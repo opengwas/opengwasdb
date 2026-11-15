@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,29 @@ def test_python_summary_separates_parent_and_worker_without_calling_numpy_python
     assert worker["samples"] == 9
     assert worker["leaf_frames"] == {"dot (numpy/core.py)": 9}
     assert "interpreted" not in json.dumps(report)
+
+
+def test_pass2_reader_percentage_in_docs_matches_the_weighted_recordings():
+    repo = Path(__file__).resolve().parents[1]
+    artifact_path = repo / "docs/benchmark-output/opengwasdb_epic307_profiles.json"
+    artifact = json.loads(artifact_path.read_text())
+    names = {"stream_associations", "swap_one", "_rows_of", "_validated_cells",
+             "batched", "_row", "_listed", "_oriented"}
+    reader = samples = snapshots = 0
+    for row in artifact["python_snapshots"]:
+        if row["step"] == "build" and "Pass 2:" in row["last_phase_line"]:
+            worker = row["roles"]["worker"]
+            snapshots += 1
+            samples += worker["samples"]
+            reader += sum(count for leaf, count in worker["leaf_frames"].items()
+                          if leaf.split(" (")[0] in names)
+    assert snapshots == 2 and reader > 0 and samples > reader
+    assert (reader, samples) == (90160, 114751)
+    percent = f"{100 * reader / samples:.2f}% pooled"
+    adr = repo / "docs/adr/0081-no-second-implementation-language-after-epic-307.md"
+    discussion = repo / "docs/benchmark-output/opengwasdb_epic307_after.md"
+    assert percent in adr.read_text()
+    assert percent in discussion.read_text()
 
 
 def test_an_empty_profile_is_not_a_zero_cost_measurement(tmp_path):

@@ -1,0 +1,28 @@
+{
+  "original_artifact": {
+    "path": "docs/benchmark-output/epic307_322/top-hits-comparison.json",
+    "sha256": "a4b7f7a3895f536c800a45bf724a5aaedd6b1c40ad31493dc792a08d5216f50e"
+  },
+  "original_scratch_harness": {
+    "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/compare_top_hits.py",
+    "sha256": "bb2a03dedae13db64f206e021eb6afedc78fe7d3e5cf59c936fe26f8be52b8e3"
+  },
+  "committed_harness": {
+    "path": "benchmarks/compare_top_hits.py",
+    "sha256": "3d4e9cbea01a91815f9bf2be4e5c4dd1247fab3c5c2f4c33f3b800782a16ede8"
+  },
+  "reproduction_cwd": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/322",
+  "reproduction_argv": [
+    "pixi",
+    "run",
+    "-e",
+    "dev",
+    "python",
+    "benchmarks/compare_top_hits.py",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/OGS-00009/store.opengwasdb",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/offclock/tophits/store.opengwasdb",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/fix1/top-hits-reproduced.json"
+  ],
+  "note": "The original full-size proof was produced by the scratch harness on 15 November. Its result is retained byte-for-byte. The recovered committed harness compares the same decoded arrays, group/tier attributes and 1024-Analysis band counts, with added provenance, output-location protection and empty-tier detection. This reproduction command is documented, not re-executed for review; it never rebuilds an index or writes either input Store."
+}

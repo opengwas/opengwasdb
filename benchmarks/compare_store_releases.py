@@ -318,10 +318,11 @@ def _summarise(report: dict[str, Any]) -> None:
 # another way (#381) has a different variant axis, so the arrays above are not
 # comparable position by position. The aligned comparison decodes both grids
 # through the reader every query uses and compares them cell by cell on the rows
-# they share by ALID. Rows only one side holds are listed whole, and a pair that
-# names one site and one allele pair in two spellings is compared with its
-# orientation taken into account. Nothing is classified as expected here: the
-# caller names the change behind each kind.
+# they share by ALID on the same Reference Assembly. Rows only one side holds
+# are listed whole. Opposite-order indels are historical respellings only across
+# the sorted/reference-first format boundary, never by unordered alleles alone.
+# Nothing is classified as expected here: the caller names the change behind
+# each kind.
 
 #: Rows of each side decoded at a time. A band of 20,000 rows of a 2,514-Analysis
 #: release is three planes of 201 MB a side as float32.
@@ -556,8 +557,10 @@ def _variant_rows(path: Path, wanted: np.ndarray) -> dict[int, dict[str, Any]]:
 def _respelled_pairs(
     left_only: dict[int, dict[str, Any]], right_only: dict[int, dict[str, Any]]
 ) -> list[tuple[int, int, bool]]:
-    """Unmatched rows that name one site and one allele pair: `(left, right, flipped)`.
+    """Unmatched historical indels: `(left, right, flipped)`.
 
+    The caller must establish sorted versus reference-first format semantics
+    first: two reference-first opposite-order indels are different identities.
     A key held by more than one row on either side is not paired: which row would
     match is then a guess.
     """
@@ -572,7 +575,8 @@ def _respelled_pairs(
     def unique(rows: dict[int, dict[str, Any]]) -> dict[tuple[str, int, frozenset[str]], int]:
         seen: dict[tuple[str, int, frozenset[str]], list[int]] = {}
         for row, record in rows.items():
-            seen.setdefault(key(record), []).append(row)
+            if len(record["effect_allele"]) != len(record["other_allele"]):
+                seen.setdefault(key(record), []).append(row)
         return {k: v[0] for k, v in seen.items() if len(v) == 1}
 
     left_keys, right_keys = unique(left_only), unique(right_only)
@@ -589,14 +593,27 @@ def compare_aligned(
 ) -> tuple[dict[str, Any], list[tuple[Any, ...]], dict[str, np.ndarray]]:
     """Two Dense releases compared cell by cell on the rows they share by ALID.
 
-    Their Analyses must be the same, in the same order. Every row is accounted
-    for: matched by ALID, paired as one site in two spellings, or held by one side
-    only. Returns the report, the unmatched rows with their Store Variant Table
+    Reference Assembly must agree, and Analyses must be the same in the same order.
+    Every row is accounted for: matched by ALID, paired as a historical indel
+    respelling only across the sorted/reference-first format boundary (ADR 0079),
+    or held by one side only. Returns the report, the unmatched rows with their Store Variant Table
     rows, and every compared row's difference code (`ROW_CODES`).
     """
     from opengwasdb.build.ordered_pool import ordered_map
+    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store.open import indels_reference_first
     from opengwasdb.validation.observed_view import _map_axis
 
+    left_manifest, right_manifest = StoreManifest.load(left), StoreManifest.load(right)
+    if left_manifest.reference_assembly != right_manifest.reference_assembly:
+        raise SystemExit(
+            "Reference Assembly differs: "
+            f"{left_manifest.reference_assembly} ({left}) versus "
+            f"{right_manifest.reference_assembly} ({right}); cannot align coordinate identities"
+        )
+    historical_indels = indels_reference_first(left_manifest.format_version) != (
+        indels_reference_first(right_manifest.format_version)
+    )
     left_ids = [row[1] for row in _read_tsv(left / "analyses.tsv")[1:]]
     right_ids = [row[1] for row in _read_tsv(right / "analyses.tsv")[1:]]
     if left_ids != right_ids:
@@ -610,7 +627,10 @@ def compare_aligned(
     right_hit[mapped[hit]] = True
     left_only = _variant_rows(left, np.flatnonzero(~hit))
     right_only = _variant_rows(right, np.flatnonzero(~right_hit))
-    pairs = _respelled_pairs(left_only, right_only)
+    # Opposite reference-first indels can be an insertion and a deletion at the
+    # same site. Only a change from sorted to reference-first format semantics
+    # permits interpreting an unmatched opposite-order pair as a respelling (ADR 0079).
+    pairs = _respelled_pairs(left_only, right_only) if historical_indels else []
     paired_left = {pair[0] for pair in pairs}
     paired_right = {pair[1] for pair in pairs}
 

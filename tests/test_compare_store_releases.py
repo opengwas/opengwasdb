@@ -7,6 +7,7 @@ arrays at all, and a structure table built on it would silently be empty.
 
 from __future__ import annotations
 
+import pytest
 import zarr
 
 from benchmarks.compare_store_releases import discover_arrays
@@ -48,7 +49,9 @@ _LEFT_ROWS = (
 )
 
 
-def _release(directory, rows):
+def _release(directory, rows, *, format_version=None, reference_assembly="GRCh38"):
+    import json
+
     from dense_sources import build_dense_from_records
 
     from opengwasdb.layouts.dense.build import NormalisedAssociation
@@ -67,8 +70,16 @@ def _release(directory, rows):
     ]
     store = directory / "store.opengwasdb"
     build_dense_from_records(
-        records, store, store_id="aligned", release_id="aligned-v1", reference_assembly="GRCh38"
+        records, store, store_id="aligned", release_id="aligned-v1",
+        reference_assembly=reference_assembly,
     )
+    if format_version is not None:
+        # The V3 arrays are shared by 0.2.1 and 0.2.2; these historical rows
+        # explicitly use sorted indels, whose semantics the old stamp declares.
+        manifest = store / "manifest.json"
+        payload = json.loads(manifest.read_text())
+        payload["format_version"] = format_version
+        manifest.write_text(json.dumps(payload))
     return store
 
 
@@ -82,7 +93,8 @@ def _alids(store):
         axis.close()
 
 
-def test_the_aligned_comparison_accounts_for_every_row_by_kind(tmp_path):
+@pytest.mark.parametrize("legacy_format", ["0.2.0", "0.2.1"])
+def test_the_aligned_comparison_accounts_for_every_row_by_kind(tmp_path, legacy_format):
     """A dropped row, an indel spelled the other way round with its statistics flipped,
     and one changed Z: each is found as what it is, and nothing else differs."""
     from benchmarks.compare_store_releases import ROW_CODES, compare_aligned
@@ -95,7 +107,7 @@ def test_the_aligned_comparison_accounts_for_every_row_by_kind(tmp_path):
         (5, "T", "A", (-1.0, 3.0), 0.25),
     ]
     left = _release(tmp_path / "left", left_rows)
-    right = _release(tmp_path / "right", right_rows)
+    right = _release(tmp_path / "right", right_rows, format_version=legacy_format)
     assert "1:3:AT:A" in _alids(left) and "1:4:G:C" in _alids(left)
     assert "1:3:A:AT" in _alids(right) and "1:3:AT:A" not in _alids(right)
     assert len(_alids(right)) == len(_alids(left)) - 1, "the right release must drop a row"
@@ -118,7 +130,10 @@ def test_the_aligned_comparison_accounts_for_every_row_by_kind(tmp_path):
     assert _alids(left)[int(changed[0])] == "1:2:C:T"
 
 
-def test_the_aligned_comparison_sees_a_respelled_indel_whose_statistics_did_not_flip(tmp_path):
+@pytest.mark.parametrize("reverse", [False, True])
+def test_the_aligned_comparison_sees_a_respelled_indel_whose_statistics_did_not_flip(
+    tmp_path, reverse
+):
     """The pairing's orientation is what makes the flipped indel agree: an indel
     respelled with its statistics left as they were differs in Z and EAF."""
     from benchmarks.compare_store_releases import compare_aligned
@@ -126,7 +141,9 @@ def test_the_aligned_comparison_sees_a_respelled_indel_whose_statistics_did_not_
     left = _release(tmp_path / "left", [(*row, 0.25) for row in _LEFT_ROWS])
     right_rows = [(*row, 0.25) for row in _LEFT_ROWS]
     right_rows[2] = (3, "A", "AT", (1.5, -2.5), 0.25)
-    right = _release(tmp_path / "right", right_rows)
+    right = _release(tmp_path / "right", right_rows, format_version="0.2.1")
+    if reverse:
+        left, right = right, left
 
     report, _, _ = compare_aligned(left, right, n_workers=1)
 
@@ -135,6 +152,48 @@ def test_the_aligned_comparison_sees_a_respelled_indel_whose_statistics_did_not_
     assert respelled["planes"]["z"]["value_differs"] == 2
     assert respelled["planes"]["eaf"]["value_differs"] == 2
     assert respelled["rows_by_code"] == {"z_value+eaf_value": 1}
+
+
+def test_reference_first_releases_keep_insertion_and_deletion_as_distinct_variants(tmp_path):
+    from benchmarks.compare_store_releases import compare_aligned
+    from opengwasdb.model.manifest import StoreManifest
+
+    common = [
+        (1, "A", "G", (0.5, -0.5), 0.25),
+        (3, "AT", "A", (1.5, -2.5), 0.25),
+        (3, "A", "AT", (-1.5, 2.5), 0.75),
+    ]
+    left = _release(tmp_path / "left", [*common, (4, "AT", "A", (1.5, -2.5), 0.25)])
+    right = _release(tmp_path / "right", [*common, (4, "A", "AT", (-1.5, 2.5), 0.75)])
+    assert StoreManifest.load(left).format_version == "0.2.2"
+    assert StoreManifest.load(right).format_version == "0.2.2"
+    assert {"1:3:AT:A", "1:3:A:AT"} <= set(_alids(left)) & set(_alids(right))
+    assert set(_alids(left)) - set(_alids(right)) == {"1:4:AT:A"}
+    assert set(_alids(right)) - set(_alids(left)) == {"1:4:A:AT"}
+
+    report, table, _ = compare_aligned(left, right)
+
+    assert report["matched_by_alid"]["rows"] == 3
+    assert report["respelled"]["rows"] == 0
+    assert report["left_only"]["rows"] == report["right_only"]["rows"] == 1
+    assert {(kind, row["alid"]) for kind, _, _, row, _, _ in table} == {
+        ("left_only", "1:4:AT:A"), ("right_only", "1:4:A:AT"),
+    }
+
+
+def test_cross_assembly_alignment_refuses_equal_coordinate_strings(tmp_path):
+    from benchmarks.compare_store_releases import compare_aligned
+    from opengwasdb.model.manifest import StoreManifest
+
+    rows = [(1, "A", "G", (0.5, -0.5), 0.25)]
+    left = _release(tmp_path / "left", rows)
+    right = _release(tmp_path / "right", rows, reference_assembly="GRCh37")
+    assert _alids(left) == _alids(right) == ["1:1:A:G"]
+    assert StoreManifest.load(left).reference_assembly == "GRCh38"
+    assert StoreManifest.load(right).reference_assembly == "GRCh37"
+
+    with pytest.raises(SystemExit, match="Reference Assembly.*GRCh38.*GRCh37"):
+        compare_aligned(left, right)
 
 
 def test_an_se_difference_is_judged_against_both_codecs_bound():

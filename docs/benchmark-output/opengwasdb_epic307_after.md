@@ -62,6 +62,25 @@ All tiers span **three 1,024-Analysis column bands**:
 | 5e-6 | 11,020,928 | 4,715,139 / 4,185,164 / 2,120,625 |
 | 5e-8 | 5,491,751 | 2,424,406 / 2,030,242 / 1,037,103 |
 
+The read-only harness is now committed as `benchmarks/compare_top_hits.py`,
+recovered from `scratch/322/run/compare_top_hits.py`.
+[Its provenance note](epic307_322/top-hits-comparison-provenance.json) pins the
+original result and both harness sources by SHA-256 and records the exact
+reproduction invocation. The original full-size JSON and its numbers were not
+rewritten or remeasured for this review. From this worktree, using only the two
+already-built Stores:
+
+```bash
+pixi run -e dev python benchmarks/compare_top_hits.py \
+  /data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/OGS-00009/store.opengwasdb \
+  /data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/offclock/tophits/store.opengwasdb \
+  --output /data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/fix1/top-hits-reproduced.json
+```
+
+This command is documented, **not executed again** in the review round. It
+compares the decoded index arrays and group/tier attributes and returns the
+three-band counts above; it cannot write its report inside either input Store.
+
 This proof is outside the timed release; it is not a second Store build. Its
 scratch copy occupied 64 GiB, more than the authorisation's estimated 47 GiB.
 The off-clock guard sampled available memory and free disk throughout copying
@@ -96,6 +115,13 @@ statistic planes. It accounts for the differences as follows:
 - **#381:** format 0.2.2 is used, but this pair needs **zero respelled ALIDs**.
   A format move does not imply this particular source changes allele order.
 
+The aligned comparator now refuses different Reference Assemblies and permits
+opposite-order historical indel pairing only across pre-0.2.2 sorted versus
+0.2.2+ reference-first semantics. Opposite-order indels in two reference-first
+Stores remain distinct insertion/deletion identities. This pair declares
+GRCh38 on both sides and has zero respelled rows, so the original evidence and
+strict SE counts remain unchanged; the full-size comparison was not repeated.
+
 No additional difference class remains unexplained. The full source-by-source
 fidelity of every retained cell was not remeasured; clean validation and the
 bounded release comparison should not be mistaken for that stronger proof.
@@ -128,6 +154,9 @@ Native **790 pooled active samples** put 53.9% in OpenBLAS/numpy C/scikit-learn
 Cython, 28.6% in Python frames and 17.5% in other native code. The draft's 70%
 was the first recording alone and is superseded by this pooled result.
 Non-native frames around numpy operations are not evidence of interpreter time.
+The eight reader frames named by ADR 0081 account for **90,160 of 114,751**
+Pass 2 worker samples across two snapshots: **78.57% pooled**, approximately
+79%, correcting the draft's 87% for that same frame set.
 
 [ADR 0081](../adr/0081-no-second-implementation-language-after-epic-307.md)
 recommends no second language now, pending owner acceptance: vectorise the

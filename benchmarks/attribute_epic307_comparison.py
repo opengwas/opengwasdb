@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from benchmarks._artifact import provenance, write_artifact
-from benchmarks.compare_store_releases import _variant_rows
+from benchmarks.compare_store_releases import ROW_CODES, _variant_rows
 from opengwasdb.store.open import open_store
 
 
@@ -47,8 +47,8 @@ def attribute(scratch: Path) -> dict[str, Any]:
     admission = scratch / "OGS-00009/store.opengwasdb.admission"
     cells = source_conflicts(admission / "dropped")
     codes = np.load(base.with_suffix(".codes.npz"))
-    presence = codes["matched_left_rows"][(codes["matched_codes"] & 16) != 0]
-    eaf = codes["matched_left_rows"][(codes["matched_codes"] & 8) != 0]
+    presence = codes["matched_left_rows"][(codes["matched_codes"] & ROW_CODES["presence"]) != 0]
+    eaf = codes["matched_left_rows"][(codes["matched_codes"] & ROW_CODES["eaf_value"]) != 0]
     rows = _variant_rows(Path(report["left"]), presence)
     examples = {
         row["left_row"]: row["cells_in_row"]

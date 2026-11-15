@@ -1447,6 +1447,21 @@ the summaries.
 
 ---
 
+### `compare_top_hits.py`
+
+Recovered from #322's original scratch harness, this read-only command compares
+all Top-Hit Index arrays as decoded values, the index group's attributes and
+each tier's attributes. It also counts each tier's hits in 1,024-Analysis
+column bands (ADR 0058). The JSON records its committed generator, invocation
+and code provenance; a difference returns exit status 1. Its output must be
+outside both input Stores. It never rebuilds an index.
+
+The exact invocation for the two already-built OGS-00009 Stores is recorded in
+`docs/benchmark-output/epic307_322/top-hits-comparison-provenance.json` and the
+measurement discussion. That note links the original measurement to the
+recovered committed harness; the full-size comparison was not repeated for
+review. Unit fixtures reproduce all 24 arrays and three nonempty bands.
+
 ### `compare_store_releases.py`
 
 Compares two Store Releases array by array (metadata, decoded values), with
@@ -1456,11 +1471,15 @@ comparable that way.
 
 `--aligned` (#322) compares two Dense releases whose axes differ -- a rebuild
 that drops rows (#376's off-primary lifts) or spells an indel's ALID the other
-way round (#381) -- through the reader every query uses. Rows are matched by
-ALID exactly, as `check-observed-view` maps them; rows left over that name one
-site and one allele pair are paired as a respelling, with the right-hand Z
-negated and EAF taken as `1 − EAF` where the effect alleles swapped; the rest are
-listed as held by one side only. Each pair's decoded Z, SE and EAF are compared
+way round (#381) -- through the reader every query uses. Different declared
+Reference Assemblies are refused before alignment: a coordinate string is not
+cross-assembly identity. Rows are matched by ALID exactly, as
+`check-observed-view` maps them. Opposite-order indels left over are paired as
+historical respellings only across the format-semantics boundary: one release
+before 0.2.2 with sorted indels, the other at 0.2.2+ with reference-first indels.
+The right-hand Z is then negated and EAF taken as `1 − EAF`. Two reference-first
+Stores' opposite-order indels remain separate left/right-only identities: they
+may be a real insertion and deletion (ADR 0079). Ambiguous pairs stay unpaired. Each pair's decoded Z, SE and EAF are compared
 cell by cell. A differing SE is counted three ways: a `float16` rounding of the
 other side (#355), within both releases' codec bound (a refitted `int8_residual`
 model re-quantises every coded cell: half a `residual_range / 127` step each in
