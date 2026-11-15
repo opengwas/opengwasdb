@@ -465,11 +465,13 @@ not a format version change (§13).
 A C shard is 256 inner chunks: 128 MiB raw. As built (ogld#7, k = 10, × 511), a Near Band shard's
 median on disk is 51 to 63 MiB by panel, and its largest 73 MiB. That is 1,257 shards for
 HGDP+1kGP EUR's Near Band and 3,457 for AFR's, against the 2,800 and 7,200 the earlier estimate
-gave at × 32767. The other arrays use one shape, 16,384 inner and
-1,048,576 to a shard. These arrays are read whole, by row range, or one sparse row at a time, and
-the prototype's stores used this shape for them. At EUR's 5.3×10⁹ index entries that is about
-5,000 shards for each of `partner` and `r`. Coarsening that shard would change no reader; ogld#8
-measured no read that needed it.
+gave at × 32767. The variant table, Proxy Index and their companion arrays that existed when
+layout C was chosen use one shape, 16,384 inner and 1,048,576 to a shard. These arrays are read
+whole, by row range, or one sparse row at a time, and the prototype's stores used this shape for
+them. The ALID index added later is the exception (ADR 0010): its `alid` byte array uses 262,144
+bytes to an inner chunk and 16,777,216 to a shard, and its `row` array uses 262,144 and 1,048,576
+rows. At EUR's 5.3×10⁹ Proxy Index entries that is about 5,000 shards for each of `partner` and
+`r`. Coarsening that shard would change no reader; ogld#8 measured no read that needed it.
 
 **The Far Pairs keep that shape** (ogld#31): 16,384 entries an inner chunk, 64 chunks to a shard.
 EUR's 1.33×10⁸ Far Pairs are 140 shards of each array. They are read by row, so what a read pays is
@@ -909,10 +911,10 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 refuses a `format_version` or `encoding` it does not implement (§13). A search for ALIDs reads the
 ALID index's two arrays, and only when they pay for themselves (ogld#42, ADR 0010). A list naming
 about a two-thousandth of the Variant Set's rows or more is searched in the index: an ALID that
-fits the slot with a byte to spare finds its row there, without reading `variants/position` or
+fits the slot finds its row there, without reading `variants/position` or
 `variants/alid` at all. A shorter list takes the exact scan for every ALID, which reads a few
-string chunks where the index reads the whole of itself. An ALID at the slot's width or past it,
-and one the index does not hold, is found by that same scan at its position, which reads the
+string chunks where the index reads the whole of itself. An ALID wider than the slot, and one the
+index does not hold, is found by that same scan at its position, which reads the
 chromosome's positions and the ALID strings there, as every ALID was found before the index. So a
 search can only be faster than it was. A chromosome's `position`
 range and its Near Band's `indptr` are read the first time a request touches that chromosome,

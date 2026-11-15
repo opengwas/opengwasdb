@@ -21,7 +21,7 @@ How each producer calls it:
 
 A store is not one until `finish` writes its provenance. A reader refuses a directory without
 provenance, so a half-written store cannot be read as a short one. `finish` runs every rule of
-spec §12 on what was written and writes the provenance only when all 23 pass.
+spec §12 on what was written and writes the provenance only when all 27 pass.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """The spec's validation rules, by name, on write and on demand (spec §12; ogld#4).
 
 Each rule yields where and how one opened hierarchy and its provenance break it. `validate`
-runs all 23, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
+runs all 27, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
 on the store it wrote, before the provenance that makes it readable goes in. A rule never
 trusts what it does not check: when what it needs is missing or malformed it reports that it
 cannot be checked, and when an array will not decode it reports that it cannot be read, each
@@ -891,8 +891,9 @@ def _alid_index_keys(store: _Store) -> _Problems:
         # a truncated key, or one that is another variant's.
         yield from _flag(path, held & ~fits, lo, "names a row whose ALID is wider than the slot")
         compare = held & fits
+        expected, _ = layout.alid_keys(alids[compare])
         wrong = np.full(len(alids), False)
-        wrong[compare] = keys[entry[compare]] != np.array(alids[compare], dtype=f"S{width}")
+        wrong[compare] = keys[entry[compare]] != expected.view(f"|S{width}").ravel()
         yield from _flag(path, wrong, lo, "is not its row's own ALID, NUL padded")
 
 
