@@ -7,7 +7,7 @@
    "r_reserved_code": -32768,
    "rounding": "half_to_even"
   },
-  "provenance_sha256": "8d7238c4b5e49e304be6328c8bf4b1e3162039e8268fc4c187fc14e24983711a"
+  "provenance_sha256": "992d78029bef4a102b65df8b6df4339d440f96f37a4626d1450acc265c47df81"
  },
  "cases": [
   {
