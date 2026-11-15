@@ -266,7 +266,6 @@ VALIDATION_RULES: Final = (
     "alid_index.rows",
     "alid_index.order",
     "alid_index.keys",
-    "alid_index.complete",
     "alid_index.count",
     "near.rows",
     "near.codes",

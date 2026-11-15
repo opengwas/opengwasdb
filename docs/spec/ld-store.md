@@ -112,8 +112,9 @@ two indels at one position that agree over the slot then share one key, so a loo
 returns whichever row sorts first — one variant answering to another's name, with nothing to
 show it (engine issue #127, 342 such variants on the published finngen-r13 release). A left-out
 ALID stays reachable, by the exact scan this section used to describe for every ALID.
-`alid_index.rows`, `alid_index.order`, `alid_index.keys`, `alid_index.complete` and
-`alid_index.count` hold the index to the table it indexes (§12).
+`alid_index.rows`, `alid_index.order`, `alid_index.keys` and `alid_index.count` hold the index to
+the table it indexes (§12), entry by entry: an entry that names a row whose ALID is wider than the
+slot, or whose key is not that row's full ALID, is a store a reader must not trust.
 
 **Why ALID is stored this way.** The variant table keeps ALID as Zarr's variable-length UTF-8
 strings, and the index beside it is bytes, because the two reads are different reads. A query
@@ -623,7 +624,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them whose \|code\| reaches `far_code_floor`, each counted once; the entries of every `far/<chrom>/` together |
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
-| `counts.alids_left_out` | int | ALIDs wider than the ALID index's 32-byte slot, whose rows it has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0010) |
+| `counts.alids_left_out` | int | the table's count of ALIDs wider than the ALID index's 32-byte slot, counted from `variants/alid`, whose rows the index has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0010) |
 | `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
 | `build.created_at` | string | ISO 8601 UTC |
 | `build.wall_seconds` | float | build time, up to the validation `StoreWriter.finish` runs before it writes this provenance: a provenance cannot hold the time taken to check it. On EUR chr22 that validation took another 80 s of a 2 min build |
@@ -1198,11 +1199,10 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `variants.order` | positions ascend within each chromosome, ties broken by ALID ascending, with no repeated ALID |
 | `variants.identity` | each `alid` is the identity function's ALID for its chromosome, position, `a1` and `a2` (ogld#3) |
 | `variants.frequency` | every `a1_frequency` is finite and in (0, 1) |
-| `alid_index.rows` | `variants/alid_index/row` holds a row of the Variant Set for each entry, none of them twice: one entry a variant (§2) |
+| `alid_index.rows` | one entry a variant: `variants/alid_index/row` holds a row of the Variant Set for each entry, none of them twice, and every ALID whose UTF-8 form fits the slot has exactly one entry — so a search that finds no key means the ALID is not in the table (§2, §8) |
 | `alid_index.order` | the entries' keys ascend bytewise, strictly: the order every search over them depends on (§2) |
-| `alid_index.keys` | each entry's key is the full ALID of the row it names, NUL padded, so no key was truncated into the slot and none names another variant (§2; opengwasdb issue #127) |
-| `alid_index.complete` | every ALID of the Variant Set whose UTF-8 form is at most 32 bytes is an entry, so a search that finds none means the variant is Absent (§2, §8) |
-| `alid_index.count` | `variants/alid_index/alid` holds 32 bytes an entry, and `counts.alids_left_out` is `n_variants` minus the entries (§2, §6, §7) |
+| `alid_index.keys` | each entry's key is the full ALID of the row it names, NUL padded — so that row's ALID fits the slot, no key was truncated into it, and no key is one no variant has (§2; opengwasdb issue #127) |
+| `alid_index.count` | `variants/alid_index/alid` holds 32 bytes an entry, and `counts.alids_left_out` is the table's own count of ALIDs wider than the slot (§2, §6, §7) |
 | `near.rows` | `indptr` starts at 0 and has n_c + 1 entries; each row's length equals the count of later variants within `near_bp` from `position`. So rows are contiguous and stay within `near_bp` |
 | `near.codes` | every code is one of the store's encoding: none is −32768 and none is past the scale, \|code\| ≤ `r_scale`, so \|r̂\| ≤ 1 holds after dequantisation |
 | `index.rows` | `indptr` starts at 0, has n_c + 1 entries and ends at the length of `partner` and `r`; within a row partners are strictly ascending, in [0, n_c), and never the row itself |
@@ -1220,13 +1220,13 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 No rule checks chunk shapes, shards or codecs (§6). No rule can
 check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
 an independent reference on the Test Panel. Each rule has a store that breaks it, in
-`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 28.
+`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 27.
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
 `StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
 with the provenance it assembled (§7) as JSON will hold it, and writes that provenance only when
-all 28 pass. Otherwise it raises
+all 27 pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -1260,12 +1260,10 @@ then read and checked at once, and no more are held. `near.codes`, `index.codes`
 at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries
 alike, t of them at once.
 
-`alid_index.keys` and `alid_index.complete` read the ALID index's keys whole, 32 bytes a variant:
-275 MB on HGDP+1kGP EUR's 8.59 M. They search that array for each block of the variant table's
-ALIDs, rather than read the table's strings twice per entry, and they read the variant columns in
-the blocks the other rules read them in. `alid_index.rows` reads the index's `row` array whole
-(34 MB on EUR), `alid_index.order` reads the keys in blocks, and `alid_index.count` reads only
-their lengths and the provenance.
+`alid_index.keys` and `alid_index.row` read the ALID index's two arrays whole — 275 MB of keys and
+34 MB of rows on HGDP+1kGP EUR's 8.59 M — and walk the variant table in blocks beside them, so each
+entry is judged against the row it names without a scattered read of the table. `alid_index.order`
+reads the keys in blocks, and `alid_index.count` counts the wide ALIDs from the table's own column.
 
 A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding of each
 rule that reads it. An `indptr` that ends past its array is a "cannot be checked" finding of each

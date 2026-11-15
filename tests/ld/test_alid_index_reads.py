@@ -10,6 +10,7 @@ none, and the answers must not move.
 
 from __future__ import annotations
 
+import tracemalloc
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ import zarr
 from store_copies import TEST_STORE, copy_store
 
 from ogld.store import StoreReader, layout
+from ogld.store.reader import _index_pays
 
 
 def oracle(store: Path) -> dict[str, int]:
@@ -113,3 +115,52 @@ def test_a_list_with_nothing_to_look_up_reads_no_index(tmp_path: Path, alids: li
         chunk.unlink()
     reader = StoreReader.open(store)
     assert reader.rows_of(alids).tolist() == [-1] * len(alids)
+
+
+# ------------------------------------------------------------------ what a lookup holds
+
+
+def test_a_long_lookup_holds_one_chunk_of_the_index_not_the_index(tmp_path: Path) -> None:
+    # The keys are read a chunk at a time, in key order, so a lookup's transient is one chunk
+    # and its own queries: the table is never copied out beside the chunk cache (ogld#42's
+    # review: a whole read held 309 MB of EUR's keys twice).
+    store = copy_store(tmp_path / "store")
+    width = layout.ALID_INDEX_WIDTH
+    entries = 200_000
+    keys = np.zeros((entries, width), dtype=np.uint8)
+    for row, key in enumerate(np.sort(np.array([f"22:{i}:A:C" for i in range(entries)], str))):
+        keys[row, : len(key)] = np.frombuffer(key.encode(), dtype=np.uint8)
+    rows = np.arange(entries, dtype=np.int32) % 1_000
+    root = zarr.open_group(store, mode="r+")
+    group = root[layout.ALID_INDEX]
+    assert isinstance(group, zarr.Group)
+    del group["alid"]
+    del group["row"]
+    # Written as a store writes them, so the keys have the chunk shape a store's have.
+    layout.put_numbers(group, "alid", keys.reshape(-1), layout.ALID_KEY_FILL, layout.ALID_KEYS)
+    layout.put_numbers(group, "row", rows, layout.ALID_ROW_FILL, layout.ALID_ROWS)
+    # A cache of nothing, so what is traced is the lookup's own transient and not the chunks it
+    # keeps: the same test the review ran, which peaked at 548 MB before this fix.
+    reader = StoreReader.open(store, cache_bytes=0)
+    assert int(reader._index().alid.chunks[0]) == layout.ALID_KEYS[0], "many chunks, as in EUR"
+    present = [f"22:{i}:A:C" for i in range(0, entries, entries // 100)]
+    tracemalloc.start()
+    try:
+        hits = reader._searched(layout.alid_keys(present)[0])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert (hits >= 0).all(), "every key it was given is in the index"
+    assert peak < keys.nbytes // 4, f"{peak:,} bytes held, for an index of {keys.nbytes:,}"
+
+
+def test_the_index_is_read_only_for_a_list_that_pays_for_it() -> None:
+    # The crossover is a list naming a `_INDEX_SHARE`th of the Variant Set's entries or more, and
+    # never fewer than one; the edge is a literal, not the constant that derives it (ogld#42's
+    # review: 4,000 of EUR's 8.59 M is where the measurement puts it).
+    assert not _index_pays(1, 4_300), "one ALID is one fewer than the threshold of 4,300 entries"
+    assert _index_pays(2, 4_300), "two ALIDs are the threshold of 4,300 entries"
+    # A store small enough that one ALID is a share of it asks for the index at one.
+    assert _index_pays(1, 1_000)
+    assert _index_pays(3_975, 8_546_809), "EUR's own threshold"
+    assert not _index_pays(3_974, 8_546_809)

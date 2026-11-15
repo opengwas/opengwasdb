@@ -789,8 +789,13 @@ def _variants_frequency(store: _Store) -> _Problems:
 # ------------------------------------------------------------------ the ALID index
 
 
+def _index_rows(store: _Store) -> npt.NDArray[np.int64]:
+    """The Variant Set row each entry of the ALID index names, whole."""
+    return store.read(layout.ALID_INDEX_ROW).astype(np.int64)
+
+
 def _index_keys(store: _Store) -> npt.NDArray[Any]:
-    """The ALID index's keys, whole, as numpy's fixed-width bytes: 32 bytes a variant, sorted."""
+    """The ALID index's keys, whole, as numpy's fixed-width bytes: 32 bytes an entry, sorted."""
     width = layout.ALID_INDEX_WIDTH
     values = store.read(layout.ALID_INDEX_ALID)
     if values.size % width:
@@ -802,40 +807,31 @@ def _index_keys(store: _Store) -> npt.NDArray[Any]:
     return values.reshape(-1, width).view(f"|S{width}").ravel()
 
 
-def _index_rows(store: _Store) -> npt.NDArray[np.int64]:
-    """The Variant Set row each entry of the ALID index names, whole."""
-    return store.read(layout.ALID_INDEX_ROW).astype(np.int64)
-
-
-def _indexed(
-    store: _Store,
-) -> Iterator[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.bool_]]]:
-    """Each block of the Variant Set's rows that fits the slot: their rows, where each one's key
-    lies in the index, and whether the index holds the key at all.
-
-    The search is the one a reader makes, over the whole sorted key array, so a rule sees where
-    each row's entry is without reading the ALID column a second time for it (spec §12)."""
-    table = _index_keys(store)
-    width = layout.ALID_INDEX_WIDTH
+def _entries_by_row(store: _Store) -> npt.NDArray[np.int64]:
+    """Where each Variant Set row's entry lies in the index, or −1 where no entry names it: the
+    `row` array inverted, so a rule that walks the table in blocks compares each row with the one
+    entry the index has for it without a scattered read. An entry outside the Variant Set, or one
+    of several naming a row, is `alid_index.rows`' finding; here the last such entry wins."""
     size = store.array("variants/position").shape[0]
-    for lo, hi in windows(0, size, _ROWS):
-        keys, at = layout.alid_keys(_strings(store, "alid", lo, hi), first=lo)
-        if not len(table):
-            # An index with no entries holds nothing: `alid_index.complete` names every ALID.
-            yield at, np.full(len(at), -1, dtype=np.int64), np.full(len(at), False)
-            continue
-        if not len(keys):
-            yield at, np.empty(0, dtype=np.int64), np.empty(0, dtype=bool)
-            continue
-        wanted = keys.view(f"|S{width}").ravel()
-        found = np.minimum(np.searchsorted(table, wanted), len(table) - 1)
-        yield at, found, table[found] == wanted
+    rows = _index_rows(store)
+    at = np.full(size, -1, dtype=np.int64)
+    inside = np.flatnonzero((rows >= 0) & (rows < size))
+    at[rows[inside]] = inside
+    return at
+
+
+def _table_alids(
+    store: _Store, lo: int, hi: int
+) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.bool_]]:
+    """Rows [lo, hi)'s ALIDs, and whether each fits the index's slot (spec §2; ADR 0010)."""
+    alids = _strings(store, "alid", lo, hi)
+    return alids, layout.alid_fits(alids)
 
 
 @_rule("alid_index.rows")
 def _alid_index_rows(store: _Store) -> _Problems:
-    """Each entry names one row of the Variant Set, none of them twice: the index is one entry a
-    variant, not a row's second key (spec §2, §6)."""
+    """One entry a variant: each names a row of the Variant Set, none of them twice, and every
+    ALID that fits the slot is named by one (spec §2, §6; ADR 0010)."""
     path = layout.ALID_INDEX_ROW
     rows = _index_rows(store)
     size = store.array("variants/position").shape[0]
@@ -846,6 +842,12 @@ def _alid_index_rows(store: _Store) -> _Problems:
         named = ", ".join(str(row) for row in twice[:_NAMED])
         more = f" and {len(twice) - _NAMED:,} more" if len(twice) > _NAMED else ""
         yield path, f"names row(s) {named}{more} more than once: one entry a variant (spec §2)"
+    by_row = _entries_by_row(store)
+    for lo, hi in windows(0, size, _ROWS):
+        _, fits = _table_alids(store, lo, hi)
+        yield from _flag(
+            "variants/alid", fits & (by_row[lo:hi] < 0), lo, "has no entry in the ALID index"
+        )
 
 
 @_rule("alid_index.order")
@@ -866,29 +868,32 @@ def _alid_index_order(store: _Store) -> _Problems:
 
 @_rule("alid_index.keys")
 def _alid_index_keys(store: _Store) -> _Problems:
-    """Each entry's key is its row's full ALID, NUL padded: nothing was truncated into the slot,
-    so no variant answers to another's name (spec §2; ADR 0010; opengwasdb issue #127)."""
+    """Each entry's key is the full ALID of the row it names, NUL padded — so that row's ALID
+    fits the slot, no key was truncated into it, and none is a key no variant has. One variant
+    answering to another's name is what the width exists to prevent (spec §2; ADR 0010;
+    opengwasdb issue #127)."""
     path = layout.ALID_INDEX_ALID
-    rows = _index_rows(store)
-    for at, found, hit in _indexed(store):
-        # A key the index does not hold is `alid_index.complete`'s finding; this rule judges the
-        # entry the key names, so a key shared with another variant's row shows here.
-        wrong = hit & (rows[found] != at)
-        yield from _flag(path, wrong, int(at[0]) if len(at) else 0, "is not its row's own ALID")
-
-
-@_rule("alid_index.complete")
-def _alid_index_complete(store: _Store) -> _Problems:
-    """Every ALID of the Variant Set that fits the slot is an entry: the index misses none, so a
-    search that finds nothing means the variant is Absent (spec §2; ADR 0010)."""
-    for at, _, hit in _indexed(store):
-        yield from _flag("variants/alid", ~hit, int(at[0]) if len(at) else 0, "is not indexed")
+    width = layout.ALID_INDEX_WIDTH
+    keys = _index_keys(store)
+    by_row = _entries_by_row(store)
+    size = store.array("variants/position").shape[0]
+    for lo, hi in windows(0, size, _ROWS):
+        alids, fits = _table_alids(store, lo, hi)
+        entry = by_row[lo:hi]
+        held = entry >= 0
+        # A row whose ALID is wider than the slot has no key of its own: an entry naming it holds
+        # a truncated key, or one that is another variant's.
+        yield from _flag(path, held & ~fits, lo, "names a row whose ALID is wider than the slot")
+        compare = held & fits
+        wrong = np.full(len(alids), False)
+        wrong[compare] = keys[entry[compare]] != np.array(alids[compare], dtype=f"S{width}")
+        yield from _flag(path, wrong, lo, "is not its row's own ALID, NUL padded")
 
 
 @_rule("alid_index.count")
 def _alid_index_count(store: _Store) -> _Problems:
-    """The keys are 32 bytes an entry, and provenance's left-out count is the rows the index has
-    no entry for (spec §2, §7; ADR 0010)."""
+    """The keys are 32 bytes an entry, and provenance's left-out count is the table's own count of
+    ALIDs wider than the slot (spec §2, §6, §7; ADR 0010)."""
     width = layout.ALID_INDEX_WIDTH
     size = store.array("variants/position").shape[0]
     entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
@@ -898,12 +903,13 @@ def _alid_index_count(store: _Store) -> _Problems:
             layout.ALID_INDEX_ALID,
             f"holds {held:,} bytes, not {entries:,} keys of {width}: one key an entry (spec §6)",
         )
+    wide = sum(int((~_table_alids(store, lo, hi)[1]).sum()) for lo, hi in windows(0, size, _ROWS))
     recorded = store.integer("counts.alids_left_out")
-    if recorded != size - entries:
+    if recorded != wide:
         yield (
             "counts.alids_left_out",
-            f"records {recorded:,} left out, but {size:,} rows have {entries:,} entries: "
-            f"{size - entries:,} are left out (spec §7)",
+            f"records {recorded:,} left out, but {wide:,} of the {size:,} ALIDs are wider than "
+            "the slot: the count is the table's (spec §7)",
         )
 
 

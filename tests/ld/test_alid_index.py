@@ -237,9 +237,10 @@ def test_a_lost_chunk_of_the_index_is_refused(tmp_path: Path) -> None:
 
 
 def rebuild(store: Path, alids: list[str], *, truncating: bool, unsorted: bool) -> None:
-    """Write `store`'s index over again from `alids`: a build that truncates at the slot, or
-    one whose entries are in no order. Both are ones validation fails; a reader must not be
-    made wrong by them."""
+    """Write `store`'s index over again from `alids`: one whose entries are in no order, which
+    validation fails (`alid_index.order`) and whose misses a reader still scans. `truncating`
+    writes every ALID cast into the slot, which validation fails and a reader trusts — that case
+    lives in `tests/contract/test_store.py`, as a breaker of `alid_index.keys`."""
     kept = [row for row, alid in enumerate(alids) if truncating or len(alid.encode()) <= 32]
     keys = np.array([alids[row] for row in kept], dtype=f"|S{layout.ALID_INDEX_WIDTH}")
     rows = np.array(kept, dtype=np.int32)
@@ -287,12 +288,11 @@ def test_rows_of_finds_an_alid_at_the_slot_and_one_a_byte_wider(tmp_path: Path) 
     )
 
 
-@pytest.mark.parametrize("rebuild_with", [{"truncating": True}, {"unsorted": True}])
-def test_rows_of_is_right_on_an_index_a_broken_build_wrote(
-    tmp_path: Path, rebuild_with: dict[str, bool]
-) -> None:
+def test_rows_of_is_right_on_an_unsorted_index(tmp_path: Path) -> None:
+    # A miss is scanned, so an index whose entries are in no order still answers as the table
+    # does; validation is what fails it (`alid_index.order`).
     built = crafted(tmp_path)
-    rebuild(built.path, built.alids, **{"truncating": False, "unsorted": False} | rebuild_with)
+    rebuild(built.path, built.alids, truncating=False, unsorted=True)
     asked = [*built.alids, ABSENT_AT_THE_SLOT]
     assert answer(built.path, asked) == [*range(len(built.alids)), -1]
     assert StoreReader.open(built.path).rows_of(asked).tolist() == [*range(len(built.alids)), -1]
@@ -305,9 +305,10 @@ def test_a_present_alid_is_found_without_loading_its_chromosome(tmp_path: Path) 
     reader = StoreReader.open(built.path)
     assert reader.rows_of([built.alids[2]]).tolist() == [2]
     assert reader._loaded == {}
-    # An ALID at the slot's width takes the scan instead, which does read its chromosome.
+    # An ALID at the slot's width is indexed like any other: validation guarantees its key is
+    # the full ALID (ADR 0010; ogld#42's fix round 1).
     assert reader.rows_of([built.alids[0]]).tolist() == [0]
-    assert reader._loaded != {}
+    assert reader._loaded == {}
 
 
 def test_the_index_is_read_only_for_an_alid_it_could_hold(tmp_path: Path) -> None:

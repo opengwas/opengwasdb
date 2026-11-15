@@ -70,11 +70,13 @@ supplies or orders one and a store written before the index gets the same one (A
   keeps winning (`docs/benchmarks/alid-index.md`). A binary search reading only the chunks one
   key's path touches was measured too, and rejected: with chunks big enough to read the whole index
   in a second, a few hundred keys touch nearly all of them.
-- An ALID at the slot's width, or wider, never asks the index. Only a key at the slot's width can
-  be what a truncating build corrupted, and NUL padding keeps every shorter key its own, so the
-  slot-width query is the one case where a broken index could answer another variant's name. It
-  takes the exact scan instead, and in a valid store that costs nothing: ALIDs 32 bytes long are
-  0.01% of #403's.
+- An ALID wider than the slot has no key (`layout.alid_fits`, the engine's own rule) and is
+  scanned. An ALID at the slot's width is indexed like every other one: validation holds the index
+  to the table entry by entry — `alid_index.keys` refuses a key that is not its row's full ALID, so
+  a truncated key, a key of a wider row's bytes, or an invented key fails it — and the reader
+  trusts a store that passes, as it trusts every other array. The first draft kept a slot-width
+  reader guard instead, which would have spent 98 chromosome loads on #403's lists to defend
+  against a store the rules now refuse.
 - An ALID the index does not hold — absent, too wide, or one a broken build left out — takes the
   exact scan at its own position, which is what found it before. So a miss, an unsorted index and
   an index with an entry dropped all answer as before; only a hit can be faster.
@@ -114,7 +116,9 @@ the phase table, the chunk-size measurements and the list-length crossover.
 ## The stores
 
 The five HGDP+1kGP stores are derived in place by `scripts/derive_alid_index.py`, which writes
-`variants/alid_index-partial/` from each store's own ALID column and renames it into place only
-when the count matches what its provenance will record. On HGDP+1kGP EUR chr22 the derived index
+`variants/alid_index-partial/` from each store's own ALID column, renames it into place, and only
+then records the count in the provenance — a new document renamed over the old one. So a run that
+fails leaves a store that validation refuses and a second run repairs, and a store already derived
+is finished rather than refused. On HGDP+1kGP EUR chr22 the derived index
 is byte-identical to a rebuild's, and the store's provenance differs only in `build` and
 `software`, as #31 showed for the Far Pairs.

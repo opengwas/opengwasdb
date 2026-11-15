@@ -28,6 +28,8 @@ NEAR_R: Final = (262_144, 67_108_864)
 #: truncated into it: two indels at one position that agree over the slot would then share a key,
 #: and one would answer to the other's name (opengwasdb issue #127, its ALID width).
 ALID_INDEX_WIDTH: Final = 32
+#: The dtype string of one key's bytes (numpy's own fixed-width bytes cast pads with NUL).
+_BYTES: Final = f"|S{ALID_INDEX_WIDTH}"
 #: The index's group and its two arrays, by their path.
 ALID_INDEX: Final = "variants/alid_index"
 ALID_INDEX_ALID: Final = f"{ALID_INDEX}/alid"
@@ -118,6 +120,17 @@ def _refused_if_lost_keys(array: zarr.Array[Any], values: npt.NDArray[Any]) -> n
     return values
 
 
+def alid_fits(alids: npt.ArrayLike) -> npt.NDArray[np.bool_]:
+    """Whether each ALID fits the index's slot, which is the one rule for what the index holds
+    (spec §2; ADR 0010): the engine's own, an ALID whose UTF-8 form is at most
+    `ALID_INDEX_WIDTH` bytes (`is_indexable_alid`). A wider ALID is left out of the index, never
+    truncated into it, and is found by the exact scan at its position instead."""
+    text = np.asarray(alids)
+    encoded = np.char.encode(text, "utf-8") if len(text) else np.empty(0, dtype="S1")
+    lengths = np.strings.str_len(encoded) if len(text) else np.empty(0, dtype=np.int64)
+    return np.asarray(lengths <= ALID_INDEX_WIDTH)
+
+
 def alid_keys(
     alids: npt.ArrayLike, first: int = 0
 ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.int64]]:
@@ -133,9 +146,8 @@ def alid_keys(
     # UTF-8 first, so a key is the ALID's bytes however wide the characters are; the cast to the
     # slot then only pads, because the wider ones are already gone.
     encoded = np.char.encode(text, "utf-8") if len(text) else np.empty(0, dtype="S1")
-    lengths = np.strings.str_len(encoded) if len(text) else np.empty(0, dtype=np.int64)
-    fits = lengths <= ALID_INDEX_WIDTH
-    keys = np.array(encoded[fits], dtype=f"|S{ALID_INDEX_WIDTH}")
+    fits = alid_fits(text)
+    keys = np.array(encoded[fits], dtype=_BYTES)
     return (
         keys.view(np.uint8).reshape(-1, ALID_INDEX_WIDTH),
         np.flatnonzero(fits).astype(np.int64) + first,

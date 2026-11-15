@@ -70,11 +70,17 @@ _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
 #: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
-#: rows or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks do
-#: at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
+#: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
+#: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
 #: index holds; `docs/benchmarks/alid-index.md` has both sides of it. A small store's list is a
 #: large share of it, so a test store's lookups read the index.
 _INDEX_SHARE: Final = 2_150
+
+
+def _index_pays(count: int, entries: int) -> bool:
+    """Whether `count` keys are worth reading the whole index of `entries` (spec §10; ADR 0010):
+    a list naming a `_INDEX_SHARE`th of them or more, and never fewer than one."""
+    return count >= max(1, entries // _INDEX_SHARE)
 
 
 @dataclass(frozen=True)
@@ -221,7 +227,8 @@ class StoreReader:
         Every ALID the index does not hold — absent, too wide for the slot, or one a broken build
         left out — takes the exact scan at its own position, which is what found it before the
         index, and a list too short for the index to pay for takes it for every ALID. So the index
-        can only make this read faster, never change its answer.
+        can only make this read faster, never change its answer; and a store whose index could
+        answer falsely is one validation fails, as it fails a store with any other broken array.
         """
         found = np.full(len(alids), -1, dtype=np.int64)
         if not len(alids):
@@ -246,28 +253,28 @@ class StoreReader:
         """Fill `found` from the ALID index for every ALID it can answer, and clear `scanned`
         there; what it cannot answer stays for the exact scan (spec §2, §10; ADR 0010).
 
-        An ALID at the slot's width, or past it, is never asked of the index: a build that
-        truncated its keys makes a wider ALID's key these same 32 bytes, and it would then answer
-        for another variant (opengwasdb issue #127). NUL padding keeps every shorter ALID's key its
-        own, so those are searched for. A list too short to pay for the index asks for nothing.
+        Which ALIDs the index holds a key for is `layout.alid_fits`' question, not this method's:
+        an ALID wider than the slot has no key and is scanned, and a store whose key for one row
+        is another row's — truncated into the slot, or invented — is one validation fails
+        (`alid_index.keys`). A list too short to pay for the index asks for nothing.
         """
-        keyed = np.array([len(alid.encode("utf-8")) < layout.ALID_INDEX_WIDTH for alid in alids])
-        asked = np.array([i for which, _ in loci.values() for i in which[keyed[which]].tolist()])
-        if not len(asked) or not self._index_pays(len(asked)):
+        asked = [i for which, _ in loci.values() for i in which.tolist()]
+        keys, fitting = layout.alid_keys([alids[i] for i in asked])
+        if not len(keys) or not _index_pays(len(keys), self._entries()):
             return
-        hits = self._searched([alids[i] for i in asked])
+        hits = self._searched(keys)
         where = hits >= 0
-        found[asked[where]] = self._read(self._index().row, hits[where])
-        scanned[asked[where]] = False
+        found[np.array(asked, dtype=np.int64)[fitting[where]]] = self._read(
+            self._index().row, hits[where]
+        )
+        scanned[np.array(asked, dtype=np.int64)[fitting[where]]] = False
 
-    def _index_pays(self, count: int) -> bool:
-        """Whether `count` ALIDs are worth the whole index: a list that names a `_INDEX_SHARE`th of
-        the Variant Set or more (spec §10; `docs/benchmarks/alid-index.md`)."""
+    def _entries(self) -> int:
+        """How many entries the Variant Set's index holds: its rows less the ALIDs too wide for its
+        slot, which the store's provenance counts (spec §7). A store written before the index
+        records no count and has no index to read either, so a search refuses it by name."""
         counts = self._provenance["counts"]
-        # A store written before the index records no count; it has no index to read either, so
-        # the search refuses it by name rather than here.
-        entries = int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
-        return count >= max(1, entries // _INDEX_SHARE)
+        return int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
 
     def _scanned(self, alids: Sequence[str], which: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """The rows of the ALIDs at `which`, in that order: the exact scan of the variant table
@@ -291,23 +298,41 @@ class StoreReader:
         found[np.array(asked, dtype=np.int64)[hit]] = rows[hit]
         return found
 
-    def _searched(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
-        """Where each ALID's entry lies in the ALID index, or −1 where the index holds none: the
-        index read whole, and searched with numpy's own binary search."""
+    def _searched(self, keys: npt.NDArray[np.uint8]) -> npt.NDArray[np.int64]:
+        """Where each key's entry lies in the ALID index, or −1 where the index holds none.
+
+        The index is read one inner chunk at a time, in key order, and each chunk's keys are
+        searched for the queries that fall within them. So the table is never held whole beside the
+        chunk cache: a lookup's transient is one chunk and the queries' own keys, where reading the
+        array in one run would hold all 273 MB of EUR's keys twice (spec §10; ogld#42's review).
+        """
         index = self._index()
         count = int(index.row.shape[0])
-        keys, _ = layout.alid_keys(alids)
-        if not count or not len(keys):
-            return np.full(len(keys), -1, dtype=np.int64)
-        width = layout.ALID_INDEX_WIDTH
-        values = self._runs(index.alid, np.array([0]), np.array([count * width]))[0]
-        table = refused_if_lost(index.alid, values).view(f"|S{width}").ravel()
-        wanted = keys.view(f"|S{width}").ravel()
-        at = np.minimum(np.searchsorted(table, wanted), count - 1)
         found = np.full(len(keys), -1, dtype=np.int64)
-        same = table[at] == wanted
-        found[same] = at[same]
+        if not count or not len(keys):
+            return found
+        width = layout.ALID_INDEX_WIDTH
+        per = max(1, int(index.alid.chunks[0]) // width)
+        order = np.argsort(keys.view(f"|S{width}").ravel(), kind="stable")
+        wanted = keys[order].view(f"|S{width}").ravel()
+        for first in range(0, count, per):
+            chunk = self._chunk(index, first, min(first + per, count))
+            a = int(np.searchsorted(wanted, chunk[0], "left"))
+            b = int(np.searchsorted(wanted, chunk[-1], "right"))
+            if b <= a:
+                continue
+            at = np.minimum(np.searchsorted(chunk, wanted[a:b]), len(chunk) - 1)
+            same = chunk[at] == wanted[a:b]
+            found[order[a:b][same]] = first + at[same]
         return found
+
+    def _chunk(self, index: _AlidIndex, first: int, stop: int) -> npt.NDArray[Any]:
+        """The keys of the index's entries [first, stop), one read; a lost one refused."""
+        width = layout.ALID_INDEX_WIDTH
+        length = np.array([(stop - first) * width])
+        run = self._runs(index.alid, np.array([first * width]), length)[0]
+        keys = refused_if_lost(index.alid, run)
+        return keys.view(f"|S{width}").ravel()
 
     def _index(self) -> _AlidIndex:
         """The ALID index's arrays, opened on first use (spec §10): opening reads their

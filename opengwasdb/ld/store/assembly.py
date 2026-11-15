@@ -562,7 +562,7 @@ def derive_far_pairs(
 
 def derive_alid_index(variants: zarr.Group, index: zarr.Group) -> int:
     """Write the ALID search index into `index` from `variants`' own ALID column (spec §2, §6;
-    ADR 0010), and return how many ALIDs it leaves out.
+    ADR 0010), and return how many ALIDs are too wide for its slot, counted from that column.
 
     The keys, their padding and their order are `layout.alid_index`'s: a store writes what the
     rule gives, whether it is being built or derived from the table it already has, and whether
@@ -571,15 +571,20 @@ def derive_alid_index(variants: zarr.Group, index: zarr.Group) -> int:
     (opengwasdb issue #127); such an ALID stays reachable by the exact scan at its position.
 
     The column is read a block of rows at a time, so nothing holds the table's strings whole:
-    the keys take 32 bytes a variant, read at the end to sort them.
+    the keys take 32 bytes a variant, read at the end to sort them. The count is the table's own,
+    never `n_variants` less the keys' length: a count inferred from the index would agree with any
+    index, including one with an entry too many (spec §7; ogld#42's review).
     """
     alid = variants["alid"]
     assert isinstance(alid, zarr.Array)
     rows = int(alid.shape[0])
     keys: list[npt.NDArray[np.uint8]] = []
     at: list[npt.NDArray[np.int64]] = []
+    wide = 0
     for lo, hi in windows(0, rows, ALID_ROWS):
-        block, first = layout.alid_keys(np.asarray(alid[lo:hi]), first=lo)
+        alids = np.asarray(alid[lo:hi])
+        wide += int((~layout.alid_fits(alids)).sum())
+        block, first = layout.alid_keys(alids, first=lo)
         keys.append(block)
         at.append(first)
     ordered, entries = layout.ordered_index(
@@ -587,7 +592,7 @@ def derive_alid_index(variants: zarr.Group, index: zarr.Group) -> int:
         np.concatenate(at) if at else np.empty(0, np.int64),
     )
     layout.put_alid_index(index, ordered, entries)
-    return rows - len(entries)
+    return wide
 
 
 def _whole(group: zarr.Group, name: str, span: slice = slice(None)) -> npt.NDArray[Any]:
