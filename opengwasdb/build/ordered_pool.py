@@ -69,6 +69,18 @@ def fork_pool(n_workers: int) -> ProcessPoolExecutor:
 
 
 @contextmanager
+def single_threaded_blas() -> Iterator[None]:
+    """Cap BLAS and OpenMP in the current process, restoring its limits on exit.
+
+    Set this in the parent before forking, never inside a forked worker: the
+    library discovery walks the dynamic loader (see `single_threaded_fork_pool`).
+    A serial block profiler uses the same cap to measure what a worker runs.
+    """
+    with threadpool_limits(limits=1):
+        yield
+
+
+@contextmanager
 def single_threaded_fork_pool(n_workers: int) -> Iterator[ProcessPoolExecutor]:
     """A fork pool whose workers run BLAS and OpenMP on one thread each.
 
@@ -87,7 +99,7 @@ def single_threaded_fork_pool(n_workers: int) -> Iterator[ProcessPoolExecutor]:
     good. In the parent the walk is safe. Its own linear algebra runs on one
     thread while the pool is open, which costs nothing: it waits on the workers.
     """
-    with threadpool_limits(limits=1), fork_pool(n_workers) as pool:
+    with single_threaded_blas(), fork_pool(n_workers) as pool:
         yield pool
 
 
