@@ -74,7 +74,10 @@ class NumericDecoder:
         if shard is None:
             return None
         inner, index = shard.codecs, shard.index_codecs
-        if not (_bytes_chain(inner, ZstdCodec) and _bytes_chain(index, Crc32cCodec)):
+        if not (
+            _bytes_chain(inner, ZstdCodec, array.dtype)
+            and _bytes_chain(index, Crc32cCodec, np.dtype("u8"))
+        ):
             return None
         if array.shards is None:
             return None
@@ -238,17 +241,22 @@ def _numeric_shard(array: zarr.Array[Any]) -> ShardingCodec | None:
     return shard if type(shard) is ShardingCodec and shard.index_location == "end" else None
 
 
-def _bytes_chain(codecs: tuple[Any, ...], last: type[Any]) -> bool:
+def _bytes_chain(codecs: tuple[Any, ...], last: type[Any], dtype: np.dtype[Any]) -> bool:
+    """Bytes then `last`. A one-byte element has no byte order, and zarr declares none for it
+    (ADR 0010); every wider one must declare the order it was written in (ADR 0009)."""
     return (
         len(codecs) == 2
         and type(codecs[0]) is BytesCodec
         and type(codecs[1]) is last
-        and codecs[0].endian in {"little", "big"}
+        and (
+            codecs[0].endian in {"little", "big"}
+            or (dtype.itemsize == 1 and codecs[0].endian is None)
+        )
     )
 
 
 def _endian(codec: Any) -> Literal["<", ">"]:
-    return "<" if codec.endian == "little" else ">"
+    return ">" if codec.endian == "big" else "<"
 
 
 def _byte_runs(

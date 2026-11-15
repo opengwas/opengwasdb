@@ -38,7 +38,7 @@ import zarr
 from ogld.format import Provenance, REncoding, Sourced
 from ogld.format.geometry import chromosome_ranges
 from ogld.store import layout
-from ogld.store.assembly import Chromosome, Cut, Cutter, Tally, provenance
+from ogld.store.assembly import Chromosome, Cut, Cutter, Tally, derive_alid_index, provenance
 from ogld.store.tables import Variants
 from ogld.store.validation import ValidationFailed, validate_group
 
@@ -180,7 +180,12 @@ class StoreWriter:
                 f"the rows of chromosome {', '.join(unwritten)} were not written, from row "
                 f"{self._next}"
             )
-        made = provenance(sourced, self._cutter, self._rows, self._tally)
+        # The ALID index is the store's, from the table it wrote (spec §2; ADR 0010): no producer
+        # supplies or orders one, and a store is unreadable until `finish` writes its provenance.
+        variants = self._root["variants"]
+        assert isinstance(variants, zarr.Group)
+        left_out = derive_alid_index(variants, variants.create_group("alid_index"))
+        made = provenance(sourced, self._cutter, self._rows, self._tally, alids_left_out=left_out)
         recorded = _as_json(made)
         findings = validate_group(self._root, recorded, threads=threads)
         if any(findings.values()):

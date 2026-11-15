@@ -245,6 +245,7 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
         "far_candidates": sum(e.far_candidates for e in every),
         "far_pairs": sum(e.far_pairs for e in every),
         "index_entries": sum(len(e.partner) for e in every),
+        "alids_left_out": sum(len(a.encode("utf-8")) > 32 for a in variants().alid),
     }
 
 
@@ -419,6 +420,7 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
         "far_candidates": 3,
         "far_pairs": 2,
         "index_entries": 4,
+        "alids_left_out": 0,
     }
 
 

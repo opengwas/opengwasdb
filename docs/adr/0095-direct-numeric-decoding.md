@@ -20,7 +20,9 @@ owns chunk planning, the cache budget, concurrent runs and kept shard indexes.
 `ogld/store/location.py` calls the numeric backend in `ogld/store/decoding.py`, which
 recognises a one-dimensional numeric array only when its declared
 codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
-CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. Other
+CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. A one-byte
+element has no byte order and zarr declares none for it, so a `bytes` codec without an `endian`
+is read as it lies — that is how the ALID index's `uint8` keys decode directly (ADR 0010). Other
 chains, strings included, still use zarr. Shapes and keys come from the opened array's
 metadata, never the layout defaults or an array path.
 

@@ -22,6 +22,31 @@ SIDE: Final = (16_384, 1_048_576)
 #: The Near Band's `r`: layout C (spec §6; ADR 0006).
 NEAR_R: Final = (262_144, 67_108_864)
 
+#: The ALID search index (spec §2, §6; ADR 0010): the variant table's ALIDs in one array a search
+#: can run over. A key is an ALID's UTF-8 bytes, NUL right-padded to `ALID_INDEX_WIDTH`; an ALID
+#: wider than that is left out of the index and found by an exact scan at its position, never
+#: truncated into it: two indels at one position that agree over the slot would then share a key,
+#: and one would answer to the other's name (opengwasdb issue #127, its ALID width).
+ALID_INDEX_WIDTH: Final = 32
+#: The dtype string of one key's bytes (numpy's own fixed-width bytes cast pads with NUL).
+_BYTES: Final = f"|S{ALID_INDEX_WIDTH}"
+#: The index's group and its two arrays, by their path.
+ALID_INDEX: Final = "variants/alid_index"
+ALID_INDEX_ALID: Final = f"{ALID_INDEX}/alid"
+ALID_INDEX_ROW: Final = f"{ALID_INDEX}/row"
+#: Their (inner chunk, shard) in elements, as `SIDE` is. A key is 32 bytes, so an inner chunk of
+#: 262,144 bytes holds 8,192 keys and a 16 MiB shard 524,288: the whole index is 275 MB on EUR, and
+#: a search reads it one shard at a time. `docs/benchmarks/alid-index.md` measured this against
+#: `SIDE`'s 16 KiB chunks, whose 16,693 of them made a whole read 4.6 s against 0.2 s.
+ALID_KEYS: Final = (262_144, 16_777_216)
+ALID_ROWS: Final = (262_144, 1_048_576)
+#: The keys' fill value: no ALID is empty, so a whole key of NUL bytes is one no store holds. It is
+#: 0 because every padding byte is NUL too, so a key is judged whole rather than byte by byte
+#: (`refused_if_lost`), and a lost chunk reads as keys of no bytes.
+ALID_KEY_FILL: Final = 0
+#: The rows': a row is never negative.
+ALID_ROW_FILL: Final = -1
+
 #: Each array's fill value: one a valid LD Store never holds (spec §6). The `r` arrays' is
 #: their encoding's reserved code and the strings' is ""; both are set where those arrays are
 #: made.
@@ -41,11 +66,16 @@ def never_data(path: str, values: npt.ArrayLike) -> npt.NDArray[np.bool_]:
     """
     v = np.asarray(values)
     name = path.rsplit("/", 1)[-1]
+    if path == ALID_INDEX_ALID:
+        # A key is judged 32 bytes at a time, never byte by byte: a padding byte is 0, which its
+        # fill value is too, so no single byte can be the one no store holds. `refused_if_lost`
+        # judges a whole key; the fill must be 0, or a lost chunk would read as a run of keys.
+        return np.asarray(v == ALID_KEY_FILL)
     if name == "r":
         # Every admitted encoding shares the container and its reserved code (ADR 0004), so a
         # lost chunk is told from data before the store's own encoding is known.
         return np.asarray(v == REncoding.reserved_code)
-    if name in {"indptr", "partner"}:
+    if name in {"indptr", "partner", "row"}:
         return np.asarray(v < 0)
     if name == "position":
         return np.asarray(v <= 0)
@@ -65,6 +95,8 @@ def shown_fill(fill: object) -> str:
 def refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
     """`values` read from `array`, unless one is a value no LD Store holds there, as its fill
     value is: that is a chunk the store lost, and decoding it would be inventing data."""
+    if array.path == ALID_INDEX_ALID:
+        return _refused_if_lost_keys(array, values)
     lost = never_data(array.path, values)
     if lost.any():
         raise ValueError(
@@ -73,6 +105,80 @@ def refused_if_lost(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDA
             "(spec §3, §6)"
         )
     return values
+
+
+def _refused_if_lost_keys(array: zarr.Array[Any], values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    """The keys `values` of `variants/alid_index/alid`, unless one is all NUL bytes: no ALID is
+    empty, so that is a chunk the store lost rather than a key (spec §6)."""
+    keys = np.asarray(values, dtype=np.uint8).reshape(-1, ALID_INDEX_WIDTH)
+    lost = ~keys.any(axis=1)
+    if lost.any():
+        raise ValueError(
+            f"{array.path} read {int(lost.sum())} key(s) of no bytes at all, as its fill value "
+            f"{shown_fill(array.fill_value)} is: a chunk the store lost, never data (spec §6)"
+        )
+    return values
+
+
+def alid_fits(alids: npt.ArrayLike) -> npt.NDArray[np.bool_]:
+    """Whether each ALID fits the index's slot, which is the one rule for what the index holds
+    (spec §2; ADR 0010): the engine's own, an ALID whose UTF-8 form is at most
+    `ALID_INDEX_WIDTH` bytes (`is_indexable_alid`). A wider ALID is left out of the index, never
+    truncated into it, and is found by the exact scan at its position instead."""
+    text = np.asarray(alids)
+    encoded = np.char.encode(text, "utf-8") if len(text) else np.empty(0, dtype="S1")
+    lengths = np.strings.str_len(encoded) if len(text) else np.empty(0, dtype=np.int64)
+    return np.asarray(lengths <= ALID_INDEX_WIDTH)
+
+
+def alid_keys(
+    alids: npt.ArrayLike, first: int = 0
+) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.int64]]:
+    """The key of each ALID of `alids` that fits the slot, and its row, in the order given (spec
+    §2; ADR 0010). An ALID wider than `ALID_INDEX_WIDTH` bytes has no key, and its row is not
+    left out of the count here: `derive_alid_index` counts them from `n_variants` and the keys.
+
+    `first` is the Variant Set row of `alids[0]`, so a block of a store's table gives the rows
+    the whole table's index has. The padding is numpy's own `|S32` cast, which is the engine's
+    (ADR 0010), and nothing is truncated: every ALID that reaches it fits.
+    """
+    text = np.asarray(alids)
+    # UTF-8 first, so a key is the ALID's bytes however wide the characters are; the cast to the
+    # slot then only pads, because the wider ones are already gone.
+    encoded = np.char.encode(text, "utf-8") if len(text) else np.empty(0, dtype="S1")
+    fits = alid_fits(text)
+    keys = np.array(encoded[fits], dtype=_BYTES)
+    return (
+        keys.view(np.uint8).reshape(-1, ALID_INDEX_WIDTH),
+        np.flatnonzero(fits).astype(np.int64) + first,
+    )
+
+
+def ordered_index(
+    keys: npt.NDArray[np.uint8], rows: npt.NDArray[np.int64]
+) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.int64]]:
+    """`keys` and `rows` in the engine's order (ADR 0010): by key bytewise, ties by row, which
+    is what its stable sort of the padded keys gives."""
+    order = np.argsort(keys.view(f"|S{ALID_INDEX_WIDTH}").ravel(), kind="stable")
+    return keys[order], rows[order]
+
+
+def alid_index(
+    alids: npt.ArrayLike,
+) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.int64]]:
+    """The ALID index of one Variant Set's `alids`: its keys, and the row of each, in the
+    engine's order (spec §2, §6; ADR 0010). The one place the width, the padding and the sort
+    are written; a store writes what this gives, and validation computes it too."""
+    return ordered_index(*alid_keys(alids))
+
+
+def put_alid_index(
+    index: zarr.Group, keys: npt.NDArray[np.uint8], rows: npt.NDArray[np.int64]
+) -> None:
+    """Write the index's two arrays into the group `index`: the keys' bytes, and each entry's
+    Variant Set row (spec §6)."""
+    put_numbers(index, "alid", keys.reshape(-1), ALID_KEY_FILL, ALID_KEYS)
+    put_numbers(index, "row", rows.astype(np.int32), ALID_ROW_FILL, ALID_ROWS)
 
 
 #: The keys of one record of `variants.attrs["chromosomes"]` (spec §2).

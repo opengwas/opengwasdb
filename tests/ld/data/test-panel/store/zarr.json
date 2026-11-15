@@ -303,17 +303,18 @@
         "near_pairs": 109212,
         "far_candidates": 37381,
         "far_pairs": 7,
-        "index_entries": 36476
+        "index_entries": 36476,
+        "alids_left_out": 8
       },
       "software": {
-        "ogld": "0.0.1.dev260+ga65843c81",
+        "ogld": "0.0.1.dev317+g8a8e18b23",
         "numpy": "2.4.6",
         "zarr": "3.4.2"
       },
       "build": {
-        "created_at": "2026-11-13T02:58:59Z",
-        "wall_seconds": 0.3831817239988595,
-        "peak_memory_bytes": 1524080640,
+        "created_at": "2026-11-15T02:17:00Z",
+        "wall_seconds": 0.39509850298054516,
+        "peak_memory_bytes": 2286096384,
         "threads": 1
       }
     }

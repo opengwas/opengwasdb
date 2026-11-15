@@ -49,6 +49,7 @@ from ogld.format.geometry import (
     within,
 )
 from ogld.identity import alid_locus
+from ogld.store import layout
 from ogld.store.layout import chromosomes_listed, never_data, refused_if_lost, shown_fill
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
@@ -68,6 +69,18 @@ _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
+#: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
+#: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
+#: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
+#: index holds; `docs/benchmarks/alid-index.md` has both sides of it. A small store's list is a
+#: large share of it, so a test store's lookups read the index.
+_INDEX_SHARE: Final = 2_150
+
+
+def _index_pays(count: int, entries: int) -> bool:
+    """Whether `count` keys are worth reading the whole index of `entries` (spec §10; ADR 0010):
+    a list naming a `_INDEX_SHARE`th of them or more, and never fewer than one."""
+    return count >= max(1, entries // _INDEX_SHARE)
 
 
 @dataclass(frozen=True)
@@ -100,6 +113,15 @@ class _Chromosome:
 
 
 @dataclass(frozen=True)
+class _AlidIndex:
+    """The ALID search index (spec §2; ADR 0010): one NUL-padded 32-byte key an entry, sorted, and
+    the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
+
+    alid: zarr.Array[Any]
+    row: zarr.Array[Any]
+
+
+@dataclass(frozen=True)
 class _Placed:
     """Ascending, distinct local rows of one chromosome, the row and column of each in a
     square result, and that result: what `pair_r` and `region_r` write their pairs into."""
@@ -128,6 +150,7 @@ class StoreReader:
     _far: dict[str, _Sparse]
     _cache: ChunkCache
     _columns: dict[str, zarr.Array[Any]]
+    _index_arrays: _AlidIndex | None
 
     def _attach(
         self, root: zarr.Group, provenance: Provenance, encoding: REncoding, cache: ChunkCache
@@ -147,6 +170,7 @@ class StoreReader:
         # Each handle is opened once: opening one reads its metadata document, which over
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
+        self._index_arrays = None
 
     @classmethod
     def open(
@@ -197,26 +221,137 @@ class StoreReader:
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
         """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
 
-        A malformed ALID is Absent too: it names no variant in the store. Each ALID's
-        position is found in its chromosome's positions, and only the ALID strings at
-        that position are read and compared, all in one read.
+        A malformed ALID is Absent too: it names no variant in the store. A long list is searched
+        for in the store's ALID index (ADR 0010), which holds every ALID of the table that fits its
+        32-byte slot, sorted, so one search answers it without reading the variant table at all.
+        Every ALID the index does not hold — absent, too wide for the slot, or one a broken build
+        left out — takes the exact scan at its own position, which is what found it before the
+        index, and a list too short for the index to pay for takes it for every ALID. So the index
+        can only make this read faster, never change its answer; and a store whose index could
+        answer falsely is one validation fails, as it fails a store with any other broken array.
         """
+        found = np.full(len(alids), -1, dtype=np.int64)
+        if not len(alids):
+            return found
+        loci = _loci(alids, self._ranges)
+        if not loci:
+            return found
+        scanned = np.ones(len(alids), dtype=bool)
+        self._from_index(alids, loci, found, scanned)
+        rest = np.flatnonzero(scanned)
+        if len(rest):
+            found[rest] = self._scanned(alids, rest)
+        return found
+
+    def _from_index(
+        self,
+        alids: Sequence[str],
+        loci: dict[str, tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]],
+        found: npt.NDArray[np.int64],
+        scanned: npt.NDArray[np.bool_],
+    ) -> None:
+        """Fill `found` from the ALID index for every ALID it can answer, and clear `scanned`
+        there; what it cannot answer stays for the exact scan (spec §2, §10; ADR 0010).
+
+        Which ALIDs the index holds a key for is `layout.alid_fits`' question, not this method's:
+        an ALID wider than the slot has no key and is scanned, and a store whose key for one row
+        is another row's — truncated into the slot, or invented — is one validation fails
+        (`alid_index.keys`). A list too short to pay for the index asks for nothing.
+        """
+        asked = [i for which, _ in loci.values() for i in which.tolist()]
+        keys, fitting = layout.alid_keys([alids[i] for i in asked])
+        if not len(keys) or not _index_pays(len(keys), self._entries()):
+            return
+        hits = self._searched(keys)
+        where = hits >= 0
+        found[np.array(asked, dtype=np.int64)[fitting[where]]] = self._read(
+            self._index().row, hits[where]
+        )
+        scanned[np.array(asked, dtype=np.int64)[fitting[where]]] = False
+
+    def _entries(self) -> int:
+        """How many entries the Variant Set's index holds: its rows less the ALIDs too wide for its
+        slot, which the store's provenance counts (spec §7). A store written before the index
+        records no count and has no index to read either, so a search refuses it by name."""
+        counts = self._provenance["counts"]
+        return int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
+
+    def _scanned(self, alids: Sequence[str], which: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
+        """The rows of the ALIDs at `which`, in that order: the exact scan of the variant table
+        at each one's own position (spec §2), which is how `rows_of` found every ALID before the
+        index. Only the ALID strings at those positions are read, in one read per chromosome."""
+        found = np.full(len(which), -1, dtype=np.int64)
+        chosen = [alids[int(i)] for i in which]
         asked: list[int] = []
         candidates: list[npt.NDArray[np.int64]] = []
-        for chrom, (which, at) in _loci(alids, self._ranges).items():
+        for chrom, (at, positions) in _loci(chosen, self._ranges).items():
             c = self._chromosome(chrom)
-            lo, hi = position_rows(c.position, at, at)
-            asked.extend(owners(hi - lo, which).tolist())
+            lo, hi = position_rows(c.position, positions, positions)
+            asked.extend(owners(hi - lo, at).tolist())
             candidates.append(global_rows(spans(lo, hi - lo), c.start))
-        found = np.full(len(alids), -1, dtype=np.int64)
         if not asked:
             return found
         rows = np.concatenate(candidates)
         names = self._strings("alid", rows)
-        query = np.array([alids[i] for i in asked], dtype=np.str_)
+        query = np.array([chosen[i] for i in asked], dtype=np.str_)
         hit = names == query
         found[np.array(asked, dtype=np.int64)[hit]] = rows[hit]
         return found
+
+    def _searched(self, keys: npt.NDArray[np.uint8]) -> npt.NDArray[np.int64]:
+        """Where each key's entry lies in the ALID index, or −1 where the index holds none.
+
+        The index is read one shard at a time — the unit the store itself reads and fetches — in key
+        order, and each read's keys are searched for the queries that fall within them. So the table
+        is never held whole beside the chunk cache: a lookup's transient is one shard of keys — 16
+        MiB on EUR, released before the next is fetched — and the queries' own keys, where reading
+        the array in one run holds all 273 MB of EUR's keys twice (spec §10; ogld#42's reviews).
+        """
+        index = self._index()
+        count = int(index.row.shape[0])
+        found = np.full(len(keys), -1, dtype=np.int64)
+        if not count or not len(keys):
+            return found
+        width = layout.ALID_INDEX_WIDTH
+        # One shard's keys, from the array's own shapes: a store written with other ones is read
+        # one of its shards at a time too. An array with no shards reads one inner chunk.
+        shard = int((index.alid.shards or index.alid.chunks)[0])
+        per = max(1, shard // width)
+        order = np.argsort(keys.view(f"|S{width}").ravel(), kind="stable")
+        wanted = keys[order].view(f"|S{width}").ravel()
+        chunk = np.empty(0, dtype=f"|S{width}")
+        for first in range(0, count, per):
+            # Let the shard just searched go before the next is fetched and joined: a lookup holds
+            # one shard's keys, not the one before it as well (ogld#42's fix round 3).
+            del chunk
+            chunk = self._chunk(index, first, min(first + per, count))
+            a = int(np.searchsorted(wanted, chunk[0], "left"))
+            b = int(np.searchsorted(wanted, chunk[-1], "right"))
+            if b <= a:
+                continue
+            at = np.minimum(np.searchsorted(chunk, wanted[a:b]), len(chunk) - 1)
+            same = chunk[at] == wanted[a:b]
+            found[order[a:b][same]] = first + at[same]
+        return found
+
+    def _chunk(self, index: _AlidIndex, first: int, stop: int) -> npt.NDArray[Any]:
+        """The keys of the index's entries [first, stop) — one read, one shard at most — refused if
+        one of its chunks is lost."""
+        width = layout.ALID_INDEX_WIDTH
+        length = np.array([(stop - first) * width])
+        run = self._runs(index.alid, np.array([first * width]), length)[0]
+        keys = refused_if_lost(index.alid, run)
+        return keys.view(f"|S{width}").ravel()
+
+    def _index(self) -> _AlidIndex:
+        """The ALID index's arrays, opened on first use (spec §10): opening reads their
+        metadata, and nothing reads them until a search does."""
+        if self._index_arrays is None:
+            self._index_arrays = _AlidIndex(
+                _kept_array(self._root, layout.ALID_INDEX_ALID),
+                _kept_array(self._root, layout.ALID_INDEX_ROW),
+            )
+        return self._index_arrays
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2)."""

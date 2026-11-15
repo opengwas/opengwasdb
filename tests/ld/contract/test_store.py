@@ -488,6 +488,85 @@ def repeat_a_partner(store: Path) -> None:
     write_index22(store, owner, partner, codes)
 
 
+def alid_index_entries(store: Path) -> tuple[np.ndarray, np.ndarray]:
+    """The ALID search index as entries: its keys, a row of bytes each, and each entry's row."""
+    group = zarr.open_group(store / "variants/alid_index", mode="r")
+    keys = np.asarray(group["alid"][:]).reshape(-1, 32)
+    return keys, np.asarray(group["row"][:]).astype(np.int64)
+
+
+def write_alid_index(store: Path, keys: np.ndarray, rows: np.ndarray) -> None:
+    rewrite(store, "variants/alid_index/alid", lambda _: keys.ravel())
+    rewrite(store, "variants/alid_index/row", lambda _: rows.astype(np.int32))
+
+
+def shorten_the_key_array(store: Path) -> None:
+    """`variants/alid_index/alid` one key short of `row`'s entries, which still name every row: the
+    two arrays do not agree, so `alid_index.count` names it and a rule that reads the keys says it
+    cannot be checked rather than failing on the shorter array (ogld#42's fix round 3)."""
+    rewrite(store, "variants/alid_index/alid", lambda data: data[:-32])
+
+
+def drop_an_index_entry(store: Path) -> None:
+    """The last entry removed from both arrays: the row it named has no entry, and every entry
+    left is its row's own ALID."""
+    keys, rows = alid_index_entries(store)
+    write_alid_index(store, keys[:-1], rows[:-1])
+
+
+def swap_two_index_entries(store: Path) -> None:
+    """The first two entries in each other's place, key and row together: every entry is still its
+    row's own ALID, and the keys no longer ascend."""
+    keys, rows = alid_index_entries(store)
+    order = np.arange(len(rows))
+    order[[0, 1]] = [1, 0]
+    write_alid_index(store, keys[order], rows[order])
+
+
+def invent_a_key(store: Path) -> None:
+    """One entry's key replaced by an ALID the store does not hold, naming the row it already
+    named: the row's own ALID is no longer in the index, and a lookup by the invented one finds
+    it (ogld#42's spec review, reproduction 2)."""
+    keys, rows = alid_index_entries(store)
+    keys[474] = np.frombuffer(b"22:1:A:C".ljust(32, b"\0"), dtype=np.uint8)
+    order = np.argsort(keys.view("S32").ravel(), kind="stable")
+    write_alid_index(store, keys[order], rows[order])
+
+
+def append_a_truncated_key(*, adjust_count: bool) -> Callable[[Path], None]:
+    """A wide row's key cut into the slot, appended as an entry of its own naming that row — the
+    defect the width exists to prevent, and ogld#42's spec review reproduction 1. It passes all
+    28 rules before fix round 1. `adjust_count` also records one fewer ALID left out, which is
+    how the review made the older count rule pass; the count is the table's now, so that is a
+    second finding."""
+
+    def breaker(store: Path) -> None:
+        keys, rows = alid_index_entries(store)
+        wide = np.flatnonzero(
+            np.array([len(str(alid).encode()) > 32 for alid in alids_of(store)], dtype=bool)
+        )
+        row = int(wide[1])
+        key = np.frombuffer(alids_of(store)[row].encode()[:32], dtype=np.uint8)
+        at = int(np.searchsorted(keys.view("S32").ravel(), key.view("S32")[0]))
+        write_alid_index(
+            store,
+            np.insert(keys, at, key, axis=0),
+            np.insert(rows, at, row),
+        )
+        if adjust_count:
+            edit_provenance(
+                lambda p: p["counts"].update(alids_left_out=p["counts"]["alids_left_out"] - 1)
+            )(store)
+
+    return breaker
+
+
+def alids_of(store: Path) -> list[str]:
+    """The Test Store's ALIDs, in row order, from its own table."""
+    values = np.asarray(zarr.open_array(store / "variants/alid", mode="r")[:]).tolist()
+    return [str(alid) for alid in values]
+
+
 def set_element(path: str, at: int, value: float) -> Callable[[Path], None]:
     def breaker(store: Path) -> None:
         def change(data: np.ndarray) -> np.ndarray:
@@ -527,6 +606,14 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "variants.identity": reverse_an_alid,
     # sets one a1_frequency to 0
     "variants.frequency": set_element("variants/a1_frequency", 7, 0.0),
+    # drops an entry, so the row it named has none
+    "alid_index.rows": drop_an_index_entry,
+    # puts two entries in each other's place, so the keys do not ascend
+    "alid_index.order": swap_two_index_entries,
+    # gives one entry an ALID the store does not hold, naming a row it has
+    "alid_index.keys": invent_a_key,
+    # leaves the key array one key short of the entries it must hold
+    "alid_index.count": shorten_the_key_array,
     # shortens one Near Band row by one code
     "near.rows": shorten_a_near_row,
     # writes −32768 into near/22/r
@@ -560,6 +647,16 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
 }
 
 
+def test_the_provenance_count_is_a_breaker_of_its_own_rule(tmp_path: Path) -> None:
+    # A recorded count the table does not give fails `alid_index.count` alone: the keys and rows
+    # are untouched (ogld#42's fix round 1).
+    copy = tmp_path / "store"
+    shutil.copytree(support.TEST_STORE, copy)
+    edit_provenance(lambda p: p["counts"].update(alids_left_out=0))(copy)
+    failing = {name for name, found in ogld.validate(copy).items() if found}
+    assert failing == {"alid_index.count"}, failing
+
+
 def test_every_rule_has_a_way_to_break_it() -> None:
     # Not a contract test: it holds the table above to the spec's rule list now.
     assert tuple(BREAKERS) == VALIDATION_RULES
@@ -573,6 +670,50 @@ def test_a_store_that_breaks_a_rule_fails_that_rule(rule: str, tmp_path: Path) -
     BREAKERS[rule](copy)
     findings = ogld.validate(copy)
     assert findings[rule], f"{rule} passed a store built to break it"
+
+
+@pytest.mark.parametrize("rule", [r for r in VALIDATION_RULES if r.startswith("alid_index.")])
+def test_an_index_rule_s_breaker_fails_only_that_rule(rule: str, tmp_path: Path) -> None:
+    # The four index rules judge one array each, so a store built to break one must not be
+    # refused for another: a reader trusts what they agree on (ogld#42's fix round 1). A rule whose
+    # array the breaker shortened says it cannot be checked, which spec §12 requires of it, and
+    # that is not a judgement against the store.
+    copy = tmp_path / "store"
+    shutil.copytree(support.TEST_STORE, copy)
+    BREAKERS[rule](copy)
+    found = ogld.validate(copy)
+    assert found[rule], f"{rule} passed a store built to break it"
+    for name, findings in found.items():
+        if name == rule or not name.startswith("alid_index."):
+            continue
+        assert all(f.message.startswith("cannot be checked") for f in findings), (name, findings)
+
+
+#: The two stores ogld#42's spec review built, which passed all 28 rules before fix round 1, with
+#: the rules each fails now. Both are a lookup that answers falsely: an ALID the store does not
+#: hold, found at a row it does.
+REPRODUCTIONS: dict[str, tuple[Callable[[Path], None], set[str]]] = {
+    # a wide ALID's key cut into the slot, appended as an entry of its own: the row's ALID is
+    # wider than the slot, so no entry may name it
+    "a truncated key appended": (append_a_truncated_key(adjust_count=False), {"alid_index.keys"}),
+    # and with the count adjusted, as the review had to make it for the older count rule: the
+    # record is no longer the table's count either
+    "a truncated key appended, count adjusted": (
+        append_a_truncated_key(adjust_count=True),
+        {"alid_index.keys", "alid_index.count"},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(REPRODUCTIONS))
+def test_the_review_s_reproductions_are_caught(case: str, tmp_path: Path) -> None:
+    assert not any(committed_findings().values())
+    breaker, expected = REPRODUCTIONS[case]
+    copy = tmp_path / "store"
+    shutil.copytree(support.TEST_STORE, copy)
+    breaker(copy)
+    failing = {name for name, found in ogld.validate(copy).items() if found}
+    assert failing == expected, failing
 
 
 def as_unadjusted(k_min: int | None) -> Callable[[dict[str, Any]], None]:
