@@ -25,8 +25,8 @@ import pytest
 import zarr
 from eaf_tables import EXCEPTION_EVERY, SMALL_VARIANTS, rewrite_primary_table
 from pool_budget import pin_fork_floor
+from validation_bands import band_rows
 
-from opengwasdb.encoding import banding
 from opengwasdb.encoding.codec import (
     EAF_EXCEPTION,
     EAF_EXCEPTION_INDEX,
@@ -65,7 +65,7 @@ def _index(store: Path) -> zarr.Group:
 def _narrow(monkeypatch: pytest.MonkeyPatch, store: Path, rows: int) -> None:
     """Bands of `rows` rows of the release's grid."""
     width = int(_grid(store)["z"].shape[1])
-    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL * width * rows)
+    band_rows(monkeypatch, rows, width)
 
 
 def _bands(store: Path) -> list[int]:
@@ -277,6 +277,14 @@ def _clean(_store: Path) -> None:
     return None
 
 
+def together(*changes: Callable[[Path], None]) -> Callable[[Path], None]:
+    """Independent rules' corruptions share a copy and its two validation passes."""
+    def corrupt(store: Path) -> None:
+        for change in changes:
+            change(store)
+    return corrupt
+
+
 @dataclass(frozen=True)
 class Case:
     """A seed, what is done to a copy of it, its band rows, and the rules it must fail."""
@@ -293,8 +301,9 @@ class Case:
     slow: tuple[int, int] | None = None
 
 
-#: Rows a band of each seed holds, and so how many bands: 16, 10, 10, 12 and 10.
-RICH, SMALL, COMPLETED, VARIED, HYBRID = 20, 400, 20, 10, 4
+#: The rich seed keeps 20 rows for tests that pin an exception in its second band.
+#: The other seeds need only seven or eight bands to fill the two-result window.
+RICH, SMALL, COMPLETED, VARIED, HYBRID = 20, 570, 25, 15, 5
 _SUBSET_FAILS = frozenset({"subsets.indexed"})
 #: A band whose EAF, so its SE, cannot be decoded: the plane and its table disagree,
 #: and the subset's table is no longer the release's remapped.
@@ -305,21 +314,21 @@ _UNDECODABLE = frozenset(
 _UNMATCHED = frozenset({"side_tables.eaf_exceptions", "subsets.indexed"})
 #: A table the plan rule finds out of order, which every value rule stands behind.
 _DISORDERED = frozenset({"encoding.eaf", "subsets.indexed"})
-#: An exception cell of the small seed in its eighth band: every twentieth variant's,
+#: An exception cell of the small seed in a worker's band: every twentieth variant's,
 #: in its second Analysis.
 _SMALL_EXCEPTION = 3_000 * 2 + 1
 assert 3_000 % EXCEPTION_EVERY == 0
 
 CASES: dict[str, Case] = {
-    "rich-clean": Case("rich_seed", _clean, RICH),
-    "rich-subset-z": Case("rich_seed", subset_cell("z", 200, 1), RICH, _SUBSET_FAILS),
-    "rich-subset-se": Case("rich_seed", subset_cell("se", 200, 2), RICH, _SUBSET_FAILS),
-    "rich-subset-eaf": Case("rich_seed", subset_cell("eaf", 200, 3), RICH, _SUBSET_FAILS),
+    "rich-clean": Case("rich_seed", _clean, 40),
+    "rich-subset-z-and-unpaired": Case(
+        "rich_seed", together(subset_cell("z", 200, 1), unpaired(250, 2)), 40,
+        _SUBSET_FAILS | {"associations.markers_paired"},
+    ),
+    "rich-subset-se": Case("rich_seed", subset_cell("se", 200, 2), 40, _SUBSET_FAILS),
+    "rich-subset-eaf": Case("rich_seed", subset_cell("eaf", 200, 3), 40, _SUBSET_FAILS),
     "rich-eaf-entry-dropped": Case(
         "rich_seed", table_entry_dropped(20 * 4 + 1), RICH, _UNDECODABLE,
-    ),
-    "rich-unpaired": Case(
-        "rich_seed", unpaired(250, 2), RICH, frozenset({"associations.markers_paired"})
     ),
     "small-clean": Case("small_seed", _clean, SMALL, table_page=64),
     "small-entry-dropped": Case(
@@ -340,8 +349,9 @@ CASES: dict[str, Case] = {
         "completed_seed", subset_cell("imputed", 150, 1), COMPLETED, _SUBSET_FAILS
     ),
     "varied-clean": Case("varied_seed", _clean, VARIED),
-    "varied-top-hit-z": Case(
-        "varied_seed", tier_z("p_5e_04", 100), VARIED, frozenset({"top_hits.z"})
+    "varied-top-hit-z-and-swapped-cells": Case(
+        "varied_seed", together(tier_z("p_5e_04", 100), swapped_cells("z", (0, 41), (0, 45))),
+        VARIED, _SUBSET_FAILS | {"top_hits.z"}, units=20,
     ),
     "small-table-disordered": Case(
         "small_seed", table_rewritten(_swapped(63)), SMALL, _DISORDERED, table_page=64,
@@ -352,9 +362,6 @@ CASES: dict[str, Case] = {
     "small-past-last-span": Case(
         "small_seed", table_rewritten(_past_the_grid), SMALL,
         frozenset({"side_tables.eaf_exceptions"}), table_page=64,
-    ),
-    "varied-swapped-cells": Case(
-        "varied_seed", swapped_cells("z", (0, 41), (0, 45)), VARIED, _SUBSET_FAILS, units=20
     ),
     "completed-index-undecodable": Case(
         "completed_seed", index_undecodable(150, 1), COMPLETED, _SUBSET_FAILS, units=20

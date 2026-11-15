@@ -23,8 +23,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from validation_bands import band_rows
 
-from opengwasdb.encoding import banding
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
 from opengwasdb.store.arrays import inner_chunk_of, open_group
@@ -216,8 +216,8 @@ def test_a_rule_whose_body_skips_gets_one_line_and_no_row(ragged_store_path, log
         for message in messages
     ), "the rule must say it was skipped"
 
-#: How long the slowed check below takes, far above the fixture's whole scan.
-_DELAY = 1.5
+#: Seconds charged to the check by the controlled clock, without a real wait.
+_CHECK_SECONDS = 1.5
 
 
 def _report_seconds(messages: list[str]) -> dict[str, float]:
@@ -242,13 +242,16 @@ def test_a_check_judged_when_a_pass_ends_is_charged_once(
     `encoding.eaf` is that check wherever the release has an EAF exception table: it
     decides whether the value folds run, so it is registered before them and waits."""
     real = validation_run._contained
+    elapsed = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(time, "perf_counter", lambda: elapsed[0])
 
-    def slowed(rule, target, findings):
+    def charged(rule, target, findings):
         if rule.name == "encoding.eaf":
-            time.sleep(_DELAY)
+            elapsed[0] += _CHECK_SECONDS
         return real(rule, target, findings)
 
-    monkeypatch.setattr(validation_run, "_contained", slowed)
+    monkeypatch.setattr(validation_run, "_contained", charged)
     started = time.monotonic()
     validate_store(indexed_store)
     wall = time.monotonic() - started
@@ -256,12 +259,12 @@ def test_a_check_judged_when_a_pass_ends_is_charged_once(
     messages = _messages(logged)
     rows = _report_seconds(messages)
     check, scan = "encoding.eaf on data.zarr", "scan associations on data.zarr"
-    assert rows[check] >= _DELAY, "the fixture's EAF table check must be the slowed one"
+    assert rows[check] == _CHECK_SECONDS, "only the EAF table check advances the clock"
     assert any(m.startswith(f"{check}: start") for m in messages)
     # The check rode the pass: it was judged inside the scan's own start and end lines.
     order = [m for m in messages if m.startswith((f"{check}: start", f"{scan}: done in"))]
     assert order[0].startswith(check), "the check must be judged inside the scan's span"
-    assert rows[scan] < _DELAY, rows
+    assert rows[scan] == 0.0, rows
     assert sum(rows.values()) <= wall, (rows, wall)
 
 
@@ -277,9 +280,7 @@ def test_a_dense_band_loop_logs_progress_with_an_eta(
     n_variants, n_analyses = int(grid.shape[0]), int(grid.shape[1])
     # Two rows per Analysis: the budget a genome-wide Store's rows are banded by,
     # shrunk until a fixture's handful of rows spans more than one band.
-    monkeypatch.setattr(
-        banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL * _ROWS_PER_BAND * n_analyses
-    )
+    band_rows(monkeypatch, _ROWS_PER_BAND, n_analyses)
     assert inner_chunk_of(grid)[0] > _ROWS_PER_BAND, "the budget must decide the band"
     total = -(-n_variants // _ROWS_PER_BAND)
     assert total > 1, "fixture is meaningful only if its grid spans several bands"
@@ -297,7 +298,7 @@ def test_a_sequence_window_loop_logs_progress_with_an_eta(
 ) -> None:
     # One cell per window, for the same reason: the sequence's budget is the same
     # decoded-byte allowance, counted in cells.
-    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL)
+    band_rows(monkeypatch, 1)
     sequence = open_group(ragged_store_path / "data.zarr" / "ragged")
     n_cells = int(np.asarray(sequence["offsets"][:], dtype=np.int64)[-1])
     assert inner_chunk_of(sequence["z"])[0] > 1, "the budget must decide the window"

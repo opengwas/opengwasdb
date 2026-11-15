@@ -2645,10 +2645,7 @@ def _validate_one_indexed_subset(
     if prepared is None:
         return None
     declared, subset = prepared
-    if ride is not None and not ride.fits(
-        group, context.root, declared, subset, context.n_analyses
-    ):
-        ride = None  # the pass digested another subset than this one: read for itself
+    ride = _fitting_ride(context, name, group, declared, subset, ride)
     # Cheap, high-value invariants that stay exhaustive even on the sampled
     # build path: the side tables are small, so their remapping and the
     # per-variant baselines are compared in full rather than sampled.  The EAF
@@ -2681,6 +2678,23 @@ def _validate_one_indexed_subset(
         name, context.root, group, declared, subset, sample, errors, eaf_cells=eaf_cells
     )
     return sample
+
+
+def _fitting_ride(
+    context: _SubsetValidation, name: str, group: Any, declared: StoreEncoding,
+    subset: np.ndarray, ride: SubsetRide | None,
+) -> SubsetRide | None:
+    """Only use digests of this subset; say when identity forces a fresh read."""
+    if ride is not None and not ride.fits(
+        group, context.root, declared, subset, context.n_analyses
+    ):
+        log.warning(
+            "indexed subset %r: the pass digested a different subset; "
+            "comparing all units cell by cell against the primary planes",
+            name,
+        )
+        return None
+    return ride
 
 
 def _validate_subset_structure(
