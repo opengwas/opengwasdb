@@ -140,8 +140,8 @@ def pool_workers(
     """How many of ``requested`` workers a pool runs, and the lines saying why.
 
     Never more than its ``units``, when the pool can count them: a worker with
-    no unit to work is still forked. A worker holds the fork's floor and ``unit_bytes`` while it works
-    one ``unit`` (`worker_bytes`), and the parent holds up to
+    no unit to work is still forked. A worker holds the fork's floor and
+    ``unit_bytes`` while it works one ``unit`` (`worker_bytes`), and the parent holds up to
     `RESULTS_HELD_PER_WORKER` of its results, ``result_bytes`` each, until it
     takes them in order (`ordered_map`'s window). The workers, those results and
     the parent together stay within a phase's budget, a quarter of `MemAvailable`
