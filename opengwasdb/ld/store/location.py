@@ -494,9 +494,7 @@ async def _prefetch_shard(
     keys = np.array(numbers, dtype=np.int64)[group]
     path = array.store_path / array.metadata.encode_chunk_key((int(keys[0]) // decoder.per_shard,))
     async with semaphore:
-        index = await path.get(
-            default_buffer_prototype(), SuffixByteRequest(decoder.index_size)
-        )
+        index = await path.get(default_buffer_prototype(), SuffixByteRequest(decoder.index_size))
     if index is None:
         return
     for lo, hi, chunks in decoder.ranges(index.to_bytes(), keys % decoder.per_shard, gap=1 << 19):
