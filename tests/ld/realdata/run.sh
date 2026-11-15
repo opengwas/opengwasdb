@@ -35,5 +35,8 @@ export OGLD_EUR_KEEP="${OGLD_EUR_KEEP:-/data/opengwasdb/work/ogld/keep/EUR.keep}
 # expected failure naming it (tests/realdata/realdata_inputs.py): a missing input is not a defect
 # of ogld. `-rfEx` prints every such reason.
 export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-/data/opengwasdb/work/ogld/realdata/403-analyses}"
+# The five published HGDP+1kGP LD Stores (ogld#7, rebuilt by the final review), for the direct
+# decoder's equality with zarr on every store (ogld#40, ADR 0009).
+export OGLD_STORES="${OGLD_STORES:-/data/opengwasdb/work/ogld/stores}"
 
 exec pytest -m realdata --timeout=300 -rfEx -p no:cacheprovider "${PREFLIGHT[@]}" "$@"
