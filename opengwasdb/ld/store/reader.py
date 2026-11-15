@@ -7,9 +7,9 @@ and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
-nothing else. A chromosome's positions and its Near Band's and Proxy Index's `indptr` are read
-the first time a request touches it, and its Far Pairs' `indptr` the first time a request needs
-its pairs beyond near_bp; each is kept. Every other read goes through the reader's `ChunkCache`,
+nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch;
+its Proxy Index's `indptr` only when the index is used, and its Far Pairs' `indptr` when a
+request needs pairs beyond near_bp. Each is kept. Every other read goes through `ChunkCache`,
 which fetches only the inner chunks holding the elements a request needs, from disk or over
 HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
 
@@ -24,7 +24,7 @@ import math
 import os
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import cached_property, partial
 from typing import Any, Final, cast
 
 import numpy as np
@@ -72,12 +72,17 @@ _PAIRS_PER_STEP: Final = 1 << 22
 
 @dataclass(frozen=True)
 class _Sparse:
-    """A sparse component of one chromosome, its Proxy Index or its Far Pairs (spec §5): the
-    `indptr` a reader keeps, and handles on `partner` and `r`, read as requests need them."""
+    """A sparse component: handles opened and fill-checked together, indptr loaded only on
+    use. Below t_far, clumping must not pay to decode an index it never reads (ogld#40)."""
 
-    indptr: npt.NDArray[np.int64]
+    source: zarr.Array[Any]
+    cache: ChunkCache
     partner: zarr.Array[Any]
     r: zarr.Array[Any]
+
+    @cached_property
+    def indptr(self) -> npt.NDArray[np.int64]:
+        return _indptr(self.source, self.cache)
 
 
 @dataclass(frozen=True)
@@ -230,14 +235,25 @@ class StoreReader:
         query names its rows by, read without the others (ogld#14)."""
         return self._strings("alid", self._checked(rows))
 
-    def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
-        """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+    def loci_of(
+        self, rows: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.int64]]:
+        """Chromosomes and positions, without allele columns clump never returns (ogld#40).
+
+        This is a store-layer read, not a public query or a new caller setting. Geometry
+        and chromosome label dtypes stay identical to the full variant-table read.
+        """
         rows = self._checked(rows)
         position = np.empty(len(rows), dtype=np.int64)
         for c, members in self._by_chromosome(rows):
             position[members] = c.position[local_rows(rows[members], c.start)]
         names = np.array(self._names, dtype=np.str_)
-        chrom = names[chromosome_index(self._stops, rows)]
+        return names[chromosome_index(self._stops, rows)], position
+
+    def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
+        """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+        rows = self._checked(rows)
+        chrom, position = self.loci_of(rows)
         frequency = self._read(self._columns["a1_frequency"], rows)
         return Variants(
             chrom=chrom,
@@ -276,6 +292,32 @@ class StoreReader:
         out[repeat] = out[source[repeat]]
         out[:, repeat] = out[:, source[repeat]]
         return out
+
+    def clump_warmer(
+        self, rows: npt.NDArray[np.int64], *, r2: float, window_bp: float
+    ) -> Callable[[np.int64], None]:
+        """Warm candidate chunks together; oversized chromosomes use positional windows.
+
+        The reader owns candidate geometry and selection of the stored part. Warming is
+        optional: a missed chunk still goes through the ordinary bounded read (ADR 0009).
+        """
+        if r2 >= self._provenance["t_far"] or not len(rows) or self.cache_bytes == 0:
+            return lambda row: None
+        c, _ = next(self._by_chromosome(rows))
+        local = np.unique(local_rows(rows, c.start))
+        reach = math.floor(window_bp)
+        if self._prefetch_hits(c, local, reach):
+            return lambda row: None
+        return _ClumpWindows(self, c, local, reach).warm
+
+    def _prefetch_hits(self, c: _Chromosome, local: npt.NDArray[np.int64], reach: int) -> bool:
+        if len(local) < 2:
+            return True
+        stop = stop_within(c.position[local], reach)
+        at = np.flatnonzero(stop > np.arange(len(local)) + 1)
+        first = near_address(c.near_indptr, local[at], local[at + 1])
+        length = local[stop[at] - 1] - local[at + 1] + 1
+        return self._cache.prefetch(c.near_r, first, length)
 
     def partners(
         self,
@@ -642,10 +684,12 @@ class StoreReader:
                 name,
                 start,
                 stop,
-                refused_if_lost(position, np.asarray(position[start:stop])).astype(np.int64),
-                _indptr(near_indptr),
+                self._runs(position, np.array([start]), np.array([stop - start]))[0].astype(
+                    np.int64
+                ),
+                _indptr(near_indptr, self._cache),
                 near_r,
-                _Sparse(_indptr(index_indptr), index_partner, index_r),
+                _Sparse(index_indptr, self._cache, index_partner, index_r),
             )
         return self._loaded[name]
 
@@ -658,7 +702,7 @@ class StoreReader:
             indptr, partner, r = (
                 _kept_array(self._root, f"far/{c.name}/{array}") for array in _SPARSE_ARRAYS
             )
-            self._far[c.name] = _Sparse(_indptr(indptr), partner, r)
+            self._far[c.name] = _Sparse(indptr, self._cache, partner, r)
         return self._far[c.name]
 
     def _by_chromosome(
@@ -691,6 +735,32 @@ class StoreReader:
                 f"{size} rows: an Absent ALID is not a row (spec §8)"
             )
         return rows
+
+
+class _ClumpWindows:
+    """One sliding positional warm range, never a second cache or chromosome-sized pin."""
+
+    def __init__(
+        self, reader: StoreReader, c: _Chromosome, local: npt.NDArray[np.int64], reach: int
+    ) -> None:
+        self.reader, self.c, self.local, self.reach = reader, c, local, reach
+        self.position = c.position[local]
+        self.low, self.high = 1, 0
+
+    def warm(self, row: np.int64) -> None:
+        centre = int(self.c.position[int(row) - self.c.start])
+        if self.low <= centre <= self.high:
+            return
+        radius = self.reach
+        while True:
+            a, b = position_rows(self.position, centre - radius, centre + radius)
+            if (
+                self.reader._prefetch_hits(self.c, self.local[int(a) : int(b)], self.reach)
+                or radius == 0
+            ):
+                self.low, self.high = centre - radius, centre + radius
+                return
+            radius //= 2
 
 
 #: What a stored part's read gives some rows: row lengths, partners (local rows), Stored r.
@@ -815,5 +885,6 @@ def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
     return array
 
 
-def _indptr(array: zarr.Array[Any]) -> npt.NDArray[np.int64]:
-    return refused_if_lost(array, np.asarray(array[:]).astype(np.int64))
+def _indptr(array: zarr.Array[Any], cache: ChunkCache) -> npt.NDArray[np.int64]:
+    data = cache.runs(array, [0], [array.shape[0]])[0]
+    return refused_if_lost(array, data).astype(np.int64, copy=False)

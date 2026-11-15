@@ -1,13 +1,15 @@
 """Epic #1's acceptance for the five HGDP+1kGP LD Stores (ogld#7): every validation rule passes
-on each, and each records what a reader of its provenance needs.
+on each, each records what a reader of its provenance needs, and the direct decoder returns the
+same bytes as zarr on each (ogld#40, ADR 0009).
 
 The stores are the ones `scripts/build_hgdp1kgp.py build` writes under `$OGLD_STORES`; its
 constants and paths (`recipe`) say the scale, k, names and roots, and `$OGLD_STORE_<ANC>` names one
 elsewhere. `$OGLD_KEEP` holds the keep files, so n is checked against the unrelated samples, not
 against what the store says of itself. Each store must hold chromosomes 1 to 22.
 Validating all five takes about an hour of the node (`pixi run -e dev acceptance-stores`),
-which is why this is an acceptance run and not the realdata tier. An input missing fails the
-run; it never skips (CONTRIBUTING.md, "Acceptance runs").
+which is why this is an acceptance run and not the realdata tier. The decoder equality reads every
+array of each store, so it belongs here too: it took the realdata tier over its five-minute budget.
+An input missing fails the run; it never skips (CONTRIBUTING.md, "Acceptance runs").
 """
 
 from __future__ import annotations
@@ -17,12 +19,13 @@ import os
 from pathlib import Path
 
 import build_hgdp1kgp as recipe
+import numpy as np
 import pytest
 
 import ogld
 from ogld.format import VALIDATION_RULES
 from ogld.store.layout import chromosomes_listed
-from ogld.store.location import open_group
+from ogld.store.location import ChunkCache, open_group
 from ogld.store.validation import validate_at
 
 #: ADR 0002, decision 11: each panel's unrelated samples (`scripts/make_keeps.py`).
@@ -41,6 +44,31 @@ def keep_count(panel: str) -> int:
     keep = recipe.keep_file(panel)
     assert keep.exists(), f"{keep} is missing: scripts/make_keeps.py writes it"
     return len(recipe.keep_iids(keep))
+
+
+@pytest.mark.parametrize("panel", PANELS)
+def test_sampled_chunks_of_published_stores_equal_zarr(panel: str) -> None:
+    """The direct decoder's first, middle and last chunk of every array in the store equals
+    zarr's own read of it (ogld#40, ADR 0009)."""
+    import zarr
+
+    path = store_path(panel)
+    cache = ChunkCache(1 << 25)
+    root = open_group(path, cache=cache)
+    arrays = [a for _, a in root.members(max_depth=None) if isinstance(a, zarr.Array)]
+    assert len(arrays) > 100
+    for array in arrays:
+        size, n = int(array.chunks[0]), int(array.shape[0])
+        if n == 0:
+            np.testing.assert_array_equal(cache.take(array, []), array[:])
+            continue
+        last = (n - 1) // size
+        for k in sorted({0, last // 2, last}):
+            coords = np.arange(k * size, min(n, (k + 1) * size))
+            expected = np.asarray(array[k * size : (k + 1) * size])
+            got = cache.take(array, coords)
+            assert got.dtype == expected.dtype, array.path
+            np.testing.assert_array_equal(got, expected, err_msg=f"{panel}/{array.path}/{k}")
 
 
 @pytest.mark.parametrize("panel", PANELS)

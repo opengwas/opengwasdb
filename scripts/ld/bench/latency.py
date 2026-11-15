@@ -52,6 +52,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from collections import Counter
@@ -104,14 +105,29 @@ class Tally:
 
 
 TALLY = Tally()
+_TALLY_LOCK = threading.Lock()
+
+
+def _record_get(key: str, out: Any) -> None:
+    name = http_static.array_of(key)
+    with _TALLY_LOCK:
+        TALLY.gets[name] += 1
+        TALLY.get_bytes[name] += 0 if out is None else len(out)
 
 
 def _counting_get(original: Callable[..., Any]) -> Callable[..., Any]:
     async def get(self: Any, key: str, prototype: Any = None, byte_range: Any = None) -> Any:
         out = await original(self, key, prototype, byte_range)
-        name = http_static.array_of(key)
-        TALLY.gets[name] += 1
-        TALLY.get_bytes[name] += 0 if out is None else len(out)
+        _record_get(key, out)
+        return out
+
+    return get
+
+
+def _counting_get_sync(original: Callable[..., Any]) -> Callable[..., Any]:
+    def get(self: Any, key: str, *, prototype: Any = None, byte_range: Any = None) -> Any:
+        out = original(self, key, prototype=prototype, byte_range=byte_range)
+        _record_get(key, out)
         return out
 
     return get
@@ -227,6 +243,7 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     import zarr
     from zarr.storage import FsspecStore, LocalStore
 
+    from ogld.query import clumping
     from ogld.store import location
     from ogld.store.location import ChunkCache
     from ogld.store.reader import StoreReader
@@ -237,6 +254,7 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         # A reader makes its cache with the module's budget when it opens (`ChunkCache()`).
         patch(location, "CACHE_BYTES", cache_mib << 20)
     _wrap(LocalStore, "get", _counting_get, patch)
+    _wrap(LocalStore, "get_sync", _counting_get_sync, patch)
     _wrap(FsspecStore, "get", _counting_get, patch)
     _wrap(ChunkCache, "_keep_run", _counting_run, patch)
     _wrap(StoreReader, "_chromosome", _loading, patch)
@@ -245,6 +263,10 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         # The string reads and the cache's per-string count, the 7% of #14's profile.
         (StoreReader, "rows_of", "rows_of"),
         (StoreReader, "variants", "variants"),
+        (StoreReader, "loci_of", "loci_of"),
+        (StoreReader, "partners", "partners"),
+        (ChunkCache, "prefetch", "prefetch"),
+        (clumping, "_greedy", "greedy"),
         (location, "_counted", "counted"),
     ):
         _wrap(owner, name, lambda original, label=label: _timing(original, label), patch)

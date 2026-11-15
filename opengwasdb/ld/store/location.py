@@ -23,19 +23,22 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Final
 
 import numpy as np
 import numpy.typing as npt
 import zarr
-from zarr.abc.store import ByteRequest, Store, SuffixByteRequest
+from zarr.abc.store import ByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
 from zarr.core.sync import sync
-from zarr.storage import StorePath, WrapperStore
+from zarr.storage import LocalStore, StorePath, WrapperStore
 
 from ogld.format import InputError
 from ogld.format.geometry import spans
+from ogld.store.decoding import Decoded, DecodedChunk, NumericDecoder, on_pool
 
 #: The decoded inner chunks and shard indexes a reader keeps unless its caller says otherwise,
 #: in bytes: 8,192 of layout C's 512 KiB Near Band chunks. ogld#8 measured repeated reads
@@ -46,6 +49,8 @@ CACHE_BYTES: Final = 1 << 32
 #: shards. The bound is per read: reads from several threads each hold a batch (ogld#32).
 #: A string chunk is planned at the most a string has held so far (`ChunkCache._chunk_bytes`).
 _FETCH_BYTES: Final = 1 << 28
+#: Bound planning metadata even for a store re-chunked to tiny elements (ADR 0009).
+_PREFETCH_CHUNKS: Final = 1 << 16
 
 
 def open_group(location: str | os.PathLike[str], *, cache: ChunkCache | None = None) -> zarr.Group:
@@ -96,10 +101,11 @@ class ChunkCache:
     """Decoded inner chunks of one store's 1-D arrays, read whole and kept to `budget` bytes,
     the least recently used dropped first.
 
-    Each kept chunk owns its memory, copied out of the read that fetched it (a view would keep
-    that whole read alive), and counts an upper bound on what is held (`_counted`), so the
-    budget is a bound on the memory kept. One lock guards every lookup, insertion and eviction,
-    so threads sharing a reader keep one copy of a chunk they both missed, and the count stays
+    Each kept chunk owns its memory, adopted from a direct decode or copied out of a fallback
+    run (a view would keep that whole run alive), and counts an upper bound on what is held
+    (`_counted`), so the budget bounds the memory kept. One lock guards lookup, insertion
+    and eviction, so threads sharing a reader keep one copy of a chunk they both missed.
+    The count stays
     the sum of what is kept. Reads, and counting, run outside it.
     """
 
@@ -124,13 +130,44 @@ class ChunkCache:
         size = int(array.chunks[0])
         which = at // size
         wanted = np.unique(which)
+        most = max(1, _FETCH_BYTES // (self._chunk_bytes(array, size) or 1))
+        if len(wanted) > most:
+            return self._take_bounded(array, at, which, wanted, most)
         chunks = self._chunks(array, wanted, size)
-        start = np.concatenate([[0], np.cumsum([len(c) for c in chunks])])
-        joined = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
-        found: npt.NDArray[Any] = joined[
-            start[np.searchsorted(wanted, which)] + (at - which * size)
-        ]
+        if len(chunks) == 1:
+            single: npt.NDArray[Any] = chunks[0][at - wanted[0] * size]
+            return single
+        # Joining full cached chunks copied gigabytes per sparse lead even on a cache hit
+        # (ogld#40). Gather only requested values, then undo the grouping's permutation.
+        order = np.argsort(which, kind="stable")
+        offsets = (at % size)[order]
+        starts = np.searchsorted(which[order], wanted)
+        stops = np.append(starts[1:], len(at))
+        grouped = np.concatenate(
+            [chunk[offsets[a:b]] for chunk, a, b in zip(chunks, starts, stops, strict=True)]
+        )
+        found = np.empty_like(grouped)
+        found[order] = grouped
         return found
+
+    def _take_bounded(
+        self,
+        array: zarr.Array[Any],
+        at: npt.NDArray[np.int64],
+        which: npt.NDArray[np.int64],
+        wanted: npt.NDArray[np.int64],
+        most: int,
+    ) -> npt.NDArray[Any]:
+        order = np.argsort(which, kind="stable")
+        ordered = which[order]
+        result = np.empty(len(at), dtype=array.dtype)
+        for start in range(0, len(wanted), most):
+            numbers = wanted[start : start + most]
+            a = np.searchsorted(ordered, numbers[0])
+            b = np.searchsorted(ordered, numbers[-1], side="right")
+            asked = order[a:b]
+            result[asked] = self.take(array, at[asked])
+        return result
 
     def runs(
         self, array: zarr.Array[Any], first: npt.ArrayLike, length: npt.ArrayLike
@@ -154,6 +191,28 @@ class ChunkCache:
             _run(chunks, s, n, size) if n else empty
             for s, n in zip(start.tolist(), count.tolist(), strict=True)
         ]
+
+    def prefetch(self, array: zarr.Array[Any], first: npt.ArrayLike, length: npt.ArrayLike) -> bool:
+        """Warm all candidate chunks only if their buffers and indexes fit the cache.
+
+        Planning merges chunk intervals without materialising a coordinate per pair. A
+        refusal fetches nothing; the reader then warms bounded positional windows instead.
+        """
+        decoder = NumericDecoder.of(array)
+        if decoder is None:
+            return False
+        wanted = _prefetch_plan(array, decoder, first, length, self._budget)
+        if wanted is None:
+            return False
+        kept = self._kept_chunks(array.path, wanted)
+        missing = [k for k in wanted if k not in kept]
+        most = max(1, _FETCH_BYTES // (decoder.size * array.dtype.itemsize) // 2)
+        for start in range(0, len(missing), most):
+            numbers = missing[start : start + most]
+            chunks = sync(_prefetched(array, decoder, numbers))
+            for k, chunk in zip(numbers, chunks, strict=True):
+                self._keep_run(array.path, k, k + 1, decoder.size, chunk)
+        return True
 
     def _chunks(
         self, array: zarr.Array[Any], wanted: npt.NDArray[np.int64], size: int
@@ -186,6 +245,10 @@ class ChunkCache:
         `async.concurrency` pieces and `_FETCH_BYTES` as one chunk is planned to hold."""
         per_shard = (array.shards or array.chunks)[0] // size
         most = max(1, _FETCH_BYTES // (self._chunk_bytes(array, size) or 1))
+        decoder = NumericDecoder.of(array)
+        if decoder is not None:
+            # Reserve trimming the padded tail, or non-native byte-order conversion.
+            most = max(1, most - 1 if decoder.dtype.isnative else most // 2)
         concurrency = int(zarr.config.get("async.concurrency"))
         return _batches(_pieces(missing, per_shard, most), concurrency, most)
 
@@ -209,7 +272,11 @@ class ChunkCache:
         pieces = _fetched(array, batch, size)
         found: dict[int, npt.NDArray[Any]] = {}
         for first, stop in batch:
-            found.update(self._keep_run(array.path, first, stop, size, pieces.pop(0)))
+            if pieces and isinstance(pieces[0], DecodedChunk):
+                for k in range(first, stop):
+                    found.update(self._keep_run(array.path, k, k + 1, size, pieces.pop(0)))
+            else:
+                found.update(self._keep_run(array.path, first, stop, size, pieces.pop(0)))
         return found
 
     def _kept_chunks(self, path: str, wanted: list[int]) -> dict[int, npt.NDArray[Any]]:
@@ -226,11 +293,17 @@ class ChunkCache:
     def _keep_run(
         self, path: str, first: int, stop: int, size: int, data: npt.NDArray[Any]
     ) -> dict[int, npt.NDArray[Any]]:
-        """Chunks first … stop − 1 of the array at `path`, fetched as `data`, each copied out
-        and kept."""
-        copies = [
-            data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
-        ]
+        """Chunks first … stop − 1, adopted if owned by the decoder, otherwise copied out.
+
+        The ownership token is only made for one chunk, so no neighbouring data is retained.
+        """
+        copies = (
+            [np.asarray(data)]
+            if isinstance(data, DecodedChunk)
+            else [
+                data[(k - first) * size : (k - first + 1) * size].copy() for k in range(first, stop)
+            ]
+        )
         read = {first + i: (chunk, _counted(chunk)) for i, chunk in enumerate(copies)}
         rate = max(counted / max(1, len(chunk)) for chunk, counted in read.values())
         with self._lock:
@@ -270,6 +343,37 @@ class ChunkCache:
             _, (_, dropped) = self._kept.popitem(last=False)
             self._bytes -= dropped
         return chunk
+
+
+def _prefetch_plan(
+    array: zarr.Array[Any],
+    decoder: NumericDecoder,
+    first: npt.ArrayLike,
+    length: npt.ArrayLike,
+    budget: int,
+) -> list[int] | None:
+    lo, hi = _chunk_intervals(first, length, decoder.size)
+    count = int((hi - lo + 1).sum())
+    # Counting every shard between the ends is conservative for sparse runs.
+    shards = int(hi[-1] // decoder.per_shard - lo[0] // decoder.per_shard + 1) if len(lo) else 0
+    needed = count * decoder.size * array.dtype.itemsize + shards * decoder.index_size
+    if needed > budget or count > _PREFETCH_CHUNKS:
+        return None
+    wanted: list[int] = spans(lo, hi - lo + 1).tolist()
+    return wanted
+
+
+def _chunk_intervals(
+    first: npt.ArrayLike, length: npt.ArrayLike, size: int
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    start, count = np.asarray(first, dtype=np.int64), np.asarray(length, dtype=np.int64)
+    some = count > 0
+    lo, hi = start[some] // size, (start[some] + count[some] - 1) // size
+    order = np.argsort(lo, kind="stable")
+    lo, hi = lo[order], np.maximum.accumulate(hi[order])
+    begins = np.r_[0, np.flatnonzero(lo[1:] > hi[:-1] + 1) + 1]
+    ends = np.r_[begins[1:] - 1, len(lo) - 1]
+    return (lo[begins], hi[ends]) if len(lo) else (lo, hi)
 
 
 def _pieces(missing: list[int], per_shard: int, most: int) -> list[tuple[int, int]]:
@@ -314,18 +418,98 @@ def _fetched(
     where `zarr.Array` runs each read it is asked for. A piece that fails cancels the others
     of its batch, rather than leaving them fetching, and its own error is raised."""
 
+    decoder = NumericDecoder.of(array) if isinstance(array, zarr.Array) else None
+
     async def together() -> list[Any]:
         try:
             async with asyncio.TaskGroup() as group:
                 reads = [
-                    group.create_task(array.async_array.getitem(slice(a * size, b * size)))
+                    group.create_task(
+                        decoder.read(array, a, b)
+                        if decoder is not None
+                        else array.async_array.getitem(slice(a * size, b * size))
+                    )
                     for a, b in pieces
                 ]
         except BaseExceptionGroup as failed:
             raise failed.exceptions[0] from failed
         return [read.result() for read in reads]
 
-    return [np.asarray(data) for data in sync(together())]
+    fetched = sync(together())
+    if decoder is not None:
+        return [chunk for piece in fetched for chunk in piece]
+    return [np.asarray(data) for data in fetched]
+
+
+class _EncodedBudget:
+    """Compressed prefetch ranges: one shared allowance, not one allowance per task."""
+
+    def __init__(self) -> None:
+        self.held = 0
+        self.condition = asyncio.Condition()
+
+    async def acquire(self, size: int) -> None:
+        async with self.condition:
+            await self.condition.wait_for(
+                lambda: self.held == 0 or self.held + size <= _FETCH_BYTES
+            )
+            self.held += size
+
+    async def release(self, size: int) -> None:
+        async with self.condition:
+            self.held -= size
+            self.condition.notify_all()
+
+
+async def _prefetched(
+    array: zarr.Array[Any], decoder: NumericDecoder, numbers: list[int]
+) -> list[npt.NDArray[Any]]:
+    budget = _EncodedBudget()
+    semaphore = asyncio.Semaphore(int(zarr.config.get("async.concurrency")))
+    out: Decoded = [None] * len(numbers)
+    groups = np.split(
+        np.arange(len(numbers)), np.flatnonzero(np.diff(np.array(numbers) // decoder.per_shard)) + 1
+    )
+    try:
+        async with asyncio.TaskGroup() as tasks:
+            for group in groups:
+                if len(group):
+                    tasks.create_task(
+                        _prefetch_shard(array, decoder, numbers, group, out, budget, semaphore)
+                    )
+    except BaseExceptionGroup as failed:
+        raise failed.exceptions[0] from failed
+    return [decoder.owned(array, k, chunk) for k, chunk in zip(numbers, out, strict=True)]
+
+
+async def _prefetch_shard(
+    array: zarr.Array[Any],
+    decoder: NumericDecoder,
+    numbers: list[int],
+    group: npt.NDArray[np.int64],
+    out: Decoded,
+    budget: _EncodedBudget,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    keys = np.array(numbers, dtype=np.int64)[group]
+    path = array.store_path / array.metadata.encode_chunk_key((int(keys[0]) // decoder.per_shard,))
+    async with semaphore:
+        index = await path.get(default_buffer_prototype(), SuffixByteRequest(decoder.index_size))
+    if index is None:
+        return
+    for lo, hi, chunks in decoder.ranges(index.to_bytes(), keys % decoder.per_shard, gap=1 << 19):
+        await budget.acquire(hi - lo)
+        try:
+            async with semaphore:
+                data = await path.get(default_buffer_prototype(), RangeByteRequest(lo, hi))
+            if data is not None:
+                view = memoryview(data.as_numpy_array()).cast("B")
+                places = [(int(group[k]), a, n) for k, a, n in chunks]
+                await decoder.decode(view, lo, places, out)
+                del view
+            del data
+        finally:
+            await budget.release(hi - lo)
 
 
 class _KeptIndexes(WrapperStore[Store]):
@@ -357,10 +541,22 @@ class _KeptIndexes(WrapperStore[Store]):
     ) -> Buffer | None:
         shard, kept = self._looked_up(key, byte_range)
         if shard is None:
-            return await self._store.get(key, prototype, byte_range)
+            return await self._get(key, prototype, byte_range)
         if kept is None:
             kept = await self._shared(shard, prototype)
         return _buffer(prototype, kept)
+
+    async def _get(
+        self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None
+    ) -> Buffer | None:
+        if type(self._store) is LocalStore:
+            # Its public sync getter has the same missing-file semantics as get(). Sharing
+            # the pool prevents the one default asyncio helper from serialising range I/O.
+            result: Buffer | None = await on_pool(
+                partial(self._store.get_sync, key, prototype=prototype, byte_range=byte_range)
+            )
+            return result
+        return await self._store.get(key, prototype, byte_range)
 
     def get_sync(
         self,
@@ -399,10 +595,19 @@ class _KeptIndexes(WrapperStore[Store]):
             pending = asyncio.ensure_future(self._fetched(shard, prototype))
             self._pending[shard] = pending
             pending.add_done_callback(lambda _: self._pending.pop(shard))
-        return await asyncio.shield(pending)
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # Sharing protects other readers, not permission to outlive this read (ADR 0009).
+            # Consume a failure while draining, but preserve this waiter's cancellation.
+            drained = asyncio.gather(pending, return_exceptions=True)
+            while not drained.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(drained)
+            raise
 
     async def _fetched(self, shard: _ShardIndex, prototype: BufferPrototype) -> bytes | None:
-        fetched = await self._store.get(shard.key, prototype, SuffixByteRequest(shard.size))
+        fetched = await self._get(shard.key, prototype, SuffixByteRequest(shard.size))
         return self._kept_from(shard, fetched)
 
 

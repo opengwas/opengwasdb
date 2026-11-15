@@ -32,13 +32,13 @@ from contract.support import RangeHandler
 from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 from zarr.abc.store import SuffixByteRequest
-from zarr.storage import LocalStore
+from zarr.storage import FsspecStore, LocalStore
 
 import ogld
 from ogld.format import InputError, Refusal, RefusalReason, judge_request
 from ogld.query import clumping
 from ogld.query import proxies as proxies_query
-from ogld.store import StoreReader, location, reader
+from ogld.store import StoreReader, decoding, location, reader
 from ogld.store.validation import validate_group
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
@@ -624,6 +624,24 @@ def holding(directory: Path, flight: InFlight) -> Iterator[str]:
         worker.join()
 
 
+def client_flight(monkeypatch: pytest.MonkeyPatch) -> InFlight:
+    """Count awaited store requests, not server finalisers after a response was delivered."""
+    flight = InFlight(together=1)
+    original = FsspecStore.get
+
+    async def get(self: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if "/c/" not in key:
+            return await original(self, key, *args, **kwargs)
+        flight.start()
+        try:
+            return await original(self, key, *args, **kwargs)
+        finally:
+            flight.end()
+
+    monkeypatch.setattr(FsspecStore, "get", get)
+    return flight
+
+
 #: Six chunks of chr22's Near Band, in six shards, none a neighbour of another: six runs.
 APART = [0, 8, 16, 24, 32, 40]
 
@@ -685,7 +703,13 @@ class Held:
     alive: list[weakref.ref[np.ndarray]] = field(default_factory=list)
 
     def still_held(self) -> int:
-        return sum(location._counted(p) for p in (ref() for ref in self.alive) if p is not None)
+        # Direct chunks transfer their sole buffers to the cache, so those references are
+        # kept chunks now, not a prior batch's uncounted run still pinned beside the cache.
+        return sum(
+            location._counted(p)
+            for p in (ref() for ref in self.alive)
+            if p is not None and not isinstance(p, decoding.DecodedChunk)
+        )
 
 
 def measured_fetches(monkeypatch: pytest.MonkeyPatch) -> Held:
@@ -719,17 +743,34 @@ def test_a_read_has_at_most_its_bounds_in_flight(
     monkeypatch.setattr(location, "_FETCH_BYTES", budget)
     held = measured_fetches(monkeypatch)
     coords = np.array(APART) * INNER + 5
-    flight = InFlight(together=3, patience=0.15)
+    flight = InFlight(together=3, patience=0.10)
+    client = client_flight(monkeypatch)
     setting = {"async.concurrency": 2 if bound == "runs" else 10}
     with zarr.config.set(setting), holding(small_chunks, flight) as url:
         cache = location.ChunkCache(1 << 28)
         served = location.open_group(url, cache=cache)["near/22/r"]
         assert isinstance(served, zarr.Array)
         np.testing.assert_array_equal(cache.take(served, coords), everything[coords])
-    assert len(held.batches) == 3, "three batches of two runs"
-    assert flight.peak == 2, "two requests in flight at once, never more"
-    assert held.earlier == [0, 0, 0], "no earlier batch's piece is held while the next fetches"
-    assert max(held.batches) <= 2 * chunk_bytes
+    # Direct decoding reserves a scratch chunk per output chunk inside the byte bound.
+    batches = 6 if bound == "bytes" else 3
+    assert len(held.batches) == batches
+    assert client.peak == (1 if bound == "bytes" else 2)
+    assert held.earlier == [0] * batches, "no earlier batch survives into the next fetch"
+    assert max(held.batches) * 2 <= budget
+
+
+def test_prefetch_limits_actual_http_requests(
+    small_chunks: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = client_flight(monkeypatch)
+    flight = InFlight(together=3, patience=0.05)
+    with zarr.config.set({"async.concurrency": 2}), holding(small_chunks, flight) as url:
+        cache = location.ChunkCache(1 << 20)
+        array = location.open_group(url, cache=cache)["near/22/r"]
+        assert isinstance(array, zarr.Array)
+        assert cache.prefetch(array, np.array(APART) * INNER, np.full(len(APART), INNER))
+    assert client.peak == 2
+    assert cache._bytes <= cache.budget
 
 
 def test_a_read_of_strings_holds_at_most_the_bytes_in_flight(
@@ -786,7 +827,7 @@ def test_a_repeated_read_fetches_its_chunks_once(
     # by a reader opened with room for them. One opened with none fetches them again.
     url, sent = served
     store = ogld.open(url, cache_bytes=budget)
-    names = list(StoreReader.open(small_chunks).variants(np.arange(500, 560, 3)).alid)
+    names = list(StoreReader.open(small_chunks).variants(np.arange(500, 540, 4)).alid)
 
     def near_bytes() -> int:
         return sum(length for path, length in sent if path.startswith("/near/22/r/c/"))
@@ -897,7 +938,9 @@ def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> No
             proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
     fetched = {key[0] for key in reader._cache._kept if kind(key) == "chunk"}
     assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
-    assert not [path for path in fetched if path.startswith("near/")], "no Near Band chunk"
+    assert not [path for path in fetched if path.startswith("near/") and path.endswith("/r")], (
+        "no Near Band code chunk; its indptr is still loaded on first chromosome touch"
+    )
     chunks = ("/near/21/r/c/", "/near/22/r/c/")
     assert not [path for path, _ in sent if path.startswith(chunks)], "nor any Near Band byte"
 

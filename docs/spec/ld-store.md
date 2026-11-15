@@ -773,9 +773,9 @@ equal to t_far, rounding onto a threshold, AMR's t_far, a pair at exactly t_far,
 
 ## 10. Reads
 
-_Informative._ A reader keeps a chromosome's `position` range and its Near Band's and Proxy
-Index's `indptr` once it has opened that chromosome, and its Far Pairs' `indptr` once a request
-has needed that chromosome's pairs beyond `near_bp`: 8 bytes a variant each. For HGDP+1kGP EUR's
+_Informative._ A reader keeps a chromosome's `position` range and its Near Band's `indptr`
+once it has opened that chromosome. Its Proxy Index's `indptr` is read only when a request
+uses the index, and its Far Pairs' `indptr` when a request needs pairs beyond `near_bp`: 8 bytes a variant each. For HGDP+1kGP EUR's
 8.59 M variants that is 69 MB of positions, which a reader holds as `int64`, and 137 MB of
 `indptr`, raw, and 69 MB more once matrices have been read on every chromosome. Each query makes one of the reader's reads (`ogld.store.StoreReader`, ogld#14),
 and the reads map onto the arrays as follows.
@@ -797,6 +797,13 @@ compares r2 with t_far itself:
 | `matrix`, `region` | no threshold: the Near Band within `near_bp`, the Far Pairs beyond it | |
 | `proxies` | the Proxy Index row of each query variant | the Near Band row and column of each query variant, within W |
 | `clump` | the Proxy Index row of each lead, among the hits still unclumped | one Near Band element for each lead and each hit still unclumped within W |
+
+`clump` visits one chromosome at a time, strongest first inside it, and scatters results
+back into the original request order, including duplicates (ogld#40; ADR 0009). A clump
+cannot cross chromosomes, so this changes no lead or member, but avoids evicting chunks to
+visit other chromosomes between leads. It reads ALIDs, chromosomes and positions, not the
+alleles or allele frequencies it never returns. A sparse chunk-cache read gathers only its
+requested elements, rather than concatenating whole cached chunks on every warm lead.
 
 `clump` asks for one lead's partners at a time, among the hits no stronger lead has taken, and
 never for a square among a lead and its m candidates, which resolves every pair among them. On the
@@ -863,8 +870,9 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A chromosome's `position`
-range and its Near Band's and Proxy Index's `indptr` are read the first time a request touches
-that chromosome, and kept; its Far Pairs' `indptr` the first time a request needs its pairs
+range and its Near Band's `indptr` are read the first time a request touches that chromosome,
+through the numeric cache, and kept. Its Proxy Index's `indptr` is read only when used;
+its Far Pairs' `indptr` the first time a request needs its pairs
 beyond `near_bp`, so `proxies` and `clump`, which never do, read no more than they did before
 the Far Pairs (ADR 0007). Every other read the reader makes goes through its cache of decoded inner chunks
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
@@ -875,6 +883,46 @@ walking skeleton's arrays held whole. A matrix resolves its pairs about 4 millio
 which bounds its working memory beside the matrix itself. Validation's rules read through Zarr
 directly, in bounded windows: one pass over each chromosome, and a second read of the blocks
 `index.near` flags in a store it fails (§12).
+
+**Direct numeric decoding** (ogld#40; ADR 0009). For a one-dimensional numeric array whose
+metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
+CRC32C in an end-located shard index, `location.py` reads through the store's async interface
+using its `decoding.py` backend. That backend owns shard/frame parsing and one process-shared
+seven-worker I/O/decode pool. Both declared
+byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
+means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
+mismatches, malformed zstd frames and decoded-length mismatches raise. No private zarr codec/index API is called. Every other chain,
+including strings, goes through zarr unchanged. Zarr remains the format and the writer.
+
+The same per-read planner and cache budget apply to both paths. Each directly decoded native
+chunk owns its buffer and transfers it to the cache without copying. The planner reserves
+one chunk for trimming a padded tail, or half the allowance for non-native byte-order
+conversion scratch. Each frame's full decoded length is checked before adoption. At least
+one chunk can be read even when its buffers exceed the allowance. No second decoded batch
+is queued. Each range submits at most seven decode jobs. A failed piece cancels sibling
+fetches and drains running decode jobs before returning. A cancelled shard-index waiter also
+drains the shielded shared index fetch without cancelling another reader's request.
+Compressed ranges, codec workspace and small index/job bookkeeping are additional to the
+decoded-byte bound;
+the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
+not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
+
+**Clump prefetch** (ogld#40 round 2; ADR 0009). Before a chromosome's greedy pass, the
+reader warms the union of chunks its candidate hit pairs can need, only when the buffers
+and shard indexes fit the cache budget and at most 65,536 chunk keys are needed. A chromosome
+that does not fit uses a sliding positional warm range of W around a lead, halved until it
+fits; ordinary reads still resolve partners outside a smaller warm range. Zero cache skips
+warming. Planning is O(hits + 65,536), not O(hit pairs). Sparse reads stream bounded chunk
+groups, so an oversized warm range never becomes a whole-chromosome decoded pin.
+
+Prefetch uses a separate 256 MiB credit limit for compressed ranges, held until decode
+finishes, in addition to the decoded flight allowance. It coalesces at most 512 KiB gaps
+into at most 16 MiB ranges and decodes only requested chunks. A single oversized chunk is
+the exception to either allowance. Actual store requests remain bounded by async.concurrency.
+The async store wrapper bridges exact LocalStore reads through its public get_sync method
+on the same pool as decoding; subclasses and HTTP retain async get. No global zarr setting
+changes. Known-size zstd frames are checked against RFC 8878 before decoding into a fixed
+buffer; unknown-size frames retain allocating decode and output-length validation.
 
 **The cache and its bound** (ogld#4, ogld#32). An opened store's cache keeps decoded chunks and
 shard indexes up to `cache_bytes`, dropping the least recently used first. The caller sets it
@@ -888,8 +936,9 @@ measured repeated reads warm, and at the earlier 256 MiB not (owner, 12 November
 
 A single cold pass reads distinct chunks, which no budget saves.
 
-Each kept chunk owns its memory, copied out of the read that fetched it, and counts an upper bound
-on what it holds. So the budget bounds the memory kept. A numeric chunk counts its buffer, and a
+Each kept chunk owns its memory: adopted from a directly decoded single-chunk buffer, or
+copied out of a fallback run, never a view retaining uncounted neighbouring chunks. It counts
+an upper bound on what it holds. So the budget bounds the memory kept. A numeric chunk counts its buffer, and a
 shard index its bytes. A string chunk stays numpy's variable-width strings, as zarr returns them,
 which keep each string over 15 UTF-8 bytes in an arena that `nbytes` leaves out (about 2.2 times
 `nbytes` for 16-character ALIDs). So it counts `nbytes` + 1.25 × Σ(bytes + 8) + 512, the sum over
@@ -931,8 +980,8 @@ hold fall into runs of neighbouring chunks. Each run is cut where a shard ends, 
 reads one shard. The pieces are fetched in batches, every piece of a batch at once on zarr's event
 loop. A batch holds at most zarr's `async.concurrency` pieces (10 by default) and at most 256 MiB
 as the cache counts memory, two of layout C's Near Band shards; a larger run is cut to fit. A
-read holds one batch at a time: it lets each piece go once its chunks are copied out, before it
-fetches the next batch.
+read holds one batch at a time: it lets each piece go once its chunks are copied out or their
+owned buffers adopted, before it fetches the next batch.
 
 A numeric chunk's decoded size is its buffer, known before it is fetched. A string chunk's is not
 known until it is decoded: its strings may be any length. So a string array's batches are planned

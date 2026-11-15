@@ -37,20 +37,45 @@ def clump(
     present = found >= 0
     absent = tuple(alid for alid, ok in zip(alids, present, strict=True) if not ok)
     rows, scores = found[present], scores[present]
-    variants = reader.variants(rows)
+    chrom, position = reader.loci_of(rows)
+    # rows_of has already compared the complete stored ALID, not only its locus.
+    names = np.array([a for a, ok in zip(alids, present, strict=True) if ok], dtype=np.str_)
 
-    lead, r_lead = _greedy(reader, rows, scores, r2=r2, window=window)
+    lead, r_lead = _chromosome_greedy(reader, rows, scores, chrom, r2=r2, window=window)
     return Clumps(
-        alid=variants.alid,
-        chrom=variants.chrom,
-        position=variants.position,
+        alid=names,
+        chrom=chrom,
+        position=position,
         score=scores,
-        lead=variants.alid[lead],
+        lead=names[lead],
         r=r_lead,
         absent=absent,
         r2=r2,
         window_bp=window,
     )
+
+
+def _chromosome_greedy(
+    reader: StoreReader,
+    rows: npt.NDArray[np.int64],
+    scores: npt.NDArray[np.float64],
+    chrom: npt.NDArray[np.str_],
+    *,
+    r2: float,
+    window: float,
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+    """A clump cannot cross chromosomes: keep each one's chunks together (ADR 0009).
+
+    Scatter back into request order, including duplicates. Only the order of independent
+    chromosome passes changes, never strongest-first order inside one chromosome.
+    """
+    lead = np.empty(len(rows), dtype=np.int64)
+    r_lead = np.empty(len(rows), dtype=np.float64)
+    for name in np.unique(chrom):
+        members = np.flatnonzero(chrom == name)
+        local, values = _greedy(reader, rows[members], scores[members], r2=r2, window=window)
+        lead[members], r_lead[members] = members[local], values
+    return lead, r_lead
 
 
 def _greedy(
@@ -69,6 +94,7 @@ def _greedy(
     lead reads its own partners among the hits still open, one call each, so a lead resolves
     only its pairs with its candidates: never a square among them (ogld#14).
     """
+    warm = reader.clump_warmer(rows, r2=r2, window_bp=window)
     hits = _Hits(rows)
     lead = np.full(len(rows), -1, dtype=np.int64)
     r_lead = np.full(len(rows), np.nan)
@@ -80,6 +106,7 @@ def _greedy(
         if _joins(*_ITSELF, r2=r2, window=window).all():
             hits.join(lead, r_lead, i, np.array([rows[i]]), np.ones(1))
         hits.close(rows[i], lead)
+        warm(rows[i])
         found = reader.partners(rows[i : i + 1], r2=r2, window_bp=window, among=hits.open())
         joins = _joins(found.r, found.distance, r2=r2, window=window)
         hits.join(lead, r_lead, i, found.partner[joins], found.r[joins])

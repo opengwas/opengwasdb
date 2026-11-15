@@ -101,6 +101,20 @@ def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
     np.testing.assert_array_equal(remote.matrix(some).r, opened().matrix(some).r)
 
 
+def test_every_array_decodes_as_zarr_over_http(served_store: str) -> None:
+    from ogld.store.location import ChunkCache, open_group
+
+    cache = ChunkCache()
+    remote = open_group(served_store, cache=cache)
+    local = zarr.open_group(support.TEST_STORE, mode="r")
+    arrays = [(p, a) for p, a in local.members(max_depth=None) if isinstance(a, zarr.Array)]
+    assert len(arrays) > 20
+    for path, array in arrays:
+        served = remote[path]
+        assert isinstance(served, zarr.Array)
+        np.testing.assert_array_equal(cache.take(served, np.arange(array.shape[0])), array[:])
+
+
 # ------------------------------------------------------------------ pair answers (spec §8)
 
 
