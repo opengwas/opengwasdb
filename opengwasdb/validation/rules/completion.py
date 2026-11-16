@@ -136,8 +136,8 @@ def declaration_matches_mask(
 
     This remains the categorical declaration rule (ADR 0028, ADR 0037 §4): an
     Analysis carried through observed-only must not claim imputed cells and derive
-    its `eaf_scope` from that claim. `completion.quality_counts` separately holds
-    the per-block quality rollup to the exact counts in the stored planes (#361).
+    its `eaf_scope` from that claim. `completion.quality_counts` separately checks
+    exact counts where at most one quality row avoids ambiguous overlaps (#307).
     """
     for row in read_analyses(analyses_path).rows:
         try:
@@ -187,14 +187,14 @@ def _quality_cells(_target: Target, block: Block) -> np.ndarray:
 def _quality_totals(target: Target) -> tuple[np.ndarray, np.ndarray]:
     """The Store records block ids and counts, but no block-to-cell membership.
 
-    Judge their per-Analysis sum without consulting an external LD panel: a Store
-    Release must validate on its own. Exact per-block attribution would require
-    that membership to be recorded, not guessed from an arbitrary block name.
+    Count rows as well as attempts: multiple rows cannot prove whether attempted
+    cells overlap (owner ruling, 16 Nov 2026, #307). A Store Release must validate
+    without an external LD panel or guesses from arbitrary block names.
     """
     n = _n_analyses(target)
     errors: list[str] = []
     totals = np.zeros((2, n), dtype=np.int64)
-    attempted = np.zeros(n, dtype=bool)
+    row_counts = np.zeros(n, dtype=np.int64)
     with target.store.index_connection() as connection:
         _validate_completion_quality_table(connection, n, errors)
         if errors:
@@ -208,8 +208,8 @@ def _quality_totals(target: Target) -> tuple[np.ndarray, np.ndarray]:
                     "has non-integer or negative n_imputed/n_missing"
                 )
             totals[:, analysis] += (imputed, missing)
-            attempted[analysis] = True
-    return totals, attempted
+            row_counts[analysis] += 1
+    return totals, row_counts
 
 
 def _ancestry_exclusions(target: Target) -> set[int]:
@@ -229,10 +229,12 @@ def _ancestry_exclusions(target: Target) -> set[int]:
 
 
 def _judge_quality_counts(target: Target, total: np.ndarray) -> Iterator[str]:
-    expected, attempted = _quality_totals(target)
+    expected, row_counts = _quality_totals(target)
     excluded = _ancestry_exclusions(target)
     actual = np.zeros_like(expected) + total
     for analysis in range(expected.shape[1]):
+        if row_counts[analysis] > 1:
+            continue
         if expected[0, analysis] != actual[0, analysis]:
             yield (
                 f"completion_quality analysis {analysis}: n_imputed={expected[0, analysis]} "
@@ -241,7 +243,7 @@ def _judge_quality_counts(target: Target, total: np.ndarray) -> Iterator[str]:
         # Missing rows are not evidence of ancestry exclusion: quality metadata
         # may have disappeared with every failed attempt it described (#307).
         if (
-            (attempted[analysis] or analysis not in excluded)
+            (row_counts[analysis] or analysis not in excluded)
             and expected[:, analysis].sum() != actual[:, analysis].sum()
         ):
             yield (

@@ -1,9 +1,12 @@
-- `validate` now checks that each Analysis's `completion_quality` counts agree
-  with the cells its completed Store actually holds (`completion.quality_counts`,
-  issue #361). Lost or collapsed fills can no longer pass merely because some
-  imputed cells survived. The rule counts imputed and missing panel cells on the
-  existing association scan, without an additional plane read. Block ids alone
-  do not record cell ownership, so the comparison is per Analysis, not per block.
+- `validate` now compares `completion_quality` counts with stored cells for each
+  Analysis having zero or one quality row (`completion.quality_counts`, issues
+  #361, #307). Lost fills in these Analyses are detected even when other fills
+  survive. With zero rows, stored ancestry-exclusion evidence exempts only the
+  missing-cell comparison; the imputed count must still be zero. Analyses with
+  multiple rows are not reconciled: persisted metadata cannot distinguish
+  distinct attempts from supported overlapping fills collapsed or dropped under
+  ADR 0072. Their lost fills and per-block count transfers remain undetectable by
+  this rule. Counts use the existing association scan without another plane read.
 
 - Hybrid completion now removes an Overflow observation that crosses onto the
   completed Dense axis from each owning block's imputed/missing quality counts,

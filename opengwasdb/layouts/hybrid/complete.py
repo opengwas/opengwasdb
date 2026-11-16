@@ -42,10 +42,10 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import CsrReader
+from opengwasdb.associations import Cells, CsrReader, DenseGridReader, Status
 from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
 from opengwasdb.completion.schema import completion_quality_rollup
-from opengwasdb.encoding import EAF_BASELINE, DenseZPlane, StoreEncoding
+from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
     CellValues,
@@ -459,8 +459,9 @@ def _crossover_cells(
     rows = np.asarray([dense.alid_to_row[alid] for alid in alids], dtype=np.int64)
     analyses = np.searchsorted(overflow.offsets[1:], selected, side="right")
     root = open_store(dense.dir).arrays(mode="r")
-    imputed = np.asarray(root["imputed"].vindex[rows, analyses]) == 1
-    missing = np.isnan(DenseZPlane.open(root, dense.encoding).points(rows, analyses))
+    associations = DenseGridReader.open(root, dense.encoding).read(Cells.pairs(rows, analyses))
+    imputed = associations.status == Status.IMPUTED
+    missing = associations.status == Status.MISSING
     cells: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
     for alid, ai, filled, empty in zip(alids, analyses, imputed, missing, strict=True):
         cells[str(alid)].append((int(ai), int(filled), int(empty)))

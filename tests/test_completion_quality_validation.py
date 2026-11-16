@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from shutil import copytree
+from shutil import copyfile, copytree, rmtree
 
 import numpy as np
 import pytest
+import test_completion_identity as identity
+import test_completion_long_alids as long
+from completion_counts import quality_counts
 from test_completion_long_alids import LONG, _dense, _ragged
 from validation_bands import band_rows
 
@@ -15,6 +18,43 @@ from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
 RULE = "completion.quality_counts"
+overlapping_completion = identity.overlapping_completion
+
+
+def test_agreeing_dense_overlaps_validate_without_the_panel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = long._panel
+
+    def overlapping_panel(root: Path, alids: dict[str, str]) -> Path:
+        panel = original(root, alids)
+        chromosome = panel / "EUR" / "1"
+        for path in list(chromosome.iterdir()):
+            copyfile(path, path.with_name(path.name.replace("900000-1300000", "second-block")))
+        return panel
+
+    monkeypatch.setattr(long, "_panel", overlapping_panel)
+    completed = _dense(tmp_path, LONG)
+    assert list(quality_counts(completed).values()) == [(4, 0), (4, 0)]
+    assert np.asarray(open_store(completed).arrays(mode="r")["imputed"][:]).sum() == 4
+    rmtree(tmp_path / "ld_panel")
+    band_rows(monkeypatch, 1)
+    for workers in (1, 3):
+        result = validate_store(completed, n_workers=workers)
+        assert result.ok, result.errors
+
+
+def test_agreeing_and_conflicting_ragged_overlaps_validate_without_the_panel(
+    overlapping_completion: tuple[Path, dict[str, int]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed, totals = overlapping_completion
+    assert list(quality_counts(completed).values()) == [(2, 0), (1, 0), (2, 0)]
+    assert (totals["n_imputed"], totals["n_missing"]) == (1, 1)
+    rmtree(completed.parent / "panel")
+    band_rows(monkeypatch, 1)
+    for workers in (1, 3):
+        result = validate_store(completed, n_workers=workers)
+        assert result.ok, result.errors
 
 
 @pytest.fixture(scope="module", params=[_dense, _ragged], ids=["dense", "ragged"])
@@ -32,7 +72,7 @@ def test_quality_counts_must_describe_the_cells_written(completed: Path, column:
     assert validate_store(completed).ok, "the unmodified completed fixture must validate"
     with sqlite3.connect(completed / "index.sqlite") as db:
         rows = db.execute("SELECT n_imputed, n_missing FROM completion_quality").fetchall()
-        assert rows and sum(row[0] for row in rows) >= 2, "several fills must be recorded"
+        assert len(rows) == 1 and rows[0][0] >= 2, "one quality row must record several fills"
         # The two column names are this test's closed parameter set, not input SQL.
         db.execute(f"UPDATE completion_quality SET {column} = {column} + 1")
     result = validate_store(completed)
