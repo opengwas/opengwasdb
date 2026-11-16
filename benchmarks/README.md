@@ -1748,3 +1748,14 @@ existing work directory. #422 leaves checkpoint format 3 unchanged: it gathers
 ALIDs encoded once per block, narrows z/SE to float32 at the same writer, and
 keeps the existing field order, dtypes and long-ALID side arrays. A single-block
 speed-up does not establish the epic's whole-release timing criterion.
+
+The [16 Nov 2026 array-fill profile](../docs/benchmark-output/reference_completion_arrays_ogs00009.json)
+records two interleaved base/head pairs on the same 7,024-variant,
+2,514-Analysis block. Mean block time falls from 189.3 to
+137.5 seconds (27.4% less); preparation plus ownership falls
+from 24.5% to 1.1% of block time, beside #309's historical 23.5%.
+Both real checkpoints are byte-identical, each with 9,833,613 fills. The
+[completed OGS-00003 pilot comparison](../docs/benchmark-output/reference_completion_arrays_pilot_ogs00003.json)
+finds identical decoded bytes in all 41 arrays and identical 13,570 quality
+rows. This ten-Analysis pilot takes about 13 minutes on either revision;
+its timing does not establish a whole-release speed-up.

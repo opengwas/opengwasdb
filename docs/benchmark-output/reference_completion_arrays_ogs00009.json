@@ -1,0 +1,1047 @@
+{
+  "issue": 422,
+  "generated_by": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/summarize.py",
+  "base_commit": "35ef0deeac5cc9f9d91087c64c30b984390dd8fc",
+  "head_commit": "7433e4f09189d5f22c93f5a856ec08863583da81",
+  "measurement_order": [
+    "base-b",
+    "head-b",
+    "base-c",
+    "head-c"
+  ],
+  "timing_lock": "/data/opengwasdb/work/orchestrate/opengwasdb-307/timing.lock",
+  "profile_harness_sha256": "99cef3e01ee95d3374eb53a69715999e4126b3a54f57998ee2f66408db97969f",
+  "dependency_versions": {
+    "base": {
+      "opengwasdb": "0.9.2.dev211+g35ef0deea",
+      "numpy": "2.4.6",
+      "scipy": "1.18.1",
+      "scikit-learn": "1.9.1",
+      "numcodecs": "0.17.0",
+      "zarr": "3.4.0"
+    },
+    "head": {
+      "opengwasdb": "0.9.2.dev211+g35ef0deea",
+      "numpy": "2.4.6",
+      "scipy": "1.18.1",
+      "scikit-learn": "1.9.1",
+      "numcodecs": "0.17.0",
+      "zarr": "3.4.0"
+    }
+  },
+  "python_version": {
+    "base": "3.12.14 (main, Sep  2 2026, 23:27:36) [GCC 15.3.0]",
+    "head": "3.12.14 (main, Sep  2 2026, 23:27:36) [GCC 15.3.0]"
+  },
+  "thread_environment": {
+    "PYTHONNOUSERSITE": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  },
+  "historical_309": {
+    "artifact": "reference_completion_block_ogs00009.json",
+    "commit": "0ea635d",
+    "fill_share": 0.2350292656867972,
+    "fills": 9901491
+  },
+  "samples": [
+    {
+      "sample": "base-b",
+      "wall_seconds": 187.40135167806875,
+      "fit_seconds": 129.94584301381838,
+      "preparation_seconds": 37.79693548649084,
+      "ownership_seconds": 8.137988382019103,
+      "fill_seconds": 45.93492386850994,
+      "fill_share": 0.24511528710999744,
+      "checkpoint_write_seconds": 4.17817545006983,
+      "process_peak_rss_kb": 4335300,
+      "load_1m_min": 2.25,
+      "load_1m_max": 10.44
+    },
+    {
+      "sample": "head-b",
+      "wall_seconds": 138.90731995808892,
+      "fit_seconds": 129.05576998053584,
+      "preparation_seconds": 1.3086979504441842,
+      "ownership_seconds": 0.24875859648454934,
+      "fill_seconds": 1.5574565469287336,
+      "fill_share": 0.011212206481952603,
+      "checkpoint_write_seconds": 0.8663885210407898,
+      "process_peak_rss_kb": 2930144,
+      "load_1m_min": 2.37,
+      "load_1m_max": 6.7
+    },
+    {
+      "sample": "base-c",
+      "wall_seconds": 191.24022093997337,
+      "fit_seconds": 131.81328290898819,
+      "preparation_seconds": 38.400836522341706,
+      "ownership_seconds": 8.41232063435018,
+      "fill_seconds": 46.81315715669189,
+      "fill_share": 0.2447872772667905,
+      "checkpoint_write_seconds": 4.680412588990293,
+      "process_peak_rss_kb": 4323224,
+      "load_1m_min": 2.0,
+      "load_1m_max": 2.91
+    },
+    {
+      "sample": "head-c",
+      "wall_seconds": 136.12583582301158,
+      "fit_seconds": 127.0472253683256,
+      "preparation_seconds": 1.2592665411066264,
+      "ownership_seconds": 0.24752227612771094,
+      "fill_seconds": 1.5067888172343373,
+      "fill_share": 0.011069094216303867,
+      "checkpoint_write_seconds": 0.8396746029611677,
+      "process_peak_rss_kb": 2986560,
+      "load_1m_min": 2.25,
+      "load_1m_max": 3.64
+    }
+  ],
+  "means": {
+    "base": {
+      "wall_seconds": 189.32078630902106,
+      "fit_seconds": 130.87956296140328,
+      "preparation_seconds": 38.09888600441627,
+      "ownership_seconds": 8.275154508184642,
+      "fill_seconds": 46.374040512600914,
+      "fill_share": 0.24495128218839396,
+      "checkpoint_write_seconds": 4.429294019530062,
+      "process_peak_rss_kb": 4329262
+    },
+    "head": {
+      "wall_seconds": 137.51657789055025,
+      "fit_seconds": 128.05149767443072,
+      "preparation_seconds": 1.2839822457754053,
+      "ownership_seconds": 0.24814043630613014,
+      "fill_seconds": 1.5321226820815355,
+      "fill_share": 0.011140650349128235,
+      "checkpoint_write_seconds": 0.8530315620009787,
+      "process_peak_rss_kb": 2958352
+    }
+  },
+  "block_time_reduction": 0.2736319103065249,
+  "fill_time_reduction": 0.9669616305772359,
+  "raw_profiles": {
+    "base-b": {
+      "tool": "benchmarks/profile_reference_completion.py",
+      "argv": [
+        "profile_reference_completion.py",
+        "block",
+        "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+        "/data/opengwasdb/reference/ld",
+        "--block",
+        "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+        "--work",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/base-b-work",
+        "--output",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/base-b.json",
+        "--keep-checkpoint"
+      ],
+      "host_load_start": {
+        "load_1m": 4.23,
+        "load_5m": 8.6,
+        "load_15m": 9.61,
+        "cpus": 224
+      },
+      "worktree_clean": true,
+      "commit": "35ef0dee",
+      "measured_at": "2026-11-16T02:42:49.406347+00:00",
+      "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422-base/opengwasdb",
+      "opengwasdb_fingerprint": "215c9f41d89df662014dad94dfb130233a33ba8c0caa92c517a72b3aea71157e",
+      "kind": "block",
+      "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+      "ld_panel": "/data/opengwasdb/reference/ld",
+      "ancestry": "EUR",
+      "block": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "chosen_by": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "block_variants": 7024,
+      "n_analyses": 2514,
+      "fills": 9833613,
+      "checkpoint_bytes": 747407908,
+      "wall_seconds": 187.40135167806875,
+      "seconds_per_fit": 0.051688879480436906,
+      "distinct_observed_sets": 951,
+      "mean_observed_variants": 3084,
+      "accounted_seconds": 187.40130168991163,
+      "stages": [
+        {
+          "stage": "elastic_net_fit",
+          "seconds": 129.94584301381838,
+          "share": 0.6934095005852019,
+          "calls": 2514
+        },
+        {
+          "stage": "kernel_cell_prep_and_fill_loop",
+          "seconds": 37.79693548649084,
+          "share": 0.20168982363330915,
+          "calls": 2514
+        },
+        {
+          "stage": "owned_rows",
+          "seconds": 8.137988382019103,
+          "share": 0.0434254634766883,
+          "calls": 2514
+        },
+        {
+          "stage": "checkpoint_write",
+          "seconds": 4.17817545006983,
+          "share": 0.022295338465595907,
+          "calls": 1
+        },
+        {
+          "stage": "source_read",
+          "seconds": 3.929378219996579,
+          "share": 0.020967721059368227,
+          "calls": 1
+        },
+        {
+          "stage": "poly_rescale",
+          "seconds": 2.021007144707255,
+          "share": 0.010784381573033928,
+          "calls": 2514
+        },
+        {
+          "stage": "block_other",
+          "seconds": 0.96201535849832,
+          "share": 0.005133450780881679,
+          "calls": 1
+        },
+        {
+          "stage": "se_scale",
+          "seconds": 0.3124740262283012,
+          "share": 0.00166740584729419,
+          "calls": 2514
+        },
+        {
+          "stage": "ld_panel_read",
+          "seconds": 0.11748460808303207,
+          "share": 0.0006269145786267323,
+          "calls": 2
+        }
+      ],
+      "host_load_end": {
+        "load_1m": 6.7,
+        "load_5m": 6.62,
+        "load_15m": 8.39,
+        "cpus": 224
+      },
+      "host_load_samples": [
+        {
+          "seconds": 0.0,
+          "load_1m": 4.23,
+          "load_5m": 8.6,
+          "load_15m": 9.61,
+          "cpus": 224
+        },
+        {
+          "seconds": 30.0,
+          "load_1m": 3.43,
+          "load_5m": 7.98,
+          "load_15m": 9.37,
+          "cpus": 224
+        },
+        {
+          "seconds": 60.3,
+          "load_1m": 3.06,
+          "load_5m": 7.46,
+          "load_15m": 9.15,
+          "cpus": 224
+        },
+        {
+          "seconds": 90.3,
+          "load_1m": 2.83,
+          "load_5m": 6.98,
+          "load_15m": 8.94,
+          "cpus": 224
+        },
+        {
+          "seconds": 120.3,
+          "load_1m": 2.8,
+          "load_5m": 6.58,
+          "load_15m": 8.74,
+          "cpus": 224
+        },
+        {
+          "seconds": 150.3,
+          "load_1m": 2.87,
+          "load_5m": 6.23,
+          "load_15m": 8.55,
+          "cpus": 224
+        },
+        {
+          "seconds": 180.3,
+          "load_1m": 2.58,
+          "load_5m": 5.84,
+          "load_15m": 8.35,
+          "cpus": 224
+        },
+        {
+          "seconds": 210.3,
+          "load_1m": 2.25,
+          "load_5m": 5.44,
+          "load_15m": 8.14,
+          "cpus": 224
+        },
+        {
+          "seconds": 240.3,
+          "load_1m": 10.44,
+          "load_5m": 7.2,
+          "load_15m": 8.64,
+          "cpus": 224
+        },
+        {
+          "seconds": 270.3,
+          "load_1m": 7.11,
+          "load_5m": 6.7,
+          "load_15m": 8.42,
+          "cpus": 224
+        },
+        {
+          "seconds": 274.5,
+          "load_1m": 6.7,
+          "load_5m": 6.62,
+          "load_15m": 8.39,
+          "cpus": 224
+        }
+      ]
+    },
+    "head-b": {
+      "tool": "benchmarks/profile_reference_completion.py",
+      "argv": [
+        "profile_reference_completion.py",
+        "block",
+        "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+        "/data/opengwasdb/reference/ld",
+        "--block",
+        "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+        "--work",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/head-b-work",
+        "--output",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/head-b.json",
+        "--keep-checkpoint"
+      ],
+      "host_load_start": {
+        "load_1m": 6.7,
+        "load_5m": 6.62,
+        "load_15m": 8.39,
+        "cpus": 224
+      },
+      "worktree_clean": true,
+      "commit": "7433e4f0",
+      "measured_at": "2026-11-16T02:47:26.045083+00:00",
+      "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422/opengwasdb",
+      "opengwasdb_fingerprint": "53a06567690ffed469f3c53ed057870145798340823ca283e6d41cf6c585e61b",
+      "kind": "block",
+      "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+      "ld_panel": "/data/opengwasdb/reference/ld",
+      "ancestry": "EUR",
+      "block": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "chosen_by": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "block_variants": 7024,
+      "n_analyses": 2514,
+      "fills": 9833613,
+      "checkpoint_bytes": 747407908,
+      "wall_seconds": 138.90731995808892,
+      "seconds_per_fit": 0.051334832927818555,
+      "distinct_observed_sets": 951,
+      "mean_observed_variants": 3084,
+      "accounted_seconds": 138.9072302080458,
+      "stages": [
+        {
+          "stage": "elastic_net_fit",
+          "seconds": 129.05576998053584,
+          "share": 0.9290788520312794,
+          "calls": 2514
+        },
+        {
+          "stage": "source_read",
+          "seconds": 4.47728707396891,
+          "share": 0.03223221042751435,
+          "calls": 1
+        },
+        {
+          "stage": "poly_rescale",
+          "seconds": 2.1012629503384233,
+          "share": 0.01512709559604129,
+          "calls": 2514
+        },
+        {
+          "stage": "kernel_cell_prep_and_fill_loop",
+          "seconds": 1.3086979504441842,
+          "share": 0.009421381079185767,
+          "calls": 2514
+        },
+        {
+          "stage": "checkpoint_write",
+          "seconds": 0.8663885210407898,
+          "share": 0.006237173685942567,
+          "calls": 1
+        },
+        {
+          "stage": "block_other",
+          "seconds": 0.3880181859713048,
+          "share": 0.0027933620545896533,
+          "calls": 1
+        },
+        {
+          "stage": "se_scale",
+          "seconds": 0.34232255117967725,
+          "share": 0.0024643969264016696,
+          "calls": 2514
+        },
+        {
+          "stage": "owned_rows",
+          "seconds": 0.24875859648454934,
+          "share": 0.0017908254027668368,
+          "calls": 2514
+        },
+        {
+          "stage": "ld_panel_read",
+          "seconds": 0.1187243980821222,
+          "share": 0.0008547027962785298,
+          "calls": 2
+        }
+      ],
+      "host_load_end": {
+        "load_1m": 2.46,
+        "load_5m": 4.28,
+        "load_15m": 7.04,
+        "cpus": 224
+      },
+      "host_load_samples": [
+        {
+          "seconds": 0.0,
+          "load_1m": 6.7,
+          "load_5m": 6.62,
+          "load_15m": 8.39,
+          "cpus": 224
+        },
+        {
+          "seconds": 30.1,
+          "load_1m": 4.73,
+          "load_5m": 6.15,
+          "load_15m": 8.17,
+          "cpus": 224
+        },
+        {
+          "seconds": 60.1,
+          "load_1m": 3.55,
+          "load_5m": 5.72,
+          "load_15m": 7.97,
+          "cpus": 224
+        },
+        {
+          "seconds": 90.1,
+          "load_1m": 2.78,
+          "load_5m": 5.33,
+          "load_15m": 7.76,
+          "cpus": 224
+        },
+        {
+          "seconds": 120.1,
+          "load_1m": 2.84,
+          "load_5m": 5.1,
+          "load_15m": 7.61,
+          "cpus": 224
+        },
+        {
+          "seconds": 150.1,
+          "load_1m": 2.41,
+          "load_5m": 4.79,
+          "load_15m": 7.43,
+          "cpus": 224
+        },
+        {
+          "seconds": 180.1,
+          "load_1m": 2.37,
+          "load_5m": 4.55,
+          "load_15m": 7.26,
+          "cpus": 224
+        },
+        {
+          "seconds": 210.1,
+          "load_1m": 2.68,
+          "load_5m": 4.42,
+          "load_15m": 7.13,
+          "cpus": 224
+        },
+        {
+          "seconds": 224.6,
+          "load_1m": 2.46,
+          "load_5m": 4.28,
+          "load_15m": 7.04,
+          "cpus": 224
+        }
+      ]
+    },
+    "base-c": {
+      "tool": "benchmarks/profile_reference_completion.py",
+      "argv": [
+        "profile_reference_completion.py",
+        "block",
+        "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+        "/data/opengwasdb/reference/ld",
+        "--block",
+        "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+        "--work",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/base-c-work",
+        "--output",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/base-c.json",
+        "--keep-checkpoint"
+      ],
+      "host_load_start": {
+        "load_1m": 2.46,
+        "load_5m": 4.28,
+        "load_15m": 7.04,
+        "cpus": 224
+      },
+      "worktree_clean": true,
+      "commit": "35ef0dee",
+      "measured_at": "2026-11-16T02:51:13.177721+00:00",
+      "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422-base/opengwasdb",
+      "opengwasdb_fingerprint": "215c9f41d89df662014dad94dfb130233a33ba8c0caa92c517a72b3aea71157e",
+      "kind": "block",
+      "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+      "ld_panel": "/data/opengwasdb/reference/ld",
+      "ancestry": "EUR",
+      "block": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "chosen_by": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "block_variants": 7024,
+      "n_analyses": 2514,
+      "fills": 9833613,
+      "checkpoint_bytes": 747407908,
+      "wall_seconds": 191.24022093997337,
+      "seconds_per_fit": 0.052431695667855285,
+      "distinct_observed_sets": 951,
+      "mean_observed_variants": 3084,
+      "accounted_seconds": 191.24015626707114,
+      "stages": [
+        {
+          "stage": "elastic_net_fit",
+          "seconds": 131.81328290898819,
+          "share": 0.6892552562282369,
+          "calls": 2514
+        },
+        {
+          "stage": "kernel_cell_prep_and_fill_loop",
+          "seconds": 38.400836522341706,
+          "share": 0.20079902292442223,
+          "calls": 2514
+        },
+        {
+          "stage": "owned_rows",
+          "seconds": 8.41232063435018,
+          "share": 0.04398825434236828,
+          "calls": 2514
+        },
+        {
+          "stage": "checkpoint_write",
+          "seconds": 4.680412588990293,
+          "share": 0.024474005252610193,
+          "calls": 1
+        },
+        {
+          "stage": "source_read",
+          "seconds": 4.396900012041442,
+          "share": 0.02299151024485189,
+          "calls": 1
+        },
+        {
+          "stage": "poly_rescale",
+          "seconds": 2.029778663534671,
+          "share": 0.010613768066054286,
+          "calls": 2514
+        },
+        {
+          "stage": "block_other",
+          "seconds": 1.0710110372165218,
+          "share": 0.005600345963537234,
+          "calls": 1
+        },
+        {
+          "stage": "se_scale",
+          "seconds": 0.31824370671529323,
+          "share": 0.0016641050338343103,
+          "calls": 2514
+        },
+        {
+          "stage": "ld_panel_read",
+          "seconds": 0.11737019289284945,
+          "share": 0.0006137319440846898,
+          "calls": 2
+        }
+      ],
+      "host_load_end": {
+        "load_1m": 2.5,
+        "load_5m": 3.2,
+        "load_15m": 5.84,
+        "cpus": 224
+      },
+      "host_load_samples": [
+        {
+          "seconds": 0.0,
+          "load_1m": 2.46,
+          "load_5m": 4.28,
+          "load_15m": 7.04,
+          "cpus": 224
+        },
+        {
+          "seconds": 30.0,
+          "load_1m": 2.12,
+          "load_5m": 4.03,
+          "load_15m": 6.87,
+          "cpus": 224
+        },
+        {
+          "seconds": 60.0,
+          "load_1m": 2.0,
+          "load_5m": 3.82,
+          "load_15m": 6.71,
+          "cpus": 224
+        },
+        {
+          "seconds": 90.0,
+          "load_1m": 2.28,
+          "load_5m": 3.7,
+          "load_15m": 6.57,
+          "cpus": 224
+        },
+        {
+          "seconds": 120.0,
+          "load_1m": 2.56,
+          "load_5m": 3.64,
+          "load_15m": 6.46,
+          "cpus": 224
+        },
+        {
+          "seconds": 150.0,
+          "load_1m": 2.65,
+          "load_5m": 3.58,
+          "load_15m": 6.35,
+          "cpus": 224
+        },
+        {
+          "seconds": 180.0,
+          "load_1m": 2.73,
+          "load_5m": 3.49,
+          "load_15m": 6.23,
+          "cpus": 224
+        },
+        {
+          "seconds": 210.0,
+          "load_1m": 2.3,
+          "load_5m": 3.32,
+          "load_15m": 6.09,
+          "cpus": 224
+        },
+        {
+          "seconds": 240.0,
+          "load_1m": 2.91,
+          "load_5m": 3.35,
+          "load_15m": 6.01,
+          "cpus": 224
+        },
+        {
+          "seconds": 270.0,
+          "load_1m": 2.68,
+          "load_5m": 3.26,
+          "load_15m": 5.89,
+          "cpus": 224
+        },
+        {
+          "seconds": 276.6,
+          "load_1m": 2.5,
+          "load_5m": 3.2,
+          "load_15m": 5.84,
+          "cpus": 224
+        }
+      ]
+    },
+    "head-c": {
+      "tool": "benchmarks/profile_reference_completion.py",
+      "argv": [
+        "profile_reference_completion.py",
+        "block",
+        "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+        "/data/opengwasdb/reference/ld",
+        "--block",
+        "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+        "--work",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/head-c-work",
+        "--output",
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/head-c.json",
+        "--keep-checkpoint"
+      ],
+      "host_load_start": {
+        "load_1m": 2.5,
+        "load_5m": 3.2,
+        "load_15m": 5.84,
+        "cpus": 224
+      },
+      "worktree_clean": true,
+      "commit": "7433e4f0",
+      "measured_at": "2026-11-16T02:55:51.965727+00:00",
+      "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422/opengwasdb",
+      "opengwasdb_fingerprint": "53a06567690ffed469f3c53ed057870145798340823ca283e6d41cf6c585e61b",
+      "kind": "block",
+      "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+      "ld_panel": "/data/opengwasdb/reference/ld",
+      "ancestry": "EUR",
+      "block": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "chosen_by": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+      "block_variants": 7024,
+      "n_analyses": 2514,
+      "fills": 9833613,
+      "checkpoint_bytes": 747407908,
+      "wall_seconds": 136.12583582301158,
+      "seconds_per_fit": 0.0505358891679895,
+      "distinct_observed_sets": 951,
+      "mean_observed_variants": 3084,
+      "accounted_seconds": 136.1257558920188,
+      "stages": [
+        {
+          "stage": "elastic_net_fit",
+          "seconds": 127.0472253683256,
+          "share": 0.933307767775448,
+          "calls": 2514
+        },
+        {
+          "stage": "source_read",
+          "seconds": 3.9502720040036365,
+          "share": 0.029019284250198573,
+          "calls": 1
+        },
+        {
+          "stage": "poly_rescale",
+          "seconds": 2.051129659637809,
+          "share": 0.015067902809405585,
+          "calls": 2514
+        },
+        {
+          "stage": "kernel_cell_prep_and_fill_loop",
+          "seconds": 1.2592665411066264,
+          "share": 0.009250758850555324,
+          "calls": 2514
+        },
+        {
+          "stage": "checkpoint_write",
+          "seconds": 0.8396746029611677,
+          "share": 0.006168374217346761,
+          "calls": 1
+        },
+        {
+          "stage": "se_scale",
+          "seconds": 0.33807323162909597,
+          "share": 0.0024835361200658546,
+          "calls": 2514
+        },
+        {
+          "stage": "block_other",
+          "seconds": 0.27513698930852115,
+          "share": 0.002021197146018219,
+          "calls": 1
+        },
+        {
+          "stage": "owned_rows",
+          "seconds": 0.24752227612771094,
+          "share": 0.0018183353657485436,
+          "calls": 2514
+        },
+        {
+          "stage": "ld_panel_read",
+          "seconds": 0.11745521891862154,
+          "share": 0.0008628434652130962,
+          "calls": 2
+        }
+      ],
+      "host_load_end": {
+        "load_1m": 2.41,
+        "load_5m": 2.84,
+        "load_15m": 5.13,
+        "cpus": 224
+      },
+      "host_load_samples": [
+        {
+          "seconds": 0.0,
+          "load_1m": 2.5,
+          "load_5m": 3.2,
+          "load_15m": 5.84,
+          "cpus": 224
+        },
+        {
+          "seconds": 30.0,
+          "load_1m": 3.64,
+          "load_5m": 3.42,
+          "load_15m": 5.83,
+          "cpus": 224
+        },
+        {
+          "seconds": 60.0,
+          "load_1m": 2.82,
+          "load_5m": 3.23,
+          "load_15m": 5.69,
+          "cpus": 224
+        },
+        {
+          "seconds": 90.0,
+          "load_1m": 2.79,
+          "load_5m": 3.18,
+          "load_15m": 5.59,
+          "cpus": 224
+        },
+        {
+          "seconds": 120.0,
+          "load_1m": 2.25,
+          "load_5m": 3.02,
+          "load_15m": 5.46,
+          "cpus": 224
+        },
+        {
+          "seconds": 150.0,
+          "load_1m": 2.33,
+          "load_5m": 2.97,
+          "load_15m": 5.37,
+          "cpus": 224
+        },
+        {
+          "seconds": 180.0,
+          "load_1m": 2.6,
+          "load_5m": 2.96,
+          "load_15m": 5.28,
+          "cpus": 224
+        },
+        {
+          "seconds": 210.0,
+          "load_1m": 2.25,
+          "load_5m": 2.83,
+          "load_15m": 5.17,
+          "cpus": 224
+        },
+        {
+          "seconds": 222.6,
+          "load_1m": 2.41,
+          "load_5m": 2.84,
+          "load_15m": 5.13,
+          "cpus": 224
+        }
+      ]
+    }
+  },
+  "checkpoint_identity": {
+    "b": [
+      {
+        "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/base-b-work/profile-block.npz",
+        "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/head-b-work/profile-block.npz",
+        "fills": 9833613,
+        "fields": [
+          {
+            "field": "format",
+            "shape": [
+              1
+            ],
+            "dtype": "int32",
+            "sha256": "9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178"
+          },
+          {
+            "field": "block_id",
+            "shape": [
+              1
+            ],
+            "dtype": "<U19",
+            "sha256": "23aba7fc3cfdee2679864357c3924997278190f6750e55d3bd23753ebbafd7b1"
+          },
+          {
+            "field": "q_ai",
+            "shape": [
+              2514
+            ],
+            "dtype": "int32",
+            "sha256": "d124311514bd1c84cd4410dc8b652c11bf19c2ec55cc27f496a747ec86f3eb43"
+          },
+          {
+            "field": "q_pearson",
+            "shape": [
+              2514
+            ],
+            "dtype": "float64",
+            "sha256": "66b0da84835bc758e562f499e7c988f4395de35ae248ba94918a7491b6fe8eef"
+          },
+          {
+            "field": "q_nimp",
+            "shape": [
+              2514
+            ],
+            "dtype": "int32",
+            "sha256": "258ebfe04c7f669982f1dee892cf9c537aaa4360c76c093ac151969f99f96045"
+          },
+          {
+            "field": "q_nmiss",
+            "shape": [
+              2514
+            ],
+            "dtype": "int32",
+            "sha256": "78bd05d81740765891b6c7fb90f0dd39772621bd9f6e51b9c87832d1b514d79f"
+          },
+          {
+            "field": "f_alid",
+            "shape": [
+              9833613
+            ],
+            "dtype": "|S64",
+            "sha256": "3620c6fb42f26e5b02f9a66fb383fd9062ca470e1ae331cd13b3bb271226075c"
+          },
+          {
+            "field": "f_long_at",
+            "shape": [
+              0
+            ],
+            "dtype": "int64",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "field": "f_long_alid",
+            "shape": [
+              0
+            ],
+            "dtype": "|S1",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "field": "f_ai",
+            "shape": [
+              9833613
+            ],
+            "dtype": "int32",
+            "sha256": "1c2e70923657b27857dc6e89761c1098a51348d9a53ce5f850f59e77e57ac09a"
+          },
+          {
+            "field": "f_z",
+            "shape": [
+              9833613
+            ],
+            "dtype": "float32",
+            "sha256": "a4ae02d5144efd6e1259afe0ab740b688e81994db787bb1bb934cced707f6c9c"
+          },
+          {
+            "field": "f_se",
+            "shape": [
+              9833613
+            ],
+            "dtype": "float32",
+            "sha256": "f76b31db698540a8c54df80551b1dfba234621ff971441e822cebc80d0f5bb7b"
+          }
+        ],
+        "npz_bytes_equal": true
+      }
+    ],
+    "c": [
+      {
+        "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/base-c-work/profile-block.npz",
+        "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/head-c-work/profile-block.npz",
+        "fills": 9833613,
+        "fields": [
+          {
+            "field": "format",
+            "shape": [
+              1
+            ],
+            "dtype": "int32",
+            "sha256": "9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178"
+          },
+          {
+            "field": "block_id",
+            "shape": [
+              1
+            ],
+            "dtype": "<U19",
+            "sha256": "23aba7fc3cfdee2679864357c3924997278190f6750e55d3bd23753ebbafd7b1"
+          },
+          {
+            "field": "q_ai",
+            "shape": [
+              2514
+            ],
+            "dtype": "int32",
+            "sha256": "d124311514bd1c84cd4410dc8b652c11bf19c2ec55cc27f496a747ec86f3eb43"
+          },
+          {
+            "field": "q_pearson",
+            "shape": [
+              2514
+            ],
+            "dtype": "float64",
+            "sha256": "66b0da84835bc758e562f499e7c988f4395de35ae248ba94918a7491b6fe8eef"
+          },
+          {
+            "field": "q_nimp",
+            "shape": [
+              2514
+            ],
+            "dtype": "int32",
+            "sha256": "258ebfe04c7f669982f1dee892cf9c537aaa4360c76c093ac151969f99f96045"
+          },
+          {
+            "field": "q_nmiss",
+            "shape": [
+              2514
+            ],
+            "dtype": "int32",
+            "sha256": "78bd05d81740765891b6c7fb90f0dd39772621bd9f6e51b9c87832d1b514d79f"
+          },
+          {
+            "field": "f_alid",
+            "shape": [
+              9833613
+            ],
+            "dtype": "|S64",
+            "sha256": "3620c6fb42f26e5b02f9a66fb383fd9062ca470e1ae331cd13b3bb271226075c"
+          },
+          {
+            "field": "f_long_at",
+            "shape": [
+              0
+            ],
+            "dtype": "int64",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "field": "f_long_alid",
+            "shape": [
+              0
+            ],
+            "dtype": "|S1",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "field": "f_ai",
+            "shape": [
+              9833613
+            ],
+            "dtype": "int32",
+            "sha256": "1c2e70923657b27857dc6e89761c1098a51348d9a53ce5f850f59e77e57ac09a"
+          },
+          {
+            "field": "f_z",
+            "shape": [
+              9833613
+            ],
+            "dtype": "float32",
+            "sha256": "a4ae02d5144efd6e1259afe0ab740b688e81994db787bb1bb934cced707f6c9c"
+          },
+          {
+            "field": "f_se",
+            "shape": [
+              9833613
+            ],
+            "dtype": "float32",
+            "sha256": "f76b31db698540a8c54df80551b1dfba234621ff971441e822cebc80d0f5bb7b"
+          }
+        ],
+        "npz_bytes_equal": true
+      }
+    ]
+  },
+  "whole_release_nine_hour_criterion_established": false
+}
