@@ -38,8 +38,6 @@ from test_indexed_subsets import (
     _build,
     _index_group,
     _root,
-    _write_standard_variant_list,
-    build_rich_store,
 )
 
 from opengwasdb.encoding import banding
@@ -105,11 +103,9 @@ def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
 
 
 @fixture
-def indexed_store(tmp_path: Path) -> Path:
-    """A published subset over `test_indexed_subsets`' rich release."""
-    store = build_rich_store(tmp_path / "store.opengwasdb")
-    _build(store, NAME, _write_standard_variant_list(tmp_path / "subset.alid.txt"))
-    return store
+def indexed_store(tmp_path: Path, rich_seed: Path) -> Path:
+    """An isolated copy of the module's rich release and its published subset."""
+    return copytree(rich_seed, tmp_path / "store.opengwasdb")
 
 
 def _table(store: Path) -> tuple[int, int]:

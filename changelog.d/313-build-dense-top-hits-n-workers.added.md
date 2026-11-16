@@ -16,4 +16,10 @@
   250,000-row band. The band leaves the scan's speed where it was — 1,060 s at
   four workers against 1,083 s — and the 3× a wider pool gives (353 s at
   sixteen) is affordable only because a worker now holds one band of decoded
-  cells, 0.75 GiB, instead of 31.6 GiB of plane. The default stays 1.
+  cells, 0.75 GiB, instead of 31.6 GiB of plane. The scan's pool is also sized
+  as every memory-bounded pool is (`encoding.memory.pool_workers`): a worker
+  counts its band's decoded budget, the 512 MiB floor every forked worker holds,
+  and the two harvests the parent may hold for it, at most every cell of the
+  band; no more workers run than a quarter of `MemAvailable` holds beside the
+  parent, or than there are bands. On OGS-00009 a worker counts 2.7 GB, so 32
+  workers ask for 85 GB. The default stays 1.

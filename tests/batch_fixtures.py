@@ -20,7 +20,7 @@ from pass2_fixtures import captured_spills
 
 from opengwasdb.admission import admission_record_for
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.readers import interface, registry
+from opengwasdb.readers import columnar, interface, registry
 from opengwasdb.readers.rows import MetricsChunk, ReaderBatch
 
 
@@ -118,7 +118,7 @@ def paired_builds(
     chain = write_alt_target_chain(root / "alt-target.chain")
     built: dict[str, tuple[Built, Built]] = {}
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(module, "_BLOCK_BYTES", 1 << 12)
+        patch.setattr(columnar, "BLOCK_BYTES", 1 << 12)
         for name, (write, assembly, *score) in sources.items():
             (root / name).mkdir()
             source = write(root / name)

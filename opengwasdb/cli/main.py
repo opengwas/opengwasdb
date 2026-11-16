@@ -896,6 +896,12 @@ def extract_variant_reference_command(
     )
 
 
+_BUILD_WORKERS_HELP = (
+    "Requested process-pool size for Pass 1, Pass 2 and residual EAF encoding; "
+    "memory and band counts cap the encode pool"
+)
+
+
 @app.command("build-dense-vcf")
 def build_dense_vcf_command(
     manifest_path: Path,
@@ -904,7 +910,7 @@ def build_dense_vcf_command(
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
-    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
+    n_workers: int = typer.Option(1, help=_BUILD_WORKERS_HELP),
     chunk_variants: _CHUNK_VARIANTS_OPTION = DEFAULT_CHUNK_SHAPE[0],
     chunk_analyses: _CHUNK_ANALYSES_OPTION = DEFAULT_CHUNK_SHAPE[1],
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
@@ -963,7 +969,7 @@ def build_hybrid_command(
     overwrite: bool = typer.Option(False),
     checkpoint: _CHECKPOINT_OPTION = False,
     resume: Annotated[bool, typer.Option("--resume", help=_RESUME_HELP)] = False,
-    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
+    n_workers: int = typer.Option(1, help=_BUILD_WORKERS_HELP),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),

@@ -328,8 +328,15 @@ class Check(Rule):
             yield self.finding(target, message)
 
 
-def _validation_failed(_target: Target, exc: Exception) -> str:
+def failed_words(exc: Exception) -> str:
+    """How a rule, or the read a fold stands on, that raised is reported: the one
+    wording, wherever it raised. `validate --format json` carries it, so it does not
+    change in passing (CONTRIBUTING, "Adding a validation rule")."""
     return f"validation failed: {exc}"
+
+
+def _validation_failed(_target: Target, exc: Exception) -> str:
+    return failed_words(exc)
 
 
 class Split(Generic[B]):
@@ -343,7 +350,8 @@ class Split(Generic[B]):
 
     `unit_bytes` is what one worker holds while it reads and measures one block:
     the decoded budget a block is sized by (issue #254), which a pass at N workers
-    holds N times, and the worker's own floor. `result_bytes` is what the driving
+    holds N times; the worker's own floor beside it is the pool's
+    (`encoding.memory.FORK_FLOOR_BYTES`). `result_bytes` is what the driving
     process holds of one block's outcome until it is added.
     """
 
@@ -411,9 +419,6 @@ class Rider(Generic[B]):
 
     def join(self, part: Any) -> None:
         raise NotImplementedError
-
-    def __call__(self, block: B) -> None:
-        self.join(self.part(block))
 
 
 @dataclass(frozen=True)

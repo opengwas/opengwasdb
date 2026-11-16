@@ -74,20 +74,22 @@ completed whole; the parent takes the units' results in unit order.**
   starts, and a Ragged assembly's parent also counts the 17 bytes a row its
   writer will hold by the end. Each unit's working set was measured with
   `--write-workers` above 1 (the profiler) or by the pilot harness, each worker's
-  private memory sampled:
+  private memory sampled. Every budget includes the fork's floor, 512 MiB, which
+  `pool_workers` adds to every pool's unit (`FORK_FLOOR_BYTES`):
 
   | unit | budget | measured |
   |---|---|---|
   | Dense band | 4 GiB + 24 B a cell: 16.4 GB for a 200,000-row band of OGS-00009's 2,514 Analyses | 10.2 GB |
-  | checkpoint | 256 MiB + 4 x the largest checkpoint file: 6.83 GB for OGS-00009's 8-band slice, whose largest is 1.64 GB | 4.57 GB (`bands_ogs00009_head-b8-w4-record.json`) |
-  | Ragged Analysis | 256 MiB + 16 B a merged-axis variant + 32 B a row of the largest Analysis | 264 MB on the OGS-00006 subset (budget 666 MB) |
-  | Ragged region | 256 MiB + 120 B a cell | 5.15 GB for a 50 M-cell region (budget 6.3 GB) |
+  | checkpoint | 512 MiB + 4 x the largest checkpoint file: 7.10 GB for OGS-00009's 8-band slice, whose largest is 1.64 GB | 4.57 GB (`bands_ogs00009_head-b8-w4-record.json`) |
+  | Ragged Analysis | 512 MiB + 16 B a merged-axis variant + 32 B a row of the largest Analysis | 264 MB on the OGS-00006 subset (budget 935 MB) |
+  | Ragged region | 512 MiB + 120 B a cell | 5.15 GB for a 50 M-cell region (budget 6.5 GB) |
 
   The parent's resident set is counted although `MemAvailable` already
   leaves it out. That double count costs a worker on OGS-00009 (13 band
   workers where 14 would fit in a 235 GB budget), and it is a margin kept on
   purpose. The parent also counts the results it holds for its workers, two
-  a worker at most, and no pool forks more workers than it has units. Each
+  a worker at most (`RESULTS_HELD_PER_WORKER`, the ordered pool's one window),
+  and no pool forks more workers than it has units. Each
   pool logs the count it ran with, the unit's figure, the results', the
   parent's, and the budget.
 - **Resume is unchanged: it redoes the write.** Only LD blocks are

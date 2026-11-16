@@ -1,14 +1,17 @@
 """How much of the host's memory a pass may hold, and how many workers fit.
 
 Several passes are bounded by memory rather than by a worker count: a decoded
-band of a Dense grid (`banding.py`, which bounds one band's cells), the
-residual `eaf` encode's pool (`build_vcf.py`, which bounds how many bands run
-at once), and Reference Completion's write pools (`pool_workers`, #321). The
-pools need the host's own figure, so reading it and dividing it belong here
-rather than in the layout that happened to need them first: a phase that sizes
-a pool by memory must not re-derive "a quarter of available" on its own, and
-the figure it must not substitute is the one that decides whether a shared
-host survives the run.
+band of a Dense grid (`banding.py`, which bounds one band's cells), and every
+pool that forks workers over units each holding a share of a release's cells --
+the Dense build's residual `eaf` encode (#320), the Top-Hit Index scan (#313),
+validation's band pass (#315) and Reference Completion's write pools (#321).
+Each of those pools is sized by `pool_workers`, one rule: a quarter of the
+host's `MemAvailable`, less what the parent holds, divided by what one worker
+holds -- the fork's floor (`FORK_FLOOR_BYTES`), its unit, and the results the
+parent keeps for it (`RESULTS_HELD_PER_WORKER`). A phase that sizes a pool by
+memory must not re-derive "a quarter of available" on its own, and the figure
+it must not substitute is the one that decides whether a shared host survives
+the run.
 
 The reading is deliberately strict. `/proc/meminfo` is a kernel format, not a
 free-form file: a field that is not exactly a whole number of kilobytes is
@@ -20,6 +23,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+
+from opengwasdb.build.ordered_pool import RESULTS_HELD_PER_WORKER
 
 log = logging.getLogger(__name__)
 
@@ -73,23 +78,41 @@ def workers_within_memory(
     return max(1, min(requested, budget_bytes // max(per_worker_bytes, 1)))
 
 
-#: The results an ordered pool's parent holds for each worker at most: what it
-#: has submitted and not yet taken back (`ordered_map`'s ``max_in_flight``).
-RESULTS_HELD_PER_WORKER = 2
+#: What a forked worker holds before its first unit: its interpreter, the
+#: pages of the parent's it writes to, a read's compressed chunks and a codec's
+#: intermediates. A validation worker held 0.26-0.27 GiB of its own between
+#: bands on OGS-00011's Dense Component and on OGS-00009 (#315), and the eaf
+#: encode's band fit put a worker's fixed part at 135 MiB (#320), so this is
+#: about twice the larger. `pool_workers` adds it to every worker's unit.
+FORK_FLOOR_BYTES = 512 * 1024**2
+
+#: The share of a unit's result an exception table may take, in cells per
+#: byte: one byte for every 40 cells of the unit. An entry is 12 bytes, pickled
+#: and unpickled, so this is room for one cell in a thousand to be an
+#: exception; OGS-00009's completed release holds 6e-5 of its cells as SE
+#: exceptions and its build 3.5e-7 as EAF ones (#320, #321).
+EXCEPTION_CELLS_PER_RESULT_BYTE = 40
+
+
+def worker_bytes(unit_bytes: int) -> int:
+    """What one forked worker holds while it works a unit of ``unit_bytes``."""
+    return FORK_FLOOR_BYTES + unit_bytes
 
 
 def resident_bytes(path: Path = SELF_STATUS) -> int:
-    """This process's resident set (`VmRSS`) in bytes; 0, said, when unreadable.
+    """This process's resident set (`VmRSS`) in bytes.
 
-    What a pool's parent already holds when the pool forks. An unreadable
-    figure counts as nothing held rather than refusing the pool -- the host's
-    own reading, which `pool_workers` does refuse to guess, still bounds it --
-    but the warning says the parent went uncounted.
+    What a pool's parent already holds when the pool forks. Linux always
+    publishes it, so a status file that does not give it as a whole number of
+    kilobytes is refused rather than counted as nothing held: a parent counted
+    at zero sizes its pool for memory the parent is already using (#321).
     """
     try:
         content = path.read_text(encoding="ascii")
-    except (OSError, UnicodeDecodeError):
-        content = ""
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            f"cannot read this process's resident set from {path}: {exc}"
+        ) from exc
     for line in content.splitlines():
         key, _, rest = line.partition(":")
         if key.strip() != "VmRSS":
@@ -97,12 +120,11 @@ def resident_bytes(path: Path = SELF_STATUS) -> int:
         fields = rest.split()
         if len(fields) == 2 and fields[1] == "kB" and fields[0].isdigit():
             return int(fields[0]) * 1024
-    log.warning(
-        "cannot read this process's resident set from %s; a pool sized beside it "
-        "counts the parent as holding nothing",
-        path,
-    )
-    return 0
+        raise RuntimeError(
+            f"cannot read this process's resident set from {path}: VmRSS is {rest.strip()!r}, "
+            "not a whole number of kB"
+        )
+    raise RuntimeError(f"cannot read this process's resident set from {path}: it has no VmRSS")
 
 
 def pool_workers(
@@ -111,17 +133,18 @@ def pool_workers(
     *,
     what: str,
     unit: str,
-    units: int | None = None,
+    units: int | None,
+    result_bytes: int,
     parent_bytes: int | None = None,
-    result_bytes: int = 0,
 ) -> int:
     """How many of ``requested`` workers a pool runs, and the lines saying why.
 
-    Never more than its ``units``: a worker with no unit to work is still
-    forked. A worker holds ``unit_bytes`` while it works one ``unit``, and the
-    parent holds up to `RESULTS_HELD_PER_WORKER` of its results, ``result_bytes``
-    each, until it takes them in order. The workers, those results and the
-    parent together stay within a phase's budget, a quarter of `MemAvailable`
+    Never more than its ``units``, when the pool can count them: a worker with
+    no unit to work is still forked. A worker holds the fork's floor and
+    ``unit_bytes`` while it works one ``unit`` (`worker_bytes`), and the parent holds up to
+    `RESULTS_HELD_PER_WORKER` of its results, ``result_bytes`` each, until it
+    takes them in order (`ordered_map`'s window). The workers, those results and
+    the parent together stay within a phase's budget, a quarter of `MemAvailable`
     read when the pool starts. The parent's own share is ``parent_bytes``, its
     expected peak, or what it holds now (`resident_bytes`). That resident set
     is counted although `MemAvailable` already leaves it out: the double count
@@ -136,7 +159,7 @@ def pool_workers(
     if requested <= 1:
         return 1
     parent = resident_bytes() if parent_bytes is None else parent_bytes
-    per_worker = unit_bytes + RESULTS_HELD_PER_WORKER * result_bytes
+    per_worker = worker_bytes(unit_bytes) + RESULTS_HELD_PER_WORKER * result_bytes
     budget = memory_budget_bytes(available_memory_bytes())
     if budget is None:
         log.warning(
@@ -157,7 +180,7 @@ def pool_workers(
     log.info(
         "%s: %d of %d worker(s); a %s is %d MiB a worker and %d MiB of results held by "
         "the parent, beside the parent's %d MiB, against a budget of %s",
-        what, workers, requested, unit, unit_bytes >> 20,
+        what, workers, requested, unit, worker_bytes(unit_bytes) >> 20,
         (RESULTS_HELD_PER_WORKER * result_bytes) >> 20, parent >> 20,
         "unknown" if budget is None else f"{budget >> 20} MiB",
     )

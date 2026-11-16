@@ -139,7 +139,7 @@ def _identical(make: Make, path: Path, scale: StoredEffectScale) -> None:
 @pytest.fixture(params=[None, 64, 1], ids=["default", "64B", "1B"])
 def block(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> int | None:
     if request.param is not None:
-        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", request.param)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", request.param)
     return cast(int | None, request.param)
 
 

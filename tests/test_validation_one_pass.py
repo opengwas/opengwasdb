@@ -29,6 +29,7 @@ import zarr
 from eaf_tables import rewrite_primary_table
 from store_reads import element_reads, times_read
 from test_indexed_subsets import _index_group, _root
+from validation_bands import band_rows
 
 from opengwasdb.encoding import banding
 from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, Z_OVERFLOW
@@ -71,7 +72,7 @@ def completed(tmp_path: Path, completed_seed: Path) -> Path:
 @pytest.fixture
 def narrow(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bands and comparison units small enough for the fixture to hold several."""
-    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", banding.BYTES_PER_CELL * 2 * BAND_ROWS)
+    band_rows(monkeypatch, BAND_ROWS, 2)
     monkeypatch.setattr(indexed_subsets, "_physical_write_unit", lambda _array: WRITE_UNIT)
     monkeypatch.setattr(indexed_subsets, "EXHAUSTIVE_VALIDATION_BAND_CELLS", UNIT_CELLS)
 
@@ -289,12 +290,32 @@ def test_the_comparison_says_how_many_units_it_compared_cell_by_cell(
     assert any(record.getMessage().endswith(found) for record in caplog.records)
 
 
+@pytest.mark.parametrize("corrupt", [False, True], ids=["clean", "corrupted"])
+def test_a_ride_for_another_subset_logs_its_cell_by_cell_fallback(
+    completed: Path, narrow: None, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, corrupt: bool,
+) -> None:
+    assert len(_subset(completed)) > WRITE_UNIT, "the subset must span several units"
+    if corrupt:
+        _bump(completed, "z", 0, _ordinary_cell(completed, 2 * WRITE_UNIT + 1, 0))
+    monkeypatch.setattr(indexed_subsets.SubsetRide, "fits", lambda *args: False)
+    with caplog.at_level("WARNING", logger=indexed_subsets.__name__):
+        result = validate_store(completed, rules={"subsets.indexed"})
+    assert result.failed() == ({"subsets.indexed"} if corrupt else set()), result.errors
+    assert any(
+        "indexed subset 'hm3'" in record.getMessage()
+        and "pass digested a different subset" in record.getMessage()
+        and "cell by cell" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 # ── The exception table, once per pass ───────────────────────────────────────
 
 
 def _pages(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sixteen bands of the small release, and its table in pages of 64."""
-    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 48_000)
+    band_rows(monkeypatch, 250, 2)
     monkeypatch.setattr(scans, "SPAN_PAGE", 64)
 
 

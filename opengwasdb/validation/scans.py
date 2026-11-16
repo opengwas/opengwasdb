@@ -16,8 +16,8 @@ takes its span of the sorted table as it decodes, and every rule that reads the
 table -- the plan rule, the side-table rule and the Indexed Variant Subset check --
 watches the same pages go by (issue #314).
 
-A `Block` is the seam: `dense_bands` makes one from a grid band, `sequence_windows`
-from a run of a sequence, and `Block.of` from arrays a test holds.
+Every fold measures a `Block`: `GridSplit.read` makes one from a grid band,
+`_Sequence.window` from a run of a sequence, and `Block.of` from arrays a test holds.
 
 A Dense grid's pass can be read apart (`GridSplit`, issue #315): the process
 driving the pass cuts each band's span of the table from its one read of it, and a
@@ -57,7 +57,7 @@ from opengwasdb.encoding.planes import (
 )
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
-from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable
+from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable, failed_words
 
 log = logging.getLogger(__name__)
 
@@ -723,11 +723,6 @@ _BANDING: dict[Kind, _Banding] = {
 }
 
 
-def dense_bands(target: Target) -> Iterator[Block]:
-    """A Dense grid's rows in byte-bounded bands aligned to its physical read unit."""
-    yield from _dense_blocks(target, _grid_limits(target))
-
-
 def _dense_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
     """The bands `limits` names, read as the grid's own chunks.
 
@@ -739,12 +734,6 @@ def _dense_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator
         yield split.read(band)
 
 
-#: What a forked worker holds beyond its band's decoded budget: its interpreter, the
-#: read's compressed chunks, the codecs' intermediates, and the pages of the parent's it
-#: writes to. A worker held 0.26-0.27 GiB of its own between bands on OGS-00011's Dense
-#: Component and OGS-00009 (#315), so this is about twice that. A band itself peaked at
-#: 54.7 and 56.2 bytes a cell there, inside the 96 `BYTES_PER_CELL` budgets.
-WORKER_FLOOR_BYTES = 512 * 1024**2
 #: The per-Analysis totals one band's outcome carries, at most: one for each fold
 #: that counts per Analysis, with room to spare.
 RESULT_TOTALS = 16
@@ -771,9 +760,11 @@ class GridSplit(Split[Block]):
 
     @property
     def unit_bytes(self) -> int:
-        """A band's decoded budget, its rows at `BYTES_PER_CELL` a cell, and a
-        worker's floor beside it."""
-        return WORKER_FLOOR_BYTES + self._rows() * self.grid.shape[1] * BYTES_PER_CELL
+        """A band's decoded budget, its rows at `BYTES_PER_CELL` a cell. A band
+        peaked at 54.7 and 56.2 bytes a cell on OGS-00011's Dense Component and
+        OGS-00009 (#315), inside the 96 that budget allows; the worker's floor
+        beside it is `pool_workers`'."""
+        return self._rows() * self.grid.shape[1] * BYTES_PER_CELL
 
     @property
     def result_bytes(self) -> int:
@@ -1042,17 +1033,9 @@ def _sequence_window_se(
         raise Undecodable(f"{label} cannot be decoded under the declared plan: {exc}") from exc
 
 
-def sequence_windows(target: Target) -> Iterator[Block]:
-    """A sequence's cells in byte-bounded windows aligned to its physical read unit.
-
-    Each window carries the Analysis and variant of the cell before it, so a rule
-    about consecutive cells sees across a window's edge.
-    """
-    yield from _sequence_blocks(target, _sequence_limits(target))
-
-
 def _sequence_blocks(target: Target, limits: Iterable[tuple[int, int]]) -> Iterator[Block]:
-    """The windows `limits` names, each carrying the cell before it."""
+    """The windows `limits` names, each carrying the Analysis and variant of the cell
+    before it, so a rule about consecutive cells sees across a window's edge."""
     sequence = _Sequence(target)
     previous: tuple[int, int] | None = None
     for lo, hi in limits:
@@ -1072,7 +1055,7 @@ def _blocks(target: Target) -> Iterator[Block]:
 def _read_failure(_target: Target, exc: Exception) -> str:
     if isinstance(exc, Undecodable):
         return str(exc)
-    return f"validation failed: {exc}"
+    return failed_words(exc)
 
 
 def _association_blocks(target: Target) -> int:

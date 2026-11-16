@@ -32,6 +32,7 @@ from liftover_fixtures import (
     write_two_strand_chain,
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
+from unknown_key_oracle import encode_keys
 
 from opengwasdb.admission import admission_record_for
 from opengwasdb.ancestry.reference import AncestryReference
@@ -44,7 +45,6 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
     encode_key,
-    encode_keys,
 )
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
@@ -2071,7 +2071,7 @@ def test_off_reference_resolution_folds_worker_results_as_they_arrive(monkeypatc
     spill paths; each must be loaded only when folded, and released after."""
     live = _LiveRuns(32)
 
-    def _fake_ordered_map(fn, items, n_workers, max_in_flight=None):
+    def _fake_ordered_map(fn, items, n_workers):
         for item in items:
             yield item[-1]
 
@@ -2783,8 +2783,6 @@ def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
     """D6 (issue #357): a two-pass axis is the sources' whole union, so Pass 2
     drops and logs an unmatched row and nothing folds a `.unk` spill. One that
     appears all the same is refused, where it used to be deleted unread."""
-    from opengwasdb.layouts.hybrid.unknown_keys import encode_keys
-
     real_spill = hybrid_build._off_reference_spill
 
     def _spill_a_row(unmatched, se_divisor, gate):

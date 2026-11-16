@@ -51,6 +51,7 @@ from opengwasdb.validation.rule import (
     Target,
     Unreadable,
     ValidationResult,
+    failed_words,
 )
 
 log = logging.getLogger(__name__)
@@ -362,13 +363,16 @@ class _Run:
         label = _scan_label(scan, target)
         try:
             with log_phase(log, label):
-                with self.timer.phase(label):
+                with self.timer.phase(label) as clock:
                     # The folds share the one read, so they are charged to it, not
                     # timed apart: naming them says which rules the phase serves.
                     log.info("%s: %s", label, ", ".join(_serves(ready, riders)))
                     done.drive()
                     _finish(scan, target)
-                    self.settle_waiting(scan, i, target)
+                    # A waiting check is judged here, in the read's span, but it is
+                    # its own phase: charging it to the scan too would count it twice.
+                    with clock.paused():
+                        self.settle_waiting(scan, i, target)
                     self.settle_held(held, i, target)
                     # The read is over, so what the folds held to measure with goes
                     # before they are judged, not after: on a full-size release the
@@ -850,7 +854,7 @@ def _measured(
                 message=scan.failure(target, exc), unreadable=True, reported_by=exc.reported_by
             )
         except Exception as exc:  # this fold's failure, and no other's
-            outcomes[fold.name] = _Outcome(message=_failed_words(exc))
+            outcomes[fold.name] = _Outcome(message=failed_words(exc))
     parts: dict[str, _Part] = {}
     for name, rider in riders:
         try:
@@ -951,12 +955,7 @@ class _Phase:
 
 
 def _failure(rule: Rule, target: Target, exc: Exception) -> Finding:
-    return rule.finding(target, _failed_words(exc), Severity.ERROR)
-
-
-def _failed_words(exc: Exception) -> str:
-    """How a rule that raised is reported: the one wording, wherever it raised."""
-    return f"validation failed: {exc}"
+    return rule.finding(target, failed_words(exc), Severity.ERROR)
 
 
 def _contained(

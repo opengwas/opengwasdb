@@ -16,8 +16,9 @@ import zarr
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
-from opengwasdb.encoding.banding import band_rows, decoded_band_bytes
+from opengwasdb.encoding.banding import BYTES_PER_CELL, band_rows, decoded_band_bytes
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
@@ -119,6 +120,28 @@ def _scan_one_band(r0: int) -> dict[str, np.ndarray]:
     }
 
 
+#: What a band's harvest costs the parent a cell, at most: a candidate's row and
+#: column (`int64`), its z, SE and EAF (`float32`) and its imputed flag, pickled
+#: and unpickled. Every cell is counted, since a band of a polygenic Analysis
+#: may pass at the loosest tier far more often than the null's 5e-4.
+_CANDIDATE_RESULT_BYTES_PER_CELL = 2 * (8 + 8 + 4 + 4 + 4 + 1)
+
+
+def _scan_workers(n_workers: int, band_rows: int, n_analyses: int, n_bands: int) -> int:
+    """How many workers the scan forks: a band's decoded budget a worker and the
+    harvests the parent holds for them, within a quarter of the host's available
+    memory beside the parent, and no more workers than bands (`pool_workers`)."""
+    cells = band_rows * n_analyses
+    return pool_workers(
+        n_workers,
+        cells * BYTES_PER_CELL,
+        what="Top-hit scan",
+        unit=f"{band_rows:,}-row band of {n_analyses:,} Analyses",
+        units=n_bands,
+        result_bytes=cells * _CANDIDATE_RESULT_BYTES_PER_CELL,
+    )
+
+
 def _scan_candidates(
     z_plane: DenseZPlane,
     se_plane: DenseSePlane,
@@ -133,7 +156,8 @@ def _scan_candidates(
 
     The matrix is never held whole: each band contributes only the cells that
     pass, which on a real store is a tiny fraction of it. Bands are independent
-    and scan across ``n_workers``; the parent concatenates their harvests in
+    and scan across ``n_workers``, as many as a quarter of the host's available
+    memory holds (`_scan_workers`); the parent concatenates their harvests in
     band order, so the candidate order is the serial pass's.
     """
     global _SCAN
@@ -142,11 +166,12 @@ def _scan_candidates(
     }
     starts = range(0, n_variants, band_rows)
     n_bands = len(starts)
+    workers = _scan_workers(n_workers, band_rows, z_plane.n_analyses, n_bands)
     _SCAN = _ScanContext(z_plane, se_plane, imputed_arr, eaf_plane, n_variants, band_rows, loosest)
     started = time.monotonic()
     try:
         with log_phase(log, "Top-hit scan"):
-            bands = ordered_map(_scan_one_band, starts, n_workers)
+            bands = ordered_map(_scan_one_band, starts, workers)
             for index, band in enumerate(bands, start=1):
                 for name, values in band.items():
                     if len(values):

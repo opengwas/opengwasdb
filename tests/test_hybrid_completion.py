@@ -626,6 +626,93 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     assert result.n_imputed >= 0
 
 
+def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from completion_counts import quality_counts
+
+    from opengwasdb.completion import block
+
+    source = _build_source(tmp_path)
+    panel = tmp_path / "ld_panel"
+    variants = [*PANEL_ALIDS, OFF_PANEL_ALID]
+    _write_ld_block(
+        panel / "EUR" / "1", "arbitrary-block-name",
+        [(alid, 0.3, int(alid.split(":")[1])) for alid in variants],
+    )
+    monkeypatch.setattr(
+        block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
+    )
+    completed = tmp_path / "completed.opengwasdb"
+    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+
+    dense = open_store(completed / "dense")
+    mask = np.asarray(dense.arrays(mode="r")["imputed"][:])
+    assert mask.sum(axis=0).tolist() == [0, 2], "one fill was reclaimed; two must survive"
+    counted = quality_counts(dense.path)
+    assert counted == {
+        (0, "1/arbitrary-block-name"): (0, 0),
+        (1, "1/arbitrary-block-name"): (2, 0),
+    }
+    declarations = [
+        row["completion_n_imputed_total"] for row in read_analyses(dense.analyses_path).rows
+    ]
+    assert declarations == ["0", "2"]
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
+def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from completion_counts import quality_counts
+
+    from opengwasdb.completion import block
+    from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
+
+    crossover = PANEL_ALIDS[1]
+    vcf = _vcf(tmp_path, "observed", [
+        f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.2:0.3\n"
+        for pos in (100_000, 750_000, 1_000_000, 1_500_000, 2_000_000)
+    ])
+    source = build_over_panel(
+        tmp_path, write_manifest(tmp_path, [(vcf, "trait_a", "Trait A")]),
+        [alid for alid in [*PANEL_ALIDS, OFF_PANEL_ALID] if alid != crossover],
+    )
+    blocks = {
+        "owner-a": PANEL_ALIDS[:3],
+        "owner-b": [*PANEL_ALIDS[:2], PANEL_ALIDS[3]],
+        "ceder": PANEL_ALIDS[:2],
+        "successor": PANEL_ALIDS[1:],
+        "unaffected": [*PANEL_ALIDS[2:], "1:1700000:A:G", OFF_PANEL_ALID],
+    }
+    panel = tmp_path / "ld_panel"
+    for name, alids in blocks.items():
+        _write_ld_block(panel / "EUR" / "1", name, [
+            (alid, 0.3, int(alid.split(":")[1])) for alid in alids
+        ])
+    ceded = ceded_at_end(list_all_blocks(panel, "EUR", "1"))
+    assert {name for name, alids in ceded.items() if crossover in alids} == {"1/ceder"}
+    assert sum(crossover in alids for alids in blocks.values()) == 4
+    monkeypatch.setattr(
+        block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
+    )
+    completed = tmp_path / "completed.opengwasdb"
+    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+
+    assert quality_counts(completed / "dense") == {
+        (0, f"1/{name}"): (int(name == "unaffected"), 0) for name in blocks
+    }
+    with query_store(completed) as query:
+        assert query.lookup([crossover], ["trait_a"])["association_status"].tolist() == ["observed"]
+    assert read_analyses(completed / "dense" / "analyses.tsv").rows[0][
+        "completion_n_imputed_total"
+    ] == "1", "the unaffected block's fill must survive the corrections"
+    file_ops.rmtree(panel)
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
 def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
     """The counts a completed Hybrid release reports -- result object, manifest
     provenance and the arrays the phases wrote -- must agree (issue #130): a

@@ -44,6 +44,7 @@ import numpy as np
 
 from opengwasdb import top_hits
 from opengwasdb.associations import Associations, Cells, CsrReader
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import (
@@ -65,7 +66,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
-from opengwasdb.completion.parallel import ordered_write, run_block_tasks
+from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -1075,9 +1076,8 @@ def _checkpoint_and_assemble(
     )
     print(f"Wrote {quality_count:,} completion quality rows")
     csr = _assemble_completed_csr(
-        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference, n_workers,
-        added_cells=int(cells.sum()),
-        largest_added=int(cells.max()) if len(cells) else 0,
+        _Assembly(plan, axis, block_rows), fill_shard_dir, batch_of, eaf_reference,
+        n_workers=n_workers, added=cells,
     )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
@@ -1088,7 +1088,7 @@ def _checkpoint_and_assemble(
 class _Assembly:
     """What assembling any Analysis reads: made by the parent before the write
     pool forks, and inherited by its workers rather than pickled
-    (`ordered_write`)."""
+    (`ordered_map`'s ``shared``)."""
 
     plan: _BlockPlan
     axis: _MergedAxis
@@ -1100,9 +1100,8 @@ class _Assembly:
 #: arrays. Measured on the OGS-00006 100-Analysis subset (11.5 M variants), its
 #: workers held 122 MB private for a typical Analysis -- 10.6 bytes a variant --
 #: and 264 MB for its largest, 6.69 M rows: 21 bytes a row more (#321). Each is
-#: rounded up by half again, since a 0.2 s sample can miss a short peak, and the
-#: fixed part covers the fork's floor.
-_ASSEMBLY_FIXED_BYTES = 256 * 1024**2
+#: rounded up by half again, since a 0.2 s sample can miss a short peak; the
+#: fork's floor beside them is `FORK_FLOOR_BYTES`, which `pool_workers` adds.
 _ASSEMBLY_BYTES_PER_VARIANT = 16
 _ASSEMBLY_BYTES_PER_ROW = 32
 
@@ -1116,12 +1115,9 @@ _RESULT_BYTES_PER_ROW = 2 * _HELD_BYTES_PER_CELL
 
 
 def _assembly_bytes(n_variants: int, max_rows: int) -> int:
-    """Bytes one Analysis's worker holds, for the largest Analysis."""
-    return (
-        _ASSEMBLY_FIXED_BYTES
-        + _ASSEMBLY_BYTES_PER_VARIANT * n_variants
-        + _ASSEMBLY_BYTES_PER_ROW * max_rows
-    )
+    """Bytes one Analysis's worker holds for the largest Analysis, beside the
+    fork's floor."""
+    return _ASSEMBLY_BYTES_PER_VARIANT * n_variants + _ASSEMBLY_BYTES_PER_ROW * max_rows
 
 
 def _complete_analysis(
@@ -1169,9 +1165,9 @@ def _assemble_completed_csr(
     fill_shard_dir: Path,
     batch_of: np.ndarray,
     eaf_reference: np.ndarray | None,
-    n_workers: int = 1,
-    added_cells: int = 0,
-    largest_added: int = 0,
+    *,
+    n_workers: int,
+    added: np.ndarray,
 ) -> _CompletedCsr:
     """Phase 3 assembly: each Analysis's completed rows -- remapped observed
     rows, its fills and its missing block positions, sorted by variant index --
@@ -1184,8 +1180,8 @@ def _assemble_completed_csr(
     own source rows; the parent adds them to the writer in Analysis order, so
     the sequence, its offsets and every side table keyed on a flat position are
     the ones one worker writes. The writer holds every completed row by the
-    end, at most the source's rows and ``added_cells`` more, and the pool is
-    sized beside that."""
+    end, at most the source's rows and the rows completion may add to each
+    Analysis (``added``, `_analysis_cells`), and the pool is sized beside that."""
     print("Assembling completed CSR per analysis...")
     plan, axis = assembly.plan, assembly.axis
     analysis_ids = [a.analysis_id for a in plan.state.src_analyses]
@@ -1201,12 +1197,12 @@ def _assemble_completed_csr(
         unit=f"completed Analysis over {len(axis.variants):,} variants",
         units=plan.state.n_analyses,
         parent_bytes=resident_bytes()
-        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + added_cells),
-        result_bytes=_RESULT_BYTES_PER_ROW * (largest + largest_added),
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + int(added.sum())),
+        result_bytes=_RESULT_BYTES_PER_ROW * (largest + int(added.max(initial=0))),
     )
     total_imputed = total_missing = 0
     items = _analysis_fills(fill_shard_dir, batch_of)
-    outcomes = ordered_write(_complete_analysis, assembly, items, workers)
+    outcomes = ordered_map(_complete_analysis, items, workers, shared=assembly)
     for expected, (ai, completed) in enumerate(outcomes):
         if ai != expected:
             raise RuntimeError(f"Analysis {ai} arrived where Analysis {expected} belongs")

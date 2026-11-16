@@ -12,16 +12,21 @@
   can tell the encode never finished.
 
   A band is at least one Dense shard, so on a wide release a worker holds a
-  large fraction of a gigabyte, and the pool is therefore capped at a quarter
-  of the host's `MemAvailable`, read when the phase starts: one band a worker,
-  the parent holding one returned band a worker, and one worker with a logged
-  reason when the host's memory cannot be read. The per-band figure is
-  empirical — `benchmarks/measure_eaf_band_memory.py` fits a fixed cost plus a
-  per-cell cost over two real OGS-00009 bands, from each forked worker's
-  `VmHWM` (135 MiB + 66.9 B a cell; the artifact is
-  `docs/benchmark-output/opengwasdb_320_eaf_band/eaf_band_memory.json`). On
-  this host that gives OGS-00009's 251.4 M-cell band 13 workers, where the
-  build's own 32 would have asked for about 500 GiB. On OGS-00003, whose five
+  large fraction of a gigabyte, and the pool is therefore sized as every
+  memory-bounded pool is (`encoding.memory.pool_workers`, #321): within a
+  quarter of the host's `MemAvailable`, read when the phase starts, each worker
+  counts one band and the 512 MiB every forked worker holds before its first
+  (`FORK_FLOOR_BYTES`), the parent counts its own resident set and the two
+  encoded bands it may hold for each worker, no more workers run than there are
+  bands, and one worker runs, with a logged reason, when the host's memory
+  cannot be read. The per-band figure is empirical —
+  `benchmarks/measure_eaf_band_memory.py` fits a fixed cost plus a per-cell
+  cost over two real OGS-00009 bands, from each forked worker's `VmHWM`
+  (135 MiB + 66.9 B a cell, rounded up to 72; the artifact is
+  `docs/benchmark-output/opengwasdb_320_eaf_band/eaf_band_memory.json`). A
+  worker on OGS-00009's 251.4 M-cell band counts 19.7 GB, so a host with
+  960 GB available runs 12 beside a parent of up to 4 GB, where the build's own
+  32 would have asked for about 630 GB. On OGS-00003, whose five
   5,000,000-row bands keep at most five workers busy, the phase fell from 37–39 s
   to 11–14 s (2.4–3.5×). The encode's time at full size is measured in #322's
   end-to-end rebuild of OGS-00009, as #310's and #321's are.
