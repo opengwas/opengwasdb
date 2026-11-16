@@ -96,6 +96,8 @@ def test_the_harness_attaches_provenance_without_running_a_reader(tmp_path, monk
                 str(probes),
                 "--store",
                 f"OGS-00009={records.parent}",
+                "--tz",
+                "Europe/London",
                 "--output",
                 str(output),
             ]
