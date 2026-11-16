@@ -22,7 +22,7 @@ Three inputs are accepted, distinguished by content rather than by suffix:
   engine before issue #354, which requires ``source_keys``, refuses this
   format in turn rather than read it without its re-orientation.
 * a plain ALID list -- one canonical GRCh38 ALID per line. Source keys are the
-  ALID's own coordinate in either allele order (identity).
+  ALID's own coordinate (either allele order only for equal-length alleles).
 * a store ``variants.tsv.gz`` -- the Store Variant Table. Source keys are
   identity, as for a plain list.
 
@@ -30,13 +30,21 @@ Anything that cannot be read as one of these fails loudly. A build must not
 proceed against an empty or corrupt axis and silently store nothing -- an empty
 result indistinguishable from a real answer is the failure mode this package
 exists to prevent.
+
+An input containing indels must declare reference-first semantics with
+``REFERENCE_FIRST_MARKER`` as its first physical line (owner, 16 Nov 2026,
+issue #381). Unmarked SNV/substitution inputs remain usable; detached Store
+tables have no format-version exemption. Parsing and refusal live here so
+streaming consumers cannot mistake historical sorted deletions for insertions.
 """
 
 from __future__ import annotations
 
 import gzip
+import itertools
 import logging
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypeVar
@@ -53,10 +61,12 @@ from opengwasdb.variants.windows import DEFAULT_WINDOW_SIZE_MB, window_key, wind
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "REFERENCE_FIRST_MARKER",
     "UnmarkedArtifactError",
     "VariantReference",
     "expected_rsids_by_routed_key",
     "expected_rsids_by_routing",
+    "iter_reference_alids",
     "read_variant_reference",
     "refuse_unmarked_artifact",
     "require_rsids_match_expected",
@@ -77,11 +87,17 @@ _ARTIFACT_COLUMNS = (
 #: The routing column of an artifact written before issue #354.
 _UNMARKED_ROUTING_COLUMN = "source_keys"
 
-#: The artifact's first line. The streaming extraction writes it as the first
+#: Version 1 declares reference-first indels. A tab makes an older full reader
+#: refuse this as an unknown header instead of losing an artifact's routing.
+REFERENCE_FIRST_MARKER = "#opengwasdb-variant-reference\t1\n"
+_MARKER_NAME = "#opengwasdb-variant-reference"
+
+#: The artifact's preamble. The streaming extraction writes it as the first
 #: gzip member (issue #196). ``routed_source_keys`` and ``reoriented_keys`` mark
 #: an artifact that records the lift's re-orientation (issue #354).
 ARTIFACT_HEADER = (
-    "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
+    REFERENCE_FIRST_MARKER
+    + "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys\n"
 )
 
 
@@ -144,9 +160,11 @@ class VariantReference:
 def read_variant_reference(path: str | Path) -> VariantReference:
     """Read a variant reference, failing loudly on anything unreadable.
 
-    The format is detected from the first line: a tab-separated header selects
-    the artifact or Store Variant Table reader by its columns; anything else is
-    a plain ALID list.
+    A header selects the artifact or Store Variant Table reader by its columns,
+    after an optional versioned semantics marker; otherwise it is a plain ALID
+    list. Identity headers accept the resolver's historical case-insensitive
+    ``alid``, ``variant_id`` and ``id``, separated by tabs or whitespace. An
+    unmarked input containing an indel fails before returning any routing.
     """
     reference_path = Path(path)
     if not reference_path.is_file():
@@ -155,7 +173,7 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     if header is None:
         return _reference_from_alid_lines(reference_path, lines)
     refuse_unmarked_artifact(header, reference_path)
-    if "routed_source_keys" in header or ("a1" in header and "a2" in header):
+    if _artifact_header(header):
         return _reference_from_artifact(reference_path, header, lines)
     if "alid" in header:
         return _reference_from_store_table(reference_path, header, lines)
@@ -163,6 +181,27 @@ def read_variant_reference(path: str | Path) -> VariantReference:
         f"variant reference {reference_path} has neither an 'alid' nor a "
         "'routed_source_keys' column"
     )
+
+
+def iter_reference_alids(path: str | Path) -> Iterator[str]:
+    """Stream declared Variant Reference identities without retaining routing.
+
+    Plain lists and tables share the full reader's semantics marker and refusal
+    policy. Consumers must exhaust the iterator before using its result: an
+    unmarked indel anywhere refuses the input, not only at requested positions.
+    Memory is bounded by one row, including gzip inputs (issue #381).
+    """
+    reference_path = Path(path)
+    with _reference_input(reference_path) as (header, lines):
+        if header is not None and "alid" not in header:
+            raise ValueError(
+                f"reference {reference_path} is tab-separated but has no 'alid' column"
+            )
+        column = header.index("alid") if header is not None else None
+        for line in lines:
+            token = _reference_token(line, column, reference_path)
+            if token is not None:
+                yield _canonical_alid(token, reference_path)
 
 
 #: A candidate or routing key: the raw source tuple, or the string form a
@@ -394,6 +433,10 @@ def write_variant_reference(
     Rows are assembled window by window (issue #188): each genomic window's
     ALIDs are sorted and the windows concatenate in genomic order, so the axis
     is never re-sorted as a whole -- only one window at a time.
+
+    The preamble declares reference-first indels (issue #381). Callers supply
+    identities already formed from a declared reference; this is not a way to
+    upgrade a legacy sorted list whose orientation has been lost.
     """
     _require_routed(reoriented, source_lookup)
     keys_by_alid = _source_keys_by_alid(source_lookup)
@@ -465,15 +508,93 @@ def _open_text(path: Path) -> IO[str]:
 
 
 def _read_header_and_lines(path: Path) -> tuple[list[str] | None, list[str]]:
-    """The header (when the file is tab-separated) and every data line."""
+    """The normalized table header, when present, and every data line."""
+    with _reference_input(path) as (header, lines):
+        return header, list(lines)
+
+
+@contextmanager
+def _reference_input(path: Path) -> Iterator[tuple[list[str] | None, Iterator[str]]]:
+    """One streaming interpretation of the declaration, header and every ALID.
+
+    No consumer may skip unrequested rows: an indel anywhere makes an unmarked
+    reference unsafe, even when a lift asks about no positions (issue #381).
+    """
     with _open_text(path) as handle:
         first = handle.readline()
+        reference_first = first.startswith(_MARKER_NAME)
+        if reference_first:
+            if first.rstrip("\r\n") != REFERENCE_FIRST_MARKER.rstrip("\n"):
+                raise ValueError(f"variant reference {path} has an unsupported semantics marker")
+            first = handle.readline()
         if not first.strip():
             raise ValueError(f"variant reference {path} is empty")
-        if "\t" in first:
-            header = [field.lstrip("#").strip() for field in first.rstrip("\n").split("\t")]
-            return header, list(handle)
-        return None, [first, *handle]
+        header = _reference_header(first, path)
+        lines = (
+            _tabular_reference_lines(handle, _artifact_header(header))
+            if header is not None else itertools.chain([first], handle)
+        )
+        start = 1 + int(reference_first) + int(header is not None)
+        yield header, _validated_reference_lines(path, header, lines, reference_first, start)
+
+
+def _reference_header(first: str, path: Path) -> list[str] | None:
+    """Keep the resolver's legacy identity columns inside the shared parser."""
+    columns = [field.lstrip("#").strip().lower() for field in first.split()]
+    refuse_unmarked_artifact(columns, path)
+    if _artifact_header(columns):
+        return [field.lstrip("#").strip().lower() for field in first.rstrip("\r\n").split("\t")]
+    for name in ("alid", "variant_id", "id"):
+        if name in columns:
+            columns[columns.index(name)] = "alid"
+            return columns
+    if "\t" in first and parse_canonical_alid(first.split()[0]) is None:
+        return columns
+    return None
+
+
+def _artifact_header(columns: Sequence[str]) -> bool:
+    return "routed_source_keys" in columns or ("a1" in columns and "a2" in columns)
+
+
+def _tabular_reference_lines(lines: Iterator[str], artifact: bool) -> Iterator[str]:
+    """Identity tables use split(); artifacts preserve tab-delimited empty cells."""
+    for line in lines:
+        yield line if artifact else "\t".join(line.split()) + "\n"
+
+
+def _validated_reference_lines(
+    path: Path, header: list[str] | None, lines: Iterator[str],
+    reference_first: bool, start: int,
+) -> Iterator[str]:
+    alid_column = None
+    if header is not None:
+        if "alid" not in header:
+            yield from lines
+            return
+        alid_column = header.index("alid")
+    for number, line in enumerate(lines, start=start):
+        if line.startswith(_MARKER_NAME):
+            raise ValueError(f"variant reference {path}:{number}: misplaced semantics marker")
+        token = _reference_token(line, alid_column, path)
+        if token is not None:
+            alid = _canonical_alid(token, path)
+            _chrom, _pos, a1, a2 = alid.split(":")
+            if not reference_first and len(a1) != len(a2):
+                raise ValueError(
+                    f"variant reference {path}:{number}: indel {token!r} has no declared "
+                    "orientation; the reference must be regenerated with reference-first "
+                    "indels (issue #381)"
+                )
+        yield line
+
+
+def _reference_token(line: str, column: int | None, path: Path) -> str | None:
+    if not line.strip() or line.lstrip().startswith("#"):
+        return None
+    if column is None:
+        return line.split()[0]
+    return _field(line.rstrip("\n").split("\t"), column, path).strip()
 
 
 def _canonical_alid(token: str, path: Path) -> str:

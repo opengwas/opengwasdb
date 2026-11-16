@@ -191,7 +191,7 @@ from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, format_version
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids
-from opengwasdb.variants.reference import read_variant_reference
+from opengwasdb.variants.reference import iter_reference_alids, read_variant_reference
 from opengwasdb.variants.routing import (
     FromReference,
     LiftedUnion,
@@ -247,36 +247,7 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
     Store Variant Table (``*.tsv.gz`` with an ``alid`` column). The panel defines
     the Dense Component axis (the imputable set).
     """
-    path = Path(panel_path)
-    name = str(path).lower()
-    alids: set[str] = set()
-    if name.endswith((".tsv.gz", ".tsv.bgz", ".bgz")):
-        import pysam
-
-        with pysam.BGZFile(str(path), "r") as handle:  # type: ignore[call-arg]
-            header: list[str] | None = None
-            for raw in handle:
-                line = raw.decode("utf-8").rstrip("\n")
-                if line.startswith("#"):
-                    header = line.lstrip("#").split("\t")
-                    continue
-                fields = line.split("\t")
-                if header is not None and "alid" in header:
-                    alids.add(fields[header.index("alid")])
-                elif len(fields) >= 6:
-                    alids.add(fields[5])
-        return alids
-    opener = open
-    if name.endswith(".gz"):
-        import gzip
-
-        opener = gzip.open  # type: ignore[assignment]
-    with opener(path, "rt", encoding="utf-8") as handle:  # type: ignore[operator]
-        for line in handle:
-            token = line.strip().split()[0] if line.strip() else ""
-            if token and not token.startswith("#") and token.count(":") == 3:
-                alids.add(token)
-    return alids
+    return set(iter_reference_alids(panel_path))
 
 _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 

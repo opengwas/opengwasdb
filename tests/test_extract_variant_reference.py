@@ -138,7 +138,8 @@ def test_artifact_has_the_declared_columns_and_lifts_hg19(tmp_path):
     assert result.output_path == artifact
     assert result.n_variants == 2
 
-    header, *rows = _artifact_text(artifact).splitlines()
+    marker, header, *rows = _artifact_text(artifact).splitlines()
+    assert marker == "#opengwasdb-variant-reference\t1"
     assert header == (
         "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys"
     )
@@ -678,7 +679,7 @@ def test_chromosomes_sharing_a_sort_rank_do_not_collide(tmp_path):
     for n_workers in (1, 2):
         artifact = tmp_path / f"ranks-{n_workers}.variant-ref.tsv.gz"
         extract_from_manifest(manifest, artifact, n_workers=n_workers)
-        alids = {line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[1:]}
+        alids = {line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[2:]}
         assert alids == expected, n_workers
 
 
@@ -690,7 +691,7 @@ def test_artifact_rows_are_in_genomic_order_after_windowed_assembly(tmp_path):
     manifest = _wide_manifest(tmp_path)
     artifact = tmp_path / "ordered.variant-ref.tsv.gz"
     extract_from_manifest(manifest, artifact, n_workers=2, window_size_mb=5)
-    alids = [line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[1:]]
+    alids = [line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[2:]]
     assert alids == sorted(alids, key=alid_sort_key)
     assert len(alids) > 10, "fixture must span enough variants to be meaningful"
 
@@ -1101,7 +1102,8 @@ def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
     raw = artifact.read_bytes()
     assert raw.count(b"\x1f\x8b\x08") >= 1 + result.n_windows
     with gzip.open(artifact, "rt", encoding="utf-8") as handle:
-        header, *rows = handle.read().splitlines()
+        marker, header, *rows = handle.read().splitlines()
+    assert marker == "#opengwasdb-variant-reference\t1"
     assert header == (
         "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys"
     )
@@ -1315,10 +1317,11 @@ def test_hg19_and_mixed_streaming_matches_the_materialising_writer(
         liftover_failure_threshold=1.0,
     )
 
-    assert expected.splitlines()[0] == (
+    assert expected.splitlines()[0] == "#opengwasdb-variant-reference\t1"
+    assert expected.splitlines()[1] == (
         "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys"
     )
-    assert len(expected.splitlines()) > 1
+    assert len(expected.splitlines()) > 2
     assert _artifact_text(actual) == expected
 
 
@@ -1361,6 +1364,7 @@ def test_extraction_records_the_keys_a_reverse_strand_lift_reorients(tmp_path):
 
     assert result.n_variants == 3
     assert _artifact_text(out).splitlines() == [
+        "#opengwasdb-variant-reference\t1",
         "#alid\tchromosome\tposition\ta1\ta2\trsid\trouted_source_keys\treoriented_keys",
         "2:998001:A:T\t2\t998001\tA\tT\t\t2:2000:T:A\t2:2000:T:A",
         "2:999001:C:T\t2\t999001\tC\tT\t\t2:1000:G:A\t2:1000:G:A",
