@@ -30,7 +30,6 @@ Contracts enforced here:
 from __future__ import annotations
 
 import csv
-import gzip
 import hashlib
 import json
 import logging
@@ -97,7 +96,7 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, load_liftover
 from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, requires_probe_id, resolve_reader
-from opengwasdb.variants.reference import refuse_unmarked_artifact
+from opengwasdb.variants.reference import iter_reference_alids, refuse_unmarked_artifact
 from opengwasdb.version import installed_version
 
 logger = logging.getLogger(__name__)
@@ -240,13 +239,7 @@ def load_variant_reference(path: Path | str) -> set[str]:
     axis = Path(path)
     if not axis.is_file():
         raise FileNotFoundError(f"variant reference not found: {axis}")
-    opener = gzip.open if axis.suffix == ".gz" else open
-    with opener(axis, "rt", encoding="utf-8") as fh:
-        first = fh.readline()
-        if not first:
-            raise ValueError(f"empty variant reference: {axis}")
-        column, initial = _parse_panel_header(first, axis)
-        variants = _read_panel_lines(fh, column, initial)
+    variants = set(iter_reference_alids(axis))
     if not variants:
         raise ValueError(f"no valid variants in variant reference: {axis}")
     return variants

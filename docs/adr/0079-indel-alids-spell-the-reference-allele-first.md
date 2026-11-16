@@ -304,6 +304,38 @@ Routing no longer carries a row's declaration. `duplicate_reversed_indel`
 keeps its place among the reasons, retired, because a reason's code is its
 position (ADR 0072's clarification of 7 Nov).
 
+**9. Variant References declare their indel semantics** (owner, 16 Nov 2026,
+[issue #381](https://github.com/opengwas/opengwasdb/issues/381)). The installed
+plain references still contain historical sorted indels. A sorted deletion is
+indistinguishable from a valid reference-first insertion, so rejecting only
+sorted rows cannot preserve the valid case and reject the unsafe one.
+
+The first physical line of a newly regenerated reference is
+`#opengwasdb-variant-reference<TAB>1` plus a newline. Version 1 declares
+reference-first indels; it is separate from a Store's format version. It works
+before either a plain ALID list or a table header, in text or gzip. Both artifact
+writers emit it, including the streaming extractor's header gzip member.
+An unmarked input containing an indel is refused at its first indel, naming the
+row/ALID and requiring regeneration; unmarked SNVs and equal-length substitutions
+remain usable. Unknown versions and misplaced declarations are refused. No
+allele is automatically swapped, and a marker is never a license to relabel
+legacy bytes without regenerating their identities from declared references.
+
+Marker parsing and refusal belong to the Variant Reference module. Its full
+reader and streaming iterator share them; Hybrid's legacy panel loader, the
+resolver and BESD's streamed lift reference use adapters to that iterator. They
+read to the end even when no positions are wanted. A detached Store Variant
+Table has no exemption, even beside a manifest: these interfaces do not open
+and verify its Store Release envelope. In-memory references and writer inputs
+remain the caller's responsibility to form under this ADR.
+
+The declaration's tab makes the previous full reader refuse an unknown header
+rather than read a new artifact as a plain list without routing. Older
+independent readers do not all refuse it, so using a declared reference requires
+upgrading the engine. This changes the Variant Reference input contract, not a
+Store Release's format or how existing Stores are queried. Regeneration of the
+large installed references remains separate work.
+
 ## Considered
 
 - **Sorted ALIDs with a flag recording the orientation.** Keeps 0.2.0's
@@ -324,6 +356,10 @@ position (ADR 0072's clarification of 7 Nov).
 - **Reading a rescued copy's reference from its path, or from the rescue
   record.** Either makes the engine depend on opengwasdb-stores' layout; a
   rescue that keeps the raw alleles needs neither (7).
+- **Detect a historical reference from sorted indels or a filename.** A valid
+  insertion has the same spelling; a mixture of orders proves nothing about
+  each row. A versioned producer declaration establishes the input convention
+  without guessing (9).
 
 ## Consequences
 
@@ -362,9 +398,9 @@ position (ADR 0072's clarification of 7 Nov).
   judge the stamp of a Store newer than 0.2.2: it warns that the package must be
   upgraded. (Amended 12 Nov 2026, epic #307's review: this point first said such a
   package reads a 0.2.2 Store "correctly" and left out its `validate`.)
-- A Variant Reference or variant list written before 0.2.2 names an indel by
-  its sorted spelling, which this build reads as the insertion: a source's
-  deletion at that site is off the reference.
+- An unmarked Variant Reference containing indels, including a detached Store
+  Variant Table, now fails before routing. Regenerate it with the versioned
+  reference-first declaration (9); existing SNV-only references remain usable.
 - Breaking for Python callers: `orient_to_canonical`, `oriented_alid`,
   `identity_fault`, `project_source_variant` and `oriented_variant` take a
   required `other_is_reference`, `orient_or_drop` a required `declaration` and

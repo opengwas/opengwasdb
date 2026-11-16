@@ -304,11 +304,40 @@ source's allele string at a moved coordinate. Signed statistics follow the
 projected alleles, so a lift that swaps which allele is `A1` flips them
 (§5).
 
+A Variant Reference containing any indel MUST start with the physical line
+`#opengwasdb-variant-reference<TAB>1` followed by a newline, where `<TAB>` is one
+tab character. Version `1` declares that every indel is written reference first;
+it is an input-format declaration, independent of a Store's `format_version`.
+The next line is the existing tab-separated column header or the first ALID of
+a plain list. The declaration applies equally to plain text and gzip inputs,
+is allowed only once at the start, and an unsupported version is refused.
+SNV-only and equal-length-substitution inputs remain usable without it.
+
+Every reader MUST refuse the first indel in an unmarked input, naming its row
+and ALID and requiring regeneration with reference-first indels (owner, 16 Nov
+2026, issue #381, ADR 0079). Both lexical orders are refused: a sorted legacy
+deletion has the same bytes as a valid reference-first insertion, and an
+unsorted row elsewhere proves nothing about that row. No reader guesses from
+allele order, a filename, a genome match or a content fraction, or swaps alleles.
+A detached Store Variant Table follows this rule even beside a manifest: these
+readers do not open and verify the release envelope. Regenerate a separate
+declared reference rather than prepend a marker to legacy or published bytes.
+
+`variants.reference` owns the declaration and refusal for both its full routing
+reader and its streaming ALID iterator. The Dense and Hybrid single-pass
+builders, Hybrid's legacy reference-panel reader, the resolver's Variant
+Reference loader and BESD's streamed lift check all use it. Streaming consumers
+exhaust the input before using their result, even when no positions are wanted;
+an unrequested indel cannot bypass the rule. Their retained memory remains
+bounded by the ALID set or requested intersection, not by the routing table.
+
 A Variant Reference artifact (`*.variant-ref.tsv.gz`, which
 `extract-variant-reference` writes) records such a lift, so that a single-pass
 build routed by it stores what the two-pass build stores. Its columns are
 `alid`, `chromosome`, `position`, `a1`, `a2`, `rsid`, `routed_source_keys` and
-`reoriented_keys`. A row's ALID is formed from the projected alleles;
+`reoriented_keys`, after the declaration above. Both artifact writers, including
+streaming extraction's first gzip member, always emit that declaration. A row's
+ALID is formed from the projected alleles;
 `routed_source_keys` lists, `;`-separated, the source keys
 (`chrom:pos:ref:alt`, as each source spells them) that route to it; and
 `reoriented_keys` lists those of them whose lift makes the other allele `A1`,
@@ -327,8 +356,13 @@ against its ALIDs: the single-pass builds, `build-ragged-besd`'s lift check
 and `resolve-analyses --variant-reference` all do. It is extracted again. The
 column was renamed for the converse: an engine before issue #354 requires
 `source_keys`, so it refuses a new artifact rather than route it without its
-re-orientation. A plain ALID list and a Store Variant Table name no such column
-and are read as before.
+re-orientation. A plain ALID list and a Store Variant Table name no such column;
+they still need the declaration above if they contain indels. The tab-separated
+declaration also makes the previous full Variant Reference reader refuse an
+unknown header rather than accidentally read a new artifact as a plain list
+and discard its routing. Older independent consumers have no such guarantee;
+use an upgraded engine for declared references. This changes no Store Release
+format, array or existing Store-reading behavior.
 
 The BESD builder (`build-ragged-besd`) checks its lift, and records that it
 did. Given `--variant-reference`, a reverse-strand lifted variant whose alleles
