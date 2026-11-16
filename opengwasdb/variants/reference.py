@@ -173,7 +173,7 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     if header is None:
         return _reference_from_alid_lines(reference_path, lines)
     refuse_unmarked_artifact(header, reference_path)
-    if "routed_source_keys" in header or ("a1" in header and "a2" in header):
+    if _artifact_header(header):
         return _reference_from_artifact(reference_path, header, lines)
     if "alid" in header:
         return _reference_from_store_table(reference_path, header, lines)
@@ -531,7 +531,7 @@ def _reference_input(path: Path) -> Iterator[tuple[list[str] | None, Iterator[st
             raise ValueError(f"variant reference {path} is empty")
         header = _reference_header(first, path)
         lines = (
-            _tabular_reference_lines(handle)
+            _tabular_reference_lines(handle, _artifact_header(header))
             if header is not None else itertools.chain([first], handle)
         )
         start = 1 + int(reference_first) + int(header is not None)
@@ -540,9 +540,10 @@ def _reference_input(path: Path) -> Iterator[tuple[list[str] | None, Iterator[st
 
 def _reference_header(first: str, path: Path) -> list[str] | None:
     """Keep the resolver's legacy identity columns inside the shared parser."""
-    fields = first.rstrip("\r\n").split("\t") if "\t" in first else first.split()
-    columns = [field.lstrip("#").strip().lower() for field in fields]
+    columns = [field.lstrip("#").strip().lower() for field in first.split()]
     refuse_unmarked_artifact(columns, path)
+    if _artifact_header(columns):
+        return [field.lstrip("#").strip().lower() for field in first.rstrip("\r\n").split("\t")]
     for name in ("alid", "variant_id", "id"):
         if name in columns:
             columns[columns.index(name)] = "alid"
@@ -552,10 +553,14 @@ def _reference_header(first: str, path: Path) -> list[str] | None:
     return None
 
 
-def _tabular_reference_lines(lines: Iterator[str]) -> Iterator[str]:
-    """Normalize whitespace tables without collapsing TSV artifact empty cells."""
+def _artifact_header(columns: Sequence[str]) -> bool:
+    return "routed_source_keys" in columns or ("a1" in columns and "a2" in columns)
+
+
+def _tabular_reference_lines(lines: Iterator[str], artifact: bool) -> Iterator[str]:
+    """Identity tables use split(); artifacts preserve tab-delimited empty cells."""
     for line in lines:
-        yield line if "\t" in line else "\t".join(line.split()) + "\n"
+        yield line if artifact else "\t".join(line.split()) + "\n"
 
 
 def _validated_reference_lines(
