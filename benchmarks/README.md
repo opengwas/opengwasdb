@@ -1308,6 +1308,17 @@ from the inputs they were assembled from and writes one JSON artifact:
 3. **The comparison** — every figure in the epic's tables beside its measured
    value, whether the record reproduces it, and the reason when it does not.
 
+`--store` requires a valid `--tz ZONE`: the Store host's declared **log-clock
+zone**, not the machine executing the parser. It is also required for
+`--window`. UTC record timestamps and offset-bearing window endpoints convert
+to that zone before dropping `tzinfo`; naive log lines and window endpoints
+retain their wall-clock readings. `log_clock_tz` and `method_note` record the
+declaration even without daily windows. The public `parse_record`,
+`measure_store`, `parse_window` and `daily_windows` APIs likewise require `tz`.
+There is no implicit Europe/London or executing-host fallback (issue #436).
+The artifact keeps naive ISO timestamps and wall-clock duration semantics:
+a naive log line in the repeated fallback hour cannot distinguish `fold`.
+
 `--window START/END` is one interval (an END before its START ends the next
 day). `--daily-window HH:MM-HH:MM --tz ZONE --daily-from DATE --until DATE`
 repeats the nightly snapshot from `--daily-from` over every night up to

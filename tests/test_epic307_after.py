@@ -54,7 +54,7 @@ def _store(root: Path, label: str, steps: dict[str, tuple[str, float]]) -> dict:
             "opengwasdb_rev": "8acd22b02a7f61656cf9079e38939fb0ff255581",
         }
         (records / f"{step}.json").write_text(json.dumps(payload), encoding="utf-8")
-    return measure_store(root / label, label=label)
+    return measure_store(root / label, tz="Europe/London", label=label)
 
 
 def _build_log(day: str, pass1_minutes: int) -> str:

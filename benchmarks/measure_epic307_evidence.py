@@ -18,7 +18,11 @@ from the same inputs and writes one JSON artifact holding:
 * the comparison: every figure in the epic's tables beside its measured value,
   whether the record reproduces it, and the reason when it does not.
 
-Windows are compared on the log lines' own clock. `--window START/END` is one
+`--store` requires `--tz ZONE`, the Store host's declared log-clock zone, also
+used to read windows. UTC record timestamps convert to that zone, never through
+the parser host; naive ISO artifact times retain wall-clock duration semantics.
+A naive line in the repeated fallback hour cannot distinguish `fold`.
+`--window START/END` is one
 interval; `--daily-window HH:MM-HH:MM --tz ZONE --until DATE` repeats the
 nightly snapshot over every night the records span, which is what keeps an
 overnight phase from being reported as the step's clean rate. The daily window
@@ -61,6 +65,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from benchmarks import _reader_ab
 from benchmarks._artifact import (
@@ -106,6 +111,14 @@ def _clock(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def _timezone(value: str) -> str:
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise argparse.ArgumentTypeError(f"invalid log-clock zone {value!r}") from error
+    return value
+
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -124,7 +137,7 @@ def _windows(
     args: argparse.Namespace, stores: Sequence[dict[str, Any]], until: date | None
 ) -> list[Window]:
     """The one-off windows plus one window per night of the records' span."""
-    windows = [parse_window(text) for text in args.window]
+    windows = [parse_window(text, args.tz) for text in args.window]
     if args.daily_window:
         if not args.tz or until is None:
             raise SystemExit("--daily-window needs --tz and --until")
@@ -170,7 +183,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="HH:MM-HH:MM",
         help="the nightly window's clock times, repeated over every night the records span",
     )
-    parser.add_argument("--tz", help="the zone --daily-window's clock times are read in")
+    parser.add_argument(
+        "--tz", type=_timezone,
+        help="Store host's declared log-clock zone (required with --store or --window); "
+             "also the zone --daily-window's wall times are read in, never the parser host's",
+    )
     parser.add_argument(
         "--daily-from",
         help="the first night --daily-window applies to (YYYY-MM-DD); default: the night of the "
@@ -319,6 +336,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{args.output} is already committed; commit the harness first and run from that "
             "commit, so the artifact names a revision that does not already hold it"
         )
+    if (args.store or args.window) and not args.tz:
+        raise SystemExit("--store and --window require --tz: declare the Store log-clock zone")
     until = _clock(args.until) if args.until else None
     sources = _sources(args.source)
     if args.reader_evidence and sources:
@@ -328,7 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rounds = _source_repetitions(args.source_repetitions)
     host_start = _host()
     stores = [
-        measure_store(path, label=label) for label, path in labelled_stores(args.store)
+        measure_store(path, tz=args.tz, label=label) for label, path in labelled_stores(args.store)
     ]
     windows = _windows(args, stores, until)
     with tempfile.TemporaryDirectory(prefix="epic307-control-") as scratch:
@@ -360,11 +379,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "end": _host(),
             "note": "the load at the run's start and end; the reader A/B records a load per sample",
         },
+        "log_clock_tz": args.tz,
         "method_note": (
+            f"Store log-clock zone: {args.tz!r}, explicitly declared by --tz; UTC record "
+            "timestamps convert to that zone before tzinfo is stripped, never through the "
+            "parser host. Naive ISO times preserve wall-clock durations; a naive line in the "
+            "repeated fallback hour cannot distinguish fold. "
             "A step's wall_seconds is its record's elapsed_seconds and its phases need not sum "
             "to it. A phase's span comes from its two log lines; the log's own `done in` value "
             "is minute-rounded, so it is recorded beside the span, not instead of it. Windows "
-            "are half-open intervals on the log lines' clock (host local time). A phase's clean "
+            "are half-open intervals on the declared Store log clock. A phase's clean "
             "rate is pooled over the progress intervals that fall entirely outside every window; "
             "the pace on the last line before a window is recorded beside it."
         ),
