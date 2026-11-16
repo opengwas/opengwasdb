@@ -35,8 +35,10 @@ to checkpoint merge and **215.6 s** to axis construction. These summaries have
 finer resolution than the integer-second log spans in the after-artifact.
 The unchanged LD-block phase is **44.7% of the release** and the principal
 milestone miss. Cheaper fits remain #423's Reference Completion Method question.
-Completion also still calls its Top-Hit Index scan without forwarding the worker
-count: that phase is single-process despite `complete-dense --n-workers 32`.
+At that revision completion did not forward its worker count to the Top-Hit
+Index scan: that phase was single-process despite `complete-dense --n-workers 32`.
+Issue #435 now forwards it; the separate completed-Store measurement below does
+not replace this historical whole-release result.
 
 Every phase projection is met at the harness's stated 5%/one-second tolerance
 except Pass 2: **34m55s against approximately 30 minutes**, still using per-row
@@ -126,6 +128,64 @@ No additional difference class remains unexplained. The full source-by-source
 fidelity of every retained cell was not remeasured; clean validation and the
 bounded release comparison should not be mistaken for that stronger proof.
 
+## Completion scan worker forwarding (#435)
+
+On **16 November 2026**, at committed `8954c7fa`, the existing production
+`build-dense-top-hits` command rebuilt the completed OGS-00009 index on a
+**private reflink**, never on #322's authoritative completed Store. Dense
+completion and Hybrid's initial and post-crossover scans now pass their existing
+worker request to this same implementation. The public default remains one;
+Ragged harvesting and #423's fit method are unchanged.
+
+The [measurement record](epic307_435/measured-result.json) preserves argv,
+commit, UTC timestamps, start/end `uptime`, memory planning and artifact hashes.
+The run held `$RD/timing.lock`, **08:06:37.434361–08:10:13.705053 UTC**. The
+[production log](epic307_435/rebuild.log) reports **32 requested and 32 effective
+workers**, not an uncapped promise that every host gets 32. The unchanged cap
+allowed a **236,522 MiB** budget, a quarter of available memory at pool creation.
+The grid was **11,133,427 × 2,514**, scanned in **2,784 bands of 4,000 rows**,
+under the unchanged **1 GiB decoded-band budget**.
+
+| Phase | Seconds |
+|---|---:|
+| Scan | 191.1 |
+| Tier write | 22.3 |
+| Production CLI wall time (`time -v`) | 216.23 |
+
+The phases are rounded to tenths by the production logger. The
+[`time -v` record](epic307_435/rebuild-time-v.txt) includes a maximum RSS of
+7,048,836 KiB; that is **not aggregate pool memory**. Before starting, the
+conservative estimate was **102,579,642,368 bytes**, including worker units,
+held results and a 16 GiB parent/writer allowance, below the quarter-available
+**248,305,688,576 bytes**. [Ten-second `free -g` samples](epic307_435/free-g.log)
+never fell below **910 GiB available**; a 200 GiB guard remained armed.
+
+The [committed comparator's result](epic307_435/top-hits-comparison.json) finds
+**all 27 arrays exactly equal**, with all group/tier attributes equal. This
+completed index has the observed index's 24 arrays **plus three `imputed`
+arrays**, one per tier. Hit counts are **47,805,439 / 12,750,070 / 6,405,322**
+at `5e-4 / 5e-6 / 5e-8`, each spanning three Analysis column bands.
+`analyses.tsv` is byte-identical, including every
+[`n_hits_*` value](epic307_435/n-hits-columns.json) (SHA-256
+`66dfa6cc67dfde289198061417bf3b5dde0fd33a43bf79be15bd963270200138`).
+The source's 564-file manifest/Analytical Metadata/index hash inventory is
+unchanged before and after; the inventories and guard driver remain under
+`$RD/scratch/435/`.
+
+This is **one standalone rebuild**, not a second whole Store build or Reference
+Completion. The earlier 4,060.9-second completion phase was measured on another
+date, not a matched-load serial control. No new end-to-end time is claimed,
+and the unwaived nine-hour decision remains separate. Reproduce the read-only
+comparison, not the rebuild, from this worktree with:
+
+```bash
+RD=/data/opengwasdb/work/orchestrate/opengwasdb-307
+pixi run -e dev python benchmarks/compare_top_hits.py \
+  "$RD/scratch/322/OGS-00009/completed.opengwasdb" \
+  "$RD/scratch/435/completed.opengwasdb" \
+  --output "$RD/scratch/435/top-hits-reproduced.json"
+```
+
 ## Four reader rows left open by #311
 
 The after-artifact carries #311's reader A/B **unchanged**, with its original
@@ -164,7 +224,8 @@ no compiled extension after #307; retain Python/Numba. Reconsider only if profil
 after the columnar GWAS-VCF reader and column-major band-write work identifies a
 dominant interpreted per-row kernel that cannot be vectorised. The follow-ups
 are to vectorise the remaining GWAS-VCF reader, benchmark column-major Dense
-bands, forward the completion index worker count, and budget the SE rewrite pool. Its sampled
+bands, and budget the SE rewrite pool; #435's completion index worker forwarding
+is measured above. The SE rewrite's sampled
 323.5 GiB private peak exceeded the initial approximately 233 GiB plan;
 available memory never fell below 625 GiB. No new solver or numerical method
 was introduced here.
