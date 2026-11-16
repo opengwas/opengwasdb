@@ -1880,7 +1880,10 @@ def build_dense_top_hits_command(
     refused before anything is written: the index is Zarr v3 arrays written into
     the release's own data group, and a v3 group beside its `.zgroup` would hide
     every array it has. Convert it with `scripts/convert_store_to_0_2_0.py`
-    first, as completion requires.
+    first for the index. Reference Completion instead requires a source rebuild
+    at format_version 0.2.2. Regenerate old or unmarked indel-bearing Variant
+    References with the v1 reference-first marker; conversion cannot establish
+    allele orientation.
     """
     try:
         build_top_hit_indexes(store_path, n_workers=n_workers)

@@ -9,7 +9,9 @@ the answer and the profile behind it. It follows ADR 0046, which turned down a
 compiled parser for the resolver because the per-row projection, not the parse,
 was the cost.
 
-**Status:** proposed; the recommendation needs the owner's acceptance before merge.
+**Status:** accepted by the owner (`explodecomputer`) on 16 November 2026, in
+[#322's decision](https://github.com/opengwas/opengwasdb/issues/322#issuecomment-6904046834).
+The acceptance does not waive milestone #388's nine-hour miss.
 
 ## Context
 
@@ -93,9 +95,9 @@ The remaining costs need different remedies:
 
 ## Decision
 
-**No compiled extension is built now, and the Python path stays the only
-implementation.** No per-row kernel left after the epic justifies one: the
-largest remaining phase is already compiled numerics, the next is a memory
+**No compiled extension is built after epic #307; retain the existing
+Python/Numba implementation.** No per-row kernel left after the epic justifies
+one: the largest remaining phase is already compiled numerics, the next is a memory
 layout, and the per-row Python that remains -- the GWAS-VCF reader in Pass 1's
 extraction and in Pass 2, an hour of a 2h54m build at 32 workers, most of it in
 the reader's per-record frames -- has the columnar approach #318 and #319

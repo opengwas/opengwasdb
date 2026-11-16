@@ -271,22 +271,26 @@ was the reference and this rule would read the wrong allele on every indel
 row. A record of them exists,
 `derived/ebi-gwas-catalog/eur-hybrid-rescue-orientation-manifest.tsv` (each
 file's checksum, and "rescued via swap_alleles"), but nothing in this package
-reads it, and no build manifest names a rescued copy. The rescue is redone in
+reads it, and no build manifest named a rescued copy. The rescue was redone in
 opengwasdb-stores instead: it keeps `effect_allele` and `other_allele` as the
 raw file has them, so `other_allele` stays the reference, and rewrites the
 statistics, negating beta, inverting an odds ratio and its interval, and
-complementing the frequency; the 58 copies are then regenerated. A rescued
+complementing the frequency. A rescued
 copy is then read like any other file of its layout, and the engine needs
 no signal and no guard.
 
-Until then the exposure is open. The 58 copies on disk are still swapped
-(each last written 23 Sep 2026). Until opengwasdb-stores#455 regenerates them,
-a build fed one spells each of its code-10 and code-11 indels as the other
-variant at its site -- a deletion as the insertion, its z unchanged -- counts
-them as kept (`indel_rows_kept_by_hm_code`), and nothing refuses it:
-`variant_table.indel_order` judges a table by its own columns, which agree.
-No build manifest names a rescued copy today. opengwasdb-stores#455 must land
-before anything rebuilds OGS-00011.
+**Updated 16 November 2026:** the owner-approved operation completed on
+10 November. The 56 regenerated copies and the manifest were replaced under
+`derived/ebi-gwas-catalog/`, and
+all 56 live checksums were verified against the receipt. The regenerated
+copies had been checked against 577,093,421 raw rows with zero mismatches.
+GCST90275159 and GCST90275160 were excluded because their beta and SE are
+dummy effects; their manifest rows name no data files, and their old derived
+copies remain on disk unused. The manifest records 56 rescued copies, 33
+unchanged `flip_frequency` rows and two exclusions. This data operation is
+complete; the code is still in draft
+[opengwasdb-stores#457](https://github.com/opengwas/opengwasdb-stores/pull/457),
+which must land before anything rebuilds OGS-00011.
 
 **8. #357's reversed-indel rule no longer fires.** An insertion and a deletion
 at one position are two variants, and an indel whose source declares no
@@ -387,12 +391,12 @@ large installed references remains separate work.
   indel rows of the 197 files checked.
 - A completion places a panel indel only by the panel's `REF` column or its
   indel-reference table, and fills nothing at the rest.
-- The 58 `swap_alleles` copies under `derived/ebi-gwas-catalog/` are still
-  swapped on disk. Until opengwasdb-stores#455 regenerates them, a build fed
-  one spells its code-10 and code-11 indels as the other variant at each site,
-  counts them as kept, and nothing refuses it. No build manifest names one
-  today, and opengwasdb-stores#455 must land before anything rebuilds
-  OGS-00011.
+- The owner-approved 10 November 2026 operation replaced 56 regenerated
+  `swap_alleles` copies and their manifest under `derived/ebi-gwas-catalog/`;
+  their live checksums match the receipt. GCST90275159 and GCST90275160 are
+  excluded because they use dummy effects, with their old copies unused (7).
+  The data operation is complete; the code PR, opengwasdb-stores#457, remains
+  draft and must land before anything rebuilds OGS-00011.
 - A package that knows only 0.2.0 or 0.2.1 reads a 0.2.2 Store's data as written
   and warns that it is newer; a completion it ran would spell its panel's indels
   sorted beside the Store's reference-first deletions. Only a package that knows

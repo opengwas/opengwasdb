@@ -159,9 +159,12 @@ Pass 2 worker samples across two snapshots: **78.57% pooled**, approximately
 79%, correcting the draft's 87% for that same frame set.
 
 [ADR 0081](../adr/0081-no-second-implementation-language-after-epic-307.md)
-recommends no second language now, pending owner acceptance: vectorise the
-remaining GWAS-VCF reader, benchmark column-major Dense bands, forward the
-completion index worker count, and budget the SE rewrite pool. Its sampled
+records the [owner's acceptance on 16 November 2026](https://github.com/opengwas/opengwasdb/issues/322#issuecomment-6904046834):
+no compiled extension after #307; retain Python/Numba. Reconsider only if profiling
+after the columnar GWAS-VCF reader and column-major band-write work identifies a
+dominant interpreted per-row kernel that cannot be vectorised. The follow-ups
+are to vectorise the remaining GWAS-VCF reader, benchmark column-major Dense
+bands, forward the completion index worker count, and budget the SE rewrite pool. Its sampled
 323.5 GiB private peak exceeded the initial approximately 233 GiB plan;
 available memory never fell below 625 GiB. No new solver or numerical method
 was introduced here.

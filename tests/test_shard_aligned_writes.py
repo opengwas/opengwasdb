@@ -654,5 +654,3 @@ def test_the_completed_se_plane_is_compressed_for_its_own_dtype(tmp_path: Path) 
 
     assert root["se"].dtype == np.int8
     assert int(root["se"].compressors[0].typesize) == 1, root["se"].compressors[0].typesize
-
-

@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from cli_output import normalize_cli_output
 from conftest import SOURCE_HEADER
 from dense_sources import build_dense_fixture, write_release_manifest
 from legacy_fixtures import relayout_as_0_1_0
@@ -189,6 +190,21 @@ def _snapshot(release_path: Path) -> dict[str, str]:
 
 def _run(*arguments: str):
     return CliRunner().invoke(app, ["build-dense-top-hits", *arguments])
+
+
+def test_help_distinguishes_index_conversion_from_completion_and_reference_regeneration() -> None:
+    result = _run("--help")
+
+    assert result.exit_code == 0, result.output
+    help_text = normalize_cli_output(result.output)
+    assert "convert_store_to_0_2_0.py" in help_text
+    assert (
+        "Reference Completion instead requires a source rebuild at format_version 0.2.2"
+        in help_text
+    )
+    assert "Regenerate old or unmarked indel-bearing Variant References" in help_text
+    assert "v1 reference-first marker" in help_text
+    assert "conversion cannot establish allele orientation" in help_text
 
 
 def test_the_index_is_identical_at_one_and_three_workers(

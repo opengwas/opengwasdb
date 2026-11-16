@@ -1,0 +1,1 @@
+- Correct `build-dense-top-hits --help`: conversion permits indexing a historical Zarr v2 Store, while Reference Completion requires a source rebuild at format 0.2.2. Old or unmarked indel-bearing Variant References need regeneration with the v1 reference-first marker; conversion cannot establish their allele orientation (issue #381, ADR 0079).
