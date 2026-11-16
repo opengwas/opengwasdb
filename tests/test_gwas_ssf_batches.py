@@ -41,6 +41,7 @@ from opengwasdb.readers.interface import (
     StreamTally,
     association_batches,
 )
+from opengwasdb.stats import MISSING_STATISTICS
 
 Make = Callable[[Path, StoredEffectScale], Any]
 
@@ -119,7 +120,7 @@ def test_the_batches_are_the_per_row_associations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make: Make, case: Case, block: int | None
 ) -> None:
     if block is not None:
-        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     path = case.write(tmp_path)
     scale = StoredEffectScale.SD
     assert _per_row(make, path, scale) == _batched(make, path, scale)
@@ -136,7 +137,7 @@ def test_the_batches_are_the_per_row_associations_of_every_existing_fixture(
     """Every GWAS-SSF fixture the Column Map tests hold, on both scales (a
     signed z is refused on the case-control one by both paths)."""
     if block is not None:
-        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     path = _SSF_FIXTURES[fixture](tmp_path)
     per_row = _per_row(make, path, scale)
     assert per_row == _batched(make, path, scale)
@@ -162,7 +163,7 @@ def test_the_batches_are_the_per_row_associations_of_other_modules_fixtures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, block: int | None, make: Make
 ) -> None:
     if block is not None:
-        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     for name, path in _other_fixtures(tmp_path).items():
         per_row = _per_row(make, path, StoredEffectScale.SD)
         assert per_row.columns is not None and per_row.columns["z"], name
@@ -177,7 +178,7 @@ def test_a_finngen_source_through_the_column_map_reads_as_its_translation_does(
     """A mapped source declares its reference by convention, of every row: the
     other branch of `_declaration`."""
     if block is not None:
-        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     path = case.write(tmp_path)
 
     def make(path: Path, scale: StoredEffectScale) -> ColumnMapReader:
@@ -224,7 +225,7 @@ def test_a_block_holds_one_read_and_the_line_it_split(
         parsed.append(len(lines))
         return fmt_block(self, lines, *args)
 
-    monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+    monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     monkeypatch.setattr(gwas_ssf._Format, "block_batches", record)
     batches = list(_ssf(path).stream_association_batches(StreamTally()))
 
@@ -248,7 +249,7 @@ def test_a_source_the_columns_decide_is_read_without_the_per_row_rules(
     expected = _per_row(_ssf, path, StoredEffectScale.SD)
     assert expected.columns is not None and len(expected.columns["z"]) > 4_500
     monkeypatch.setattr(gwas_ssf, "_tabular_row", _refuse)
-    monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", 1 << 14)
+    monkeypatch.setattr(columnar, "BLOCK_BYTES", 1 << 14)
     with caplog.at_level("WARNING", logger=gwas_ssf.__name__):
         assert _batched(_ssf, path, StoredEffectScale.SD) == expected
     assert _fallbacks(caplog) == []
@@ -272,18 +273,11 @@ def test_pandas_reads_a_nan_only_from_the_tokens_a_statistic_is_missing_for(cell
     other spelling of NaN makes pandas read the whole column as text."""
     data = f"0.1\n{cell}\n0.2\n".encode()
     frame = pd.read_csv(
-        io.BytesIO(data), names=[0], na_values={0: list(columnar.MISSING_STATISTICS)},
+        io.BytesIO(data), names=[0], na_values={0: columnar.MISSING_TOKENS},
         float_precision="round_trip", **columnar.PANDAS,
     )
     assert frame[0].dtype.kind != "f"
-    assert cell not in columnar.MISSING_STATISTICS
-
-
-def test_a_statistic_is_missing_where_the_per_row_reader_reads_it_missing() -> None:
-    import opengwasdb.readers.tabular as tabular
-    import opengwasdb.stats as stats
-
-    assert set(columnar.MISSING_STATISTICS) == tabular._MISSING == stats._MISSING_AF
+    assert cell not in MISSING_STATISTICS
 
 
 @pytest.mark.parametrize(
@@ -336,7 +330,7 @@ def test_a_crlf_source_is_read_as_columns_not_row_by_row(
     The first rebuild of OGS-00004 read all nine of its sources row by row, since
     the header's carriage return sent them there; identity cannot see that."""
     if block is not None:
-        monkeypatch.setattr(gwas_ssf, "_BLOCK_BYTES", block)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     (case,) = (c for c in CASES if c.name == name)
     path = case.write(tmp_path)
     with caplog.at_level("WARNING", logger=gwas_ssf.__name__):

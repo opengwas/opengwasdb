@@ -28,8 +28,8 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
-from opengwasdb.completion.parallel import ordered_write
 from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.variants.routing import collapse_duplicates
 
@@ -156,14 +156,14 @@ def insert_completion_quality_batch(db: Any, batch: list[_QualityRow]) -> None:
     db.commit()
 
 
-#: What one checkpoint's resolution holds: the fork's floor, and per byte of
-#: checkpoint about 3.3 more. A fill is 76 bytes on disk (its 64-byte ALID, its
+#: What one checkpoint's resolution holds beside the fork's floor
+#: (`FORK_FLOOR_BYTES`, which `pool_workers` adds): per byte of checkpoint
+#: about 3.3 more. A fill is 76 bytes on disk (its 64-byte ALID, its
 #: Analysis, z and SE), loaded whole; the lookup gathers an ALID and three
 #: `int64`s a fill (89 bytes), the resolved fills and their shard key take 40,
 #: and pickling them back to the parent 48. Rounded up to 4 (#321): on an
 #: 8-band slice of OGS-00009, whose largest checkpoint is 1.64 GB, the budget
 #: is 6.83 GB and its merge workers held at most 4.57 GB private.
-_RESOLVE_FIXED_BYTES = 256 * 1024**2
 _RESOLVE_BYTES_PER_CHECKPOINT_BYTE = 4
 #: What the parent holds of one checkpoint's result until it appends it: 24
 #: bytes a fill of records and shard key, pickled and unpickled, against the
@@ -173,8 +173,9 @@ _CHECKPOINT_BYTES_PER_FILL = 76
 
 
 def resolve_unit_bytes(largest_checkpoint: int) -> int:
-    """Bytes a checkpoint-merge worker holds, for the largest checkpoint."""
-    return _RESOLVE_FIXED_BYTES + _RESOLVE_BYTES_PER_CHECKPOINT_BYTE * largest_checkpoint
+    """Bytes a checkpoint-merge worker holds for the largest checkpoint, beside
+    the fork's floor."""
+    return _RESOLVE_BYTES_PER_CHECKPOINT_BYTE * largest_checkpoint
 
 
 def resolve_result_bytes(largest_checkpoint: int) -> int:
@@ -254,7 +255,7 @@ def shard_checkpoint_fills(
     workers = _resolve_workers(checkpoints, n_workers)
 
     with staged.index_connection() as dst_db:
-        for resolved in ordered_write(_resolve_checkpoint, plan, checkpoints, workers):
+        for resolved in ordered_map(_resolve_checkpoint, checkpoints, workers, shared=plan):
             quality_count += len(resolved.quality)
             quality_batch.extend(resolved.quality)
             if len(quality_batch) >= _QUALITY_BATCH_SIZE:

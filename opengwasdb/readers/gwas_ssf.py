@@ -670,8 +670,6 @@ def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
 # is read in columns, and a block whose score pandas cannot read as `float()` does
 # is left to its rows.
 
-#: Decompressed bytes one block reads, 32 MiB (see `finngen._BLOCK_BYTES`).
-_BLOCK_BYTES = 1 << 25
 
 #: The cells an association reads whatever the file's effect column is.
 _IDENTITY_COLUMNS = ("chromosome", "base_pair_location", "effect_allele", "other_allele")
@@ -732,7 +730,7 @@ class _Format:
     label: str = "GWAS-SSF source"
 
     def block_bytes(self) -> int:
-        return _BLOCK_BYTES
+        return columnar.BLOCK_BYTES
 
     def per_row(
         self, text: io.TextIOBase, names: list[str] | None, source: columnar.Source
@@ -1044,7 +1042,7 @@ def _frame(
     missing."""
     reads = plan.reads
     categories = [reads[name] for name in ("chromosome", "effect_allele", "other_allele")]
-    missing = {at: list(columnar.MISSING_STATISTICS) for at in index.values() if at is not None}
+    missing = {at: columnar.MISSING_TOKENS for at in index.values() if at is not None}
     if index["score"] is not None:
         missing[index["score"]] = list(columnar.MISSING_SCORES)
     return pd.read_csv(

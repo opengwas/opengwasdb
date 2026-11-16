@@ -140,11 +140,6 @@ class ReferenceAllele(StrEnum):
     UNDECLARED = "undeclared"
     REF = "ref"
 
-    @property
-    def declared(self) -> bool:
-        """Whether the format names either allele the genome's reference."""
-        return self is not ReferenceAllele.UNDECLARED
-
 
 @dataclass(frozen=True)
 class ReaderAssociation:

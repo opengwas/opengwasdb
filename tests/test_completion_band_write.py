@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import multiprocessing
 import os
-import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -32,7 +31,7 @@ import numpy as np
 import pytest
 from completion_releases import CompletionInputs, assert_same_release
 from dense_sources import build_dense_from_records
-from fork_order import CompletionOrder
+from fork_order import CompletionOrder, CrashAfterTwo
 from ld_blocks import write_ld_block
 from pool_budget import pin_pool_units
 from zarr.storage import LocalStore
@@ -225,27 +224,13 @@ def test_a_release_completed_on_three_workers_is_the_one_completed_on_one(
 
 # ── an interrupted band write ──────────────────────────────────────────────
 
-_FORK = multiprocessing.get_context("fork")
-_BANDS_WRITTEN = _FORK.Value("i", 0)
-_CRASHED_IN_PID = _FORK.Value("i", 0)
-_CRASHING_BAND = 3
+_BAND_CRASH = CrashAfterTwo("simulated crash in the band write")
 
 
 def _band_crashing_after_two_others(plan: Any, band: int) -> Any:
     """The band write's worker, failing on one band once two others are written."""
-    if band == _CRASHING_BAND:
-        deadline = time.monotonic() + CompletionOrder.WAIT_SECONDS
-        while _BANDS_WRITTEN.value < 2:
-            if time.monotonic() > deadline:
-                raise AssertionError("no two bands were written beside the failing one")
-            os.sched_yield()
-        _CRASHED_IN_PID.value = os.getpid()
-        raise RuntimeError("simulated crash in the band write")
     assert _REAL_COMPLETE_BAND is not None
-    outcome = _REAL_COMPLETE_BAND(plan, band)
-    with _BANDS_WRITTEN.get_lock():
-        _BANDS_WRITTEN.value += 1
-    return outcome
+    return _BAND_CRASH.run(_REAL_COMPLETE_BAND, plan, band, crash=band == 3)
 
 
 def test_a_band_write_interrupted_after_some_bands_resumes_to_the_same_release(
@@ -255,8 +240,7 @@ def test_a_band_write_interrupted_after_some_bands_resumes_to_the_same_release(
     release goes, every LD block's checkpoint stays, and the resumed completion,
     which writes every band again, is the release a single worker writes."""
     dst = tmp_path / "resumed.opengwasdb"
-    _BANDS_WRITTEN.value = 0
-    _CRASHED_IN_PID.value = 0
+    _BAND_CRASH.reset()
     with monkeypatch.context() as crash:
         crash.setattr(
             complete_module, "_complete_band", _band_crashing_after_two_others, raising=False
@@ -264,8 +248,7 @@ def test_a_band_write_interrupted_after_some_bands_resumes_to_the_same_release(
         with pytest.raises(RuntimeError, match="simulated crash in the band write"):
             completion.complete(dst, n_workers=N_WORKERS)
 
-    assert _BANDS_WRITTEN.value >= 2
-    assert _CRASHED_IN_PID.value not in (0, os.getpid()), "the band ran in the parent"
+    _BAND_CRASH.assert_worker_crashed()
     checkpoint_dir = checkpoint_dir_for(dst)
     assert len(list((checkpoint_dir / "blocks").glob("*.npz"))) == 3
     assert not dst.exists()
@@ -292,6 +275,9 @@ def _tree_bytes(path: Path, skip: str | None = None) -> int:
             except FileNotFoundError:
                 pass
     return total
+
+
+_FORK = multiprocessing.get_context("fork")
 
 
 class _ScratchPeak:

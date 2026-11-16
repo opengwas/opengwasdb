@@ -1,0 +1,67 @@
+{
+  "generator": "benchmarks/attribute_epic307_comparison.py",
+  "commit": "d902cf4",
+  "measured_at": "2026-11-15T23:19:16.889808+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/322/opengwasdb",
+  "opengwasdb_fingerprint": "53d9ee995a10a394199df2bb07580c3e5939e17d1bcad98defd8a433be863065",
+  "comparison": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/offclock/compare/observed-vs-published.json",
+  "lift_off_primary_376": {
+    "rows": 1271,
+    "all_off_primary_lifts": true
+  },
+  "duplicate_conflicting_357": {
+    "cells_by_alid": {
+      "4:74450339:C:T": 1299,
+      "7:74988062:G:T": 1982,
+      "7:101668260:A:G": 2514,
+      "8:144235357:C:T": 2514,
+      "10:47013158:A:G": 2141,
+      "10:50240776:C:T": 2514,
+      "7:75044656:A:C": 1131,
+      "7:75044656:C:G": 1131
+    },
+    "matches_presence_differences": true
+  },
+  "se_355": {
+    "historical_float16_log_half_step": 0.0004881620795013512,
+    "two_codec_log_bound": 0.003937007874015748,
+    "combined_log_envelope": 0.004425169953517099,
+    "observed_max_abs_log_ratio": 0.004152023437809877,
+    "max_within_historical_envelope": true,
+    "note": "#355 removed float16 narrowing before the residual fit, not just from exceptions. Counts beyond the codec-only bound are unchanged; this larger historical envelope is not a source-equality proof."
+  },
+  "eaf_after_conflict_drops": {
+    "differing_cells": 1544,
+    "rows": [
+      {
+        "left_row": 2590592,
+        "right_row": 2590592,
+        "baseline_left": 0.7340480089187622,
+        "baseline_right": 0.7340400218963623
+      },
+      {
+        "left_row": 4606159,
+        "right_row": 4606159,
+        "baseline_left": 0.06768399477005005,
+        "baseline_right": 0.06770998239517212
+      },
+      {
+        "left_row": 4606160,
+        "right_row": 4606160,
+        "baseline_left": 0.8986200094223022,
+        "baseline_right": 0.89860600233078
+      },
+      {
+        "left_row": 6054032,
+        "right_row": 6054032,
+        "baseline_left": 0.3319540023803711,
+        "baseline_right": 0.24421000480651855
+      }
+    ],
+    "only_at_conflicting_rows": true,
+    "all_baselines_changed": true
+  },
+  "reference_first_381": {
+    "respelled_rows": 0
+  }
+}

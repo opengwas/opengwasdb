@@ -254,8 +254,12 @@ def test_the_host_s_memory_caps_the_pool_and_not_the_report(
     subset_cell("z", 200, 1)(store)
     _narrow(monkeypatch, store, RICH)
     split = _split(store)
-    per_worker = split.unit_bytes + memory.RESULTS_HELD_PER_WORKER * split.result_bytes
-    assert split.unit_bytes > FIXTURE_UNIT_BYTES, "a worker must hold its band"
+    per_worker = (
+        memory.worker_bytes(split.unit_bytes)
+        + memory.RESULTS_HELD_PER_WORKER * split.result_bytes
+    )
+    assert memory.FORK_FLOOR_BYTES == FIXTURE_UNIT_BYTES, "the floor is pinned"
+    assert split.unit_bytes > 0, "a worker must hold its band"
     available = None if room is None else int(memory.MEMORY_BUDGET_DIVISOR * room * per_worker)
     monkeypatch.setattr(memory, "available_memory_bytes", lambda: available)
     monkeypatch.setattr(memory, "resident_bytes", lambda: 0)
@@ -286,15 +290,15 @@ import sys
 from pathlib import Path
 
 from opengwasdb.store import arrays
-from opengwasdb.encoding import banding
-from opengwasdb.validation import scans, validate_store
+from opengwasdb.encoding import banding, memory
+from opengwasdb.validation import validate_store
 
 # The pool's sizing line goes to stderr, where the test reads how many workers forked.
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 arrays.DENSE_SHARD_SHAPE = tuple(json.loads(sys.argv[2]))
 banding.DECODED_BAND_BYTES = int(sys.argv[3])
 # A worker's floor at a fixture's size here too, so a small host still forks them all.
-scans.WORKER_FLOOR_BYTES = int(sys.argv[5])
+memory.FORK_FLOOR_BYTES = int(sys.argv[5])
 store = Path(sys.argv[1])
 reports = [
     [[f.rule, f.severity.value, f.target, f.message] for f in validate_store(

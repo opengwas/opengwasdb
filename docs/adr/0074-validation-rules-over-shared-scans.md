@@ -98,7 +98,8 @@ every target each applies to:
 - `VARIANT_TABLE` streams the Store Variant Table once.
 - `BY_VARIANT` reads a variant index's `analysis_index` once.
 
-A `Block` is the seam: `dense_bands`, `sequence_windows` and `Block.of` for tests.
+A `Block` is the seam: a grid band's (`GridSplit.read`, since #315), a sequence
+window's (`_Sequence.window`), and `Block.of` for tests.
 
 **One rule for both layouts.** Where a Dense rule and its Ragged twin judged the
 same thing, they are one rule, and each layout keeps the words it has always
@@ -292,7 +293,9 @@ stream is bounded, and each rule needs its own view. Merging them into one pass 
 #314's, which moves the subset comparison onto the scan's bands; the subset check's
 own read is once per Indexed Variant Subset today, and a release carries one.
 
-The per-band consult the association scan makes when it decodes a band stays: a
+The per-band consult the association scan makes when it decodes a band stays
+(superseded by the amendment for issue #314 below: each block now takes its span from
+the pass's one read of the table, `TablePages`, in place of the per-band lookup): a
 Dense band's exception cells are one contiguous span of the sorted table, so a
 band's lookup is one read of it already. A Dense grid reads the table in 4,756
 bands on OGS-00011, about 239,000 exception cells a band.
@@ -398,7 +401,8 @@ weighed against the two exact designs:
 **The table is read once a pass** (`TablePages`). Each block takes its span of the
 sorted table as it decodes -- every entry its cells can name, read a page of 262,144
 entries at a time -- in place of the per-band lookup, which also read the two 200,000-
-entry inner chunks it bisected to. `side_tables.eaf_exceptions` reconciles the block
+entry inner chunks it bisected to. This supersedes the #387 amendment's ruling above
+that the scan's per-band consult stays. `side_tables.eaf_exceptions` reconciles the block
 against that span, and `encoding.eaf` and every subset's ride watch the pages go by;
 the entries past the last block are read for them once the blocks are.
 
@@ -532,7 +536,8 @@ were in flight, and `validate` ends with that error. It does not report a Store 
 about a read that never finished.
 
 **Memory.** A worker holds one band at a time: the decoded-band budget (#254), at 96
-bytes a cell, and 512 MiB beside it (`WORKER_FLOOR_BYTES`). The pool is sized by
+bytes a cell, and 512 MiB beside it, the fork's floor every pool shares
+(`encoding.memory.FORK_FLOOR_BYTES`). The pool is sized by
 `encoding.memory.pool_workers` (#321): no more workers than a quarter of the host's
 available memory holds beside the driver and the outcomes it holds in flight, no more
 than the bands left, and one on a host whose memory cannot be read.

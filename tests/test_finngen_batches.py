@@ -41,9 +41,8 @@ from test_infinite_effects import BETAS
 from test_infinite_effects import _finngen as _infinite_finngen
 from test_source_reader_seam import _finngen as _seam_finngen
 
+import opengwasdb.readers.columnar as columnar
 import opengwasdb.readers.finngen as finngen
-import opengwasdb.readers.tabular as tabular
-import opengwasdb.stats as stats
 from opengwasdb.readers.finngen import FinnGenR13Reader
 from opengwasdb.readers.interface import (
     AssociationBatch,
@@ -253,7 +252,7 @@ def test_the_batches_are_the_per_row_associations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, block: int | None
 ) -> None:
     if block is not None:
-        monkeypatch.setattr(finngen, "_BLOCK_BYTES", block)
+        monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     path = SOURCES[source](tmp_path)
     per_row, batched = _per_row(path), _batched(path)
     assert per_row == batched
@@ -288,7 +287,7 @@ def test_a_block_holds_one_read_and_the_line_it_split(
         parsed.append(len(lines))
         return parse(lines, *args)
 
-    monkeypatch.setattr(finngen, "_BLOCK_BYTES", block)
+    monkeypatch.setattr(columnar, "BLOCK_BYTES", block)
     monkeypatch.setattr(finngen, "_block_batches", record)
     batches = list(FinnGenR13Reader(path).stream_association_batches(StreamTally()))
 
@@ -309,13 +308,8 @@ def test_a_plain_source_is_parsed_as_columns(
         raise AssertionError("a plain block was read row by row")
 
     monkeypatch.setattr(finngen, "_source_row", refuse)
-    monkeypatch.setattr(finngen, "_BLOCK_BYTES", 1 << 14)
+    monkeypatch.setattr(columnar, "BLOCK_BYTES", 1 << 14)
     assert _batched(path) == expected
-
-
-def test_a_statistic_is_missing_where_the_per_row_reader_reads_it_missing() -> None:
-    """The block parse's missing tokens are the per-row parsers' own."""
-    assert set(finngen._MISSING_STATISTICS) == tabular._MISSING == stats._MISSING_AF
 
 
 _CASES = {case.name: case for case in CASES}
@@ -380,7 +374,7 @@ def test_a_fallback_names_its_true_byte_past_the_first_block(
 ) -> None:
     path, byte = _with_a_quote(tmp_path, last=last)
     assert byte > 4 * (1 << 12), "the quote must lie past the first blocks"
-    monkeypatch.setattr(finngen, "_BLOCK_BYTES", 1 << 12)
+    monkeypatch.setattr(columnar, "BLOCK_BYTES", 1 << 12)
     with caplog.at_level("WARNING", logger=finngen.__name__):
         assert _batched(path) == _per_row(path)
     first, extent = _fallbacks(caplog)
@@ -399,7 +393,7 @@ def test_a_source_pandas_refuses_throughout_says_every_block_was_read_row_by_row
     path = tmp_path / "short.tsv"
     lines = [finngen_cases.HEADER, *(f"1\t{100 * i}\tA\tG" for i in range(1, 40))]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(finngen, "_BLOCK_BYTES", 64)
+    monkeypatch.setattr(columnar, "BLOCK_BYTES", 64)
     with caplog.at_level("WARNING", logger=finngen.__name__):
         assert _batched(path) == _per_row(path)
     blocks = math.ceil((path.stat().st_size - len(lines[0]) - 1) / 64)

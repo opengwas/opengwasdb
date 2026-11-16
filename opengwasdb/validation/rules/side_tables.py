@@ -32,17 +32,16 @@ from opengwasdb.encoding import (
     ZOverflowTable,
 )
 from opengwasdb.store.arrays import array_length
-from opengwasdb.store.open import parse_format_version
 from opengwasdb.validation.rule import (
     Check,
     Finding,
     Fold,
     Rule,
-    Severity,
     Target,
 )
 from opengwasdb.validation.rules.associations import EAF_EXCEPTIONS, VALUE_KINDS, VALUES_AFTER
 from opengwasdb.validation.rules.encoding import plane_label
+from opengwasdb.validation.rules.release import current_builders_wrote, severity_owed
 from opengwasdb.validation.scans import ASSOCIATIONS, Block
 
 
@@ -273,12 +272,6 @@ FLOAT16_EXACT_SHARE = 0.01
 #: as likely to be a source reporting SEs at `float16`'s own precision as a
 #: rounded plane, so the rule says nothing rather than guessing.
 FLOAT16_EXACT_MINIMUM = 1_000
-#: The first `format_version` whose builders hold an SE exception at the source's
-#: `float32` (issue #355): this package's, which write 0.2.2 (spec §21.3). A release
-#: written before it, package 0.9.0's 0.2.1 among them, may hold a rounded table, so
-#: the rule reports that one and does not fail it: #367 owns re-validating the
-#: published Stores.
-SE_EXCEPTIONS_EXACT_SINCE = (0, 2, 2)
 
 
 def _se_exceptions_judged(target: Target) -> bool:
@@ -325,7 +318,7 @@ def _rounded_se_exceptions(target: Target) -> Iterator[str]:
         return
     owed = (
         "rebuild the release"
-        if parse_format_version(target.store.manifest.format_version) >= SE_EXCEPTIONS_EXACT_SINCE
+        if current_builders_wrote(target)
         else "the release predates the fix, which #367 owns"
     )
     yield (
@@ -341,16 +334,15 @@ class _SeverityByFormat(Check):
     """A check whose severity says what the release's *format* owes, not what a reader saw.
 
     An error fails the release, so only one written by a builder that had to hold
-    the value exactly can be failed: a release from before `exact_since` is
-    reported as a warning, which says what it is without failing a Store nobody
-    can fix in place (issue #355, #367). Every other rule's severity is its own.
+    the value exactly can be failed: a release of an earlier format, package
+    0.9.0's 0.2.1 among them, may hold a rounded table and is reported as a
+    warning (`severity_owed`), which says what it is without failing a Store
+    nobody can fix in place (issue #355, #367). Every other rule's severity is
+    its own.
     """
 
-    exact_since: tuple[int, int, int]
-
     def findings(self, target: Target) -> Iterator[Finding]:
-        version = parse_format_version(target.store.manifest.format_version)
-        severity = self.severity if version >= self.exact_since else Severity.WARNING
+        severity = severity_owed(target, self.severity)
         for message in self.run(target):
             yield self.finding(target, message, severity)
 
@@ -388,7 +380,6 @@ RULES: tuple[Rule, ...] = (
         kinds=VALUE_KINDS,
         after=("side_tables.se_exceptions",),
         when=_se_exceptions_judged,
-        exact_since=SE_EXCEPTIONS_EXACT_SINCE,
         run=_rounded_se_exceptions,
     ),
 )

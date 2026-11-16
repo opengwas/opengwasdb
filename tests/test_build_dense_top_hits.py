@@ -27,8 +27,9 @@ from legacy_fixtures import relayout_as_0_1_0
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import banding
+from opengwasdb.encoding import banding, memory
 from opengwasdb.encoding.banding import BYTES_PER_CELL
+from opengwasdb.layouts.dense import top_hits as dense_top_hits
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.top_hits import TOP_HIT_TIER_ARRAYS
 
@@ -244,6 +245,43 @@ def test_the_scan_logs_the_worker_count_and_the_band_the_budget_gives(
     # The budget reaches the scan through the module, at call time: a smaller
     # budget is a smaller band, in the scan's own log.
     assert plans == [(20, 20 * BYTES_PER_CELL * _N_ANALYSES), (40, _FORTY_ROW_BUDGET)], plans
+
+
+def test_the_scan_forks_no_more_workers_than_the_host_s_memory_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, forty_row_bands: int
+) -> None:
+    """The scan's pool is sized as every memory-bounded pool is (`pool_workers`):
+    a quarter of the host's available memory, holding two workers' bands, floors
+    and harvests beside the parent, runs two of the three asked for -- and the
+    index is the one a single process writes."""
+    source = _store(tmp_path, "source")
+    serial = _copy(source, tmp_path / "serial")
+    capped = _copy(source, tmp_path / "capped")
+    band = forty_row_bands // (BYTES_PER_CELL * _N_ANALYSES)
+    cells = band * _N_ANALYSES
+    per_worker = memory.worker_bytes(
+        cells * BYTES_PER_CELL
+    ) + memory.RESULTS_HELD_PER_WORKER * cells * dense_top_hits._CANDIDATE_RESULT_BYTES_PER_CELL
+    available = memory.MEMORY_BUDGET_DIVISOR * 2 * per_worker
+    monkeypatch.setattr(memory, "available_memory_bytes", lambda path=memory.MEMINFO: available)
+    monkeypatch.setattr(memory, "resident_bytes", lambda path=memory.SELF_STATUS: 0)
+    forked: list[int] = []
+    real = dense_top_hits.ordered_map
+
+    def spy(fn, items, n_workers, **kwargs):
+        forked.append(n_workers)
+        return real(fn, items, n_workers, **kwargs)
+
+    monkeypatch.setattr(dense_top_hits, "ordered_map", spy)
+    build_top_hit_indexes(serial, n_workers=1)
+    build_top_hit_indexes(capped, n_workers=3)
+
+    assert -(-_N_VARIANTS // band) > 2, "the scan must have more bands than the cap"
+    assert forked == [1, 2], forked
+    serial_arrays = _tier_arrays(serial)
+    assert serial_arrays, "the fixture must write an index to compare"
+    for name, values in serial_arrays.items():
+        np.testing.assert_array_equal(_tier_arrays(capped)[name], values, err_msg=name)
 
 
 def test_a_wide_release_gets_a_narrower_band_than_a_narrow_one(

@@ -1,13 +1,13 @@
 - **No rule of `validate` reads the Dense EAF exception table whole (issue #387,
   ADR 0074).** The table is one Zarr v3 shard — 237,027,522 entries on OGS-00016,
   1,136,991,041 on OGS-00011, 2.7 GiB and 12.7 GiB of `int64` plus `float32` — and
-  three rules loaded it: `encoding.eaf` to check its positions and values, the
+  four streams read it: `encoding.eaf` to check its positions and values, the
   Indexed Variant Subset check to prove the index's copy was the primary's, remapped
-  (with several copies of it held at once), and `side_tables.eaf_exceptions`, whose
+  (with several copies of it held at once), `side_tables.eaf_exceptions`, whose
   judge read it beside the 1.14 billion positions the association scan had marked
-  and kept, 8.5 GiB. Each now streams it in pages and holds one page at most; the
-  subset check hands the cells it kept to the value comparison, so the plane no
-  longer consults the table per band. A full `validate` of OGS-00011, its peak read
+  and kept, 8.5 GiB, and the association scan's own decode. These reads were first
+  bounded in pages by #387; after #314 they share one paged read per pass, each
+  receiving the spans it needs without reading the primary table again. A full `validate` of OGS-00011, its peak read
   from the validating process's own `VmHWM`, falls from 68.53 GiB to 8.30 GiB and
   its wall time from 40,998 s to 32,279 s; on OGS-00016, whose 3.92 GiB is the
   figure before `encoding.eaf` was paged (it was not re-run after), the peak was

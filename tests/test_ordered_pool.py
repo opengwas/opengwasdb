@@ -8,9 +8,12 @@ from typing import Any
 
 import pytest
 
-from opengwasdb.build.ordered_pool import ordered_map
+from opengwasdb.build.ordered_pool import RESULTS_HELD_PER_WORKER, ordered_map
 
-_ITEMS = 16
+_WORKERS = 4
+# The whole input fits the pool's window, so item 0 can wait on later items
+# that would otherwise not be submitted until it yielded.
+_ITEMS = RESULTS_HELD_PER_WORKER * _WORKERS
 # Item 0 waits for every other item to finish before returning, and each item
 # logs its completion position here. A shared counter rather than a sleep makes
 # that ordering a condition, not a race with the clock; a map that yields in
@@ -62,11 +65,7 @@ def _fail_on_three(i: int) -> int:
 
 def test_parallel_results_come_back_in_input_order() -> None:
     _reset_completion()
-    # max_in_flight covers the whole input so item 0 can block on later items
-    # that would otherwise not be submitted until it yielded.
-    results = list(
-        ordered_map(_reverse_completion, range(_ITEMS), n_workers=4, max_in_flight=_ITEMS)
-    )
+    results = list(ordered_map(_reverse_completion, range(_ITEMS), n_workers=_WORKERS))
     assert [i for i, _ in results] == list(range(_ITEMS))
     # Fixture is meaningful only if work really left the parent process...
     assert {pid for _, pid in results} - {os.getpid()}
@@ -89,10 +88,12 @@ def test_items_are_pulled_lazily_with_bounded_in_flight() -> None:
             pulled.append(i)
             yield i
 
-    it = ordered_map(abs, source(), n_workers=2, max_in_flight=3)
+    it = ordered_map(abs, source(), n_workers=2)
     first = next(it)
     assert first == 0
-    assert len(pulled) <= 3
+    # The parent holds two results a worker at most, the share a pool's memory
+    # budget counts (`encoding.memory.pool_workers`).
+    assert len(pulled) <= RESULTS_HELD_PER_WORKER * 2
     assert list(it) == list(range(1, 20))
 
 
@@ -117,8 +118,7 @@ def test_shared_value_keeps_input_order_under_a_slow_item() -> None:
         ordered_map(
             _reverse_completion_shared,
             range(_ITEMS),
-            n_workers=4,
-            max_in_flight=_ITEMS,
+            n_workers=_WORKERS,
             shared={"tag": 11},
         )
     )

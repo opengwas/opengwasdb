@@ -60,6 +60,7 @@ from typing import Any
 
 from benchmarks._artifact import LoadSampler, artifact_header, host_load, write_artifact
 from opengwasdb.completion.fill_shards import resolve_unit_bytes
+from opengwasdb.encoding.memory import worker_bytes
 from opengwasdb.encoding.timing import PhaseTimer
 
 DEFAULT_MIN_COR = 0.7
@@ -207,13 +208,11 @@ def profile_block(
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, Any]:
     """Complete one LD block for every Analysis of ``source``, split by stage."""
+    from opengwasdb.build.ordered_pool import single_threaded_blas
     from opengwasdb.completion import block as block_module
     from opengwasdb.completion import impute as impute_module
-    from opengwasdb.completion.parallel import init_block_worker
     from opengwasdb.layouts.dense import complete as dense
 
-    # A pool worker runs one BLAS thread; so does the block measured here.
-    init_block_worker()
     panel = dense._enumerate_panel(ld_dir, ancestry)
     tsv_path = choose_block(panel.tsv_paths, which)
     require_new_directory(work)
@@ -251,13 +250,16 @@ def profile_block(
         (dense, "write_block_checkpoint", "checkpoint_write"),
     ]
     saved_reader, dense._make_reader = make_reader, timed_make_reader
-    started = clock()
+    # Measure the block under the same BLAS cap its pool workers inherit, but
+    # keep library discovery and restoring the parent's limits outside its time.
     try:
-        with _patched(table, stages), stages.stage("block_other"):
-            result = dense._run_block(task)
+        with single_threaded_blas():
+            started = clock()
+            with _patched(table, stages), stages.stage("block_other"):
+                result = dense._run_block(task)
+            wall = clock() - started
     finally:
         dense._make_reader = saved_reader
-    wall = clock() - started
     assert result is not None, f"{tsv_path} could not be loaded"
     accounted = stages.summary()
     check_accounts_for_wall(accounted["accounted_seconds"], wall)
@@ -504,9 +506,11 @@ def profile_bands(
                 "blocks_run": len(blocks), "blocks_in_panel": len(axis.tsv_paths),
                 "slice_imputed_cells": int(tallies.total_imputed),
                 "slice_cells": slice_rows * axis.n_analyses,
-                "band_worker_estimate_bytes": dense._band_bytes(axis.n_analyses, band_rows),
+                "band_worker_estimate_bytes": worker_bytes(
+                    dense._band_bytes(axis.n_analyses, band_rows)
+                ),
                 "largest_checkpoint_bytes": largest,
-                "merge_worker_estimate_bytes": resolve_unit_bytes(largest),
+                "merge_worker_estimate_bytes": worker_bytes(resolve_unit_bytes(largest)),
                 "write_pool_memory": memory.summary(),
             }
             raise _DiscardSlice

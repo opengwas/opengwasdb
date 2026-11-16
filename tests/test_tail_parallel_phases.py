@@ -137,8 +137,8 @@ def test_the_se_reduction_is_sensitive_to_chunk_order(tmp_path, monkeypatch) -> 
 
     real_map = ordered_pool.ordered_map
 
-    def reversed_map(fn, items, n_workers, max_in_flight=None):
-        return iter(reversed(list(real_map(fn, items, n_workers, max_in_flight))))
+    def reversed_map(fn, items, n_workers):
+        return iter(reversed(list(real_map(fn, items, n_workers))))
 
     monkeypatch.setattr(se_module, "ordered_map", reversed_map)
     reversed_group = _se_group(tmp_path, "reversed.zarr")

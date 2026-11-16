@@ -56,9 +56,12 @@ whose indel spelling `variant_table.indel_order` does not judge. This package do
 not repeat that for a later version: it reads a Store newer than 0.2.2 with the
 same newer-remainder warning, and its `manifest.format_stamp` warns that the
 package must be upgraded instead of judging the stamp. A 0.2.0 or
-0.2.1 Store is read and validated as before and never rewritten: the rules this
-package gates at 0.2.2 (`variant_table.indel_order`, `variant_table.lifted_contig`
-as an error, the exact-SE share rule) do not judge it. This package refuses to
+0.2.1 Store is read and validated as before and never rewritten. Three rules are
+gated at 0.2.2, the first format this package's builders write, by one test of
+the stamp: `variant_table.indel_order` does not judge an earlier Store, and
+`variant_table.lifted_contig` and the exact-SE share rule,
+`side_tables.se_exceptions_rounded`, report what they find on it as a warning
+rather than an error. This package refuses to
 complete it (rebuild it, then complete), and spells a source's indels sorted
 when it checks source fidelity against it. The converter writes 0.2.0 from a
 0.1.0 Store, whose indels it cannot re-spell. #338's reference branch also used

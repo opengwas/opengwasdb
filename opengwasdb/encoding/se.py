@@ -59,7 +59,7 @@ def _row_block_of(array: Any) -> int:
     return int(shards[0]) if shards is not None else int(array.chunks[0])
 
 
-def _optional_phase(timer: PhaseTimer | None, name: str) -> AbstractContextManager[None]:
+def _optional_phase(timer: PhaseTimer | None, name: str) -> AbstractContextManager[object]:
     """A timer phase when one is being kept, a no-op otherwise.
 
     The per-chunk passes run inside a worker when a pool is in use, where a

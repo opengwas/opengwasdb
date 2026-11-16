@@ -285,14 +285,6 @@ def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
 # (`_source_row`) is the reference: a block holds exactly its associations, in
 # order, bit for bit.
 
-#: Decompressed bytes one block reads, 32 MiB: what bounds a Pass 2 worker's
-#: batch, which holds one block and the line the read before it split. R13's
-#: 21,326,102-row ACTINOMYCOSIS file reads as 63 batches, the largest of
-#: 346,947 rows, and the read's sampled resident memory peaked at 501 MiB
-#: (ADR 0076 gives `ru_maxrss` beside it).
-_BLOCK_BYTES = 1 << 25
-
-_MISSING_STATISTICS = columnar.MISSING_STATISTICS
 
 #: The cells an association reads beyond its chromosome.
 _READ = ("pos", "ref", "alt", "beta", "sebeta", "af_alt")
@@ -360,7 +352,7 @@ class _Format:
     label: str = "FinnGen source"
 
     def block_bytes(self) -> int:
-        return _BLOCK_BYTES
+        return columnar.BLOCK_BYTES
 
     def per_row(
         self, text: TextIOBase, names: list[str] | None, source: columnar.Source
@@ -426,7 +418,7 @@ class _Block:
             usecols=sorted(reads.values()),
             dtype={reads[name]: "category" for name in ("ref", "alt")}
             | {plan.chromosome: "category"},
-            na_values={index: list(_MISSING_STATISTICS) for index in statistics},
+            na_values={index: columnar.MISSING_TOKENS for index in statistics},
             # `float()` is correctly rounded and pandas' default converter is not.
             float_precision="round_trip",
             **columnar.PANDAS,

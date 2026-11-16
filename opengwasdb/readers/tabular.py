@@ -46,7 +46,7 @@ from opengwasdb.readers.rows import (
     stream_associations,
     stream_variants,
 )
-from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
+from opengwasdb.stats import MISSING_STATISTICS, Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
     UndeclaredReference,
     VariantNormalisationError,
@@ -64,7 +64,6 @@ if TYPE_CHECKING:
     # caller's resolved effect source (issue #215).
     from opengwasdb.readers.effect_source import EffectSource
 
-_MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 _VALID_DISTINCT_ALLELE_CODES = frozenset(
     (ref, alt) for ref in b"ACGT" for alt in b"ACGT" if ref != alt
 )
@@ -72,7 +71,7 @@ _SINGLE_ALLELE_TEXT = {bytes((code,)): chr(code) for code in b"ACGTacgt"}
 
 
 def parse_finite_float(value: str | None) -> float | None:
-    if value is None or value.strip() in _MISSING:
+    if value is None or value.strip() in MISSING_STATISTICS:
         return None
     try:
         parsed = float(value)
@@ -1001,7 +1000,7 @@ _STATISTIC_FIELDS = (
 _PROJECTED_FIELDS = (
     "chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS, "imputation_score", "reference",
 )
-_MISSING_TOKENS = sorted(_MISSING)
+_MISSING_TOKENS = sorted(MISSING_STATISTICS)
 
 def _projected_column_names(
     header: list[bytes], projection: _ResolvedMetricsProjection
@@ -1100,7 +1099,7 @@ def _floats_from_text(column: pd.Series) -> np.ndarray:
     """`float()` per cell -- the row-wise rule -- for a column pandas left as text.
 
     Reached only when a statistic column carries a token that is neither a
-    number nor one of `_MISSING`, which is a malformed source rather than an
+    number nor one of `MISSING_STATISTICS`, which is a malformed source rather than an
     ordinary one. `to_numeric` would be the vectorised answer and is not used:
     it is a digit less accurate than `float()` on a long decimal, and a
     statistic that differs from the row-wise projection in its last place is
@@ -1386,7 +1385,7 @@ def _metric_frame_reader(
     The position keeps its source text: pandas would happily read `1e5` and
     `100.5` as numbers, and `int()` -- the rule the row-wise projection applies
     -- rejects both, so the literal is the only thing that can be checked
-    against it. Missing values are `_MISSING` and nothing else, per column:
+    against it. Missing values are `MISSING_STATISTICS` and nothing else, per column:
     pandas' own default token list would turn a chromosome spelled `NA` -- which
     the row-wise projection keeps -- into a dropped row, while a statistic has
     exactly the missing spellings `parse_finite_float` accepts.
