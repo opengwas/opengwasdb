@@ -20,9 +20,11 @@ not parse, and the artifact carries that count so an empty `phases` list is
 never mistaken for a real zero (see `tests/test_epic307_evidence.py`'s
 round-trip test, which emits through the real functions).
 
-Times are compared on the log lines' own clock -- the host's local time as
-written on each line -- and a record's UTC `start_time`/`end_time` are
-converted onto it. Windows are half-open `[start, end)`.
+Times are compared on the log lines' own clock -- wall time in the Store host's
+explicitly declared zone, never the parser machine's zone -- and a record's UTC
+`start_time`/`end_time` are converted onto it. Windows are half-open `[start, end)`.
+Naive timestamps preserve the artifact schema and wall-clock duration semantics;
+a log line in the repeated fallback hour cannot distinguish `fold` (issue #436).
 """
 
 from __future__ import annotations
@@ -116,20 +118,15 @@ class Window:
         }
 
 
-def _log_clock(value: str) -> datetime:
-    """A log-clock datetime from `YYYY-MM-DD[ T]HH:MM[:SS]`.
-
-    A value carrying an offset is converted to the host's local time and then
-    stripped of its zone, because the log lines are written in local time and
-    everything has to be compared on one clock.
-    """
+def _log_clock(value: str, zone: ZoneInfo) -> datetime:
+    """A window endpoint on the declared Store log clock, never the parser host's."""
     parsed = datetime.fromisoformat(value.strip().replace(" ", "T"))
     if parsed.tzinfo is None:
         return parsed
-    return parsed.astimezone().replace(tzinfo=None)
+    return parsed.astimezone(zone).replace(tzinfo=None)
 
 
-def _record_clock(value: str) -> datetime:
+def _record_clock(value: str, zone: ZoneInfo) -> datetime:
     """A record's ISO timestamp on the log clock.
 
     A record's `start_time`/`end_time` are UTC and carry an offset; a naive one
@@ -138,17 +135,18 @@ def _record_clock(value: str) -> datetime:
     """
     parsed = datetime.fromisoformat(value.strip().replace(" ", "T"))
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC).astimezone().replace(tzinfo=None)
-    return parsed.astimezone().replace(tzinfo=None)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(zone).replace(tzinfo=None)
 
 
-def parse_window(text: str) -> Window:
+def parse_window(text: str, tz: str) -> Window:
     """`START/END` in log-clock time; an END before START ends the next day."""
     start_text, separator, end_text = text.partition("/")
     if not separator or not start_text.strip() or not end_text.strip():
         raise ValueError(f"a window is START/END, got {text!r} (no `/` in it)")
-    start = _log_clock(start_text)
-    end = _log_clock(end_text)
+    zone = ZoneInfo(tz)
+    start = _log_clock(start_text, zone)
+    end = _log_clock(end_text, zone)
     if end <= start:
         end += timedelta(days=1)
     return Window(start, end, text)
@@ -187,8 +185,8 @@ def daily_windows(
             end += timedelta(days=1)
         windows.append(
             Window(
-                start.astimezone().replace(tzinfo=None),
-                end.astimezone().replace(tzinfo=None),
+                start.replace(tzinfo=None),
+                end.replace(tzinfo=None),
                 text,
                 day.isoformat(),
             )
@@ -347,7 +345,7 @@ def _messages(stderr: str) -> list[tuple[datetime, str]]:
     for line in stderr.splitlines():
         matched = _LOG_LINE.match(line)
         if matched is not None:
-            out.append((_log_clock(matched.group("at")), matched.group("message")))
+            out.append((datetime.fromisoformat(matched.group("at")), matched.group("message")))
     return out
 
 
@@ -788,12 +786,13 @@ def _has_offset(value: str | None) -> bool:
 
 
 def _span(
-    payload: dict[str, Any], first_log: datetime | None, last_log: datetime | None
+    payload: dict[str, Any], first_log: datetime | None, last_log: datetime | None,
+    zone: ZoneInfo,
 ) -> tuple[datetime | None, datetime | None, str]:
     """The step's span on the log clock, preferring the record's own timestamps."""
     if payload.get("start_time") or payload.get("end_time"):
-        start = _record_clock(payload["start_time"]) if payload.get("start_time") else None
-        end = _record_clock(payload["end_time"]) if payload.get("end_time") else None
+        start = _record_clock(payload["start_time"], zone) if payload.get("start_time") else None
+        end = _record_clock(payload["end_time"], zone) if payload.get("end_time") else None
         if start is not None or end is not None:
             return start, end, "record_times"
     if first_log is not None or last_log is not None:
@@ -802,7 +801,8 @@ def _span(
 
 
 def _stderr_outside_record(
-    start: str | None, end: str | None, first_log: datetime | None, last_log: datetime | None
+    start: str | None, end: str | None, first_log: datetime | None, last_log: datetime | None,
+    zone: ZoneInfo,
 ) -> bool | None:
     """Whether the stderr's own timestamps fall outside the record's dates.
 
@@ -815,13 +815,14 @@ def _stderr_outside_record(
     if first_log is None or last_log is None or not start or not end:
         return None
     slack = timedelta(minutes=1)
-    record_start = _record_clock(start)
-    record_end = _record_clock(end)
+    record_start = _record_clock(start, zone)
+    record_end = _record_clock(end, zone)
     return first_log < record_start - slack or last_log > record_end + slack
 
 
-def parse_record(path: str | Path) -> Record:
-    """One `records/<step>.json`, with everything it says about its own time."""
+def parse_record(path: str | Path, tz: str) -> Record:
+    """One step record on the explicitly declared Store log-clock zone `tz`."""
+    zone = ZoneInfo(tz)
     record_path = Path(path)
     payload = json.loads(record_path.read_text(encoding="utf-8"))
     missing = tuple(key for key in RECORD_KEYS if key not in payload)
@@ -836,13 +837,13 @@ def parse_record(path: str | Path) -> Record:
         (key for key in ("opengwasdb_revision", "opengwasdb_rev") if payload.get(key)),
         None,
     )
-    log_start, log_end, span_source = _span(payload, first_log, last_log)
+    log_start, log_end, span_source = _span(payload, first_log, last_log, zone)
     record_span = (
-        _record_clock(payload["start_time"]) if payload.get("start_time") else None,
-        _record_clock(payload["end_time"]) if payload.get("end_time") else None,
+        _record_clock(payload["start_time"], zone) if payload.get("start_time") else None,
+        _record_clock(payload["end_time"], zone) if payload.get("end_time") else None,
     )
     stderr_outside = _stderr_outside_record(
-        payload.get("start_time"), payload.get("end_time"), first_log, last_log
+        payload.get("start_time"), payload.get("end_time"), first_log, last_log, zone
     )
     for key in ("start_time", "end_time"):
         if payload.get(key) and not _has_offset(payload[key]):
@@ -884,17 +885,19 @@ def parse_record(path: str | Path) -> Record:
     )
 
 
-def measure_store(path: str | Path, label: str | None = None) -> dict[str, Any]:
+def measure_store(path: str | Path, *, tz: str, label: str | None = None) -> dict[str, Any]:
     """Every step record under one Store Release, in file order.
 
+    `tz` declares the Store host's log-clock zone, not the executing host's.
     `label` names the Store in the artifact; a replaced or retired Store's
     directory is named for its timestamp, not for the Store it held.
     """
+    ZoneInfo(tz)
     store = Path(path).resolve()
     records = sorted((store / "records").glob("*.json"))
     if not records:
         raise SystemExit(f"{store}: no records/*.json; not an orchestrated Store Release")
-    parsed = [parse_record(record) for record in records]
+    parsed = [parse_record(record, tz) for record in records]
     ids = {entry.store_id for entry in parsed if entry.store_id}
     if len(ids) > 1:
         raise SystemExit(f"{store}: records disagree about their store id: {sorted(ids)}")

@@ -29,7 +29,8 @@ import time
 from datetime import date, datetime
 from datetime import time as clock_time
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from sys import executable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -228,7 +229,7 @@ def test_a_records_revision_is_read_from_whichever_key_it_holds(tmp_path):
     payload["opengwasdb_revision"] = "5fc07666202d43500d5e48bbc48f1e4c9e34ef0f"
     revision_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    record = parse_record(revision_path)
+    record = parse_record(revision_path, "Europe/London")
 
     assert record.revision_key == "opengwasdb_revision"
     assert record.revision == "5fc07666202d43500d5e48bbc48f1e4c9e34ef0f"
@@ -237,7 +238,7 @@ def test_a_records_revision_is_read_from_whichever_key_it_holds(tmp_path):
 def test_a_missing_stderr_is_missing_not_an_empty_one(tmp_path):
     path = _record(tmp_path, None)
 
-    record = parse_record(path)
+    record = parse_record(path, "Europe/London")
 
     assert record.stderr_present is False
     assert record.stderr_lines is None
@@ -253,7 +254,7 @@ def test_missing_step_fields_are_named_rather_than_defaulted(tmp_path):
         payload.pop(key)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    record = parse_record(path)
+    record = parse_record(path, "Europe/London")
 
     assert set(record.missing_fields) >= {"exit_code", "success", "elapsed_seconds"}
     assert "opengwasdb_revision" in record.missing_fields
@@ -292,7 +293,7 @@ def test_a_record_yields_the_steps_wall_time_and_each_phases_span(tmp_path):
         + "\n",
     )
 
-    step = parse_record(path).to_dict([])
+    step = parse_record(path, "Europe/London").to_dict([])
 
     assert step["wall_seconds"] == 1234.5
     assert [(p["label"], p["start"], p["end"]) for p in step["phases"]] == [
@@ -320,7 +321,7 @@ def test_an_interval_whose_two_lines_share_a_second_is_zero_not_missing(tmp_path
         )
         + "\n",
     )
-    record = parse_record(path)
+    record = parse_record(path, "Europe/London")
 
     planes = record.interval(r"^Encoding plan:", r"^Band-write z: start$")
     assert planes is not None and planes["seconds"] == 0.0
@@ -333,7 +334,7 @@ def test_an_interval_whose_two_lines_share_a_second_is_zero_not_missing(tmp_path
 
 
 def test_a_window_flags_the_phases_it_overlaps_and_no_others():
-    window = parse_window("2026-10-22T01:06/2026-10-22T16:10")
+    window = parse_window("2026-10-22T01:06/2026-10-22T16:10", "Europe/London")
 
     assert [
         window.overlaps(_at("2026-10-22T09:00:00"), _at("2026-10-22T10:00:00")),
@@ -345,13 +346,15 @@ def test_a_window_flags_the_phases_it_overlaps_and_no_others():
 
 
 def test_a_window_that_lands_before_its_start_crosses_midnight():
-    window = parse_window("2026-10-22T22:00/2026-10-23T06:00")
+    window = parse_window("2026-10-22T22:00/2026-10-23T06:00", "Europe/London")
 
     assert window.start == _at("2026-10-22T22:00:00")
     assert window.end == _at("2026-10-23T06:00:00")
     assert window.overlaps(_at("2026-10-22T23:30:00"), _at("2026-10-23T00:30:00")) is True
     assert window.overlaps(_at("2026-10-22T20:00:00"), _at("2026-10-22T22:00:00")) is False
-    assert parse_window("2026-10-22T22:00/2026-10-22T06:00").end == _at("2026-10-23T06:00:00")
+    assert parse_window(
+        "2026-10-22T22:00/2026-10-22T06:00", "Europe/London"
+    ).end == _at("2026-10-23T06:00:00")
 
 
 def test_a_phase_that_straddles_midnight_is_flagged_by_a_nightly_window(tmp_path):
@@ -366,7 +369,9 @@ def test_a_phase_that_straddles_midnight_is_flagged_by_a_nightly_window(tmp_path
         + "\n",
     )
 
-    step = parse_record(path).to_dict([parse_window("2026-10-22T22:00/2026-10-23T06:00")])
+    step = parse_record(path, "Europe/London").to_dict([
+        parse_window("2026-10-22T22:00/2026-10-23T06:00", "Europe/London")
+    ])
 
     (phase,) = step["phases"]
     assert phase["elapsed_seconds"] == 3600.0
@@ -386,8 +391,8 @@ def test_a_daily_window_covers_every_night_the_records_span():
         night = date.fromisoformat(window.date or "")
         start = datetime.combine(night, clock_time(1, 6), tzinfo=ZoneInfo("Europe/London"))
         end = datetime.combine(night, clock_time(16, 10), tzinfo=ZoneInfo("Europe/London"))
-        assert window.start == start.astimezone().replace(tzinfo=None)
-        assert window.end == end.astimezone().replace(tzinfo=None)
+        assert window.start == start.replace(tzinfo=None)
+        assert window.end == end.replace(tzinfo=None)
         assert (window.end - window.start).total_seconds() == 15 * 3600 + 4 * 60
 
 
@@ -408,6 +413,130 @@ def test_a_daily_window_keeps_its_wall_clock_across_the_dst_change():
     assert {(window.end.hour, window.end.minute) for window in windows} == {(16, 10)}
 
 
+@pytest.mark.parametrize("machine_tz", ["UTC", "Europe/London"])
+def test_the_cli_uses_the_declared_log_clock_across_fallback(tmp_path, machine_tz):
+    """Literal UTC/London pairs, not two outputs sharing a conversion bug (#436)."""
+    for day, start, end in (
+        ("24", "2026-10-24T00:05:00Z", "2026-10-24T15:11:00Z"),
+        ("25", "2026-10-25T00:05:00Z", "2026-10-25T16:11:00Z"),
+        ("26", "2026-10-26T01:05:00Z", "2026-10-26T16:11:00Z"),
+    ):
+        _record(
+            tmp_path,
+            "\n".join([
+                _line(f"2026-10-{day} 01:05:00", "Pass 2: start"),
+                _line(f"2026-10-{day} 01:05:00", "Pass 2: 0/30 — elapsed 0s, ETA 1h"),
+                _line(f"2026-10-{day} 01:07:00", "Pass 2: 10/30 — elapsed 2m00s, ETA 1h"),
+                _line(f"2026-10-{day} 16:10:00", "Pass 2: 20/30 — elapsed 15h05m, ETA 1m"),
+                _line(f"2026-10-{day} 16:11:00", "Pass 2: 30/30 — elapsed 15h06m, ETA 0s"),
+                _line(f"2026-10-{day} 16:11:00", "Pass 2: done in 15h06m"),
+            ]),
+            step=f"build-{day}", start=start, end=end,
+        )
+    output = tmp_path / "out.json"
+    subprocess.run(
+        [executable, "-m", "benchmarks.measure_epic307_evidence",
+         "--store", f"synthetic={tmp_path}", "--tz", "Europe/London",
+         "--window", "2026-10-24T00:06Z/2026-10-24T15:10Z",
+         "--daily-window", "01:06-16:10", "--until", "2026-10-27",
+         "--output", str(output)],
+        env={**os.environ, "TZ": machine_tz}, check=True, capture_output=True, text=True,
+    )
+    artifact = json.loads(output.read_text())
+    steps = artifact["stores"][0]["steps"]
+    assert len(steps) == 3
+    for step, day in zip(steps, ("24", "25", "26"), strict=True):
+        assert step["record_span"] == {
+            "first": f"2026-10-{day}T01:05:00", "last": f"2026-10-{day}T16:11:00",
+        }
+        assert step["log_start"] == step["first_log_line"]
+        assert step["stderr_outside_record"] is False
+        assert step["overlaps_window"] is True
+        assert step["seconds_inside_windows"] == 54240.0
+        rate = step["progress"]["Pass 2"]
+        assert rate["samples_inside_window"] == 1
+        assert rate["intervals"] == 1
+        assert rate["seconds_per_item"] == 6.0
+        assert step["phases"][0]["seconds_inside_windows"] == 54240.0
+    windows = artifact["windows"]["intervals"]
+    assert len(windows) == 4
+    assert windows[0]["start"] == "2026-10-24T01:06:00"
+    assert windows[0]["end"] == "2026-10-24T16:10:00"
+    assert [(w["start"], w["end"]) for w in windows[1:]] == [
+        (f"2026-10-{day}T01:06:00", f"2026-10-{day}T16:10:00")
+        for day in ("24", "25", "26")
+    ]
+
+
+@pytest.mark.parametrize("zone", [None, "Not/AZone", "", "/etc/localtime"])
+def test_the_cli_refuses_an_undeclared_or_invalid_store_clock(tmp_path, zone, capsys):
+    output = tmp_path / "out.json"
+    argv = ["--store", f"missing={tmp_path / 'missing'}", "--output", str(output)]
+    if zone is not None:
+        argv += ["--tz", zone]
+    with pytest.raises(SystemExit) as refused:
+        main(argv)
+    if zone is None:
+        assert "require --tz" in str(refused.value)
+    else:
+        assert refused.value.code == 2
+        assert "invalid log-clock zone" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("machine_tz", ["UTC", "Europe/London"])
+def test_the_cli_can_declare_utc_without_a_daily_window(tmp_path, machine_tz):
+    _record(
+        tmp_path, _line("2026-10-24 00:05:00", "Validate: start"),
+        start="2026-10-24T00:05:00Z", end="2026-10-24T00:10:00Z",
+    )
+    output = tmp_path / "utc.json"
+    subprocess.run(
+        [executable, "-m", "benchmarks.measure_epic307_evidence",
+         "--store", f"synthetic={tmp_path}", "--tz", "UTC",
+         "--window", "2026-10-24T01:06+01:00/2026-10-24T01:07+01:00",
+         "--output", str(output)],
+        env={**os.environ, "TZ": machine_tz}, check=True, capture_output=True, text=True,
+    )
+    artifact = json.loads(output.read_text())
+    step = artifact["stores"][0]["steps"][0]
+    assert step["record_span"] == {
+        "first": "2026-10-24T00:05:00", "last": "2026-10-24T00:10:00",
+    }
+    assert step["stderr_outside_record"] is False
+    assert step["seconds_inside_windows"] == 60.0
+    assert artifact["log_clock_tz"] == "UTC"
+    assert "'UTC', explicitly declared" in artifact["method_note"]
+
+
+@pytest.mark.parametrize("api", ["record", "store", "window", "daily"])
+def test_public_clock_parsers_require_a_valid_zone(tmp_path, api):
+    path = _record(tmp_path, "")
+    parsers = {
+        "record": lambda **kw: parse_record(path, **kw),
+        "store": lambda **kw: measure_store(tmp_path, **kw),
+        "window": lambda **kw: parse_window("2026-10-24T00:00/2026-10-24T01:00", **kw),
+        "daily": lambda **kw: daily_windows(
+            "01:06-16:10", first=date(2026, 10, 24), until=date(2026, 10, 27), **kw
+        ),
+    }
+    with pytest.raises(TypeError, match="tz"):
+        parsers[api]()
+    with pytest.raises(ZoneInfoNotFoundError):
+        parsers[api](tz="Not/AZone")
+
+
+def test_naive_record_times_are_explicitly_normalised_from_utc(tmp_path):
+    path = _record(
+        tmp_path, "", start="2026-10-24T00:30:00", end="2026-10-26T01:30:00",
+    )
+    step = parse_record(path, "Europe/London").to_dict([])
+    assert step["record_span"] == {
+        "first": "2026-10-24T01:30:00", "last": "2026-10-26T01:30:00",
+    }
+    assert step["normalised"] == ["start_time_naive_taken_as_utc", "end_time_naive_taken_as_utc"]
+
+
 def test_a_step_with_no_phases_is_flagged_when_the_step_itself_overlaps(tmp_path):
     path = _record(
         tmp_path,
@@ -417,7 +546,9 @@ def test_a_step_with_no_phases_is_flagged_when_the_step_itself_overlaps(tmp_path
         end="2026-10-22T21:00:00.000000Z",
     )
 
-    step = parse_record(path).to_dict([parse_window("2026-10-22T01:06/2026-10-22T19:30:00")])
+    step = parse_record(path, "Europe/London").to_dict([
+        parse_window("2026-10-22T01:06/2026-10-22T19:30:00", "Europe/London")
+    ])
 
     assert step["phases"] == []
     assert step["overlaps_window"] is True
@@ -435,7 +566,9 @@ def test_a_phase_with_no_end_has_an_unknown_window_flag(tmp_path):
         + _line("2026-10-22 09:10:00", "Band-write z: done in 5m00s"),
     )
 
-    step = parse_record(path).to_dict([parse_window("2026-10-22T01:06/2026-10-22T16:10")])
+    step = parse_record(path, "Europe/London").to_dict([
+        parse_window("2026-10-22T01:06/2026-10-22T16:10", "Europe/London")
+    ])
 
     unfinished, closed = step["phases"]
     assert unfinished["overlaps_window"] is None
@@ -453,7 +586,7 @@ def test_a_stderr_from_another_run_is_flagged(tmp_path):
         end="2026-10-23T09:00:00.000000Z",
     )
 
-    step = parse_record(path).to_dict([])
+    step = parse_record(path, "Europe/London").to_dict([])
 
     assert step["stderr_outside_record"] is True
     assert step["record_span"]["first"] == "2026-10-22T17:48:00"
@@ -468,7 +601,7 @@ def test_a_stderr_from_the_records_own_run_is_not_flagged(tmp_path):
         end="2026-10-22T02:00:00.000000Z",
     )
 
-    assert parse_record(path).to_dict([])["stderr_outside_record"] is False
+    assert parse_record(path, "Europe/London").to_dict([])["stderr_outside_record"] is False
 
 
 # --- 4. the clean rate ------------------------------------------------------
@@ -571,7 +704,9 @@ def test_the_median_clean_pace_survives_an_hour_that_was_slow_for_another_reason
     )
     samples = parse_progress(stderr)["Pass 2"]
 
-    rate = clean_rate(samples, [parse_window("2026-10-22T01:06/2026-10-22T16:10")])
+    rate = clean_rate(samples, [
+        parse_window("2026-10-22T01:06/2026-10-22T16:10", "Europe/London")
+    ])
 
     # Intervals of 1.0, 1.0 and 18.0 s per item: the pooled rate is dragged by
     # the last one, the median is what the phase usually keeps.
@@ -601,7 +736,9 @@ def test_an_unreadable_elapsed_does_not_read_as_no_line_before_the_window():
     samples = parse_progress(stderr)["Pass 2"]
     assert samples[1].elapsed_seconds is None
 
-    rate = clean_rate(samples, [parse_window("2026-10-22T02:00/2026-10-22T03:00")])
+    rate = clean_rate(samples, [
+        parse_window("2026-10-22T02:00/2026-10-22T03:00", "Europe/London")
+    ])
 
     assert rate["prefix"] is not None
     assert rate["prefix"]["completed"] == 200
@@ -638,7 +775,9 @@ def test_slow_intervals_outside_every_window_are_listed_with_their_time():
     )
     samples = parse_progress(stderr)["Pass 2"]
 
-    rate = clean_rate(samples, [parse_window("2026-10-14T01:06/2026-10-14T16:10")])
+    rate = clean_rate(samples, [
+        parse_window("2026-10-14T01:06/2026-10-14T16:10", "Europe/London")
+    ])
 
     assert rate["median_interval_seconds_per_item"] == 1.0
     assert rate["seconds_per_item"] == pytest.approx(7200 / 300)
@@ -653,7 +792,9 @@ def test_slow_intervals_outside_every_window_are_listed_with_their_time():
 def test_clean_rate_refuses_a_phase_with_no_clean_interval():
     samples = parse_progress(PROGRESS_LINES)["Pass 2"]
 
-    rate = clean_rate(samples, [parse_window("2026-10-22T00:00/2026-10-22T06:00")])
+    rate = clean_rate(samples, [
+        parse_window("2026-10-22T00:00/2026-10-22T06:00", "Europe/London")
+    ])
 
     assert rate["seconds_per_item"] is None
     assert rate["intervals"] == 0
@@ -670,14 +811,14 @@ def test_measure_store_refuses_a_directory_whose_records_disagree(tmp_path):
     _record(tmp_path, "", step="validate", extra={"store_id": "OGS-00001"})
 
     with pytest.raises(SystemExit, match="disagree"):
-        measure_store(tmp_path)
+        measure_store(tmp_path, tz="Europe/London")
 
 
 def test_measure_store_records_every_step_record(tmp_path):
     _record(tmp_path, "", step="build")
     _record(tmp_path, "", step="top-hits", wall=42.0)
 
-    store = measure_store(tmp_path)
+    store = measure_store(tmp_path, tz="Europe/London")
 
     assert store["label"] == tmp_path.name
     assert [record.step for record in store["records"]] == ["build", "top-hits"]
@@ -688,7 +829,7 @@ def test_measure_store_records_every_step_record(tmp_path):
 
 
 def _evidence(tmp_path: Path, windows: list[Window] | None = None) -> dict:
-    store = measure_store(tmp_path)
+    store = measure_store(tmp_path, tz="Europe/London")
     return {
         "stores": {store["label"]: {record.step: record for record in store["records"]}},
         "windows": windows or [],
@@ -759,7 +900,9 @@ def test_a_progress_figure_is_projected_from_the_clean_pace(tmp_path):
         )
         + "\n",
     )
-    evidence = _evidence(tmp_path, [parse_window("2026-10-22T01:06/2026-10-22T16:10")])
+    evidence = _evidence(tmp_path, [
+        parse_window("2026-10-22T01:06/2026-10-22T16:10", "Europe/London")
+    ])
     evidence["stores"] = {"OGS-00009": evidence["stores"][tmp_path.name]}
 
     entry = measure_figure(
@@ -871,7 +1014,9 @@ def test_a_composed_figure_is_a_lower_bound_and_says_what_it_left_out(tmp_path):
         )
         + "\n",
     )
-    evidence = _evidence(tmp_path, [parse_window("2026-10-21T23:00/2026-10-22T00:30")])
+    evidence = _evidence(tmp_path, [
+        parse_window("2026-10-21T23:00/2026-10-22T00:30", "Europe/London")
+    ])
     evidence["stores"] = {"OGS-00009": evidence["stores"][tmp_path.name]}
 
     entry = measure_figure(
@@ -914,7 +1059,9 @@ def test_a_reason_whose_predicate_no_longer_holds_is_not_printed(tmp_path):
         + "\n"
         + _line("2026-10-22 20:05:00", "Outside: done in 5m00s"),
     )
-    evidence = _evidence(tmp_path, [parse_window("2026-10-22T01:06/2026-10-22T16:10")])
+    evidence = _evidence(tmp_path, [
+        parse_window("2026-10-22T01:06/2026-10-22T16:10", "Europe/London")
+    ])
     evidence["stores"] = {"OGS-00009": evidence["stores"][tmp_path.name]}
 
     entry = measure_figure(
@@ -1229,6 +1376,7 @@ def test_an_unknown_source_capability_is_refused(tmp_path):
                 f"x={tmp_path}",
                 "--source",
                 f"opengwasdb.nope={tmp_path / 'x'}",
+                "--tz", "Europe/London",
                 "--output",
                 str(tmp_path / "out.json"),
             ]
@@ -1237,7 +1385,7 @@ def test_an_unknown_source_capability_is_refused(tmp_path):
 
 def test_parse_window_refuses_text_that_names_no_span():
     with pytest.raises(ValueError, match="/"):
-        parse_window("2026-10-22T01:06")
+        parse_window("2026-10-22T01:06", "Europe/London")
 
 
 def test_the_artifacts_times_are_log_clock_not_record_clock(tmp_path):
@@ -1249,7 +1397,7 @@ def test_the_artifacts_times_are_log_clock_not_record_clock(tmp_path):
         end="2026-10-22T01:00:00.000000Z",
     )
 
-    step = parse_record(path).to_dict([])
+    step = parse_record(path, "Europe/London").to_dict([])
 
     # The record's UTC start is the log clock's midnight in BST, which is where
     # its first log line sits.
@@ -1364,7 +1512,7 @@ def _mkstore(tmp_path: Path, label: str, steps: dict[str, str | None], **kwargs)
     root = tmp_path / label
     for step, stderr in steps.items():
         _record(root, stderr, step=step, start=None, end=None, **kwargs)
-    return measure_store(root, label=label)
+    return measure_store(root, tz="Europe/London", label=label)
 
 
 def _ev(*stores: dict, windows: list[Window] | None = None, **extra) -> dict:
@@ -1384,7 +1532,7 @@ def _figure(key: str) -> Figure:
 
 
 def _window(text: str, date: str | None = None) -> Window:
-    window = parse_window(text)
+    window = parse_window(text, "Europe/London")
     return Window(window.start, window.end, window.text, date)
 
 
