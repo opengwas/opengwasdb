@@ -279,7 +279,7 @@ def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
     # checkpoints in Phase 3. Returning them here would push potentially millions
     # of tuples per block through the pool result queue and accumulate them in the
     # parent (issue 044 follow-up), so return an empty-fills marker.
-    return BlockCompletionResult(block_id=result.block_id, quality_rows=[], fills=[])
+    return BlockCompletionResult(block_id=result.block_id, quality_rows=[])
 
 
 # ── Public entry points ─────────────────────────────────────────────────────

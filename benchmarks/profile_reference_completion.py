@@ -10,6 +10,8 @@ real input, without running a completion:
     split into the LD-panel read, the source-plane read, the elastic-net fits,
     the polynomial rescale, the per-cell fill loop, the fill-row bookkeeping and
     the checkpoint write. It also counts the block's distinct observed sets.
+    ``--keep-checkpoint`` retains the block's format-3 checkpoint under ``--work``
+    for exact cell-by-cell comparison between revisions.
 
 ``bands``
     The checkpoint merge and the band write over a prefix of the completed
@@ -206,6 +208,7 @@ def _patched(stages: list[tuple[Any, str, str]], clock: StageClock) -> Iterator[
 def profile_block(
     source: Path, ld_dir: Path, ancestry: str, work: Path, which: str,
     clock: Callable[[], float] = time.perf_counter,
+    *, keep_checkpoint: bool = False,
 ) -> dict[str, Any]:
     """Complete one LD block for every Analysis of ``source``, split by stage."""
     from opengwasdb.build.ordered_pool import single_threaded_blas
@@ -265,8 +268,9 @@ def profile_block(
     check_accounts_for_wall(accounted["accounted_seconds"], wall)
     fills = _checkpoint_fills(task.checkpoint_path)
     checkpoint_bytes = task.checkpoint_path.stat().st_size
-    task.checkpoint_path.unlink()
-    work.rmdir()
+    if not keep_checkpoint:
+        task.checkpoint_path.unlink()
+        work.rmdir()
     fits = next(s for s in accounted["stages"] if s["stage"] == "elastic_net_fit")
     return {
         "kind": "block",
@@ -652,6 +656,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--load-period", type=float, default=30.0)
         if name == "block":
             p.add_argument("--block", default="median", help="median, largest, or a block .tsv")
+            p.add_argument("--keep-checkpoint", action="store_true",
+                           help="retain the checkpoint under --work for exact comparison")
         else:
             p.add_argument("--bands", type=int, default=2)
             p.add_argument("--n-workers", type=int, default=32)
@@ -669,7 +675,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     with LoadSampler(args.load_period) as load:
         if args.command == "block":
-            body = profile_block(args.source, args.ld_panel, args.ancestry, args.work, args.block)
+            body = profile_block(
+                args.source, args.ld_panel, args.ancestry, args.work, args.block,
+                keep_checkpoint=args.keep_checkpoint,
+            )
         else:
             body = profile_bands(
                 args.source, args.ld_panel, args.ancestry, args.work, args.bands, args.n_workers,

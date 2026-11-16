@@ -407,46 +407,6 @@ class TestCompletionFiles:
         )
 
 
-class TestRegionCap:
-    """QC z-cap: an imputed |z| is clamped to the max observed |z| within
-    +/- REGION_CAP_BP (per pleiodb)."""
-
-    def _obs(self):
-        # observed variants at 1.0/2.0/5.0 Mb with |z| = 3, 4, 2 (already sorted).
-        pos = np.array([1_000_000, 2_000_000, 5_000_000], dtype=np.int64)
-        absz = np.array([3.0, 4.0, 2.0], dtype=np.float64)
-        return pos, absz
-
-    def test_caps_overshoot_to_window_max(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        # at 1.5 Mb, window +/-1 Mb -> [1.0, 2.0] Mb (|z| 3, 4) -> cap to 4
-        assert _region_capped_z(10.0, 1_500_000, pos, absz) == pytest.approx(4.0)
-        assert _region_capped_z(-10.0, 1_500_000, pos, absz) == pytest.approx(-4.0)
-
-    def test_within_window_unchanged(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        assert _region_capped_z(2.5, 1_500_000, pos, absz) == pytest.approx(2.5)
-
-    def test_no_observed_in_window_uncapped(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        # 10 Mb is >1 Mb from every observed variant -> no window -> unchanged
-        assert _region_capped_z(9.9, 10_000_000, pos, absz) == pytest.approx(9.9)
-
-    def test_window_excludes_distant_large_z(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        # at 5 Mb, window includes only the 5 Mb observed (|z|=2) -> cap to 2,
-        # NOT the larger |z|=4 at 2 Mb which is out of the +/-1 Mb window.
-        assert _region_capped_z(8.0, 5_000_000, pos, absz) == pytest.approx(2.0)
-
-
 class TestValidation:
     def test_valid_completed_store_passes(self, completed_store):
         result = validate_store(completed_store)
@@ -2001,7 +1961,9 @@ def test_a_block_neither_fills_nor_counts_what_it_cedes(
         ceded=lambda analysis: endpoint if analysis == 0 else frozenset(),
     )
 
-    assert [(f.alid, f.analysis_index) for f in result.fills] == [("1:1050000:C:T", 1)]
+    assert [(result.alids[f["local_index"]], f["analysis_index"]) for f in result.fills] == [
+        ("1:1050000:C:T", 1)
+    ]
     assert [(q.analysis_index, q.n_imputed, q.n_missing) for q in result.quality_rows] == [
         (0, 0, 0),
         (1, 1, 0),

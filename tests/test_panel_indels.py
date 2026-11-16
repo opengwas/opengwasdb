@@ -140,7 +140,7 @@ def _fills(tsv: Path) -> dict[str, float]:
 
     result = run_block(tsv, 0.99, 0.0, None, make_reader)
     assert result is not None
-    return {fill.alid: fill.z for fill in result.fills}
+    return {result.alids[fill["local_index"]]: fill["z"] for fill in result.fills}
 
 
 @pytest.mark.parametrize("declared_by", ["ref-column", "table"])

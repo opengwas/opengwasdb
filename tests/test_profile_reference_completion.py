@@ -342,3 +342,15 @@ def test_recorded_full_run_reads_the_figures_from_the_step_record(tmp_path: Path
     assert figures["blocks_at_least_seconds"] == 5 * 3600 + 14 * 60 + 38
     assert figures["post_block_at_most_seconds"] == 7 * 3600 + 39 * 60 + 7
     assert figures["se_rewrite_seconds"] == 1 * 3600 + 34 * 60 + 11
+
+
+def test_block_profile_can_retain_checkpoint_for_cell_comparison(inputs, tmp_path):
+    import numpy as np
+
+    source, panel = inputs
+    artifact = _run(tmp_path, "block", source, panel, "--block", "largest", "--keep-checkpoint")
+    path = tmp_path / "block-work" / "profile-block.npz"
+    assert artifact["checkpoint_bytes"] == path.stat().st_size
+    with np.load(path, allow_pickle=False) as checkpoint:
+        assert len(checkpoint["q_ai"]) == 2
+        assert len(checkpoint["f_z"]) == artifact["fills"]

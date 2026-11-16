@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -132,20 +132,27 @@ class QualityRow(NamedTuple):
     n_missing: int
 
 
-class FillRow(NamedTuple):
-    """One imputed cell: an Analysis's completed z/se at one ALID."""
-
-    alid: str
-    analysis_index: int
-    z: float
-    se: float
+# One-dimensional owned fills, in Analysis order then ascending local index.
+# ALIDs live once on BlockCompletionResult, not once per imputed cell (#422).
+BLOCK_FILL_DTYPE = np.dtype([
+    ("local_index", np.int64), ("analysis_index", np.int32),
+    ("z", np.float64), ("se", np.float64),
+])
 
 
 @dataclass(frozen=True)
 class BlockCompletionResult:
+    """One block's fills indexed into its ALIDs; no fill may name a None ALID.
+
+    ``fills`` is a 1-D BLOCK_FILL_DTYPE array. The float64 kernel values narrow
+    only when written to the unchanged float32 checkpoint fields. Empty results
+    need no ALIDs, including the worker's acknowledgement after checkpointing.
+    """
+
     block_id: str
     quality_rows: list[QualityRow]
-    fills: list[FillRow]
+    fills: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=BLOCK_FILL_DTYPE))
+    alids: list[str | None] = field(default_factory=list)
 
 
 def write_block_checkpoint(path: Path, result: BlockCompletionResult) -> None:
@@ -155,7 +162,7 @@ def write_block_checkpoint(path: Path, result: BlockCompletionResult) -> None:
         "format": np.array([CHECKPOINT_FORMAT], dtype=np.int32),
         "block_id": np.array([result.block_id]),
         **_quality_arrays(result.quality_rows),
-        **_fill_arrays(result.fills),
+        **_fill_arrays(result),
     }
     tmp_path = path.with_name(path.name + ".tmp")
     with open(tmp_path, "wb") as fh:
@@ -189,13 +196,24 @@ def split_alids(alids: Iterable[str]) -> tuple[np.ndarray, np.ndarray, np.ndarra
     return short, np.array(at, dtype=np.int64), long_
 
 
-def _fill_arrays(fills: list[FillRow]) -> dict[str, np.ndarray]:
-    short, long_at, long_ = split_alids(r.alid for r in fills)
+def _fill_arrays(result: BlockCompletionResult) -> dict[str, np.ndarray]:
+    # Encode once per panel row. Gather by integer index for every fill, keeping
+    # long ALIDs out of the fixed-width array exactly as format 3 requires.
+    short, long_at, long_ = split_alids(alid or "" for alid in result.alids)
+    local = result.fills["local_index"]
+    long_slot = np.full(len(short), -1, dtype=np.int64)
+    long_slot[long_at] = np.arange(len(long_at))
+    selected = long_slot[local]
+    fill_long_at = np.flatnonzero(selected >= 0)
+    fill_long = long_[selected[fill_long_at]]
+    # A block's longest ALID might never be filled. Keep the format-3 width
+    # derived from the actual fills, including S1 for an empty long side array.
+    width = int(np.char.str_len(fill_long).max()) if len(fill_long) else 1
     return {
-        "f_alid": short,
-        "f_long_at": long_at,
-        "f_long_alid": long_,
-        "f_ai": np.array([r.analysis_index for r in fills], dtype=np.int32),
-        "f_z": np.array([r.z for r in fills], dtype=np.float32),
-        "f_se": np.array([r.se for r in fills], dtype=np.float32),
+        "f_alid": short[local],
+        "f_long_at": fill_long_at,
+        "f_long_alid": fill_long.astype(f"S{width}"),
+        "f_ai": result.fills["analysis_index"],
+        "f_z": result.fills["z"].astype(np.float32),
+        "f_se": result.fills["se"].astype(np.float32),
     }

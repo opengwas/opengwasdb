@@ -304,7 +304,7 @@ def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
     checkpoint.write_block_checkpoint(task.checkpoint_path, result)
     # Fills stay on disk (the checkpoint); the parent reads them back in Phase 3
     # (mirrors dense — see issue 044).
-    return checkpoint.BlockCompletionResult(block_id=result.block_id, quality_rows=[], fills=[])
+    return checkpoint.BlockCompletionResult(block_id=result.block_id, quality_rows=[])
 
 
 # ── Public entry points ─────────────────────────────────────────────────────

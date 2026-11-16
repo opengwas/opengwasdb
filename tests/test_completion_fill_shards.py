@@ -21,8 +21,8 @@ from fork_order import CompletionOrder
 
 from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import (
+    BLOCK_FILL_DTYPE,
     BlockCompletionResult,
-    FillRow,
     QualityRow,
     write_block_checkpoint,
 )
@@ -38,31 +38,39 @@ BLOCKS = {
     "1/100-300": (
         [QualityRow(0, 0.9, 3, 0), QualityRow(1, None, 0, 2), QualityRow(2, 0.5, 1, 1)],
         [
-            FillRow("1:100:A:G", 0, 1.5, 0.25),
-            FillRow("1:200:C:T", 0, 2.0, 0.5),
-            FillRow("1:300:A:C", 0, 3.0, 0.5),
-            FillRow("1:999:A:G", 0, 9.0, 0.5),
-            FillRow("1:300:A:C", 2, -1.0, 0.125),
+            ("1:100:A:G", 0, 1.5, 0.25),
+            ("1:200:C:T", 0, 2.0, 0.5),
+            ("1:300:A:C", 0, 3.0, 0.5),
+            ("1:999:A:G", 0, 9.0, 0.5),
+            ("1:300:A:C", 2, -1.0, 0.125),
         ],
     ),
     "1/200-500": (
         [QualityRow(0, 0.8, 3, 0), QualityRow(2, 0.7, 1, 0)],
         [
-            FillRow("1:200:C:T", 0, 2.0, 0.5),
-            FillRow("1:300:A:C", 0, 3.5, 0.5),
-            FillRow("1:500:A:T", 0, 5.0, 0.75),
-            FillRow("1:400:G:T", 2, 4.0, 0.25),
+            ("1:200:C:T", 0, 2.0, 0.5),
+            ("1:300:A:C", 0, 3.5, 0.5),
+            ("1:500:A:T", 0, 5.0, 0.75),
+            ("1:400:G:T", 2, 4.0, 0.25),
         ],
     ),
 }
 
 #: Every fill on the axis, as `(row, analysis, z, se)` records.
 ON_AXIS = sorted(
-    (AXIS[f.alid], f.analysis_index, f.z, f.se)
+    (AXIS[f[0]], *f[1:])
     for _quality, fills in BLOCKS.values()
     for f in fills
-    if f.alid in AXIS
+    if f[0] in AXIS
 )
+
+
+def _block_result(
+    block_id: str, quality: list[QualityRow], rows: list[tuple[str, int, float, float]],
+) -> BlockCompletionResult:
+    alids = [row[0] for row in rows]
+    fills = np.array([(i, *row[1:]) for i, row in enumerate(rows)], dtype=BLOCK_FILL_DTYPE)
+    return BlockCompletionResult(block_id, quality, fills, alids)
 
 
 def _blocks_dir(tmp_path: Path) -> Path:
@@ -71,7 +79,7 @@ def _blocks_dir(tmp_path: Path) -> Path:
     for block_id, (quality, fills) in BLOCKS.items():
         write_block_checkpoint(
             blocks / f"{block_id.replace('/', '__')}.npz",
-            BlockCompletionResult(block_id, quality, fills),
+            _block_result(block_id, quality, fills),
         )
     return blocks
 
@@ -201,13 +209,13 @@ LONG_C = "2:6000:A:" + "ACGT" * 40
 LONG_AXIS = {"2:4000:A:G": 0, LONG_A: 1, LONG_B: 2, "2:5500:C:T": 3, LONG_C: 4}
 
 
-def _long_fills() -> list[FillRow]:
+def _long_fills() -> list[tuple[str, int, float, float]]:
     return [
-        FillRow(LONG_A, 0, 1.0, 0.5),
-        FillRow(LONG_B, 0, 2.0, 0.5),
-        FillRow(LONG_C, 1, 3.0, 0.25),
-        FillRow("2:5500:C:T", 1, 4.0, 0.25),
-        FillRow(LONG_PREFIX + "CC", 0, 9.0, 0.5),  # shares the prefix; on no axis row
+        (LONG_A, 0, 1.0, 0.5),
+        (LONG_B, 0, 2.0, 0.5),
+        (LONG_C, 1, 3.0, 0.25),
+        ("2:5500:C:T", 1, 4.0, 0.25),
+        (LONG_PREFIX + "CC", 0, 9.0, 0.5),  # shares the prefix; on no axis row
     ]
 
 
@@ -234,7 +242,7 @@ def test_each_long_alid_fill_reaches_its_own_row(tmp_path) -> None:
     blocks.mkdir()
     write_block_checkpoint(
         blocks / "2__1-9.npz",
-        BlockCompletionResult("2/1-9", [QualityRow(0, 0.5, 3, 0)], _long_fills()),
+        _block_result("2/1-9", [QualityRow(0, 0.5, 3, 0)], _long_fills()),
     )
     union = fill_shards.sorted_union_map(LONG_AXIS)
     dst = tmp_path / "out.opengwasdb"
@@ -269,7 +277,7 @@ def test_a_format_2_checkpoint_is_refused_with_a_restart_not_read(tmp_path) -> N
     checkpoint_dir = checkpoint_dir_for(tmp_path / "out.opengwasdb")
     blocks = checkpoint_blocks_dir(checkpoint_dir)
     path = blocks / "2__1-9.npz"
-    write_block_checkpoint(path, BlockCompletionResult("2/1-9", [], _long_fills()))
+    write_block_checkpoint(path, _block_result("2/1-9", [], _long_fills()))
     checkpoint_blocks_dir(checkpoint_dir)  # a current one resumes
     with np.load(path, allow_pickle=False) as c:
         arrays = {k: c[k] for k in c.files}
@@ -318,11 +326,11 @@ def test_the_edge_fixture_has_the_widths_it_names() -> None:
 def test_alids_of_63_64_and_65_bytes_each_reach_their_own_row(tmp_path) -> None:
     """The 64-byte ALID is the first 64 bytes of the 65-byte one: cut, the two
     are one key. Each of the four fills reaches the row of its own ALID."""
-    fills = [FillRow(a, 0, float(row), 0.5) for a, row in EDGE_AXIS.items() if row]
+    fills = [(a, 0, float(row), 0.5) for a, row in EDGE_AXIS.items() if row]
     blocks = tmp_path / "blocks"
     blocks.mkdir()
     write_block_checkpoint(
-        blocks / "3__1-9.npz", BlockCompletionResult("3/1-9", [], fills)
+        blocks / "3__1-9.npz", _block_result("3/1-9", [], fills)
     )
     union = fill_shards.sorted_union_map(EDGE_AXIS)
     with OpenGWASDBStore.staging(tmp_path / "out.opengwasdb", overwrite=True) as staged:

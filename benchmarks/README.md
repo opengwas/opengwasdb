@@ -1729,3 +1729,22 @@ structure produced by `besdq/scripts/dense_05_query_benchmark.py`:
   "raw_float16": { ... }
 }
 ```
+
+## Reference Completion block profiles (#309, #422)
+
+`profile_reference_completion.py block SOURCE LD_PANEL --block BLOCK.tsv
+--work NEW_DIR --output result.json` runs the real fits and checkpoint writer
+for one LD block. Its exclusive stage timings sum to the independently timed
+block wall time, and the artifact records the commit, package fingerprint and
+host load. Compare the same block and source at base and head, interleaving
+runs under the run's timing lock. `kernel_cell_prep_and_fill_loop` retains its
+historical stage name after #422 replaces the per-cell loop with arrays;
+report it together with `owned_rows` against #309's recorded 23.5%.
+
+Pass `--keep-checkpoint` to retain `NEW_DIR/profile-block.npz` for exact
+comparison of every checkpoint array, including ALIDs, z/SE and quality rows.
+The default still removes the profile's checkpoint. Both modes refuse an
+existing work directory. #422 leaves checkpoint format 3 unchanged: it gathers
+ALIDs encoded once per block, narrows z/SE to float32 at the same writer, and
+keeps the existing field order, dtypes and long-ALID side arrays. A single-block
+speed-up does not establish the epic's whole-release timing criterion.
