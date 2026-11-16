@@ -705,15 +705,20 @@ class Record:
         return [phase for phase in self.phases if phase.label == label]
 
     def interval(self, after: str, until: str) -> dict[str, Any] | None:
-        """Seconds from the last line matching `after` to the next `until` one."""
+        """Seconds from the last line matching `after` to the next `until` one.
+
+        "Next" is the log's own order, not its clock: two lines a phase logs within
+        one second make an interval of zero seconds, not a missing one.
+        """
         start = None
-        for at, message in self.messages:
+        start_index = -1
+        for index, (at, message) in enumerate(self.messages):
             if re.search(after, message):
-                start = at
+                start, start_index = at, index
         if start is None:
             return None
-        for at, message in self.messages:
-            if at > start and re.search(until, message):
+        for at, message in self.messages[start_index + 1 :]:
+            if re.search(until, message):
                 return {
                     "from": start.isoformat(),
                     "to": at.isoformat(),

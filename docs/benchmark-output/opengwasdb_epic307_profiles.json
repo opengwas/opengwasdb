@@ -1,0 +1,1023 @@
+{
+  "generator": "benchmarks/summarise_epic307_profiles.py",
+  "commit": "d902cf4",
+  "measured_at": "2026-11-15T23:19:14.705903+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/322/opengwasdb",
+  "opengwasdb_fingerprint": "53d9ee995a10a394199df2bb07580c3e5939e17d1bcad98defd8a433be863065",
+  "method": "40 s non-native whole-tree snapshots at 50 Hz every 20 min; three 10 s native single-worker snapshots at 20 Hz. Active samples, not wall-time shares; non-native leaves may be compiled calls. Native classification uses the leaf's file; other native includes interpreter internals and gc.",
+  "index": {
+    "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/index.tsv",
+    "sha256": "77aa992c2baef60dd575ab2699c73858ed32f0ac91649d7ba90a21c13ce998d0"
+  },
+  "python_snapshots": [
+    {
+      "stamp": "20261113T020300Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 02:01:03 INFO opengwasdb.variants.routing.union: Pass 1: 2514 source(s) \u2192 128 size-balanced chunk(s) across 32 worker(s)",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T020300Z-build.txt",
+      "sha256": "f8c920a955ef4e8e8e3302db1d08387031c8b4d1310a721e13d8642d0c667177",
+      "roles": {
+        "worker": {
+          "samples": 48773,
+          "leaf_frames": {
+            "_variants_of (opengwasdb/readers/gwas_vcf.py)": 19255,
+            "_validated_cells (opengwasdb/readers/gwas_vcf.py)": 5170,
+            "_pass1_worker (opengwasdb/variants/routing/union.py)": 5158,
+            "_write_pass1_shard (opengwasdb/variants/routing/union.py)": 4417,
+            "_buffer_pass1_variant (opengwasdb/variants/routing/union.py)": 2979,
+            "_flush_pass1_buffers (opengwasdb/variants/routing/union.py)": 2199,
+            "window_key (opengwasdb/variants/windows.py)": 1969,
+            "normalise_chromosome (opengwasdb/variants/normalise.py)": 1851,
+            "identity_allele (opengwasdb/variants/normalise.py)": 1452,
+            "__init__ (<string>)": 1194,
+            "site (opengwasdb/readers/interface.py)": 709,
+            "chromosome_sort_key (opengwasdb/variants/normalise.py)": 575
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T022341Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 02:01:03 INFO opengwasdb.variants.routing.union: Pass 1: 2514 source(s) \u2192 128 size-balanced chunk(s) across 32 worker(s)",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T022341Z-build.txt",
+      "sha256": "9f76542c5123c65f4c8a554aa36d4017428aae35d0f078e59c0dee0f934952e6",
+      "roles": {
+        "worker": {
+          "samples": 48677,
+          "leaf_frames": {
+            "_variants_of (opengwasdb/readers/gwas_vcf.py)": 19148,
+            "_validated_cells (opengwasdb/readers/gwas_vcf.py)": 5189,
+            "_pass1_worker (opengwasdb/variants/routing/union.py)": 5036,
+            "_write_pass1_shard (opengwasdb/variants/routing/union.py)": 4868,
+            "_buffer_pass1_variant (opengwasdb/variants/routing/union.py)": 2743,
+            "_flush_pass1_buffers (opengwasdb/variants/routing/union.py)": 2200,
+            "window_key (opengwasdb/variants/windows.py)": 1830,
+            "normalise_chromosome (opengwasdb/variants/normalise.py)": 1768,
+            "identity_allele (opengwasdb/variants/normalise.py)": 1410,
+            "__init__ (<string>)": 1198,
+            "site (opengwasdb/readers/interface.py)": 768,
+            "chromosome_sort_key (opengwasdb/variants/normalise.py)": 560
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T024420Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 02:44:17 INFO opengwasdb.layouts.dense.build_vcf: Pass 2: 550/2514 done (last: ukb-b-13841) \u2014 elapsed 7m40s, ETA 27m24s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T024420Z-build.txt",
+      "sha256": "cf01e3bd6ceee7204f88134fc132b21944bf17d0e835ff815ca99bea648c0455",
+      "roles": {
+        "worker": {
+          "samples": 57334,
+          "leaf_frames": {
+            "stream_associations (opengwasdb/readers/rows.py)": 8594,
+            "swap_one (opengwasdb/readers/orientation.py)": 7422,
+            "_rows_of (opengwasdb/readers/gwas_vcf.py)": 6524,
+            "_validated_cells (opengwasdb/readers/gwas_vcf.py)": 6336,
+            "batched (opengwasdb/readers/interface.py)": 5169,
+            "_row (opengwasdb/readers/gwas_vcf.py)": 4019,
+            "_listed (opengwasdb/readers/interface.py)": 3571,
+            "_oriented (opengwasdb/readers/gwas_vcf.py)": 3529,
+            "encode (opengwasdb/variants/routing/keys.py)": 1821,
+            "_derive_z (opengwasdb/readers/gwas_vcf.py)": 1522,
+            "parse_af (opengwasdb/stats.py)": 1402,
+            "_parse_positive_float (opengwasdb/readers/gwas_vcf.py)": 1255
+          }
+        },
+        "parent": {
+          "samples": 1,
+          "leaf_frames": {
+            "sentinel (multiprocessing/process.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T030501Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 03:04:58 INFO opengwasdb.layouts.dense.build_vcf: Pass 2: 2000/2514 done (last: ukb-b-6027) \u2014 elapsed 28m22s, ETA 7m17s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T030501Z-build.txt",
+      "sha256": "57b88dcd03ca5cb173a56f9da6031fbdd4d1392983370be42505f3dced6491d9",
+      "roles": {
+        "worker": {
+          "samples": 57417,
+          "leaf_frames": {
+            "stream_associations (opengwasdb/readers/rows.py)": 8796,
+            "swap_one (opengwasdb/readers/orientation.py)": 7721,
+            "_rows_of (opengwasdb/readers/gwas_vcf.py)": 6569,
+            "_validated_cells (opengwasdb/readers/gwas_vcf.py)": 5920,
+            "batched (opengwasdb/readers/interface.py)": 5001,
+            "_row (opengwasdb/readers/gwas_vcf.py)": 4380,
+            "_listed (opengwasdb/readers/interface.py)": 3455,
+            "_oriented (opengwasdb/readers/gwas_vcf.py)": 3154,
+            "encode (opengwasdb/variants/routing/keys.py)": 1712,
+            "_derive_z (opengwasdb/readers/gwas_vcf.py)": 1448,
+            "parse_af (opengwasdb/stats.py)": 1289,
+            "oriented_alid (opengwasdb/variants/normalise.py)": 1196
+          }
+        },
+        "parent": {
+          "samples": 1,
+          "leaf_frames": {
+            "wait (multiprocessing/connection.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T032540Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 03:22:03 INFO opengwasdb.layouts.dense.build_vcf: Band-write z: 1024/2514 done (cols 0:1024) \u2014 elapsed 45m26s, ETA 1h06m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T032540Z-build.txt",
+      "sha256": "5fe8208cd6c3df3d7a72f025f5eb95a7029d15d9c8c64cb1ff70295b54b78ef7",
+      "roles": {
+        "worker": {
+          "samples": 3003,
+          "leaf_frames": {
+            "_scale (opengwasdb/encoding/codec.py)": 608,
+            "_update_crc (zipfile/__init__.py)": 559,
+            "encode_z (opengwasdb/encoding/codec.py)": 458,
+            "_load_z_column (opengwasdb/layouts/dense/build_vcf.py)": 357,
+            "read (zipfile/__init__.py)": 345,
+            "quantise_z (opengwasdb/encoding/codec.py)": 314,
+            "read_array (numpy/lib/_format_impl.py)": 189,
+            "dumps (multiprocessing/reduction.py)": 63,
+            "_send (multiprocessing/connection.py)": 46,
+            "_process_worker (concurrent/futures/process.py)": 16,
+            "full (numpy/_core/numeric.py)": 14,
+            "_wrapreduction_any_all (numpy/_core/fromnumeric.py)": 7
+          }
+        },
+        "parent": {
+          "samples": 2135,
+          "leaf_frames": {
+            "_ordered_bands (opengwasdb/layouts/dense/build_vcf.py)": 1994,
+            "_recv (multiprocessing/connection.py)": 109,
+            "recv (multiprocessing/connection.py)": 27,
+            "wait (multiprocessing/connection.py)": 1,
+            "register (selectors.py)": 1,
+            "run (concurrent/futures/process.py)": 1,
+            "dumps (multiprocessing/reduction.py)": 1,
+            "_write_dense_z_bands (opengwasdb/layouts/dense/build_vcf.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T034620Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 03:36:15 INFO opengwasdb.layouts.dense.build_vcf: Band-write se: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T034620Z-build.txt",
+      "sha256": "dc7700b1a34fa66010e7555a4fe7b7ea325877d8580621df91937e7cd12f375c",
+      "roles": {
+        "parent": {
+          "samples": 1991,
+          "leaf_frames": {
+            "_encode_sync (zarr/codecs/blosc.py)": 1860,
+            "_encode_sync (zarr/codecs/bytes.py)": 53,
+            "_put (zarr/storage/_local.py)": 37,
+            "combine (zarr/core/buffer/cpu.py)": 30,
+            "from_array_like (zarr/core/buffer/core.py)": 2,
+            "ensure_contiguous_ndarray (numcodecs/compat.py)": 2,
+            "encode_chunk (zarr/core/chunk_utils.py)": 1,
+            "__iter__ (zarr/core/indexing.py)": 1,
+            "_write_one (zarr/core/codec_pipeline.py)": 1,
+            "_merge_chunk_array (zarr/core/chunk_utils.py)": 1,
+            "_encode_partial_sync (zarr/codecs/sharding.py)": 1,
+            "_build_shard_layout (zarr/codecs/sharding.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T040700Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 04:05:28 INFO opengwasdb.layouts.dense.build_vcf: Band-write eaf: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T040700Z-build.txt",
+      "sha256": "f825a59fb1577a095a902fee6bd10d2bee55f523e35ba32cae0277f87f0bf035",
+      "roles": {
+        "worker": {
+          "samples": 942,
+          "leaf_frames": {
+            "_update_crc (zipfile/__init__.py)": 299,
+            "dumps (multiprocessing/reduction.py)": 133,
+            "read (zipfile/__init__.py)": 129,
+            "_load_sparse_column (opengwasdb/layouts/dense/build_vcf.py)": 117,
+            "read_array (numpy/lib/_format_impl.py)": 100,
+            "_send (multiprocessing/connection.py)": 97,
+            "full (numpy/_core/numeric.py)": 48,
+            "_sendback_result (concurrent/futures/process.py)": 8,
+            "__str__ (pathlib.py)": 3,
+            "put (multiprocessing/queues.py)": 2,
+            "__exit__ (multiprocessing/synchronize.py)": 1,
+            "_recv (multiprocessing/connection.py)": 1
+          }
+        },
+        "parent": {
+          "samples": 2404,
+          "leaf_frames": {
+            "_ordered_bands (opengwasdb/layouts/dense/build_vcf.py)": 1968,
+            "_recv (multiprocessing/connection.py)": 298,
+            "recv (multiprocessing/connection.py)": 112,
+            "_recv_bytes (multiprocessing/connection.py)": 8,
+            "wait_result_broken_or_wakeup (concurrent/futures/process.py)": 7,
+            "_write_dense_eaf (opengwasdb/layouts/dense/build_vcf.py)": 7,
+            "dumps (multiprocessing/reduction.py)": 1,
+            "_feed (multiprocessing/queues.py)": 1,
+            "register (selectors.py)": 1,
+            "get (queue.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T042740Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 04:17:04 INFO opengwasdb.layouts.dense.build_vcf: Band-write eaf: 1024/2514 done (cols 0:1024) \u2014 elapsed 1h40m, ETA 2h26m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T042740Z-build.txt",
+      "sha256": "ca5ed0191a1b88616f5ef8d27fdaea059118f19981ade3c97ced016bcbb23135",
+      "roles": {
+        "parent": {
+          "samples": 1997,
+          "leaf_frames": {
+            "_encode_sync (zarr/codecs/blosc.py)": 1866,
+            "_encode_sync (zarr/codecs/bytes.py)": 69,
+            "combine (zarr/core/buffer/cpu.py)": 27,
+            "_put (zarr/storage/_local.py)": 26,
+            "_merge_chunk_array (zarr/core/chunk_utils.py)": 3,
+            "encode_or_elide_chunk (zarr/core/chunk_utils.py)": 1,
+            "encode_chunk (zarr/core/chunk_utils.py)": 1,
+            "set_chunk_slice (zarr/codecs/sharding.py)": 1,
+            "_build_shard_layout (zarr/codecs/sharding.py)": 1,
+            "from_array_like (zarr/core/buffer/core.py)": 1,
+            "ensure_contiguous_ndarray (numcodecs/compat.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T044821Z",
+      "step": "build",
+      "last_phase_line": "2026-11-13 04:47:19 INFO opengwasdb.encoding.se: SE rewrite: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T044821Z-build.txt",
+      "sha256": "5c8fafc407eb0e609ff5a317482c5259ffcd4bac152eca76b2269c586529ba14",
+      "roles": {
+        "worker": {
+          "samples": 60854,
+          "leaf_frames": {
+            "_se_prediction (opengwasdb/encoding/codec.py)": 14555,
+            "logit (opengwasdb/encoding/codec.py)": 9507,
+            "expit (opengwasdb/encoding/codec.py)": 9371,
+            "encode_se (opengwasdb/encoding/codec.py)": 8433,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 6097,
+            "se_residual_codes (opengwasdb/encoding/codec.py)": 5589,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 3319,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 1474,
+            "full (numpy/_core/numeric.py)": 766,
+            "read_band (opengwasdb/encoding/planes.py)": 381,
+            "read_bytes (pathlib.py)": 347,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 253
+          }
+        },
+        "parent": {
+          "samples": 2113,
+          "leaf_frames": {
+            "_encode_sync (zarr/codecs/blosc.py)": 1407,
+            "_recv (multiprocessing/connection.py)": 365,
+            "_encode_sync (zarr/codecs/bytes.py)": 153,
+            "recv (multiprocessing/connection.py)": 102,
+            "_put (zarr/storage/_local.py)": 16,
+            "combine (zarr/core/buffer/cpu.py)": 16,
+            "__iter__ (zarr/core/indexing.py)": 9,
+            "from_array_like (zarr/core/buffer/core.py)": 5,
+            "_encode_partial_sync (zarr/codecs/sharding.py)": 5,
+            "from_bytes (zarr/core/buffer/cpu.py)": 4,
+            "_write_one (zarr/core/codec_pipeline.py)": 3,
+            "merge_and_encode_chunk (zarr/core/chunk_utils.py)": 3
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T045651Z",
+      "step": "indexed-subset-hm3",
+      "last_phase_line": "2026-11-13 04:55:02 WARNING opengwasdb.layouts.dense.indexed_subsets: 855 of 1206903 requested ALIDs are absent from this Store Release and were not indexed",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T045651Z-indexed-subset-hm3.txt",
+      "sha256": "e2465247a05eb6adcf59593ee7e343920ea57679ff06dcf9af223abbfa33008f",
+      "roles": {
+        "parent": {
+          "samples": 1907,
+          "leaf_frames": {
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 1129,
+            "_get (zarr/storage/_local.py)": 283,
+            "_encode_sync (zarr/codecs/blosc.py)": 215,
+            "_encode_sync (zarr/codecs/bytes.py)": 134,
+            "__iter__ (zarr/core/indexing.py)": 14,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 10,
+            "__getitem__ (zarr/core/buffer/cpu.py)": 10,
+            "_put (zarr/storage/_local.py)": 10,
+            "decode_chunk (zarr/core/chunk_utils.py)": 9,
+            "scatter_chunk (zarr/core/chunk_utils.py)": 8,
+            "open (pathlib.py)": 7,
+            "get_ranges_sync (zarr/abc/store.py)": 6
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T050437Z",
+      "step": "validate",
+      "last_phase_line": "2026-11-13 05:04:35 INFO opengwasdb.validation.run: scan associations on data.zarr: 1476/2462 \u2014 elapsed 1m21s, ETA 54s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T050437Z-validate.txt",
+      "sha256": "07029c49ae5901065312278892a1a647ec6e6e6378d291f4a81067eaf396514c",
+      "roles": {
+        "worker": {
+          "samples": 62353,
+          "leaf_frames": {
+            "_se_prediction (opengwasdb/encoding/codec.py)": 13179,
+            "logit (opengwasdb/encoding/codec.py)": 8462,
+            "expit (opengwasdb/encoding/codec.py)": 7300,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 5161,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 3954,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 3764,
+            "decode_se (opengwasdb/encoding/codec.py)": 2621,
+            "_of_window (opengwasdb/associations/record.py)": 2607,
+            "decode_z (opengwasdb/encoding/codec.py)": 2174,
+            "_fmix (opengwasdb/layouts/dense/indexed_subsets.py)": 1959,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 1484,
+            "states (opengwasdb/associations/record.py)": 1419
+          }
+        },
+        "parent": {
+          "samples": 40,
+          "leaf_frames": {
+            "recv (multiprocessing/connection.py)": 12,
+            "dumps (multiprocessing/reduction.py)": 7,
+            "_recv (multiprocessing/connection.py)": 3,
+            "register (selectors.py)": 2,
+            "_send (multiprocessing/connection.py)": 2,
+            "__init__ (multiprocessing/reduction.py)": 2,
+            "__add__ (collections/__init__.py)": 2,
+            "wait_result_broken_or_wakeup (concurrent/futures/process.py)": 1,
+            "__exit__ (threading.py)": 1,
+            "wakeup (concurrent/futures/process.py)": 1,
+            "_feed (multiprocessing/queues.py)": 1,
+            "take (opengwasdb/validation/scans.py)": 1
+          }
+        },
+        "depth0": {
+          "samples": 1,
+          "leaf_frames": {
+            "count_nonzero (numpy/_core/numeric.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T051904Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 05:17:07 INFO opengwasdb.layouts.dense.complete: Axis construction: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T051904Z-complete.txt",
+      "sha256": "3e911a524e6c864ca8ddd8eee60f51a5ec7e2881fc67851660e9dd7a39de11a7",
+      "roles": {
+        "parent": {
+          "samples": 1999,
+          "leaf_frames": {
+            "_write_union_axis_tables (opengwasdb/layouts/dense/complete.py)": 450,
+            "_union_variant_table (opengwasdb/layouts/dense/complete.py)": 449,
+            "write_variant_axis (opengwasdb/variants/axis.py)": 409,
+            "__init__ (<string>)": 304,
+            "alid (opengwasdb/variants/normalise.py)": 156,
+            "<lambda> (opengwasdb/layouts/dense/complete.py)": 84,
+            "normalise_chromosome (opengwasdb/variants/normalise.py)": 70,
+            "chromosome_sort_key (opengwasdb/variants/normalise.py)": 65,
+            "_build_union_axis (opengwasdb/layouts/dense/complete.py)": 12
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T053945Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 05:20:42 INFO opengwasdb.layouts.dense.complete: LD-block completion: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T053945Z-complete.txt",
+      "sha256": "808852ba789ca17d9b150bcc031e382780298e6efaf63d937d431a480e64ff9b",
+      "roles": {
+        "worker": {
+          "samples": 54832,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 19016,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8206,
+            "_region_capped_z (opengwasdb/completion/block.py)": 4457,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 4021,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3593,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2918,
+            "tensordot (numpy/_core/numeric.py)": 1638,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1035,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 992,
+            "check_array (sklearn/utils/validation.py)": 937,
+            "_assert_all_finite (sklearn/utils/validation.py)": 842,
+            "<lambda> (<string>)": 646
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T060024Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 05:20:42 INFO opengwasdb.layouts.dense.complete: LD-block completion: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T060024Z-complete.txt",
+      "sha256": "a79842afbab181ef8c82de0cbbe9cd99ee9a0d31c479cb74b07cf5d2f1b322b9",
+      "roles": {
+        "worker": {
+          "samples": 54387,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 19580,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8114,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3987,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3634,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3512,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2742,
+            "tensordot (numpy/_core/numeric.py)": 1624,
+            "check_array (sklearn/utils/validation.py)": 1079,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1036,
+            "_assert_all_finite (sklearn/utils/validation.py)": 783,
+            "<lambda> (<string>)": 763,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 760
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T062106Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 06:08:39 INFO opengwasdb.completion.parallel: LD blocks: 200/1357 \u2014 elapsed 47m56s, ETA 4h37m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T062106Z-complete.txt",
+      "sha256": "4f2175b12df63512f521b1393fc18e5e556b745d0daa9bd8dae6e5df6558bd72",
+      "roles": {
+        "worker": {
+          "samples": 54649,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 19703,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8033,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3934,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3718,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3331,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2613,
+            "tensordot (numpy/_core/numeric.py)": 1655,
+            "check_array (sklearn/utils/validation.py)": 1000,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 980,
+            "_assert_all_finite (sklearn/utils/validation.py)": 941,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 711,
+            "<lambda> (<string>)": 663
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T064145Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 06:08:39 INFO opengwasdb.completion.parallel: LD blocks: 200/1357 \u2014 elapsed 47m56s, ETA 4h37m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T064145Z-complete.txt",
+      "sha256": "5148c7a4fe3bad2534c30b3c5736c367880421ff82d452dd7afb1846fd49ef56",
+      "roles": {
+        "worker": {
+          "samples": 54901,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 20039,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8043,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3959,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3826,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3554,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2583,
+            "tensordot (numpy/_core/numeric.py)": 1685,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 1442,
+            "check_array (sklearn/utils/validation.py)": 985,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 975,
+            "<lambda> (<string>)": 957,
+            "_assert_all_finite (sklearn/utils/validation.py)": 859
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T070225Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 06:51:37 INFO opengwasdb.completion.parallel: LD blocks: 400/1357 \u2014 elapsed 1h30m, ETA 3h37m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T070225Z-complete.txt",
+      "sha256": "3915989b758baa9fa7bc19b6431ede5724fabdd01aa2545e35d80514b4aeb688",
+      "roles": {
+        "worker": {
+          "samples": 54474,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 19632,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8061,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3907,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3870,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3666,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2532,
+            "tensordot (numpy/_core/numeric.py)": 1712,
+            "<lambda> (<string>)": 1448,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1108,
+            "check_array (sklearn/utils/validation.py)": 1046,
+            "_assert_all_finite (sklearn/utils/validation.py)": 797,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 606
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T072306Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 06:51:37 INFO opengwasdb.completion.parallel: LD blocks: 400/1357 \u2014 elapsed 1h30m, ETA 3h37m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T072306Z-complete.txt",
+      "sha256": "feff3e0d0f263c78a1a615522893f1243951637ec68f03b1dc31975656969bb7",
+      "roles": {
+        "worker": {
+          "samples": 53677,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 17920,
+            "_pre_fit (sklearn/linear_model/_base.py)": 6878,
+            "_region_capped_z (opengwasdb/completion/block.py)": 4215,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3461,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3240,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2379,
+            "<lambda> (<string>)": 1604,
+            "tensordot (numpy/_core/numeric.py)": 1553,
+            "check_array (sklearn/utils/validation.py)": 1152,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 958,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 871,
+            "_assert_all_finite (sklearn/utils/validation.py)": 854
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T074347Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 07:30:21 INFO opengwasdb.completion.parallel: LD blocks: 600/1357 \u2014 elapsed 2h09m, ETA 2h43m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T074347Z-complete.txt",
+      "sha256": "bc5e00bf4f51b7cdb53a4b659ee259575ccc66ab129433bd250f60ca3fce3ffe",
+      "roles": {
+        "worker": {
+          "samples": 54810,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 20236,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8283,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3896,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3662,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3496,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2649,
+            "tensordot (numpy/_core/numeric.py)": 1759,
+            "<lambda> (<string>)": 1269,
+            "check_array (sklearn/utils/validation.py)": 1021,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 982,
+            "_assert_all_finite (sklearn/utils/validation.py)": 867,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 543
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T080427Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 07:30:21 INFO opengwasdb.completion.parallel: LD blocks: 600/1357 \u2014 elapsed 2h09m, ETA 2h43m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T080427Z-complete.txt",
+      "sha256": "b0719246c7f2462c5298cf6d5ee0cd01cdb3dd3fc0fddb23553b2616723199f0",
+      "roles": {
+        "worker": {
+          "samples": 54836,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 19100,
+            "_pre_fit (sklearn/linear_model/_base.py)": 7947,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3926,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3734,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3588,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2731,
+            "tensordot (numpy/_core/numeric.py)": 1591,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 1223,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1081,
+            "check_array (sklearn/utils/validation.py)": 968,
+            "<lambda> (<string>)": 908,
+            "_assert_all_finite (sklearn/utils/validation.py)": 809
+          }
+        },
+        "parent": {
+          "samples": 1,
+          "leaf_frames": {
+            "register (selectors.py)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T082509Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 08:08:02 INFO opengwasdb.completion.parallel: LD blocks: 800/1357 \u2014 elapsed 2h47m, ETA 1h56m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T082509Z-complete.txt",
+      "sha256": "0aa75a22b48dca4abb31ace86ad1c7c73a8893796dbca70461282cb9e4158f4a",
+      "roles": {
+        "worker": {
+          "samples": 54773,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 18305,
+            "_pre_fit (sklearn/linear_model/_base.py)": 7968,
+            "_region_capped_z (opengwasdb/completion/block.py)": 4234,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 4051,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3650,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2753,
+            "tensordot (numpy/_core/numeric.py)": 1660,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1150,
+            "<lambda> (<string>)": 1092,
+            "check_array (sklearn/utils/validation.py)": 964,
+            "_assert_all_finite (sklearn/utils/validation.py)": 865,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 796
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T084549Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 08:44:31 INFO opengwasdb.completion.parallel: LD blocks: 1000/1357 \u2014 elapsed 3h23m, ETA 1h12m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T084549Z-complete.txt",
+      "sha256": "971d77905661043c944e9f567a52dfb6e95564e18c82d86627f1676175ee3c03",
+      "roles": {
+        "worker": {
+          "samples": 53622,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 18882,
+            "_pre_fit (sklearn/linear_model/_base.py)": 7142,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3979,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3472,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3333,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2383,
+            "tensordot (numpy/_core/numeric.py)": 1477,
+            "check_array (sklearn/utils/validation.py)": 1170,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 970,
+            "<lambda> (<string>)": 838,
+            "_assert_all_finite (sklearn/utils/validation.py)": 790,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 682
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T090629Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 08:44:31 INFO opengwasdb.completion.parallel: LD blocks: 1000/1357 \u2014 elapsed 3h23m, ETA 1h12m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T090629Z-complete.txt",
+      "sha256": "16281ff8ddc568f3c2e48a2b4feb70aa134d02ba99a1a0e8b130ab4961c1397a",
+      "roles": {
+        "worker": {
+          "samples": 55488,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 20636,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8870,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 4044,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3711,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3701,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2920,
+            "tensordot (numpy/_core/numeric.py)": 1708,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1106,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 1050,
+            "_assert_all_finite (sklearn/utils/validation.py)": 886,
+            "check_array (sklearn/utils/validation.py)": 834,
+            "_owned_rows (opengwasdb/completion/block.py)": 403
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T092709Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 09:23:11 INFO opengwasdb.completion.parallel: LD blocks: 1200/1357 \u2014 elapsed 4h02m, ETA 31m43s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T092709Z-complete.txt",
+      "sha256": "c65ff11e6861c48491b81067349a75acdb0f161cf211972460cfbd25ce344a39",
+      "roles": {
+        "worker": {
+          "samples": 55182,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 20235,
+            "_pre_fit (sklearn/linear_model/_base.py)": 8552,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3984,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3859,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3622,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2799,
+            "tensordot (numpy/_core/numeric.py)": 1724,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 1064,
+            "check_array (sklearn/utils/validation.py)": 930,
+            "_assert_all_finite (sklearn/utils/validation.py)": 871,
+            "_owned_rows (opengwasdb/completion/block.py)": 406,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 387
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T094749Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 09:23:11 INFO opengwasdb.completion.parallel: LD blocks: 1200/1357 \u2014 elapsed 4h02m, ETA 31m43s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T094749Z-complete.txt",
+      "sha256": "5c12a9fddd99c00008f03b5705f3311e6a8f8ef0860ac5bdfccf491b9b282a5c",
+      "roles": {
+        "worker": {
+          "samples": 48181,
+          "leaf_frames": {
+            "enet_path (sklearn/linear_model/_coordinate_descent.py)": 17735,
+            "_pre_fit (sklearn/linear_model/_base.py)": 7403,
+            "_asarray_with_order (sklearn/utils/_array_api.py)": 3447,
+            "_path_residuals (sklearn/linear_model/_coordinate_descent.py)": 3227,
+            "_region_capped_z (opengwasdb/completion/block.py)": 3163,
+            "_wrapreduction (numpy/_core/fromnumeric.py)": 2539,
+            "tensordot (numpy/_core/numeric.py)": 1375,
+            "elastic_net_impute (opengwasdb/completion/impute.py)": 985,
+            "<lambda> (<string>)": 816,
+            "check_array (sklearn/utils/validation.py)": 787,
+            "_assert_all_finite (sklearn/utils/validation.py)": 720,
+            "_fill_arrays (opengwasdb/completion/checkpoint.py)": 538
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T100829Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 10:06:01 INFO opengwasdb.layouts.dense.complete: Band write: start",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T100829Z-complete.txt",
+      "sha256": "8f2d732182d58dc9199bd45b3d4396fb90ccf78a0c158c1eb7bb1b8e82cb7910",
+      "roles": {
+        "worker": {
+          "samples": 27610,
+          "leaf_frames": {
+            "apply_fill_batch (opengwasdb/completion/fill_shards.py)": 12307,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 3796,
+            "collapse_duplicates (opengwasdb/variants/routing/table.py)": 1922,
+            "_se_prediction (opengwasdb/encoding/codec.py)": 1690,
+            "logit (opengwasdb/encoding/codec.py)": 973,
+            "iter_fill_records (opengwasdb/completion/fill_shards.py)": 877,
+            "expit (opengwasdb/encoding/codec.py)": 777,
+            "_apply_fill_shard_records (opengwasdb/layouts/dense/complete.py)": 630,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 567,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 511,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 499,
+            "_seed_paired_bands (opengwasdb/layouts/dense/complete.py)": 496
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T102909Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 10:28:46 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 139/2784 \u2014 elapsed 3m23s, ETA 1h04m",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T102909Z-complete.txt",
+      "sha256": "7ecfff72c1f2da4f0a19d7e6f208154e4d0b887620cbe71d3da745073836695b",
+      "roles": {
+        "parent": {
+          "samples": 1850,
+          "leaf_frames": {
+            "logit (opengwasdb/encoding/codec.py)": 349,
+            "expit (opengwasdb/encoding/codec.py)": 314,
+            "_se_prediction (opengwasdb/encoding/codec.py)": 275,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 214,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 177,
+            "_apply_eaf_reference (opengwasdb/encoding/codec.py)": 128,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 88,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 37,
+            "full (numpy/_core/numeric.py)": 36,
+            "_scan_one_band (opengwasdb/layouts/dense/top_hits.py)": 34,
+            "decode_se (opengwasdb/encoding/codec.py)": 30,
+            "decode_z (opengwasdb/encoding/codec.py)": 27
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T104950Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 10:48:07 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 973/2784 \u2014 elapsed 22m44s, ETA 42m19s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T104950Z-complete.txt",
+      "sha256": "892d547c23b37f2f2b81f1d055af1a47c4daec79897d5d60825a23a6f53bf79c",
+      "roles": {
+        "parent": {
+          "samples": 1854,
+          "leaf_frames": {
+            "logit (opengwasdb/encoding/codec.py)": 333,
+            "_se_prediction (opengwasdb/encoding/codec.py)": 320,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 268,
+            "expit (opengwasdb/encoding/codec.py)": 267,
+            "_apply_eaf_reference (opengwasdb/encoding/codec.py)": 163,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 112,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 66,
+            "full (numpy/_core/numeric.py)": 48,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 46,
+            "_scan_one_band (opengwasdb/layouts/dense/top_hits.py)": 44,
+            "decode_z (opengwasdb/encoding/codec.py)": 33,
+            "decode_se (opengwasdb/encoding/codec.py)": 25
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T111031Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 11:09:27 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1807/2784 \u2014 elapsed 44m04s, ETA 23m49s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T111031Z-complete.txt",
+      "sha256": "e7b30bb36bb0f158bbff71ccd15125d047ab22e08e3096219c11ab3d58ba27fd",
+      "roles": {
+        "parent": {
+          "samples": 1896,
+          "leaf_frames": {
+            "logit (opengwasdb/encoding/codec.py)": 368,
+            "expit (opengwasdb/encoding/codec.py)": 307,
+            "_se_prediction (opengwasdb/encoding/codec.py)": 302,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 259,
+            "_apply_eaf_reference (opengwasdb/encoding/codec.py)": 134,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 114,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 103,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 61,
+            "decode_se (opengwasdb/encoding/codec.py)": 45,
+            "_scan_one_band (opengwasdb/layouts/dense/top_hits.py)": 40,
+            "decode_z (opengwasdb/encoding/codec.py)": 26,
+            "full (numpy/_core/numeric.py)": 21
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T113111Z",
+      "step": "complete",
+      "last_phase_line": "2026-11-13 11:29:34 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2641/2784 \u2014 elapsed 1h04m, ETA 3m28s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T113111Z-complete.txt",
+      "sha256": "239efb84a52a3450e18b2cabf2d2bbe917ef0118ed717e386a0ad123785b0d62",
+      "roles": {
+        "parent": {
+          "samples": 1843,
+          "leaf_frames": {
+            "logit (opengwasdb/encoding/codec.py)": 365,
+            "expit (opengwasdb/encoding/codec.py)": 277,
+            "_se_prediction (opengwasdb/encoding/codec.py)": 271,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 243,
+            "_apply_eaf_reference (opengwasdb/encoding/codec.py)": 165,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 159,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 63,
+            "_scan_one_band (opengwasdb/layouts/dense/top_hits.py)": 48,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 39,
+            "decode_z (opengwasdb/encoding/codec.py)": 32,
+            "full (numpy/_core/numeric.py)": 31,
+            "decode_se (opengwasdb/encoding/codec.py)": 29
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T113550Z",
+      "step": "completion-indexed-subset-hm3",
+      "last_phase_line": "2026-11-13 11:34:02 WARNING opengwasdb.layouts.dense.indexed_subsets: 855 of 1206903 requested ALIDs are absent from this Store Release and were not indexed",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T113550Z-completion-indexed-subset-hm3.txt",
+      "sha256": "5eaac830c6e8327bee41f11cc20a5f163b51e6e6fe4cfb4b5cac124d9e4ed12c",
+      "roles": {
+        "parent": {
+          "samples": 1824,
+          "leaf_frames": {
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 980,
+            "_get (zarr/storage/_local.py)": 299,
+            "_encode_sync (zarr/codecs/blosc.py)": 133,
+            "_encode_sync (zarr/codecs/bytes.py)": 123,
+            "scatter_chunk (zarr/core/chunk_utils.py)": 31,
+            "_put (zarr/storage/_local.py)": 28,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 23,
+            "open (pathlib.py)": 19,
+            "__iter__ (zarr/core/indexing.py)": 19,
+            "decode_chunk (zarr/core/chunk_utils.py)": 16,
+            "get_ranges_sync (zarr/abc/store.py)": 13,
+            "__init__ (zarr/core/buffer/cpu.py)": 11
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T114342Z",
+      "step": "completion-validate",
+      "last_phase_line": "2026-11-13 11:43:39 INFO opengwasdb.validation.run: scan associations on data.zarr: 1668/2784 \u2014 elapsed 1m22s, ETA 55s",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T114342Z-completion-validate.txt",
+      "sha256": "02ab346d7f8e6081915ee4c23530d4fd18ca50c30d310f54a86a07d680710bf0",
+      "roles": {
+        "worker": {
+          "samples": 61443,
+          "leaf_frames": {
+            "_se_prediction (opengwasdb/encoding/codec.py)": 11275,
+            "logit (opengwasdb/encoding/codec.py)": 7647,
+            "expit (opengwasdb/encoding/codec.py)": 6980,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 5053,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 3559,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 3509,
+            "_apply_eaf_reference (opengwasdb/encoding/codec.py)": 3104,
+            "_of_window (opengwasdb/associations/record.py)": 2917,
+            "states (opengwasdb/associations/record.py)": 2331,
+            "_fmix (opengwasdb/layouts/dense/indexed_subsets.py)": 1872,
+            "__setitem__ (zarr/core/buffer/cpu.py)": 1736,
+            "decode_se (opengwasdb/encoding/codec.py)": 1459
+          }
+        },
+        "parent": {
+          "samples": 50,
+          "leaf_frames": {
+            "recv (multiprocessing/connection.py)": 12,
+            "dumps (multiprocessing/reduction.py)": 9,
+            "register (selectors.py)": 7,
+            "add (opengwasdb/validation/run.py)": 4,
+            "set_result (concurrent/futures/_base.py)": 2,
+            "wait (multiprocessing/connection.py)": 2,
+            "_recv (multiprocessing/connection.py)": 2,
+            "wait_result_broken_or_wakeup (concurrent/futures/process.py)": 2,
+            "_send (multiprocessing/connection.py)": 2,
+            "_check_closed (multiprocessing/process.py)": 1,
+            "_invoke_callbacks (concurrent/futures/_base.py)": 1,
+            "__instancecheck__ (<frozen abc>)": 1
+          }
+        }
+      }
+    },
+    {
+      "stamp": "20261113T120012Z",
+      "step": "completion-observed-view-check",
+      "last_phase_line": "",
+      "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof/20261113T120012Z-completion-observed-view-check.txt",
+      "sha256": "f348eb1b8113a445842243cf69f029c0c52335e3b4192d10e7eef4d788e7d7a5",
+      "roles": {
+        "parent": {
+          "samples": 1880,
+          "leaf_frames": {
+            "_se_prediction (opengwasdb/encoding/codec.py)": 293,
+            "logit (opengwasdb/encoding/codec.py)": 196,
+            "_compare (opengwasdb/validation/observed_view.py)": 175,
+            "states (opengwasdb/associations/record.py)": 128,
+            "expit (opengwasdb/encoding/codec.py)": 122,
+            "as_numpy_array_wrapper (zarr/core/buffer/cpu.py)": 112,
+            "decode_eaf (opengwasdb/encoding/codec.py)": 105,
+            "_wrapfunc (numpy/_core/fromnumeric.py)": 73,
+            "_values (opengwasdb/associations/dense.py)": 65,
+            "_plane_difference (opengwasdb/validation/observed_view.py)": 54,
+            "_of_window (opengwasdb/associations/record.py)": 53,
+            "_se_from_codes (opengwasdb/encoding/codec.py)": 48
+          }
+        }
+      }
+    }
+  ],
+  "native_block_workers": {
+    "recordings": [
+      {
+        "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof-native/block-worker-054240.txt",
+        "sha256": "9ae720b568aa2603f534273526636b29baa2d072d89a420fc2cea0e83f612338",
+        "samples": {
+          "OpenBLAS": 69,
+          "interpreted Python frame": 36,
+          "numpy C": 39,
+          "other native": 24,
+          "scikit-learn Cython": 31
+        }
+      },
+      {
+        "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof-native/block-worker-062831.txt",
+        "sha256": "504a47195e7dc3bef779daab77d04a604588275e13a3fe1ee8b20882a3e26ad3",
+        "samples": {
+          "numpy C": 30,
+          "other native": 26,
+          "interpreted Python frame": 81,
+          "OpenBLAS": 47,
+          "scikit-learn Cython": 12
+        }
+      },
+      {
+        "path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/run/e2e/prof-native/block-worker-065916.txt",
+        "sha256": "0bd76af8128477a5875b25f4ea96efe2babeafc4cf78beae592eaa8c8c4c8b6d",
+        "samples": {
+          "numpy C": 141,
+          "scikit-learn Cython": 15,
+          "interpreted Python frame": 109,
+          "other native": 88,
+          "OpenBLAS": 42
+        }
+      }
+    ],
+    "total_samples": 790,
+    "samples": {
+      "OpenBLAS": 158,
+      "interpreted Python frame": 226,
+      "numpy C": 210,
+      "other native": 138,
+      "scikit-learn Cython": 58
+    },
+    "shares_percent": {
+      "OpenBLAS": 20.0,
+      "interpreted Python frame": 28.6,
+      "numpy C": 26.6,
+      "other native": 17.5,
+      "scikit-learn Cython": 7.3
+    }
+  }
+}

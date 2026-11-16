@@ -70,7 +70,9 @@ from benchmarks._artifact import (
     provenance,
     write_artifact,
 )
+from benchmarks._epic307_after import compare_after
 from benchmarks._epic307_figures import compare, evidence
+from benchmarks._epic307_reader_cache import load_reader_evidence
 from benchmarks._step_records import (
     Window,
     daily_windows,
@@ -199,6 +201,27 @@ def _parser() -> argparse.ArgumentParser:
         help="rounds for one source, when its samples are cheap enough to afford more",
     )
     parser.add_argument(
+        "--cold",
+        action="store_true",
+        help="also read each source's floor, and the control, with the file evicted from the "
+        "page cache first (sides `parse_floor_cold`, `reader_base_cold`)",
+    )
+    parser.add_argument(
+        "--after",
+        metavar="LABEL",
+        help="the --store holding an end-to-end run on the finished engine (#322): each phase "
+        "is set beside OGS-00009's October records and the epic's projections",
+    )
+    parser.add_argument(
+        "--reader-evidence", type=Path,
+        help="carry an existing reader A/B artifact without re-running it; "
+             "its revision stays named",
+    )
+    parser.add_argument(
+        "--reader-cache-probes", type=Path,
+        help="attach the existing #322 exploratory cache-probe logs to --reader-evidence",
+    )
+    parser.add_argument(
         "--control-revision",
         help="a commit of this repository to export with `git archive` as the control "
         "reader_base imports (the epic's d405de0)",
@@ -298,6 +321,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     until = _clock(args.until) if args.until else None
     sources = _sources(args.source)
+    if args.reader_evidence and sources:
+        raise SystemExit("--reader-evidence and --source are alternative measurement inputs")
+    if args.reader_cache_probes and not args.reader_evidence:
+        raise SystemExit("--reader-cache-probes needs --reader-evidence")
     rounds = _source_repetitions(args.source_repetitions)
     host_start = _host()
     stores = [
@@ -312,10 +339,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 path,
                 repetitions=rounds.get(capability, args.repetitions),
                 control=control,
+                cold=args.cold,
             )
             for capability, path in sources
         ]
+    reader_origin = None
+    if args.reader_evidence:
+        reader_ab, reader_origin = load_reader_evidence(
+            args.reader_evidence, args.reader_cache_probes
+        )
     spans = [store_span(store["records"]) for store in stores]
+    found = evidence(stores, windows, reader_ab)
     payload = {
         "artifact": "epic #307 evidence: step timings, window flags, reader A/B, epic comparison",
         "generator": "benchmarks/measure_epic307_evidence.py",
@@ -371,8 +405,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             for index, store in enumerate(stores)
         ],
         "reader_ab": reader_ab,
-        "comparison": compare(evidence(stores, windows, reader_ab)),
+        "reader_evidence_origin": reader_origin,
+        "comparison": compare(found),
     }
+    if args.after:
+        payload["after"] = compare_after(found, args.after)
     write_artifact(args.output, payload)
     _summarise(payload)
     return 0
@@ -405,6 +442,18 @@ def _summarise(payload: dict[str, Any]) -> None:
         counts[figure["verdict"]] = counts.get(figure["verdict"], 0) + 1
     summary = ", ".join(f"{count} {verdict}" for verdict, count in sorted(counts.items()))
     print(f"comparison: {len(figures)} epic figures — {summary}")
+    after = payload.get("after")
+    if after:
+        for row in after["rows"]:
+            verdicts = ", ".join(
+                f"{p['epic']} {p['verdict']}" for p in row["projections"]
+            )
+            print(f"after {row['phase']}: {row['baseline']['rendered']} -> "
+                  f"{row['after']['rendered']} ({verdicts})")
+        release = after["store_release"]
+        line = release["milestone_388"]
+        print(f"after Store Release: {release['span']} from first start to last end; "
+              f"#388 {line['verdict']} by {line['over_by']}")
 
 
 if __name__ == "__main__":

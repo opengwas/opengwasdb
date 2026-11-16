@@ -304,6 +304,31 @@ def test_a_record_yields_the_steps_wall_time_and_each_phases_span(tmp_path):
     assert [p["logged_duration_seconds"] for p in step["phases"]] == [90, 5700]
 
 
+def test_an_interval_whose_two_lines_share_a_second_is_zero_not_missing(tmp_path):
+    """#322's build planned its planes within the second it logged its encoding plan:
+    the interval between those lines is 0 s, and the next `until` is the one after
+    `after` in the log, not the next one a second later."""
+    path = _record(
+        tmp_path,
+        "\n".join(
+            [
+                _line("2026-11-13 03:13:52", "Encoding plan: {'version': 3}"),
+                _line("2026-11-13 03:13:52", "Band-write z: start"),
+                _line("2026-11-13 03:36:15", "Band-write z: done in 22m22s"),
+                _line("2026-11-13 03:36:15", "Band-write se: start"),
+            ]
+        )
+        + "\n",
+    )
+    record = parse_record(path)
+
+    planes = record.interval(r"^Encoding plan:", r"^Band-write z: start$")
+    assert planes is not None and planes["seconds"] == 0.0
+    later = record.interval(r"^Band-write z: done in", r"^Band-write .*: start$")
+    assert later is not None and later["to"] == "2026-11-13T03:36:15"
+    assert record.interval(r"^Band-write se: start$", r"^Band-write z: start$") is None
+
+
 # --- 3. windows -------------------------------------------------------------
 
 
@@ -1124,13 +1149,7 @@ def test_a_control_whose_paired_ratios_straddle_one_is_not_resolved(tmp_path, mo
     fake = _Mixed({"reader_head": 4.0, "reader_base": 4.0, "parse_floor": 1.0})
     monkeypatch.setattr(_reader_ab, "run_child", fake)
 
-    record = _reader_ab.measure_source(
-        "opengwasdb.finngen-r13",
-        source,
-        repetitions=2,
-        control=_control(tmp_path),
-        warm=False,
-    )
+    record = _measure_synthetic_finngen(tmp_path, source)
 
     comparison = record["comparisons"]["reader_head_vs_reader_base"]
     assert comparison["verdict"] == "not resolved at this load"
@@ -2313,3 +2332,114 @@ def test_the_control_record_names_a_revision_and_fingerprint_and_no_path(tmp_pat
     assert record["control"]["fingerprint"]
     assert "module_path" not in record["control"]
     assert str(tmp_path) not in json.dumps(record["control"])
+
+
+# --- cold-cache sides (#322) --------------------------------------------------
+
+
+def _measure_synthetic_finngen(tmp_path: Path, source: Path, *, cold: bool = False) -> dict:
+    return _reader_ab.measure_source(
+        "opengwasdb.finngen-r13", source, repetitions=2,
+        control=_control(tmp_path), warm=False, cold=cold,
+    )
+
+
+def test_a_cold_side_runs_its_warm_counterpart_on_a_file_just_evicted(tmp_path, monkeypatch):
+    """The cold floor and control read the file right after it leaves the page cache;
+    every other side does not, and each sample says which it met."""
+    source = _synthetic_finngen(tmp_path)
+    evicted: list[bool] = [False]
+
+    class _CacheAwareChild(_FakeChild):
+        def __call__(self, script: Path, argv: list[str], marker: str) -> dict:
+            record = super().__call__(script, argv, marker)
+            if evicted[0]:
+                record["seconds"] *= 2
+                evicted[0] = False
+            return record
+
+    fake = _CacheAwareChild({"reader_head": 4.0, "reader_base": 8.0, "parse_floor": 1.0})
+    monkeypatch.setattr(_reader_ab, "run_child", fake)
+    monkeypatch.setattr(_reader_ab, "evict", lambda path: evicted.__setitem__(0, True))
+
+    record = _measure_synthetic_finngen(tmp_path, source, cold=True)
+
+    assert record["sides"] == [
+        "reader_head",
+        "reader_base",
+        "parse_floor",
+        "reader_base_cold",
+        "parse_floor_cold",
+    ]
+    run = [argv[argv.index("--side") + 1] for argv in fake.calls]
+    assert "reader_base_cold" not in run and "parse_floor_cold" not in run
+    assert record["medians"] == {
+        "reader_head": 4.0,
+        "reader_base": 8.0,
+        "parse_floor": 1.0,
+        "reader_base_cold": 16.0,
+        "parse_floor_cold": 2.0,
+    }
+    caches = {(s["side"], s["page_cache"]) for s in record["samples"]}
+    assert ("parse_floor_cold", "evicted") in caches and ("parse_floor", "warm") in caches
+    assert record["cold"] is True
+
+
+def _reader_source(warm_floor, cold_floor, warm_control, cold_control) -> dict:
+    samples = [
+        {"side": side, "seconds": seconds}
+        for side, values in (
+            ("parse_floor", warm_floor),
+            ("parse_floor_cold", cold_floor),
+            ("reader_base", warm_control),
+            ("reader_base_cold", cold_control),
+        )
+        for seconds in values
+    ]
+    from statistics import median
+
+    return {
+        "label": "ukb-b-10001",
+        "n_rows": 5352901,
+        "samples": samples,
+        "medians": {
+            "parse_floor": median(warm_floor),
+            "parse_floor_cold": median(cold_floor),
+            "reader_base": median(warm_control),
+            "reader_base_cold": median(cold_control),
+        },
+        "control": {"revision": "d405de0"},
+    }
+
+
+def test_the_floor_row_names_the_cache_only_while_the_epics_reading_is_among_the_cold_ones():
+    """Cold reads can support a cache explanation, not recover a historical cache state."""
+    figure = _figure("reader_ukb_floor")
+    cache = _ev(reader_ab=[_reader_source([6.0, 6.3, 9.5], [8.77, 9.01, 7.94], [16.0], [18.0])])
+    elsewhere = _ev(reader_ab=[_reader_source([6.0, 6.3, 6.5], [6.2, 6.4, 6.6], [16.0], [18.0])])
+
+    attributed = measure_figure(figure, cache)
+    unattributed = measure_figure(figure, elsewhere)
+
+    assert attributed["verdict"] == unattributed["verdict"] == "differs"
+    assert attributed["reason"].startswith("the epic's single reading lies among")
+    assert "does not establish the historical cause" in attributed["reason"]
+    assert unattributed["reason"].startswith("every sample of the floor is faster")
+
+
+def test_the_ratio_row_says_whether_the_cache_reaches_the_epics_ratio():
+    """A cache effect may reach the epic's ratio or leave a gap neither state explains."""
+    ukb = _figure("reader_ukb_control_over_floor")
+    finngen = _figure("reader_finngen_control_over_floor")
+    near = _ev(reader_ab=[_reader_source([6.31], [8.77], [15.98], [18.05])])
+    far = {
+        **_ev(reader_ab=[_reader_source([22.4], [23.6], [211.3], [220.8])]),
+    }
+    far["reader_ab"][0]["label"] = "finngen_R13_AB1_ACTINOMYCOSIS"
+
+    cold_one = measure_figure(ukb, near)
+    inseparable = measure_figure(finngen, far)
+
+    assert cold_one["reason"].startswith("the cold-cache ratio is nearer the epic's")
+    assert "historical cache state was not recorded" in cold_one["reason"]
+    assert inseparable["reason"].startswith("evicting the file moves this ratio")

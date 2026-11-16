@@ -1,0 +1,7 @@
+1 cold reader_base finngen load=51.29 220.8019 21326102
+1 warm reader_base finngen load=51.93 211.2691 21326102
+2 cold reader_base finngen load=81.18 224.8482 21326102
+2 warm reader_base finngen load=45.67 213.8934 21326102
+Fri 13 Nov 06:27:54 UTC 2026
+
+[exited with code 0]
