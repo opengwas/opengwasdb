@@ -1,0 +1,12 @@
+1 cold opengwasdb.gwas-vcf load=54.20 8.7707 5352901
+1 cold opengwasdb.finngen-r13 load=55.51 23.6366 21326102
+1 warm opengwasdb.gwas-vcf load=52.16 6.0343 5352901
+1 warm opengwasdb.finngen-r13 load=52.87 22.374 21326102
+2 cold opengwasdb.gwas-vcf load=53.88 9.0072 5352901
+2 cold opengwasdb.finngen-r13 load=73.51 22.3053 21326102
+2 warm opengwasdb.gwas-vcf load=67.81 6.3066 5352901
+2 warm opengwasdb.finngen-r13 load=64.50 22.0036 21326102
+3 cold opengwasdb.gwas-vcf load=61.53 7.9368 5352901
+3 cold opengwasdb.finngen-r13 load=61.27 27.3513 21326102
+3 warm opengwasdb.gwas-vcf load=59.60 9.5039 5352901
+3 warm opengwasdb.finngen-r13 load=59.10 22.568 21326102

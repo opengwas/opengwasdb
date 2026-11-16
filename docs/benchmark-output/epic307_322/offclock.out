@@ -1,0 +1,21 @@
+2026-11-15T00:12:32Z copy start  00:12:32 up 10 days,  5:35,  2 users,  load average: 3.04, 5.12, 3.97
+2026-11-15T00:13:09Z copy done 64G
+2026-11-15T00:13:12.246436Z plan tophits: 1 steps; opengwasdb from /data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/engine/opengwasdb/__init__.py; PYTHONPATH=/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/engine
+2026-11-15T00:13:12.246912Z start top-hits: opengwasdb build-dense-top-hits /data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/offclock/tophits/store.opengwasdb --n-workers 32
+2026-11-15T00:15:50.320214Z end top-hits: exit 0 in 158.1 s; peaks {"min_available_gib": 916, "max_session_private_kib": 12614944, "max_session_pss_kib": 12765565, "max_leader_rss_kib": 4711028, "max_leader_hwm_kib": 6020436, "max_worker_private_kib": 562080, "max_processes": 33}
+2026-11-15T00:15:50.320530Z plan tophits DONE in 158.1 s
+2026-11-15T00:15:50Z compare top hits  00:15:50 up 10 days,  5:38,  2 users,  load average: 24.97, 15.93, 8.43
+{"identical": true, "n_arrays": {"inline": 24, "standalone": 24}, "arrays_differing": [], "group_attrs_equal": true}
+p_5e_04 41910434 [17140593, 16979702, 7790139] True
+p_5e_06 11020928 [4715139, 4185164, 2120625] True
+p_5e_08 5491751 [2424406, 2030242, 1037103] True
+2026-11-15T00:16:06Z aligned comparison with the published observed build  00:16:06 up 10 days,  5:38,  3 users,  load average: 20.18, 15.31, 8.35
+rows: {'left': 9846427, 'right': 9847698}; matched by ALID 9,846,427, respelled 0 (0 flipped), left only 0, right only 1,271
+matched: 9,846,427 rows differ: {'se_float16_rounding': 869, 'presence': 3, 'se_within_codec': 398242, 'se_value+se_within_codec': 6728867, 'se_float16_rounding+se_within_codec': 21463, 'se_value+se_float16_rounding+se_within_codec': 2696978, 'presence+se_within_codec': 1, 'eaf_value+presence+se_within_codec': 2, 'se_value+eaf_value+presence+se_within_codec': 1, 'se_float16_rounding+eaf_value+presence+se_within_codec': 1}
+  z: {'only_left': 0, 'only_right': 15226, 'value_differs': 0, 'max_abs_diff': 0.0}
+  se: {'only_left': 0, 'only_right': 15226, 'value_differs': 14079650231, 'max_abs_diff': 0.03808784484863281, 'value_differs_by_float16_rounding': 5002503, 'value_differs_within_codec': 13788253543, 'value_differs_beyond_codec': 286394185, 'max_abs_log_ratio': 0.004152023437809877, 'se_log_bound': 0.003937007874015748}
+  eaf: {'only_left': 0, 'only_right': 15226, 'value_differs': 1544, 'max_abs_diff': 0.00034415721893310547}
+respelled: 0 rows differ: {}
+Wrote /data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/offclock/compare/observed-vs-published.json
+412.60 s wall, 4153516 KB max RSS
+2026-11-15T00:22:59Z offclock DONE  00:22:59 up 10 days,  5:45,  1 user,  load average: 26.70, 28.09, 17.26
