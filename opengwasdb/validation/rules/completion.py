@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.associations import Tally
+from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import array_length
@@ -211,8 +212,25 @@ def _quality_totals(target: Target) -> tuple[np.ndarray, np.ndarray]:
     return totals, attempted
 
 
+def _ancestry_exclusions(target: Target) -> set[int]:
+    """Only stored routing evidence, not absent quality rows, establishes exclusion."""
+    rows = target.analyses.rows
+    ancestry = target.store.manifest.provenance.get("completion", {}).get("ancestry")
+    if not isinstance(ancestry, str) or not ancestry or not any(
+        row.get("assigned_ancestry") for row in rows
+    ):
+        return set()
+    eligible = derive_impute_analysis_ids(rows, ancestry)
+    assert eligible is not None, "assigned ancestries must select an explicit set"
+    return {
+        int(row["analysis_index"]) for row in rows
+        if row["analysis_id"] not in eligible and not row.get("completed_against")
+    }
+
+
 def _judge_quality_counts(target: Target, total: np.ndarray) -> Iterator[str]:
     expected, attempted = _quality_totals(target)
+    excluded = _ancestry_exclusions(target)
     actual = np.zeros_like(expected) + total
     for analysis in range(expected.shape[1]):
         if expected[0, analysis] != actual[0, analysis]:
@@ -220,9 +238,12 @@ def _judge_quality_counts(target: Target, total: np.ndarray) -> Iterator[str]:
                 f"completion_quality analysis {analysis}: n_imputed={expected[0, analysis]} "
                 f"but the imputed plane marks {actual[0, analysis]} cell(s)"
             )
-        # An ancestry-unmatched Analysis has no quality row and is observed-only:
-        # its missing Dense panel cells were never completion attempts (ADR 0028).
-        if attempted[analysis] and expected[:, analysis].sum() != actual[:, analysis].sum():
+        # Missing rows are not evidence of ancestry exclusion: quality metadata
+        # may have disappeared with every failed attempt it described (#307).
+        if (
+            (attempted[analysis] or analysis not in excluded)
+            and expected[:, analysis].sum() != actual[:, analysis].sum()
+        ):
             yield (
                 f"completion_quality analysis {analysis}: n_imputed + n_missing="
                 f"{expected[:, analysis].sum()} but the planes hold "

@@ -2272,8 +2272,10 @@ without another plane read. Per Analysis, the sum of `completion_quality.n_imput
 equals the imputed mask's count, and `n_imputed + n_missing` equals imputed plus
 missing panel cells (the rows completion attempted to add). Dense off-panel missing
 cells are excluded. An ancestry-unmatched Analysis with no quality rows is not
-judged for missing completion attempts. The table records block ids, not
-block-to-variant membership; no self-contained per-block comparison is possible
+judged for missing completion attempts only when the recorded panel ancestry,
+Assigned Ancestry and blank `completed_against` establish that it was excluded.
+Missing quality rows alone do not establish ancestry exclusion. The table records
+block ids, not block-to-variant membership; no self-contained per-block comparison is possible
 from that alone, and a block id is not interpreted as a genomic interval or an
 external panel path. Malformed quality-table structure is reported by
 `completion.quality_table`; `completion.quality_counts` also fails if its counts

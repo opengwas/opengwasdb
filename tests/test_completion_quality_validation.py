@@ -59,6 +59,26 @@ def test_a_lost_fill_is_found_even_when_other_fills_survive(
     assert any("n_imputed" in message for message in result.errors)
 
 
+def test_erasing_failed_attempts_does_not_establish_ancestry_exclusion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opengwasdb.completion import block
+
+    monkeypatch.setattr(
+        block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), np.nan), -1.0)
+    )
+    completed = _dense(tmp_path, LONG)
+    assert validate_store(completed).ok, "the rejected-fit completion must initially validate"
+    with sqlite3.connect(completed / "index.sqlite") as db:
+        assert db.execute(
+            "SELECT n_imputed, n_missing FROM completion_quality"
+        ).fetchall() == [(0, 4)], "four failed attempts must actually be recorded"
+        db.execute("DELETE FROM completion_quality")
+    result = validate_store(completed)
+    assert result.failed() == {RULE}, result.errors
+    assert "n_imputed + n_missing=0" in result.errors[0]
+
+
 def test_a_selected_count_rule_cannot_pass_without_its_quality_table(completed: Path) -> None:
     with sqlite3.connect(completed / "index.sqlite") as db:
         db.execute("DROP TABLE completion_quality")
