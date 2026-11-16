@@ -1,0 +1,17 @@
+{
+  "analyses": 2514,
+  "columns": {
+    "n_hits_5e8": {
+      "identical": true,
+      "total": 6405322
+    },
+    "n_hits_5e6": {
+      "identical": true,
+      "total": 12750070
+    },
+    "n_hits_5e4": {
+      "identical": true,
+      "total": 47805439
+    }
+  }
+}

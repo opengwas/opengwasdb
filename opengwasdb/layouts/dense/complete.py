@@ -951,12 +951,13 @@ def _finalise_release(
     axis: _UnionAxis,
     arrays: _CompletedArrays,
     dst_analyses: list[Analysis],
+    n_workers: int,
 ) -> CompletionResult:
     """Phase 5 — top-hit indexes and the final summary. The indexes read the
     completed arrays, and ``analyses.tsv``'s Top-Hit Counts read the indexes
     (ADR 0032), so both are written once, here, after Phase 3 and 4."""
     print("Building top-hit indexes...")
-    build_top_hit_indexes(staged.path, encoding=arrays.encoding)
+    build_top_hit_indexes(staged.path, encoding=arrays.encoding, n_workers=n_workers)
     write_analyses_tsv(staged.path, add_hit_counts(staged.path, dst_analyses))
     result = CompletionResult(
         output_path=dst,
@@ -1028,7 +1029,7 @@ def _run_completion(
         )
         dst_analyses = _completed_analysis_rows(staged, axis, arrays, ancestry=ancestry)
         with _completion_phase(timer, TOP_HIT_PHASE):
-            result = _finalise_release(staged, dst, axis, arrays, dst_analyses)
+            result = _finalise_release(staged, dst, axis, arrays, dst_analyses, n_workers)
     _log_phase_report(timer, started)
     return result
 

@@ -218,7 +218,7 @@ def complete_hybrid_store(
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow, ld, ancestry)
+        axis = _remap_shared_axis(dense, overflow, ld, ancestry, n_workers)
         # Phase 3: shared index/variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -352,6 +352,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
 
 def _remap_shared_axis(
     dense: _CompletedDense, overflow: _SourceOverflow, ld_dir: Path, ancestry: str,
+    n_workers: int,
 ) -> _SharedAxis:
     """Fold panel crossovers into the completed Dense Component and rebuild
     the shared union axis (issue #99): an off-panel variant that became
@@ -394,7 +395,7 @@ def _remap_shared_axis(
         # Rebuild the top-hit index complete_dense_store built from its
         # pre-patch z. Quality counts are corrected above; Top-Hit Count rollups
         # retain the pre-existing narrow imprecision for crossover cells.
-        build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding)
+        build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding, n_workers=n_workers)
 
     union = sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
     return _SharedAxis(

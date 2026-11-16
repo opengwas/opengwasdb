@@ -1,0 +1,342 @@
+{
+  "inline": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/OGS-00009/completed.opengwasdb",
+  "standalone": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/completed.opengwasdb",
+  "identical": true,
+  "n_arrays": {
+    "inline": 27,
+    "standalone": 27
+  },
+  "arrays_differing": [],
+  "group_attrs_equal": true,
+  "group_attrs": {
+    "thresholds": [
+      5e-08,
+      5e-06,
+      0.0005
+    ]
+  },
+  "tiers": {
+    "p_5e_04": {
+      "attrs_equal": true,
+      "attrs": {
+        "threshold": 0.0005,
+        "order": "analysis_index,variant_index"
+      },
+      "hits": 47805439,
+      "hits_by_column_band": [
+        19562558,
+        19331998,
+        8910883
+      ]
+    },
+    "p_5e_06": {
+      "attrs_equal": true,
+      "attrs": {
+        "threshold": 5e-06,
+        "order": "analysis_index,variant_index"
+      },
+      "hits": 12750070,
+      "hits_by_column_band": [
+        5454095,
+        4830522,
+        2465453
+      ]
+    },
+    "p_5e_08": {
+      "attrs_equal": true,
+      "attrs": {
+        "threshold": 5e-08,
+        "order": "analysis_index,variant_index"
+      },
+      "hits": 6405322,
+      "hits_by_column_band": [
+        2823578,
+        2363671,
+        1218073
+      ]
+    }
+  },
+  "arrays": {
+    "data.zarr/top_hits/p_5e_04/abs_z": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/analysis_index": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "uint32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/analysis_offsets": {
+      "shape": [
+        2515
+      ],
+      "dtype": "uint64",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/eaf": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/imputed": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "uint8",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/p_value": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "float64",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/se": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/variant_index": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "uint32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_04/z": {
+      "shape": [
+        47805439
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/abs_z": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/analysis_index": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "uint32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/analysis_offsets": {
+      "shape": [
+        2515
+      ],
+      "dtype": "uint64",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/eaf": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/imputed": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "uint8",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/p_value": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "float64",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/se": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/variant_index": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "uint32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_06/z": {
+      "shape": [
+        12750070
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/abs_z": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/analysis_index": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "uint32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/analysis_offsets": {
+      "shape": [
+        2515
+      ],
+      "dtype": "uint64",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/eaf": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/imputed": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "uint8",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/p_value": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "float64",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/se": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/variant_index": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "uint32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    },
+    "data.zarr/top_hits/p_5e_08/z": {
+      "shape": [
+        6405322
+      ],
+      "dtype": "float32",
+      "comparable": true,
+      "differing_cells": 0,
+      "max_abs_diff": 0.0,
+      "examples": []
+    }
+  },
+  "generator": "benchmarks/compare_top_hits.py",
+  "argv": [
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/OGS-00009/completed.opengwasdb",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/completed.opengwasdb",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/top-hits-comparison.json"
+  ],
+  "commit": "8954c7fa",
+  "measured_at": "2026-11-16T08:10:32.158616+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/435/opengwasdb",
+  "opengwasdb_fingerprint": "7481004a4b93ba1fc7ff4d0aeca8e72be76caf6fca2114fd84784b178fe5dadc"
+}

@@ -1,0 +1,133 @@
+{
+  "issue": 435,
+  "measurement": {
+    "commit": "8954c7fa317177a7200157244229e160ad5e20d2",
+    "copy_argv": [
+      "cp",
+      "-a",
+      "--reflink=always",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/OGS-00009/completed.opengwasdb",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/completed.opengwasdb"
+    ],
+    "argv": [
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/rebuild-time-v.txt",
+      "pixi",
+      "run",
+      "-e",
+      "dev",
+      "opengwasdb",
+      "build-dense-top-hits",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/completed.opengwasdb",
+      "--n-workers",
+      "32"
+    ],
+    "start": "2026-11-16T08:06:37.434361+00:00",
+    "uptime_start": "08:06:37 up 11 days, 13:29,  0 users,  load average: 5.96, 4.02, 2.72",
+    "returncode": 0,
+    "end": "2026-11-16T08:10:13.705053+00:00",
+    "uptime_end": "08:10:13 up 11 days, 13:33,  0 users,  load average: 22.12, 16.62, 8.25",
+    "compare_argv": [
+      "pixi",
+      "run",
+      "-e",
+      "dev",
+      "python",
+      "benchmarks/compare_top_hits.py",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/322/OGS-00009/completed.opengwasdb",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/completed.opengwasdb",
+      "--output",
+      "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/435/top-hits-comparison.json"
+    ]
+  },
+  "memory_plan": {
+    "at": "2026-11-16T08:06:37.411718+00:00",
+    "rows": 11133427,
+    "analyses": 2514,
+    "bands": 2784,
+    "band_rows": 4000,
+    "decoded_band_budget_bytes": 1073741824,
+    "requested_workers": 32,
+    "worker_bytes": 1502246912,
+    "held_results_per_worker_bytes": 1166496000,
+    "parent_allowance_bytes": 17179869184,
+    "estimated_peak_bytes": 102579642368,
+    "available_bytes": 993222754304,
+    "quarter_available_bytes": 248305688576
+  },
+  "effective_workers": 32,
+  "logged_requested_workers": 32,
+  "runtime_memory_cap_mib": 236522,
+  "phase_seconds_rounded_to_tenths_by_production_logger": {
+    "top_hits.scan": 191.1,
+    "top_hits.write": 22.3
+  },
+  "minimum_sampled_available_gib": 910,
+  "memory_samples": 22,
+  "metadata": {
+    "analyses_tsv_byte_identical": true,
+    "source_sha256": "66dfa6cc67dfde289198061417bf3b5dde0fd33a43bf79be15bd963270200138",
+    "rebuilt_sha256": "66dfa6cc67dfde289198061417bf3b5dde0fd33a43bf79be15bd963270200138",
+    "source_inventory_unchanged": true,
+    "source_files_hashed": 564
+  },
+  "comparison_identical": true,
+  "n_arrays": {
+    "inline": 27,
+    "standalone": 27
+  },
+  "tiers": {
+    "p_5e_04": {
+      "attrs_equal": true,
+      "attrs": {
+        "threshold": 0.0005,
+        "order": "analysis_index,variant_index"
+      },
+      "hits": 47805439,
+      "hits_by_column_band": [
+        19562558,
+        19331998,
+        8910883
+      ]
+    },
+    "p_5e_06": {
+      "attrs_equal": true,
+      "attrs": {
+        "threshold": 5e-06,
+        "order": "analysis_index,variant_index"
+      },
+      "hits": 12750070,
+      "hits_by_column_band": [
+        5454095,
+        4830522,
+        2465453
+      ]
+    },
+    "p_5e_08": {
+      "attrs_equal": true,
+      "attrs": {
+        "threshold": 5e-08,
+        "order": "analysis_index,variant_index"
+      },
+      "hits": 6405322,
+      "hits_by_column_band": [
+        2823578,
+        2363671,
+        1218073
+      ]
+    }
+  },
+  "raw_artifact_sha256": {
+    "rebuild.log": "1cef694ffb20ff585b55b3dc23345d70a6abc20bf4f4e8b71dc4523b151e0b10",
+    "rebuild-time-v.txt": "a7e2d6d4a7724b1269c6518381c45ce993e06931aad78239aec4288af669d31d",
+    "free-g.log": "c4de5e9afea71099dd6f2fb621137432d06674929db5dfae476f02c0ac984d6c",
+    "memory-plan.json": "5dba82ffc6375f75c930586ea9f92c7a08b1146303a68d2855bc0d98f42a23f5",
+    "measurement.json": "f06d4f0ba999de1ee2a04bc4e7074674c6abe08b7c7a0f5c728abb18581fed4a",
+    "top-hits-comparison.json": "026dca0c167b7a26e8797c2532740497581537008b80a946674ab8143fc09633",
+    "n-hits-comparison.json": "d8517ae2dcfeecae2e919d402341f200452c07e8197c7b583d79340dd8542e84",
+    "source-before.json": "f4a457f475ec6c8d7a66263a9f0c9307a456b2b0f4d43cc200ad75012e15c7ce",
+    "source-after.json": "f4a457f475ec6c8d7a66263a9f0c9307a456b2b0f4d43cc200ad75012e15c7ce"
+  }
+}
