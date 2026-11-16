@@ -392,12 +392,11 @@ def test_fold_counts_and_logs_the_rows_no_key_resolves(tmp_path: Path) -> None:
     packed SNV decoded from its bits and a hashed indel from the side file,
     where it used to vanish after the gates had written their record."""
     from opengwasdb.layouts.hybrid.build import _write_unknown_side_file
-    from opengwasdb.layouts.hybrid.unknown_keys import encode_keys
+    from opengwasdb.layouts.hybrid.unknown_keys import encode_fields
 
     spill_dir = tmp_path / "spills"
     spill_dir.mkdir()
-    raw = ["1:5:A:G", "1:7:C:T", "1:9:A:AT"]
-    encoded = encode_keys(raw)
+    encoded = encode_fields(["1", "1", "1"], [5, 7, 9], ["A", "C", "A"], ["G", "T", "AT"])
     assert encoded.hashed_index.tolist() == [2], "the fixture must hold a hashed key"
     np.savez(
         spill_dir / "0.unk.npz",

@@ -141,7 +141,9 @@ def test_a_sequence_mask_flagging_a_missing_cell_fails_the_completion_rule(
     group["imputed"][cell] = 1
     _flag_in_the_variant_index(group, cell)
 
-    result = validate_store(store)
+    # The corruption also violates quality-count equality; this test owns the
+    # mask/presence contract, whose exact findings must remain stable (#307).
+    result = validate_store(store, rules={"completion.imputed_present"})
 
     assert result.failed() == {"completion.imputed_present"}, result.errors
     assert result.errors == [

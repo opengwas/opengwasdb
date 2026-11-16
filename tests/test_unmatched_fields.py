@@ -1,21 +1,22 @@
 """An off-reference row is encoded from its fields, not from a key string (#318).
 
 `RouteTable` keeps each unmatched row's chromosome, position and alleles, and a
-Hybrid off-reference spill encodes them with `encode_fields`. The spill must be
-the one `encode_keys` wrote from each row's Routing Key, byte for byte.
+Hybrid off-reference spill encodes them with `encode_fields`. The spill must match the
+scalar `encode_key` contract for each Routing Key, byte for byte, including
+lossless side-file identities and collision refusal.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
+import unknown_key_oracle
 
 from opengwasdb.layouts.hybrid import unknown_keys
 from opengwasdb.layouts.hybrid.unknown_keys import (
     MAX_POSITION,
     UnknownKeyEncodingError,
     encode_fields,
-    encode_keys,
 )
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation
@@ -44,7 +45,7 @@ ROWS = [
 
 
 def _keys(rows: list[tuple[str, int, str, str]]) -> unknown_keys.EncodedKeys:
-    return encode_keys([routing_key(row) for row in rows])
+    return unknown_key_oracle.encode_keys([routing_key(row) for row in rows])
 
 
 def _equal(a: unknown_keys.EncodedKeys, b: unknown_keys.EncodedKeys) -> bool:
@@ -58,7 +59,11 @@ def _equal(a: unknown_keys.EncodedKeys, b: unknown_keys.EncodedKeys) -> bool:
 
 def test_the_rows_both_pack_and_hash() -> None:
     encoded = _keys(ROWS)
-    assert 0 < len(encoded.hashed_raw) < len(ROWS)
+    assert encoded.hashed_index.tolist() == [6, 7, 8, 9, 11, 12, 13]
+    assert encoded.hashed_raw == [
+        "1:200:AT:A", "2:300:A:ACGT", "GL000192.1:10:A:G", "HLA-A*01:01:11:C:T",
+        "1:268435456:A:C", "1:1099511627776:G:A", "3:400:ACG:TGA",
+    ]
 
 
 @pytest.mark.parametrize("as_arrays", [False, True], ids=["lists", "arrays"])
@@ -73,13 +78,13 @@ def test_fields_encode_as_their_routing_keys_do(as_arrays: bool) -> None:
     else:
         assert _equal(encode_fields(chromosome, position, ref, alt), _keys(ROWS))
     empty = encode_fields([], [], [], [])
-    assert _equal(empty, encode_keys([]))
+    assert empty.values.dtype == np.uint64 and empty.values.size == 0
+    assert empty.hashed_index.dtype == np.int64 and empty.hashed_index.size == 0
+    assert empty.hashed_raw == []
 
 
-def test_a_hash_collision_is_refused_from_fields_as_from_keys() -> None:
+def test_a_hash_collision_is_refused_from_fields() -> None:
     rows = [("1", 1, "A", "AT"), ("1", 1, "A", "GA")]
-    with pytest.raises(UnknownKeyEncodingError, match="hash collision"):
-        encode_keys([routing_key(row) for row in rows], hash_fn=lambda key: 7)
     columns = [list(column) for column in zip(*rows, strict=True)]
     with pytest.raises(UnknownKeyEncodingError, match="hash collision"):
         encode_fields(*columns, hash_fn=lambda key: 7)

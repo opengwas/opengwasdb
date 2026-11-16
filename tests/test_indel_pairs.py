@@ -175,7 +175,10 @@ def test_a_hybrid_build_stores_the_pair_as_two_variants(tmp_path: Path, on_panel
     source = _gwas_vcf(tmp_path / "bmi_irn.vcf", _rows(deletion_first=True))
     panel = tmp_path / "panel.txt"
     alids = [INSERTION_ALID, DELETION_ALID, CONTROL_ALID] if on_panel else [CONTROL_ALID]
-    panel.write_text("".join(f"{alid}\n" for alid in alids), encoding="utf-8")
+    panel.write_text(
+        "#opengwasdb-variant-reference\t1\n" + "".join(f"{alid}\n" for alid in alids),
+        encoding="utf-8",
+    )
     store = tmp_path / "hybrid.opengwasdb"
 
     result = build_hybrid_from_vcf_manifest(
