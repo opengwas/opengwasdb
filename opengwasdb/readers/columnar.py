@@ -584,4 +584,3 @@ class Columns:
                 if self.imputation_status is None else self.imputation_status[kept]
             ),
         )
-

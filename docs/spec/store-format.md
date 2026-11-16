@@ -1,7 +1,7 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.2.2` (Zarr v3 with sharding, §10a; an indel's ALID spelt reference first, §4; what every builder writes, each release stamped the lowest its features use, §21.3)  
+Format version described: `0.2.2` (Zarr v3 with sharding, §10a; an indel's ALID spelt reference first, §4; what every builder writes, each release stamped the lowest its features use, §21.3)
 Also readable: `0.2.1` and `0.2.0` (the same layout, indel ALIDs sorted), and `0.1.0` (Zarr v2); nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It

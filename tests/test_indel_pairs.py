@@ -350,4 +350,3 @@ def test_a_besd_build_drops_and_logs_each_probe_s_rows_at_the_pair(tmp_path: Pat
         store, analysis,
         [["esi:0", "indel_reference_undeclared"], ["esi:1", "indel_reference_undeclared"]],
     )
-
