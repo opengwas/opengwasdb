@@ -308,8 +308,11 @@ A Variant Reference containing any indel MUST start with the physical line
 `#opengwasdb-variant-reference<TAB>1` followed by a newline, where `<TAB>` is one
 tab character. Version `1` declares that every indel is written reference first;
 it is an input-format declaration, independent of a Store's `format_version`.
-The next line is the existing tab-separated column header or the first ALID of
-a plain list. The declaration applies equally to plain text and gzip inputs,
+The next line is the existing column header or the first ALID of a plain list.
+Identity table headers retain the resolver's case-insensitive `alid`,
+`variant_id` and `id` aliases, with tab or whitespace delimiters; unheaded lists
+retain their first ALID. Artifact rows remain TSV so empty routing cells survive.
+The declaration applies equally to plain text and gzip inputs,
 is allowed only once at the start, and an unsupported version is refused.
 SNV-only and equal-length-substitution inputs remain usable without it.
 

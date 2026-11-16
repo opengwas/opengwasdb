@@ -129,3 +129,26 @@ def test_a_detached_table_does_not_inherit_a_nearby_format_stamp(tmp_path: Path)
 
     with pytest.raises(ValueError, match="1:827587:G:GGGGCC.*regenerated"):
         read_variant_reference(reference)
+
+
+@pytest.mark.parametrize("column", ["alid", "ALID", "variant_id", "VaRiAnT_Id", "id", "ID", None])
+@pytest.mark.parametrize("delimiter", ["\t", "  "], ids=["tabs", "spaces"])
+@pytest.mark.parametrize("indel", [False, True], ids=["snvs", "unmarked-indel"])
+def test_the_resolver_preserves_legacy_reference_shapes_without_bypassing_the_guard(
+    tmp_path: Path, column: str | None, delimiter: str, indel: bool,
+) -> None:
+    alids = ["1:100:A:G", "1:827587:G:GGGGCC" if indel else "1:200:C:T"]
+    if column is None:
+        text = "".join(f"{alid}{delimiter}annotation\n" for alid in alids)
+    else:
+        text = f"rsid{delimiter}{column}\n"
+        text += "".join(f"rs1{delimiter}{alid}\n" for alid in alids)
+    path = tmp_path / "legacy-table.txt"
+    path.write_text(text, encoding="utf-8")
+
+    if indel:
+        with pytest.raises(ValueError, match="1:827587:G:GGGGCC.*regenerated.*reference-first"):
+            load_variant_reference(path)
+    else:
+        assert load_variant_reference(path) == set(alids)
+        assert read_variant_reference(path).alids == alids

@@ -160,10 +160,11 @@ class VariantReference:
 def read_variant_reference(path: str | Path) -> VariantReference:
     """Read a variant reference, failing loudly on anything unreadable.
 
-    The format is detected from the first line: a tab-separated header selects
-    the artifact or Store Variant Table reader by its columns, after an optional
-    versioned semantics marker; anything else is a plain ALID list. An unmarked
-    input containing an indel fails before returning any routing.
+    A header selects the artifact or Store Variant Table reader by its columns,
+    after an optional versioned semantics marker; otherwise it is a plain ALID
+    list. Identity headers accept the resolver's historical case-insensitive
+    ``alid``, ``variant_id`` and ``id``, separated by tabs or whitespace. An
+    unmarked input containing an indel fails before returning any routing.
     """
     reference_path = Path(path)
     if not reference_path.is_file():
@@ -507,7 +508,7 @@ def _open_text(path: Path) -> IO[str]:
 
 
 def _read_header_and_lines(path: Path) -> tuple[list[str] | None, list[str]]:
-    """The header (when the file is tab-separated) and every data line."""
+    """The normalized table header, when present, and every data line."""
     with _reference_input(path) as (header, lines):
         return header, list(lines)
 
@@ -528,13 +529,33 @@ def _reference_input(path: Path) -> Iterator[tuple[list[str] | None, Iterator[st
             first = handle.readline()
         if not first.strip():
             raise ValueError(f"variant reference {path} is empty")
-        header = None
-        if "\t" in first:
-            header = [field.lstrip("#").strip() for field in first.rstrip("\n").split("\t")]
-            refuse_unmarked_artifact(header, path)
-        lines = handle if header is not None else itertools.chain([first], handle)
+        header = _reference_header(first, path)
+        lines = (
+            _tabular_reference_lines(handle)
+            if header is not None else itertools.chain([first], handle)
+        )
         start = 1 + int(reference_first) + int(header is not None)
         yield header, _validated_reference_lines(path, header, lines, reference_first, start)
+
+
+def _reference_header(first: str, path: Path) -> list[str] | None:
+    """Keep the resolver's legacy identity columns inside the shared parser."""
+    fields = first.rstrip("\r\n").split("\t") if "\t" in first else first.split()
+    columns = [field.lstrip("#").strip().lower() for field in fields]
+    refuse_unmarked_artifact(columns, path)
+    for name in ("alid", "variant_id", "id"):
+        if name in columns:
+            columns[columns.index(name)] = "alid"
+            return columns
+    if "\t" in first and parse_canonical_alid(first.split()[0]) is None:
+        return columns
+    return None
+
+
+def _tabular_reference_lines(lines: Iterator[str]) -> Iterator[str]:
+    """Normalize whitespace tables without collapsing TSV artifact empty cells."""
+    for line in lines:
+        yield line if "\t" in line else "\t".join(line.split()) + "\n"
 
 
 def _validated_reference_lines(

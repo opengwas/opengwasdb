@@ -315,6 +315,9 @@ The first physical line of a newly regenerated reference is
 reference-first indels; it is separate from a Store's format version. It works
 before either a plain ALID list or a table header, in text or gzip. Both artifact
 writers emit it, including the streaming extractor's header gzip member.
+The shared reader retains the resolver's case-insensitive `alid`, `variant_id`
+and `id` headers with tab or whitespace delimiters, and unheaded first-row ALIDs;
+the declaration rule does not narrow those existing SNV input shapes.
 An unmarked input containing an indel is refused at its first indel, naming the
 row/ALID and requiring regeneration; unmarked SNVs and equal-length substitutions
 remain usable. Unknown versions and misplaced declarations are refused. No
