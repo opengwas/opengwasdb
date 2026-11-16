@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import logging
 import shutil as file_ops
 from pathlib import Path
 
@@ -17,8 +18,11 @@ import numpy as np
 import plane_edits
 import pytest
 import zarr
+from completion_releases import assert_same_release
 from residual_fixtures import write_gwas_vcf_with_eaf
+from store_digest import store_digest
 
+from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
@@ -497,7 +501,9 @@ def _residual_ld_panel_with_crossover(
     return root
 
 
-def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_path) -> None:
+def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
+    tmp_path, caplog, monkeypatch
+) -> None:
     """issue #163: panel crossover must rebuild the Dense Top-Hit Index with
     the completed component's own encoding, not the source's.
 
@@ -511,9 +517,32 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_pa
     )
     assert StoreManifest.load(src).encoding.se.is_residual
 
+    dense_axis = VariantAxis(src / "dense")
+    assert crossover_alid not in {row.alid for row in dense_axis.all()}
+    dense_axis.close()
+    shared = VariantAxis(src)
+    shared_alids = {row.variant_index: row.alid for row in shared.all()}
+    shared.close()
+    overflow = RaggedCSRReader(src)
+    assert crossover_alid in {
+        shared_alids[int(vi)] for vi in overflow.variant_index(0, overflow.sequence_length)
+    }
+
+    from opengwasdb.encoding import banding
+
+    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 32 * 2 * banding.BYTES_PER_CELL)
+    caplog.set_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits")
+    caplog.clear()
     ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
     dst = tmp_path / "dst.opengwasdb"
     result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    parallel_dst = tmp_path / "parallel.opengwasdb"
+    complete_hybrid_store(src, parallel_dst, ld, min_cor=0.0, thresh=0.9, n_workers=2)
+    assert store_digest(dst) == store_digest(parallel_dst)
+    assert_same_release(dst / "dense", parallel_dst / "dense")
+    top_hits = compare_top_hits(dst / "dense", parallel_dst / "dense")
+    assert top_hits["identical"], top_hits
+    assert all(tier["hits"] > 0 for tier in top_hits["tiers"].values())
 
     assert validate_store(dst).ok
     assert result.n_imputed > 0  # trait_b's four unobserved panel variants
@@ -571,6 +600,11 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_pa
     }
     assert crossover_alid in facade_by_alid
     assert facade_by_alid[crossover_alid] == pytest.approx(expected_crossover_se, rel=0.01)
+
+    plans = [r.message for r in caplog.records if "Top-hit index: scanning" in r.message]
+    assert len(plans) == 4  # Initial completion and the post-crossover rebuild, twice.
+    for plan, requested in zip(plans, (1, 1, 2, 2), strict=True):
+        assert f"n_workers={requested}, 32 rows per band" in plan
 
 
 def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation(tmp_path):

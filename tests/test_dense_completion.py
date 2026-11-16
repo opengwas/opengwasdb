@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from shutil import copytree
 
 import numpy as np
 import pytest
+from completion_releases import assert_same_release
 from dense_sources import build_dense_fixture, write_dense_manifest
 from ld_blocks import write_ld_block
 
+from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion import fill_shards
@@ -1056,7 +1059,15 @@ class TestResume:
 
 
 class TestParallel:
-    def test_two_workers_matches_serial(self, tmp_path, observed_store, ld_panel):
+    def test_two_workers_matches_serial(
+        self, tmp_path, observed_store, ld_panel, caplog, monkeypatch
+    ):
+        from opengwasdb.encoding import banding
+
+        # Several scan bands make the requested pool meaningful even on this tiny grid.
+        monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 2 * 2 * banding.BYTES_PER_CELL)
+        caplog.set_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits")
+        caplog.clear()
         serial_dst = tmp_path / "serial.opengwasdb"
         serial = complete_dense_store(
             observed_store, serial_dst, ld_panel, ancestry="EUR", min_cor=0.0, n_workers=1
@@ -1070,7 +1081,15 @@ class TestParallel:
         assert parallel.n_missing_off_panel == serial.n_missing_off_panel
         assert parallel.n_missing_imputation_failed == serial.n_missing_imputation_failed
         _assert_stores_identical(parallel_dst, serial_dst)
+        assert_same_release(serial_dst, parallel_dst)
+        top_hits = compare_top_hits(serial_dst, parallel_dst)
+        assert top_hits["identical"], top_hits
+        assert all(tier["hits"] > 0 for tier in top_hits["tiers"].values())
         assert validate_store(parallel_dst).ok
+        plans = [r.message for r in caplog.records if "Top-hit index: scanning" in r.message]
+        assert len(plans) == 2
+        assert "n_workers=1, 2 rows per band" in plans[0]
+        assert "n_workers=2, 2 rows per band" in plans[1]
 
 
 # ── the completed-band writer seam ─────────────────────────────────────────

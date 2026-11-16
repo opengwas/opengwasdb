@@ -1,0 +1,1 @@
+- **Dense and Hybrid Reference Completion now forward `--n-workers` to every Dense Top-Hit scan (issue #435, ADR 0080).** The scan keeps its memory and band-count caps and the default remains one worker. Top-Hit tiers, `n_hits_*` metadata and completed values are unchanged; Ragged Top-Hit harvesting remains serial.

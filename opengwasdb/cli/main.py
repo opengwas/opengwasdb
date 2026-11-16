@@ -1526,16 +1526,17 @@ def calibrate_ancestry_command(
         )
 
 
-#: What `--n-workers` sizes in each completion (#321): the LD-block pool, then
-#: the pools of the write after it, which run fewer workers when a quarter of
-#: the host's available memory holds fewer.
+#: Completion's post-block pools share the memory cap (#321); Dense Top-Hit
+#: scans also cap the requested count by the number of bands (#435).
 _DENSE_WORKERS_HELP = (
-    "Process-pool size for the LD blocks, then for the checkpoint merge and the band "
-    "write, which run fewer when a quarter of available memory holds fewer"
+    "Process-pool size for LD blocks, checkpoint merge, band write and Dense Top-Hit scan; "
+    "the post-block pools are capped by a quarter of available memory, "
+    "and the scan also by the number of bands"
 )
 _HYBRID_WORKERS_HELP = (
-    "Process-pool size for the Dense Component's LD blocks, checkpoint merge and band "
-    "write; the last two run fewer when a quarter of available memory holds fewer"
+    "Process-pool size for the Dense Component's LD blocks, checkpoint merge, band write "
+    "and Top-Hit scans; the post-block pools are capped by a quarter of available memory, "
+    "and the scans also by the number of bands"
 )
 _RAGGED_WORKERS_HELP = (
     "Process-pool size for the LD blocks, then for the checkpoint merge, the Analyses' "
