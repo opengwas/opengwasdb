@@ -111,3 +111,33 @@ def test_empty_prepared_fills_keep_quality_and_array_dtype(monkeypatch, observed
     assert result.fills.dtype == block.PREPARED_FILL_DTYPE
     assert result.n_missing == 4 - observed_count
     assert result.pearson_r == (None if observed_count < 2 else 0.2 if failed else 1.0)
+
+
+def test_checkpoint_memory_depends_on_filled_alid_width(tmp_path):
+    import tracemalloc
+
+    from opengwasdb.completion.checkpoint import (
+        BLOCK_FILL_DTYPE,
+        BlockCompletionResult,
+        write_block_checkpoint,
+    )
+
+    filled_alid = "1:100:A:" + "C" * 60
+    unfilled_alid = "1:200:A:" + "C" * 20_000
+    fills = np.zeros(2_000, dtype=BLOCK_FILL_DTYPE)
+    fills["z"], fills["se"] = 1.0, 0.25
+    result = BlockCompletionResult("1/1-200", [], fills, [filled_alid, unfilled_alid])
+    path = tmp_path / "block.npz"
+    tracemalloc.start()
+    try:
+        write_block_checkpoint(path, result)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    with np.load(path, allow_pickle=False) as written:
+        assert written["f_long_alid"].shape == (2_000,)
+        assert written["f_long_alid"].dtype.itemsize == len(filled_alid)
+        assert np.all(written["f_long_alid"] == filled_alid.encode())
+    # The compact checkpoint is <300 KiB. A 2 MiB allowance accommodates ZIP
+    # buffers but rejects allocating 40 MB at the unfilled panel ALID's width.
+    assert peak < 2 * 1024**2, peak

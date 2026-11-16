@@ -205,14 +205,19 @@ def _fill_arrays(result: BlockCompletionResult) -> dict[str, np.ndarray]:
     long_slot[long_at] = np.arange(len(long_at))
     selected = long_slot[local]
     fill_long_at = np.flatnonzero(selected >= 0)
-    fill_long = long_[selected[fill_long_at]]
-    # A block's longest ALID might never be filled. Keep the format-3 width
-    # derived from the actual fills, including S1 for an empty long side array.
-    width = int(np.char.str_len(fill_long).max()) if len(fill_long) else 1
+    long_indices = selected[fill_long_at]
+    # Determine the filled-only width before gathering: the block's longest
+    # ALID may be unfilled, and an intermediate at that width can be enormous.
+    lengths = np.char.str_len(long_)
+    width = int(lengths[long_indices].max()) if len(long_indices) else 1
+    # Narrow the small panel array first, not the per-fill array. Every selected
+    # ALID fits this width; only unselected scratch entries can be shortened.
+    # np.take(out=...) still allocates at its input dtype before the output cast.
+    fill_long = long_.astype(f"S{width}")[long_indices]
     return {
         "f_alid": short[local],
         "f_long_at": fill_long_at,
-        "f_long_alid": fill_long.astype(f"S{width}"),
+        "f_long_alid": fill_long,
         "f_ai": result.fills["analysis_index"],
         "f_z": result.fills["z"].astype(np.float32),
         "f_se": result.fills["se"].astype(np.float32),
