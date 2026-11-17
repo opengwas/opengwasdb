@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 # `release` is the sibling script: running this file puts `scripts/` first on
@@ -309,7 +309,9 @@ def _run_plan(args: argparse.Namespace) -> None:
     if not owed:
         print(f"Nothing owed to {args.index} (first PyPI release: {PYPI_FIRST_RELEASE}).")
     if args.json_out is not None:
-        args.json_out.write_text(json.dumps([asdict(release) for release in owed]))
+        # Strings only: each entry becomes one leg of a GitHub Actions matrix.
+        matrix = [{"tag": r.tag, "version": r.version, "commit": r.commit} for r in owed]
+        args.json_out.write_text(json.dumps(matrix))
 
 
 def _version(args: argparse.Namespace) -> str:

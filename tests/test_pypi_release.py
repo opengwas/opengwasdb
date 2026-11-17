@@ -317,9 +317,10 @@ def test_the_plan_command_writes_the_owed_tags(
     out = tmp_path / "plan.json"
     assert pypi.main(["plan", "--index", "pypi", "--json-out", str(out)]) == 0
     entries = json.loads(out.read_text())
-    assert [(e["tag"], e["version"], e["commit"]) for e in entries] == [
-        ("v0.12.1", "0.12.1", "c" * 40),
-        ("v0.13.0", "0.13.0", "d" * 40),
+    # Each entry is one leg of the workflow's matrix: strings, nothing else.
+    assert entries == [
+        {"tag": "v0.12.1", "version": "0.12.1", "commit": "c" * 40},
+        {"tag": "v0.13.0", "version": "0.13.0", "commit": "d" * 40},
     ]
     assert "v0.12.1" in capsys.readouterr().out
 
