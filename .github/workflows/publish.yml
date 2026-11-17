@@ -1,0 +1,309 @@
+name: Publish to PyPI
+
+# Every tagged release from `PYPI_FIRST_RELEASE` on goes to PyPI (#437, #439,
+# ADR 0083). This is the one workflow PyPI's Trusted Publisher names:
+# repository opengwas/opengwasdb, workflow `publish.yml`, environment `pypi`
+# (and `testpypi` on test.pypi.org). Renaming this file or the environments
+# breaks publication until the publishers are changed to match.
+#
+# It decides nothing itself. `scripts/pypi_release.py plan` reconciles: every
+# eligible tag whose two files the index does not yet hold is owed, so a burst
+# of merges, a lost run, a failed upload and a partial upload are all finished
+# by the next run. Each owed tag is then
+#
+#   build    unprivileged. Reuses the archives already verified and attached
+#            to the tag's GitHub Release, or builds them from the tag's own
+#            commit. Checks them against the tag's tree and exact version,
+#            installs the wheel outside the checkout and runs the smoke test,
+#            then compares them with the index file by file. A conflicting
+#            file stops the run here.
+#   record   attaches the verified archives to the GitHub Release, once, so a
+#            retry uploads the same bytes. `contents: write`, nothing else.
+#   upload   the only job with `id-token: write`. It builds nothing, and
+#            uploads only the files the index lacked.
+#   confirm  waits for the index to hold exactly the verified files, installs
+#            the version from the index as a user would, and runs the smoke
+#            test against it.
+#
+# Triggers. `release.yml` dispatches this after tagging: tags it pushes with
+# GITHUB_TOKEN trigger no workflow, but a dispatch does. A daily schedule
+# catches anything that dispatch missed. A manual dispatch is the recovery
+# entry point: `gh workflow run publish.yml`, optionally `-f tag=vX.Y.Z`, and
+# `-f index=testpypi -f tag=vX.Y.Z` for a rehearsal. TestPyPI is never
+# published automatically.
+on:
+  workflow_dispatch:
+    inputs:
+      index:
+        description: "Where to publish: pypi, or testpypi for a rehearsal"
+        type: choice
+        options: [pypi, testpypi]
+        default: pypi
+      tag:
+        description: "Only this tag (vX.Y.Z); required for testpypi"
+        type: string
+        default: ""
+  schedule:
+    - cron: "17 6 * * *"
+
+# Each job asks for what it needs, and nothing is granted by default.
+permissions: {}
+
+# One run per index at a time, never cancelled: two runs comparing with the
+# index at once could both stage the same file.
+concurrency:
+  group: publish-${{ inputs.index || 'pypi' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: what the index is owed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      releases: ${{ steps.plan.outputs.releases }}
+      index: ${{ steps.plan.outputs.index }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan every eligible tag whose files the index lacks
+        id: plan
+        env:
+          INDEX: ${{ inputs.index || 'pypi' }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          args=(plan --index "$INDEX" --json-out "$RUNNER_TEMP/owed.json")
+          if [ -n "$TAG" ]; then args+=(--tag "$TAG"); fi
+          python3 scripts/pypi_release.py "${args[@]}"
+          echo "releases=$(cat "$RUNNER_TEMP/owed.json")" >> "$GITHUB_OUTPUT"
+          echo "index=$INDEX" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build and verify ${{ matrix.tag }}
+    needs: plan
+    if: needs.plan.outputs.releases != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.releases) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INDEX: ${{ needs.plan.outputs.index }}
+      TAG: ${{ matrix.tag }}
+      VERSION: ${{ matrix.version }}
+      COMMIT: ${{ matrix.commit }}
+    steps:
+      # The tooling is main's; the archives, their checks, the smoke test and
+      # the fixture are the tag's own.
+      - uses: actions/checkout@v4
+        with:
+          path: tooling
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.commit }}
+          path: release
+          # The version is derived from the tag, which needs the history.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tag names the planned commit and carries the packaging checks
+        run: |
+          tagged=$(git -C release rev-parse "refs/tags/$TAG^{commit}")
+          if [ "$tagged" != "$COMMIT" ]; then
+            echo "$TAG is at $tagged, not the planned $COMMIT" >&2
+            exit 1
+          fi
+          for script in check_distributions.py smoke_test_installed.py; do
+            if [ ! -f "release/scripts/$script" ]; then
+              echo "$TAG predates scripts/$script (#438); it cannot be published" >&2
+              exit 1
+            fi
+          done
+
+      - name: Reuse the archives verified before, or build them from the tag
+        run: |
+          python -m pip install build==1.6.1 twine==7.0.0
+          state=$(python tooling/scripts/pypi_release.py fetch \
+            --tag "$TAG" --dist "$RUNNER_TEMP/dist")
+          echo "the Release's verified archives: $state"
+          if [ "$state" = absent ]; then
+            python -m build --outdir "$RUNNER_TEMP/dist" release
+          fi
+
+      - name: The archives are this tag's, at exactly its version
+        run: |
+          python -m twine check --strict "$RUNNER_TEMP"/dist/*
+          python release/scripts/check_distributions.py "$RUNNER_TEMP/dist" \
+            --repo-root release --version "$VERSION"
+
+      - name: The wheel works installed, outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install "$RUNNER_TEMP"/dist/*.whl
+          "$RUNNER_TEMP/venv/bin/python" -m pip check
+          mkdir "$RUNNER_TEMP/run"
+          cd "$RUNNER_TEMP/run"
+          "$RUNNER_TEMP/venv/bin/python" -I \
+            "$GITHUB_WORKSPACE/release/scripts/smoke_test_installed.py" \
+            --fixture "$GITHUB_WORKSPACE/release/docs/examples/tiny" \
+            --version "$VERSION"
+
+      - name: Compare with the index, and stage only what it lacks
+        run: |
+          python tooling/scripts/pypi_release.py stage --index "$INDEX" \
+            --tag "$TAG" --dist "$RUNNER_TEMP/dist" --upload "$RUNNER_TEMP/upload"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upload-${{ matrix.tag }}
+          path: ${{ runner.temp }}/upload/
+          if-no-files-found: ignore
+
+  record:
+    name: keep ${{ matrix.tag }}'s verified archives on its Release
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.releases) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist
+
+      - name: Attach them, unless the Release already holds them
+        run: |
+          python3 scripts/pypi_release.py store \
+            --tag "${{ matrix.tag }}" --dist "$RUNNER_TEMP/dist"
+
+  upload:
+    name: upload ${{ matrix.tag }} to ${{ needs.plan.outputs.index }}
+    needs: [plan, record]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ needs.plan.outputs.index }}
+    permissions:
+      id-token: write
+    strategy:
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.releases) }}
+    steps:
+      # A pattern, not a name: a tag the index already held in full has no
+      # upload artifact, and that is not an error.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: upload-${{ matrix.tag }}
+          path: upload
+          merge-multiple: true
+
+      - name: Upload to PyPI
+        if: needs.plan.outputs.index == 'pypi' && hashFiles('upload/*') != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: upload/
+          print-hash: true
+
+      - name: Upload to TestPyPI
+        if: needs.plan.outputs.index == 'testpypi' && hashFiles('upload/*') != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: upload/
+          print-hash: true
+
+  confirm:
+    name: install ${{ matrix.tag }} from ${{ needs.plan.outputs.index }}
+    needs: [plan, upload]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.releases) }}
+    env:
+      INDEX: ${{ needs.plan.outputs.index }}
+      TAG: ${{ matrix.tag }}
+      VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tooling
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.commit }}
+          path: release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist
+
+      - name: The index holds exactly the verified archives
+        run: |
+          python tooling/scripts/pypi_release.py confirm --index "$INDEX" \
+            --tag "$TAG" --dist "$RUNNER_TEMP/dist"
+
+      # TestPyPI is not a source of dependencies: the package comes from it
+      # and everything it needs from PyPI, as a user's install would resolve.
+      - name: Install the version from the index, as a user would
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          pip="$RUNNER_TEMP/venv/bin/python -m pip"
+          $pip install --upgrade pip
+          for attempt in 1 2 3 4 5; do
+            if [ "$INDEX" = testpypi ]; then
+              $pip download --no-deps --no-cache-dir -d "$RUNNER_TEMP/from-index" \
+                --index-url https://test.pypi.org/simple/ "opengwasdb==$VERSION" \
+                && $pip install "$RUNNER_TEMP"/from-index/*.whl && break
+            else
+              $pip install --no-cache-dir "opengwasdb==$VERSION" && break
+            fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            echo "the index's simple page may still be cached; retrying in 60 s"
+            sleep 60
+          done
+          $pip check
+
+      - name: Use the installed release from outside the checkout
+        run: |
+          mkdir "$RUNNER_TEMP/run"
+          cd "$RUNNER_TEMP/run"
+          "$RUNNER_TEMP/venv/bin/python" -I \
+            "$GITHUB_WORKSPACE/release/scripts/smoke_test_installed.py" \
+            --fixture "$GITHUB_WORKSPACE/release/docs/examples/tiny" \
+            --version "$VERSION"

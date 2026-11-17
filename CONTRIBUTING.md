@@ -76,6 +76,19 @@ commit ends the run rather than being moved. A commit's fragments are read from
 that commit's tree (`git show <commit>:<path>`), so a later edit cannot change
 what an earlier Release said.
 
+**Releases go to PyPI the same way (ADR 0083).** `release.yml` dispatches
+`.github/workflows/publish.yml`, which also runs daily. Each run publishes
+every tag from `PYPI_FIRST_RELEASE` (`scripts/pypi_release.py`) on whose two
+files PyPI does not yet hold. While that constant is `None`, nothing goes to
+PyPI. The verified archives are attached to the tag's GitHub Release before
+they are uploaded, and a retry uploads those same bytes. A file PyPI holds
+with other content stops the run; nothing published is ever replaced.
+Recovery is re-running it: `gh workflow run publish.yml` finishes a failed or
+partial upload, and `-f tag=vX.Y.Z` limits a run to one tag. A Release left
+holding one of the two archives is the one case to fix by hand: delete that
+asset, then re-run. A TestPyPI rehearsal is
+`gh workflow run publish.yml -f index=testpypi -f tag=vX.Y.Z`.
+
 **A pull request adds a changelog fragment instead of editing
 `CHANGELOG.md`.** `changelog.d/<slug>.<type>.md` holds what a user would
 notice, and the fragments of the pull request that merges are that version's
