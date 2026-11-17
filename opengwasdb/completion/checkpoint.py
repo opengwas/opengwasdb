@@ -8,16 +8,27 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 
-# ALID strings are short and fixed-format (chr:pos:a1:a2); a bounded numpy
-# byte-string dtype avoids the overhead of an object array in a checkpoint
-# that may hold millions of fill rows.
-ALID_DTYPE = "S64"
+#: Most ALIDs are short (chr:pos:a1:a2), and a fixed-width byte string holds
+#: millions of them compactly. An ALID of more bytes than this (a long indel,
+#: ADR 0079) is never cut to fit: it is held whole beside them (`split_alids`),
+#: because a width taken from the longest ALID would give every row of a
+#: Store's axis that width (OGS-00013's longest is 761 bytes, its median 15).
+ALID_WIDTH = 64
+ALID_DTYPE = f"S{ALID_WIDTH}"
+
+
+def is_long(encoded: bytes) -> bool:
+    """Whether an encoded ALID is held in the wide array, not cut to `ALID_DTYPE`.
+    The one place the rule is written: checkpoints and the union map both ask it."""
+    return len(encoded) > ALID_WIDTH
+
 
 #: The format a block checkpoint records (``format`` in its ``.npz``). A resume
 #: refuses a directory holding a checkpoint without it, or under another number:
@@ -28,7 +39,11 @@ ALID_DTYPE = "S64"
 #: that wrote no format) fills and counts it, so resumed beside the next
 #: block's it puts two fills on one cell and counts both. Nothing in it says
 #: which rule wrote it, so it is refused, and the completion starts again.
-CHECKPOINT_FORMAT = 2
+#:
+#: **3** (#361): a fill's ALID is held whole. Format 2 cut it to 64 bytes, so
+#: a checkpoint of it that holds a longer ALID has already lost which variant
+#: each such fill was for, and cannot be read right.
+CHECKPOINT_FORMAT = 3
 
 
 def checkpoint_dir_for(dest_path: Path) -> Path:
@@ -87,9 +102,10 @@ def require_current_checkpoints(checkpoint_dir: Path) -> None:
             f"The checkpoint directory {checkpoint_dir} holds {len(stale):,} of "
             f"{len(written):,} block checkpoint(s) not written in format "
             f"{CHECKPOINT_FORMAT} (first {stale[0].name}): an older package wrote them, "
-            "before a variant two LD blocks share had one owner (ADR 0072), and they "
-            "cannot be resumed. To start the completion again, delete it, or rerun the "
-            "completion with --overwrite (overwrite=True) to discard it."
+            "before a variant two LD blocks share had one owner (ADR 0072) or before "
+            "an ALID over 64 bytes was kept whole (#361), and they cannot be resumed. "
+            "Restart the completion: delete it, or rerun the completion with "
+            "--overwrite (overwrite=True) to discard it."
         )
 
 
@@ -116,20 +132,27 @@ class QualityRow(NamedTuple):
     n_missing: int
 
 
-class FillRow(NamedTuple):
-    """One imputed cell: an Analysis's completed z/se at one ALID."""
-
-    alid: str
-    analysis_index: int
-    z: float
-    se: float
+# One-dimensional owned fills, in Analysis order then ascending local index.
+# ALIDs live once on BlockCompletionResult, not once per imputed cell (#422).
+BLOCK_FILL_DTYPE = np.dtype([
+    ("local_index", np.int64), ("analysis_index", np.int32),
+    ("z", np.float64), ("se", np.float64),
+])
 
 
 @dataclass(frozen=True)
 class BlockCompletionResult:
+    """One block's fills indexed into its ALIDs; no fill may name a None ALID.
+
+    ``fills`` is a 1-D BLOCK_FILL_DTYPE array. The float64 kernel values narrow
+    only when written to the unchanged float32 checkpoint fields. Empty results
+    need no ALIDs, including the worker's acknowledgement after checkpointing.
+    """
+
     block_id: str
     quality_rows: list[QualityRow]
-    fills: list[FillRow]
+    fills: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=BLOCK_FILL_DTYPE))
+    alids: list[str | None] = field(default_factory=list)
 
 
 def write_block_checkpoint(path: Path, result: BlockCompletionResult) -> None:
@@ -139,7 +162,7 @@ def write_block_checkpoint(path: Path, result: BlockCompletionResult) -> None:
         "format": np.array([CHECKPOINT_FORMAT], dtype=np.int32),
         "block_id": np.array([result.block_id]),
         **_quality_arrays(result.quality_rows),
-        **_fill_arrays(result.fills),
+        **_fill_arrays(result),
     }
     tmp_path = path.with_name(path.name + ".tmp")
     with open(tmp_path, "wb") as fh:
@@ -158,10 +181,44 @@ def _quality_arrays(rows: list[QualityRow]) -> dict[str, np.ndarray]:
     }
 
 
-def _fill_arrays(fills: list[FillRow]) -> dict[str, np.ndarray]:
+def split_alids(alids: Iterable[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``alids`` as ``(short, long_at, long)``, none of them cut.
+
+    ``short`` holds each ALID of `ALID_WIDTH` bytes or fewer, and is empty at
+    the position of a longer one; ``long_at`` is the positions of those, and
+    ``long`` their ALIDs, as wide as the longest. ALIDs are UTF-8, as the
+    Store's variant table writes them.
+    """
+    encoded = [alid.encode("utf-8") for alid in alids]
+    at = [i for i, b in enumerate(encoded) if is_long(b)]
+    short = np.array([b"" if is_long(b) else b for b in encoded], dtype=ALID_DTYPE)
+    long_ = np.array([encoded[i] for i in at], dtype="S1" if not at else None)
+    return short, np.array(at, dtype=np.int64), long_
+
+
+def _fill_arrays(result: BlockCompletionResult) -> dict[str, np.ndarray]:
+    # Encode once per panel row. Gather by integer index for every fill, keeping
+    # long ALIDs out of the fixed-width array exactly as format 3 requires.
+    short, long_at, long_ = split_alids(alid or "" for alid in result.alids)
+    local = result.fills["local_index"]
+    long_slot = np.full(len(short), -1, dtype=np.int64)
+    long_slot[long_at] = np.arange(len(long_at))
+    selected = long_slot[local]
+    fill_long_at = np.flatnonzero(selected >= 0)
+    long_indices = selected[fill_long_at]
+    # Determine the filled-only width before gathering: the block's longest
+    # ALID may be unfilled, and an intermediate at that width can be enormous.
+    lengths = np.char.str_len(long_)
+    width = int(lengths[long_indices].max()) if len(long_indices) else 1
+    # Narrow the small panel array first, not the per-fill array. Every selected
+    # ALID fits this width; only unselected scratch entries can be shortened.
+    # np.take(out=...) still allocates at its input dtype before the output cast.
+    fill_long = long_.astype(f"S{width}")[long_indices]
     return {
-        "f_alid": np.array([r.alid.encode("ascii") for r in fills], dtype=ALID_DTYPE),
-        "f_ai": np.array([r.analysis_index for r in fills], dtype=np.int32),
-        "f_z": np.array([r.z for r in fills], dtype=np.float32),
-        "f_se": np.array([r.se for r in fills], dtype=np.float32),
+        "f_alid": short[local],
+        "f_long_at": fill_long_at,
+        "f_long_alid": fill_long,
+        "f_ai": result.fills["analysis_index"],
+        "f_z": result.fills["z"].astype(np.float32),
+        "f_se": result.fills["se"].astype(np.float32),
     }

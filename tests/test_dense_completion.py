@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from shutil import copytree
 
 import numpy as np
 import pytest
+from completion_releases import assert_same_release
 from dense_sources import build_dense_fixture, write_dense_manifest
 from ld_blocks import write_ld_block
 
+from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LdPanelNotFoundError,
     SharedEndpoint,
     canonical_panel_alid,
@@ -404,46 +408,6 @@ class TestCompletionFiles:
             "unexpected store entry" in error and "traits.tsv.gz" in error
             for error in result.errors
         )
-
-
-class TestRegionCap:
-    """QC z-cap: an imputed |z| is clamped to the max observed |z| within
-    +/- REGION_CAP_BP (per pleiodb)."""
-
-    def _obs(self):
-        # observed variants at 1.0/2.0/5.0 Mb with |z| = 3, 4, 2 (already sorted).
-        pos = np.array([1_000_000, 2_000_000, 5_000_000], dtype=np.int64)
-        absz = np.array([3.0, 4.0, 2.0], dtype=np.float64)
-        return pos, absz
-
-    def test_caps_overshoot_to_window_max(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        # at 1.5 Mb, window +/-1 Mb -> [1.0, 2.0] Mb (|z| 3, 4) -> cap to 4
-        assert _region_capped_z(10.0, 1_500_000, pos, absz) == pytest.approx(4.0)
-        assert _region_capped_z(-10.0, 1_500_000, pos, absz) == pytest.approx(-4.0)
-
-    def test_within_window_unchanged(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        assert _region_capped_z(2.5, 1_500_000, pos, absz) == pytest.approx(2.5)
-
-    def test_no_observed_in_window_uncapped(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        # 10 Mb is >1 Mb from every observed variant -> no window -> unchanged
-        assert _region_capped_z(9.9, 10_000_000, pos, absz) == pytest.approx(9.9)
-
-    def test_window_excludes_distant_large_z(self):
-        from opengwasdb.completion.block import _region_capped_z
-
-        pos, absz = self._obs()
-        # at 5 Mb, window includes only the 5 Mb observed (|z|=2) -> cap to 2,
-        # NOT the larger |z|=4 at 2 Mb which is out of the +/-1 Mb window.
-        assert _region_capped_z(8.0, 5_000_000, pos, absz) == pytest.approx(2.0)
 
 
 class TestValidation:
@@ -1095,7 +1059,15 @@ class TestResume:
 
 
 class TestParallel:
-    def test_two_workers_matches_serial(self, tmp_path, observed_store, ld_panel):
+    def test_two_workers_matches_serial(
+        self, tmp_path, observed_store, ld_panel, caplog, monkeypatch
+    ):
+        from opengwasdb.encoding import banding
+
+        # Several scan bands make the requested pool meaningful even on this tiny grid.
+        monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 2 * 2 * banding.BYTES_PER_CELL)
+        caplog.set_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits")
+        caplog.clear()
         serial_dst = tmp_path / "serial.opengwasdb"
         serial = complete_dense_store(
             observed_store, serial_dst, ld_panel, ancestry="EUR", min_cor=0.0, n_workers=1
@@ -1109,7 +1081,15 @@ class TestParallel:
         assert parallel.n_missing_off_panel == serial.n_missing_off_panel
         assert parallel.n_missing_imputation_failed == serial.n_missing_imputation_failed
         _assert_stores_identical(parallel_dst, serial_dst)
+        assert_same_release(serial_dst, parallel_dst)
+        top_hits = compare_top_hits(serial_dst, parallel_dst)
+        assert top_hits["identical"], top_hits
+        assert all(tier["hits"] > 0 for tier in top_hits["tiers"].values())
         assert validate_store(parallel_dst).ok
+        plans = [r.message for r in caplog.records if "Top-hit index: scanning" in r.message]
+        assert len(plans) == 2
+        assert "n_workers=1, 2 rows per band" in plans[0]
+        assert "n_workers=2, 2 rows per band" in plans[1]
 
 
 # ── the completed-band writer seam ─────────────────────────────────────────
@@ -1579,6 +1559,26 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
         root = open_store(dst).arrays(mode="r")
         assert root["imputed"][:].sum() > 0
 
+    def test_a_worker_that_reads_a_block_otherwise_than_the_plan_stops_the_completion(
+        self, tmp_path, signal_observed_store, signal_panel_npz_only, monkeypatch
+    ):
+        """The union axis and the completion record come from the plan's read of
+        the panel, and each block is read again where it is completed. A read that
+        names a row the plan's named differently stops the completion rather than
+        fill a panel the record does not describe."""
+        from dataclasses import replace
+
+        from block_rereads import reread_with
+
+        from opengwasdb.completion.ld_panel import PanelReadMismatchError
+
+        reread_with(monkeypatch, lambda block: replace(block, alids=[None, *block.alids[1:]]))
+        with pytest.raises(PanelReadMismatchError, match=r"names \d+ of \d+ rows"):
+            complete_dense_store(
+                signal_observed_store, tmp_path / "comp.opengwasdb", signal_panel_npz_only,
+                ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+            )
+
 
 # ── The declaration and the arrays are two accounts of the same cells ────────
 #
@@ -1755,6 +1755,7 @@ class TestReaderSeam:
             min_cor=0.0,
             thresh=1e-5,
             checkpoint_path=observed_store / "unused-checkpoint",
+            placement=BlockPlacement(len(alids), 2, 0, "unused: no block is read"),
         )
         analysis_range, read = complete_module._make_reader(task)(None, alids)
         n_analyses = len(analysis_range)
@@ -1819,13 +1820,14 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
     assert not (tmp_path / "comp.opengwasdb").exists()
 
 
-def _seed_unjudged(zb, sb, source, out_to_src, r0):
-    """Seed a band from the source as completion does, judging none of its cells."""
-    valid, rows = complete_module._band_source_rows(out_to_src, r0, r0 + len(zb))
+def _seed_unjudged(zb, sb, eb, source, valid, rows):
+    """Seed band rows from the source as completion does, judging none of its cells."""
     if len(valid):
         cells = source.inspect(Cells.variants(rows))
         zb[valid, :] = cells.z.reshape(len(rows), -1)
         sb[valid, :] = cells.se.reshape(len(rows), -1)
+        if eb is not None:
+            eb[valid, :] = cells.eaf.reshape(len(rows), -1)
 
 
 @pytest.mark.parametrize(
@@ -1978,7 +1980,9 @@ def test_a_block_neither_fills_nor_counts_what_it_cedes(
         ceded=lambda analysis: endpoint if analysis == 0 else frozenset(),
     )
 
-    assert [(f.alid, f.analysis_index) for f in result.fills] == [("1:1050000:C:T", 1)]
+    assert [(result.alids[f["local_index"]], f["analysis_index"]) for f in result.fills] == [
+        ("1:1050000:C:T", 1)
+    ]
     assert [(q.analysis_index, q.n_imputed, q.n_missing) for q in result.quality_rows] == [
         (0, 0, 0),
         (1, 1, 0),
@@ -2009,6 +2013,57 @@ def test_a_shared_endpoint_is_filled_by_the_block_that_starts_there_and_counted_
     assert result.n_imputed == 1
     a1 = next(r for r in read_analyses(dst / "analyses.tsv").rows if r["analysis_id"] == "a1")
     assert a1["completion_n_imputed_total"] == "1"
+
+
+#: An indel at the shared endpoint that the panel declares no reference for, in both
+#: blocks: no ALID names it (ADR 0079), so it is never a cell of the Store.
+_UNNAMED_AT_END = ("1:1050000:A:AT", 0.2, 1_050_000)
+
+
+def _quality(store: Path) -> dict[tuple[int, str], tuple[int, int]]:
+    import sqlite3
+
+    with sqlite3.connect(str(store / "index.sqlite")) as conn:
+        return {
+            (int(a), str(b)): (int(i), int(m))
+            for a, b, i, m in conn.execute(
+                "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
+            )
+        }
+
+
+def test_a_panel_row_no_alid_names_is_counted_by_no_block(
+    tmp_path: Path, observed_store: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`completion_quality` counts only cells the Store holds (the owner's ruling of 11
+    Nov 2026, ADR 0039). An unnamed indel at the shared endpoint is in both blocks, and
+    ceding by ALID cannot reach it, so each block once counted it missing. Neither does
+    now: the counts are those of the same completion without it, and each quality row
+    counts exactly the cells its block owns, the named endpoint left to the block that
+    starts there (ADR 0072)."""
+    from completion_counts import assert_dense_counts_are_cells
+
+    _stub_fits(monkeypatch)
+    plain = _boundary_panel(tmp_path / "plain", "900000-1050000", "1050000-1200000")
+    unnamed = tmp_path / "unnamed"
+    write_ld_block(unnamed / "EUR" / "1", "900000-1050000", [*_ENDING_AT, _UNNAMED_AT_END])
+    write_ld_block(
+        unnamed / "EUR" / "1", "1050000-1200000", [_UNNAMED_AT_END, *_STARTING_AT], seed=1
+    )
+    counts = {}
+    for name, panel in (("plain", plain), ("unnamed", unnamed)):
+        dst = tmp_path / f"{name}.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        )
+        counts[name] = _quality(dst)
+        assert_dense_counts_are_cells(dst, panel)
+        record = open_store(dst).manifest.provenance["completion"]
+        unplaced = record["panel_indels"]["unplaced"]["no_reference"]
+        assert unplaced == (2 if name == "unnamed" else 0), (name, record["panel_indels"])
+
+    assert counts["plain"], "the completion records no quality row"
+    assert counts["unnamed"] == counts["plain"]
 
 
 def test_a_shared_endpoint_does_not_depend_on_block_order(

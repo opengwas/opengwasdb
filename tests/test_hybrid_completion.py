@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import logging
 import shutil as file_ops
 from pathlib import Path
 
@@ -17,8 +18,11 @@ import numpy as np
 import plane_edits
 import pytest
 import zarr
+from completion_releases import assert_same_release
 from residual_fixtures import write_gwas_vcf_with_eaf
+from store_digest import store_digest
 
+from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
@@ -176,20 +180,19 @@ def completed_hybrid(
 def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     tmp_path: Path, completed_hybrid: tuple[Path, Path, HybridCompletionResult]
 ) -> None:
-    """Spec §21.3: completion refuses a source stamped other than its features give,
-    rather than publish another; a Hybrid carries no region table, so it is 0.2.0."""
+    """A Hybrid build is 0.2.2, its indels spelt reference first (spec §21.3, ADR 0079).
+    Stamped 0.2.1, it claims sorted indels, which completion refuses before it reads the
+    stamp's other feature, rather than spell the panel's indels beside them."""
     from region_tables import edit_manifest
 
     from opengwasdb.store.open import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
-    assert StoreManifest.load(src).format_version == "0.2.0"
+    assert StoreManifest.load(src).format_version == "0.2.2"
     edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
     dst = tmp_path / "restamped-dst.opengwasdb"
 
-    with pytest.raises(
-        UnsupportedFormatVersion, match="stamped 0.2.1, but a release carrying no region table"
-    ):
+    with pytest.raises(UnsupportedFormatVersion, match="0.2.1 Store sorts an indel's alleles"):
         complete_hybrid_store(src, dst, _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
     assert not dst.exists()
 
@@ -498,7 +501,9 @@ def _residual_ld_panel_with_crossover(
     return root
 
 
-def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_path) -> None:
+def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
+    tmp_path, caplog, monkeypatch
+) -> None:
     """issue #163: panel crossover must rebuild the Dense Top-Hit Index with
     the completed component's own encoding, not the source's.
 
@@ -512,9 +517,32 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_pa
     )
     assert StoreManifest.load(src).encoding.se.is_residual
 
+    dense_axis = VariantAxis(src / "dense")
+    assert crossover_alid not in {row.alid for row in dense_axis.all()}
+    dense_axis.close()
+    shared = VariantAxis(src)
+    shared_alids = {row.variant_index: row.alid for row in shared.all()}
+    shared.close()
+    overflow = RaggedCSRReader(src)
+    assert crossover_alid in {
+        shared_alids[int(vi)] for vi in overflow.variant_index(0, overflow.sequence_length)
+    }
+
+    from opengwasdb.encoding import banding
+
+    monkeypatch.setattr(banding, "DECODED_BAND_BYTES", 32 * 2 * banding.BYTES_PER_CELL)
+    caplog.set_level(logging.INFO, logger="opengwasdb.layouts.dense.top_hits")
+    caplog.clear()
     ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
     dst = tmp_path / "dst.opengwasdb"
     result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    parallel_dst = tmp_path / "parallel.opengwasdb"
+    complete_hybrid_store(src, parallel_dst, ld, min_cor=0.0, thresh=0.9, n_workers=2)
+    assert store_digest(dst) == store_digest(parallel_dst)
+    assert_same_release(dst / "dense", parallel_dst / "dense")
+    top_hits = compare_top_hits(dst / "dense", parallel_dst / "dense")
+    assert top_hits["identical"], top_hits
+    assert all(tier["hits"] > 0 for tier in top_hits["tiers"].values())
 
     assert validate_store(dst).ok
     assert result.n_imputed > 0  # trait_b's four unobserved panel variants
@@ -573,6 +601,11 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_pa
     assert crossover_alid in facade_by_alid
     assert facade_by_alid[crossover_alid] == pytest.approx(expected_crossover_se, rel=0.01)
 
+    plans = [r.message for r in caplog.records if "Top-hit index: scanning" in r.message]
+    assert len(plans) == 4  # Initial completion and the post-crossover rebuild, twice.
+    for plan, requested in zip(plans, (1, 1, 2, 2), strict=True):
+        assert f"n_workers={requested}, 32 rows per band" in plan
+
 
 def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation(tmp_path):
     """issue #99: when the LD panel extends the Dense Component to cover a
@@ -625,6 +658,93 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     # never counted as imputed to begin with in this fixture (see the
     # correlated-block test below for the case where it was).
     assert result.n_imputed >= 0
+
+
+def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from completion_counts import quality_counts
+
+    from opengwasdb.completion import block
+
+    source = _build_source(tmp_path)
+    panel = tmp_path / "ld_panel"
+    variants = [*PANEL_ALIDS, OFF_PANEL_ALID]
+    _write_ld_block(
+        panel / "EUR" / "1", "arbitrary-block-name",
+        [(alid, 0.3, int(alid.split(":")[1])) for alid in variants],
+    )
+    monkeypatch.setattr(
+        block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
+    )
+    completed = tmp_path / "completed.opengwasdb"
+    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+
+    dense = open_store(completed / "dense")
+    mask = np.asarray(dense.arrays(mode="r")["imputed"][:])
+    assert mask.sum(axis=0).tolist() == [0, 2], "one fill was reclaimed; two must survive"
+    counted = quality_counts(dense.path)
+    assert counted == {
+        (0, "1/arbitrary-block-name"): (0, 0),
+        (1, "1/arbitrary-block-name"): (2, 0),
+    }
+    declarations = [
+        row["completion_n_imputed_total"] for row in read_analyses(dense.analyses_path).rows
+    ]
+    assert declarations == ["0", "2"]
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
+def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from completion_counts import quality_counts
+
+    from opengwasdb.completion import block
+    from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
+
+    crossover = PANEL_ALIDS[1]
+    vcf = _vcf(tmp_path, "observed", [
+        f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.2:0.3\n"
+        for pos in (100_000, 750_000, 1_000_000, 1_500_000, 2_000_000)
+    ])
+    source = build_over_panel(
+        tmp_path, write_manifest(tmp_path, [(vcf, "trait_a", "Trait A")]),
+        [alid for alid in [*PANEL_ALIDS, OFF_PANEL_ALID] if alid != crossover],
+    )
+    blocks = {
+        "owner-a": PANEL_ALIDS[:3],
+        "owner-b": [*PANEL_ALIDS[:2], PANEL_ALIDS[3]],
+        "ceder": PANEL_ALIDS[:2],
+        "successor": PANEL_ALIDS[1:],
+        "unaffected": [*PANEL_ALIDS[2:], "1:1700000:A:G", OFF_PANEL_ALID],
+    }
+    panel = tmp_path / "ld_panel"
+    for name, alids in blocks.items():
+        _write_ld_block(panel / "EUR" / "1", name, [
+            (alid, 0.3, int(alid.split(":")[1])) for alid in alids
+        ])
+    ceded = ceded_at_end(list_all_blocks(panel, "EUR", "1"))
+    assert {name for name, alids in ceded.items() if crossover in alids} == {"1/ceder"}
+    assert sum(crossover in alids for alids in blocks.values()) == 4
+    monkeypatch.setattr(
+        block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
+    )
+    completed = tmp_path / "completed.opengwasdb"
+    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+
+    assert quality_counts(completed / "dense") == {
+        (0, f"1/{name}"): (int(name == "unaffected"), 0) for name in blocks
+    }
+    with query_store(completed) as query:
+        assert query.lookup([crossover], ["trait_a"])["association_status"].tolist() == ["observed"]
+    assert read_analyses(completed / "dense" / "analyses.tsv").rows[0][
+        "completion_n_imputed_total"
+    ] == "1", "the unaffected block's fill must survive the corrections"
+    file_ops.rmtree(panel)
+    result = validate_store(completed)
+    assert result.ok, result.errors
 
 
 def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:

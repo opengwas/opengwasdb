@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, NoReturn, Self, cast
+from typing import Any, ClassVar, NoReturn, Self, TypeVar, cast
 
 import numpy as np
 
@@ -108,14 +108,15 @@ def _positions_for(mask: np.ndarray, positions: PositionSource, *, what: str) ->
 
 
 def se_float16(values: np.ndarray) -> np.ndarray:
-    """SEs as a `float16` SE plane holds them: the one place an SE is narrowed.
+    """SEs as a `float16` SE plane holds them: the one rounding rule for an SE.
 
     Rounded to nearest, so an SE above 65,504 and below 65,520 becomes 65,504,
     and one of 65,520 or more becomes `+inf`; either stays an association (spec
-    §15, issue #337). The plane's writers, its byte
-    measurement and the Dense build's rounding of the SEs it holds exactly
-    (issue #355) all come through here, so a plane cannot be measured under
-    one rounding and written under another.
+    §15, issue #337). Everything that needs an SE as a `float16` plane holds it
+    comes through here or through `StoreCodec.float16_se`, so a plane cannot be
+    measured under one rounding and written under another. A build holds its SEs
+    at the source's `float32` until a plan is chosen, because a residual plan's
+    exact exception is that value (issue #355, spec §6a).
     """
     with np.errstate(over="ignore"):
         narrowed: np.ndarray = np.asarray(values).astype(np.float16)
@@ -633,6 +634,9 @@ class SparseExactBuilder:
         return cls(index=index, value=value)
 
 
+_Table = TypeVar("_Table", bound=SparseExactTable)
+
+
 @dataclass(frozen=True)
 class ZOverflowTable(SparseExactTable):
     """Exact `float32` z for the cells the fixed-point plane cannot hold.
@@ -677,6 +681,37 @@ class EafExceptionBuilder(SparseExactBuilder):
 
     def table(self) -> EafExceptionTable:
         return cast(EafExceptionTable, super().table())
+
+
+def table_end_to_end(table_type: type[_Table], runs: Sequence[_Table]) -> _Table:
+    """One table from runs of entries, each a contiguous range of flat positions,
+    laid end to end in the order given -- a Dense row band's, a Ragged region's.
+
+    Not sorted: the order the runs are given in is the table, so a caller that
+    assembled them in the order its workers *finished* is refused by the table's
+    own rule (its index would no longer ascend) instead of writing a table no
+    lookup can read (#321, as `eaf_exception_table` for the Dense build).
+    """
+    if not runs:
+        return table_type(index=np.empty(0, dtype=np.int64), value=np.empty(0, dtype=np.float32))
+    return table_type(
+        index=np.concatenate([run.index for run in runs]),
+        value=np.concatenate([run.value for run in runs]),
+    )
+
+
+def eaf_exception_table(bands: Sequence[EafExceptionTable]) -> EafExceptionTable:
+    """One table from a grid encode's per-band ones, in the order they arrive.
+
+    A Dense row band holds a contiguous run of flat positions, so the bands'
+    runs, laid end to end in row order, are already the sorted, unique table
+    the format requires -- and are taken as given rather than sorted again,
+    because sorting would hide the one thing that makes the bytes depend on
+    order: which band a parent put first. A caller that assembled them in the
+    order its workers *finished* is refused by the table's own rule (the index
+    would no longer ascend), instead of writing a table no lookup can read.
+    """
+    return table_end_to_end(EafExceptionTable, bands)
 
 
 @dataclass(frozen=True)
@@ -977,6 +1012,20 @@ class StoreCodec:
         self.se_exceptions = se_exceptions
 
     # ---- se --------------------------------------------------------------
+
+    def float16_se(self, values: np.ndarray) -> np.ndarray:
+        """These SEs as a `float16` plan's plane stores them, at `float16`.
+
+        The non-residual plan's rounding, asked of the codec so no builder or
+        checker narrows an SE itself (issue #355). A Dense build harvests a
+        top-hit candidate's SE this way before its plan is decided, because
+        under a `float16` plan that is the value a query decodes at the cell;
+        `write_top_hit_indexes_for_store` re-reads the plane under a residual
+        one, whose cells hold codes. Validation re-applies it to a source value
+        to compare the cell a `float16` plane stores, and to a table entry to
+        ask whether that entry is one such rounding (spec §20.0).
+        """
+        return se_float16(values)
 
     @staticmethod
     def _se_prediction(

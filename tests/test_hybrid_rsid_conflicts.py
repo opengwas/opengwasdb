@@ -252,47 +252,50 @@ class TestNormalisedNamesDoNotConflict:
         assert _hybrid_axis_rsids(store) == {CONFLICT_ON: stored, AGREED: ""}
 
 
-#: GCST004988 reports this indel in both allele orders under different names;
-#: GCST010723 names the `TTTTG`/`T` order as the other one does (stores #225).
-INDEL_ALID = "1:154311889:T:TTTTG"
+#: A variant one source reports in both allele orders under different names,
+#: and another names in one order as the first does: GCST004988 and GCST010723
+#: did so for the indel `T`/`TTTTG` (stores #225). An indel's two orders are two
+#: variants since its ALID is spelt reference first (ADR 0079), and GWAS-SSF
+#: declares no reference, so the case is an SNV's.
+SNV_ALID = "1:154311889:C:T"
 
 
 @pytest.mark.parametrize("on_reference", [True, False], ids=["reference", "fold"])
 def test_drop_blanks_a_variant_another_allele_order_still_names(tmp_path, on_reference):
     """The variant, not just the disputed key, stores no rsid: here the
-    `TTTTG`/`T` key is disputed (rs376674031 against rs113800458) while the
-    `T`/`TTTTG` key, which routes to the same variant, names rs113800458 alone.
+    `T`/`C` key is disputed (rs376674031 against rs113800458) while the
+    `C`/`T` key, which routes to the same variant, names rs113800458 alone.
     Before the variant was blanked it kept that name."""
     upper = _write_ssf(
         tmp_path / "upper.tsv.gz",
         [
-            ("1", 154311889, "T", "TTTTG", 0.5, 0.1, "rs113800458:154284365:T:TTTTG"),
-            ("1", 154311889, "TTTTG", "T", -0.5, 0.1, "rs376674031:154284365:TTTTG:T"),
+            ("1", 154311889, "C", "T", 0.5, 0.1, "rs113800458:154284365:C:T"),
+            ("1", 154311889, "T", "C", -0.5, 0.1, "rs376674031:154284365:T:C"),
             ("1", 1564620, "A", "G", 0.2, 0.1, "rs3"),
         ],
     )
     lower = _write_ssf(
         tmp_path / "lower.tsv.gz",
         [
-            ("1", 154311889, "ttttg", "t", 0.4, 0.1, "rs113800458"),
+            ("1", 154311889, "t", "c", 0.4, 0.1, "rs113800458"),
             ("1", 1564620, "a", "g", 0.3, 0.1, "rs3"),
         ],
     )
     manifest = _manifest(tmp_path, [("upper", upper), ("lower", lower)])
     reference = tmp_path / "reference.txt"
-    alids = [INDEL_ALID, AGREED] if on_reference else [AGREED]
+    alids = [SNV_ALID, AGREED] if on_reference else [AGREED]
     reference.write_text("".join(f"{alid}\n" for alid in alids), encoding="utf-8")
     store = tmp_path / "indel.opengwasdb"
 
     result = _cli(manifest, reference, store, "--on-rsid-conflict", "drop")
 
     names = ("rs376674031", "rs113800458")
-    _assert_one_variant_unnamed(result, store, "1:154311889:TTTTG:T", names, INDEL_ALID)
-    assert _hybrid_axis_rsids(store) == {INDEL_ALID: "", AGREED: "rs3"}
+    _assert_one_variant_unnamed(result, store, "1:154311889:T:C", names, SNV_ALID)
+    assert _hybrid_axis_rsids(store) == {SNV_ALID: "", AGREED: "rs3"}
     if on_reference:
         # The disputed order is off the reference, so the fold reaches this
         # Dense row after the skeleton was named: the Dense table is rewritten.
-        assert _table_rsid_cells(store / "dense")[INDEL_ALID] == "."
+        assert _table_rsid_cells(store / "dense")[SNV_ALID] == "."
 
 
 def _agreeing_fixture(tmp_path: Path) -> tuple[Path, Path]:

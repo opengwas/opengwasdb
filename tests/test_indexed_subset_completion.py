@@ -55,7 +55,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     list_indexed_subsets,
     open_indexed_subset,
 )
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
@@ -86,11 +86,11 @@ def _record(
 
 
 def _source_with_cohort_eaf(store: Path) -> Path:
-    """a1 observes every position but the target; a2 observes the target, not completed.
+    """EUR a1 observes all but the target; EAS a2 stays observed-only.
 
     a1's cell at ``NO_COHORT_EAF`` carries no cohort frequency.  a2 is left
-    observed-only by ``impute_analysis_ids={'a1'}`` below, so the fixture spans
-    a completed Analysis and an unmatched one.
+    observed-only by its persisted ancestry, so validation can establish why
+    its missing panel cells were never attempted (#307).
     """
     records: list[NormalisedAssociation] = []
     for i, z in enumerate(_SIGNAL_Z_TRUE):
@@ -106,6 +106,10 @@ def _source_with_cohort_eaf(store: Path) -> Path:
         release_id="observed-v1",
         reference_assembly="GRCh38",
     )
+    table = read_analyses(store / "analyses.tsv")
+    for row in table.rows:
+        row["assigned_ancestry"] = {"a1": "EUR", "a2": "EAS"}[row["analysis_id"]]
+    write_analyses(store / "analyses.tsv", table)
     return store
 
 
@@ -174,8 +178,6 @@ def _complete_seed(
     source: Path,
     dst: Path,
     panel: Path,
-    *,
-    impute_analysis_ids: set[str] | None = None,
 ) -> None:
     """Complete a shared seed with the settings common to this module."""
     complete_dense_store(
@@ -185,7 +187,6 @@ def _complete_seed(
         ancestry="EUR",
         min_cor=0.0,
         release_id="comp-v1",
-        impute_analysis_ids=impute_analysis_ids,
     )
 
 
@@ -201,7 +202,7 @@ def _completed_store_seed(
         root, _cohort_eaf_store_seed, "cohort-obs.opengwasdb", _signal_panel_seed
     )
     dst = root / "cohort-comp.opengwasdb"
-    _complete_seed(source, dst, panel, impute_analysis_ids={"a1"})
+    _complete_seed(source, dst, panel)
     return dst
 
 
@@ -299,6 +300,14 @@ def test_cohort_eaf_fixture_reaches_every_completed_state(completed_store: Path)
     )}
     assert np.isnan(by_variant[_variant_index_of(completed_store, NO_COHORT_EAF)][0])
     assert by_variant[_variant_index_of(completed_store, IMPUTED)][1] == "imputed"
+    rows = read_analyses(completed_store / "analyses.tsv").rows
+    assert [(row["analysis_id"], row["assigned_ancestry"]) for row in rows] == [
+        ("a1", "EUR"), ("a2", "EAS"),
+    ]
+    assert rows[0]["completed_against"] and not rows[1]["completed_against"]
+    excluded = _analyse(completed_store, "a2")
+    assert len(excluded["variant_index"]) == 2
+    assert set(excluded["association_status"]) == {"observed"}
     assert validate_store(completed_store).ok
 
 

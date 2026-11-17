@@ -1,0 +1,255 @@
+{
+ "single_pass": {
+  "alids": [
+   "2:998001:A:T",
+   "2:999001:C:T",
+   "3:1000:A:G",
+   "3:5000:A:AACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
+   "3:5000:AACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT:A",
+   "3:6000:G:GGGGCC",
+   "3:6000:GGGGCC:G",
+   "3:7000:C:T",
+   "3:8000:A:G",
+   "3:9000:A:G",
+   "3:10000:ACGT:A"
+  ],
+  "columns": {
+   "0": {
+    "eaf": {
+     "dtype": "float32",
+     "values": [
+      0.800000011920929,
+      0.699999988079071,
+      0.20000000298023224,
+      0.8999999761581421,
+      0.9800000190734863,
+      0.9917144775390625,
+      0.9995127320289612,
+      0.6000000238418579,
+      0.5,
+      0.75
+     ]
+    },
+    "rows": {
+     "dtype": "int64",
+     "values": [
+      1,
+      0,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      9,
+      10
+     ]
+    },
+    "se": {
+     "dtype": "float32",
+     "values": [
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.05000000074505806,
+      0.05999999865889549,
+      0.013590799644589424,
+      0.05057999864220619,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612
+     ]
+    },
+    "z": {
+     "dtype": "float32",
+     "values": [
+      -2.0,
+      -3.0,
+      2.0,
+      2.0,
+      -5.0,
+      0.08515098690986633,
+      -0.44727757573127747,
+      -5.0,
+      -1.0,
+      2.0
+     ]
+    }
+   },
+   "1": {
+    "eaf": {
+     "dtype": "float32",
+     "values": [
+      0.800000011920929,
+      0.20000000298023224,
+      0.8999999761581421,
+      0.9994999766349792,
+      0.75
+     ]
+    },
+    "rows": {
+     "dtype": "int64",
+     "values": [
+      1,
+      2,
+      3,
+      6,
+      10
+     ]
+    },
+    "se": {
+     "dtype": "float32",
+     "values": [
+      0.10000000149011612,
+      0.10000000149011612,
+      0.05000000074505806,
+      0.05000000074505806,
+      0.10000000149011612
+     ]
+    },
+    "z": {
+     "dtype": "float32",
+     "values": [
+      -2.5,
+      2.5,
+      3.0,
+      -0.4000000059604645,
+      3.0
+     ]
+    }
+   }
+  }
+ },
+ "two_pass": {
+  "alids": [
+   "2:998001:A:T",
+   "2:999001:C:T",
+   "3:1000:A:G",
+   "3:5000:A:AACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
+   "3:5000:AACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT:A",
+   "3:6000:G:GGGGCC",
+   "3:6000:GGGGCC:G",
+   "3:7000:C:T",
+   "3:8000:A:G",
+   "3:9000:A:G",
+   "3:10000:ACGT:A",
+   "3:12000:C:T",
+   "3:13000:A:AT",
+   "3:13000:AT:A"
+  ],
+  "columns": {
+   "0": {
+    "eaf": {
+     "dtype": "float32",
+     "values": [
+      0.800000011920929,
+      0.699999988079071,
+      0.20000000298023224,
+      0.8999999761581421,
+      0.9800000190734863,
+      0.9917144775390625,
+      0.9995127320289612,
+      0.6000000238418579,
+      0.5,
+      0.75
+     ]
+    },
+    "rows": {
+     "dtype": "int64",
+     "values": [
+      1,
+      0,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      9,
+      10
+     ]
+    },
+    "se": {
+     "dtype": "float32",
+     "values": [
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.05000000074505806,
+      0.05999999865889549,
+      0.013590799644589424,
+      0.05057999864220619,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612
+     ]
+    },
+    "z": {
+     "dtype": "float32",
+     "values": [
+      -2.0,
+      -3.0,
+      2.0,
+      2.0,
+      -5.0,
+      0.08515098690986633,
+      -0.44727757573127747,
+      -5.0,
+      -1.0,
+      2.0
+     ]
+    }
+   },
+   "1": {
+    "eaf": {
+     "dtype": "float32",
+     "values": [
+      0.800000011920929,
+      0.20000000298023224,
+      0.8999999761581421,
+      0.9994999766349792,
+      0.75,
+      0.6000000238418579,
+      0.8999999761581421
+     ]
+    },
+    "rows": {
+     "dtype": "int64",
+     "values": [
+      1,
+      2,
+      3,
+      6,
+      10,
+      11,
+      13
+     ]
+    },
+    "se": {
+     "dtype": "float32",
+     "values": [
+      0.10000000149011612,
+      0.10000000149011612,
+      0.05000000074505806,
+      0.05000000074505806,
+      0.10000000149011612,
+      0.10000000149011612,
+      0.10000000149011612
+     ]
+    },
+    "z": {
+     "dtype": "float32",
+     "values": [
+      -2.5,
+      2.5,
+      3.0,
+      -0.4000000059604645,
+      3.0,
+      9.0,
+      -3.0
+     ]
+    }
+   }
+  }
+ }
+}

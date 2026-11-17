@@ -1,5 +1,31 @@
 # Association Admission: one rule set, one gate, one record
 
+> **Amended by [ADR 0079](0079-indel-alids-spell-the-reference-allele-first.md)**
+> (issue #381). An indel's ALID spells its reference allele first, so an
+> insertion and a deletion at one position are two variants, and the
+> reversed-indel rule below can no longer fire: no build drops a row as
+> `duplicate_reversed_indel`, which stays readable in a record written before.
+> An indel whose source declares no reference is a third malformed identity,
+> dropped and logged as `indel_reference_undeclared` after `allele_invalid`, or,
+> for GWAS-SSF, under a reason naming its layout (`indel_ssf_unharmonised`,
+> `indel_ssf_hm_columns`, `indel_ssf_hm_code`); a record also counts the indels
+> a GWAS-SSF harmoniser code kept (`indel_rows_kept_by_hm_code`). The rule set's
+> version is `admission/14`: a row of a lifted source that the chain places on
+> an alt, random or unplaced contig is dropped and logged as `lift_off_primary`
+> (#376).
+>
+> **Clarified 7 Nov 2026 (issue #316): D5 has no reversed-indel case.** With
+> every indel's ALID spelt reference first, the rows of one (variant,
+> Analysis) are never an insertion and a deletion, so #316 removed the
+> exception and what fed it: routing's per-row `REFERENCE_*` codes, the
+> readers' `ref_first`, `ReferenceAllele.ALT`, and the reference arrays of a
+> Hybrid's Overflow and off-reference spills. The duplicate rule is now the
+> one sentence: rows that agree collapse to the first, and rows that disagree
+> are all dropped. `duplicate_reversed_indel` is retired in place: a reason's
+> code is its position, so the member keeps its place, and no rule gives it.
+> #316 left the rule set at `admission/13`, since no record a build writes
+> changed; #376 moves it to `admission/14`.
+
 Issue [#357](https://github.com/opengwas/opengwasdb/issues/357), part of epic
 #58. Records which of an Analysis's source rows a Store admits, where that is
 decided, and where what it dropped is written down. Amends ADR 0054, whose one
@@ -86,6 +112,10 @@ name the decisions issue #357 took on the rules that differed.
 |---|---|---|---|
 | `chromosome_missing` | its chromosome is an empty cell or a missing-value token (`.`, `NA`, `NaN`, `None`) | yes | #365 |
 | `allele_invalid` | an allele, upper-cased (ADR 0075), is empty or holds a character other than A, C, G or T | yes | #365 |
+| `indel_reference_undeclared` | its two alleles differ in length and its source declares neither the reference, so no ALID can spell it reference first (ADR 0079) | yes | #381 |
+| `indel_ssf_unharmonised` | the same, in a GWAS-SSF file with no harmoniser column | yes | #381 |
+| `indel_ssf_hm_columns` | the same, in a GWAS-SSF file that keeps its harmonised alleles in `hm_*` columns, none of whose indels is placed | yes | #381 |
+| `indel_ssf_hm_code` | the same, in a GWAS-SSF file whose main columns are harmonised, on a row whose harmoniser code is neither 10 nor 11 | yes | #381 |
 | `se_unusable` | its reported SE is missing, not positive or not finite | yes | slice 4 (Ragged), D3 (every reader) |
 | `effect_missing` | it has a usable SE but no effect | yes | slice 5 |
 | `z_nonfinite` | its z is infinite, beside a usable SE | yes | D4 |
@@ -93,16 +123,38 @@ name the decisions issue #357 took on the rules that differed.
 | `maf_missing` | a `FILTERED` MAF policy finds no usable frequency | no | ADR 0054; every builder since D2 |
 | `maf_below_threshold` | MAF is below a `FILTERED` threshold | no | ADR 0054; every builder since D2 |
 | `duplicate_collapsed` | it agrees on z and SE with an earlier row for its (variant, Analysis), whose association it is | no | D5 |
-| `duplicate_reversed_indel` | it is an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept | yes | D5, reversed indels |
+| `duplicate_reversed_indel` | retired by #316, and given by no rule; it was: an indel whose declared reference allele its ALID spells second, at a (variant, Analysis) whose distinct rows, once agreeing copies collapse, are this one and one spelling it first, which is kept; no longer fires since ADR 0079 | yes | D5, reversed indels |
 | `duplicate_conflicting` | the rows for its (variant, Analysis) disagree on z or SE: all are dropped | yes | D5 |
 | `off_axis` | no axis of the Store holds its variant, and nothing will place it later | yes | D6 |
 | `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
 | `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
+| `lift_off_primary` | its source is lifted onto the Store's assembly and the chain places its site on an alt, random or unplaced contig, which a Store does not hold | yes | #376 |
 
 `build-ragged-ssf` lifts a source declaring another build, and counts what the
-lift drops under its own two reasons rather than `off_axis`: a record then says
+lift drops under its own three reasons (`lift_unmapped`, `lift_ambiguous` and, since
+#376, `lift_off_primary`) rather than `off_axis`: a record then says
 the chain, not an axis, lost the row. Records written before #386 hold neither
 reason and read as before. The rule set's version moved to `admission/11`.
+
+A lift onto an alt, random or unplaced contig (#376, `admission/14`) is counted this
+way by every builder, not only `build-ragged-ssf`: Dense and Hybrid lift the rows
+a Variant Reference does not hold to tell them from `off_axis` ones, and a
+reference extracted before #376 that routes a lifted row onto such a contig has the
+row dropped and counted the same way. A Store records each Analysis's source
+assembly nowhere, so no rule can say which Analysis's rows were lifted; the rule
+`variant_table.lifted_contig` judges the variant table instead, by `source_alid`
+(the contig a lifted variant came from), and cannot judge a row whose `source_alid`
+a collision blanked. It is an error on a release of format 0.2.2 or later, which the
+fixed builders write, and a warning on an earlier one, which #367 owns. The routing
+check above is what covers the rows it cannot judge.
+
+One limit #367 must know if it rebuilds from a published axis. A plain ALID list
+or a Store Variant Table used as a Variant Reference records no source keys, so the
+build cannot tell an alt-contig ALID that a lift put on it from one a GRCh38 source
+named: it keeps the ALID, whose row stays empty in the new Store, and
+`variant_table.lifted_contig` passes it, since the row's `source_alid` is the ALID
+itself. A Store rebuilt from such an axis holds the alt-contig variants with no
+associations until the axis is rebuilt from the sources.
 
 The duplicate rule is Variant Routing's `collapse_duplicates`, applied after
 the rules above, wherever two rows can reach one (variant, Analysis):
@@ -189,7 +241,8 @@ opposite alleles. Dropping both rows was rejected because it loses a cell
 base kept; this rule keeps it wherever the source declares the reference.
 
 Which formats declare the reference allele (`ReferenceAllele`, carried on each
-`ReaderAssociation` and through routing as one byte a row):
+`ReaderAssociation` and through routing as one byte a row, until #316 and #318
+removed both carriers):
 - GWAS-VCF's `REF`, FinnGen r13's `ref`, and a Column Map with
   `ref_alt_effect_is_alt`, whose rows are the FinnGen reader's, do.
 - GWAS-SSF names an effect and an other allele, and its documentation does not
@@ -203,7 +256,8 @@ Which formats declare the reference allele (`ReferenceAllele`, carried on each
 This is an interim rule. The ALID still spells a reversed pair as one variant:
 #381 gives an indel a ref-first ALID, which is an ADR and a format change, and
 #382 corrects the published cells that hold a deletion's statistics under the
-insertion's ALID.
+insertion's ALID. (#381 did, in ADR 0079, and #316 removed the rule: see the
+note at the top.)
 
 `off_axis` is a Dense VCF row its axis lacks (a lift failure, a variant a
 Variant Reference omits), a two-pass Hybrid row no axis holds (it used to be

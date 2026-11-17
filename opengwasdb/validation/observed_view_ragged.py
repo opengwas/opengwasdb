@@ -55,7 +55,6 @@ from opengwasdb.completion.block import panel_positions
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
-    canonical_panel_alid,
     check_panel_has_chromosomes,
 )
 from opengwasdb.completion.regions import (
@@ -402,9 +401,8 @@ class _RegionRows:
         parts = []
         for block in blocks:
             if block.block_id not in self._by_block:
-                alids = [canonical_panel_alid(snp) for snp in block.snp_ids]
                 self._by_block[block.block_id] = (
-                    self._target_rows.aligned(alids), panel_positions(block)
+                    self._target_rows.aligned(block.alids), panel_positions(block)
                 )
             rows, positions = self._by_block[block.block_id]
             parts.append(rows[inside(regions, block.chrom, positions) & (rows >= 0)])

@@ -46,9 +46,11 @@ def _write_besd_sparse_3f(path: Path, n_probes: int, probe_assocs: list[list[tup
         cols.append(offset)
         cols.append(offset + n)
         for snp_idx, beta, _ in assocs:
-            rowid.append(snp_idx); val.append(beta)
+            rowid.append(snp_idx)
+            val.append(beta)
         for _, _, se in assocs:
-            rowid.append(0); val.append(se)
+            rowid.append(0)
+            val.append(se)
         offset += 2 * n
     cols.append(offset)
     col_num = (n_probes << 1) + 1
@@ -109,7 +111,7 @@ def _make_ld_panel(tmp_path: Path, chrom: str, start: int, end: int) -> Path:
     n = len(ref_snps)
 
     tsv_lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
-    for alid, eaf, bp in ref_snps:
+    for alid, eaf, _bp in ref_snps:
         chrom_, rest = alid.split(":")
         bp_str = rest.split("_")[0]
         a1, a2 = rest.split("_")[1], rest.split("_")[2]
@@ -535,7 +537,9 @@ class TestCompletionFiles:
         conn.close()
         assert "completion_quality" in tables
 
-    def test_overwrite_raises_without_flag(self, tmp_path, observed_store, ld_panel, completed_store):
+    def test_overwrite_raises_without_flag(
+        self, tmp_path, observed_store, ld_panel, completed_store
+    ):
         with pytest.raises(FileExistsError):
             complete_ragged_store(observed_store, completed_store, ld_panel, min_cor=0.0,
             )
@@ -973,7 +977,9 @@ class TestAncestryMatchedRaggedCompletion:
         assert len(afr_result["z"]) == len(afr_observed["z"]) == len(observed_bp)
         assert set(afr_result["association_status"].tolist()) == {"observed"}
         comp_ax2 = VariantAxis(completed_store)
-        afr_result_alids = {comp_ax2.by_index(vi).alid for vi in afr_result["variant_index"].tolist()}
+        afr_result_alids = {
+            comp_ax2.by_index(vi).alid for vi in afr_result["variant_index"].tolist()
+        }
         comp_ax2.close()
         assert afr_result_alids == afr_observed_alids
 
@@ -1958,6 +1964,7 @@ def test_a_block_cedes_its_end_only_for_an_analysis_completed_against_the_next()
         block_canonical_alids={},
         block_positions={},
         new_alids=set(),
+        panel_placement={},
         endpoints={"1/100-200": SharedEndpoint("1/200-300", endpoint)},
     )
 

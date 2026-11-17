@@ -621,7 +621,9 @@ def test_the_orientation_sample_is_the_whole_axis_sample_without_holding_the_axi
     from opengwasdb.variants import orient_to_canonical
 
     variants = [
-        orient_to_canonical("1", str(1_000 + 10 * (i // 2)), "A", "G" if i % 2 else "C").variant
+        orient_to_canonical(
+            "1", str(1_000 + 10 * (i // 2)), "A", "G" if i % 2 else "C", other_is_reference=False
+        ).variant
         for i in range(30_000)
     ]
     assert variants[0].position == variants[1].position, "the fixture must share positions"

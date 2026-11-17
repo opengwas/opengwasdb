@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
 from shutil import copytree
 from typing import TYPE_CHECKING
 
 import pytest
 import shared_releases
+
+from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 
 if TYPE_CHECKING:
     from test_ragged_residual_completion import RaggedResidualScenario
@@ -39,6 +43,21 @@ SOURCE_ROWS = [
 ]
 
 
+#: Test modules whose every GWAS-SSF read is also made as batches and compared
+#: (`batch_fixtures.shadow_gwas_ssf`, #319): the ones that write their own sources.
+_SHADOWED_MODULES = {"test_readers", "test_effect_recovery"}
+
+
+@pytest.fixture(autouse=True)
+def _gwas_ssf_batches_match_the_associations(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if request.module.__name__ in _SHADOWED_MODULES:
+        import batch_fixtures
+
+        batch_fixtures.shadow_gwas_ssf(monkeypatch)
+
+
 @pytest.fixture
 def source_path(tmp_path: Path) -> Path:
     path = tmp_path / "associations.tsv"
@@ -58,6 +77,74 @@ def dense_store_path(tmp_path: Path, dense_fixture_store: Path) -> Path:
     return Path(copytree(dense_fixture_store, tmp_path / "store.opengwasdb"))
 
 
+@pytest.fixture
+def ragged_store_path(tmp_path):
+    """A minimal Ragged Observed-Only store (SSF ingestion path)."""
+    header = [
+        "chromosome", "base_pair_location", "effect_allele", "other_allele",
+        "beta", "standard_error", "rsid",
+    ]
+    rows = [
+        {"chromosome": "1", "base_pair_location": 100, "effect_allele": "A",
+         "other_allele": "G", "beta": 0.3, "standard_error": 0.1, "rsid": "rs1"},
+        {"chromosome": "1", "base_pair_location": 200, "effect_allele": "A",
+         "other_allele": "G", "beta": -0.2, "standard_error": 0.1, "rsid": "rs2"},
+    ]
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    with gzip.open(filtered_dir / "t1.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("\t".join(header) + "\n")
+        for row in rows:
+            fh.write("\t".join(str(row[c]) for c in header) + "\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\ttrait_id\t"
+        "analysis_label\ttrait_ontology_id\ttrait_ontology_label\ttrait_chr\ttrait_bp\t"
+        "n\ttissue\tcontext\tmhc\tfiltered_file\tsource_genome_build\n"
+        "0\tt1\tT1\tGENE1\tENSEMBL:ENSG1\tEnsembl\t1\t150\t1000\tBlood\t\tFALSE\tt1.tsv.gz\tGRCh38\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "ragged.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered_dir, store_path, store_id="fixture", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    return store_path
+
+
+@pytest.fixture
+def hybrid_store_path(tmp_path):
+    """A minimal Hybrid store: two on-panel analyses, so its Dense Component
+    (dense_component_path) is where index.sqlite/analyses.tsv actually live."""
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
+        "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
+        "##SAMPLE=<ID=S,StudyType=Continuous>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
+    )
+    vcf_a = tmp_path / "trait_a.vcf"
+    vcf_a.write_text(header + "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n", encoding="utf-8")
+    vcf_b = tmp_path / "trait_b.vcf"
+    vcf_b.write_text(header + "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.4\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\toriginal_sd\n"
+        f"trait_a\t{vcf_a}\tTrait A\t1000\tsd\tdeclared_standardised\t\n"
+        f"trait_b\t{vcf_b}\tTrait B\t1000\tsd\tdeclared_standardised\t\n",
+        encoding="utf-8",
+    )
+    panel = tmp_path / "panel.txt"
+    panel.write_text("1:100000:A:G\n", encoding="utf-8")
+    store_path = tmp_path / "hybrid.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, reference_panel=panel, store_id="fixture", release_id="v1"
+    )
+    return store_path
+
+
 @pytest.fixture(scope="session")
 def residual_ragged_scenario(
     tmp_path_factory: pytest.TempPathFactory,
@@ -72,3 +159,139 @@ def panel_only_eaf_ragged_store(tmp_path_factory: pytest.TempPathFactory) -> Pat
     return shared_releases.panel_only_eaf_ragged(
         tmp_path_factory.mktemp("panel-only-eaf-ragged")
     )
+
+
+@pytest.fixture(scope="module")
+def small_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A release whose EAF exception table crosses pages, with a subset of every
+    variant: its table is 400 entries over a grid of 4,000 variants (#387, #314)."""
+    from eaf_tables import SMALL_VARIANTS, build_table_store, publish_every_variant
+
+    root = tmp_path_factory.mktemp("eaf-small")
+    store = build_table_store(root / "store.opengwasdb", SMALL_VARIANTS, "eaf-small")
+    return publish_every_variant(store, SMALL_VARIANTS)
+
+
+@pytest.fixture
+def small_copy(tmp_path: Path, small_seed: Path) -> Path:
+    """A copy of the small release, so a test cannot change the module's."""
+    return copytree(small_seed, tmp_path / "store.opengwasdb")
+
+
+@pytest.fixture(scope="module")
+def completed_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Reference-Completed residual release of 200 variants by two Analyses, with
+    a published subset `hm3` of every third variant, built once (#314, #315)."""
+    from residual_stores import dense_completed
+    from test_indexed_subsets import _build
+
+    from opengwasdb.variants import VariantAxis
+
+    root = tmp_path_factory.mktemp("one-pass")
+    store, _observed, _panel = dense_completed(root)
+    axis = VariantAxis(store)
+    try:
+        alids = [axis.by_index(row).alid for row in range(0, axis.n_variants, 3)]
+    finally:
+        axis.close()
+    listing = root / "subset.alid.txt"
+    listing.write_text("\n".join(alids) + "\n", encoding="utf-8")
+    _build(store, "hm3", listing)
+    return store
+
+
+#: The varied release's variants: 120, by two Analyses.
+VARIED_VARIANTS = 120
+
+
+@pytest.fixture(scope="module")
+def varied_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """120 variants by two Analyses, each cell a different Z, with a published subset
+    `hm3` of every other variant (#314, #315). Its Z climbs past the loosest Top-Hit
+    cutoff in its last rows, so its Top-Hit Index holds cells there."""
+    from dense_sources import build_dense_from_records
+    from test_indexed_subsets import _build
+
+    from opengwasdb.layouts.dense.build import NormalisedAssociation
+    from opengwasdb.variants import CanonicalVariant
+
+    root = tmp_path_factory.mktemp("varied")
+    records = [
+        NormalisedAssociation(
+            analysis_id=f"a{col}",
+            variant=CanonicalVariant("1", row + 1, "A", "G"),
+            z=0.01 + 0.03 * row + 0.5 * col,
+            se=0.2,
+            eaf=0.3,
+        )
+        for col in range(2)
+        for row in range(VARIED_VARIANTS)
+    ]
+    store = root / "store.opengwasdb"
+    build_dense_from_records(
+        records, store, store_id="varied", release_id="varied-v1",
+        reference_assembly="GRCh38", chunk_shape=(VARIED_VARIANTS, 2),
+    )
+    listing = root / "subset.alid.txt"
+    listing.write_text(
+        "\n".join(f"1:{row + 1}:A:G" for row in range(0, VARIED_VARIANTS, 2)) + "\n",
+        encoding="utf-8",
+    )
+    _build(store, "hm3", listing)
+    return store
+
+
+@pytest.fixture(scope="module")
+def rich_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """#387's rich release, 320 variants by four Analyses -- residual SE, an overflow
+    Z, an EAF and an SE exception, missing cells -- with its standard subset."""
+    from test_indexed_subsets import _build, _write_standard_variant_list, build_rich_store
+
+    root = tmp_path_factory.mktemp("rich")
+    store = build_rich_store(root / "store.opengwasdb")
+    _build(store, "hm3", _write_standard_variant_list(root / "subset.alid.txt"))
+    return store
+
+
+#: The Hybrid seed's on-panel variants, and the off-panel ones each trait adds.
+PANEL_VARIANTS = 40
+OFF_PANEL = 4
+
+
+@pytest.fixture(scope="module")
+def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Hybrid release of three traits over a 40-variant panel, each with four
+    off-panel variants in its Overflow, and a subset of every other panel variant."""
+    from test_hybrid_build import _make_manifest, _make_vcf
+
+    from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
+
+    root = tmp_path_factory.mktemp("hybrid")
+    entries = []
+    for trait in range(3):
+        rows = [
+            f"1\t{1_000 * (i + 1)}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t"
+            f"{0.05 * (i + 1) * (trait + 1):.4f}:{0.1 + 0.01 * trait:.3f}:{0.1 + 0.015 * i:.4f}\n"
+            for i in range(PANEL_VARIANTS + (OFF_PANEL if trait else 0) * (trait + 1))
+        ]
+        entries.append((f"t{trait}", _make_vcf(root, f"t{trait}", rows), f"Trait {trait}"))
+    panel = root / "panel.txt"
+    panel.write_text(
+        "".join(f"1:{1_000 * (i + 1)}:A:G\n" for i in range(PANEL_VARIANTS)), encoding="utf-8"
+    )
+    store = root / "hybrid.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        _make_manifest(root, entries),
+        store,
+        reference_panel=panel,
+        store_id="h",
+        release_id="v1",
+        source_assembly="GRCh38",
+    )
+    listing = root / "subset.alid.txt"
+    listing.write_text(
+        "".join(f"1:{1_000 * (i + 1)}:A:G\n" for i in range(0, PANEL_VARIANTS, 2)),
+        encoding="utf-8",
+    )
+    build_indexed_subset(store, "hm3", listing, reference_assembly="GRCh38")
+    return store

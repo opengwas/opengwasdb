@@ -24,7 +24,7 @@ import json
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +128,13 @@ Digests = dict[str, dict[str, dict[str, str]]]
 Rounds = list[dict[str, Any]]
 
 
+def round_order(sides: Sequence[str], index: int) -> list[str]:
+    """The order round `index` runs the sides in: the first side leads on even
+    rounds and trails on odd ones, so neither side is systematically measured on
+    the warmer or quieter half of the window."""
+    return list(sides) if index % 2 == 0 else list(reversed(sides))
+
+
 def interleave(
     sides: list[str],
     run_side: Callable[[str, int], dict[str, Any]],
@@ -144,7 +151,7 @@ def interleave(
     digests: dict[str, dict[str, dict[str, str]]] = {side: {} for side in sides}
     records: list[dict[str, Any]] = []
     for index in range(rounds):
-        order = list(sides) if index % 2 == 0 else list(reversed(sides))
+        order = round_order(sides, index)
         record: dict[str, Any] = {"round": index, "order": order, "results": {}}
         for side in order:
             child = run_side(side, index)

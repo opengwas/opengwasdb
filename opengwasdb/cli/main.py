@@ -67,6 +67,7 @@ from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQue
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
+from opengwasdb.store.open import UnsupportedFormatVersion
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -82,11 +83,12 @@ from opengwasdb.variants.windows import (
 )
 from opengwasdb.version import __version__
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+#: The one logging layout a step's stderr is written in. A benchmark that parses
+#: those lines imports these rather than spelling the layout again.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -549,14 +551,30 @@ def info(
     typer.echo(f"opengwasdb_version: {__version__}")
 
 
+# Issue #315: validation's band pass. A module-level singleton, as above, so it adds
+# no B008 finding.
+_VALIDATE_WORKERS_OPTION = typer.Option(
+    1,
+    "--n-workers",
+    "--workers",
+    min=1,
+    help=(
+        "Fork process-pool size for each Dense grid's association scan, one band a "
+        "worker at a time, capped by a quarter of available memory; the report is "
+        "the same at any size. Other checks run in one process."
+    ),
+)
+
+
 @app.command("validate")
 def validate_command(
     store_path: Path,
     output_format: ReportFormat = _REPORT_FORMAT_OPTION,
+    n_workers: int = _VALIDATE_WORKERS_OPTION,
 ) -> None:
     """Validate a local Store Release."""
 
-    result = validate_store(store_path)
+    result = validate_store(store_path, n_workers=n_workers)
     if output_format is ReportFormat.json:
         # `findings` names the rule behind each record, and the skips beside the
         # failures and warnings: a rule that had nothing to judge is not a pass, and
@@ -878,6 +896,12 @@ def extract_variant_reference_command(
     )
 
 
+_BUILD_WORKERS_HELP = (
+    "Requested process-pool size for Pass 1, Pass 2 and residual EAF encoding; "
+    "memory and band counts cap the encode pool"
+)
+
+
 @app.command("build-dense-vcf")
 def build_dense_vcf_command(
     manifest_path: Path,
@@ -886,7 +910,7 @@ def build_dense_vcf_command(
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
-    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
+    n_workers: int = typer.Option(1, help=_BUILD_WORKERS_HELP),
     chunk_variants: _CHUNK_VARIANTS_OPTION = DEFAULT_CHUNK_SHAPE[0],
     chunk_analyses: _CHUNK_ANALYSES_OPTION = DEFAULT_CHUNK_SHAPE[1],
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
@@ -945,7 +969,7 @@ def build_hybrid_command(
     overwrite: bool = typer.Option(False),
     checkpoint: _CHECKPOINT_OPTION = False,
     resume: Annotated[bool, typer.Option("--resume", help=_RESUME_HELP)] = False,
-    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
+    n_workers: int = typer.Option(1, help=_BUILD_WORKERS_HELP),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
@@ -1502,6 +1526,24 @@ def calibrate_ancestry_command(
         )
 
 
+#: Completion's post-block pools share the memory cap (#321); Dense Top-Hit
+#: scans also cap the requested count by the number of bands (#435).
+_DENSE_WORKERS_HELP = (
+    "Process-pool size for LD blocks, checkpoint merge, band write and Dense Top-Hit scan; "
+    "the post-block pools are capped by a quarter of available memory, "
+    "and the scan also by the number of bands"
+)
+_HYBRID_WORKERS_HELP = (
+    "Process-pool size for the Dense Component's LD blocks, checkpoint merge, band write "
+    "and Top-Hit scans; the post-block pools are capped by a quarter of available memory, "
+    "and the scans also by the number of bands"
+)
+_RAGGED_WORKERS_HELP = (
+    "Process-pool size for the LD blocks, then for the checkpoint merge, the Analyses' "
+    "assembly and the CSR write, which run fewer when a quarter of available memory holds fewer"
+)
+
+
 @app.command("complete-hybrid")
 def complete_hybrid_command(
     source_path: Path,
@@ -1511,7 +1553,7 @@ def complete_hybrid_command(
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_HYBRID_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Reference-complete a Hybrid store — impute only the Dense Component."""
@@ -1673,7 +1715,7 @@ def complete_ragged_command(
     cis_window_bp: int = typer.Option(1_000_000),
     min_cor: float = typer.Option(0.7),
     release_id: str = typer.Option(None),
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_RAGGED_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Produce a Reference-Completed ragged store from an observed-only store.
@@ -1744,7 +1786,7 @@ def complete_dense_command(
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_DENSE_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Produce a Reference-Completed Dense store from a `gwas`-coverage observed-only store."""
@@ -1768,7 +1810,7 @@ def complete_dense_command(
 @app.command("complete-dense-resume")
 def complete_dense_resume_command(
     checkpoint_dir: Path,
-    n_workers: int = typer.Option(1, help="LD-block process-pool size"),
+    n_workers: int = typer.Option(1, help=_DENSE_WORKERS_HELP),
 ) -> None:
     """Resume an interrupted complete-dense run from its checkpoint directory.
 
@@ -1830,9 +1872,25 @@ def build_ragged_top_hits_command(store_path: Path) -> None:
 
 
 @app.command("build-dense-top-hits")
-def build_dense_top_hits_command(store_path: Path) -> None:
-    """Build (or rebuild) the top-hit index for a Dense store."""
-    build_top_hit_indexes(store_path)
+def build_dense_top_hits_command(
+    store_path: Path, n_workers: int = _N_WORKERS_OPTION
+) -> None:
+    """Build (or rebuild) the top-hit index for a Dense store.
+
+    A release stored as Zarr v2 -- every `format_version` 0.1.0 release -- is
+    refused before anything is written: the index is Zarr v3 arrays written into
+    the release's own data group, and a v3 group beside its `.zgroup` would hide
+    every array it has. Convert it with `scripts/convert_store_to_0_2_0.py`
+    first for the index. Reference Completion instead requires a source rebuild
+    at format_version 0.2.2. Regenerate old or unmarked indel-bearing Variant
+    References with the v1 reference-first marker; conversion cannot establish
+    allele orientation.
+    """
+    try:
+        build_top_hit_indexes(store_path, n_workers=n_workers)
+    except UnsupportedFormatVersion as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo("done")
 
 

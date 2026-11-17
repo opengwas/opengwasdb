@@ -1,0 +1,41 @@
+2026-11-16 08:06:39 INFO opengwasdb.layouts.dense.top_hits: Top-hit index: scanning 11133427 variants over 2514 Analyses (n_workers=32, 4000 rows per band, 1073741824-byte decoded-band budget)
+2026-11-16 08:06:39 INFO opengwasdb.encoding.memory: Top-hit scan: 32 of 32 worker(s); a 4,000-row band of 2,514 Analyses is 1432 MiB a worker and 1112 MiB of results held by the parent, beside the parent's 192 MiB, against a budget of 236522 MiB
+2026-11-16 08:06:39 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: start
+2026-11-16 08:06:54 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 139/2784 — elapsed 14s, ETA 4m31s
+2026-11-16 08:07:02 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 278/2784 — elapsed 22s, ETA 3m25s
+2026-11-16 08:07:11 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 417/2784 — elapsed 31s, ETA 2m59s
+2026-11-16 08:07:20 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 556/2784 — elapsed 40s, ETA 2m40s
+2026-11-16 08:07:29 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 695/2784 — elapsed 49s, ETA 2m28s
+2026-11-16 08:07:38 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 834/2784 — elapsed 58s, ETA 2m16s
+2026-11-16 08:07:47 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 973/2784 — elapsed 1m07s, ETA 2m05s
+2026-11-16 08:07:56 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1112/2784 — elapsed 1m16s, ETA 1m55s
+2026-11-16 08:08:05 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1251/2784 — elapsed 1m25s, ETA 1m45s
+2026-11-16 08:08:15 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1390/2784 — elapsed 1m35s, ETA 1m35s
+2026-11-16 08:08:24 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1529/2784 — elapsed 1m45s, ETA 1m26s
+2026-11-16 08:08:34 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1668/2784 — elapsed 1m54s, ETA 1m16s
+2026-11-16 08:08:44 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1807/2784 — elapsed 2m04s, ETA 1m07s
+2026-11-16 08:08:53 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 1946/2784 — elapsed 2m13s, ETA 57s
+2026-11-16 08:09:02 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2085/2784 — elapsed 2m23s, ETA 47s
+2026-11-16 08:09:12 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2224/2784 — elapsed 2m32s, ETA 38s
+2026-11-16 08:09:21 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2363/2784 — elapsed 2m41s, ETA 28s
+2026-11-16 08:09:32 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2502/2784 — elapsed 2m52s, ETA 19s
+2026-11-16 08:09:41 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2641/2784 — elapsed 3m01s, ETA 9s
+2026-11-16 08:09:50 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2780/2784 — elapsed 3m11s, ETA 0s
+2026-11-16 08:09:50 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: 2784/2784 — elapsed 3m11s, ETA 0s
+2026-11-16 08:09:50 INFO opengwasdb.layouts.dense.top_hits: Top-hit scan: done in 3m11s
+2026-11-16 08:09:50 INFO opengwasdb.layouts.dense.top_hits: Top-hit index write: start
+2026-11-16 08:09:52 INFO opengwasdb.top_hits: Top-hit tier p_5e_08: start
+2026-11-16 08:09:55 INFO opengwasdb.top_hits: Top-hit tier p_5e_08: done in 2s
+2026-11-16 08:09:55 INFO opengwasdb.top_hits: p_5e_08: 6405322 hits
+2026-11-16 08:09:55 INFO opengwasdb.top_hits: Top-hit tier p_5e_06: start
+2026-11-16 08:09:59 INFO opengwasdb.top_hits: Top-hit tier p_5e_06: done in 4s
+2026-11-16 08:09:59 INFO opengwasdb.top_hits: p_5e_06: 12750070 hits
+2026-11-16 08:09:59 INFO opengwasdb.top_hits: Top-hit tier p_5e_04: start
+2026-11-16 08:10:13 INFO opengwasdb.top_hits: Top-hit tier p_5e_04: done in 13s
+2026-11-16 08:10:13 INFO opengwasdb.top_hits: p_5e_04: 47805439 hits
+2026-11-16 08:10:13 INFO opengwasdb.layouts.dense.top_hits: Top-hit index write: done in 22s
+2026-11-16 08:10:13 INFO opengwasdb.layouts.dense.top_hits: Top-hit phase timings:
+  top_hits.scan                191.1s  89.5%
+  top_hits.write                22.3s  10.5%
+  total accounted              213.4s
+done

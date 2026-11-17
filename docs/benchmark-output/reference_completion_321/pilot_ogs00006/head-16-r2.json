@@ -1,0 +1,86 @@
+{
+  "package": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/head-25530c9/opengwasdb/__init__.py",
+  "layout": "ragged",
+  "template": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/merged/.ogs6-blocks.opengwasdb.checkpoint",
+  "dest": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs6/head-16-r2.opengwasdb",
+  "n_workers": 16,
+  "wall_seconds": 250.50029358803295,
+  "phase_seconds": {
+    "_read_source_state": 29.516129720956087,
+    "_plan_blocks": 12.193102868972346,
+    "_merged_axis": 30.546377890976146,
+    "_encode_plan": 21.088424653047696,
+    "_run_pending_blocks": 0.014780964003875852,
+    "_analysis_batches": 0.00012492493260651827,
+    "shard_checkpoint_fills": 1.9281764270272106,
+    "_assemble_completed_csr": 12.529366963077337,
+    "flush_regions": 17.820184603100643,
+    "build_variant_index": 47.76253111299593,
+    "_write_completed_zarr": 65.58749943494331,
+    "_write_top_hits_and_analyses": 9.112575005972758
+  },
+  "pool_worker_memory": {
+    "shard_checkpoint_fills": {
+      "workers_sampled": 3,
+      "peak_private_bytes": 19570688,
+      "peak_private_bytes_by_worker": [
+        19570688,
+        18718720,
+        17555456
+      ]
+    },
+    "_assemble_completed_csr": {
+      "workers_sampled": 16,
+      "peak_private_bytes": 267456512,
+      "peak_private_bytes_by_worker": [
+        267456512,
+        266391552,
+        266260480,
+        135675904,
+        130228224,
+        127995904,
+        124948480,
+        124801024,
+        123650048,
+        122949632,
+        122490880,
+        122023936,
+        121610240,
+        121602048,
+        121204736,
+        118190080
+      ]
+    },
+    "flush_regions": {
+      "workers_sampled": 2,
+      "peak_private_bytes": 4944269312,
+      "peak_private_bytes_by_worker": [
+        4944269312,
+        593846272
+      ]
+    }
+  },
+  "peak_scratch_bytes": {
+    "total": 1434562729,
+    "checkpoint": 3235497,
+    "staged": 1431327232,
+    "fill_shards": 621776
+  },
+  "release_bytes": 1452319382,
+  "uptime": [
+    7.29,
+    6.8,
+    6.35
+  ],
+  "ru_maxrss_kib_self": 12503656,
+  "ru_maxrss_kib_children": 13615628,
+  "result": {
+    "output_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs6/head-16-r2.opengwasdb",
+    "n_variants": 11521857,
+    "n_analyses": 1400,
+    "n_associations": 55327252,
+    "n_imputed": 38861,
+    "n_missing": 0,
+    "regions_without_block": "('GCST90199623__sig_trans__001', 'GCST90199629__sig_trans__001', 'GCST90199636__sig_trans__001', 'GCST90199638__sig_trans__001', 'GCST90199639__sig_trans__001', 'GCST90199640__sig_trans__001', 'GCST90199642__sig_trans__001', 'GCST90199649__sig_trans__001', 'GCST90199667__sig_trans__001', 'GCST90199667__sig_trans__002', 'GCST90199668__sig_trans__001', 'GCST90199680__sig_trans__001', 'GCST90199693__sig_trans__001', 'GCST90199697__sig_trans__001', 'GCST90199700__sig_trans__001', 'GCST90199701__sig_trans__001', 'GCST90199701__sig_trans__002', 'GCST90199704__sig_trans__001', 'GCST90199704__sig_trans__002', 'GCST90199712__sig_trans__001', 'GCST90199716__sig_trans__001', 'GCST90199718__sig_trans__001', 'GCST90199718__sig_trans__002', 'GCST90199720__sig_trans__001', 'GCST90199626__sig_trans__001', 'GCST90199626__sig_trans__002', 'GCST90199627__sig_trans__001', 'GCST90199635__sig_trans__001', 'GCST90199637__sig_trans__002', 'GCST90199641__sig_trans__002', 'GCST90199645__sig_trans__001', 'GCST90199645__sig_trans__002', 'GCST90199648__sig_trans__004', 'GCST90199675__sig_trans__002', 'GCST90199681__sig_trans__001', 'GCST90199686__sig_trans__002', 'GCST90199688__sig_trans__002', 'GCST90199694__sig_trans__003', 'GCST90199695__sig_trans__001', 'GCST90199701__sig_trans__007', 'GCST90199705__sig_trans__002', 'GCST90199706__sig_trans__002', 'GCST90199622__sig_trans__003', 'GCST90199632__sig_trans__001', 'GCST90199632__sig_trans__002', 'GCST90199634__sig_trans__005', 'GCST90199637__sig_trans__004', 'GCST90199639__sig_trans__006', 'GCST90199652__sig_trans__001', 'GCST90199654__sig_trans__005', 'GCST90199663__sig_trans__001', 'GCST90199667__sig_trans__005', 'GCST90199681__sig_trans__002', 'GCST90199685__sig_trans__001', 'GCST90199688__sig_trans__003', 'GCST90199690__sig_trans__001', 'GCST90199705__sig_trans__004', 'GCST90199706__sig_trans__003', 'GCST90199626__sig_trans__003', 'GCST90199631__sig_trans__001', 'GCST90199648__sig_trans__007', 'GCST90199655__sig_trans__001', 'GCST90199665__sig_trans__001', 'GCST90199675__sig_trans__004', 'GCST90199676__sig_trans__004', 'GCST90199677__sig_trans__001', 'GCST90199698__sig_trans__004', 'GCST90199707__sig_trans__001', 'GCST90199718__sig_trans__003', 'GCST90199720__sig_trans__004', 'GCST90199621__sig_trans__003', 'GCST90199621__sig_trans__004', 'GCST90199648__sig_trans__008', 'GCST90199666__sig_trans__002', 'GCST90199668__sig_trans__003', 'GCST90199668__sig_trans__004', 'GCST90199669__sig_trans__002', 'GCST90199669__sig_trans__003', 'GCST90199672__sig_trans__001', 'GCST90199672__sig_trans__002', 'GCST90199673__sig_trans__004', 'GCST90199675__sig_trans__005', 'GCST90199678__sig_trans__003', 'GCST90199687__sig_trans__005', 'GCST90199691__sig_trans__005', 'GCST90199701__sig_trans__008', 'GCST90199703__sig_trans__002', 'GCST90199708__sig_trans__003', 'GCST90199626__sig_trans__004', 'GCST90199645__sig_trans__004', 'GCST90199648__sig_trans__009', 'GCST90199654__sig_trans__006', 'GCST90199660__sig_trans__003', 'GCST90199666__sig_trans__003', 'GCST90199668__sig_trans__005', 'GCST90199669__sig_trans__004', 'GCST90199680__sig_trans__002', 'GCST90199696__sig_trans__002', 'GCST90199698__sig_trans__005', 'GCST90199708__sig_trans__004', 'GCST90199712__sig_trans__002', 'GCST90199621__sig_trans__005', 'GCST90199641__sig_trans__003', 'GCST90199644__sig_trans__002', 'GCST90199648__sig_trans__010', 'GCST90199649__sig_trans__008', 'GCST90199649__sig_trans__009', 'GCST90199665__sig_trans__002', 'GCST90199673__sig_trans__005', 'GCST90199683__sig_trans__001', 'GCST90199719__sig_trans__001', 'GCST90199636__sig_trans__004', 'GCST90199641__sig_trans__004', 'GCST90199647__sig_trans__002', 'GCST90199648__sig_trans__011', 'GCST90199654__sig_trans__007', 'GCST90199657__sig_trans__003', 'GCST90199667__sig_trans__006', 'GCST90199667__sig_trans__007', 'GCST90199673__sig_trans__006', 'GCST90199696__sig_trans__003', 'GCST90199699__sig_trans__002', 'GCST90199639__sig_trans__007', 'GCST90199650__sig_trans__002', 'GCST90199650__sig_trans__003', 'GCST90199671__sig_trans__001', 'GCST90199705__sig_trans__005', 'GCST90199714__sig_trans__003', 'GCST90199621__sig_trans__001', 'GCST90199621__sig_trans__002', 'GCST90199666__sig_trans__001', 'GCST90199668__sig_trans__002', 'GCST90199669__sig_trans__001', 'GCST90199687__sig_trans__001', 'GCST90199694__sig_trans__001', 'GCST90199696__sig_trans__001', 'GCST90199698__sig_trans__001', 'GCST90199701__sig_trans__003', 'GCST90199708__sig_trans__001', 'GCST90199714__sig_trans__001', 'GCST90199717__sig_trans__001', 'GCST90199622__sig_trans__001', 'GCST90199639__sig_trans__002', 'GCST90199648__sig_trans__001', 'GCST90199649__sig_trans__002', 'GCST90199649__sig_trans__003', 'GCST90199651__sig_trans__001', 'GCST90199660__sig_trans__001', 'GCST90199676__sig_trans__001', 'GCST90199687__sig_trans__002', 'GCST90199688__sig_trans__001', 'GCST90199698__sig_trans__002', 'GCST90199701__sig_trans__004', 'GCST90199705__sig_trans__001', 'GCST90199709__sig_trans__001', 'GCST90199710__sig_trans__001', 'GCST90199713__sig_trans__001', 'GCST90199622__sig_trans__002', 'GCST90199634__sig_trans__001', 'GCST90199634__sig_trans__002', 'GCST90199636__sig_trans__002', 'GCST90199639__sig_trans__003', 'GCST90199640__sig_trans__002', 'GCST90199701__sig_trans__005', 'GCST90199706__sig_trans__001', 'GCST90199717__sig_trans__002', 'GCST90199637__sig_trans__001', 'GCST90199658__sig_trans__001', 'GCST90199667__sig_trans__003', 'GCST90199673__sig_trans__001', 'GCST90199678__sig_trans__001', 'GCST90199708__sig_trans__002', 'GCST90199641__sig_trans__001')"
+  }
+}

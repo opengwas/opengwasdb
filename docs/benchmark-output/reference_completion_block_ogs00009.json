@@ -1,0 +1,180 @@
+{
+  "tool": "benchmarks/profile_reference_completion.py",
+  "argv": [
+    "profile_reference_completion.py",
+    "block",
+    "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+    "/data/opengwasdb/reference/ld",
+    "--work",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/309/rerun-block-work",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/309/rerun/block.json"
+  ],
+  "host_load_start": {
+    "load_1m": 38.96,
+    "load_5m": 54.11,
+    "load_15m": 55.11,
+    "cpus": 224
+  },
+  "worktree_clean": true,
+  "commit": "0ea635d",
+  "measured_at": "2026-11-07T16:22:27.418531+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/309/opengwasdb",
+  "opengwasdb_fingerprint": "417406cf18c0f0ceb341f30e974fc4968f10946af70cb29f21a955c70c462b12",
+  "kind": "block",
+  "source": "/data/opengwasdb/stores/OGS-00009/replaced/20261023T190459Z/store.opengwasdb",
+  "ld_panel": "/data/opengwasdb/reference/ld",
+  "ancestry": "EUR",
+  "block": "/data/opengwasdb/reference/ld/EUR/6/56175027-60230066.tsv",
+  "chosen_by": "median",
+  "block_variants": 7024,
+  "n_analyses": 2514,
+  "fills": 9901491,
+  "checkpoint_bytes": 752566132,
+  "wall_seconds": 244.3266825560131,
+  "seconds_per_fit": 0.06903630162297936,
+  "distinct_observed_sets": 951,
+  "mean_observed_variants": 3084,
+  "accounted_seconds": 244.32653313400806,
+  "stages": [
+    {
+      "stage": "elastic_net_fit",
+      "seconds": 173.5572622801701,
+      "share": 0.7103496294648339,
+      "calls": 2514
+    },
+    {
+      "stage": "kernel_cell_prep_and_fill_loop",
+      "seconds": 47.291645485762274,
+      "share": 0.19355918851361012,
+      "calls": 2514
+    },
+    {
+      "stage": "owned_rows",
+      "seconds": 10.132240184524562,
+      "share": 0.04147007717318707,
+      "calls": 2514
+    },
+    {
+      "stage": "source_read",
+      "seconds": 4.630222462001257,
+      "share": 0.01895096043237218,
+      "calls": 1
+    },
+    {
+      "stage": "checkpoint_write",
+      "seconds": 4.051270744996145,
+      "share": 0.016581378588031236,
+      "calls": 1
+    },
+    {
+      "stage": "poly_rescale",
+      "seconds": 2.9645522463542875,
+      "share": 0.012133566536256182,
+      "calls": 2514
+    },
+    {
+      "stage": "block_other",
+      "seconds": 1.1982860759017058,
+      "share": 0.004904445131403189,
+      "calls": 1
+    },
+    {
+      "stage": "se_scale",
+      "seconds": 0.41182674330775626,
+      "share": 0.0016855588217341822,
+      "calls": 2514
+    },
+    {
+      "stage": "ld_panel_read",
+      "seconds": 0.08922691098996438,
+      "share": 0.0003651953385718663,
+      "calls": 2
+    }
+  ],
+  "host_load_end": {
+    "load_1m": 31.44,
+    "load_5m": 35.69,
+    "load_15m": 46.44,
+    "cpus": 224
+  },
+  "host_load_samples": [
+    {
+      "seconds": 0.0,
+      "load_1m": 38.96,
+      "load_5m": 54.11,
+      "load_15m": 55.11,
+      "cpus": 224
+    },
+    {
+      "seconds": 30.0,
+      "load_1m": 32.26,
+      "load_5m": 51.21,
+      "load_15m": 54.12,
+      "cpus": 224
+    },
+    {
+      "seconds": 60.0,
+      "load_1m": 23.03,
+      "load_5m": 47.12,
+      "load_15m": 52.66,
+      "cpus": 224
+    },
+    {
+      "seconds": 90.0,
+      "load_1m": 18.78,
+      "load_5m": 43.78,
+      "load_15m": 51.37,
+      "cpus": 224
+    },
+    {
+      "seconds": 120.0,
+      "load_1m": 14.66,
+      "load_5m": 40.37,
+      "load_15m": 50.0,
+      "cpus": 224
+    },
+    {
+      "seconds": 150.0,
+      "load_1m": 14.61,
+      "load_5m": 37.91,
+      "load_15m": 48.87,
+      "cpus": 224
+    },
+    {
+      "seconds": 180.0,
+      "load_1m": 14.84,
+      "load_5m": 35.7,
+      "load_15m": 47.78,
+      "cpus": 224
+    },
+    {
+      "seconds": 210.0,
+      "load_1m": 22.64,
+      "load_5m": 35.53,
+      "load_15m": 47.33,
+      "cpus": 224
+    },
+    {
+      "seconds": 240.0,
+      "load_1m": 29.51,
+      "load_5m": 35.98,
+      "load_15m": 47.11,
+      "cpus": 224
+    },
+    {
+      "seconds": 270.0,
+      "load_1m": 32.82,
+      "load_5m": 36.2,
+      "load_15m": 46.83,
+      "cpus": 224
+    },
+    {
+      "seconds": 289.0,
+      "load_1m": 31.44,
+      "load_5m": 35.69,
+      "load_15m": 46.44,
+      "cpus": 224
+    }
+  ]
+}

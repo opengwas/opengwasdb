@@ -1,0 +1,248 @@
+{
+  "commit": "cfd84dc",
+  "measured_at": "2026-11-07T17:17:51.516470+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/310/opengwasdb",
+  "opengwasdb_fingerprint": "2efc9b49dd3f8b3bb32501619a6b9338135fb68290e820ea5f1d02d510a8be2b",
+  "worktree_clean": true,
+  "nproc": 224,
+  "argv": [
+    "benchmarks/profile_eaf_survey_phase.py",
+    "/data/opengwasdb/stores/OGS-00009/work/analyses.tsv",
+    "--stride",
+    "5",
+    "--work",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/310/ogs9-r5",
+    "--n-workers",
+    "32",
+    "--source-reader-capability",
+    "opengwasdb.gwas-vcf",
+    "--source-assembly",
+    "hg19",
+    "--output",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/310/ogs9-r5.json"
+  ],
+  "n_analyses_in_manifest": 2514,
+  "n_analyses_profiled": 503,
+  "scale_to_manifest": 4.998011928429423,
+  "n_workers": 32,
+  "wall_seconds_to_survey_end": 1272.9208989930048,
+  "loadavg_before": [
+    26.21,
+    46.96,
+    46.16
+  ],
+  "loadavg_after": [
+    26.67,
+    49.11,
+    50.94
+  ],
+  "phases": {
+    "EAF survey and orientation verification": {
+      "start": 1794071818.339,
+      "done_in": "33s"
+    },
+    "EAF site hashes": {
+      "start": 1794071818.339,
+      "done_in": "7s"
+    },
+    "EAF survey": {
+      "start": 1794071825.765,
+      "done_in": "21s"
+    },
+    "EAF survey accumulation": {
+      "done_in": "4s"
+    },
+    "EAF orientation verification": {
+      "start": 1794071847.261,
+      "done_in": "4s"
+    }
+  },
+  "log": [
+    {
+      "t": 1794071818.339,
+      "message": "EAF survey and orientation verification: start"
+    },
+    {
+      "t": 1794071818.339,
+      "message": "EAF site hashes: start"
+    },
+    {
+      "t": 1794071825.765,
+      "message": "EAF site hashes: done in 7s"
+    },
+    {
+      "t": 1794071825.765,
+      "message": "EAF survey: start"
+    },
+    {
+      "t": 1794071830.438,
+      "message": "EAF survey: 25/503 \u2014 elapsed 4s, ETA 1m29s"
+    },
+    {
+      "t": 1794071830.889,
+      "message": "EAF survey: 50/503 \u2014 elapsed 5s, ETA 46s"
+    },
+    {
+      "t": 1794071832.627,
+      "message": "EAF survey: 75/503 \u2014 elapsed 6s, ETA 39s"
+    },
+    {
+      "t": 1794071832.838,
+      "message": "EAF survey: 100/503 \u2014 elapsed 7s, ETA 28s"
+    },
+    {
+      "t": 1794071834.104,
+      "message": "EAF survey: 125/503 \u2014 elapsed 8s, ETA 25s"
+    },
+    {
+      "t": 1794071834.905,
+      "message": "EAF survey: 150/503 \u2014 elapsed 9s, ETA 21s"
+    },
+    {
+      "t": 1794071835.414,
+      "message": "EAF survey: 175/503 \u2014 elapsed 9s, ETA 18s"
+    },
+    {
+      "t": 1794071836.671,
+      "message": "EAF survey: 200/503 \u2014 elapsed 10s, ETA 16s"
+    },
+    {
+      "t": 1794071837.031,
+      "message": "EAF survey: 225/503 \u2014 elapsed 11s, ETA 13s"
+    },
+    {
+      "t": 1794071838.106,
+      "message": "EAF survey: 250/503 \u2014 elapsed 12s, ETA 12s"
+    },
+    {
+      "t": 1794071838.805,
+      "message": "EAF survey: 275/503 \u2014 elapsed 13s, ETA 10s"
+    },
+    {
+      "t": 1794071839.614,
+      "message": "EAF survey: 300/503 \u2014 elapsed 13s, ETA 9s"
+    },
+    {
+      "t": 1794071840.416,
+      "message": "EAF survey: 325/503 \u2014 elapsed 14s, ETA 8s"
+    },
+    {
+      "t": 1794071841.712,
+      "message": "EAF survey: 350/503 \u2014 elapsed 15s, ETA 6s"
+    },
+    {
+      "t": 1794071843.123,
+      "message": "EAF survey: 375/503 \u2014 elapsed 17s, ETA 5s"
+    },
+    {
+      "t": 1794071843.42,
+      "message": "EAF survey: 400/503 \u2014 elapsed 17s, ETA 4s"
+    },
+    {
+      "t": 1794071843.769,
+      "message": "EAF survey: 425/503 \u2014 elapsed 18s, ETA 3s"
+    },
+    {
+      "t": 1794071844.851,
+      "message": "EAF survey: 450/503 \u2014 elapsed 19s, ETA 2s"
+    },
+    {
+      "t": 1794071845.786,
+      "message": "EAF survey: 475/503 \u2014 elapsed 20s, ETA 1s"
+    },
+    {
+      "t": 1794071846.201,
+      "message": "EAF survey: 500/503 \u2014 elapsed 20s, ETA 0s"
+    },
+    {
+      "t": 1794071846.215,
+      "message": "EAF survey: 503/503 \u2014 elapsed 20s, ETA 0s"
+    },
+    {
+      "t": 1794071846.662,
+      "message": "EAF survey accumulation: done in 4s across 503 Analyses"
+    },
+    {
+      "t": 1794071846.778,
+      "message": "EAF survey: done in 21s"
+    },
+    {
+      "t": 1794071847.261,
+      "message": "EAF orientation verification: start"
+    },
+    {
+      "t": 1794071851.831,
+      "message": "EAF orientation verification: done in 4s"
+    },
+    {
+      "t": 1794071851.832,
+      "message": "EAF survey and orientation verification: done in 33s"
+    }
+  ],
+  "column_split": [
+    {
+      "n_rows": 5349208,
+      "n_eaf_cells": 5349208,
+      "load_npz_and_cast": 0.06209645702620037,
+      "finite_filter": 0.01842271100031212,
+      "select_rows_by_hash": 0.036836724990280345,
+      "row_to_eaf_dict_and_gather": 0.5645434510079212
+    },
+    {
+      "n_rows": 1868356,
+      "n_eaf_cells": 1868356,
+      "load_npz_and_cast": 0.020992953999666497,
+      "finite_filter": 0.005397210014052689,
+      "select_rows_by_hash": 0.014795447990763932,
+      "row_to_eaf_dict_and_gather": 0.21694651900907047
+    },
+    {
+      "n_rows": 8620851,
+      "n_eaf_cells": 8620851,
+      "load_npz_and_cast": 0.10187899597804062,
+      "finite_filter": 0.03153785501490347,
+      "select_rows_by_hash": 0.059137000993359834,
+      "row_to_eaf_dict_and_gather": 0.5838219250144903
+    },
+    {
+      "n_rows": 2752327,
+      "n_eaf_cells": 2752327,
+      "load_npz_and_cast": 0.02753122299327515,
+      "finite_filter": 0.0088149520161096,
+      "select_rows_by_hash": 0.02124266402097419,
+      "row_to_eaf_dict_and_gather": 0.30574083601823077
+    },
+    {
+      "n_rows": 6093139,
+      "n_eaf_cells": 6093139,
+      "load_npz_and_cast": 0.07283762301085517,
+      "finite_filter": 0.022442733024945483,
+      "select_rows_by_hash": 0.03746092299115844,
+      "row_to_eaf_dict_and_gather": 0.5263959699950647
+    },
+    {
+      "n_rows": 3741296,
+      "n_eaf_cells": 3741296,
+      "load_npz_and_cast": 0.040677334007341415,
+      "finite_filter": 0.014058147004107013,
+      "select_rows_by_hash": 0.025804253004025668,
+      "row_to_eaf_dict_and_gather": 0.4036176920053549
+    },
+    {
+      "n_rows": 2079985,
+      "n_eaf_cells": 2079985,
+      "load_npz_and_cast": 0.02568155201151967,
+      "finite_filter": 0.007238857011543587,
+      "select_rows_by_hash": 0.016062871989561245,
+      "row_to_eaf_dict_and_gather": 0.23386381901218556
+    },
+    {
+      "n_rows": 4107872,
+      "n_eaf_cells": 4107872,
+      "load_npz_and_cast": 0.05141590000130236,
+      "finite_filter": 0.015314861986553296,
+      "select_rows_by_hash": 0.032182431023102254,
+      "row_to_eaf_dict_and_gather": 0.4292805839795619
+    }
+  ]
+}

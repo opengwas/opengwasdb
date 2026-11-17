@@ -43,7 +43,10 @@ def observed_only_release_manifest(
         encoding=encoding,
         store_id=store_id,
         release_id=release_id,
-        format_version=format_version_for(carries_regions=regions is not None),
+        # Every build spells an indel's ALID reference first (ADR 0079).
+        format_version=format_version_for(
+            carries_regions=regions is not None, reference_first_indels=True
+        ),
         primary_layout=layout,
         association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,

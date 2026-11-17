@@ -330,3 +330,15 @@ def test_an_infinite_z_is_its_own_reason_after_the_effect_rule():
 
     assert gate.source_rows(rows).tolist() == [False, False, False]
     assert gate.counts.dropped == {Reason.EFFECT_MISSING: 1, Reason.Z_NONFINITE: 2}
+
+
+def test_the_retired_reversed_indel_reason_keeps_its_place():
+    """A reason's code is its position, and records name it (#316):
+    `duplicate_reversed_indel`, which no rule gives since an indel's ALID spells
+    its reference first (ADR 0079), keeps its member between the two duplicate
+    reasons."""
+    order = [reason.value for reason in Reason]
+    first = order.index("duplicate_collapsed")
+    assert order[first : first + 3] == [
+        "duplicate_collapsed", "duplicate_reversed_indel", "duplicate_conflicting"
+    ]

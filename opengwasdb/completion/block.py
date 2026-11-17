@@ -25,11 +25,11 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.admission.cells import admissible
-from opengwasdb.completion.checkpoint import BlockCompletionResult, FillRow, QualityRow
+from opengwasdb.completion.checkpoint import BLOCK_FILL_DTYPE, BlockCompletionResult, QualityRow
 from opengwasdb.completion.impute import impute_z_block, scalar_n_se
 from opengwasdb.completion.ld_panel import (
+    BlockPlacement,
     LDBlock,
-    canonical_panel_alid,
     load_block,
     load_ld_eigenvectors,
 )
@@ -49,6 +49,10 @@ COMPLETION_METHOD = "elastic_net_eigenvectors_v2_regioncap"
 # large imputed z-scores from LD extrapolation. See pleiodb.
 REGION_CAP_BP = 1_000_000
 
+# One-dimensional prepared fills, in ascending local block index. Float64 keeps
+# the kernel values exact until the checkpoint's established float32 cast.
+PREPARED_FILL_DTYPE = np.dtype([("local_index", np.int64), ("z", np.float64), ("se", np.float64)])
+
 
 @dataclass(frozen=True)
 class BlockAnalysisResult:
@@ -58,7 +62,8 @@ class BlockAnalysisResult:
     two observed positions in the block) and a float (possibly NaN) once it
     was -- the same three-way distinction the ``completion_quality`` table
     records. ``fills`` holds only positions actually filled, as
-    ``(local_block_index, z, se)`` -- the position's index into the block's
+    a 1-D ``PREPARED_FILL_DTYPE`` array (int64 local index, float64 z/se) --
+    the position's index into the block's
     own SNP list, not a store-wide variant index, since that mapping is the
     caller's responsibility (dense resolves it against the union axis by
     ALID; ragged resolves it the same way). ``n_missing`` is the count of
@@ -67,32 +72,34 @@ class BlockAnalysisResult:
     """
 
     pearson_r: float | None
-    fills: list[tuple[int, float, float]]
+    fills: np.ndarray
     n_missing: int
 
 
-def _region_capped_z(
-    zv: float,
-    pos: int,
-    obs_pos_sorted: np.ndarray,
-    obs_absz_sorted: np.ndarray,
-    window_bp: int = REGION_CAP_BP,
-) -> float:
-    """Clamp an imputed z-score so its magnitude does not exceed the largest
-    observed |z| within +/- ``window_bp`` of ``pos`` (QC, per pleiodb). Returns
-    ``zv`` unchanged when there is no observed variant in the window.
+def _region_capped_array(
+    z: np.ndarray, positions: np.ndarray, observed_positions: np.ndarray,
+    observed_absz: np.ndarray, window_bp: int,
+) -> np.ndarray:
+    """Exact scalar region caps with range maxima over power-of-two spans.
 
-    ``obs_pos_sorted`` must be ascending, with ``obs_absz_sorted`` the matching
-    |z| of the observed variants.
+    Two overlapping spans cover each inclusive window. Max only selects an
+    existing observed value, so changing the reduction order changes no bits.
+    Empty windows leave z untouched, including its sign when z is zero.
     """
-    lo = int(np.searchsorted(obs_pos_sorted, pos - window_bp, side="left"))
-    hi = int(np.searchsorted(obs_pos_sorted, pos + window_bp, side="right"))
-    if hi <= lo:
-        return zv
-    z_region_max = float(obs_absz_sorted[lo:hi].max())
-    if abs(zv) <= z_region_max:
-        return zv
-    return z_region_max if zv >= 0 else -z_region_max
+    lo = np.searchsorted(observed_positions, positions - window_bp, side="left")
+    hi = np.searchsorted(observed_positions, positions + window_bp, side="right")
+    widths = hi - lo
+    caps = np.full(len(z), np.inf)
+    maxima = observed_absz
+    span = 1
+    while span <= len(observed_absz):
+        use = (widths >= span) & (widths < 2 * span)
+        caps[use] = np.maximum(maxima[lo[use]], maxima[hi[use] - span])
+        if 2 * span > len(observed_absz):
+            break
+        maxima = np.maximum(maxima[:-span], maxima[span:])
+        span *= 2
+    return np.where(np.abs(z) <= caps, z, np.copysign(caps, z))
 
 
 def complete_block_for_analysis(
@@ -124,31 +131,29 @@ def complete_block_for_analysis(
     n_obs = int(obs_mask.sum())
     n_miss_block = int((~obs_mask).sum())
     if n_obs < 2:
-        return BlockAnalysisResult(pearson_r=None, fills=[], n_missing=n_miss_block)
+        return BlockAnalysisResult(None, np.empty(0, dtype=PREPARED_FILL_DTYPE), n_miss_block)
 
     z_imp_arr, corr = impute_z_block(z_dense, eigenvectors, eigenvalues, min_cor=min_cor)
     if z_imp_arr is None:
         pearson_r = float(corr) if np.isfinite(corr) else None
-        return BlockAnalysisResult(pearson_r=pearson_r, fills=[], n_missing=n_miss_block)
+        return BlockAnalysisResult(pearson_r, np.empty(0, dtype=PREPARED_FILL_DTYPE), n_miss_block)
 
     se_all = scalar_n_se(se_dense[obs_mask], eaf[obs_mask], eaf)
 
-    obs_pos_s = obs_absz_s = None
+    candidates = np.flatnonzero(~obs_mask)
+    candidates = candidates[admissible(z_imp_arr[candidates], se_all[candidates])]
+    fills = np.empty(len(candidates), dtype=PREPARED_FILL_DTYPE)
+    fills["local_index"] = candidates
+    fills["z"] = z_imp_arr[candidates]
+    fills["se"] = se_all[candidates]
     if region_cap_bp is not None:
-        obs_idx = np.where(obs_mask)[0]
+        obs_idx = np.flatnonzero(obs_mask)
         o_order = np.argsort(positions[obs_idx])
         obs_pos_s = positions[obs_idx][o_order]
         obs_absz_s = np.abs(z_dense[obs_idx])[o_order]
-
-    fills: list[tuple[int, float, float]] = []
-    candidates = np.where(~obs_mask)[0]
-    # Only a cell Association Admission would store as present is a fill; the
-    # rest stay missing and are counted `n_missing`.
-    for i in candidates[admissible(z_imp_arr[candidates], se_all[candidates])].tolist():
-        zv, sev = float(z_imp_arr[i]), float(se_all[i])
-        if region_cap_bp is not None:
-            zv = _region_capped_z(zv, int(positions[i]), obs_pos_s, obs_absz_s, region_cap_bp)
-        fills.append((int(i), zv, sev))
+        fills["z"] = _region_capped_array(
+            fills["z"], positions[candidates], obs_pos_s, obs_absz_s, region_cap_bp
+        )
 
     return BlockAnalysisResult(
         pearson_r=float(corr), fills=fills, n_missing=n_miss_block - len(fills)
@@ -172,9 +177,28 @@ ObservedReader = Callable[[int], "tuple[np.ndarray, np.ndarray]"]
 # Analysis, since opening the source is the expensive part.
 BlockReaderFactory = Callable[[LDBlock, list[str | None]], "tuple[Iterable[int], ObservedReader]"]
 
+
+def read_as_planned(planned: BlockPlacement, make_reader: BlockReaderFactory) -> BlockReaderFactory:
+    """``make_reader``, once the block a worker has read names its rows as the
+    read the completion was planned from did (`BlockPlacement.require`)."""
+
+    def checked(
+        block: LDBlock, canonical_alids: list[str | None]
+    ) -> tuple[Iterable[int], ObservedReader]:
+        planned.require(block)
+        return make_reader(block, canonical_alids)
+
+    return checked
+
+
 # The canonical ALIDs a block leaves to the block that follows it, for one
 # Analysis (`completion.ld_panel.shared_endpoints`).
 CededAlids = Callable[[int], "frozenset[str]"]
+
+# (Analysis, the block's positions in block order) -> a mask of the rows outside
+# every region the Analysis is completed in (Ragged, issue #430). By position, so
+# it leaves out a row no ALID names as well as a variant.
+OutsideRegions = Callable[[int, np.ndarray], np.ndarray]
 
 
 def run_block(
@@ -184,6 +208,7 @@ def run_block(
     region_cap_bp: int | None,
     make_reader: BlockReaderFactory,
     ceded: CededAlids | None = None,
+    outside: OutsideRegions | None = None,
 ) -> BlockCompletionResult | None:
     """Complete one LD block for every Analysis its caller assigns to it.
 
@@ -193,9 +218,9 @@ def run_block(
     checkpoint-worthy, so a later run doesn't keep retrying an unreadable
     block).
 
-    ``ceded`` names, per Analysis, the variants at this block's end that the
-    block starting there owns (ADR 0072). This block neither fills nor counts
-    them, so each such cell is filled, and counted, once.
+    ``ceded`` names, per Analysis, the variants at this block's end the block starting
+    there owns (ADR 0072); ``outside`` marks its rows outside its regions (#430). The
+    block fits both but fills and counts neither, so a ceded cell is counted once.
     """
     block = load_block(tsv_path)
     if block is None:
@@ -205,20 +230,41 @@ def run_block(
         eigenvalues, eigenvectors = load_ld_eigenvectors(block, thresh)
     except Exception as exc:  # noqa: BLE001
         log.warning("Block %s: cannot load eigenvectors (%s) — skipping", block.block_id, exc)
-        return BlockCompletionResult(block_id=block.block_id, quality_rows=[], fills=[])
+        return BlockCompletionResult(block_id=block.block_id, quality_rows=[])
 
-    # Canonical ALID per block variant (None if it doesn't parse); the LD
+    return _complete_loaded_block(
+        block, eigenvalues, eigenvectors, min_cor, region_cap_bp, make_reader, ceded, outside
+    )
+
+
+def _complete_loaded_block(
+    block: LDBlock,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
+    min_cor: float,
+    region_cap_bp: int | None,
+    make_reader: BlockReaderFactory,
+    ceded: CededAlids | None,
+    outside: OutsideRegions | None,
+) -> BlockCompletionResult:
+    """Prepare and own each assigned Analysis's fills on the loaded panel axis."""
+    # Canonical ALID per block variant (None where it names none); the LD
     # eigenvectors are indexed by block position, so every block SNP keeps
-    # its slot even when unmatched.
-    canonical_alids = [canonical_panel_alid(s) for s in block.snp_ids]
-    eaf = block.eaf
+    # its slot even when unmatched. A panel codes its LD and EAF on each row's
+    # EA, and the Store signs a statistic for its ALID's A1, so a row whose A1
+    # is not its EA -- a panel deletion, spelt reference first -- is re-signed
+    # (ADR 0079).
+    canonical_alids = block.alids
+    eigenvectors = block.oriented_eigenvectors(eigenvectors)
+    eaf = block.eaf_for_a1()
     positions = panel_positions(block)
 
     analysis_indices, read_observed = make_reader(block, canonical_alids)
 
     quality_rows: list[QualityRow] = []
-    fills: list[FillRow] = []
-    ceded_mask = _ceded_masks(canonical_alids, ceded)
+    fills: list[np.ndarray] = []
+    named = np.array([alid is not None for alid in canonical_alids], dtype=bool)
+    left_alone = _left_alone(canonical_alids, positions, ceded, outside)
     for ai in analysis_indices:
         z_dense, se_dense = read_observed(ai)
         block_result = complete_block_for_analysis(
@@ -226,12 +272,38 @@ def run_block(
             min_cor=min_cor, region_cap_bp=region_cap_bp,
         )
         analysis_fills, quality = _owned_rows(
-            ai, block_result, canonical_alids, ceded_mask(ai), np.isnan(z_dense)
+            ai, block_result, named, left_alone(ai), np.isnan(z_dense)
         )
-        fills.extend(analysis_fills)
+        fills.append(analysis_fills)
         quality_rows.append(quality)
 
-    return BlockCompletionResult(block_id=block.block_id, quality_rows=quality_rows, fills=fills)
+    return BlockCompletionResult(
+        block_id=block.block_id, quality_rows=quality_rows, alids=canonical_alids,
+        fills=np.concatenate(fills) if fills else np.empty(0, dtype=BLOCK_FILL_DTYPE),
+    )
+
+
+def _left_alone(
+    canonical_alids: list[str | None],
+    positions: np.ndarray,
+    ceded: CededAlids | None,
+    outside: OutsideRegions | None,
+) -> Callable[[int], np.ndarray | None]:
+    """Per Analysis, the block rows it neither fills nor counts: those no ALID names,
+    which are never a Store row (the owner's ruling of 11 Nov 2026, ADR 0039), those
+    it cedes, and those outside its regions; None where there are none."""
+    named = np.array([alid is not None for alid in canonical_alids], dtype=bool)
+    unnamed = None if named.all() else ~named
+    ceded_mask = _ceded_masks(canonical_alids, ceded)
+
+    def mask(analysis: int) -> np.ndarray | None:
+        masks = [ceded_mask(analysis), unnamed]
+        if outside is not None:
+            masks.append(outside(analysis, positions))
+        present = [m for m in masks if m is not None]
+        return np.logical_or.reduce(present) if present else None
+
+    return mask
 
 
 def _ceded_masks(
@@ -255,25 +327,30 @@ def _ceded_masks(
 def _owned_rows(
     ai: int,
     result: BlockAnalysisResult,
-    canonical_alids: list[str | None],
+    named: np.ndarray,
     ceded: np.ndarray | None,
     missing: np.ndarray,
-) -> tuple[list[FillRow], QualityRow]:
-    """One Analysis's fills and quality row, leaving out what the block cedes.
+) -> tuple[np.ndarray, QualityRow]:
+    """One Analysis's array fills and quality, leaving unowned positions alone.
 
-    A ceded position is neither a fill nor missing here: the next block counts
-    it. A fill at a position no ALID names is missing.
+    Ceded, out-of-region and unnamed positions count as neither filled nor
+    missing here (ADR 0072 and the owner's 11 Nov 2026 ruling, ADR 0039).
     """
     n_missing = result.n_missing
+    prepared = result.fills
     if ceded is not None:
-        n_missing -= int((ceded & missing).sum())
-    fills: list[FillRow] = []
-    for local_idx, zv, sev in result.fills:
-        alid = canonical_alids[local_idx]
-        if ceded is not None and ceded[local_idx]:
-            n_missing += 1  # counted out with the ceded positions above
-        elif alid is None:
-            n_missing += 1
-        else:
-            fills.append(FillRow(alid, ai, zv, sev))
+        keep = ~ceded[prepared["local_index"]]
+        n_missing += int((~keep).sum()) - int((ceded & missing).sum())
+        prepared = prepared[keep]
+    local = prepared["local_index"]
+    unnamed = ~named[local]
+    if unnamed.any():
+        raise AssertionError(
+            f"block position {local[unnamed][0]} names no ALID but was not left alone"
+        )
+    fills = np.empty(len(prepared), dtype=BLOCK_FILL_DTYPE)
+    fills["local_index"] = local
+    fills["analysis_index"] = ai
+    fills["z"] = prepared["z"]
+    fills["se"] = prepared["se"]
     return fills, QualityRow(ai, result.pearson_r, len(fills), n_missing)

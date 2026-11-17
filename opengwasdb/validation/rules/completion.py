@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.associations import Tally
+from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import array_length
@@ -133,13 +134,10 @@ def declaration_matches_mask(
 ) -> None:
     """Each Analysis holds imputed cells if and only if it says it does.
 
-    Categorical, not a count comparison: `completion_n_imputed_total` is rolled up
-    from per-block quality and the arrays hold what was actually written, so the
-    two need not agree to the cell. What they may not do is disagree about
-    *whether there are any* -- that is the shape the ancestry-match filter's
-    defect took, an Analysis carried through observed-only while its metadata
-    claimed thousands of imputed cells, and `eaf_scope` derived from the claim
-    (ADR 0028, ADR 0037 §4).
+    This remains the categorical declaration rule (ADR 0028, ADR 0037 §4): an
+    Analysis carried through observed-only must not claim imputed cells and derive
+    its `eaf_scope` from that claim. `completion.quality_counts` separately checks
+    exact counts where at most one quality row avoids ambiguous overlaps (#307).
     """
     for row in read_analyses(analyses_path).rows:
         try:
@@ -170,6 +168,89 @@ def _disagreement(row: dict[str, str], declared: int, actual: int, label: str) -
             "imputed cells its metadata does not account for"
         )
     return None
+
+
+def _quality_cells(_target: Target, block: Block) -> np.ndarray:
+    """Imputed cells and missing panel cells, measured on the shared scan (#361).
+
+    Dense completion's off-panel missing cells have no LD block and do not belong
+    to completion_quality. Ragged missing rows are retained completion attempts;
+    source-observed rows are present, including off-panel ones (ADR 0039).
+    """
+    assert block.imputed is not None
+    missing = block.z_missing.copy()
+    if block.on_panel is not None:
+        missing &= block.on_panel[:, None] == 1
+    return np.stack((block.per_analysis(block.imputed == 1), block.per_analysis(missing)))
+
+
+def _quality_totals(target: Target) -> tuple[np.ndarray, np.ndarray]:
+    """The Store records block ids and counts, but no block-to-cell membership.
+
+    Count rows as well as attempts: multiple rows cannot prove whether attempted
+    cells overlap (owner ruling, 16 Nov 2026, #307). A Store Release must validate
+    without an external LD panel or guesses from arbitrary block names.
+    """
+    n = _n_analyses(target)
+    errors: list[str] = []
+    totals = np.zeros((2, n), dtype=np.int64)
+    row_counts = np.zeros(n, dtype=np.int64)
+    with target.store.index_connection() as connection:
+        _validate_completion_quality_table(connection, n, errors)
+        if errors:
+            raise ValueError("completion_quality cannot be counted: " + "; ".join(errors))
+        for analysis, block_id, imputed, missing in connection.execute(
+            "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
+        ):
+            if not all(isinstance(value, int) and value >= 0 for value in (imputed, missing)):
+                raise ValueError(
+                    f"completion_quality for analysis {analysis}, block {block_id!r} "
+                    "has non-integer or negative n_imputed/n_missing"
+                )
+            totals[:, analysis] += (imputed, missing)
+            row_counts[analysis] += 1
+    return totals, row_counts
+
+
+def _ancestry_exclusions(target: Target) -> set[int]:
+    """Only stored routing evidence, not absent quality rows, establishes exclusion."""
+    rows = target.analyses.rows
+    ancestry = target.store.manifest.provenance.get("completion", {}).get("ancestry")
+    if not isinstance(ancestry, str) or not ancestry or not any(
+        row.get("assigned_ancestry") for row in rows
+    ):
+        return set()
+    eligible = derive_impute_analysis_ids(rows, ancestry)
+    assert eligible is not None, "assigned ancestries must select an explicit set"
+    return {
+        int(row["analysis_index"]) for row in rows
+        if row["analysis_id"] not in eligible and not row.get("completed_against")
+    }
+
+
+def _judge_quality_counts(target: Target, total: np.ndarray) -> Iterator[str]:
+    expected, row_counts = _quality_totals(target)
+    excluded = _ancestry_exclusions(target)
+    actual = np.zeros_like(expected) + total
+    for analysis in range(expected.shape[1]):
+        if row_counts[analysis] > 1:
+            continue
+        if expected[0, analysis] != actual[0, analysis]:
+            yield (
+                f"completion_quality analysis {analysis}: n_imputed={expected[0, analysis]} "
+                f"but the imputed plane marks {actual[0, analysis]} cell(s)"
+            )
+        # Missing rows are not evidence of ancestry exclusion: quality metadata
+        # may have disappeared with every failed attempt it described (#307).
+        if (
+            (row_counts[analysis] or analysis not in excluded)
+            and expected[:, analysis].sum() != actual[:, analysis].sum()
+        ):
+            yield (
+                f"completion_quality analysis {analysis}: n_imputed + n_missing="
+                f"{expected[:, analysis].sum()} but the planes hold "
+                f"{actual[:, analysis].sum()} imputed or missing panel cell(s)"
+            )
 
 
 CHECKS: tuple[Rule, ...] = (
@@ -204,6 +285,13 @@ RULES: tuple[Rule, ...] = (
         np.zeros((), dtype=np.int64),
         _imputed_per_analysis,
         _judge_declaration,
+        when=completed,
+    ),
+    value_fold(
+        "completion.quality_counts",
+        np.zeros((), dtype=np.int64),
+        _quality_cells,
+        _judge_quality_counts,
         when=completed,
     ),
 )

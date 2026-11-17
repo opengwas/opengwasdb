@@ -29,6 +29,7 @@ from opengwasdb.encoding.codec import (
     EafExceptionTable,
     SeExceptionBuilder,
     SeExceptionTable,
+    SparseExactTable,
     StoreCodec,
     ZOverflowBuilder,
     ZOverflowTable,
@@ -430,10 +431,30 @@ class DenseEafPlane(_EafPlaneBase):
     """The `n_variants x n_analyses` frequency grid, decoded on read."""
 
     @classmethod
-    def open(cls, group: Any, encoding: StoreEncoding, *, name: str = "eaf") -> DenseEafPlane:
+    def open(
+        cls,
+        group: Any,
+        encoding: StoreEncoding,
+        *,
+        name: str = "eaf",
+        exceptions: SparseExactTable | None = None,
+    ) -> DenseEafPlane:
+        """A decoder for the plane, with its exception table read on demand.
+
+        `exceptions` is a table the caller has already read and keyed by this
+        plane's flat cell positions; passing it is what lets a pass that has read
+        the table anyway consult it without reading it again (issue #387). None
+        asks for the lazy view of the store's own table, which reads the window a
+        lookup covers.
+        """
         return cls(
             group[name] if name in group else None,
-            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group)),
+            StoreCodec(
+                encoding,
+                eaf_exceptions=(
+                    EafExceptionTable.open(group) if exceptions is None else exceptions
+                ),
+            ),
             baseline=group[EAF_BASELINE] if EAF_BASELINE in group else None,
             reference=group[EAF_REFERENCE] if EAF_REFERENCE in group else None,
             imputed=group["imputed"] if "imputed" in group else None,

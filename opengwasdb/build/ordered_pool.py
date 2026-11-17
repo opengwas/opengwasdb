@@ -5,8 +5,8 @@ whose results must be combined in input order: CSR offsets align with
 ``analysis_index``, overflow tables and top-hit harvests are ordered. A plain
 ``as_completed`` loop would reorder them silently, and ``pool.map`` over a list
 submits every item at once and holds every result. ``ordered_map`` does
-neither: it keeps at most ``max_in_flight`` items submitted, and yields results
-strictly in input order.
+neither: it keeps at most `RESULTS_HELD_PER_WORKER` items a worker submitted,
+and yields results strictly in input order.
 
 Workers are forked, so large read-only state the parent set up before the call
 (numpy arrays, not Python dicts, which fork copies page by page as reference
@@ -34,6 +34,8 @@ from contextlib import contextmanager
 from functools import partial
 from typing import Any, TypeVar, overload
 
+from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
+
 T = TypeVar("T")
 R = TypeVar("R")
 S = TypeVar("S")
@@ -47,6 +49,13 @@ _sharing = False
 #: ``None`` is still shared rather than silently dropped.
 _NO_SHARED: Any = object()
 
+#: The results an ordered pool's parent holds for each worker at most: what it
+#: has submitted and not yet taken back. Two keep every worker busy while the
+#: parent waits on the result ahead of them. One window for every pool, so the
+#: memory a pool is sized against (`encoding.memory.pool_workers`) counts what
+#: the parent really holds.
+RESULTS_HELD_PER_WORKER = 2
+
 
 def fork_pool(n_workers: int) -> ProcessPoolExecutor:
     """A ``ProcessPoolExecutor`` pinned to the fork start method.
@@ -57,6 +66,41 @@ def fork_pool(n_workers: int) -> ProcessPoolExecutor:
     """
     fork_ctx = multiprocessing.get_context("fork")
     return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
+
+
+@contextmanager
+def single_threaded_blas() -> Iterator[None]:
+    """Cap BLAS and OpenMP in the current process, restoring its limits on exit.
+
+    Set this in the parent before forking, never inside a forked worker: the
+    library discovery walks the dynamic loader (see `single_threaded_fork_pool`).
+    A serial block profiler uses the same cap to measure what a worker runs.
+    """
+    with threadpool_limits(limits=1):
+        yield
+
+
+@contextmanager
+def single_threaded_fork_pool(n_workers: int) -> Iterator[ProcessPoolExecutor]:
+    """A fork pool whose workers run BLAS and OpenMP on one thread each.
+
+    Without the cap, ``n_workers`` processes each start a thread per core in
+    numpy's linear algebra and sklearn: about a thousand threads on 256 cores.
+    The cap is set here, in the parent, for as long as the pool is open, and
+    every worker inherits it when it forks -- the fork start method launches
+    them all at the first submit. A worker never sets it itself: threadpoolctl
+    finds the libraries by walking the dynamic loader's list of loaded objects
+    (``dl_iterate_phdr``, through a ctypes callback), and a forked worker's
+    copy of that state is whatever the parent's other threads left it. From a
+    parent holding OpenBLAS's threads that had already used threadpoolctl, the
+    walk aborted or segfaulted a worker in 3 of 5 pools (13 Nov 2026), the
+    abort #321's full test run had seen; forked while another thread of the
+    parent was inside the loader, every worker waited on the loader's lock for
+    good. In the parent the walk is safe. Its own linear algebra runs on one
+    thread while the pool is open, which costs nothing: it waits on the workers.
+    """
+    with single_threaded_blas(), fork_pool(n_workers) as pool:
+        yield pool
 
 
 @contextmanager
@@ -83,7 +127,6 @@ def ordered_map(
     fn: Callable[[T], R],
     items: Iterable[T],
     n_workers: int,
-    max_in_flight: int | None = None,
 ) -> Iterator[R]: ...
 
 
@@ -92,7 +135,6 @@ def ordered_map(
     fn: Callable[[S, T], R],
     items: Iterable[T],
     n_workers: int,
-    max_in_flight: int | None = None,
     *,
     shared: S,
 ) -> Iterator[R]: ...
@@ -102,7 +144,6 @@ def ordered_map(
     fn: Callable[..., R],
     items: Iterable[T],
     n_workers: int,
-    max_in_flight: int | None = None,
     *,
     shared: Any = _NO_SHARED,
 ) -> Iterator[R]:
@@ -114,10 +155,10 @@ def ordered_map(
     item. Not re-entrant in that form -- a second shared call while one has a
     pool open is refused, as it is for ``fork_each``.
 
-    At most ``max_in_flight`` items (default ``2 * n_workers``) are submitted
-    but not yet yielded, which bounds the results the parent holds. An
-    exception raised by ``fn`` propagates from the iteration at that item's
-    position; remaining submitted work is cancelled.
+    At most `RESULTS_HELD_PER_WORKER` items a worker are submitted but not yet
+    yielded, which bounds the results the parent holds. An exception raised by
+    ``fn`` propagates from the iteration at that item's position; remaining
+    submitted work is cancelled.
     """
     if n_workers <= 1:
         if shared is _NO_SHARED:
@@ -127,9 +168,7 @@ def ordered_map(
             for item in items:
                 yield fn(shared, item)
         return
-    limit = max_in_flight if max_in_flight is not None else 2 * n_workers
-    if limit < 1:
-        raise ValueError(f"max_in_flight must be >= 1, got {limit}")
+    limit = RESULTS_HELD_PER_WORKER * n_workers
     if shared is _NO_SHARED:
         with fork_pool(n_workers) as pool:
             yield from _in_input_order(partial(pool.submit, fn), items, limit)

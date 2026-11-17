@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ from opengwasdb.layouts.dense import (
 )
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.model.analyses import Analysis
-from opengwasdb.readers.interface import ImputationScoreStatus, ReferenceAllele, StreamTally
+from opengwasdb.readers.interface import ImputationScoreStatus, StreamTally
 from opengwasdb.readers.rows import ReaderBatch
 
 #: Each Analysis-level column the combined TSV may carry, by the manifest column
@@ -164,6 +165,42 @@ def _batch(rows: Sequence[NormalisedAssociation]) -> ReaderBatch:
         # Unflipped, so the effect allele is the row's alt, as a source spells it.
         ref=np.array([r.variant.other_allele for r in rows], dtype=object),
         alt=np.array([r.variant.effect_allele for r in rows], dtype=object),
-        reference=ReferenceAllele.UNDECLARED,
     )
 
+
+
+def write_release_manifest(
+    release: Path,
+    *,
+    store_id: str,
+    format_version: str = "0.2.0",
+) -> Path:
+    """The release manifest a reader of `release`'s planes needs, for a built tree.
+
+    For fixtures that write `data.zarr` themselves and only need a reader's
+    `encoding` and `format_version`: the arrays are the caller's, so the plan
+    describes a plain float16/float16/float32 Store.
+    """
+    from opengwasdb.encoding import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+    from opengwasdb.model.enums import (
+        AssociationCoverage,
+        CompletionState,
+        PrimaryStorageLayout,
+    )
+    from opengwasdb.model.manifest import StoreManifest
+
+    manifest = StoreManifest(
+        store_id=store_id,
+        release_id="observed-1",
+        format_version=format_version,
+        primary_layout=PrimaryStorageLayout.DENSE,
+        association_coverage=AssociationCoverage.GWAS,
+        completion_state=CompletionState.OBSERVED_ONLY,
+        reference_assembly="GRCh37",
+        encoding=StoreEncoding(
+            z=ZEncoding("float16"), se=SeEncoding("float16"), eaf=EafEncoding("float32")
+        ),
+    )
+    path = release / "manifest.json"
+    path.write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+    return path

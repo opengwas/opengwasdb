@@ -1,5 +1,15 @@
 # Dense Reference-Completion build: process pool over LD blocks, no thread layer, checkpointed resume
 
+> **Superseded in part by [ADR 0080](./0080-completion-writes-its-planes-a-unit-at-a-time-across-workers.md)
+> (issue #321).** The LD-block pool, the per-block checkpoints and `--resume`
+> below still hold. What no longer holds is the write after the pool: the main
+> process no longer applies the fills and writes the planes in one serial pass.
+> The completed planes are written a row band at a time on a pool of forked
+> workers, each band whole Dense shards and written by its own worker, and the
+> parent assembles the bands' side tables in band order. The rejected option
+> below, workers writing disjoint row ranges, was rejected because block
+> boundaries do not align with zarr chunks; completion bands do (#247).
+
 Builds on ADR 0022. For a `gwas`-coverage Dense store (e.g. UKB-B), reference completion runs elastic-net imputation once per (LD block, Analysis) pair across the genome-wide reference panel — roughly 1,700 blocks × n_analyses fits, a long-running batch job with no incremental write path in the existing `_write_zarr` (builds the whole array in memory, one final write).
 
 ## Decision

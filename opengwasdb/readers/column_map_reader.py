@@ -46,6 +46,7 @@ from opengwasdb.readers.column_map import (
 from opengwasdb.readers.effect_source import EffectSource
 from opengwasdb.readers.gwas_ssf import VARIANT_COLUMNS, GwasSsfReader
 from opengwasdb.readers.interface import (
+    AssociationBatch,
     ImputationScoreDeclaration,
     ReaderAssociation,
     RegionsFile,
@@ -57,6 +58,7 @@ from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
     TabularMetricsRow,
+    declared_reference,
     open_binary,
     stream_projected_variants,
 )
@@ -485,13 +487,27 @@ class ColumnMapReader:
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         yield from self._delegate.stream_associations(tally)
 
+    def stream_association_batches(
+        self, tally: StreamTally | None = None
+    ) -> Iterator[AssociationBatch]:
+        """The delegate's batches: the map's translation read as columns (#319).
+
+        Named here because a reader offers batches only if it has the method
+        itself; `ColumnMapReader` does not inherit it from its delegate."""
+        yield from self._delegate.stream_association_batches(tally)
+
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
         yield from self._delegate.stream_batches(tally)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator
-        columns = replace(VARIANT_COLUMNS, alias_separator=separator)
-        yield from stream_projected_variants(self._source(), columns)
+        source = self._source()
+        columns = replace(
+            VARIANT_COLUMNS,
+            alias_separator=separator,
+            reference=declared_reference(source.reference),
+        )
+        yield from stream_projected_variants(source, columns)
 
     def stream_metrics(self) -> Iterator[TabularMetricsRow]:
         yield from self._delegate.stream_metrics()

@@ -36,10 +36,13 @@ _SSF_HEADER = [
 
 
 def _write_filtered(path: Path, rows: list[dict]) -> None:
+    """Rows under GWAS-SSF's columns, then any other column the first row names
+    (a harmoniser's `hm_code`)."""
+    header = _SSF_HEADER + [name for name in (rows[0] if rows else {}) if name not in _SSF_HEADER]
     with gzip.open(path, "wt", encoding="utf-8") as fh:
-        fh.write("\t".join(_SSF_HEADER) + "\n")
+        fh.write("\t".join(header) + "\n")
         for row in rows:
-            fh.write("\t".join(str(row.get(col, "")) for col in _SSF_HEADER) + "\n")
+            fh.write("\t".join(str(row.get(col, "")) for col in header) + "\n")
 
 
 #: Every column the Ragged SSF builder's manifest may carry, in written order.

@@ -14,7 +14,7 @@ Dense store gains a ``data.zarr/rho`` group; nothing else changes.
 from __future__ import annotations
 
 import math
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -23,8 +23,8 @@ import numpy as np
 import zarr
 from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
 from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
-from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
+from opengwasdb.build.ordered_pool import single_threaded_fork_pool
 from opengwasdb.encoding import DenseZPlane, StoreEncoding
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.model.manifest import StoreManifest
@@ -199,17 +199,6 @@ def _pairwise_sufficient_statistics(
 
 # ── Per-pair MLE, optionally parallelised over pairs (ADR 0023 pattern) ──────
 
-_worker_thread_limiter: Any = None
-
-
-def _init_rho_worker() -> None:
-    """Cap each pool worker's BLAS threads to one -- see completion.py's
-    ``_init_block_worker`` (ADR 0023): n_workers processes each spawning
-    per-core BLAS threads would oversubscribe the CPU."""
-    global _worker_thread_limiter
-    _worker_thread_limiter = threadpool_limits(limits=1)
-
-
 def _estimate_pairs_batch(
     A: np.ndarray,
     B: np.ndarray,
@@ -259,7 +248,8 @@ def _estimate_all_pairs(
         for c in chunk_index
     ]
     results: list[np.ndarray | None] = [None] * len(tasks)
-    with ProcessPoolExecutor(max_workers=n_workers, initializer=_init_rho_worker) as pool:
+    # One BLAS thread a worker, set before they fork (`single_threaded_fork_pool`).
+    with single_threaded_fork_pool(n_workers) as pool:
         futures = {pool.submit(_estimate_pairs_worker, task): i for i, task in enumerate(tasks)}
         for fut in as_completed(futures):
             results[futures[fut]] = fut.result()

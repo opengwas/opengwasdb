@@ -36,7 +36,6 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers import interface
 from opengwasdb.readers.interface import (
     ReaderAssociation,
-    ReferenceAllele,
     SiteMetrics,
     SourceVariant,
     StreamTally,
@@ -54,19 +53,19 @@ from opengwasdb.readers.rows import (
 from opengwasdb.stats import FrequencyTally, parse_af
 from opengwasdb.variants.normalise import (
     IdentityFaults,
+    LiftedOffPrimary,
     MalformedIdentity,
     Orientation,
     VariantNormalisationError,
     allele_fault,
     identity_allele,
+    is_primary_contig,
     normalise_chromosome,
     orient_to_canonical,
     oriented_alid,
 )
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
-#: GWAS-VCF's REF is the genome's reference allele, on every record.
-_REFERENCE = ReferenceAllele.REF
 
 
 def write_regions_file(alids: Iterable[str], path: str | Path) -> Path:
@@ -173,12 +172,21 @@ def _lift_variant(
 
 
 def oriented_variant(
-    liftover: object | None, chrom: str, pos: str, effect: str, other: str
+    liftover: object | None,
+    chrom: str,
+    pos: str,
+    effect: str,
+    other: str,
+    *,
+    other_is_reference: bool,
+    off_primary: list[str] | None = None,
 ) -> Orientation | None:
     """One source row's canonical orientation, lifted first when `liftover` is set.
 
-    `None` when the row names no usable variant: unnormalisable alleles, or a
-    lift that did not land. An indel or an ambiguous mapping under a lift
+    `None` when the row names no usable variant: unnormalisable alleles, a lift
+    that did not land, or one that landed on an alt, random or unplaced contig,
+    which a Store does not hold (#376): ``off_primary``, given, then gets the row's
+    own spelling, so a caller can tell the last from the others. An indel or an ambiguous mapping under a lift
     raises `LiftoverProjectionError` instead, because no single position lift
     can establish its target identity (ADR 0044). Shared with the BESD resolver
     (issue #282), which aligns `.esi` rows by the same rule.
@@ -187,9 +195,15 @@ def oriented_variant(
         lifted = _lift_variant(liftover, chrom, pos, effect, other)
         if lifted is None:
             return None
+        if not is_primary_contig(lifted[0]):
+            if off_primary is not None:
+                off_primary.append(f"{chrom}:{pos}:{effect}:{other}")
+            return None
         chrom, pos, effect, other = lifted
     try:
-        return orient_to_canonical(chrom, pos, effect, other)
+        return orient_to_canonical(
+            chrom, pos, effect, other, other_is_reference=other_is_reference
+        )
     except VariantNormalisationError:
         return None
 
@@ -358,7 +372,7 @@ def _oriented(chrom: str, pos: str, effect: str, other: str) -> tuple[int, str, 
     position = _position(pos)
     if position is None:
         return None
-    oriented = oriented_alid(chrom, position, effect, other)
+    oriented = oriented_alid(chrom, position, effect, other, other_is_reference=True)
     return None if oriented is None else (position, *oriented)
 
 
@@ -510,8 +524,13 @@ def _lifted_rows_of(
         if isinstance(identity, MalformedIdentity):
             faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", identity)
             continue
-        orientation = oriented_variant(liftover, chrom_raw, pos, alt, ref)
+        off_primary: list[str] = []
+        orientation = oriented_variant(
+            liftover, chrom_raw, pos, alt, ref, other_is_reference=True, off_primary=off_primary
+        )
         if orientation is None:
+            if off_primary:
+                faults.record(f"{chrom_raw}:{pos}:{ref}:{alt}", LiftedOffPrimary(off_primary[0]))
             continue
         variant = orientation.variant
         se = _parse_positive_float(se_cell)
@@ -603,11 +622,11 @@ class GwasVcfReader:
 
     def stream_associations(self, tally: StreamTally | None = None) -> Iterator[ReaderAssociation]:
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
-            yield from stream_associations(rows, self.stored_effect_scale, _REFERENCE)
+            yield from stream_associations(rows, self.stored_effect_scale)
 
     def stream_batches(self, tally: StreamTally | None = None) -> Iterator[ReaderBatch]:
         with contextlib.closing(_record_rows(self.path, tally=tally)) as rows:
-            yield from stream_batches(rows, _REFERENCE, chunk_rows=self.chunk_rows)
+            yield from stream_batches(rows, chunk_rows=self.chunk_rows)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _variants(self.path)

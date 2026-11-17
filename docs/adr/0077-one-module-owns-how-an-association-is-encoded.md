@@ -148,8 +148,8 @@ decides which completion does.
 **Closed by [ADR 0078](0078-completion-keeps-its-sources-se-model.md) (issue
 #301):** Ragged completion no longer fits a model. It codes every cell against
 its source's `se_coefficients`, so a refusal cannot leave it without one.
-Issue #338 still adds the `n_missing_se_out_of_range` column and format
-0.2.1, persists the count each writer already logs, and carries it through
+Issue #338 still adds the `n_missing_se_out_of_range` column and the next free
+format version (0.2.3: #430 took 0.2.1 and #381 0.2.2), persists the count each writer already logs, and carries it through
 completion.
 
 ### The read side and the Top-Hit Index

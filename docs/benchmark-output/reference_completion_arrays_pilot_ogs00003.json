@@ -1,0 +1,5434 @@
+{
+  "issue": 422,
+  "generated_by": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/summarize.py",
+  "timing_lock": "/data/opengwasdb/work/orchestrate/opengwasdb-307/timing.lock",
+  "measurement_order": [
+    "base",
+    "head"
+  ],
+  "raw_runs": {
+    "base": {
+      "tool": "scratch/422/pilot.py",
+      "argv": [
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/pilot.py",
+        "base"
+      ],
+      "host_load_start": {
+        "load_1m": 1.87,
+        "load_5m": 2.53,
+        "load_15m": 4.83,
+        "cpus": 224
+      },
+      "worktree_clean": true,
+      "commit": "35ef0dee",
+      "measured_at": "2026-11-16T03:00:53.669149+00:00",
+      "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422-base/opengwasdb",
+      "opengwasdb_fingerprint": "215c9f41d89df662014dad94dfb130233a33ba8c0caa92c517a72b3aea71157e",
+      "versions": {
+        "opengwasdb": "0.9.2.dev211+g35ef0deea",
+        "numpy": "2.4.6",
+        "scipy": "1.18.1",
+        "scikit-learn": "1.9.1",
+        "numcodecs": "0.17.0",
+        "zarr": "3.4.0"
+      },
+      "python_version": "3.12.14 (main, Sep  2 2026, 23:27:36) [GCC 15.3.0]",
+      "platform": "Linux-4.18.0-553.177.1.el8_10.x86_64-x86_64-with-glibc2.28",
+      "source": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/merge-main/fix2/ogs3/head-src.opengwasdb",
+      "ld_panel": "/data/opengwasdb/reference/ld",
+      "n_workers": 16,
+      "blosc_threads": 1,
+      "source_metadata_sha256": {
+        "manifest.json": "d6e470b8d26b9fe8abc1745d82f89ec195d6a687a4fc27bf34ed8fef5bf21a26",
+        "analyses.tsv": "1efa46309c715cc95a1dc55ef1d3929ddd76cbb5a4d703e4703de0926067338a"
+      },
+      "environment": {
+        "PYTHONNOUSERSITE": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "PYTHONPATH": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422-base"
+      },
+      "elapsed_seconds": 782.6271161769982,
+      "result": "CompletionResult(output_path=PosixPath('/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/pilot-base'), n_variants=21618934, n_analyses=10, n_imputed=2916759, n_missing_off_panel=6188, n_missing_imputation_failed=2161)",
+      "host_load_samples": [
+        {
+          "seconds": 0.0,
+          "load_1m": 1.87,
+          "load_5m": 2.53,
+          "load_15m": 4.83,
+          "cpus": 224
+        },
+        {
+          "seconds": 30.0,
+          "load_1m": 1.98,
+          "load_5m": 2.48,
+          "load_15m": 4.74,
+          "cpus": 224
+        },
+        {
+          "seconds": 60.0,
+          "load_1m": 2.39,
+          "load_5m": 2.54,
+          "load_15m": 4.69,
+          "cpus": 224
+        },
+        {
+          "seconds": 90.0,
+          "load_1m": 1.97,
+          "load_5m": 2.43,
+          "load_15m": 4.58,
+          "cpus": 224
+        },
+        {
+          "seconds": 120.0,
+          "load_1m": 2.18,
+          "load_5m": 2.42,
+          "load_15m": 4.51,
+          "cpus": 224
+        },
+        {
+          "seconds": 150.9,
+          "load_1m": 1.92,
+          "load_5m": 2.33,
+          "load_15m": 4.41,
+          "cpus": 224
+        },
+        {
+          "seconds": 180.9,
+          "load_1m": 2.18,
+          "load_5m": 2.36,
+          "load_15m": 4.35,
+          "cpus": 224
+        },
+        {
+          "seconds": 210.9,
+          "load_1m": 3.27,
+          "load_5m": 2.56,
+          "load_15m": 4.35,
+          "cpus": 224
+        },
+        {
+          "seconds": 240.9,
+          "load_1m": 3.52,
+          "load_5m": 2.73,
+          "load_15m": 4.36,
+          "cpus": 224
+        },
+        {
+          "seconds": 271.3,
+          "load_1m": 3.19,
+          "load_5m": 2.73,
+          "load_15m": 4.3,
+          "cpus": 224
+        },
+        {
+          "seconds": 301.3,
+          "load_1m": 3.79,
+          "load_5m": 2.92,
+          "load_15m": 4.31,
+          "cpus": 224
+        },
+        {
+          "seconds": 331.3,
+          "load_1m": 7.54,
+          "load_5m": 3.84,
+          "load_15m": 4.57,
+          "cpus": 224
+        },
+        {
+          "seconds": 361.3,
+          "load_1m": 12.95,
+          "load_5m": 5.48,
+          "load_15m": 5.1,
+          "cpus": 224
+        },
+        {
+          "seconds": 391.3,
+          "load_1m": 15.82,
+          "load_5m": 6.9,
+          "load_15m": 5.58,
+          "cpus": 224
+        },
+        {
+          "seconds": 421.3,
+          "load_1m": 18.0,
+          "load_5m": 8.28,
+          "load_15m": 6.08,
+          "cpus": 224
+        },
+        {
+          "seconds": 451.3,
+          "load_1m": 19.03,
+          "load_5m": 9.47,
+          "load_15m": 6.55,
+          "cpus": 224
+        },
+        {
+          "seconds": 481.3,
+          "load_1m": 20.31,
+          "load_5m": 10.68,
+          "load_15m": 7.05,
+          "cpus": 224
+        },
+        {
+          "seconds": 511.3,
+          "load_1m": 20.64,
+          "load_5m": 11.69,
+          "load_15m": 7.5,
+          "cpus": 224
+        },
+        {
+          "seconds": 541.3,
+          "load_1m": 20.7,
+          "load_5m": 12.58,
+          "load_15m": 7.93,
+          "cpus": 224
+        },
+        {
+          "seconds": 571.3,
+          "load_1m": 20.54,
+          "load_5m": 13.32,
+          "load_15m": 8.32,
+          "cpus": 224
+        },
+        {
+          "seconds": 601.3,
+          "load_1m": 15.63,
+          "load_5m": 12.9,
+          "load_15m": 8.35,
+          "cpus": 224
+        },
+        {
+          "seconds": 631.3,
+          "load_1m": 10.61,
+          "load_5m": 11.94,
+          "load_15m": 8.17,
+          "cpus": 224
+        },
+        {
+          "seconds": 661.3,
+          "load_1m": 8.12,
+          "load_5m": 11.21,
+          "load_15m": 8.05,
+          "cpus": 224
+        },
+        {
+          "seconds": 691.3,
+          "load_1m": 5.91,
+          "load_5m": 10.37,
+          "load_15m": 7.87,
+          "cpus": 224
+        },
+        {
+          "seconds": 721.3,
+          "load_1m": 8.63,
+          "load_5m": 10.52,
+          "load_15m": 7.99,
+          "cpus": 224
+        },
+        {
+          "seconds": 751.3,
+          "load_1m": 7.32,
+          "load_5m": 10.02,
+          "load_15m": 7.91,
+          "cpus": 224
+        },
+        {
+          "seconds": 782.6,
+          "load_1m": 5.66,
+          "load_5m": 9.37,
+          "load_15m": 7.76,
+          "cpus": 224
+        },
+        {
+          "seconds": 782.6,
+          "load_1m": 5.66,
+          "load_5m": 9.37,
+          "load_15m": 7.76,
+          "cpus": 224
+        }
+      ]
+    },
+    "head": {
+      "tool": "scratch/422/pilot.py",
+      "argv": [
+        "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/pilot.py",
+        "head"
+      ],
+      "host_load_start": {
+        "load_1m": 5.66,
+        "load_5m": 9.37,
+        "load_15m": 7.76,
+        "cpus": 224
+      },
+      "worktree_clean": true,
+      "commit": "7433e4f0",
+      "measured_at": "2026-11-16T03:13:58.599874+00:00",
+      "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422/opengwasdb",
+      "opengwasdb_fingerprint": "53a06567690ffed469f3c53ed057870145798340823ca283e6d41cf6c585e61b",
+      "versions": {
+        "opengwasdb": "0.9.2.dev211+g35ef0deea",
+        "numpy": "2.4.6",
+        "scipy": "1.18.1",
+        "scikit-learn": "1.9.1",
+        "numcodecs": "0.17.0",
+        "zarr": "3.4.0"
+      },
+      "python_version": "3.12.14 (main, Sep  2 2026, 23:27:36) [GCC 15.3.0]",
+      "platform": "Linux-4.18.0-553.177.1.el8_10.x86_64-x86_64-with-glibc2.28",
+      "source": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/merge-main/fix2/ogs3/head-src.opengwasdb",
+      "ld_panel": "/data/opengwasdb/reference/ld",
+      "n_workers": 16,
+      "blosc_threads": 1,
+      "source_metadata_sha256": {
+        "manifest.json": "d6e470b8d26b9fe8abc1745d82f89ec195d6a687a4fc27bf34ed8fef5bf21a26",
+        "analyses.tsv": "1efa46309c715cc95a1dc55ef1d3929ddd76cbb5a4d703e4703de0926067338a"
+      },
+      "environment": {
+        "PYTHONNOUSERSITE": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "PYTHONPATH": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/422"
+      },
+      "elapsed_seconds": 778.6976293190382,
+      "result": "CompletionResult(output_path=PosixPath('/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/pilot-head'), n_variants=21618934, n_analyses=10, n_imputed=2916759, n_missing_off_panel=6188, n_missing_imputation_failed=2161)",
+      "host_load_samples": [
+        {
+          "seconds": 0.0,
+          "load_1m": 5.66,
+          "load_5m": 9.37,
+          "load_15m": 7.76,
+          "cpus": 224
+        },
+        {
+          "seconds": 30.0,
+          "load_1m": 6.2,
+          "load_5m": 9.17,
+          "load_15m": 7.74,
+          "cpus": 224
+        },
+        {
+          "seconds": 60.0,
+          "load_1m": 6.49,
+          "load_5m": 8.94,
+          "load_15m": 7.71,
+          "cpus": 224
+        },
+        {
+          "seconds": 90.0,
+          "load_1m": 6.08,
+          "load_5m": 8.6,
+          "load_15m": 7.64,
+          "cpus": 224
+        },
+        {
+          "seconds": 120.0,
+          "load_1m": 5.4,
+          "load_5m": 8.19,
+          "load_15m": 7.53,
+          "cpus": 224
+        },
+        {
+          "seconds": 152.4,
+          "load_1m": 5.48,
+          "load_5m": 7.89,
+          "load_15m": 7.45,
+          "cpus": 224
+        },
+        {
+          "seconds": 182.4,
+          "load_1m": 4.89,
+          "load_5m": 7.51,
+          "load_15m": 7.34,
+          "cpus": 224
+        },
+        {
+          "seconds": 212.4,
+          "load_1m": 5.01,
+          "load_5m": 7.29,
+          "load_15m": 7.27,
+          "cpus": 224
+        },
+        {
+          "seconds": 242.4,
+          "load_1m": 5.64,
+          "load_5m": 7.24,
+          "load_15m": 7.26,
+          "cpus": 224
+        },
+        {
+          "seconds": 273.6,
+          "load_1m": 5.15,
+          "load_5m": 6.98,
+          "load_15m": 7.17,
+          "cpus": 224
+        },
+        {
+          "seconds": 303.6,
+          "load_1m": 5.43,
+          "load_5m": 6.89,
+          "load_15m": 7.14,
+          "cpus": 224
+        },
+        {
+          "seconds": 333.6,
+          "load_1m": 8.2,
+          "load_5m": 7.35,
+          "load_15m": 7.28,
+          "cpus": 224
+        },
+        {
+          "seconds": 363.6,
+          "load_1m": 14.68,
+          "load_5m": 8.98,
+          "load_15m": 7.82,
+          "cpus": 224
+        },
+        {
+          "seconds": 393.6,
+          "load_1m": 16.64,
+          "load_5m": 10.01,
+          "load_15m": 8.2,
+          "cpus": 224
+        },
+        {
+          "seconds": 423.6,
+          "load_1m": 25.37,
+          "load_5m": 12.96,
+          "load_15m": 9.25,
+          "cpus": 224
+        },
+        {
+          "seconds": 453.6,
+          "load_1m": 22.95,
+          "load_5m": 13.57,
+          "load_15m": 9.58,
+          "cpus": 224
+        },
+        {
+          "seconds": 483.6,
+          "load_1m": 21.5,
+          "load_5m": 14.14,
+          "load_15m": 9.89,
+          "cpus": 224
+        },
+        {
+          "seconds": 513.6,
+          "load_1m": 21.01,
+          "load_5m": 14.73,
+          "load_15m": 10.23,
+          "cpus": 224
+        },
+        {
+          "seconds": 543.6,
+          "load_1m": 20.57,
+          "load_5m": 15.22,
+          "load_15m": 10.53,
+          "cpus": 224
+        },
+        {
+          "seconds": 573.6,
+          "load_1m": 20.75,
+          "load_5m": 15.79,
+          "load_15m": 10.87,
+          "cpus": 224
+        },
+        {
+          "seconds": 603.6,
+          "load_1m": 15.64,
+          "load_5m": 15.09,
+          "load_15m": 10.8,
+          "cpus": 224
+        },
+        {
+          "seconds": 633.7,
+          "load_1m": 10.0,
+          "load_5m": 13.77,
+          "load_15m": 10.5,
+          "cpus": 224
+        },
+        {
+          "seconds": 663.7,
+          "load_1m": 6.65,
+          "load_5m": 12.6,
+          "load_15m": 10.21,
+          "cpus": 224
+        },
+        {
+          "seconds": 693.7,
+          "load_1m": 4.91,
+          "load_5m": 11.61,
+          "load_15m": 9.96,
+          "cpus": 224
+        },
+        {
+          "seconds": 723.7,
+          "load_1m": 4.46,
+          "load_5m": 10.86,
+          "load_15m": 9.76,
+          "cpus": 224
+        },
+        {
+          "seconds": 753.7,
+          "load_1m": 3.76,
+          "load_5m": 10.08,
+          "load_15m": 9.53,
+          "cpus": 224
+        },
+        {
+          "seconds": 778.7,
+          "load_1m": 2.82,
+          "load_5m": 9.35,
+          "load_15m": 9.31,
+          "cpus": 224
+        }
+      ]
+    }
+  },
+  "totals": {
+    "base": {
+      "n_variants": 21618934,
+      "n_analyses": 10,
+      "n_imputed": 2916759,
+      "n_missing_off_panel": 6188,
+      "n_missing_imputation_failed": 2161
+    },
+    "head": {
+      "n_variants": 21618934,
+      "n_analyses": 10,
+      "n_imputed": 2916759,
+      "n_missing_off_panel": 6188,
+      "n_missing_imputation_failed": 2161
+    }
+  },
+  "comparison": {
+    "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/pilot-base",
+    "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/pilot-head",
+    "n_arrays_left": 41,
+    "n_arrays_right": 41,
+    "arrays_only_left": [],
+    "arrays_only_right": [],
+    "arrays_with_metadata_differences": [],
+    "arrays_with_value_differences": [],
+    "arrays": {
+      "data.zarr/eaf": {
+        "metadata_left": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "int8",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 58386008
+        },
+        "metadata_right": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "int8",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 58386008
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/eaf_baseline": {
+        "metadata_left": {
+          "shape": [
+            21618934
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1000
+          ],
+          "shard": [
+            1000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 75354349
+        },
+        "metadata_right": {
+          "shape": [
+            21618934
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1000
+          ],
+          "shard": [
+            1000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 75354349
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/eaf_exception_index": {
+        "metadata_left": {
+          "shape": [
+            340
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            340
+          ],
+          "shard": [
+            340
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 3693
+        },
+        "metadata_right": {
+          "shape": [
+            340
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            340
+          ],
+          "shard": [
+            340
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 3693
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/eaf_exception_value": {
+        "metadata_left": {
+          "shape": [
+            340
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            340
+          ],
+          "shard": [
+            340
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 2337
+        },
+        "metadata_right": {
+          "shape": [
+            340
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            340
+          ],
+          "shard": [
+            340
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 2337
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/eaf_reference": {
+        "metadata_left": {
+          "shape": [
+            21618934
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1000
+          ],
+          "shard": [
+            1000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 61812475
+        },
+        "metadata_right": {
+          "shape": [
+            21618934
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1000
+          ],
+          "shard": [
+            1000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 61812475
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/imputed": {
+        "metadata_left": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2441430
+        },
+        "metadata_right": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2441430
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/on_panel": {
+        "metadata_left": {
+          "shape": [
+            21618934
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            1000
+          ],
+          "shard": [
+            1000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3871841
+        },
+        "metadata_right": {
+          "shape": [
+            21618934
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            1000
+          ],
+          "shard": [
+            1000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3871841
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/se": {
+        "metadata_left": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "int8",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 118493496
+        },
+        "metadata_right": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "int8",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 118493496
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/se_coefficients": {
+        "metadata_left": {
+          "shape": [
+            10,
+            2
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            10,
+            2
+          ],
+          "shard": [
+            10,
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1355
+        },
+        "metadata_right": {
+          "shape": [
+            10,
+            2
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            10,
+            2
+          ],
+          "shard": [
+            10,
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1355
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/se_exception_index": {
+        "metadata_left": {
+          "shape": [
+            3875474
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            4000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2756043
+        },
+        "metadata_right": {
+          "shape": [
+            3875474
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            4000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2756043
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/se_exception_value": {
+        "metadata_left": {
+          "shape": [
+            3875474
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            4000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 12533650
+        },
+        "metadata_right": {
+          "shape": [
+            3875474
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            4000000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 12533650
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/abs_z": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3642801
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3642801
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 11721
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 11721
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/analysis_offsets": {
+        "metadata_left": {
+          "shape": [
+            11
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            11
+          ],
+          "shard": [
+            11
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1329
+        },
+        "metadata_right": {
+          "shape": [
+            11
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            11
+          ],
+          "shard": [
+            11
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1329
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/eaf": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 7843889
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 7843889
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/imputed": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 82155
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 82155
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/p_value": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 17346568
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 17346568
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/se": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 7198594
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 7198594
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/variant_index": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2841013
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2841013
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/z": {
+        "metadata_left": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3957289
+        },
+        "metadata_right": {
+          "shape": [
+            2448045
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            1048576
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3957289
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/abs_z": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1219507
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1219507
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 4581
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 4581
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/analysis_offsets": {
+        "metadata_left": {
+          "shape": [
+            11
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            11
+          ],
+          "shard": [
+            11
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1329
+        },
+        "metadata_right": {
+          "shape": [
+            11
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            11
+          ],
+          "shard": [
+            11
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1329
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/eaf": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2626732
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2626732
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/imputed": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 30280
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 30280
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/p_value": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 5922412
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 5922412
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/se": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2346344
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2346344
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/variant_index": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 944835
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 944835
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/z": {
+        "metadata_left": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1325752
+        },
+        "metadata_right": {
+          "shape": [
+            829328
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            835584
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1325752
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/abs_z": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 649278
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 649278
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2993
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 2993
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/analysis_offsets": {
+        "metadata_left": {
+          "shape": [
+            11
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            11
+          ],
+          "shard": [
+            11
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1329
+        },
+        "metadata_right": {
+          "shape": [
+            11
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            11
+          ],
+          "shard": [
+            11
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1329
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/eaf": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1328504
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1328504
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/imputed": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 16127
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 16127
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/p_value": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3033811
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 3033811
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/se": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1176684
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1176684
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/variant_index": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 478253
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 478253
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/z": {
+        "metadata_left": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 703342
+        },
+        "metadata_right": {
+          "shape": [
+            421262
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            16384
+          ],
+          "shard": [
+            425984
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 703342
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/z": {
+        "metadata_left": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "int16",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 361509838
+        },
+        "metadata_right": {
+          "shape": [
+            21618934,
+            10
+          ],
+          "dtype": "int16",
+          "inner_chunk": [
+            1000,
+            10
+          ],
+          "shard": [
+            100000,
+            10
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 361509838
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/z_overflow_index": {
+        "metadata_left": {
+          "shape": [
+            294
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            294
+          ],
+          "shard": [
+            294
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 3325
+        },
+        "metadata_right": {
+          "shape": [
+            294
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            294
+          ],
+          "shard": [
+            294
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 3325
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/z_overflow_value": {
+        "metadata_left": {
+          "shape": [
+            294
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            294
+          ],
+          "shard": [
+            294
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 2153
+        },
+        "metadata_right": {
+          "shape": [
+            294
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            294
+          ],
+          "shard": [
+            294
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 2153
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      }
+    },
+    "encoding_plan": {
+      "left": {
+        "": {
+          "eaf": {
+            "kind": "int8_residual",
+            "reference": true,
+            "residual_range": 0.5
+          },
+          "se": {
+            "kind": "int8_residual",
+            "residual_range": 0.5
+          },
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          }
+        }
+      },
+      "right": {
+        "": {
+          "eaf": {
+            "kind": "int8_residual",
+            "reference": true,
+            "residual_range": 0.5
+          },
+          "se": {
+            "kind": "int8_residual",
+            "residual_range": 0.5
+          },
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          }
+        }
+      }
+    },
+    "analyses_tsv": {
+      "columns_only_left": [],
+      "columns_only_right": [],
+      "rows": {
+        "left": 10,
+        "right": 10
+      },
+      "differing_cells_by_column": {},
+      "examples": {}
+    },
+    "variants_tsv_gz": {
+      "left_sha256": "1415924d8af419b359b4beb6a14c9e9a77d03bb44592b77e8bdb6ea83e083462",
+      "right_sha256": "1415924d8af419b359b4beb6a14c9e9a77d03bb44592b77e8bdb6ea83e083462",
+      "identical": true
+    },
+    "strict_decoded_bytes_identical": [
+      "data.zarr/eaf",
+      "data.zarr/eaf_baseline",
+      "data.zarr/eaf_exception_index",
+      "data.zarr/eaf_exception_value",
+      "data.zarr/eaf_reference",
+      "data.zarr/imputed",
+      "data.zarr/on_panel",
+      "data.zarr/se",
+      "data.zarr/se_coefficients",
+      "data.zarr/se_exception_index",
+      "data.zarr/se_exception_value",
+      "data.zarr/top_hits/p_5e_04/abs_z",
+      "data.zarr/top_hits/p_5e_04/analysis_index",
+      "data.zarr/top_hits/p_5e_04/analysis_offsets",
+      "data.zarr/top_hits/p_5e_04/eaf",
+      "data.zarr/top_hits/p_5e_04/imputed",
+      "data.zarr/top_hits/p_5e_04/p_value",
+      "data.zarr/top_hits/p_5e_04/se",
+      "data.zarr/top_hits/p_5e_04/variant_index",
+      "data.zarr/top_hits/p_5e_04/z",
+      "data.zarr/top_hits/p_5e_06/abs_z",
+      "data.zarr/top_hits/p_5e_06/analysis_index",
+      "data.zarr/top_hits/p_5e_06/analysis_offsets",
+      "data.zarr/top_hits/p_5e_06/eaf",
+      "data.zarr/top_hits/p_5e_06/imputed",
+      "data.zarr/top_hits/p_5e_06/p_value",
+      "data.zarr/top_hits/p_5e_06/se",
+      "data.zarr/top_hits/p_5e_06/variant_index",
+      "data.zarr/top_hits/p_5e_06/z",
+      "data.zarr/top_hits/p_5e_08/abs_z",
+      "data.zarr/top_hits/p_5e_08/analysis_index",
+      "data.zarr/top_hits/p_5e_08/analysis_offsets",
+      "data.zarr/top_hits/p_5e_08/eaf",
+      "data.zarr/top_hits/p_5e_08/imputed",
+      "data.zarr/top_hits/p_5e_08/p_value",
+      "data.zarr/top_hits/p_5e_08/se",
+      "data.zarr/top_hits/p_5e_08/variant_index",
+      "data.zarr/top_hits/p_5e_08/z",
+      "data.zarr/z",
+      "data.zarr/z_overflow_index",
+      "data.zarr/z_overflow_value"
+    ],
+    "quality_rows_identical": 13570,
+    "manifest_identical_except_created_at": true
+  },
+  "synthetic_comparison": {
+    "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/base",
+    "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/head-final",
+    "n_arrays_left": 42,
+    "n_arrays_right": 42,
+    "arrays_only_left": [],
+    "arrays_only_right": [],
+    "arrays_with_metadata_differences": [],
+    "arrays_with_value_differences": [],
+    "arrays": {
+      "data.zarr/ragged/by_variant/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "int32",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1454
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "int32",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1454
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/by_variant/imputed": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1228
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1228
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/by_variant/offsets": {
+        "metadata_left": {
+          "shape": [
+            8
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            8
+          ],
+          "shard": [
+            8
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1301
+        },
+        "metadata_right": {
+          "shape": [
+            8
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            8
+          ],
+          "shard": [
+            8
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1301
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/by_variant/se": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "float16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1406
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "float16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1406
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/by_variant/z": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "int16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1414
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "int16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1414
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/by_variant/z_overflow_index": {
+        "metadata_left": {
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 947
+        },
+        "metadata_right": {
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 947
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/by_variant/z_overflow_value": {
+        "metadata_left": {
+          "shape": [
+            0
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 951
+        },
+        "metadata_right": {
+          "shape": [
+            0
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 951
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/eaf_reference": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            7
+          ],
+          "shard": [
+            7
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1269
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            7
+          ],
+          "shard": [
+            7
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1269
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/imputed": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1228
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1228
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/offsets": {
+        "metadata_left": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            10000
+          ],
+          "shard": [
+            10000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1282
+        },
+        "metadata_right": {
+          "shape": [
+            2
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            10000
+          ],
+          "shard": [
+            10000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1282
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/se": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "float16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1406
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "float16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1406
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/variant_index": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "int32",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1463
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "int32",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1463
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/z": {
+        "metadata_left": {
+          "shape": [
+            7
+          ],
+          "dtype": "int16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1414
+        },
+        "metadata_right": {
+          "shape": [
+            7
+          ],
+          "dtype": "int16",
+          "inner_chunk": [
+            200000
+          ],
+          "shard": [
+            200000
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 2,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1414
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/z_overflow_index": {
+        "metadata_left": {
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 947
+        },
+        "metadata_right": {
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 947
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/ragged/z_overflow_value": {
+        "metadata_left": {
+          "shape": [
+            0
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 951
+        },
+        "metadata_right": {
+          "shape": [
+            0
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            1
+          ],
+          "shard": [
+            1
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": null,
+            "codecs": [
+              "sharding_indexed"
+            ]
+          },
+          "nbytes_on_disk": 951
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/abs_z": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/analysis_offsets": {
+        "metadata_left": {
+          "shape": [
+            2
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            2
+          ],
+          "shard": [
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1254
+        },
+        "metadata_right": {
+          "shape": [
+            2
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            2
+          ],
+          "shard": [
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1254
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/eaf": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/imputed": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1164
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1164
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/p_value": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1289
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1289
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/se": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/variant_index": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_04/z": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/abs_z": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/analysis_offsets": {
+        "metadata_left": {
+          "shape": [
+            2
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            2
+          ],
+          "shard": [
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1254
+        },
+        "metadata_right": {
+          "shape": [
+            2
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            2
+          ],
+          "shard": [
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1254
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/eaf": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/imputed": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1164
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1164
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/p_value": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1289
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1289
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/se": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/variant_index": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1262
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_06/z": {
+        "metadata_left": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_right": {
+          "shape": [
+            6
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            6
+          ],
+          "shard": [
+            6
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1265
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/abs_z": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/analysis_index": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1258
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1258
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/analysis_offsets": {
+        "metadata_left": {
+          "shape": [
+            2
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            2
+          ],
+          "shard": [
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1254
+        },
+        "metadata_right": {
+          "shape": [
+            2
+          ],
+          "dtype": "uint64",
+          "inner_chunk": [
+            2
+          ],
+          "shard": [
+            2
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1254
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/eaf": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/imputed": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1163
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "uint8",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 1,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1163
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/p_value": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1281
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "float64",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 8,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1281
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/se": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/variant_index": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1258
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "uint32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1258
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      },
+      "data.zarr/top_hits/p_5e_08/z": {
+        "metadata_left": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_right": {
+          "shape": [
+            5
+          ],
+          "dtype": "float32",
+          "inner_chunk": [
+            5
+          ],
+          "shard": [
+            5
+          ],
+          "zarr_format": 3,
+          "compressor": {
+            "sharding": "sharding_indexed",
+            "typesize": 4,
+            "cname": "zstd",
+            "clevel": 3,
+            "shuffle": "bitshuffle",
+            "blocksize": 0
+          },
+          "nbytes_on_disk": 1261
+        },
+        "metadata_equal": true,
+        "values": {
+          "comparable": true,
+          "differing_cells": 0,
+          "max_abs_diff": 0.0,
+          "examples": []
+        }
+      }
+    },
+    "encoding_plan": {
+      "left": {
+        "": {
+          "eaf": {
+            "kind": "absent",
+            "reference": true
+          },
+          "se": {
+            "kind": "float16"
+          },
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          }
+        }
+      },
+      "right": {
+        "": {
+          "eaf": {
+            "kind": "absent",
+            "reference": true
+          },
+          "se": {
+            "kind": "float16"
+          },
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          }
+        }
+      }
+    },
+    "analyses_tsv": {
+      "columns_only_left": [],
+      "columns_only_right": [],
+      "rows": {
+        "left": 1,
+        "right": 1
+      },
+      "differing_cells_by_column": {},
+      "examples": {}
+    },
+    "variants_tsv_gz": {
+      "left_sha256": "f2918f12e77a2fb5e53b97ad097cde391afc325ec3117688d6ae67106e07ec41",
+      "right_sha256": "f2918f12e77a2fb5e53b97ad097cde391afc325ec3117688d6ae67106e07ec41",
+      "identical": true
+    },
+    "strict_decoded_bytes_identical": [
+      "data.zarr/ragged/by_variant/analysis_index",
+      "data.zarr/ragged/by_variant/imputed",
+      "data.zarr/ragged/by_variant/offsets",
+      "data.zarr/ragged/by_variant/se",
+      "data.zarr/ragged/by_variant/z",
+      "data.zarr/ragged/by_variant/z_overflow_index",
+      "data.zarr/ragged/by_variant/z_overflow_value",
+      "data.zarr/ragged/eaf_reference",
+      "data.zarr/ragged/imputed",
+      "data.zarr/ragged/offsets",
+      "data.zarr/ragged/se",
+      "data.zarr/ragged/variant_index",
+      "data.zarr/ragged/z",
+      "data.zarr/ragged/z_overflow_index",
+      "data.zarr/ragged/z_overflow_value",
+      "data.zarr/top_hits/p_5e_04/abs_z",
+      "data.zarr/top_hits/p_5e_04/analysis_index",
+      "data.zarr/top_hits/p_5e_04/analysis_offsets",
+      "data.zarr/top_hits/p_5e_04/eaf",
+      "data.zarr/top_hits/p_5e_04/imputed",
+      "data.zarr/top_hits/p_5e_04/p_value",
+      "data.zarr/top_hits/p_5e_04/se",
+      "data.zarr/top_hits/p_5e_04/variant_index",
+      "data.zarr/top_hits/p_5e_04/z",
+      "data.zarr/top_hits/p_5e_06/abs_z",
+      "data.zarr/top_hits/p_5e_06/analysis_index",
+      "data.zarr/top_hits/p_5e_06/analysis_offsets",
+      "data.zarr/top_hits/p_5e_06/eaf",
+      "data.zarr/top_hits/p_5e_06/imputed",
+      "data.zarr/top_hits/p_5e_06/p_value",
+      "data.zarr/top_hits/p_5e_06/se",
+      "data.zarr/top_hits/p_5e_06/variant_index",
+      "data.zarr/top_hits/p_5e_06/z",
+      "data.zarr/top_hits/p_5e_08/abs_z",
+      "data.zarr/top_hits/p_5e_08/analysis_index",
+      "data.zarr/top_hits/p_5e_08/analysis_offsets",
+      "data.zarr/top_hits/p_5e_08/eaf",
+      "data.zarr/top_hits/p_5e_08/imputed",
+      "data.zarr/top_hits/p_5e_08/p_value",
+      "data.zarr/top_hits/p_5e_08/se",
+      "data.zarr/top_hits/p_5e_08/variant_index",
+      "data.zarr/top_hits/p_5e_08/z"
+    ],
+    "quality_rows_identical": 3,
+    "manifest_identical_except_created_at": true
+  },
+  "synthetic_checkpoint_comparison": [
+    {
+      "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/base-checkpoints/1__900000-1200000.npz",
+      "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/head-final-checkpoints/1__900000-1200000.npz",
+      "fills": 2,
+      "fields": [
+        {
+          "field": "format",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178"
+        },
+        {
+          "field": "block_id",
+          "shape": [
+            1
+          ],
+          "dtype": "<U16",
+          "sha256": "93468b9d2c9aabf56460148e92a399dca812e59a99f4889ee2f85e5a77aed68f"
+        },
+        {
+          "field": "q_ai",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "q_pearson",
+          "shape": [
+            1
+          ],
+          "dtype": "float64",
+          "sha256": "fcd40c52c2ded7e0e88c1a3e7ae98fb8bce0fd5b491e928928ba76dc977584bb"
+        },
+        {
+          "field": "q_nimp",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "26b25d457597a7b0463f9620f666dd10aa2c4373a505967c7c8d70922a2d6ece"
+        },
+        {
+          "field": "q_nmiss",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "f_alid",
+          "shape": [
+            2
+          ],
+          "dtype": "|S64",
+          "sha256": "efdea9cfc5a092c4a134e1a052c790f9a331cecca487592d221347f5fcfd430e"
+        },
+        {
+          "field": "f_long_at",
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "field": "f_long_alid",
+          "shape": [
+            0
+          ],
+          "dtype": "|S1",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "field": "f_ai",
+          "shape": [
+            2
+          ],
+          "dtype": "int32",
+          "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+        },
+        {
+          "field": "f_z",
+          "shape": [
+            2
+          ],
+          "dtype": "float32",
+          "sha256": "9cfbb2bc72641324179bd0f63e54fb9dd8bd4c7c6319eef8b74fa2c87b04f5a0"
+        },
+        {
+          "field": "f_se",
+          "shape": [
+            2
+          ],
+          "dtype": "float32",
+          "sha256": "f185cfade1634b14b2c719b0c825104196da248d8f1c50876f5a24e12741c22b"
+        }
+      ],
+      "npz_bytes_equal": true
+    },
+    {
+      "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/base-checkpoints/1__900000-1210000.npz",
+      "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/head-final-checkpoints/1__900000-1210000.npz",
+      "fills": 1,
+      "fields": [
+        {
+          "field": "format",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178"
+        },
+        {
+          "field": "block_id",
+          "shape": [
+            1
+          ],
+          "dtype": "<U16",
+          "sha256": "d19583dd6ac94bfda6d4755ccc8cf34820a1c38fe5d0c1d65064abfeb578355b"
+        },
+        {
+          "field": "q_ai",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "q_pearson",
+          "shape": [
+            1
+          ],
+          "dtype": "float64",
+          "sha256": "f55f66ab61f5d0ddd577ce02d367dba45c7ff0704098273e5253d979ddbdd714"
+        },
+        {
+          "field": "q_nimp",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "67abdd721024f0ff4e0b3f4c2fc13bc5bad42d0b7851d456d88d203d15aaa450"
+        },
+        {
+          "field": "q_nmiss",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "f_alid",
+          "shape": [
+            1
+          ],
+          "dtype": "|S64",
+          "sha256": "dc5c18bb855b833d0290cbe96a64ddabe15d8fb623dd18f4a8e428722e4c0c39"
+        },
+        {
+          "field": "f_long_at",
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "field": "f_long_alid",
+          "shape": [
+            0
+          ],
+          "dtype": "|S1",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "field": "f_ai",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "f_z",
+          "shape": [
+            1
+          ],
+          "dtype": "float32",
+          "sha256": "fbff96357f61b728788336ea44fe112325d5ff35bc3677e27efa94dfbf92a2e7"
+        },
+        {
+          "field": "f_se",
+          "shape": [
+            1
+          ],
+          "dtype": "float32",
+          "sha256": "add17bc687550f1deb8600a7e652f669341ac6ff66c975cafa57970608e43c69"
+        }
+      ],
+      "npz_bytes_equal": true
+    },
+    {
+      "left": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/base-checkpoints/1__900000-1250000.npz",
+      "right": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/422/fixture/head-final-checkpoints/1__900000-1250000.npz",
+      "fills": 2,
+      "fields": [
+        {
+          "field": "format",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178"
+        },
+        {
+          "field": "block_id",
+          "shape": [
+            1
+          ],
+          "dtype": "<U16",
+          "sha256": "c92237b28a6edcc8c556fb03e144adeadc9b44eac704b74b6170f2517180112d"
+        },
+        {
+          "field": "q_ai",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "q_pearson",
+          "shape": [
+            1
+          ],
+          "dtype": "float64",
+          "sha256": "fcd40c52c2ded7e0e88c1a3e7ae98fb8bce0fd5b491e928928ba76dc977584bb"
+        },
+        {
+          "field": "q_nimp",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "26b25d457597a7b0463f9620f666dd10aa2c4373a505967c7c8d70922a2d6ece"
+        },
+        {
+          "field": "q_nmiss",
+          "shape": [
+            1
+          ],
+          "dtype": "int32",
+          "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+        },
+        {
+          "field": "f_alid",
+          "shape": [
+            2
+          ],
+          "dtype": "|S64",
+          "sha256": "efdea9cfc5a092c4a134e1a052c790f9a331cecca487592d221347f5fcfd430e"
+        },
+        {
+          "field": "f_long_at",
+          "shape": [
+            0
+          ],
+          "dtype": "int64",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "field": "f_long_alid",
+          "shape": [
+            0
+          ],
+          "dtype": "|S1",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "field": "f_ai",
+          "shape": [
+            2
+          ],
+          "dtype": "int32",
+          "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc"
+        },
+        {
+          "field": "f_z",
+          "shape": [
+            2
+          ],
+          "dtype": "float32",
+          "sha256": "9cfbb2bc72641324179bd0f63e54fb9dd8bd4c7c6319eef8b74fa2c87b04f5a0"
+        },
+        {
+          "field": "f_se",
+          "shape": [
+            2
+          ],
+          "dtype": "float32",
+          "sha256": "f185cfade1634b14b2c719b0c825104196da248d8f1c50876f5a24e12741c22b"
+        }
+      ],
+      "npz_bytes_equal": true
+    }
+  ]
+}

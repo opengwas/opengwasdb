@@ -607,10 +607,16 @@ fills plus the extra filing cost per checkpoint, memory from its parts
 (`_memory_model`), set beside the larger run's measured peaks.
 
 The artifacts of the #424 runs are in
-`docs/benchmark-output/ragged_completion_streams/`.
+`docs/benchmark-output/ragged_completion_streams/`. They were run at `1ab2b09`
+and `bd04698`, on the published Observed-Only Store as it then was (format
+0.2.0), before #430 bounded completion to regions and #381 made completion
+refuse a 0.2.0 source. The commands below are those runs; they reproduce them
+only from a worktree of those commits (see the paragraph after them). At today's
+code, use the #430 recipe below, whose source and panel completion accepts.
 
 ```bash
-# A chr15-22 panel: the real panel's chromosome directories, linked.
+# A chr15-22 panel: the real panel's chromosome directories, linked, and the
+# files beside them, the indel-reference table among them.
 mkdir -p /data/opengwasdb/work/odb424/panel-chr15-22/EUR
 for f in /data/opengwasdb/reference/ld/EUR/*; do b=$(basename "$f")
   if [[ ! "$b" =~ ^[0-9]+$ ]] || (( b >= 15 )); then
@@ -646,36 +652,45 @@ instead of the checkout's and the artifact names its commit.
 Store records in `regions.tsv`, so OGS-00006, whose coverage is `signals_only`,
 runs from an Observed-Only source built with its bundle's region table
 (`build-ragged-ssf --regions .../stores/OGS-00006/sidecars/sparse_regions.tsv`;
-the published Store is now Reference-Completed, and was built without one). A run
-from a source carrying `regions.tsv` adds `region_accounting`: per completed
-Analysis, its significant regions and their extent on the run's panel, and the
-cells completion added it, read back from both Stores and tested against the
-table here rather than by the package's own region code; `added_outside_regions`
-and `observed_rows_lost` must be 0. `regions-projection` counts, for every
-Analysis, the panel variants inside its regions that it does not observe, which
-is what a completion adds it: on a run's panel it is checked against that run,
-Analysis by Analysis (`checked_against_run.disagreeing` must be empty), and on
-the full panel it is the full Store's cells, the `--full-fills` for `project`.
-The #430 artifacts are `regions-*.json` in the same directory.
+the published Store is now Reference-Completed, and was built without one). **Since
+#381** that source must also be a build of this package: completion refuses a Store
+whose indels are sorted (format 0.2.1 or earlier, ADR 0079), and every build of this
+package writes 0.2.2. A 0.2.2 build of OGS-00006 has no indel at all: its GWAS-SSF
+sources carry no harmoniser columns, so the build drops their 594,623 indel variants
+(`indel_ssf_unharmonised`) and keeps the same 11,491,840 SNVs. A run from a source
+carrying `regions.tsv` adds `region_accounting`: per completed Analysis, its
+significant regions and their extent on the run's panel, and the cells completion
+added it, read back from both Stores and tested against the table here rather than
+by the package's own region code; `added_outside_regions` and `observed_rows_lost`
+must be 0. `regions-projection` counts, for every Analysis, the panel variants inside
+its regions that it does not observe, which is what a completion adds it: on a run's
+panel it is checked against that run, Analysis by Analysis
+(`checked_against_run.disagreeing` must be empty), and on the full panel it is the
+full Store's cells, the `--full-fills` for `project`. The #430 artifacts are
+`regions-*.json` in the same directory.
 
-The chr15-22 panel holds the real panel's chromosome directories 15 to 22, linked,
-and nothing else; `STORES` is a checkout of opengwasdb-stores, whose bundle holds
-the region table, and the source is built from the bundle's own build argv (the
+The chr15-22 panel holds the real panel's chromosome directories 15 to 22 and its
+indel-reference table (`indel_reference.tsv.gz`, its index and its provenance),
+linked. Without the table the panel places no indel and the runs complete none
+(ADR 0079). `STORES` is a checkout of opengwasdb-stores, whose bundle holds the
+region table, and the source is built from the bundle's own build argv (the
 published Store's `records/build.json`) with `--admission-record`, required since
 #357, and `--regions` added.
 
 ```bash
 STORES=path/to/opengwasdb-stores
-SRC=/data/opengwasdb/work/odb430/ogs6/store.opengwasdb
+SRC=/data/opengwasdb/work/odb430/OGS-00006-0.2.2.opengwasdb
 PANEL=/data/opengwasdb/work/odb430/panel-chr15-22
 OUT=docs/benchmark-output/ragged_completion_streams
 pixi run -e dev opengwasdb build-ragged-ssf /data/opengwasdb/stores/OGS-00006/work/analyses.tsv \
     /data/opengwasdb/stores/OGS-00006/source $SRC --store-id OGS-00006 --release-id OGS-00006 \
     --association-coverage signals_only --stored-effect-scale sd \
-    --admission-record /data/opengwasdb/work/odb430/ogs6/admission.json \
+    --admission-record $SRC.admission \
     --regions $STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
 mkdir -p $PANEL/EUR
 for c in $(seq 15 22); do ln -sfn /data/opengwasdb/reference/ld/EUR/$c $PANEL/EUR/$c; done
+for f in indel_reference.tsv.gz indel_reference.tsv.gz.tbi indel_reference.json; do
+  ln -sfn /data/opengwasdb/reference/ld/EUR/$f $PANEL/EUR/$f; done
 for n in 25 100; do
   /usr/bin/time -v pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py \
       run --source $SRC --n-analyses $n --n-workers 16 --ld-dir $PANEL \
@@ -696,15 +711,27 @@ pixi run -e dev python benchmarks/benchmark_ragged_completion_streams.py project
     --output $OUT/regions-projection-phase3.json
 ```
 
-On OGS-00006 the full Store adds 1,038,245 cells (`regions-projection-ld.json`),
-where its first completion added 10,001,552,498; the subsets imputed every cell
-they added, and the chr15-22 projection agrees with the 100-Analysis run for all
-100 Analyses. `project` reads Phase 3's time off a line through two runs 17,191
-fills apart, both carrying the same 58M observed rows, so host noise sets its
-slope: here the 100-Analysis run's Phase 3 took 184 s and the 25-Analysis run's
-192 s, so `project` records no time (`phase3_not_fitted`) rather than extrapolate
-a negative one. The full Store holds 59.1M cells, 1.7% more than the 100-Analysis
-run's 58.1M; the memory model puts it at 9.4 GB at assembly and 12.8 GB at write.
+`regions-head-*.json`, `regions-projection-*.json` and `regions-shard-append.json`
+were measured at `b897533` (#432), on a build of package 0.9.0 carrying
+`regions.tsv`: format 0.2.1, its indels sorted and the panel read as before #381,
+every indel named by its sorted alleles and none re-signed. On that reading the full
+Store adds 1,038,245 cells (`regions-projection-ld.json`), where its first completion
+added 10,001,552,498; the subsets imputed every cell they added, and the chr15-22
+projection agrees with the 100-Analysis run for all 100 Analyses. `project` reads
+Phase 3's time off a line through two runs 17,191 fills apart, both carrying the
+same 58M observed rows, so host noise sets its slope: here the 100-Analysis run's
+Phase 3 took 184 s and the 25-Analysis run's 192 s, so `project` records no time
+(`phase3_not_fitted`) rather than extrapolate a negative one. The full Store holds
+59.1M cells, 1.7% more than the 100-Analysis run's 58.1M; the memory model puts it
+at 9.4 GB at assembly and 12.8 GB at write.
+
+`regions-0.2.1-*.json` were measured at `48c0576`, before #432, on a build of this
+branch whose indels were spelt reference first: format 0.2.1 as #381 first numbered
+it, 0.2.2 since main's #432 took 0.2.1. The 100-Analysis run imputes 38,861 cells,
+none outside a region, and loses no observed row; on chromosomes 15-22 the
+projection agrees with it Analysis by Analysis; on the full panel the full Store
+adds 2,160,436 cells, about twice the sorted figure, because the build drops the
+Store's indels and every panel indel inside a region becomes a cell completion adds.
 
 ### `benchmark_store_comparison.py`
 
@@ -1250,6 +1277,238 @@ misrepresent what was measured.
 
 ---
 
+### `measure_epic307_evidence.py`
+
+One command for epic #307's timing evidence. It re-derives the epic's tables
+from the inputs they were assembled from and writes one JSON artifact:
+
+1. **Steps and phases** — for every `records/<step>.json` of each
+   `--store LABEL=PATH`: the step's wall time, every `log_phase` pair
+   (`X: start` … `X: done in 1h28m`) with its start, end and span (the
+   minute-rounded `done in` value is recorded beside it, not instead of it),
+   every progress phase (`X: n/N done (extra) — elapsed …, ETA …`) with the
+   pace it achieved, and the count of lines that looked like a phase or
+   progress line and did not parse. A step or phase "overlaps a window" when any
+   part of it falls inside one; windows are half-open intervals on the log
+   lines' own clock.
+2. **The reader A/B** — for each `--source CAPABILITY=PATH`, three sides
+   interleaved round by round in fresh interpreters: the current reader, a
+   control reader exported with `git archive` from `--control-revision` (the
+   epic measured at `d405de0`, and both readers changed after it), and the parse
+   floor. A reader side reads the associations as Pass 2 does: as the reader's
+   association batches where it offers them (FinnGen, since #318), else one at
+   a time, so against a control from before #318 the A/B is batches against
+   rows. The floor
+   is recorded by its method: a `pandas` C-engine read of the seven columns a
+   tabular association row is built from plus `z = beta / sebeta`, or the
+   GWAS-VCF reader's own `bcftools query` format with no per-record Python. Both
+   skip orientation and Analysis admission, so they bound the gain rather than
+   predict it. Every side reports the `opengwasdb` it imported, and a reader
+   that streams a different number of associations than the control is refused.
+3. **The comparison** — every figure in the epic's tables beside its measured
+   value, whether the record reproduces it, and the reason when it does not.
+
+`--store` requires a valid `--tz ZONE`: the Store host's declared **log-clock
+zone**, not the machine executing the parser. It is also required for
+`--window`. UTC record timestamps and offset-bearing window endpoints convert
+to that zone before dropping `tzinfo`; naive log lines and window endpoints
+retain their wall-clock readings. `log_clock_tz` and `method_note` record the
+declaration even without daily windows. The public `parse_record`,
+`measure_store`, `parse_window` and `daily_windows` APIs likewise require `tz`.
+There is no implicit Europe/London or executing-host fallback (issue #436).
+The artifact keeps naive ISO timestamps and wall-clock duration semantics:
+a naive log line in the repeated fallback hour cannot distinguish `fold`.
+
+`--window START/END` is one interval (an END before its START ends the next
+day). `--daily-window HH:MM-HH:MM --tz ZONE --daily-from DATE --until DATE`
+repeats the nightly snapshot from `--daily-from` over every night up to
+`--until`; without it a step that ran overnight is reported at the pace the
+backup let it have. The daily window is an assumption read off 22 Oct's
+observation and applied back to 14 Oct, the first night of the October
+records, where OGS-00016's build slows in the same hours; the September build
+is left outside it, the epic having read it as clean. The artifact records it
+as an assumption. `--store` takes a replaced or retired Store's directory
+too, under any label: the September OGS-00009 build and OGS-00010's completion
+are read from where those Stores' files now sit.
+
+**Output file written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_epic307_evidence.json` | Per Store: every step with its phases, window flags (`null` where a time is unknown) and clean rates, including each clean interval more than 3x the median; per source: the reader A/B samples, per-round paired ratios, medians, control and floor method; the epic comparison with a verdict, a checked reason and checked notes per row; the run's revision, argv and `host` load window. **Not a quiet-node measurement**: read the load at its start and end in the artifact's `host` block, and each sample's in `reader_ab[].samples`, before reading any timing. |
+
+**Usage** — the sources are read-only and every side is I/O bound, so take the
+host's shared heavy-job lock around it (`flock -w 14400 <lock> …`); the artifact
+records the 1/5/15-minute load at the run's start and end, and per A/B sample:
+
+The control is the epic's own revision. The harness runs `git archive` on it,
+fingerprints the archive's own bytes, and imports the exported tree in the
+control's fresh interpreters, so the fingerprint names the commit and not a
+tree someone left on disk:
+
+```bash
+pixi run -e dev python benchmarks/measure_epic307_evidence.py \
+  --store OGS-00009=/data/opengwasdb/stores/OGS-00009 \
+  --store OGS-00016=/data/opengwasdb/stores/OGS-00016 \
+  --store OGS-00017=/data/opengwasdb/stores/OGS-00017 \
+  --store OGS-00011=/data/opengwasdb/stores/OGS-00011 \
+  --store OGS-00012=/data/opengwasdb/stores/OGS-00012 \
+  --store OGS-00013=/data/opengwasdb/stores/OGS-00013 \
+  --store OGS-00009-sept=/data/opengwasdb/stores/OGS-00009/replaced/20261021T223815Z \
+  --store OGS-00010-retired=/data/opengwasdb/work/retired/OGS-00010 \
+  --window 2026-10-22T01:06/2026-10-22T16:10 \
+  --daily-window 01:06-16:10 --tz Europe/London \
+  --daily-from 2026-10-14 --until 2026-11-02 \
+  --source opengwasdb.finngen-r13=/data/opengwasdb/finngen-r13/releases/r13-full/source/finngen_R13_AB1_ACTINOMYCOSIS.gz \
+  --source opengwasdb.gwas-vcf=/data/opengwasdb/raw/gwas-vcf/ukb-b/ukb-b-10001.vcf.gz \
+  --control-revision d405de0 \
+  --repetitions 6 --source-repetitions opengwasdb.gwas-vcf=10 \
+  --output docs/benchmark-output/opengwasdb_epic307_evidence.json
+```
+
+`--repetitions` is the rounds per source: an even number, six by default, so
+head and control each lead half of them; `--source-repetitions CAPABILITY=N`
+gives a cheap source more rounds. The A/B reports each round's head / control
+ratio with that round's load and who ran first, the sign test and the Wilcoxon
+signed-rank p over the ratios, and names a direction only from at least six
+rounds with both p under 0.05; otherwise the row says the run is not resolved.
+The artifact records the control's revision and the fingerprint of the
+`opengwasdb` each side imported, and the run is refused if the control's
+fingerprint is not the archive's or is this checkout's. The output path is
+checked first, so a committed artifact is refused before any sample is taken.
+
+A step's `wall_seconds` is the record's own `elapsed_seconds`, and its phases
+need not sum to it: a step can run for hours outside any phase it logs, and that
+unattributed time is the point of #308–#310. The Stores named above are the
+epic's own (OGS-00009 and the full-size OGS-00016/17/11, plus OGS-00012/13 for
+its step rows); a Store re-encoded after its build still has the build's
+records, so these baselines are times, not bytes.
+
+**The after-measurement (#322).** `--after LABEL` names a `--store` holding an
+end-to-end run on the finished engine: OGS-00009 rebuilt from its own inputs and
+run as the Store Release Build plans it after opengwasdb-stores#357/#358 (the
+Dense build with its inline Top-Hit Index and no standalone rebuild, validation
+at the build's worker count, the hm3 subset, Reference Completion and the
+completed release's subset, overview, validation and Observed-View Check). The
+artifact gains an `after` block (`benchmarks/_epic307_after.py`): every row of
+the epic's OGS-00009 table with #311's baseline -- the same derivation over the
+published Store's October records -- the after value, their ratio, and each of
+the epic's projections for that row (after steps 2–4, and the two step-5
+scenarios) marked `met` or `missed`, a miss with its checked reason. A
+projection is met at most 5% (or one second) above it; the standalone Top-Hit
+rebuild meets its zero only when the after Store has no record of it. The
+block also attributes the run's unprojected phases (completion's five, #309;
+the EAF survey's, #310), sums every planned step, and judges milestone #388's
+"an evening" (9 h) on the span from the first step's start to the last step's
+end, with the largest attributed phase beside the verdict. The after-measurement
+reads records only; `--source` adds the reader A/B as before.
+
+`--cold` adds two sides to the reader A/B, `parse_floor_cold` and
+`reader_base_cold`: the same measurement on the file just evicted from the page
+cache (`posix_fadvise(POSIX_FADV_DONTNEED)`, no privilege needed), each sample
+marked `page_cache: evicted`. Every other sample follows an untimed warming read,
+so without them nothing says what a cold read costs, and the epic's single
+readings may have been cold ones. The floor and control-over-floor rows then
+check their reasons against both: the epic's reading among the cold samples, or
+the epic's ratio nearer the cold one; and where the cache moves the ratio less
+than its distance from the epic's, they say it cannot be separated. A cache
+explanation is consistent with those samples, not proof of an unrecorded
+historical cache state.
+
+`--reader-evidence FILE` instead carries an existing A/B unchanged, preserving
+its original revision, timestamp and hash in `reader_evidence_origin`. It cannot
+be combined with `--source`: old head/control comparisons still concern the old
+head. `--reader-cache-probes DIR` attaches #322's existing exploratory probe
+logs separately, without replacing the original samples or calling a reader.
+
+```bash
+pixi run -e dev python benchmarks/measure_epic307_evidence.py \
+  --store OGS-00009=/data/opengwasdb/stores/OGS-00009 \
+  --store OGS-00009-322=<RD>/scratch/322/OGS-00009 \
+  --window 2026-10-22T01:06/2026-10-22T16:10 \
+  --daily-window 01:06-16:10 --tz Europe/London \
+  --daily-from 2026-10-14 --until 2026-11-02 \
+  --after OGS-00009-322 \
+  --reader-evidence docs/benchmark-output/opengwasdb_epic307_evidence.json \
+  --reader-cache-probes docs/benchmark-output/epic307_322/reader-cache \
+  --output <RD>/scratch/322/after-reproduced.json
+```
+
+| File | Description |
+|---|---|
+| `opengwasdb_epic307_after.json` | Baseline/after phase rows, all epic projections, unprojected steps and milestone #388's verdict; carried reader evidence and cache-probe attribution. |
+| `opengwasdb_epic307_profiles.json` | All existing whole-tree snapshots and three native worker profiles, with sample-weighted native shares and input hashes. |
+| `opengwasdb_epic307_after.md` | Measurement discussion, full-size #312 proof, correctness classification, reader attribution and artifact-only reproduction commands. |
+
+The completed release took **36,777.574 s**, missing nine hours by
+**4,377.574 s**, principally the **16,443.2 s LD-block phase**. Pass 2 is the
+only phase projection missed; OGS-00009 still uses per-row GWAS-VCF. See the
+measurement discussion for the distinction between the epic's six-step sum
+and the complete release, and the historical SE narrowing that its strict
+codec-only comparison bound does not include.
+
+`benchmarks/summarise_epic307_profiles.py RUN_DIR --output OUT` reads only
+existing py-spy files. Native shares pool sample counts before division;
+non-native numpy callers are not classified as interpreter time.
+`benchmarks/attribute_epic307_comparison.py SCRATCH --output OUT` reads the
+completed comparison, Admission Record and eight variant metadata rows; it
+never repeats the statistic-plane comparison. Both outputs record provenance.
+Do not rebuild OGS-00009 or repeat its completion/index/comparison to regenerate
+the summaries.
+
+---
+
+### `compare_top_hits.py`
+
+Recovered from #322's original scratch harness, this read-only command compares
+all Top-Hit Index arrays as decoded values, the index group's attributes and
+each tier's attributes. It also counts each tier's hits in 1,024-Analysis
+column bands (ADR 0058). The JSON records its committed generator, invocation
+and code provenance; a difference returns exit status 1. Its output must be
+outside both input Stores. It never rebuilds an index.
+
+The exact invocation for the two already-built OGS-00009 Stores is recorded in
+`docs/benchmark-output/epic307_322/top-hits-comparison-provenance.json` and the
+measurement discussion. That note links the original measurement to the
+recovered committed harness; the full-size comparison was not repeated for
+review. Unit fixtures reproduce all 24 arrays and three nonempty bands.
+
+### `compare_store_releases.py`
+
+Compares two Store Releases array by array (metadata, decoded values), with
+`analyses.tsv`, `variants.tsv.gz` and the encoding plans. Arrays are compared
+position by position, so two releases whose variant axes differ are not
+comparable that way.
+
+`--aligned` (#322) compares two Dense releases whose axes differ -- a rebuild
+that drops rows (#376's off-primary lifts) or spells an indel's ALID the other
+way round (#381) -- through the reader every query uses. Different declared
+Reference Assemblies are refused before alignment: a coordinate string is not
+cross-assembly identity. Rows are matched by ALID exactly, as
+`check-observed-view` maps them. Opposite-order indels left over are paired as
+historical respellings only across the format-semantics boundary: one release
+before 0.2.2 with sorted indels, the other at 0.2.2+ with reference-first indels.
+The right-hand Z is then negated and EAF taken as `1 − EAF`. Two reference-first
+Stores' opposite-order indels remain separate left/right-only identities: they
+may be a real insertion and deletion (ADR 0079). Ambiguous pairs stay unpaired. Each pair's decoded Z, SE and EAF are compared
+cell by cell. A differing SE is counted three ways: a `float16` rounding of the
+other side (#355), within both releases' codec bound (a refitted `int8_residual`
+model re-quantises every coded cell: half a `residual_range / 127` step each in
+log space), or beyond it. Nothing is called expected: the caller names the change
+behind each kind. It runs on the fork pool with `--n-workers`, a band of
+`--band-rows` rows at a time.
+
+```bash
+pixi run -e dev python benchmarks/compare_store_releases.py REBUILD PUBLISHED \
+  --aligned --n-workers 32 --output OUT.json
+```
+
+Beside `OUT.json` it writes `OUT.unmatched.tsv` (every row not matched by ALID,
+with its Store Variant Table row) and `OUT.codes.npz` (every compared pair's rows
+and its difference code, the bits in the report's `row_codes`).
+
+---
+
 ### #244: zarr-python 3's read levers, and the 0.2.0 shape screen
 
 #244 moved the package to zarr-python 3.4. These scripts measured what that
@@ -1481,3 +1740,33 @@ structure produced by `besdq/scripts/dense_05_query_benchmark.py`:
   "raw_float16": { ... }
 }
 ```
+
+## Reference Completion block profiles (#309, #422)
+
+`profile_reference_completion.py block SOURCE LD_PANEL --block BLOCK.tsv
+--work NEW_DIR --output result.json` runs the real fits and checkpoint writer
+for one LD block. Its exclusive stage timings sum to the independently timed
+block wall time, and the artifact records the commit, package fingerprint and
+host load. Compare the same block and source at base and head, interleaving
+runs under the run's timing lock. `kernel_cell_prep_and_fill_loop` retains its
+historical stage name after #422 replaces the per-cell loop with arrays;
+report it together with `owned_rows` against #309's recorded 23.5%.
+
+Pass `--keep-checkpoint` to retain `NEW_DIR/profile-block.npz` for exact
+comparison of every checkpoint array, including ALIDs, z/SE and quality rows.
+The default still removes the profile's checkpoint. Both modes refuse an
+existing work directory. #422 leaves checkpoint format 3 unchanged: it gathers
+ALIDs encoded once per block, narrows z/SE to float32 at the same writer, and
+keeps the existing field order, dtypes and long-ALID side arrays. A single-block
+speed-up does not establish the epic's whole-release timing criterion.
+
+The [16 Nov 2026 array-fill profile](../docs/benchmark-output/reference_completion_arrays_ogs00009.json)
+records two interleaved base/head pairs on the same 7,024-variant,
+2,514-Analysis block. Mean block time falls from 189.3 to
+137.5 seconds (27.4% less); preparation plus ownership falls
+from 24.5% to 1.1% of block time, beside #309's historical 23.5%.
+Both real checkpoints are byte-identical, each with 9,833,613 fills. The
+[completed OGS-00003 pilot comparison](../docs/benchmark-output/reference_completion_arrays_pilot_ogs00003.json)
+finds identical decoded bytes in all 41 arrays and identical 13,570 quality
+rows. This ten-Analysis pilot takes about 13 minutes on either revision;
+its timing does not establish a whole-release speed-up.

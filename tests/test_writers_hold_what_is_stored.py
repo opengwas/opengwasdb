@@ -36,7 +36,6 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.association_codec import CellValues, Storable
 from opengwasdb.layouts.dense import build_vcf
-from opengwasdb.layouts.dense import complete as dense_complete
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -229,7 +228,8 @@ def test_dense_completion_writes_only_what_it_stores(tmp_path, monkeypatch) -> N
         [source], observed, store_id="t", release_id="obs", reference_assembly="GRCh38"
     )
     assert "eaf" in open_store(observed).arrays(mode="r"), "fixture carries frequencies"
-    _inject(monkeypatch, _se_is(REFUSED_SE), dense_complete)
+    # A band is judged as `AssociationCodec` encodes it (#321).
+    _inject(monkeypatch, _se_is(REFUSED_SE), association_codec)
     completed = tmp_path / "comp.opengwasdb"
     complete_dense_store(observed, completed, tdc._make_ld_panel(tmp_path), min_cor=0.0)
 

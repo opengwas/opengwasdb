@@ -709,18 +709,22 @@ def test_an_inserted_row_before_the_first_source_row_is_examined(leading_gap_pai
 
 # --- seam 5: wide ALIDs ----------------------------------------------------
 
-_LONG_ALLELE = "ACGT" * 10  # 1:1150000:A:ACGT... is 53 bytes, wider than the 32-byte index key
+#: A 40-base substitution: 1:1150000:ACGT...:TGCA... is 92 bytes, wider than the
+#: 32-byte index key. Not an indel, which an association TSV cannot place (ADR 0079).
+_LONG_ALLELE = "ACGT" * 10
+_LONG_OTHER = "TGCA" * 10
 
 
-def _with_a_long_indel(root: Path) -> tuple[Path, Path]:
+def _with_a_long_substitution(root: Path) -> tuple[Path, Path]:
     long_row = (
-        f"a1\tp1\tHeight\tHeight primary\t1\t1150000\t{_LONG_ALLELE}\tA\t1.2\t0.3\trsL\tsd\t0.4"
+        f"a1\tp1\tHeight\tHeight primary\t1\t1150000\t{_LONG_ALLELE}\t{_LONG_OTHER}"
+        "\t1.2\t0.3\trsL\tsd\t0.4"
     )
     return _build_pair(root, [*ROWS, long_row], tdc._make_ld_panel(root))
 
 
 def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path):
-    observed, completed = _with_a_long_indel(tmp_path)
+    observed, completed = _with_a_long_substitution(tmp_path)
     indexed = len(np.load(observed / "variant_alid_bytes.npy"))
     assert indexed == N_PARENT, "fixture must leave the long ALID out of the index"
 

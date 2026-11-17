@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.build.eaf_orientation import panel_a1_eaf
+from opengwasdb.completion.ld_panel import panel_indel_frequencies
 from opengwasdb.model.enums import EafScope
 from opengwasdb.variants import CanonicalVariant
 
@@ -44,6 +45,10 @@ def panel_reference_eaf(
     imputed and NaN on every observed one.
     """
     panel = panel_a1_eaf(ld_dir, ancestry, required=False)
+    if panel:
+        # `panel_a1_eaf` orients by EA and OA alone, which place no indel; the
+        # panel's own reference places them, as completion does (ADR 0079).
+        panel.update(panel_indel_frequencies(ld_dir, ancestry))
     if not panel:
         print("Reference EAF: the LD panel declares none; imputed cells will read NaN")
         return None

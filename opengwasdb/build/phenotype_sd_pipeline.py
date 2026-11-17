@@ -36,7 +36,7 @@ from opengwasdb.model.manifest_columns import require_columns, resolve_manifest_
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import ReaderAssociation, SourceReader
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
-from opengwasdb.variants.normalise import orient_to_canonical
+from opengwasdb.variants.normalise import canonical_alid
 
 log = logging.getLogger(__name__)
 
@@ -222,13 +222,14 @@ class _EstimationContext:
 
 
 def _canonical_alid(association: ReaderAssociation) -> str:
-    """The association's canonical ALID, through the shared orientation code."""
-    return orient_to_canonical(
-        association.chromosome,
-        association.position,
-        association.ref,
-        association.alt,
-    ).variant.alid
+    """The association's canonical ALID (`canonical_alid`).
+
+    Its reader dropped every indel whose source declares no reference, so an
+    indel here has its declared reference in ``ref`` (ADR 0079).
+    """
+    return canonical_alid(
+        association.chromosome, association.position, association.ref, association.alt
+    )
 
 
 def _gather_evidence(

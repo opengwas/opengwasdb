@@ -1,0 +1,102 @@
+{
+  "tool": "benchmarks/measure_eaf_band_memory.py",
+  "argv": [
+    "--store",
+    "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+    "--scratch",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/320/eaf-band",
+    "--repeats",
+    "2",
+    "--out",
+    "docs/benchmark-output/opengwasdb_320_eaf_band/eaf_band_memory.json"
+  ],
+  "host_load_start": {
+    "load_1m": 52.61,
+    "load_5m": 32.86,
+    "load_15m": 28.46,
+    "cpus": 224
+  },
+  "worktree_clean": false,
+  "commit": "50df7c3",
+  "measured_at": "2026-11-08T01:41:15.618140+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/worktrees/320/opengwasdb",
+  "opengwasdb_fingerprint": "fb0077b5dceeb9faa81ca001d61cab606a8bd94ac592611a52a22384e8b20aea",
+  "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+  "n_analyses": 2514,
+  "band_rule": {
+    "shard_rows": 100000,
+    "band_rows": 100000
+  },
+  "staged_bands": [
+    {
+      "rows": 100000,
+      "shape": [
+        100000,
+        2514
+      ],
+      "exceptions": 45,
+      "absent": 23545291
+    },
+    {
+      "rows": 10000,
+      "shape": [
+        10000,
+        2514
+      ],
+      "exceptions": 10,
+      "absent": 2978655
+    }
+  ],
+  "workers": [
+    {
+      "rows": 100000,
+      "cells": 251400000,
+      "encode_seconds": 23.73,
+      "rss_at_peak_bytes": 117477376,
+      "vm_hwm_bytes": 16961613824
+    },
+    {
+      "rows": 100000,
+      "cells": 251400000,
+      "encode_seconds": 22.87,
+      "rss_at_peak_bytes": 117518336,
+      "vm_hwm_bytes": 16961581056
+    },
+    {
+      "rows": 10000,
+      "cells": 25140000,
+      "encode_seconds": 2.74,
+      "rss_at_peak_bytes": 115089408,
+      "vm_hwm_bytes": 1823731712
+    },
+    {
+      "rows": 10000,
+      "cells": 25140000,
+      "encode_seconds": 2.84,
+      "rss_at_peak_bytes": 115023872,
+      "vm_hwm_bytes": 1823666176
+    }
+  ],
+  "fit": {
+    "fixed_bytes": 141710222,
+    "per_cell_bytes": 66.905,
+    "residual_bytes": [
+      16384,
+      -16384,
+      32768,
+      -32768
+    ],
+    "residual_fraction": [
+      0.0,
+      -0.0,
+      2e-05,
+      -2e-05
+    ]
+  },
+  "host_load_end": {
+    "load_1m": 30.77,
+    "load_5m": 30.73,
+    "load_15m": 28.07,
+    "cpus": 224
+  }
+}

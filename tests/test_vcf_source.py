@@ -18,7 +18,7 @@ import pytest
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.gwas_vcf import GwasVcfReader, _record_rows
-from opengwasdb.readers.interface import ReferenceAllele, StreamTally
+from opengwasdb.readers.interface import StreamTally
 from opengwasdb.variants.normalise import (
     VariantNormalisationError,
     orient_to_canonical,
@@ -53,7 +53,6 @@ def test_a_reported_ez_is_the_stored_z_bit_for_bit(tmp_path: Path) -> None:
     _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tEZ:ES:SE\t5.25:0.5:0.1\n")
     (association,) = _associations(vcf)
     assert association.z == -5.25
-    assert association.reference is ReferenceAllele.REF
 
 
 @pytest.mark.parametrize(
@@ -152,13 +151,23 @@ def test_every_projection_needs_bcftools(tmp_path: Path) -> None:
 
 def test_oriented_alid_is_orient_to_canonicals_answer() -> None:
     """The VCF reader's fast orientation, against the rule it stands in for."""
-    alleles = ["A", "c", "G", "t", "AC", "Tg", "GGGGCC"]
+    alleles = ["A", "c", "G", "t", "AC", "Tg", "GGGGCC", "g"]
+    declared_indels = 0
     for effect, other in itertools.product(alleles, repeat=2):
-        try:
-            expected = orient_to_canonical("1", 100, effect, other)
-        except VariantNormalisationError:
-            assert oriented_alid("1", 100, effect, other) is None
-            continue
-        assert oriented_alid("1", 100, effect, other) == (
-            expected.variant.alid, expected.flipped
-        )
+        for declared in (True, False):
+            try:
+                expected = orient_to_canonical(
+                    "1", 100, effect, other, other_is_reference=declared
+                )
+            except VariantNormalisationError:
+                assert oriented_alid("1", 100, effect, other, other_is_reference=declared) is None
+                continue
+            declared_indels += declared and len(effect) != len(other)
+            assert oriented_alid("1", 100, effect, other, other_is_reference=declared) == (
+                expected.variant.alid, expected.flipped
+            )
+    # The pairs must reach a declared indel, whose ALID is spelt reference first.
+    assert declared_indels
+    assert oriented_alid("1", 100, "G", "GGGGCC", other_is_reference=True) == (
+        "1:100:GGGGCC:G", True
+    )

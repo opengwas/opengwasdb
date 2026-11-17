@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import gzip
+import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -8,95 +9,37 @@ from pathlib import Path
 import numpy as np
 import plane_edits
 import pytest
+from dense_sources import build_dense_from_records
+from residual_fixtures import model_se
 
 from opengwasdb.encoding import DenseSePlane
+from opengwasdb.encoding.codec import SeExceptionTable, se_float16
+from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses, write_analyses
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import open_store
+from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
 from opengwasdb.validation import Severity, validate_store
-
-
-@pytest.fixture
-def ragged_store_path(tmp_path):
-    """A minimal Ragged Observed-Only store (SSF ingestion path)."""
-    header = [
-        "chromosome", "base_pair_location", "effect_allele", "other_allele",
-        "beta", "standard_error", "rsid",
-    ]
-    rows = [
-        {"chromosome": "1", "base_pair_location": 100, "effect_allele": "A",
-         "other_allele": "G", "beta": 0.3, "standard_error": 0.1, "rsid": "rs1"},
-        {"chromosome": "1", "base_pair_location": 200, "effect_allele": "A",
-         "other_allele": "G", "beta": -0.2, "standard_error": 0.1, "rsid": "rs2"},
-    ]
-    filtered_dir = tmp_path / "filtered"
-    filtered_dir.mkdir()
-    with gzip.open(filtered_dir / "t1.tsv.gz", "wt", encoding="utf-8") as fh:
-        fh.write("\t".join(header) + "\n")
-        for row in rows:
-            fh.write("\t".join(str(row[c]) for c in header) + "\n")
-
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\t"
-        "analysis_label\ttrait_ontology_id\ttrait_ontology_label\ttrait_chr\ttrait_bp\t"
-        "n\ttissue\tcontext\tmhc\tfiltered_file\tsource_genome_build\n"
-        "0\tt1\tT1\tGENE1\tENSEMBL:ENSG1\tEnsembl\t1\t150\t1000\tBlood\t\tFALSE\tt1.tsv.gz\tGRCh38\n",
-        encoding="utf-8",
-    )
-    store_path = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(
-        manifest, filtered_dir, store_path, store_id="fixture", release_id="v1",
-        association_coverage="cis_and_signals",
-    )
-    return store_path
-
-
-@pytest.fixture
-def hybrid_store_path(tmp_path):
-    """A minimal Hybrid store: two on-panel analyses, so its Dense Component
-    (dense_component_path) is where index.sqlite/analyses.tsv actually live."""
-    header = (
-        "##fileformat=VCFv4.2\n"
-        "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
-        "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
-        "##SAMPLE=<ID=S,StudyType=Continuous>\n"
-        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
-    )
-    vcf_a = tmp_path / "trait_a.vcf"
-    vcf_a.write_text(header + "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n", encoding="utf-8")
-    vcf_b = tmp_path / "trait_b.vcf"
-    vcf_b.write_text(header + "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.4\n", encoding="utf-8")
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
-        "\toriginal_sd_method\toriginal_sd\n"
-        f"trait_a\t{vcf_a}\tTrait A\t1000\tsd\tdeclared_standardised\t\n"
-        f"trait_b\t{vcf_b}\tTrait B\t1000\tsd\tdeclared_standardised\t\n",
-        encoding="utf-8",
-    )
-    panel = tmp_path / "panel.txt"
-    panel.write_text("1:100000:A:G\n", encoding="utf-8")
-    store_path = tmp_path / "hybrid.opengwasdb"
-    build_hybrid_from_vcf_manifest(
-        manifest, store_path, reference_panel=panel, store_id="fixture", release_id="v1"
-    )
-    return store_path
+from opengwasdb.validation.rules.side_tables import (
+    FLOAT16_EXACT_MINIMUM,
+    FLOAT16_EXACT_SHARE,
+)
+from opengwasdb.variants import CanonicalVariant
 
 
 @pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
 def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request, fixture):
     """Spec §21.3: a release is stamped the lowest version its features use, so one
-    without `regions.tsv` is 0.2.0, and one stamped otherwise disagrees with itself. For
-    a Hybrid, the outer release's manifest is the one restamped."""
+    whose indels are sorted and that has no `regions.tsv` is 0.2.0, and one stamped
+    0.2.1 without the table disagrees with itself. For a Hybrid, the outer release's
+    manifest is the one restamped."""
     from region_tables import edit_manifest
 
     store = request.getfixturevalue(fixture)
     assert validate_store(store).ok, "the fixture must validate before it is restamped"
-    assert open_store(store).manifest.format_version == "0.2.0"
+    assert open_store(store).manifest.format_version == "0.2.2"
     edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.1"})
 
     result = validate_store(store)
@@ -106,6 +49,38 @@ def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request,
         "stamped 0.2.1, but a release carrying no region table is 0.2.0" in error
         for error in result.errors
     ), result.errors
+
+
+@pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
+def test_a_release_stamped_newer_than_this_build_writes_is_told_to_upgrade(
+    request, fixture, caplog
+):
+    """A 0.2.3 release is a later package's format: its stamp rule is that package's.
+    `validate` reads it with the newer-remainder warning, and `manifest.format_stamp`
+    warns that the package must be upgraded instead of judging the stamp -- never that
+    the stamp is wrong: re-stamped 0.2.2 as such an error would say, it is a release
+    this build completes, whatever 0.2.3 changed. A warning, not a skip, because the
+    text report prints warnings and not skips."""
+    import logging
+
+    from region_tables import edit_manifest
+
+    store = request.getfixturevalue(fixture)
+    assert validate_store(store).ok, "the fixture must validate before it is restamped"
+    edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.3"})
+
+    with caplog.at_level(logging.WARNING):
+        result = validate_store(store)
+
+    assert result.ok, result.errors
+    assert "newer compatible version" in caplog.text, caplog.text
+    said = result.of("manifest.format_stamp")
+    assert said, "the stamp rule recorded nothing, so the release reads as judged"
+    for finding in said:
+        assert finding.severity is Severity.WARNING, finding
+        assert "Upgrade opengwasdb" in finding.message, finding
+        assert "do not re-stamp" in finding.message, finding
+        assert "but a release carrying" not in finding.message, finding
 
 
 def test_validator_rejects_missing_required_array(dense_store_path):
@@ -240,8 +215,8 @@ def test_the_zarr_format_rule_reports_nodes_in_name_order(
 
     assert result.failed() == {"zarr.format"}
     assert result.errors == [
-        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.0; a "
-        "0.2.0 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.2; a "
+        "0.2.2 release is Zarr v3, and a half-converted release is invalid (issue #245)"
         for node in ("se", "z")
     ]
 
@@ -1027,3 +1002,164 @@ def test_validator_rejects_rho_variant_index_length_mismatch(dense_store_path):
 
     assert not result.ok
     assert any("rho variant_index has" in error for error in result.errors)
+
+
+# -- the SE exception table's precision (issue #355) -------------------------
+
+#: A residual plan keeps at most 2% of an Analysis's cells as exceptions, so a
+#: table the precision rule judges needs at least 50,000 cells in the Analysis.
+ROUNDED_SE_VARIANTS = 60_000
+ROUNDED_SE_EXCEPTIONS = 1_100
+
+
+def _se_exception_records() -> list[NormalisedAssociation]:
+    """One Analysis whose SE tracks its MAF, with a block the plan cannot code.
+
+    The block's SE is `exp(2.2)` times the model's, so its residual sits beyond
+    every candidate range and the build must store it exactly -- which is what
+    makes the table's precision the thing under test.
+    """
+    frequencies = np.linspace(0.05, 0.95, ROUNDED_SE_VARIANTS, dtype=np.float64)
+    records = []
+    for row in range(ROUNDED_SE_VARIANTS):
+        se = model_se(0, float(frequencies[row]), row)
+        if row < ROUNDED_SE_EXCEPTIONS:
+            se *= math.exp(2.2)
+        records.append(
+            NormalisedAssociation(
+                analysis_id="a",
+                variant=CanonicalVariant("1", row + 1, "A", "G"),
+                z=1.0,
+                se=se,
+                eaf=float(frequencies[row]),
+            )
+        )
+    return records
+
+
+@pytest.fixture(scope="module")
+def se_exception_stores(tmp_path_factory) -> tuple[Path, Path]:
+    """A residual release with over 1,000 exceptions, and a copy of it rounded.
+
+    The copy holds what a build before #355 wrote: the same cells marked `-127`,
+    every table entry the `float16` rounding of its SE rather than the source's.
+    """
+    directory = tmp_path_factory.mktemp("rounded-se-exceptions")
+    exact = directory / "exact.opengwasdb"
+    build_dense_from_records(
+        _se_exception_records(),
+        exact,
+        store_id="s",
+        release_id="r",
+        reference_assembly="GRCh38",
+        chunk_shape=(1000, 1),
+    )
+    rounded = directory / "rounded.opengwasdb"
+    shutil.copytree(exact, rounded)
+    root = open_store(rounded).arrays(mode="r+")
+    values = np.asarray(root[SeExceptionTable.value_name][:], dtype=np.float32)
+    root[SeExceptionTable.value_name][:] = se_float16(values)
+    return exact, rounded
+
+
+def _exception_values(store: Path) -> np.ndarray:
+    """The store's SE exception values, asserted to be enough for the rule to judge."""
+    values = np.asarray(
+        open_store(store).arrays(mode="r")[SeExceptionTable.value_name][:], dtype=np.float32
+    )
+    assert len(values) >= FLOAT16_EXACT_MINIMUM, (
+        f"the fixture must hold {FLOAT16_EXACT_MINIMUM} exceptions, not {len(values)}, "
+        "or the precision rule has nothing to judge"
+    )
+    return values
+
+
+def test_an_exact_se_exception_table_passes_the_precision_rule(
+    se_exception_stores: tuple[Path, Path],
+) -> None:
+    """A build that held the source's `float32` is the shape the rule expects."""
+    exact, _rounded = se_exception_stores
+    values = _exception_values(exact)
+    exact_share = float(np.count_nonzero(se_float16(values).astype(np.float32) == values)) / len(
+        values
+    )
+    assert exact_share < FLOAT16_EXACT_SHARE, (
+        f"the exact fixture's share is {exact_share:.2%}, which the rule would flag"
+    )
+    result = validate_store(exact)
+    assert "side_tables.se_exceptions_rounded" not in result.failed()
+    assert not [w for w in result.warnings if "float16 plane stores" in w]
+    assert result.ok, result.errors
+
+
+def test_a_rounded_se_exception_table_fails_a_0_2_2_release(
+    se_exception_stores: tuple[Path, Path],
+) -> None:
+    """Issue #355: every entry of a rounded table is what a `float16` plane stores.
+
+    One rounded exception reads exactly like a right one, so nothing per cell can
+    find this; the table's share is 100% against the 2**-13 a source value is
+    `float16`-exact by chance.
+    """
+    _exact, rounded = se_exception_stores
+    assert StoreManifest.load(rounded).format_version == CURRENT_FORMAT_VERSION
+    values = _exception_values(rounded)
+    assert (se_float16(values).astype(np.float32) == values).all(), (
+        "every fixture entry must be a float16 rounding, or the share is not 100%"
+    )
+
+    result = validate_store(rounded)
+
+    assert result.failed() == {"side_tables.se_exceptions_rounded"}
+    message = result.errors[0]
+    assert f"{len(values)} of {len(values)} se exceptions" in message
+    assert "float16 plane stores" in message
+    assert "rebuild the release" in message
+
+
+@pytest.mark.parametrize(
+    ("format_version", "severity"),
+    [("0.2.2", "error"), ("0.3.0", "error"), ("0.2.1", "warning"), ("0.2.0", "warning")],
+)
+def test_the_rounded_se_rule_fails_only_a_release_its_builders_make(format_version, severity):
+    """The exact-SE fix is this package's, which writes 0.2.2. Package 0.9.0's 0.2.1 (a
+    Ragged release carrying `regions.tsv`) predates it, so a rounded table there is
+    reported, not failed (issues #355, #367)."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from opengwasdb.validation.rules.side_tables import RULES
+
+    rule = next(r for r in RULES if r.name == "side_tables.se_exceptions_rounded")
+    rule = replace(rule, run=lambda _target: iter(["rounded"]))
+    target = SimpleNamespace(
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version=format_version)),
+        label=".",
+    )
+    (finding,) = rule.findings(target)
+    assert finding.severity.value == severity
+
+
+def test_a_rounded_se_exception_table_warns_on_an_earlier_release(
+    se_exception_stores: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """A release from before the fix is reported, not failed: #367 owns it.
+
+    Re-validating a published Store must say what it is without failing a Store
+    nobody can rebuild in place.
+    """
+    _exact, rounded = se_exception_stores
+    store = tmp_path / "restamped.opengwasdb"
+    shutil.copytree(rounded, store)
+    manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
+    manifest["format_version"] = "0.2.0"
+    (store / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _exception_values(store)
+
+    result = validate_store(store)
+
+    assert "side_tables.se_exceptions_rounded" not in result.failed()
+    warnings = [w for w in result.warnings if "float16 plane stores" in w]
+    assert len(warnings) == 1
+    assert "predates the fix" in warnings[0]
+    assert result.ok, result.errors

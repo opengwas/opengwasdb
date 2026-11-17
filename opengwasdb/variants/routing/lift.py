@@ -18,12 +18,18 @@ import logging
 import time
 from collections.abc import Collection, Mapping
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
-from opengwasdb.build.liftover import lift_hg19_to_hg38, statistics_swap
+from opengwasdb.build.liftover import (
+    LiftedRow,
+    lift_hg19_to_hg38,
+    lifted_rows,
+    statistics_swap,
+)
 from opengwasdb.encoding.timing import format_duration
-from opengwasdb.variants.normalise import canonical_alid
+from opengwasdb.variants.normalise import canonical_alid, is_primary_contig
 from opengwasdb.variants.routing.keys import SourceKey, routing_key
 
 log = logging.getLogger(__name__)
@@ -35,6 +41,43 @@ SourceLookup = dict[SourceKey, str]
 ReorientedKeys = set[SourceKey]
 
 
+class LiftSplit(NamedTuple):
+    """A lift's rows by where they landed: ``primary`` on a primary-assembly contig,
+    and the source keys of ``off_primary``, which landed on an alt, random or
+    unplaced contig (#376)."""
+
+    primary: dict[SourceKey, LiftedRow]
+    off_primary: set[SourceKey]
+
+
+def split_off_primary(rows: Mapping[SourceKey, LiftedRow]) -> LiftSplit:
+    """Split a lift's rows by `is_primary_contig`: the one place the rule is applied
+    to a lift's result, which every path that lifts a source calls."""
+    primary = {key: row for key, row in rows.items() if is_primary_contig(row.chromosome)}
+    return LiftSplit(primary, rows.keys() - primary.keys())
+
+
+def lifted_off_primary(sites: Collection[SourceKey], *, chain_file: str | Path | None) -> set[str]:
+    """The routing keys of the hg19 ``sites`` the chain places off the primary assembly.
+
+    For a build routed by a Variant Reference, whose unmatched hg19 rows are the
+    only ones not lifted already: no failure threshold applies, since a site the
+    chain places nowhere is `off_axis` as before."""
+    rows, _attempts, _failures = lifted_rows(sites, chain_file=chain_file)
+    return {routing_key(site) for site in split_off_primary(rows).off_primary}
+
+
+class UnionPlacement(NamedTuple):
+    """`place_union`'s result: the union's site lookup, the keys the lift
+    re-oriented (#284), the routing keys both assemblies declared (#255), and the
+    routing keys of the sites the lift placed off the primary assembly (#376)."""
+
+    lookup: SourceLookup
+    reoriented: ReorientedKeys
+    dropped: set[str]
+    off_primary: set[str]
+
+
 @dataclass(frozen=True)
 class SitePlacement:
     """Where source sites land on GRCh38.
@@ -43,10 +86,14 @@ class SitePlacement:
     is absent. ``reoriented`` holds the sites a reverse-strand chain block
     re-oriented: their stored alleles call the other allele A1, so a z signed
     by the source must be negated and an EAF complemented (issue #284).
+    ``off_primary`` holds the sites the lift placed on an alt, random or
+    unplaced contig: they are in neither ``alid`` nor ``reoriented``, and a
+    build drops and counts their rows (#376).
     """
 
     alid: SourceLookup
     reoriented: ReorientedKeys
+    off_primary: set[SourceKey] = field(default_factory=set)
 
 
 def place_sites(
@@ -104,11 +151,23 @@ def _lift_hg19(
     """
     log.info("Running liftover hg19 → hg38 (%d variants)", len(sites))
     lifted = lift_hg19_to_hg38(sites, chain_file=chain_file, failure_threshold=failure_threshold)
-    for key, row in lifted.items():
+    split = split_off_primary(lifted)
+    placement.off_primary.update(split.off_primary)
+    for key, row in split.primary.items():
         placement.alid[key] = row.alid
         if statistics_swap(key, row):
             placement.reoriented.add(key)
     log.info("Liftover complete: %d variants mapped", len(lifted))
+    if placement.off_primary:
+        log.warning(
+            "%d lifted variant(s) landed on an alt, random or unplaced contig, "
+            "which the Store does not hold -- their rows are dropped (first: %s)",
+            len(placement.off_primary), _first_key(placement.off_primary),
+        )
+
+
+def _first_key(sites: Collection[SourceKey]) -> str:
+    return ":".join(map(str, min(sites)))
 
 
 def _refuse_both_assemblies(
@@ -129,10 +188,10 @@ def _lift_union_by_assembly(
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-) -> tuple[SourceLookup, SourceLookup, ReorientedKeys]:
-    """Place each assembly's group; return the hg38 passthrough, the lifted, and
-    the keys the lift re-oriented (issue #284). Kept apart so the
-    both-assembly drop can compare them."""
+) -> tuple[SitePlacement, SitePlacement]:
+    """Place each assembly's group; return the hg38 passthrough and the lifted
+    placement (its re-oriented keys, issue #284, and the sites it placed off the
+    primary assembly, #376). Kept apart so the both-assembly drop can compare them."""
     passthrough = place_sites({"hg38": tuples_by_assembly.pop("hg38", set())})
     lifted = place_sites(
         {"hg19": tuples_by_assembly.pop("hg19", set())},
@@ -141,7 +200,7 @@ def _lift_union_by_assembly(
     )
     if tuples_by_assembly:
         raise ValueError(f"unhandled source_assembly values: {sorted(tuples_by_assembly)}")
-    return passthrough.alid, lifted.alid, lifted.reoriented
+    return passthrough, lifted
 
 
 def cross_assembly_collisions(
@@ -181,17 +240,27 @@ def _drop_cross_assembly_collisions(
     passthrough_lookup: SourceLookup,
     lifted_lookup: SourceLookup,
     swapped: ReorientedKeys,
+    off_primary: set[SourceKey],
 ) -> set[str]:
     """Apply `cross_assembly_collisions` to the union's two placed groups, and
     return the dropped routing keys, which a harvest also drops from its
-    candidates."""
-    dropped = cross_assembly_collisions(passthrough_lookup.keys(), lifted_lookup.keys())
+    candidates.
+
+    A site lifted off the primary assembly is a lifted locus all the same: a
+    GRCh38 source spelling its key would otherwise take the row that is not its.
+    """
+    dropped = cross_assembly_collisions(
+        passthrough_lookup.keys(), lifted_lookup.keys() | off_primary
+    )
     log_cross_assembly_drop(len(dropped))
     if dropped:
         for lookup in (passthrough_lookup, lifted_lookup):
             for site in [site for site in lookup if routing_key(site) in dropped]:
                 del lookup[site]
                 swapped.discard(site)
+        off_primary.difference_update(
+            [site for site in off_primary if routing_key(site) in dropped]
+        )
     return dropped
 
 
@@ -200,17 +269,22 @@ def place_union(
     *,
     chain_file: str | Path | None,
     failure_threshold: float,
-) -> tuple[SourceLookup, ReorientedKeys, set[str]]:
-    """Place the union on hg38: its lookup, the keys the lift re-oriented, and
-    the both-assembly tuples it dropped, as routing keys (issue #255 rounds 4-5).
+) -> UnionPlacement:
+    """Place the union on hg38 (`UnionPlacement`): the both-assembly tuples it
+    dropped are routing keys (issue #255 rounds 4-5), and so are the sites the
+    lift placed off the primary assembly, whose rows a build drops and counts (#376).
     """
     finalise_start = time.monotonic()
-    passthrough_lookup, lifted_lookup, swapped = _lift_union_by_assembly(
+    passthrough, lifted = _lift_union_by_assembly(
         tuples_by_assembly,
         chain_file=chain_file,
         liftover_failure_threshold=failure_threshold,
     )
-    dropped_keys = _drop_cross_assembly_collisions(passthrough_lookup, lifted_lookup, swapped)
+    passthrough_lookup, lifted_lookup = passthrough.alid, lifted.alid
+    swapped, off_primary = lifted.reoriented, lifted.off_primary
+    dropped_keys = _drop_cross_assembly_collisions(
+        passthrough_lookup, lifted_lookup, swapped, off_primary
+    )
     source_lookup = {**passthrough_lookup, **lifted_lookup}
     log.info(
         "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",
@@ -218,4 +292,6 @@ def place_union(
         len(set(source_lookup.values())),
         format_duration(time.monotonic() - finalise_start),
     )
-    return source_lookup, swapped, dropped_keys
+    return UnionPlacement(
+        source_lookup, swapped, dropped_keys, {routing_key(site) for site in off_primary}
+    )

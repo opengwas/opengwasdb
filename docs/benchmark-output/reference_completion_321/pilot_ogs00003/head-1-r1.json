@@ -1,0 +1,51 @@
+{
+  "package": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/head-25530c9/opengwasdb/__init__.py",
+  "layout": "dense",
+  "template": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots/merged/.ogs3-blocks.opengwasdb.checkpoint",
+  "dest": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r1.opengwasdb",
+  "n_workers": 1,
+  "wall_seconds": 574.8126399809262,
+  "phase_seconds": {
+    "_build_union_axis": 324.4326025469927,
+    "_complete_pending_blocks": 0.1825758519116789,
+    "_merge_checkpoint_fills": 125.61667736596428,
+    "_write_completed_bands": 77.69144643191248,
+    "_write_completed_manifest": 0.008556336048059165,
+    "_completed_analysis_rows": 0.02522105595562607,
+    "_finalise_release": 43.03720980102662
+  },
+  "pool_worker_memory": {
+    "_merge_checkpoint_fills": {
+      "workers_sampled": 0,
+      "peak_private_bytes": 0,
+      "peak_private_bytes_by_worker": []
+    },
+    "_write_completed_bands": {
+      "workers_sampled": 0,
+      "peak_private_bytes": 0,
+      "peak_private_bytes_by_worker": []
+    }
+  },
+  "peak_scratch_bytes": {
+    "total": 2821169183,
+    "checkpoint": 226075452,
+    "staged": 2595093731,
+    "fill_shards": 46668144
+  },
+  "release_bytes": 2614532729,
+  "uptime": [
+    7.02,
+    7.3,
+    9.42
+  ],
+  "ru_maxrss_kib_self": 24489540,
+  "ru_maxrss_kib_children": 0,
+  "result": {
+    "output_path": "/data/opengwasdb/work/orchestrate/opengwasdb-307/scratch/321/pilots2/ogs3/head-1-r1.opengwasdb",
+    "n_variants": 21618934,
+    "n_analyses": 10,
+    "n_imputed": 2916759,
+    "n_missing_off_panel": 6188,
+    "n_missing_imputation_failed": 2161
+  }
+}

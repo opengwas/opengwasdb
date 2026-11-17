@@ -16,8 +16,6 @@ by construction rather than by coincidence.
 
 from __future__ import annotations
 
-import gzip
-import itertools
 import logging
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
@@ -26,8 +24,8 @@ from typing import Any
 
 from opengwasdb.readers.gwas_vcf import project_lifted_alleles
 from opengwasdb.variants.axis import parse_canonical_alid
-from opengwasdb.variants.normalise import canonical_alid, identity_allele
-from opengwasdb.variants.reference import refuse_unmarked_artifact
+from opengwasdb.variants.normalise import canonical_alid, ref_is_a1
+from opengwasdb.variants.reference import iter_reference_alids
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +96,8 @@ class LiftedRow:
 def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     """Whether the lift swapped which allele is canonical, so z and EAF must follow.
 
-    A source reader signs a statistic against the source-assembly canonical A1
-    (``min`` of the upper-cased ``ref`` and ``alt``, see `identity_allele`), by
+    A source reader signs a statistic against the source-assembly ALID's A1
+    (`alid_alleles`: the upper-cased pair sorted, or an indel's reference), by
     `opengwasdb.readers.orientation`'s rule. A reverse-strand block
     complements both alleles, and a complement reverses their alphabetical
     order -- or, for a palindromic pair, maps A1 onto A2 -- so the projected
@@ -107,13 +105,12 @@ def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
     stored z is then the negation of the source's and the stored frequency is
     ``1 - eaf``, exactly as BESD orients a probe (issue #284).
 
-    Computed from the row's projected alleles in source order, so it is exact
-    for an indel too rather than assuming complement always reverses order.
+    Computed from the row's projected alleles in source order. An indel's ALID
+    spells its reference first on either assembly -- the projected `ref` is
+    the release assembly's reference (ADR 0079) -- so a lift never swaps one.
     """
-    ref, alt = identity_allele(source[2]), identity_allele(source[3])
-    effect, other = identity_allele(row.effect_allele), identity_allele(row.other_allele)
-    projected_first = effect if min(ref, alt) == ref else other
-    return projected_first != min(effect, other)
+    projected_ref, projected_alt = row.effect_allele, row.other_allele
+    return ref_is_a1(source[2], source[3]) != ref_is_a1(projected_ref, projected_alt)
 
 
 def build_liftover_lookup(
@@ -126,7 +123,8 @@ def build_liftover_lookup(
     """Convert hg19 (bare_chrom, pos, ref, alt) tuples to hg38 ALIDs.
 
     Returns a dict mapping each input tuple to its hg38 ALID
-    (``chr:pos:A1:A2`` where A1 = alphabetically first allele), with the
+    (``chr:pos:A1:A2`` by `alid_alleles`: the pair sorted, an indel's reference
+    first), with the
     alleles projected onto the mapping's strand (issue #284). Variants that
     fail liftover are omitted; a warning is logged.
 
@@ -362,70 +360,16 @@ def read_reference_alleles(
     """
     wanted = set(positions)
     pairs: dict[PositionKey, set[AllelePair]] = {}
-    reference_path = Path(path)
-    with _open_text(reference_path) as handle:
-        first_line = handle.readline()
-        # A tab-separated first line is a header, commented or not (that is how
-        # `read_variant_reference` classifies these shapes). It is consumed
-        # here, once: rewinding and re-reading it would offer "alid" to the
-        # parser as a variant. It is read even when no position is wanted, so
-        # an artifact from before issue #354 is refused by any build given it.
-        header = "\t" in first_line
-        alid_column = _alid_column(first_line, reference_path) if header else None
-        if not wanted:
-            return pairs
-        lines = handle if header else itertools.chain([first_line], handle)
-        for line_number, line in enumerate(lines, start=2 if header else 1):
-            token = _reference_alid_token(line, alid_column)
-            if token is None:
-                continue
-            parsed = parse_canonical_alid(token)
-            if parsed is None:
-                raise ValueError(
-                    f"reference {reference_path} line {line_number} is not a canonical "
-                    f"ALID: {token!r}"
-                )
-            key = (parsed.chromosome, parsed.position)
-            if key in wanted:
-                pairs.setdefault(key, set()).add(
-                    frozenset({parsed.effect_allele, parsed.other_allele})
-                )
+    for token in iter_reference_alids(path):
+        parsed = parse_canonical_alid(token)
+        if parsed is None:
+            raise ValueError(f"reference {path} contains invalid ALID {token!r}")
+        key = (parsed.chromosome, parsed.position)
+        if key in wanted:
+            pairs.setdefault(key, set()).add(
+                frozenset({parsed.effect_allele, parsed.other_allele})
+            )
     return pairs
-
-
-def _open_text(path: Path) -> Any:
-    if str(path).lower().endswith((".gz", ".bgz", ".bgzf")):
-        return gzip.open(path, "rt", encoding="utf-8")
-    return open(path, encoding="utf-8")
-
-
-def _alid_column(first_line: str, path: Path) -> int:
-    """Which field of a tab-separated header holds the ALID.
-
-    A tab-separated table with no ``alid`` column is refused rather than read
-    positionally, because guessing which column holds the identity is how a
-    build checks itself against the wrong thing. So is a Variant Reference
-    artifact from before issue #354, whose ALIDs may name a reverse-strand
-    variant on the source's strand (`refuse_unmarked_artifact`).
-    """
-    header = [field.lstrip("#").strip() for field in first_line.rstrip("\n").split("\t")]
-    refuse_unmarked_artifact(header, path)
-    if "alid" not in header:
-        raise ValueError(
-            f"reference {path} is tab-separated but has no 'alid' column: {header}"
-        )
-    return header.index("alid")
-
-
-def _reference_alid_token(line: str, alid_column: int | None) -> str | None:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
-        return None
-    fields = line.rstrip("\n").split("\t")
-    if alid_column is None:
-        return fields[0].strip() or None
-    field = fields[alid_column].strip() if alid_column < len(fields) else ""
-    return field or None
 
 
 @dataclass(frozen=True)

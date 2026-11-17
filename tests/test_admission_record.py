@@ -378,10 +378,10 @@ def test_a_reader_association_keeps_the_se_its_source_gave():
     """An unusable SE is the source's, as read: Admission, not the reader's
     record type, decides the row is not an association."""
     from opengwasdb.model.enums import StoredEffectScale
-    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
+    from opengwasdb.readers.interface import ReaderAssociation
 
     association = ReaderAssociation(
-        "1", 100, "A", "G", 1.0, -0.5, StoredEffectScale.SD, reference=ReferenceAllele.UNDECLARED
+        "1", 100, "A", "G", 1.0, -0.5, StoredEffectScale.SD
     )
     assert association.se == -0.5
 
@@ -523,11 +523,13 @@ def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
     from opengwasdb.variants.routing import Unmatched
 
     unmatched = Unmatched(
-        ["1:5:A:G", "1:5:A:G", "1:9:C:T", "1:9:C:T", "2:4:A:C"],
         np.array([1.0, 1.0, 2.0, -2.0, 3.0], dtype=np.float32),
         np.full(5, 0.1, dtype=np.float32),
         np.full(5, np.nan, dtype=np.float32),
-        np.zeros(5, dtype=np.int8),
+        chromosome=["1", "1", "1", "1", "2"],
+        position=[5, 5, 9, 9, 4],
+        ref=["A", "A", "C", "C", "A"],
+        alt=["G", "G", "T", "T", "C"],
     )
     gate = counting_gate(AnalysisRules("A"))
     keys, z, *_ = _off_reference_spill(unmatched, 1.0, gate)
@@ -598,17 +600,15 @@ def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
     from opengwasdb.layouts.hybrid import build as hybrid_build
     from opengwasdb.model.enums import StoredEffectScale
     from opengwasdb.readers.fake import FakeReader
-    from opengwasdb.readers.interface import ReaderAssociation, ReferenceAllele
+    from opengwasdb.readers.interface import ReaderAssociation
     from opengwasdb.variants.routing import RouteTable
 
     rows = [
         ReaderAssociation(
             "1", 100, "A", "G", 2.0, 0.1, StoredEffectScale.SD,
-            reference=ReferenceAllele.UNDECLARED,
         ),
         ReaderAssociation(
             "1", 900, "C", "T", 1.0, 0.1, StoredEffectScale.SD,
-            reference=ReferenceAllele.UNDECLARED,
         ),
     ]
     monkeypatch.setattr(
