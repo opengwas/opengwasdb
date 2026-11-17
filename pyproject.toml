@@ -1,5 +1,7 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+# 1.27 is the first hatchling that writes PEP 639 licence metadata
+# (`License-Expression`, `License-File`), which the licence below needs.
+requires = ["hatchling>=1.27", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -11,9 +13,26 @@ readme = "README.md"
 # numpy >=2.  The old floor of 3.11 cannot resolve it, so the floor moves with
 # the dependency; see CHANGELOG.md.
 requires-python = ">=3.12"
-license = { text = "MIT" }
+# The Sustainable Use License, v1.0 (owner's ruling, 17 Nov 2026, #437/#438).
+# It has no SPDX identifier, so PEP 639 names it as a `LicenseRef-` and the
+# text travels in both distributions as LICENSE. No `License ::` classifier:
+# PEP 639 forbids one beside a licence expression. This is not an OSI licence.
+license = "LicenseRef-Sustainable-Use-License"
+license-files = ["LICENSE"]
 authors = [
   { name = "OpenGWASDB contributors" }
+]
+# What is advertised is what CI's installed-wheel job tests (#438); other
+# platforms are #441.
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
   "numpy>=1.26,<2.5",
@@ -46,6 +65,27 @@ dev = [
 
 [project.scripts]
 opengwasdb = "opengwasdb.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/opengwas/opengwasdb"
+Documentation = "https://blog.opengwas.io/opengwasdb/"
+Repository = "https://github.com/opengwas/opengwasdb"
+Issues = "https://github.com/opengwas/opengwasdb/issues"
+Changelog = "https://github.com/opengwas/opengwasdb/releases"
+
+# -----------------------------------------------------------------------------
+# Distribution contents (#438).
+#
+# The wheel is the package directory: hatchling finds `opengwasdb/` and takes
+# every file git tracks under it, Python and reader column maps alike, so it
+# needs no list. The source archive defaults to the whole repository -- 21.7 MiB
+# at v0.9.0, mostly benchmark documents -- so it is listed: the package, and
+# what a wheel build from it reads. hatchling adds pyproject.toml, PKG-INFO and
+# the licence itself. scripts/check_distributions.py holds both archives to
+# this, and CI runs it on every pull request.
+# -----------------------------------------------------------------------------
+[tool.hatch.build.targets.sdist]
+include = ["/opengwasdb", "/README.md", "/LICENSE"]
 
 # -----------------------------------------------------------------------------
 # Version from tags (issue #333).

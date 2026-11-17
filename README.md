@@ -2,16 +2,15 @@
 
 Standalone storage and query engine for OpenGWAS-scale summary statistic stores.
 
-The project is starting from a clean store contract:
+The store contract:
 
 - self-contained store releases;
 - embedded SQLite for metadata and lookup indexes;
 - Zarr for compressed association arrays;
 - layout-independent build and query APIs;
-- Dense and Ragged primary layouts;
 - optional reference completion using LD reference panels.
 
-OpenGWASDB implements **Dense**, **Ragged**, and **Hybrid** layouts, with observed-only and reference completion, under `format_version` **0.1.0**. Service and catalogue deployment are not part of this package.
+OpenGWASDB implements **Dense**, **Ragged**, and **Hybrid** layouts, with observed-only and reference completion; [docs/store-format-compatibility.md](./docs/store-format-compatibility.md) lists the `format_version`s each release reads and writes. Service and catalogue deployment are not part of this package.
 
 For the broader OpenGWAS platform direction, see [docs/opengwas-roadmap.md](./docs/opengwas-roadmap.md).
 
@@ -56,8 +55,11 @@ pixi run -e dev typecheck   # mypy opengwasdb
 For a one-off script or REPL, use `pixi run -e dev python <script>.py`
 rather than invoking a bare interpreter.
 
-The package is still a normal `pip install`-able library for downstream
-consumers (`pyproject.toml` + hatchling + hatch-vcs): `pip install -e ".[dev]"`
-continues to work if you'd rather manage the environment yourself, but it won't
-provide `bcftools`. The version comes from the `v*` tags; clone with them.
+`pip install -e ".[dev]"` also works, without `bcftools`. The version comes
+from the `v*` tags; clone with them.
 
+## Licence
+
+[Sustainable Use License](./LICENSE), version 1.0: use is limited to internal
+business, non-commercial and personal purposes. It is not an OSI open-source
+licence.
