@@ -16,11 +16,13 @@ on:
     branches: [main]
 
 # `contents: write` is what pushes a tag and creates a release;
-# `pull-requests: read` is what `gh api …/commits/<sha>/pulls` needs, and an
-# installation token gets nothing it was not granted. Nothing else is.
+# `pull-requests: read` is what `gh api …/commits/<sha>/pulls` needs;
+# `actions: write` is what dispatches publish.yml. An installation token gets
+# nothing it was not granted. Nothing else is.
 permissions:
   contents: write
   pull-requests: read
+  actions: write
 
 # Serialised so two runs never tag at once, and never cancelled: a cancelled run
 # would leave a merge unpublishable until the next push, which is why the plan
@@ -58,3 +60,14 @@ jobs:
           python3 scripts/release.py publish \
             --plan "${RUNNER_TEMP}/plan.json" \
             --repository "${GITHUB_REPOSITORY}"
+
+      # PyPI publication is its own workflow, the one PyPI's Trusted Publisher
+      # names (#439). A tag this job pushed with GITHUB_TOKEN triggers no
+      # workflow, but a dispatch does. That workflow reconciles every eligible
+      # tag itself, so it is dispatched whether or not this run tagged
+      # anything, and its daily schedule covers a dispatch that never ran.
+      - name: Hand the tags to PyPI publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run publish.yml --repo "${GITHUB_REPOSITORY}" --ref main -f index=pypi
