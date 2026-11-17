@@ -77,6 +77,87 @@ jobs:
           print(f"installed version {reported}, newest tag {newest}")
           PY
 
+  # What a `pip install opengwasdb` user gets, built and checked the way a
+  # release will build it (#438): the source archive first, then the wheel
+  # from that archive, so a file the archive leaves out breaks the wheel here
+  # rather than for a user. No Pixi: the build environment is a bare Python
+  # with the two build tools pinned.
+  distributions:
+    name: build and check distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version is derived from the `v*` tags (#333).
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the source archive, and the wheel from it
+        run: |
+          python -m pip install build==1.6.1 twine==7.0.0
+          python -m build --outdir dist .
+
+      - name: The metadata renders
+        run: python -m twine check --strict dist/*
+
+      - name: The archives hold what the repository says they hold
+        run: python scripts/check_distributions.py dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  # The wheel above, installed into a clean environment outside the checkout
+  # on every Python `pyproject.toml` advertises, and used the way
+  # docs/getting-started.md uses it. The checkout supplies only the smoke-test
+  # script and the tiny fixture, which the script copies out before building;
+  # `-I` keeps the checkout off the import path, and the script refuses a
+  # package imported from anywhere but the environment's site-packages.
+  installed-wheel:
+    name: installed wheel, Python ${{ matrix.python }}
+    needs: distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: ${{ runner.temp }}/dist
+
+      - name: Install the wheel into a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install "$RUNNER_TEMP"/dist/*.whl
+          "$RUNNER_TEMP/venv/bin/python" -m pip check
+
+      - name: Use the installed package from outside the checkout
+        run: |
+          wheel=$(basename "$RUNNER_TEMP"/dist/*.whl)
+          version=$(echo "$wheel" | cut -d- -f2)
+          mkdir "$RUNNER_TEMP/run"
+          cd "$RUNNER_TEMP/run"
+          "$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/smoke_test_installed.py" \
+            --fixture "$GITHUB_WORKSPACE/docs/examples/tiny" \
+            --version "$version"
+
   changelog:
     name: changelog fragment
     runs-on: ubuntu-latest
