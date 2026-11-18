@@ -186,6 +186,7 @@ class StoreReader:
     _cache: ChunkCache
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
+    _loci_lock: threading.Lock
     _partner_lock: threading.Lock
     _query_workers: int
     _closed: bool
@@ -217,8 +218,10 @@ class StoreReader:
         self._located = {}
         self._far = {}
         self._partner_frames = {}
-        # A chromosome's first use is one load, however many threads make it (§7): the offsets chunk
-        # is read once and one chunk-file descriptor is opened.
+        # A chromosome's first use is one load, however many threads make it: its positions are
+        # read once and both caches hold that one array (#71), and its Partner Rows' offsets chunk
+        # is read once and one chunk-file descriptor is opened (partner-rows §7).
+        self._loci_lock = threading.Lock()
         self._partner_lock = threading.Lock()
         self._closed = False
         # Each handle is opened once: opening one reads its metadata document, which over
@@ -1013,36 +1016,52 @@ class StoreReader:
 
         Positions are the variant table's, one slice a chromosome, so an ALID lookup, a clump and
         a proxies query read no `near/<chrom>/indptr` and open none of the Proxy Index's arrays.
+        A chromosome's positions are loaded once, however many threads are cold on it: the check is
+        repeated under the lock, as a first use of the Partner Rows is (§7), so no caller publishes
+        a second copy of a chromosome-sized array.
         """
-        if name not in self._located:
-            loaded = self._loaded.get(name)
-            if loaded is not None:
-                # The LD path loaded this chromosome first: its positions are the same array, so
-                # a query afterwards reads none again.
-                self._located[name] = _Loci(loaded.name, loaded.start, loaded.stop, loaded.position)
-            else:
-                start, stop = self._ranges[name]
-                position = self._columns["position"]
-                self._located[name] = _Loci(
-                    name,
-                    start,
-                    stop,
-                    self._runs(position, np.array([start]), np.array([stop - start]))[0].astype(
-                        np.int64
-                    ),
-                )
-        return self._located[name]
+        loci = self._located.get(name)
+        if loci is not None:
+            return loci
+        with self._loci_lock:
+            return self._loaded_loci(name)
+
+    def _loaded_loci(self, name: str) -> _Loci:
+        """`_chromosome_loci` with the lock held: the one load a chromosome's positions get."""
+        loci = self._located.get(name)
+        if loci is None:
+            start, stop = self._ranges[name]
+            position = self._columns["position"]
+            loci = _Loci(
+                name,
+                start,
+                stop,
+                self._runs(position, np.array([start]), np.array([stop - start]))[0].astype(
+                    np.int64
+                ),
+            )
+            self._located[name] = loci
+        return loci
 
     def _chromosome(self, name: str) -> _Chromosome:
         """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
-        fill values is judged before any element of the chromosome is decoded."""
-        if name not in self._loaded:
-            loci = self._chromosome_loci(name)
+        fill values is judged before any element of the chromosome is decoded.
+
+        It takes its positions from the published `_Loci`, and publishes it under the same lock, so
+        `_loaded[c].position is _located[c].position` however the two paths interleave.
+        """
+        loaded = self._loaded.get(name)
+        if loaded is not None:
+            return loaded
+        with self._loci_lock:
+            if name in self._loaded:
+                return self._loaded[name]
+            loci = self._loaded_loci(name)
             near_indptr, near_r, index_indptr, index_partner, index_r = (
                 _kept_array(self._root, f"{kind}/{name}/{array}")
                 for kind, array in _CHROMOSOME_ARRAYS
             )
-            self._loaded[name] = _Chromosome(
+            assembled = _Chromosome(
                 loci.name,
                 loci.start,
                 loci.stop,
@@ -1051,7 +1070,8 @@ class StoreReader:
                 near_r,
                 _Sparse(index_indptr, self._cache, index_partner, index_r),
             )
-        return self._loaded[name]
+            self._loaded[name] = assembled
+            return assembled
 
     def _far_pairs(self, c: _Chromosome) -> _Sparse:
         """One chromosome's Far Pairs, opened and their `indptr` kept the first time a request
