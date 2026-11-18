@@ -1,5 +1,10 @@
 # LD Stores hold a 3 Mb Near Band and thresholded Far Pairs
 
+> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+> Where this record speaks of it in the present tense — as a component a store holds, a stream a
+> build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
+> entry it held, and `clump` and `proxies` read them. Everything else here stands.
+
 > **Decision 2's "quantised to `int16`" is superseded by [ADR 0004](./0004-per-store-encoding.md)**
 > (owner, 10 November 2026). Each LD Store records its own encoding: a symmetric scale in an
 > `int16` container, × 511 for the five HGDP+1kGP stores and × 2047 for UK Biobank EUR, where

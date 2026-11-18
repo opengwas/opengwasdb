@@ -60,8 +60,11 @@ decision 1. The triangle stays for `matrix` and `region`.
 - **Component workers are capped at 4** for #71 (§9.2, option B). At eight, cold LD regresses to
   1.913 / 5.753 / 5.109 s at G = 4 / 8 / 16, against 1.051–1.169 s where each G was fastest.
 - **The under-1 s LD target moves to #71** (owner, 18 November 2026). The best cold LD is 1.051 s
-  (G = 8) and at G = 16 it is 1.067 s cold and 1.058 s warm, so nothing here claims the target;
-  #71's acceptance criterion holds it.
+  (G = 8) and at G = 16 it is 1.067 s cold and 1.058 s warm, so nothing here claims the target.
+  #71 did not meet it and the owner accepted it (#71's owner decision, recorded on #72): a quiet
+  re-time at `cc48a58` on GCST90476460 gave cold LD medians of **2.30 / 1.55 / 2.95 s** at
+  1 / 2 / 4 workers, and warm medians of **0.98 / 0.97 / 1.35 s** (EUR k = 10). The follow-up is
+  **#81**, decode and gather plus ALID resolution, and it owns the worker default too.
 
 §12 records the alternatives that were weighed and what they would have cost.
 
@@ -230,7 +233,7 @@ today (`ld-store.md` §6, "How a store is written"):
 
 Its two producers:
 
-- **The build** (`StoreWriter`): the emitter sits beside the Proxy Index writer until #72 removes
+- **The build** (`StoreWriter`): the emitter took the Proxy Index writer's place, which #72 removed
   it, and is fed by the same blocks. No new pass over genotypes.
 - **Derivation** (§6.2): the same emitter fed by reading the Near Band and the Far Pairs back.
 
@@ -283,8 +286,9 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   the same invocation as a derivation that did not become whole. A removal that fails raises,
   naming the path, and the count stays: the provenance never claims a removal that did not happen.
   An `index/` that is a symbolic link is unlinked and the directory it names is left whole, which
-  is what a scratch store over a published one needs. Until #72 removes the Proxy Index's six
-  rules, a store whose index is dropped here fails them, which is what that removal is for.
+  is what a scratch store over a published one needs. A store this code writes holds no `index/`,
+  so the option is what finishes one derived before #72; since #72 the store validates and reads
+  with or without the leftover (ld-store §12).
 
 ### 6.3 Parallelising the build and the derivation
 
@@ -428,8 +432,12 @@ ALIDs, and the store opens in 0.02–0.05 s. Where the 1.85 s cold goes at four 
 of row gather (2.13 s of `partner_row` CPU less that decode), spread over four threads and so
 bounded by the GIL, plus the component split, the greedy and the cold reads' latency. Serially the
 same parts are 0.87 s of LD CPU: 0.49 s decode, 0.17 s gather, and 0.21 s of the split and the
-greedy. **The under-1 s LD target is not met** (owner, 18 November 2026,
-moved it here from #65). The options the numbers point at, measured rather than guessed: a reusable
+greedy. **The under-1 s LD target is not met, and the owner accepted it** (#71's owner decision,
+recorded on #72). The figures to hold the reader to are that quiet re-time, at `cc48a58`, on
+GCST90476460 at EUR k = 10: cold LD medians of **2.30 / 1.55 / 2.95 s** at 1 / 2 / 4 workers, and
+warm medians of **0.98 / 0.97 / 1.35 s**. The follow-up is **#81**, decode and gather plus ALID
+resolution; the worker default stays at four here and is #81's to change. The options the numbers
+point at, measured rather than guessed: a reusable
 row buffer in `FramePayload.row` (#70's module) is 31.7 µs a row against 40.8 µs on a 628-entry
 median row, some 35 ms over 3,854 leads; G = 8, which #65 measured a little faster than G = 16; and
 more than four workers, which regresses here as it did there.
@@ -443,9 +451,10 @@ read a Near Band column.
 
 ### 8.4 What the proposal deletes
 
-Once D1 and D2 are taken, `clump` and `proxies` never touch `near/` or `index/`. These go:
+Once D1 and D2 are taken, `clump` and `proxies` never touch `near/` or `index/`. These go, and
+went in #72:
 
-- the Proxy Index (`index/<c>/`), its writer, and its six validation rules;
+- the Proxy Index (`index/<c>/`), its writer, and its six validation rules, with `far.index`;
 - `StoreReader.clump_warmer`, and `partners` reading the Near Band row and column, with `among`;
 - clump's use of the Near Band chunk cache, single-flight and admission. The machinery from
   #46/#50/#51 stays only for `matrix` and `region`, which read the Near Band whole-row and
@@ -483,12 +492,13 @@ request. Reach for C only on evidence.
 **What will bound latency next.** On GCST90476460 today, ALID resolution (`rows_of`) takes
 2.0–3.2 s, and store open, score and loci 3.4 s together. Those seconds become most of a
 sub-second clump's time. They are out of scope here. They are #50's mmap lookup question, raised
-as its own issue, and #71 holds the under-1 s target meanwhile.
+as its own issue, and **#81** carries the follow-up the owner opened when they accepted #71
+without the < 1 s target.
 
 ## 10. Validation
 
-These rules replace the six `index.*` rules and `far.index` in `ld-store.md` §12, which #68 adds
-beside until #72 removes them. Each reads frames in bounded blocks, never a whole chromosome. Each
+These rules replaced the six `index.*` rules and `far.index` in `ld-store.md` §12, which #68 added
+beside them and #72 removed, leaving the ten below. Each reads frames in bounded blocks, never a whole chromosome. Each
 has a breaker in `tests/contract/test_store.py`.
 
 | rule | checks |
@@ -581,5 +591,6 @@ subdividing the G = 16 frames) and
 Epic [#64](https://github.com/opengwas/ogld/issues/64) carries this design's plan and acceptance
 criteria: #67 writes the rows from `StoreWriter`, #69 derives them for the existing stores, #70
 reads them, #71 moves `clump` and `proxies` onto them, #68 validates them, #72 removes the Proxy
-Index, and #73 rolls them out to the five HGDP+1kGP stores. This document specifies the format those
+Index (done: the component, its writer, its arrays, its six rules and `far.index` are gone, and
+`clump`'s Near Band reads with them), and #73 rolls them out to the five HGDP+1kGP stores. This document specifies the format those
 tickets build, and does not restate their acceptance.
