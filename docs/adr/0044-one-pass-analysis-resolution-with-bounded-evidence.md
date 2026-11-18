@@ -60,7 +60,11 @@ ancestry assignment can still read a frequency from. GWAS-SSF projects parsed
 tabular blocks. GWAS-VCF (issue #278) performs one streaming `bcftools query`
 after a header capability probe, preferring usable EZ and otherwise ES/SE, with
 `beta = z * SE`; a missing effect leaves an AF+SE row available to the unchanged
-ancestry rule but not to phenotype-SD evidence.
+ancestry rule but not to phenotype-SD evidence. Such a row is read only from a
+file whose header declares the effect fields: one declaring neither `EZ` nor
+both `ES` and `SE` is refused before a record is read (ADR 0076's addendum of
+2026-11-18, issue #363), so the ancestry rule meets a record's own missing
+value, never a file that never had the columns.
 
 ## Consequences
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,21 +27,45 @@ from opengwasdb.variants.normalise import (
     oriented_alid,
 )
 
+#: The FORMAT meta-lines a GWAS-VCF declares when it carries both spellings of
+#: an effect. `_write_vcf` takes them as a parameter so a test can write a file
+#: whose header cannot give a record its z (issue #363).
+_ES_SE_EZ = (
+    '##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size relative to ALT">\n'
+    '##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error of effect size">\n'
+    '##FORMAT=<ID=EZ,Number=A,Type=Float,Description="Z-score, if used to derive EFFECT/SE">\n'
+)
+_ES_ONLY = '##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size relative to ALT">\n'
+_EZ_ONLY = '##FORMAT=<ID=EZ,Number=A,Type=Float,Description="Z-score">\n'
+_AF_ONLY = '##FORMAT=<ID=AF,Number=A,Type=Float,Description="Alternate allele frequency">\n'
+
 
 def _write_vcf(
-    path: Path, body: str, study_type: str = "Continuous", samples: str = "STUDY1"
+    path: Path,
+    body: str,
+    study_type: str = "Continuous",
+    samples: str = "STUDY1",
+    formats: str = _ES_SE_EZ,
 ) -> None:
     """Write a minimal GWAS-VCF fixture to ``path``."""
-    header = f"""\
-##fileformat=VCFv4.2
-##FILTER=<ID=PASS,Description="All filters passed">
-##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size relative to ALT">
-##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error of effect size">
-##FORMAT=<ID=EZ,Number=A,Type=Float,Description="Z-score, if used to derive EFFECT/SE">
-##SAMPLE=<ID=STUDY1,StudyType={study_type}>
-#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{samples}
-"""
+    header = (
+        "##fileformat=VCFv4.2\n"
+        '##FILTER=<ID=PASS,Description="All filters passed">\n'
+        f"{formats}"
+        f"##SAMPLE=<ID=STUDY1,StudyType={study_type}>\n"
+        f"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{samples}\n"
+    )
     path.write_text(header + body, encoding="utf-8")
+
+
+def _declared_format_ids(vcf: Path) -> set[str]:
+    """The FORMAT tags the fixture's own text declares, read back without the reader."""
+    prefix = "##FORMAT=<ID="
+    return {
+        line[len(prefix) :].split(",", 1)[0]
+        for line in vcf.read_text(encoding="utf-8").splitlines()
+        if line.startswith(prefix)
+    }
 
 
 def _associations(vcf: Path) -> list:
@@ -147,6 +173,134 @@ def test_every_projection_needs_bcftools(tmp_path: Path) -> None:
         with patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="bcftools"):
                 list(stream())
+
+
+# --- Refusals that name the file (issue #363) ---
+
+#: Every projection that turns records into associations: the two the builders
+#: store, and the resolver's metric blocks.
+_RECORD_PROJECTIONS = ("associations", "batches", "metric_chunks")
+
+
+def _read(reader: GwasVcfReader, projection: str) -> list:
+    stream = {
+        "associations": reader.stream_associations,
+        "batches": reader.stream_batches,
+        "metric_chunks": reader.stream_metric_chunks,
+    }[projection]
+    return list(stream())
+
+
+@pytest.mark.parametrize("projection", _RECORD_PROJECTIONS)
+def test_a_header_without_an_effect_field_is_refused_naming_the_file(
+    tmp_path: Path, projection: str
+) -> None:
+    """No EZ and no ES/SE is not a source of 0 associations: it is a broken file."""
+    vcf = tmp_path / "no-effect.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tAF\t0.3\n", formats=_AF_ONLY)
+    # The fixture must really lack all three tags for this to mean anything.
+    assert _declared_format_ids(vcf) == {"AF"}
+    with pytest.raises(ValueError) as raised:
+        _read(GwasVcfReader(vcf), projection)
+    message = str(raised.value)
+    assert str(vcf) in message
+    assert "FORMAT/EZ" in message and "FORMAT/SE" in message
+    assert "AF" in message  # names the tags it did find
+
+
+@pytest.mark.parametrize("projection", _RECORD_PROJECTIONS)
+def test_a_header_with_es_but_no_se_is_refused(tmp_path: Path, projection: str) -> None:
+    """ES without SE derives no z, so it is refused as the missing pair it is."""
+    vcf = tmp_path / "es-without-se.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES\t0.5\n", formats=_ES_ONLY)
+    assert _declared_format_ids(vcf) == {"ES"}
+    assert "SE" not in _declared_format_ids(vcf)
+    with pytest.raises(ValueError, match="FORMAT/ES with FORMAT/SE") as raised:
+        _read(GwasVcfReader(vcf), projection)
+    assert str(vcf) in str(raised.value)
+
+
+def test_a_header_declaring_only_ez_reads_as_today(tmp_path: Path) -> None:
+    vcf = tmp_path / "ez-only.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tEZ\t5.25\n", formats=_EZ_ONLY)
+    assert _declared_format_ids(vcf) == {"EZ"}
+    (association,) = _associations(vcf)
+    assert association.z == -5.25
+    assert math.isnan(association.se)  # no SE is reported, not a zero
+
+
+def test_a_declared_effect_holding_a_missing_value_is_a_missing_association(
+    tmp_path: Path,
+) -> None:
+    """A record's `.` is a missing association, not a broken file (issue #363)."""
+    vcf = tmp_path / "missing-cells.vcf"
+    _write_vcf(
+        vcf,
+        "1\t100\t.\tA\tG\t.\tPASS\t.\tEZ:ES:SE\t.:.:.\n"
+        "1\t200\t.\tA\tG\t.\tPASS\t.\tEZ:ES:SE\t2.0:0.5:0.25\n",
+    )
+    assert {"EZ", "ES", "SE"} <= _declared_format_ids(vcf)
+    first, second = _associations(vcf)
+    assert math.isnan(first.z) and math.isnan(first.se)
+    assert second.z == -2.0 and second.se == 0.25
+
+
+_HEADER_FAILS = """\
+#!{python}
+import sys
+
+sys.stderr.write("synthetic bcftools header failure\\n")
+raise SystemExit(3)
+"""
+
+_RECORDS_FAIL = """\
+#!{python}
+import sys
+
+if sys.argv[1] == "view":
+    with open(sys.argv[-1], encoding="utf-8") as handle:
+        sys.stdout.write("".join(line for line in handle if line.startswith("#")))
+    raise SystemExit(0)
+sys.stderr.write("synthetic bcftools record failure\\n")
+raise SystemExit(7)
+"""
+
+
+def _install_stub_bcftools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> Path:
+    """Put a fake ``bcftools`` first on PATH, ahead of the real one."""
+    binary = tmp_path / "stub-bin" / "bcftools"
+    binary.parent.mkdir()
+    binary.write_text(script.format(python=sys.executable), encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary.parent}{os.pathsep}{os.environ['PATH']}")
+    return binary
+
+
+def test_a_failing_header_probe_names_the_file(tmp_path: Path, monkeypatch) -> None:
+    vcf = tmp_path / "study.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n")
+    # The fixture is readable: what fails below is bcftools, not the file.
+    assert len(_associations(vcf)) == 1
+    _install_stub_bcftools(tmp_path, monkeypatch, _HEADER_FAILS)
+    with pytest.raises(OSError) as raised:
+        _associations(vcf)
+    message = str(raised.value)
+    assert str(vcf) in message
+    assert "bcftools header query failed (3)" in message
+    assert "synthetic bcftools header failure" in message
+
+
+def test_a_failing_record_query_names_the_file(tmp_path: Path, monkeypatch) -> None:
+    vcf = tmp_path / "study.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.5:0.1\n")
+    assert len(_associations(vcf)) == 1
+    _install_stub_bcftools(tmp_path, monkeypatch, _RECORDS_FAIL)
+    with pytest.raises(OSError) as raised:
+        _associations(vcf)
+    message = str(raised.value)
+    assert str(vcf) in message
+    assert "bcftools record query failed (7)" in message
+    assert "synthetic bcftools record failure" in message
 
 
 def test_oriented_alid_is_orient_to_canonicals_answer() -> None:
