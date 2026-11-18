@@ -45,6 +45,57 @@ from ogld.store.validation import validate_group
 INNER, PER_SHARD = 512, 4
 
 
+def test_one_chromosomes_positions_are_loaded_once_however_many_cold_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chromosome's positions are read once, and both caches hold that one array (#71).
+
+    Four cold callers meet at a barrier around the position read: `loci_of` and `pair_r`, the two
+    paths that reach a chromosome. The first to arrive holds the reader's lock and the rest wait,
+    so one load is made and `_loaded[c].position is _located[c].position`; a reader that checks and
+    publishes without a lock makes four loads and keeps two different arrays.
+    """
+    reader = StoreReader.open(TEST_STORE)
+    gate = threading.Barrier(4, timeout=0.5)
+    loads: list[int] = []
+    runs = reader._runs
+
+    def gated(array: zarr.Array[Any], first: Any, length: Any) -> Any:
+        if array.path == "variants/position":
+            loads.append(1)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                gate.wait()
+        return runs(array, first, length)
+
+    monkeypatch.setattr(reader, "_runs", gated)
+    rows = np.array([468, 470, 480, 1055], dtype=np.int64)
+    answers: list[Any] = [None] * 4
+
+    def loci(at: int) -> None:
+        answers[at] = reader.loci_of(rows)
+
+    def pairs(at: int) -> None:
+        answers[at] = reader.pair_r(rows)
+
+    callers = [
+        threading.Thread(target=loci, args=(0,)),
+        threading.Thread(target=pairs, args=(1,)),
+        threading.Thread(target=loci, args=(2,)),
+        threading.Thread(target=pairs, args=(3,)),
+    ]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(10)
+    assert not any(caller.is_alive() for caller in callers), "a cold caller hung"
+    assert len(loads) == 1, f"{len(loads)} whole-chromosome position loads, not one"
+    np.testing.assert_array_equal(answers[0][1], answers[2][1])
+    np.testing.assert_array_equal(answers[1], answers[3])
+    assert reader._loaded["22"].position is reader._located["22"].position, (
+        "the two caches kept different position arrays"
+    )
+
+
 @pytest.fixture(scope="module")
 def small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return resharded(tmp_path_factory.mktemp("resharded") / "store", INNER, PER_SHARD)
@@ -468,8 +519,6 @@ def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
         ("far/22/partner", "-1", "matrix"),
         ("far/22/r", "-32768", "matrix"),
         ("far/22/indptr", "-1", "matrix"),
-        ("index/22/partner", "-1", "proxies"),
-        ("index/22/r", "-32768", "proxies"),
         ("near/22/indptr", "-1", "matrix"),
     ],
 )
@@ -478,7 +527,8 @@ def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
 ) -> None:
     # An ALID that read as "" would make a present variant Absent; a partner of −1 would name
     # the last variant. Each is refused, naming the array, by a query that reads it: a matrix
-    # reads the Far Pairs, and proxies at r2 ≥ t_far the Proxy Index (ADR 0007).
+    # reads the Far Pairs. From 0.2.0 no query reads the Proxy Index (partner-rows §8.4), so its
+    # arrays are not here; the Partner Rows' frames are checked by their own checksums instead.
     copy = tmp_path / "lost"
     shutil.copytree(small_chunks, copy)
     every = list(StoreReader.open(copy).variants(np.arange(1056)).alid)
@@ -939,26 +989,26 @@ def test_a_store_keeps_4_gib_of_its_chunks_unless_told_otherwise() -> None:
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])
-def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> None:
-    # At r2 ≥ t_far a variant's partners are its Proxy Index row, both sides, and the reader
-    # chooses that part for both queries (spec §10; ogld#14). r2 is t_far exactly, the edge.
-    # The committed store holds each array in one chunk, so any Near Band read fetches one.
+def test_at_every_answered_r2_the_partner_rows_are_read_and_no_near_band_or_index_r(
+    query: str,
+) -> None:
+    # From 0.2.0 both queries read the Partner Rows and nothing else: at r2 ≥ t_far, and at
+    # r2 = t_partner below it, which the Near Band used to answer one element at a time
+    # (partner-rows §8.1, §8.3, §8.4). The committed store holds each array in one chunk, so any
+    # Near Band or Proxy Index read would fetch one; the frames are one chunk a chromosome.
     rows = support.passing_rows()
     names = support.alids(rows)
-    with serving(TEST_STORE) as (url, sent):
-        reader = StoreReader.open(url)
-        if query == "clump":
-            z = np.abs(support.panel_data().gwas().z)[rows]
-            clumping.clump(reader, names, z, r2=support.T_FAR, kb=3000)
-        else:
-            proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
-    fetched = {key[0] for key in reader._cache._kept if kind(key) == "chunk"}
-    assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
-    assert not [path for path in fetched if path.startswith("near/") and path.endswith("/r")], (
-        "no Near Band code chunk; its indptr is still loaded on first chromosome touch"
-    )
-    chunks = ("/near/21/r/c/", "/near/22/r/c/")
-    assert not [path for path, _ in sent if path.startswith(chunks)], "nor any Near Band byte"
+    for r2, kb in ((support.T_FAR, 3000), (support.T_PARTNER, 3000)):
+        with serving(TEST_STORE) as (url, sent):
+            reader = StoreReader.open(url)
+            if query == "clump":
+                z = np.abs(support.panel_data().gwas().z)[rows]
+                clumping.clump(reader, names, z, r2=r2, kb=kb)
+            else:
+                proxies_query.proxies(reader, names[::5], r2=r2, kb=kb)
+        offending = [path for path, _ in sent if path.startswith(("/near/", "/index/"))]
+        assert offending == [], f"a Near Band or Proxy Index read: {offending[:5]}"
+        assert [path for path, _ in sent if path.startswith("/partners/")], "the frames are read"
 
 
 def test_the_test_store_passes_every_rule_over_http() -> None:

@@ -203,8 +203,9 @@ def test_the_client_counts_what_crossed_the_proxy(instrumented: Any) -> None:
         store.proxies(alids, r2=0.8, kb=10_000)
         wire = control(url, "stats")
     reached = set(wire["requests_by_array"])
-    # A matrix reads its pairs beyond near_bp from the Far Pairs, and proxies the index (ogld#31).
-    wanted = {"near/r", "far/r", "index/r", "variants/alid"}
+    # A matrix reads its pairs beyond near_bp from the Far Pairs, and from 0.2.0 a variant's
+    # proxies are its Partner Rows frame (partner-rows §8.3).
+    wanted = {"near/r", "far/r", "partners/frames", "variants/alid"}
     assert wanted <= reached, "the reads must reach these arrays"
     same_counts(instrumented.TALLY.as_json(), wire)
 

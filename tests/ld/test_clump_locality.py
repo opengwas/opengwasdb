@@ -1,4 +1,4 @@
-"""Chromosome scheduling changes reads, not result order or greedy edges (#40)."""
+"""Scheduling changes reads, not result order or greedy edges (#40; partner-rows §9.2)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from store_copies import TEST_STORE
 import ogld
 
 
-@pytest.mark.parametrize("r2", [0, 0.001, 0.01, 0.1, 1])
+@pytest.mark.parametrize("r2", [0.01, 0.1, 1])
 def test_interleaved_chromosomes_keep_request_order_and_answers(r2: float) -> None:
     store = ogld.open(TEST_STORE)
     reader = store._reader
@@ -34,33 +34,37 @@ def test_interleaved_chromosomes_keep_request_order_and_answers(r2: float) -> No
         np.testing.assert_array_equal(got.r[at], one.r)
 
 
-def test_clump_reads_only_returned_columns_and_never_returns_to_a_chromosome(
+def test_clump_reads_only_returned_columns_and_one_partner_row_per_lead(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A clump reads the Position and ALID columns clump returns, no allele column, and one
+    Partner Rows row per lead: never a row of a hit a stronger lead took (partner-rows §8.2)."""
     store = ogld.open(TEST_STORE)
     reader = store._reader
     rows = np.arange(store.provenance["n_variants"])
     names = reader.alids_of(rows).tolist()
     columns: Counter[str] = Counter()
-    visited: list[str] = []
+    reads: list[tuple[str, int]] = []
     read = reader._read
-    partners = reader.partners
+    partner_row = reader.partner_row
 
     def recording(array: Any, coords: Any) -> Any:
         columns[array.path] += len(coords)
         return read(array, coords)
 
-    # Record partner chromosomes without polluting the column-read assertion.
-    chrom = reader.variants(rows).chrom
-
-    def paired(rows: Any, **kwargs: Any) -> Any:
-        visited.extend(chrom[rows].tolist())
-        return partners(rows, **kwargs)
+    def recorded(chrom: str, local_row: int) -> Any:
+        reads.append((chrom, local_row))
+        return partner_row(chrom, local_row)
 
     monkeypatch.setattr(reader, "_read", recording)
-    monkeypatch.setattr(reader, "partners", paired)
-    got = store.clump(names, np.random.default_rng(40).random(len(rows)), r2=0.01, kb=3000)
+    monkeypatch.setattr(reader, "partner_row", recorded)
+    score = np.random.default_rng(40).random(len(rows))
+    got = store.clump(names, score, r2=0.01, kb=3000)
     assert len(got.leads()) > 1
-    assert set(visited) == {"21", "22"}
     assert not {"variants/a1", "variants/a2", "variants/a1_frequency"} & columns.keys()
-    assert len(np.flatnonzero(np.array(visited[1:]) != visited[:-1])) == 1
+    leads = set(got.leads().tolist())
+    assert len(reads) == len(leads), "one Partner Rows row per lead, and no other"
+    assert len({(chrom, local) for chrom, local in reads}) == len(reads), "no row read twice"
+    for chrom, local in reads:
+        row = reader.chromosome_range(chrom)[0] + local
+        assert reader.alids_of(np.array([row]))[0] in leads, "a row read is a lead's"

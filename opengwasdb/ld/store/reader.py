@@ -77,6 +77,11 @@ _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
+#: The most component threads one request runs (partner-rows §9.2). Four is where the prototype was
+#: fastest (#65: 1.051 s at G = 8 and 1.067 s at G = 16); eight is slower, 5.753 s and 5.109 s,
+#: because a component's per-lead Python work holds the GIL while only the reads and the decode
+#: release it. The pool's size is the reader's, so no query signature carries it.
+COMPONENT_WORKERS_MAX: Final = 4
 #: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
 #: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
 #: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
@@ -104,6 +109,23 @@ class _Sparse:
     @cached_property
     def indptr(self) -> npt.NDArray[np.int64]:
         return _indptr(self.source, self.cache)
+
+
+@dataclass(frozen=True)
+class _Loci:
+    """One chromosome's Variant Set rows and positions, and nothing of its LD components (#71).
+
+    A query that reads only the Partner Rows still needs each hit's chromosome, position and ALID
+    to order it and measure distances, and must not read `near/<chrom>/indptr` or open the Proxy
+    Index's arrays to get them (partner-rows §8; ld-store §10). This is that much, from
+    `variants/position` alone; `_Chromosome` is it plus the Near Band and the Proxy Index, for the
+    reads that resolve stored pairs.
+    """
+
+    name: str
+    start: int
+    stop: int
+    position: npt.NDArray[np.int64]
 
 
 @dataclass(frozen=True)
@@ -159,11 +181,14 @@ class StoreReader:
     _names: list[str]
     _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
+    _located: dict[str, _Loci]
     _far: dict[str, _Sparse]
     _cache: ChunkCache
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
+    _loci_lock: threading.Lock
     _partner_lock: threading.Lock
+    _query_workers: int
     _closed: bool
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
@@ -178,21 +203,25 @@ class StoreReader:
     ) -> None:
         """Keep the provenance, the encoding and the chromosome ranges of an opened, checked
         store, and the two caches its reads go through: decoded Near Band chunks, and decoded
-        Partner Rows frames (partner-rows §7)."""
+        Partner Rows frames (partner-rows §7), and the component threads it may run (§9.2)."""
         self._root = root
         self._provenance = provenance
         self._encoding = encoding
         self._cache = cache
         self._frame_cache = frames
+        self._query_workers = COMPONENT_WORKERS_MAX
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
         self._ranges = {name: (start, stop) for name, start, stop in listed}
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
+        self._located = {}
         self._far = {}
         self._partner_frames = {}
-        # A chromosome's first use is one load, however many threads make it (§7): the offsets chunk
-        # is read once and one chunk-file descriptor is opened.
+        # A chromosome's first use is one load, however many threads make it: its positions are
+        # read once and both caches hold that one array (#71), and its Partner Rows' offsets chunk
+        # is read once and one chunk-file descriptor is opened (partner-rows §7).
+        self._loci_lock = threading.Lock()
         self._partner_lock = threading.Lock()
         self._closed = False
         # Each handle is opened once: opening one reads its metadata document, which over
@@ -247,6 +276,18 @@ class StoreReader:
     def frame_cache_bytes(self) -> int:
         """The bytes of decoded Partner Rows frames this reader keeps at most (partner-rows §7)."""
         return self._frame_cache.budget
+
+    def _set_query_workers(self, requested: int) -> None:
+        """Set the threads one `clump` may run its components on (partner-rows §9.2).
+
+        The size of that pool is the reader's, not a caller's setting: this is the private seam
+        #71's tests use, and it holds the cap, so asking for eight gives `COMPONENT_WORKERS_MAX`.
+        """
+        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+            raise InputError(
+                f"the component thread count is a whole number of at least 1: {requested!r}"
+            )
+        self._query_workers = min(requested, COMPONENT_WORKERS_MAX)
 
     def close(self) -> None:
         """Close the reader: after it returns no Partner Rows read is answered, and every chunk file
@@ -350,7 +391,7 @@ class StoreReader:
         asked: list[int] = []
         candidates: list[npt.NDArray[np.int64]] = []
         for chrom, (at, positions) in _loci(chosen, self._ranges).items():
-            c = self._chromosome(chrom)
+            c = self._chromosome_loci(chrom)
             lo, hi = position_rows(c.position, positions, positions)
             asked.extend(owners(hi - lo, at).tolist())
             candidates.append(global_rows(spans(lo, hi - lo), c.start))
@@ -430,6 +471,21 @@ class StoreReader:
         lo, hi = position_rows(c.position, start, stop)
         return global_rows(np.arange(int(lo), int(hi), dtype=np.int64), c.start)
 
+    def chromosome_range(self, chrom: str) -> tuple[int, int]:
+        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (spec §2).
+
+        It is what turns a Partner Rows row's chromosome-local partner into a Variant Set row
+        (partner-rows §7), so a component split and a greedy can work in the store's own rows. A
+        label the store does not hold is refused naming it, as `partner_row` refuses it.
+        """
+        try:
+            return self._ranges[chrom]
+        except KeyError:
+            raise ValueError(
+                f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
+                f"{', '.join(self._names)} (spec §2)"
+            ) from None
+
     def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
         """The ALID of each of `rows`, in the order given (spec §2): the one string column a
         query names its rows by, read without the others (ogld#14)."""
@@ -440,12 +496,14 @@ class StoreReader:
     ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.int64]]:
         """Chromosomes and positions, without allele columns clump never returns (ogld#40).
 
-        This is a store-layer read, not a public query or a new caller setting. Geometry
-        and chromosome label dtypes stay identical to the full variant-table read.
+        It reads the variant table's positions and nothing of the LD components: `clump` and
+        `proxies` call it, and from 0.2.0 their only LD read is the Partner Rows (#71). This is a
+        store-layer read, not a public query or a new caller setting. Geometry and chromosome label
+        dtypes stay identical to the full variant-table read.
         """
         rows = self._checked(rows)
         position = np.empty(len(rows), dtype=np.int64)
-        for c, members in self._by_chromosome(rows):
+        for c, members in self._loci_by_chromosome(rows):
             position[members] = c.position[local_rows(rows[members], c.start)]
         names = np.array(self._names, dtype=np.str_)
         return names[chromosome_index(self._stops, rows)], position
@@ -500,6 +558,10 @@ class StoreReader:
 
         The reader owns candidate geometry and selection of the stored part. Warming is
         optional: a missed chunk still goes through the ordinary bounded read (ADR 0009).
+
+        **No query calls this since #71**: `clump` reads the Partner Rows and its own frame
+        cache, so the Near Band's warm windows warm nothing a clump reads. It is kept, tested
+        and unused until #72 removes it with the Near Band partner reads it serves.
         """
         if r2 >= self._provenance["t_far"] or not len(rows) or self.cache_bytes == 0:
             return lambda row: None
@@ -671,6 +733,23 @@ class StoreReader:
 
     # ------------------------------------------------------------ partner rows
 
+    def require_partner_rows(self) -> float:
+        """The Partner Threshold this store recorded (spec §7; partner-rows §3).
+
+        From format 0.2.0 `clump` and `proxies` read the Partner Rows and nothing else, so a
+        store that holds none — every 0.1.0 store — is refused here, naming the missing component
+        and the way to derive it, before any read. It is never answered from the Near Band: that
+        is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
+        """
+        if "t_partner" not in self._provenance:
+            raise InputError(
+                f"this LD Store is format {self._provenance['format_version']}, which has no "
+                f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
+                "naming the missing component; a store built before 0.2.0 derives them with "
+                "`ogld derive-partners` (spec §13; partner-rows §5.1)"
+            )
+        return float(self._provenance["t_partner"])
+
     def partner_row(self, chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         """One variant's Partner Rows row: every partner within far_bp at its distance's floor,
         each with its code, chromosome-local and ascending (partner-rows §7).
@@ -719,12 +798,7 @@ class StoreReader:
             )
         # A 0.1.0 store records none of the Partner Rows' keys, because it holds no Partner Rows
         # (spec §13): the read is refused naming the component, never answered from another one.
-        if "t_partner" not in self._provenance:
-            raise InputError(
-                f"this LD Store is format {self._provenance['format_version']}, which has no "
-                f"Partner Rows ({layout.PARTNERS}/): partner_row reads them, and a store without "
-                "them is refused naming the missing component (spec §13; partner-rows §5.1)"
-            )
+        self.require_partner_rows()
         with self._partner_lock:
             if self._closed:
                 raise ValueError(
@@ -937,28 +1011,67 @@ class StoreReader:
         a lost chunk refused."""
         return [refused_if_lost(array, run) for run in self._cache.runs(array, first, length)]
 
-    def _chromosome(self, name: str) -> _Chromosome:
-        """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
-        fill values is judged before any element of the chromosome is decoded."""
-        if name not in self._loaded:
+    def _chromosome_loci(self, name: str) -> _Loci:
+        """One chromosome's rows and positions, read on first use and nothing else (#71).
+
+        Positions are the variant table's, one slice a chromosome, so an ALID lookup, a clump and
+        a proxies query read no `near/<chrom>/indptr` and open none of the Proxy Index's arrays.
+        A chromosome's positions are loaded once, however many threads are cold on it: the check is
+        repeated under the lock, as a first use of the Partner Rows is (§7), so no caller publishes
+        a second copy of a chromosome-sized array.
+        """
+        loci = self._located.get(name)
+        if loci is not None:
+            return loci
+        with self._loci_lock:
+            return self._loaded_loci(name)
+
+    def _loaded_loci(self, name: str) -> _Loci:
+        """`_chromosome_loci` with the lock held: the one load a chromosome's positions get."""
+        loci = self._located.get(name)
+        if loci is None:
             start, stop = self._ranges[name]
-            near_indptr, near_r, index_indptr, index_partner, index_r = (
-                _kept_array(self._root, f"{kind}/{name}/{array}")
-                for kind, array in _CHROMOSOME_ARRAYS
-            )
             position = self._columns["position"]
-            self._loaded[name] = _Chromosome(
+            loci = _Loci(
                 name,
                 start,
                 stop,
                 self._runs(position, np.array([start]), np.array([stop - start]))[0].astype(
                     np.int64
                 ),
+            )
+            self._located[name] = loci
+        return loci
+
+    def _chromosome(self, name: str) -> _Chromosome:
+        """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
+        fill values is judged before any element of the chromosome is decoded.
+
+        It takes its positions from the published `_Loci`, and publishes it under the same lock, so
+        `_loaded[c].position is _located[c].position` however the two paths interleave.
+        """
+        loaded = self._loaded.get(name)
+        if loaded is not None:
+            return loaded
+        with self._loci_lock:
+            if name in self._loaded:
+                return self._loaded[name]
+            loci = self._loaded_loci(name)
+            near_indptr, near_r, index_indptr, index_partner, index_r = (
+                _kept_array(self._root, f"{kind}/{name}/{array}")
+                for kind, array in _CHROMOSOME_ARRAYS
+            )
+            assembled = _Chromosome(
+                loci.name,
+                loci.start,
+                loci.stop,
+                loci.position,
                 _indptr(near_indptr, self._cache),
                 near_r,
                 _Sparse(index_indptr, self._cache, index_partner, index_r),
             )
-        return self._loaded[name]
+            self._loaded[name] = assembled
+            return assembled
 
     def _far_pairs(self, c: _Chromosome) -> _Sparse:
         """One chromosome's Far Pairs, opened and their `indptr` kept the first time a request
@@ -979,6 +1092,15 @@ class StoreReader:
         which = chromosome_index(self._stops, rows)
         for index in np.unique(which):
             yield self._chromosome(self._names[index]), np.flatnonzero(which == index)
+
+    def _loci_by_chromosome(
+        self, rows: npt.NDArray[np.int64]
+    ) -> Iterator[tuple[_Loci, npt.NDArray[np.int64]]]:
+        """`_by_chromosome` without the LD components: each chromosome `rows` touch, its rows and
+        positions, and the positions in `rows` that are on it (#71)."""
+        which = chromosome_index(self._stops, rows)
+        for index in np.unique(which):
+            yield self._chromosome_loci(self._names[index]), np.flatnonzero(which == index)
 
     def _strings(self, name: str, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
         """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""

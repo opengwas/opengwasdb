@@ -290,10 +290,14 @@ partner_rows(chrom, l…) -> (indptr, partners, codes)
    frame, of which the decompress is 87 µs either way.
 
 - **The frame cache** is a byte-bounded LRU of frames' decompressed payloads, per reader, which
-  drops the least recently used frame first. Its 256 MiB default is **chosen, not measured**: it
-  holds some 3,400 of a panel store's frames, and #71's measurements settle it. Neighbouring leads
-  often share a frame, and repeated Analyses on one reader hit it. It is separate from the Near
-  Band chunk cache, which keeps serving `matrix` and `region`.
+  drops the least recently used frame first. **Its 256 MiB default is measured** (#71): GCST90476460
+  and the 37 chr22 Analyses in one reader on a warm page cache made 4,323 frame reads with no cache,
+  4,205 at 16 MiB, 4,188 at 64 MiB and 4,132 (191 hits) at 256 MiB, and 1 GiB and 4 GiB made the
+  same 4,132. So 256 MiB is the smallest budget that kept every hit the workload offered, and a
+  larger one buys nothing; chr22's whole frames file is 117 MB, so its frames fit. Neighbouring
+  leads often share a frame, and repeated Analyses on one reader hit it, which is where the 191
+  come from. It is separate from the Near Band chunk cache, which keeps serving `matrix` and
+  `region`.
 - **One seam, two transports.** A frame's bytes are read through the array's own chunk file, whose
   path the metadata gives (§5.1) and whose name is never assumed. A local store's file is held open
   and read with `os.pread` — one syscall a read, no store call, no event loop — and the descriptor
@@ -351,11 +355,31 @@ ALID, a hit joins a lead at r̂² > r2 and d < W, results in request order inclu
 component's row span, so filtering a row costs O(E_l) vector operations with no hashing.
 Duplicate ALIDs share a row and follow today's scatter rule.
 
-**Cost** (measured in #65). One frame read and decode per lead that has not hit the frame cache.
-No speculative reads and no reads for eliminated hits. On the whole of GCST90476460, whose 3,869
-leads fall in 95 components, G = 16 with four component workers made 3,854 frame reads and
-101,810,367 bytes: 1.067 s of LD work cold and 1.058 s warm, against 23–26 s today and 10.7 GB
-read. ALID resolution is separate, and took 2.0–2.8 s in the same runs.
+**Cost** (measured in #65 and #71). One frame read and decode per lead that has not hit the frame
+cache. No speculative reads and no reads for eliminated hits. On the whole of GCST90476460, whose
+3,869 leads fall in 95 components, G = 16 with four component workers made 3,854 frame reads and
+101,810,367 bytes, with 15 cache hits. Its LD work, cold and warm, in seconds, by the reader's
+worker count, median of three alternating fresh subprocesses on 8 CPUs with `taskset -c 0-7`, while
+another lane derived Partner Rows (load average 5.6–6.5):
+
+| workers | cold | warm |
+|---|---|---|
+| 1 | 3.279 (best 2.603) | 1.078 (best 0.975) |
+| 2 | 1.904 (best 1.513) | 1.254 (best 1.019) |
+| 4 | 1.846 (best 1.832) | 1.552 (best 1.293) |
+
+Under a lighter load (3.5–5) the same configuration measured 1.33–1.87 s cold and 1.33–1.40 s warm
+at four workers. `rows_of` is separate and slower than the LD work, 2.3–3.6 s for its 260,821
+ALIDs, and the store opens in 0.02–0.05 s. Where the 1.85 s cold goes at four workers: 1.31 s of
+`partner_row` CPU — the frames' decompress on a miss, 0.94 s of it in the warm runs — and 0.82 s
+of row gather (2.13 s of `partner_row` CPU less that decode), spread over four threads and so
+bounded by the GIL, plus the component split, the greedy and the cold reads' latency. Serially the
+same parts are 0.87 s of LD CPU: 0.49 s decode, 0.17 s gather, and 0.21 s of the split and the
+greedy. **The under-1 s LD target is not met** (owner, 18 November 2026,
+moved it here from #65). The options the numbers point at, measured rather than guessed: a reusable
+row buffer in `FramePayload.row` (#70's module) is 31.7 µs a row against 40.8 µs on a 628-entry
+median row, some 35 ms over 3,854 leads; G = 8, which #65 measured a little faster than G = 16; and
+more than four workers, which regresses here as it did there.
 
 ### 8.3 `proxies`
 
@@ -388,26 +412,20 @@ whole sets of components. The options, from simplest:
 
 | | option | what it hides | its cost | use when |
 |---|---|---|---|---|
-| A | **serial**: components one after another, one thread | nothing | none | default; measure first |
+| A | **serial**: components one after another, one thread | nothing | none | built and measured first (#71); one worker, when the reader's pool is set to it |
 | B | **component tasks on a bounded thread pool**, capped at 4 for #71 | cold-read latency (local cold, HTTP); zstd decode and `pread` release the GIL | per-lead Python work holds the GIL, so B scales I/O, not CPU; above four tasks the work regresses | cold or remote stores, large Analyses |
 | C | **component tasks on a process pool**; workers open the store once, mmap shared | CPU-bound greedy beyond one core | worker start-up, pickling of hit arrays (small) | only if A and B leave the greedy CPU-bound on large Analyses |
 | D | **Analyses in parallel**, each serial, sharing one reader's frame cache | many concurrent users | the frame cache needs a lock | a service handling many requests |
 | E | **read-ahead within a component**: also fetch the frames of the next K open hits in score order | latency on HTTP | reads for hits a stronger lead then takes; #41 measured 66% wasted at depth 8 | HTTP stores only, with the waste counted |
 
-**Recommendation.** Build A first, then B with the pool size internal to the reader (no public
-signature change), bounded by the reader's thread budget and **capped at four component workers**
-for #71 (fixed on #65's evidence; §1). Four was where G = 8 and G = 16 were fastest, 1.051 and
-1.067 s cold; at eight, cold LD regresses to 5.753 s (G = 8), 5.109 s (G = 16) and 1.913 s
-(G = 4), because the per-lead Python work holds the GIL. Reach for C only on evidence.
-
-- B, C and D need no ordering rules: components are independent and results are scattered by
-  request index, so the answer is the same at any concurrency. A test holds this by running one
-  Analysis at 1, 2 and 8 workers and comparing results byte for byte.
-- Two tasks may decode the same frame when two components share one (possible for small W). The
-  cost is a duplicate decode, not a wrong answer. No single-flight is needed.
-- A refusal is decided before any task starts (§8.2, step 2). A frame that fails its checks fails
-  the whole request: outstanding tasks are cancelled or drained, and no partial result is
-  returned.
+**Recommendation.** A was built and measured first, then B, whose pool **is the reader's own and
+capped at four component workers** for #71 (fixed on #65's evidence; §1). There is no caller-facing
+setting: `ogld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
+it, and a test reaches it through a private seam. Four was where G = 8 and G = 16 were fastest,
+1.051 and 1.067 s cold; at eight, cold LD regresses to 5.753 s (G = 8), 5.109 s (G = 16) and
+1.913 s (G = 4), because the per-lead Python work holds the GIL. #71 measured the same answer at 1,
+2 and 8 requested workers, one Partner Rows row per lead, and a damaged frame failing the whole
+request. Reach for C only on evidence.
 
 **What will bound latency next.** On GCST90476460 today, ALID resolution (`rows_of`) takes
 2.0–3.2 s, and store open, score and loci 3.4 s together. Those seconds become most of a
