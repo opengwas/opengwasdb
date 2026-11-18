@@ -36,13 +36,14 @@ from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 from zarr.abc.store import RangeByteRequest
 from zarr.core.buffer import default_buffer_prototype
+from zarr.core.sync import sync
 from zarr.storage import LocalStore
 
 from ogld.format import Codes, REncoding
@@ -635,16 +636,47 @@ class FramesGroup:
             )
 
 
+def range_bytes(array: zarr.Array[Any], lo: int, hi: int) -> bytes:
+    """Bytes [lo, hi) of a one-chunk array's chunk file, one range request (partner-rows §5.1, §7).
+
+    A `frames` array's single chunk is the whole file, so a slice read would fetch and decode
+    every frame of the chromosome: a reader asks for the byte range of the frame it wants, and
+    so does validation, which streams the file through this to hash it. A file shorter than the
+    array's shape claims — a truncated `frames` chunk — is refused naming the array, never read
+    as a short frame.
+    """
+    if hi <= lo:
+        return b""
+    raw = _ranged(array, slice(lo, hi))
+    if len(raw) != hi - lo:
+        raise ValueError(
+            f"{array.path} holds {lo + len(raw):,} bytes, fewer than its {array.shape[0]:,}: a "
+            "frames chunk file a store lost or truncated (spec §5.1)"
+        )
+    return raw
+
+
+def frame_bytes(array: zarr.Array[Any], offsets: npt.NDArray[np.int64], number: int) -> bytes:
+    """Frame `number`'s bytes: the `frames` chunk file's bytes [offsets[n], offsets[n + 1])
+    (partner-rows §5.2, §7). One positional read or HTTP Range request, and nothing beside it."""
+    return range_bytes(array, int(offsets[number]), int(offsets[number + 1]))
+
+
 def _ranged(array: zarr.Array[Any], span: slice) -> bytes:
     """Bytes `span` of a one-chunk array's chunk file, read through the array's own store path and
-    chunk key, as a reader's range request does (partner-rows §7)."""
-    store = cast(LocalStore, array.store_path.store)
+    chunk key, as a reader's range request does (partner-rows §7).
+
+    A local store's own synchronous read is taken as it is; any other store — an HTTP one, which
+    has no synchronous read of its own — is read through zarr's async API, one Range request.
+    """
+    store = array.store_path.store
     key = array.store_path.path + "/" + array.metadata.encode_chunk_key((0,))
-    fetched = store.get_sync(
-        key,
-        prototype=default_buffer_prototype(),
-        byte_range=RangeByteRequest(span.start, span.stop),
-    )
+    request = RangeByteRequest(span.start, span.stop)
+    prototype = default_buffer_prototype()
+    if isinstance(store, LocalStore):
+        fetched = store.get_sync(key, prototype=prototype, byte_range=request)
+    else:
+        fetched = sync(store.get(key, prototype=prototype, byte_range=request))
     if fetched is None:
         raise ValueError(f"{key} is not there: a frames chunk file a store lost")
     return bytes(fetched.to_bytes())

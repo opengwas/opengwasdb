@@ -205,6 +205,33 @@ def test_a_frame_read_back_through_zarr_is_the_frame_written(tmp_path: Path) -> 
             np.testing.assert_array_equal(codes, TWO_FRAMES[row][1], err_msg=str(row))
 
 
+def test_a_frame_is_read_as_the_byte_range_the_offsets_give(tmp_path: Path) -> None:
+    # A frame is one positional read of the chunk file (partner-rows §5.1, §7): `frame_bytes` is
+    # the range the offsets name, what a reader fetches instead of decoding the whole array.
+    raw = encoded(0, TWO_FRAMES[:16], 0) + encoded(16, TWO_FRAMES[16:], 1)
+    written(tmp_path / "store", rows=20).close()
+    held = zarr.open_group(str(tmp_path / "store"), mode="r")["partners/22"]
+    array = held["frames"]
+    offsets = np.asarray(held["frames_idx"][:]).astype(np.int64)
+    for number in range(len(offsets) - 1):
+        span = slice(int(offsets[number]), int(offsets[number + 1]))
+        assert frames.frame_bytes(array, offsets, number) == raw[span]
+        assert frames.range_bytes(array, span.start, span.stop) == raw[span]
+    assert frames.range_bytes(array, 5, 5) == b"", "an empty range reads nothing"
+
+
+def test_a_chunk_file_short_of_its_array_is_refused(tmp_path: Path) -> None:
+    # A truncated `frames` chunk file — a store that lost its tail — is refused naming the array,
+    # never read as a short frame (spec §5.4).
+    written(tmp_path / "store", rows=20).close()
+    held = zarr.open_group(str(tmp_path / "store"), mode="r")["partners/22"]
+    array = held["frames"]
+    file = chunk_file(array)
+    file.write_bytes(file.read_bytes()[:-8])
+    with pytest.raises(ValueError, match="fewer than its"):
+        frames.range_bytes(array, 0, int(array.shape[0]))
+
+
 def test_zarr_lists_the_partner_rows_as_a_node_with_no_warning(tmp_path: Path) -> None:
     written(tmp_path / "store", rows=20).close()
     with warnings.catch_warnings(record=True) as caught:
