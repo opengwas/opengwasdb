@@ -64,6 +64,13 @@ def _parser() -> argparse.ArgumentParser:
         help="the store's r scale, r̂ = code / r_scale, as ADR 0004 sets it for the panel; "
         "no default",
     )
+    b.add_argument(
+        "--t-partner",
+        type=float,
+        required=True,
+        help="the r² a pair within near_bp must reach to be in the Partner Rows; no default, and "
+        "never above t_far (partner-rows §3)",
+    )
     unset = argparse.SUPPRESS
     b.add_argument("--k", type=int, default=unset)
     b.add_argument("--k-min", type=int, default=unset)
@@ -92,6 +99,7 @@ def _build(args: argparse.Namespace) -> int:
         ancestry=args.ancestry,
         genotype_source=args.genotype_source,
         r_scale=args.r_scale,
+        t_partner=args.t_partner,
         **_given(args, "k", "k_min", "mac_min", "info_min"),
     )
     provenance = build(inputs, args.out, **_given(args, "threads"))

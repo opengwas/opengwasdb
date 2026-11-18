@@ -184,7 +184,8 @@ The `partners/<chrom>/` group's attributes:
 
 The root provenance (`ld-store.md` §7) gains `t_partner` (float), `partner_code_floor` (int),
 `counts.partner_entries` (int, every chromosome's `entries`) and `software.zstd` (the library
-version, because frame bytes depend on it). It loses `counts.index_entries` (D1).
+version, because frame bytes depend on it). `counts.index_entries` goes with the Proxy Index, in
+#72 (D1); until then both components are written and both counts are recorded.
 
 ### 5.4 Why this form
 
@@ -218,7 +219,10 @@ today (`ld-store.md` §6, "How a store is written"):
    rows being written. The prototype's exact row-boundary scan puts the peak at 85,926,574 pairs
    on chr6 and 3,231,727 on chr1: 515.6 MB and 19.4 MB at 6 bytes a pair with the destination
    implicit, or 859.3 MB and 32.3 MB at 10. Either way it is a chromosome's row-boundary peak,
-   not a chromosome sort.
+   not a chromosome sort. On the Test Store written in blocks of 16 rows, the emitter's peak carry
+   is 5,235 pairs — 52,350 bytes at 10 bytes a pair — and 5,277 pairs in blocks of one row, against
+   0 written whole, as the committed store is (`pixi run -e dev python
+   scripts/bench/partner_carry.py`).
 
 Its two producers:
 

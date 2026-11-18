@@ -31,6 +31,12 @@ FLOOR = 85
 FLOOR_K0 = 85
 FLOOR_K7 = 85
 
+#: The Test Store's Partner Threshold, and its Partner Floor at R_SCALE: the smallest code c ≥ 0
+#: with (c / 511)² ≥ 0.01, computed here rather than read from the store. 0.01 is the owner's for
+#: the HGDP+1kGP panels, below every panel's t_far (partner-rows §3, §11).
+T_PARTNER = 0.01
+PARTNER_FLOOR = 52
+
 
 def codes_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.int64]:
     """r as a store at × `scale` codes it, computed here rather than by ogld: spec §3's

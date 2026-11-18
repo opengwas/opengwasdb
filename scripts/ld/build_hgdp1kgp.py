@@ -13,7 +13,8 @@ exits 0 and the fileset holds exactly the keep file's samples, so a conversion t
 was cut short, has none and is converted again. A conversion that finishes with other samples
 than the keep file's stops the run.
 
-`build` runs `ogld build` with `--k` K and `--r-scale` PANEL_SCALE (ADR 0004), the panel's PC File,
+`build` runs `ogld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0004) and `--t-partner`
+PANEL_T_PARTNER (ADR 0011), the panel's PC File,
 keep file and panel id, then `ogld validate`, each at `--threads` (16) threads, `--builds` (2)
 panels at once. It refuses a store that already exists. When a panel fails, panels not yet
 started are cancelled and the one still running finishes; the run then stops with that failure.
@@ -46,6 +47,9 @@ PANELS = ("AFR", "EUR", "EAS", "SAS", "AMR")
 CHROMS = tuple(range(1, 23))
 #: The stores' encoding (ADR 0004): `BuildInputs.r_scale` has no default, so the recipe names it.
 PANEL_SCALE = 511
+#: The Partner Rows' threshold (ADR 0011, D3): `BuildInputs.t_partner` has no default either, and
+#: 0.01 is the owner's for the HGDP+1kGP panels, below EUR's t_far 0.0319 (partner-rows §3, §11).
+PANEL_T_PARTNER = 0.01
 K = 10
 CONVERT_THREADS = 4
 CONVERT_MEMORY_MB = 16000
@@ -98,6 +102,8 @@ def build_command(
         str(K),
         "--r-scale",
         str(PANEL_SCALE),
+        "--t-partner",
+        str(PANEL_T_PARTNER),
         "--info-min",
         "none",
         "--threads",

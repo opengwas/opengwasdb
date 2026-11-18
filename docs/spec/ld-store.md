@@ -1,8 +1,8 @@
 # LD Store Format Specification
 
 Status: draft
-Format version described: `0.1.0`, the code at this commit; `0.2.0` is specified in §1, §3, §5, §7,
-§9, §10, §12 and §13, and lands with the writer (#67).
+Format version described: `0.2.0`, which the code writes (#67); `0.1.0` is the version before the
+Partner Rows, which a reader still reads (§13).
 
 This document defines a valid **LD Store**: the arrays, their dtypes and Zarr layout, how r is
 quantised, the provenance an LD Store carries, what a reader answers for a pair, what the four
@@ -638,7 +638,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 
 | key | type | meaning |
 |---|---|---|
-| `format_version` | string | `"0.1.0"` |
+| `format_version` | string | `"0.1.0"` before the Partner Rows, `"0.2.0"` with them (§13) |
 | `encoding.r_dtype` | string | `"int16"`, the container of every admitted encoding (§3) |
 | `encoding.r_scale` | int | the store's scale s, a whole number from 1 to 32767: r̂ = code / s. 511 for the HGDP+1kGP stores, 2047 for UK Biobank EUR (ADR 0004); a build records the `r_scale` it was given |
 | `encoding.r_reserved_code` | int | −32768 |
@@ -665,21 +665,26 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
+| `t_partner` | float | the **Partner Threshold**: the r² a pair within `near_bp` must reach to be in the Partner Rows, never above `t_far` (0.2.0; `docs/spec/partner-rows.md` §3) |
+| `partner_code_floor` | int | the **Partner Floor**: §3's floor rule at `t_partner` (0.2.0) |
 | `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `ogld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
 | `counts.near_pairs` | int | Near Band codes, over all chromosomes |
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them whose \|code\| reaches `far_code_floor`, each counted once; the entries of every `far/<chrom>/` together |
+| `counts.partner_entries` | int | Partner Rows entries, both directions, over all chromosomes: each `partners/<chrom>/` group's `entries` (0.2.0) |
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
 | `counts.alids_left_out` | int | the table's count of ALIDs wider than the ALID index's 32-byte slot, counted from `variants/alid`, whose rows the index has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0010) |
-| `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
+| `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr`, `zstd` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
+| `software.zstd` | string | the zstd library's version, because the Partner Rows' frame bytes depend on it (0.2.0); a build records it, so it is required with them |
 | `build.created_at` | string | ISO 8601 UTC |
 | `build.wall_seconds` | float | build time, up to the validation `StoreWriter.finish` runs before it writes this provenance: a provenance cannot hold the time taken to check it. On EUR chr22 that validation took another 80 s of a 2 min build |
 | `build.peak_memory_bytes` | int | peak memory over the same span: the build's own on Linux, whose high-water mark the build resets when it starts; elsewhere the process's |
 | `build.threads` | int | threads used: the build's worker threads, which bound it, since BLAS runs one thread inside a build |
 
-**The Partner Rows' keys (format 0.2.0; written by #67, derived by #69).** Four keys join the
-table above, and `ogld.format.REQUIRED_KEYS`, in the commit that writes them, because a store with
-no Partner Rows has none of them:
+**The Partner Rows' keys (format 0.2.0; written by #67, derived by #69).** The four keys at
+`t_partner`, `partner_code_floor`, `counts.partner_entries` and `software.zstd` are in the table
+above, and in `ogld.format.REQUIRED_KEYS` with it. Each is required only of a store whose
+`format_version` is `0.2.0`: a 0.1.0 store has no Partner Rows, so it has none of their keys.
 
 - `t_partner` (float): the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
 the Partner Rows. It is a required build input with no default (`docs/spec/build-inputs.md` §1),
@@ -689,7 +694,7 @@ never above `t_far`: 0.01 for the five HGDP+1kGP stores, 0.001 for UK Biobank EU
 pairs the Partner Rows hold, as each chromosome's `entries` attribute gives it.
 - `software.zstd` (string): the zstd library's version, because a frame's bytes depend on it.
 
-`counts.index_entries` leaves with the Proxy Index, in #72.
+`counts.index_entries` stays until the Proxy Index goes, in #72.
 
 `pc_diagnostic` holds `pairs` (the pair set: `source`, opengwas/opengwasdb#405's seeded
 cross-chromosome pairs; `seed`, 405; `n_pairs`, 200,000), `rate_r2_ge_0_01_unadjusted` (the share

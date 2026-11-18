@@ -152,9 +152,9 @@ def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
     """A k = 0 store written from reference_r(0), once per worker."""
     if not _K0:
         out = tmp_path_factory.mktemp("k0") / "store"
-        _K0.append(
-            ogld.open(load_script("make_test_store").write_test_store(0, out, support.R_SCALE))
-        )
+        script = load_script("make_test_store")
+        made = script.write_test_store(0, out, support.R_SCALE, 0.01)
+        _K0.append(ogld.open(made))
     return _K0[0]
 
 

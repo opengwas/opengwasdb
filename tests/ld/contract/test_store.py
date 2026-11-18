@@ -66,12 +66,15 @@ def with_provenance(tmp_path: Path, edit: Callable[[dict[str, Any]], None]) -> P
 
 def test_the_test_store_records_its_panel_and_its_distances() -> None:
     p = opened().provenance
-    assert p["format_version"] == "0.1.0"
+    assert p["format_version"] == "0.2.0"
     assert p["panel"]["n"] == support.N_SAMPLES
     assert p["adjustment"]["k"] == support.K
     assert p["adjustment"]["covariates"] == [f"PC{i}" for i in range(1, 11)]
     assert p["t_far"] == support.T_FAR
     assert p["far_code_floor"] == support.FLOOR
+    assert p["t_partner"] == support.T_PARTNER
+    assert p["partner_code_floor"] == support.PARTNER_FLOOR
+    assert p["counts"]["partner_entries"] > 0
     assert p["encoding"] == {
         "r_dtype": "int16",
         "r_scale": support.R_SCALE,
@@ -91,6 +94,20 @@ def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path)
 
     with pytest.raises(ValueError, match=r"9\.0\.0"):
         ogld.open(with_provenance(tmp_path, future))
+
+
+def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path) -> None:
+    # Spec §13: the bump lands with the writer, so a store published before the Partner Rows is
+    # still read, from its Near Band, its Proxy Index and its Far Pairs.
+    def earlier(p: dict[str, Any]) -> None:
+        p["format_version"] = "0.1.0"
+
+    location = with_provenance(tmp_path, earlier)
+    shutil.rmtree(location / "partners")
+    opened_early = ogld.open(location)
+    assert opened_early.provenance["format_version"] == "0.1.0"
+    rows = alids(passing_rows()[:20])
+    assert opened_early.matrix(rows).r.shape == (20, 20)
 
 
 def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
@@ -301,6 +318,7 @@ def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
             encoding=REncoding(support.R_SCALE),
             n=771,
             k=10,
+            t_partner=0.01,
         )
     assert sorted(p.relative_to(copy) for p in copy.rglob("*")) == before
 

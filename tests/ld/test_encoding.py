@@ -26,7 +26,7 @@ from store_copies import R_SCALE, TEST_STORE
 
 import ogld
 from ogld import cli
-from ogld.format import RefusalReason
+from ogld.format import RefusalReason, REncoding
 
 CONTRACT = Path(__file__).resolve().parent / "contract"
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -55,7 +55,7 @@ def store_at(scale: int, factory: pytest.TempPathFactory) -> Path:
         return TEST_STORE
     if scale not in _STORES:
         out = factory.mktemp(f"x{scale}") / "store"
-        _STORES[scale] = load_script("make_test_store").write_test_store(10, out, scale)
+        _STORES[scale] = load_script("make_test_store").write_test_store(10, out, scale, 0.01)
     return _STORES[scale]
 
 
@@ -176,6 +176,39 @@ def test_the_far_pairs_and_the_bound_follow_the_store_s_own_floor(
     assert np.isnan(m.r[far & ~reaches]).all(), "a Bound is never a number"
 
 
+#: The Partner Floor at the Partner Thresholds the owner set per dataset (CONTEXT.md; spec §3), and
+#: the t_far each pair of them is judged under: t_partner 0.01 on the HGDP+1kGP stores at × 511 and
+#: × 32767, and 0.001 = t_far on UK Biobank EUR at × 2047. The floors are literals computed here.
+PARTNER_FLOORS = {
+    (511, 0.01, 0.0318654): 52,
+    (2047, 0.001, 0.001): 65,
+    (32767, 0.01, 0.0274211): 3277,
+}
+
+
+@pytest.mark.parametrize(("scale", "t_partner", "t_far"), list(PARTNER_FLOORS))
+def test_the_partner_floor_is_the_smallest_code_reaching_the_partner_threshold(
+    scale: int, t_partner: float, t_far: float
+) -> None:
+    floor = PARTNER_FLOORS[(scale, t_partner, t_far)]
+    assert REncoding(scale).partner_code_floor(t_partner, t_far) == floor
+    assert (floor / scale) ** 2 >= t_partner, "the floor's own code reaches the threshold"
+    assert ((floor - 1) / scale) ** 2 < t_partner, "and no smaller code does"
+
+
+def test_a_partner_threshold_at_t_far_has_the_far_code_floor() -> None:
+    # UK Biobank EUR's t_partner is its t_far (CONTEXT.md): the Partner Rows are its Far Pairs too.
+    encoding = REncoding(2047)
+    assert encoding.partner_code_floor(0.001, 0.001) == encoding.far_code_floor(0.001) == 65
+
+
+def test_a_partner_threshold_above_t_far_is_refused_naming_both() -> None:
+    with pytest.raises(ValueError, match="above t_far") as refused:
+        REncoding(511).partner_code_floor(0.04, 0.0318654)
+    assert "0.04" in str(refused.value), refused.value
+    assert "0.0318654" in str(refused.value), refused.value
+
+
 @pytest.mark.parametrize("scale", SCALES)
 def test_every_refusal_holds_at_each_scale(
     scale: int, tmp_path_factory: pytest.TempPathFactory
@@ -274,10 +307,10 @@ NAMED_ON_PURPOSE = {
         "r_scale: int = 32767",
     ),
     "scripts/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),
+    "scripts/bench/partner_carry.py": ("T_PARTNER, SCALE = 0.01, 511",),
     "scripts/make_test_store.py": (
         "quantised at × 511, HGDP+1kGP EUR's encoding",
-        "make_test_store.py --r-scale 511 [--k 10]",
-        "the committed Test Store is × 511, and tests write × 2047 and",
+        "the committed Test Store is × 511, and tests write",
         "× 32767 stores beside it.",
         "511 for the committed Test Store, HGDP+1kGP EUR's",
     ),

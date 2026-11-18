@@ -10,6 +10,8 @@ store"). It handles:
 - both directions of the Proxy Index, partners ascending, one code per pair (spec §5);
 - the Far Pairs: the index's pairs beyond near_bp, once each, in the earlier row (spec §5;
   ADR 0007), from the pairs a cut already keeps, with no second pass over r;
+- the Partner Rows: every pair within far_bp at its distance's floor, in both variants' rows, 16
+  rows to a zstd frame (spec §5; partner-rows §5, §6.1; ADR 0011);
 - the counts, and the rest of the provenance a store derives from itself (spec §7).
 
 Validation at `finish` runs every rule of spec §12 through `validate_group`. A producer supplies r
@@ -23,7 +25,10 @@ measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near 
 - **The Near Band carry:** less than one shard of `r`, 67,108,864 codes, so 128 MiB.
 - **The Proxy Index carry:** the pairs whose later row is not yet written. At most these are
   the pairs spanning one row within far_bp, plus one bucket of `CARRY_ROWS` rows. At the MHC
-  that is 33,869,608 pairs at 10 B, 323 MiB.
+  that is 33,869,608 pairs at 10 B, 323 MiB. The Partner Rows carry the same pairs, once, and
+  never both components' copies at once: a row is written as its block arrives.
+- **The Partner Rows' frames:** at most `2 × workers` compressed frames in flight, and one frame
+  of rows, 16 rows' partners, before it is compressed.
 - **The Proxy Index output:** less than one shard each of `partner` and `r`, 6 MiB.
 - **The Far Pairs output:** the same, 6 MiB. Nothing is carried: a row's Far Pairs are all in
   its own block.
@@ -56,6 +61,7 @@ from ogld.format.geometry import (
     blocks,
     chromosome_index,
     indptr_of,
+    near_pair_of,
     near_row_lengths,
     owners,
     spans_at,
@@ -63,13 +69,16 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.store import layout
+from ogld.store import frames, layout
 
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
 #: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged.
 DERIVE_ENTRIES: Final = 1 << 23
 #: Variant Set rows `derive_alid_index` reads at once: 1,048,576 ALIDs, whose keys are 32 MiB.
 ALID_ROWS: Final = 1 << 20
+#: The bytes one carried pair holds: its earlier row, its later row and its code — the row's two
+#: 4-byte integers and its code's 2 — the destination being its bucket (partner-rows §6.1).
+PAIR_BYTES: Final = 10
 #: The rows of one bucket of the Proxy Index's carried pairs. Pairs are carried by the bucket
 #: their later row falls in, so a bucket is freed once its rows are written. Only the pairs of
 #: one partly written bucket are held beyond those spanning the row being written.
@@ -113,8 +122,8 @@ class Cut:
 class Cutter:
     """What every block of one store is cut by, fixed when the store is created: the Variant
     Set's positions and chromosome ranges, near_bp and far_bp, the encoding, and t_far with its
-    far code floor (spec §3–§5). Nothing in it changes after `create`, so blocks are cut on any
-    thread, in any order."""
+    far code floor and t_partner with its Partner Floor (spec §3–§5; partner-rows §3). Nothing in
+    it changes after `create`, so blocks are cut on any thread, in any order."""
 
     def __init__(
         self,
@@ -125,12 +134,16 @@ class Cutter:
         *,
         n: int,
         k: int,
+        t_partner: float,
     ) -> None:
         """Blocks are thresholded as they arrive, so t_far for `n` samples and `k` covariates, and
-        its floor, are fixed here, before the first; an n and k with no t_far raise here. The
-        positions are copied and made read-only, so no caller can change what a cut reads."""
+        its floor, are fixed here, before the first; an n and k with no t_far raise here. So is
+        `t_partner` and its Partner Floor, and a t_partner above t_far raises here, naming both.
+        The positions are copied and made read-only, so no caller can change what a cut reads."""
         self.t_far = t_far(n, k)
         self.floor = encoding.far_code_floor(self.t_far)
+        self.t_partner = t_partner
+        self.partner_floor = encoding.partner_code_floor(t_partner, self.t_far)
         self.encoding = encoding
         self.n, self.k = n, k
         self.near_bp, self.far_bp = distances
@@ -396,44 +409,88 @@ def _by_later_row(pairs: list[_Pairs]) -> _Pairs:
     return lo[order], hi[order], codes[order]
 
 
-class ProxyIndexStream:
-    """One chromosome's Proxy Index, both directions, written row by row as blocks arrive (§5).
+@dataclass(frozen=True)
+class Rows:
+    """The rows one block of a sparse component completes: their entry counts, and their
+    partners and codes row after row, each row's partners in ascending order."""
 
-    Row l holds every pair (m, l) with m < l, which come from earlier blocks or its own, then
-    every pair (l, m) with m > l, which come from its own block. So row l is complete when its
-    own block arrives, and each block's rows are written then: partners below ascending, then
-    partners above, each with its pair's one code. A block's pairs whose later row is still to
-    come are carried, in buckets of `CARRY_ROWS` rows by that later row. That is at most the
-    pairs spanning one row within far_bp and one bucket, however long the chromosome.
+    first: int
+    counts: npt.NDArray[np.int64]
+    partner: _Rows
+    codes: Codes
 
-    `partner` and `r` grow shard by shard (`Appender`). `indptr` is held, n_c + 1 int64, and
-    written at the end.
+    @property
+    def last(self) -> int:
+        """The row after the block's last."""
+        return self.first + len(self.counts)
+
+
+class RowCarry:
+    """The block-at-a-time row carry the Proxy Index and the Partner Rows share (spec §5;
+    partner-rows §6.1).
+
+    A pair (lo, hi) goes into row lo as the block arrives, because both rows are the store's, and
+    into row hi only when hi's block does. So row l's entries are the pairs whose earlier row is in
+    its own block, which are ascending in partner already, and those carried to it from earlier
+    blocks. A pair whose later row is still to come is carried, in buckets of `CARRY_ROWS` rows by
+    that later row: at most the pairs spanning one row within far_bp and one bucket, however long
+    the chromosome.
+
+    `complete` gives each row's partners in ascending order, as both components require (§3;
+    partner-rows §3), so a reader's binary search and a cumulative sum need no case for the row.
+    The pairs handed to it are ascending by (lo, hi): the order a cut's Near Band codes and its
+    kept pairs arrive in, once the caller has interleaved the two by row.
     """
 
-    def __init__(self, group: zarr.Group, rows: int, encoding: REncoding) -> None:
+    def __init__(self, rows: int) -> None:
         #: Each row's entries once written; −1 until then, so a row never written is never read as
         #: a row with no partners.
         self._counts = np.full(rows, -1, dtype=np.int64)
-        self._group = group
         self._next = 0
         self._carried: dict[int, list[_Pairs]] = {}
-        self._partner, self._codes = _entries(group, encoding)
+        #: The pairs carried now, and the most ever: counted as they are kept and released, never
+        #: by walking the pieces, so a block costs what it carries and nothing per live piece.
+        self._held = 0
+        self._peak = 0
 
-    def add(self, cut: Cut) -> None:
-        """Write the rows of `cut`, which continue the rows already written, and carry its
-        pairs whose later row is still to come."""
-        a, b = self._next, self._next + cut.rows
-        closing = cut.hi < b
-        below = [*self._take(b), (cut.lo[closing], cut.hi[closing], cut.codes[closing])]
-        lo, hi, codes = _by_later_row(below)
-        self._carry(cut.lo[~closing], cut.hi[~closing], cut.codes[~closing])
-        owner = np.concatenate([hi, cut.lo])
-        partner = np.concatenate([lo, cut.hi])
+    @property
+    def peak(self) -> tuple[int, int]:
+        """The most pairs the carry held at once, and their bytes: what bounds a chromosome's
+        memory however long it is (partner-rows §6.1)."""
+        return self._peak, self._peak * PAIR_BYTES
+
+    @property
+    def next_row(self) -> int:
+        """The first row not yet completed."""
+        return self._next
+
+    @property
+    def counts(self) -> npt.NDArray[np.int64]:
+        """Each row's entries, −1 for a row not yet written."""
+        return self._counts
+
+    def complete(self, rows: int, lo: _Rows, hi: _Rows, codes: Codes) -> Rows:
+        """Complete the next `rows` rows from the pairs (lo, hi) of their own blocks, and carry
+        the pairs whose later row is still to come."""
+        a, b = self._next, self._next + rows
+        closing = hi < b
+        below = [*self._take(b), (lo[closing], hi[closing], codes[closing])]
+        lo_below, hi_below, codes_below = _by_later_row(below)
+        self._carry(lo[~closing], hi[~closing], codes[~closing])
+        owner = np.concatenate([hi_below, lo])
         order = np.argsort(owner, kind="stable")
-        self._counts[a:b] = np.bincount(owner - a, minlength=b - a)
-        self._partner.add(partner[order])
-        self._codes.add(np.concatenate([codes, cut.codes])[order])
+        counts = np.bincount(owner - a, minlength=rows)
+        self._counts[a:b] = counts
         self._next = b
+        self._peak = max(
+            self._peak, sum(len(piece[0]) for held in self._carried.values() for piece in held)
+        )
+        return Rows(
+            a,
+            counts,
+            np.concatenate([lo_below, hi])[order].astype(np.int32),
+            np.concatenate([codes_below, codes])[order],
+        )
 
     def _carry(self, lo: _Rows, hi: _Rows, codes: Codes) -> None:
         """Keep pairs whose later row is still to come, sorted by (hi, lo), in the bucket of
@@ -441,6 +498,7 @@ class ProxyIndexStream:
         if not len(hi):
             return
         lo, hi, codes = _by_later_row([(lo, hi, codes)])
+        self._held += len(hi)
         bucket = hi // CARRY_ROWS
         edges = np.flatnonzero(np.diff(bucket)) + 1
         for part in np.split(np.arange(len(hi)), edges):
@@ -457,25 +515,160 @@ class ProxyIndexStream:
             pieces = self._carried.pop(key)
             if (key + 1) * CARRY_ROWS <= b:
                 taken += pieces
+                self._held -= sum(len(piece[1]) for piece in pieces)
                 continue
-            kept = []
-            for lo, hi, codes in pieces:
-                at = int(np.searchsorted(hi, b))
-                taken.append((lo[:at], hi[:at], codes[:at]))
-                if at < len(hi):
-                    kept.append((lo[at:], hi[at:], codes[at:]))
-            if kept:
-                self._carried[key] = kept
+            taken += self._split(key, pieces, b)
         return taken
+
+    def _split(self, key: int, pieces: list[_Pairs], b: int) -> list[_Pairs]:
+        """The part of a bucket only partly taken, releasing it; the rest stays carried."""
+        taken: list[_Pairs] = []
+        kept: list[_Pairs] = []
+        for lo, hi, codes in pieces:
+            at = int(np.searchsorted(hi, b))
+            taken.append((lo[:at], hi[:at], codes[:at]))
+            self._held -= at
+            if at < len(hi):
+                kept.append((lo[at:], hi[at:], codes[at:]))
+        if kept:
+            self._carried[key] = kept
+        return taken
+
+    def close(self) -> None:
+        """Refuse a component whose rows were not all written, or whose carry is left over."""
+        if self._carried or (self._counts < 0).any():
+            raise ValueError("a sparse component has rows not written: a store assembly fault")
+
+
+class ProxyIndexStream:
+    """One chromosome's Proxy Index, both directions, written row by row as blocks arrive (§5).
+
+    Row l holds every pair (m, l) with m < l, which come from earlier blocks or its own, then
+    every pair (l, m) with m > l, which come from its own block. So row l is complete when its
+    own block arrives, and each block's rows are written then: partners below ascending, then
+    partners above, each with its pair's one code. `RowCarry` is the carry that gives them.
+
+    `partner` and `r` grow shard by shard (`Appender`). `indptr` is held, n_c + 1 int64, and
+    written at the end.
+    """
+
+    def __init__(self, group: zarr.Group, rows: int, encoding: REncoding) -> None:
+        self._group = group
+        self._rows = RowCarry(rows)
+        self._partner, self._codes = _entries(group, encoding)
+
+    def add(self, cut: Cut) -> None:
+        """Write the rows of `cut`, which continue the rows already written, and carry its
+        pairs whose later row is still to come."""
+        block = self._rows.complete(cut.rows, cut.lo, cut.hi, cut.codes)
+        self._partner.add(block.partner)
+        self._codes.add(block.codes)
 
     def close(self) -> None:
         """Write `indptr` and the last entries. A row not written, or a carried pair left over,
         would be a row the index lacks, and is refused."""
-        if self._carried or (self._counts < 0).any():
-            raise ValueError("the Proxy Index has rows not written: a store assembly fault")
-        layout.put_numbers(self._group, "indptr", indptr_of(self._counts), layout.INT64_FILL)
+        self._rows.close()
+        layout.put_numbers(self._group, "indptr", indptr_of(self._rows.counts), layout.INT64_FILL)
         self._partner.close()
         self._codes.close()
+
+
+class PartnerRowsStream:
+    """One chromosome's Partner Rows, written a frame at a time (§5; partner-rows §6.1).
+
+    It is fed by (a block of rows, its Near Band codes, its Far Pairs) rather than by a `Cut`
+    alone, so that #69's derivation can feed the same emitter from a store's own Near Band and Far
+    Pairs and produce a build's bytes. The Near Band's codes become (lo, hi) pairs through the
+    band's row lengths, and each is kept at the Partner Floor; the Far Pairs are already the pairs
+    beyond near_bp at the far code floor, so they are kept as they come. Both are handed to
+    `RowCarry`, whose rows then hold every partner on both sides, each at its pair's one code.
+
+    The rows are assembled into frames of `frames.ROWS_PER_FRAME`, which `frames.FramesGroup`
+    compresses on a bounded pool and appends in frame order, so the bytes do not depend on the
+    block size or the pool's size.
+    """
+
+    def __init__(
+        self,
+        root: zarr.Group,
+        chrom: str,
+        lengths: npt.NDArray[np.int64],
+        encoding: REncoding,
+        partner_floor: int,
+        *,
+        workers: int = 1,
+    ) -> None:
+        """The Partner Rows of chromosome `chrom`, whose Near Band rows are `lengths` codes long
+        and whose pairs are kept at `partner_floor` within near_bp."""
+        self._chrom = chrom
+        self._encoding = encoding
+        self._indptr = indptr_of(lengths)
+        self._floor = partner_floor
+        self._rows = RowCarry(len(lengths))
+        self._group = frames.FramesGroup(root, chrom, len(lengths), workers=workers)
+        self._pending: list[tuple[_Rows, Codes]] = []
+
+    @property
+    def chrom(self) -> str:
+        """The chromosome these rows belong to."""
+        return self._chrom
+
+    @property
+    def peak_carry(self) -> tuple[int, int]:
+        """The most pairs the emitter's carry held at once, and their bytes (partner-rows §6.1)."""
+        return self._rows.peak
+
+    def add(self, rows: int, near: Codes, lo: _Rows, hi: _Rows, codes: Codes) -> None:
+        """Write the next `rows` rows, keeping the block's Near Band codes `near` (row after row)
+        at the Partner Floor and every pair of `lo`, `hi`, `codes` (its Far Pairs)."""
+        # A code no store holds, which is what a lost chunk reads as, is refused rather than
+        # compared against the floor: a fill value would silently drop its pair.
+        self._encoding.require_codes(near)
+        self._encoding.require_codes(codes)
+        first = self._rows.next_row
+        at = np.arange(self._indptr[first], self._indptr[first + rows], dtype=np.int64)
+        if len(near) != len(at):
+            raise ValueError(
+                f"a block of {rows} rows of chromosome {self._chrom} carries {len(near)} Near "
+                f"Band codes, not its band's {len(at)}: a store assembly fault"
+            )
+        near_lo, near_hi = near_pair_of(self._indptr[first : first + rows + 1], at)
+        keep = np.abs(near) >= self._floor
+        # The Near Band's kept pairs come first and every one of them is closer than the Far Pairs
+        # of its row, so a stable sort by the earlier row gives the (lo, hi) order `RowCarry` needs.
+        rows_lo = np.concatenate([near_lo[keep] + first, lo]).astype(np.int32)
+        order = np.argsort(rows_lo, kind="stable")
+        rows_hi = np.concatenate([near_hi[keep] + first, hi]).astype(np.int32)
+        block = self._rows.complete(
+            rows,
+            rows_lo[order],
+            rows_hi[order],
+            np.concatenate([near[keep], codes])[order],
+        )
+        self._rows_in(block)
+
+    def _rows_in(self, block: Rows) -> None:
+        """Keep the block's rows until a frame holds its own, then append that frame."""
+        edges = np.cumsum(block.counts)
+        starts = edges - block.counts
+        for start, stop in zip(starts, edges, strict=True):
+            self._pending.append(
+                (block.partner[int(start) : int(stop)], block.codes[int(start) : int(stop)])
+            )
+            if len(self._pending) == frames.ROWS_PER_FRAME:
+                self._frame()
+
+    def _frame(self) -> None:
+        self._group.add(self._pending)
+        self._pending = []
+
+    def close(self) -> int:
+        """Append the last frame and finish the group; return the chromosome's entries: every
+        pair's code in both variants' rows (§5.3)."""
+        self._rows.close()
+        if self._pending:
+            self._frame()
+        return self._group.close()
 
 
 class FarPairsStream:
@@ -611,11 +804,13 @@ class Tally:
     near_pairs: int = 0
     far_candidates: int = 0
     far_pairs: int = 0
+    partner_entries: int = 0
     index_entries: int = 0
 
     def add(self, cut: Cut) -> None:
         """Count a cut: its Near Band codes, its pairs judged and kept beyond near_bp, and two
-        Proxy Index entries for each pair it keeps, one in each of its rows (spec §5)."""
+        Proxy Index entries for each pair it keeps, one in each of its rows (spec §5). The Partner
+        Rows' entries are their frames', counted when a chromosome is closed (§5.3)."""
         self.near_pairs += len(cut.near)
         self.far_candidates += cut.far_candidates
         self.far_pairs += cut.far_pairs
@@ -626,56 +821,58 @@ class Tally:
             "near_pairs": self.near_pairs,
             "far_candidates": self.far_candidates,
             "far_pairs": self.far_pairs,
+            "partner_entries": self.partner_entries,
             "index_entries": self.index_entries,
             "alids_left_out": alids_left_out,
         }
 
 
 class Chromosome:
-    """One chromosome being written: its Near Band, its Proxy Index and its Far Pairs."""
+    """One chromosome being written: its Near Band, its Proxy Index, its Far Pairs and its
+    Partner Rows (spec §4, §5; partner-rows §5, §6.1)."""
 
-    def __init__(self, root: zarr.Group, cutter: Cutter, name: str) -> None:
+    def __init__(
+        self, root: zarr.Group, cutter: Cutter, name: str, *, compress_workers: int = 1
+    ) -> None:
         self.name = name
         position = cutter.positions(name)
-        self.near = NearBandStream(
-            root.require_group(f"near/{name}"),
-            near_row_lengths(position, cutter.near_bp),
-            cutter.encoding,
-        )
+        lengths = near_row_lengths(position, cutter.near_bp)
+        self.near = NearBandStream(root.require_group(f"near/{name}"), lengths, cutter.encoding)
         self.index = ProxyIndexStream(
             root.require_group(f"index/{name}"), len(position), cutter.encoding
         )
         self.far = FarPairsStream(root.require_group(f"far/{name}"), len(position), cutter.encoding)
+        self.partners = PartnerRowsStream(
+            root,
+            name,
+            lengths,
+            cutter.encoding,
+            cutter.partner_floor,
+            workers=compress_workers,
+        )
 
     def add(self, cut: Cut) -> None:
         self.near.add(cut.near)
         self.index.add(cut)
         self.far.add(cut.rows, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
+        self.partners.add(cut.rows, cut.near, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
 
-    def close(self) -> None:
-        """Finish all three."""
+    def close(self) -> int:
+        """Finish all four, and return the chromosome's Partner Rows entries (§5.3)."""
         self.near.close()
         self.index.close()
         self.far.close()
+        return self.partners.close()
 
 
 _PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)
 
 
-def provenance(
-    sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally, *, alids_left_out: int = 0
-) -> Provenance:
-    """The store's provenance, in spec §7's order. It is the producer's `sourced` plus what the
-    store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`,
-    `t_far`, `t_far_q`, `far_code_floor` and `counts`, the count of ALIDs the search index left
-    out among them (ADR 0010).
-
-    Spec §7 lets a store hold other keys, which a reader ignores. This writer records none: a key
-    `Sourced` does not name is refused, whether it is one the store derives, which a producer may
-    not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
-    `sourced` that lacks a key of the producer's, or records an n or k other than the threshold's,
-    is refused too."""
-    given = dict(sourced)
+def _only_what_the_producer_knows(sourced: Sourced) -> dict[str, Any]:
+    """`sourced` as a mutable dict, refused unless it is exactly the producer's keys: a key the
+    store derives is refused, because the store would record its own instead, and one no reader
+    knows is refused, because it would be stored unread and unchecked (spec §7)."""
+    given: dict[str, Any] = dict(sourced)
     derived_keys = set(Provenance.__required_keys__) - _PRODUCER_KEYS
     ours = sorted(set(given) & derived_keys)
     if ours:
@@ -692,12 +889,45 @@ def provenance(
     missing = sorted(_PRODUCER_KEYS - set(given))
     if missing:
         raise ValueError(f"provenance lacks {', '.join(missing)}, which only its producer knows")
+    return given
+
+
+def _with_zstd(software: object) -> dict[str, str]:
+    """The producer's `software` versions with `zstd` added: a frame's bytes depend on the zstd
+    that made them, so a store records it, and refuses a producer's other version (spec §7)."""
+    told = dict(cast(dict[str, str], software))
+    mine = frames.zstd_version()
+    if told.setdefault("zstd", mine) != mine:
+        raise ValueError(
+            f"provenance records zstd {told['zstd']!r}, but the Partner Rows' frames were "
+            f"compressed with {mine!r}: a frame's bytes depend on it (spec §7)"
+        )
+    return told
+
+
+def provenance(
+    sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally, *, alids_left_out: int = 0
+) -> Provenance:
+    """The store's provenance, in spec §7's order. It is the producer's `sourced` plus what the
+    store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`,
+    `t_far`, `t_far_q`, `far_code_floor`, `t_partner`, `partner_code_floor` and `counts`, the
+    count of ALIDs the search index left out and of Partner Rows entries among them (ADR 0010;
+    partner-rows §5.3). `software` is the producer's list of versions, which the store adds `zstd`
+    to, the library that compressed its Partner Rows' frames (§7).
+
+    Spec §7 lets a store hold other keys, which a reader ignores. This writer records none: a key
+    `Sourced` does not name is refused, whether it is one the store derives, which a producer may
+    not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
+    `sourced` that lacks a key of the producer's, or records an n or k other than the threshold's,
+    is refused too."""
+    given = _only_what_the_producer_knows(sourced)
     said = (sourced["panel"]["n"], sourced["adjustment"]["k"])
     if said != (cutter.n, cutter.k):
         raise ValueError(
             f"provenance records n = {said[0]} and k = {said[1]}, but the store was "
             f"thresholded at t_far for n = {cutter.n} and k = {cutter.k} (spec §3)"
         )
+    given["software"] = _with_zstd(given["software"])
     derived: dict[str, Any] = {
         "format_version": FORMAT_VERSION,
         "encoding": cutter.encoding.record(),
@@ -707,6 +937,8 @@ def provenance(
         "t_far": cutter.t_far,
         "t_far_q": T_FAR_Q,
         "far_code_floor": cutter.floor,
+        "t_partner": cutter.t_partner,
+        "partner_code_floor": cutter.partner_floor,
         "counts": tally.counts(alids_left_out),
     }
     order = Provenance.__annotations__

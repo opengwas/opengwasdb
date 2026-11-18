@@ -171,7 +171,7 @@ def test_every_test_store_array_equals_zarr() -> None:
     assert len(arrays) > 20
     for _, array in arrays:
         decoded = decoding.NumericDecoder.of(array)
-        assert (decoded is None) == (array.dtype.kind == "T"), array.path
+        assert (decoded is None) == (array.dtype.kind == "T" or array.shards is None), array.path
         coords = np.arange(array.shape[0])
         np.testing.assert_array_equal(location.ChunkCache().take(array, coords), array[:])
 

@@ -35,7 +35,9 @@ from store_copies import FLOOR as FLOOR
 from store_copies import FLOOR_K0 as FLOOR_K0
 from store_copies import FLOOR_K7 as FLOOR_K7
 from store_copies import HALF_STEP as HALF_STEP
+from store_copies import PARTNER_FLOOR as PARTNER_FLOOR
 from store_copies import R_SCALE as R_SCALE
+from store_copies import T_PARTNER as T_PARTNER
 from store_copies import codes_at as codes_at
 from store_copies import stored_at as stored_at
 

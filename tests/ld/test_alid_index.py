@@ -153,6 +153,8 @@ SOURCED: dict[str, Any] = {
         "t_far",
         "t_far_q",
         "far_code_floor",
+        "t_partner",
+        "partner_code_floor",
         "counts",
     }
 }
@@ -186,6 +188,7 @@ def written(out: Path, rows: list[tuple[str, int, str, str]] = WIDTH_ROWS) -> Pa
         far_bp=FAR_BP,
         n=771,
         k=10,
+        t_partner=0.01,
     )
     writer.write(writer.cut(0, np.eye(len(given))))
     writer.finish(cast(Sourced, SOURCED))
