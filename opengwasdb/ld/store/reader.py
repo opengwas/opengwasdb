@@ -38,7 +38,15 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import READABLE_FORMATS, Codes, InputError, Provenance, REncoding, judge_window
+from ogld.format import (
+    READABLE_FORMATS,
+    Codes,
+    InputError,
+    Provenance,
+    REncoding,
+    judge_window,
+    release_of,
+)
 from ogld.format.geometry import (
     blocks,
     chromosome_index,
@@ -740,8 +748,13 @@ class StoreReader:
         store that holds none — every 0.1.0 store — is refused here, naming the missing component
         and the way to derive it, before any read. It is never answered from the Near Band: that
         is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
+
+        The recorded **format version** decides, and the key alone does not: spec §7 lets a store
+        hold other keys, and a 0.1.0 store's extra `t_partner` is no claim to a component whose
+        frames nothing has judged. Reading one would answer a query from an unclaimed residue — a
+        wrong answer that looks like a right one (ogld#69).
         """
-        if "t_partner" not in self._provenance:
+        if not self.has_partner_rows:
             raise InputError(
                 f"this LD Store is format {self._provenance['format_version']}, which has no "
                 f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
@@ -749,6 +762,19 @@ class StoreReader:
                 "`ogld derive-partners` (spec §13; partner-rows §5.1)"
             )
         return float(self._provenance["t_partner"])
+
+    @property
+    def has_partner_rows(self) -> bool:
+        """Whether the store's provenance claims Partner Rows: the recorded format version is
+        0.2.0 or later **and** the Partner Threshold is recorded, which is what a derivation
+        writes in its one claim (partner-rows §6.2; spec §13).
+
+        A version this package reads (0.1.0 or 0.2.0, refused at open otherwise) that is below
+        0.2.0 has none, whatever keys or groups a store carries: they are a residue nothing has
+        claimed (ogld#69).
+        """
+        recorded = release_of(self._provenance.get("format_version"))
+        return recorded is not None and recorded >= (0, 2, 0) and "t_partner" in self._provenance
 
     def partner_row(self, chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         """One variant's Partner Rows row: every partner within far_bp at its distance's floor,

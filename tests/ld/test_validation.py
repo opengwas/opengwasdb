@@ -458,6 +458,11 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         lambda store: contract().a_temporary_group_a_crash_left(store),
         "is a temporary group a writer left behind",
     ),
+    "a partners directory that is not a node of the hierarchy": (
+        "partners.files",
+        lambda store: (store / "partners" / "zarr.json").unlink(),
+        "is not a group of the store's hierarchy",
+    ),
     "bytes appended past a chunk file's frames": (
         "partners.files",
         lambda store: contract().bytes_appended_to_the_frames_file(store),
@@ -1248,14 +1253,16 @@ def test_a_0_1_0_store_with_no_partner_rows_passes_its_ten_rules(tmp_path: Path)
 
 def test_a_0_2_0_store_with_no_partner_rows_fails_its_ten_rules(tmp_path: Path) -> None:
     # Spec §13: a 0.2.0 store without the component is not one, so `partners.files` names the
-    # missing group and every rule that needs a frame says it cannot be checked.
+    # missing node, then each chromosome's group, and every rule that needs a frame says it cannot
+    # be checked (partner-rows §5.1: `partners/` is a node of the store's one hierarchy).
     later = copy_store(tmp_path / "later")
     shutil.rmtree(later / "partners")
     found = findings(later, VALIDATION_RULES)
-    assert [f.where for f in found["partners.files"]] == ["partners/21", "partners/22"]
+    assert [f.where for f in found["partners.files"]] == ["partners", "partners/21", "partners/22"]
+    assert "is not a group of the store's hierarchy" in found["partners.files"][0].message
     assert all(
         f.message == "missing: every chromosome of the Variant Set has one (spec §5.1)"
-        for f in found["partners.files"]
+        for f in found["partners.files"][1:]
     )
     for rule in PARTNER_FRAME_RULES:
         assert found[rule], rule

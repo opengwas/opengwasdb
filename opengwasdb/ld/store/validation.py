@@ -48,7 +48,7 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
+from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES, release_of
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
@@ -80,6 +80,17 @@ _FRAMES_PER_BLOCK: Final = 256
 _PARTNER_ENTRIES: Final = 1 << 19
 #: Offending elements a finding names; it counts the rest.
 _NAMED: Final = 5
+
+#: The rules a store's Partner Rows must pass before its provenance claims them (partner-rows
+#: §10, §6.2): the nine `partners.*` rules and the threshold they are judged at. `ogld
+#: derive-partners` runs these alone, because the band, the index and the Far Pairs of a store it
+#: derives from were judged when it was built and re-reading them would cost a whole validation
+#: per run (ogld#69).
+PARTNER_RULES: Final = tuple(
+    rule
+    for rule in VALIDATION_RULES
+    if rule.startswith("partners.") or rule == "provenance.partner_threshold"
+)
 
 
 @dataclass(frozen=True)
@@ -296,13 +307,17 @@ class _Store:
         return entries
 
     def partners_judged(self) -> bool:
-        """Whether this store's Partner Rows are judged: a 0.2.0 store has them (spec §13), and a
-        0.1.0 store, which need not, is held to them anyway when it carries the component — a
-        group a store writes is one a reader trusts."""
+        """Whether this store's Partner Rows are judged: its provenance claims them, which a store
+        of format 0.2.0 or later does and no other can (spec §13; partner-rows §6.2).
+
+        A 0.1.0 store that carries the component anyway is an **unclaimed** one: a derivation
+        killed between making `partners/` a node of the hierarchy and writing the provenance that
+        claims it. Nothing may read those frames — a reader refuses a store whose provenance has
+        no `t_partner` — so judging them here would fail a store no one can use and complete
+        nothing; the device that completes or rebuilds it is `ogld derive-partners` (ogld#69).
+        """
         version = _release(_lookup(self.provenance, "format_version"))
-        if version is not None and version >= (0, 2, 0):
-            return True
-        return self.node(layout.PARTNERS) is not None
+        return version is not None and version >= (0, 2, 0)
 
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """One chromosome's positions, kept as a reader keeps them (spec §10)."""
@@ -652,13 +667,8 @@ def _quantile_problems(provenance: dict[str, Any]) -> _Problems:
 
 
 def _release(version: object) -> tuple[int, ...] | None:
-    """A `MAJOR.MINOR.PATCH` version as numbers, or None for one that is not that."""
-    if not isinstance(version, str):
-        return None
-    try:
-        return tuple(int(part) for part in version.split("."))
-    except ValueError:
-        return None
+    """A `MAJOR.MINOR.PATCH` version as numbers, or None for one that is not that (§13)."""
+    return release_of(version)
 
 
 def _added_later(key: str, version: object) -> bool:
@@ -2108,12 +2118,24 @@ def _partners_files(store: _Store) -> _Problems:
     """Every chromosome of the Variant Set has a `partners/<c>/` group with both arrays, its
     attributes are the sizes §5.3 names, its `frames_idx` is F + 1 ascending offsets from 0 to
     `frames_bytes`, and both chunk files are the ones its hashes name (partner-rows §5.1, §5.3,
-    §10). A store whose version has no Partner Rows has nothing to judge (spec §13)."""
+    §10). A store whose version has no Partner Rows has nothing to judge (spec §13).
+
+    `partners/` is a group of the store's one hierarchy, never a directory beside it (§1, §5.1):
+    a 0.2.0 store whose root does not list it is a damaged one even when every chromosome's group
+    still resolves by its own path, because a listing of the store would not show its component.
+    """
     if not store.partners_judged():
         return
     group = store.node(layout.PARTNERS)
     if isinstance(group, zarr.Group):
         yield from _temporary_entries(layout.PARTNERS, group)
+    else:
+        yield (
+            layout.PARTNERS,
+            "is not a group of the store's hierarchy: a 0.2.0 store's Partner Rows are a node of "
+            "it, listed by `members()` with both arrays of every chromosome (spec §1, §5.1; "
+            "partner-rows §5.1)",
+        )
     for chrom, start, stop in store.chromosomes():
         yield from _partner_files(store, chrom, stop - start)
 

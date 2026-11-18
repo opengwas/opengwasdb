@@ -218,6 +218,22 @@ class Sourced(TypedDict):
     build: Build
 
 
+def release_of(version: object) -> tuple[int, ...] | None:
+    """`MAJOR.MINOR.PATCH` as numbers, or None for one that is not that.
+
+    Spec §13 makes `format_version` the one thing that says which components a store has, so a
+    reader, a validation rule and the derivation all ask it the same way (ogld#69). A version this
+    package cannot parse is None here; whoever needs it refuses the store by name (§13,
+    `provenance.encoding`).
+    """
+    if not isinstance(version, str):
+        return None
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
 #: Every key spec §7 requires, dotted where it is nested. `provenance.complete` checks them.
 REQUIRED_KEYS: Final = (
     "format_version",
