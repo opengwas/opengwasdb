@@ -18,7 +18,7 @@ import testdata
 import zarr
 from contract import support
 from script_modules import load_script
-from store_copies import FLOOR, R_SCALE, T_PARTNER, codes_at, stored_at
+from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, codes_at
 
 from ogld.format import NEAR_BP, InputError, REncoding
 from ogld.identity import orient
@@ -59,11 +59,10 @@ def test_the_fixture_reaches_every_array_kind(written: Path) -> None:
     expected |= {"variants/alid_index/alid", "variants/alid_index/row"}
     for chrom in ("21", "22"):
         expected |= {f"near/{chrom}/{a}" for a in ("indptr", "r")}
-        expected |= {
-            f"{kind}/{chrom}/{a}" for kind in ("index", "far") for a in ("indptr", "partner", "r")
-        }
+        expected |= {f"far/{chrom}/{a}" for a in ("indptr", "partner", "r")}
         expected |= {f"partners/{chrom}/{a}" for a in ("frames", "frames_idx")}
     assert names == expected
+    assert not [name for name in names if name.startswith("index/")], "a store holds no Proxy Index"
 
 
 def test_every_array_has_the_fill_value_and_codecs_spec_6_says(written: Path) -> None:
@@ -141,15 +140,34 @@ def test_the_whole_store_reads_back_the_reference_codes_exactly(written: Path) -
     np.testing.assert_array_equal(reader.pair_r(np.arange(len(rows))), expected)
 
 
-def test_the_proxy_index_holds_each_pair_both_ways_at_the_threshold(written: Path) -> None:
+def every_partner_row(reader: StoreReader) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Every row of every chromosome's Partner Rows, as (owner row, partner row, code)."""
+    owner, partner, code = [], [], []
+    for chrom in ("21", "22"):
+        start, stop = reader.chromosome_range(chrom)
+        rows = np.arange(stop - start, dtype=np.int64)
+        indptr, at, codes = reader.partner_rows(chrom, rows)
+        owner.append(np.repeat(rows + start, np.diff(indptr)))
+        partner.append(at.astype(np.int64) + start)
+        code.append(codes)
+    return np.concatenate(owner), np.concatenate(partner), np.concatenate(code)
+
+
+def test_the_partner_rows_hold_each_pair_both_ways_at_its_distance_s_floor(written: Path) -> None:
     reader = StoreReader.open(written)
-    n = reader.provenance["n_variants"]
-    index = reader.index(np.arange(n))
-    held = np.repeat(np.arange(n), np.diff(index.indptr))
-    assert len(index.partner) == reader.provenance["counts"]["index_entries"] > 100
-    assert (np.abs(codes_at(index.r)) >= FLOOR).all()
-    forward = dict(zip(zip(held, index.partner, strict=True), index.r, strict=True))
-    assert all(forward[(m, j)] == r for (j, m), r in forward.items())
+    held, partner, code = every_partner_row(reader)
+    assert len(held) == reader.provenance["counts"]["partner_entries"] > 100
+    floors = np.where(
+        np.abs(np.asarray(reader.variants(held).position) - reader.variants(partner).position)
+        <= NEAR_BP,
+        PARTNER_FLOOR,
+        FLOOR,
+    )
+    assert (np.abs(code) >= floors).all()
+    forward = dict(
+        zip(zip(held.tolist(), partner.tolist(), strict=True), code.tolist(), strict=True)
+    )
+    assert all(forward[(m, j)] == c for (j, m), c in forward.items())
 
 
 def test_an_unwritten_near_band_chunk_reads_as_the_reserved_code(tmp_path: Path) -> None:
@@ -187,7 +205,7 @@ def test_the_script_writes_the_same_arrays_and_the_same_provenance_again(tmp_pat
     second = script.write_test_store(0, tmp_path / "two", R_SCALE, 0.01)
     one, two = zarr.open_group(first, mode="r"), zarr.open_group(second, mode="r")
     names = {name: np.asarray(array[:]) for name, array in arrays(one)}
-    assert len(names) == 27, "every array must be compared for this to mean anything"
+    assert len(names) == 21, "every array must be compared for this to mean anything"
     again = {name: np.asarray(array[:]) for name, array in arrays(two)}
     assert names.keys() == again.keys()
     for name, array in names.items():
@@ -218,7 +236,7 @@ def test_the_reader_refuses_a_row_outside_the_variant_set(written: Path, rows: l
     reader = StoreReader.open(written)
     assert reader.provenance["n_variants"] == 1056
     given = np.array(rows, dtype=np.int64)
-    for read in (reader.pair_r, reader.variants, reader.index, reader.band):
+    for read in (reader.pair_r, reader.variants):
         with pytest.raises(ValueError, match="outside the Variant Set"):
             read(given)
 
@@ -229,48 +247,6 @@ def test_rows_in_refuses_a_label_that_is_not_canonical(written: Path) -> None:
     with pytest.raises(InputError, match="chr22"):
         reader.rows_in("chr22", 0, 100_000_000)
     assert len(reader.rows_in("7", 0, 100_000_000)) == 0, "a canonical chromosome with no variants"
-
-
-def test_the_band_is_both_sides_of_a_row_within_near_bp(written: Path) -> None:
-    reader = StoreReader.open(written)
-    ref = testdata.reference_r(K)
-    where, sign = store_rows(), signs()
-    a, b = where[ref.row_i], where[ref.row_j]
-    near = (testdata.variants().pos[ref.row_j] - testdata.variants().pos[ref.row_i]) <= NEAR_BP
-    stored = stored_at(ref.r * sign[ref.row_i] * sign[ref.row_j])
-    some = reader.rows_in("22", 0, 100_000_000)[[200, 300, 400]]
-    band = reader.band(some)
-    for n, row in enumerate(some):
-        mine = near & ((a == row) | (b == row))
-        partners = np.where(a[mine] == row, b[mine], a[mine])
-        order = np.argsort(partners)
-        got = slice(band.indptr[n], band.indptr[n + 1])
-        assert len(partners) > 5, "the row must have Near Band partners for this to mean anything"
-        np.testing.assert_array_equal(band.partner[got], partners[order])
-        np.testing.assert_array_equal(band.r[got], stored[mine][order])
-    assert (band.partner[band.partner < some[1]] != some[1]).all()
-    assert (band.partner[band.partner < some[1]]).size > 0, "an upstream partner must exist"
-
-
-def test_the_proxy_index_is_exactly_the_reference_pairs_at_the_threshold(written: Path) -> None:
-    reader = StoreReader.open(written)
-    ref = testdata.reference_r(K)
-    where, sign = store_rows(), signs()
-    code = codes_at(ref.r * sign[ref.row_i] * sign[ref.row_j])
-    keep = np.abs(code) >= FLOOR
-    assert keep.sum() > 100, "the reference must hold many pairs at the threshold"
-    a, b = where[ref.row_i[keep]], where[ref.row_j[keep]]
-    expected = {
-        (int(x), int(y)): float(c) / R_SCALE for x, y, c in zip(a, b, code[keep], strict=True)
-    }
-    expected |= {(y, x): r for (x, y), r in expected.items()}
-    n = reader.provenance["n_variants"]
-    index = reader.index(np.arange(n))
-    held = np.repeat(np.arange(n), np.diff(index.indptr))
-    found = {
-        (int(i), int(j)): float(r) for i, j, r in zip(held, index.partner, index.r, strict=True)
-    }
-    assert found == expected
 
 
 def test_a1_frequency_is_the_a1_share_of_the_dosages(written: Path) -> None:

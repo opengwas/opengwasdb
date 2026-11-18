@@ -373,24 +373,6 @@ def chr22(store: Path) -> tuple[int, np.ndarray]:
     return start, np.asarray(group["position"][start:stop]).astype(np.int64)
 
 
-def index22(store: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """chr22's Proxy Index as entries: owner, partner (local rows) and code."""
-    group = zarr.open_group(store / "index" / "22", mode="r")
-    indptr = np.asarray(group["indptr"][:])
-    owner = np.repeat(np.arange(len(indptr) - 1), np.diff(indptr))
-    return owner, np.asarray(group["partner"][:]).astype(np.int64), np.asarray(group["r"][:])
-
-
-def write_index22(store: Path, owner: np.ndarray, partner: np.ndarray, code: np.ndarray) -> None:
-    """Write chr22's Proxy Index from entries, in row order and ascending partner."""
-    order = np.lexsort((partner, owner))
-    size = len(chr22(store)[1])
-    counts = np.bincount(owner, minlength=size)
-    rewrite(store, "index/22/indptr", lambda _: np.concatenate([[0], np.cumsum(counts)]))
-    rewrite(store, "index/22/partner", lambda _: partner[order].astype(np.int32))
-    rewrite(store, "index/22/r", lambda _: code[order].astype(np.int16))
-
-
 def far22(store: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """chr22's Far Pairs as entries: row, partner (local rows) and code."""
     group = zarr.open_group(store / "far" / "22", mode="r")
@@ -414,25 +396,6 @@ def floor_of(store: Path) -> int:
         "far_code_floor"
     ]
     return floor
-
-
-def add_pair(
-    gap: Callable[[np.ndarray], np.ndarray], coded: Callable[[int], int]
-) -> Callable[[Path], None]:
-    """A breaker adding, both ways, the first chr22 pair not in the index whose distance
-    `gap` accepts, with the code `coded` gives for the store's far code floor."""
-
-    def breaker(store: Path) -> None:
-        code = coded(floor_of(store))
-        _, pos = chr22(store)
-        owner, partner, codes = index22(store)
-        held = set(zip(owner.tolist(), partner.tolist(), strict=True))
-        apart = np.argwhere(np.triu(gap(pos[None, :] - pos[:, None]), k=1))
-        lo, hi = next((int(a), int(b)) for a, b in apart if (int(a), int(b)) not in held)
-        both = (np.append(owner, [lo, hi]), np.append(partner, [hi, lo]))
-        write_index22(store, *both, np.append(codes, [code, code]).astype(np.int16))
-
-    return breaker
 
 
 def add_far_pair(
@@ -464,20 +427,6 @@ def drop_a_far_pair(store: Path) -> None:
     write_far22(store, owner[1:], partner[1:], codes[1:])
 
 
-def drop_entry(near: bool) -> Callable[[Path], None]:
-    """A breaker dropping the first chr22 entry, earlier row first, within 3 Mb or beyond."""
-
-    def breaker(store: Path) -> None:
-        _, pos = chr22(store)
-        owner, partner, codes = index22(store)
-        within = np.abs(pos[partner] - pos[owner]) <= 3_000_000
-        first = np.flatnonzero((within == near) & (partner > owner))[0]
-        keep = np.arange(len(owner)) != first
-        write_index22(store, owner[keep], partner[keep], codes[keep])
-
-    return breaker
-
-
 def shorten_a_near_row(store: Path) -> None:
     indptr = np.asarray(zarr.open_array(store / "near/22/indptr", mode="r")[:])
     row = int(np.flatnonzero(np.diff(indptr) > 0)[0])
@@ -500,13 +449,6 @@ def reverse_an_alid(store: Path) -> None:
         return alid
 
     rewrite(store, "variants/alid", reverse)
-
-
-def repeat_a_partner(store: Path) -> None:
-    owner, partner, codes = index22(store)
-    k = int(np.flatnonzero(owner[1:] == owner[:-1])[0])
-    partner[k + 1] = partner[k]
-    write_index22(store, owner, partner, codes)
 
 
 def alid_index_entries(store: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -935,8 +877,8 @@ def a_group_recording_another_entry_count(store: Path) -> None:
 
 #: One way to break each rule, applied to a copy of the Test Store. ogld#4 writes each.
 BREAKERS: dict[str, Callable[[Path], None]] = {
-    # lacks index/22/partner
-    "envelope.arrays": lambda store: shutil.rmtree(store / "index" / "22" / "partner"),
+    # lacks far/22/partner
+    "envelope.arrays": lambda store: shutil.rmtree(store / "far" / "22" / "partner"),
     # sets near/22/r's fill value to 0
     "envelope.fill": lambda store: edit_json(
         store, "near/22/r", lambda doc: doc.update(fill_value=0)
@@ -973,20 +915,6 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "near.rows": shorten_a_near_row,
     # writes −32768 into near/22/r
     "near.codes": set_element("near/22/r", 5, -32768),
-    # repeats a partner within one index row
-    "index.rows": repeat_a_partner,
-    # writes −32768 into index/22/r
-    "index.codes": set_element("index/22/r", 3, -32768),
-    # adds an index entry 10,000,001 bp apart, with a code above the floor
-    "index.distance": add_pair(lambda gap: gap == 10_000_001, lambda floor: floor + 100),
-    # adds an index entry with |code| = far_code_floor − 1
-    "index.threshold": add_pair(
-        lambda gap: (gap > 3_000_000) & (gap <= 10_000_000), lambda floor: -(floor - 1)
-    ),
-    # drops one direction of one index pair
-    "index.symmetric": drop_entry(near=False),
-    # drops an index entry within 3 Mb whose Near Band code reaches the floor
-    "index.near": drop_entry(near=True),
     # holds one chr22 Far Pair in its later row
     "far.rows": move_a_far_pair_to_its_later_row,
     # writes −32768 into far/22/r
@@ -997,8 +925,6 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "far.threshold": add_far_pair(
         lambda gap: (gap > 3_000_000) & (gap <= 10_000_000), lambda floor: -(floor - 1)
     ),
-    # drops a Far Pair the index holds
-    "far.index": drop_a_far_pair,
     # leaves a crashed writer's temporary group under partners/, and 26 bytes past the frames
     "partners.files": a_group_recording_another_row_count,
     # recompresses chr22's third frame with no checksum in its header
@@ -1144,5 +1070,5 @@ def test_ogld_validate_and_info_on_the_test_store(capsys: pytest.CaptureFixture[
     assert cli.main(["validate", str(support.TEST_STORE)]) == 0
     assert cli.main(["info", str(support.TEST_STORE)]) == 0
     out = capsys.readouterr().out
-    assert "ok   index.symmetric" in out
+    assert "ok   partners.symmetric" in out
     assert '"t_far"' in out

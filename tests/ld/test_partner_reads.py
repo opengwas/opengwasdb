@@ -2,8 +2,8 @@
 
 Each test counts at the reader's chunk cache: a `Counting` cache is put on one reader instance,
 so no reader is subclassed and no module global is patched. "Resolved" is the Stored r the
-reader takes, the elements of every `near/<c>/r` and `index/<c>/r` it asks the cache for.
-What a query needs comes from an independent greedy over the Test Panel's reference r.
+reader takes, the elements of every `near/<c>/r` it asks the cache for. What a query needs comes
+from an independent greedy over the Test Panel's reference r.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class Counting(location.ChunkCache):
         return got
 
     def resolved(self) -> int:
-        """The Stored r taken: elements of every Near Band and Proxy Index `r` array."""
+        """The Stored r taken: elements of every Near Band `r` array."""
         return sum(n for path, n in self.taken.items() if path.endswith("/r"))
 
 
@@ -68,8 +68,8 @@ def reference_greedy(
 ) -> tuple[npt.NDArray[np.int64], int, int]:
     """plink2's greedy over the Test Store's variants from the reference r, quantised: each
     variant's lead; the pairs the leads need, each lead with every hit still open within W
-    on its chromosome; and the entries of the leads' Proxy Index rows, every partner within
-    far_bp whose code reaches the floor (spec §5). Ties go to the row, the engine's order."""
+    on its chromosome; and every partner within far_bp whose code reaches the floor, which is
+    the rows' entries at the far code floor (spec §5). Ties go to the row, the engine's order."""
     rows = passing_rows()
     pos = panel_data().variants().pos.astype(np.int64)[rows]
     chrom = np.asarray(panel_data().variants().chrom)[rows]
@@ -105,7 +105,7 @@ def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
     r2: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # From 0.2.0 a lead's partners are its Partner Rows row, one frame read and one row's
-    # unshuffle (partner-rows §7, §8.2): no element of `near/` or `index/` is read at any r2, and
+    # unshuffle (partner-rows §7, §8.2): no element of `near/` is read at any r2, and
     # no hit another lead took is read, so the reads are one a lead.
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
@@ -127,7 +127,7 @@ def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
     assert len(asked) == len(np.unique(lead)), "one Partner Rows row per lead, and no other"
     assert len(set(asked)) == len(asked), "no row is read twice"
     assert cache.resolved() == 0, "no Near Band or Proxy Index code is read at any r2"
-    offending = [key for key in keys if key.startswith(("near/", "index/"))]
+    offending = [key for key in keys if key.startswith("near/")]
     assert offending == [], f"clump read {offending[:5]}"
 
 
@@ -208,34 +208,6 @@ def test_a_matrix_query_holds_one_float64_copy_of_its_result(
     # Two float64 copies alone would be twice the result; the rest is the mask, one step's
     # pairs and the variant table's strings.
     assert peak < 2 * r.nbytes, f"peak {peak:,} bytes for a {r.nbytes:,}-byte result"
-
-
-@pytest.mark.parametrize("among", [False, True])
-def test_partners_holds_what_its_docstring_states(
-    among: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # partners() states 48 bytes per kept entry, once as read and once in the result, beside
-    # one block of at most _PAIRS_PER_STEP entries, 72 bytes each, and some 600 bytes of
-    # bookkeeping a block (ogld#14). A block holds a row at least, so at a step of 997 the
-    # block terms are under a kilobyte a row.
-    monkeypatch.setattr(reader_module, "_PAIRS_PER_STEP", 997)
-    reader = StoreReader.open(str(support.TEST_STORE))
-    rows = np.arange(1056)
-    listed = np.arange(0, 1056, 2) if among else None
-
-    def run() -> Any:
-        return reader.partners(rows, r2=0.0, window_bp=3_000_000, among=listed)
-
-    run()  # warm: the chunks are read and kept before anything is measured
-    tracemalloc.start()
-    try:
-        kept = len(run().partner)
-        peak = tracemalloc.get_traced_memory()[1]
-    finally:
-        tracemalloc.stop()
-    assert kept > 90_000, "many kept entries, so the per-entry term is what is measured"
-    bound = 48 * kept + 1024 * len(rows) + 64 * 1024
-    assert peak <= bound, f"peak {peak:,} bytes for {kept:,} kept entries, bound {bound:,}"
 
 
 @pytest.mark.parametrize("one_against_many", [False, True])

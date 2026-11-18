@@ -160,7 +160,6 @@ class Counts(TypedDict):
     far_candidates: int
     far_pairs: int
     partner_entries: int
-    index_entries: int
     alids_left_out: int
 
 
@@ -270,7 +269,6 @@ REQUIRED_KEYS: Final = (
     "counts.far_candidates",
     "counts.far_pairs",
     "counts.partner_entries",
-    "counts.index_entries",
     "counts.alids_left_out",
     "software",
     "software.zstd",
@@ -299,17 +297,10 @@ VALIDATION_RULES: Final = (
     "alid_index.count",
     "near.rows",
     "near.codes",
-    "index.rows",
-    "index.codes",
-    "index.distance",
-    "index.threshold",
-    "index.symmetric",
-    "index.near",
     "far.rows",
     "far.codes",
     "far.distance",
     "far.threshold",
-    "far.index",
     "partners.files",
     "partners.frames",
     "partners.rows",

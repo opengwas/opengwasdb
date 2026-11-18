@@ -127,7 +127,10 @@ def _derive_command(commands: argparse._SubParsersAction[argparse.ArgumentParser
     d.add_argument(
         "--drop-index",
         action="store_true",
-        help="afterwards remove the Proxy Index, if the store's Partner Rows pass their rules",
+        help=(
+            "afterwards remove a Proxy Index the store still holds — a leftover of a store derived "
+            "before format 0.2.0 had none — if its Partner Rows pass their rules"
+        ),
     )
 
 

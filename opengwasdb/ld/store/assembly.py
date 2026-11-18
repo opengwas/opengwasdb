@@ -7,8 +7,7 @@ store"). It handles:
 - quantising r at the store's encoding, through `ogld.format.REncoding` (spec §3);
 - the Near Band's row lengths and `indptr`, from the positions (spec §4);
 - the threshold at the far code floor, judged on codes, for every pair within far_bp (§3, §5);
-- both directions of the Proxy Index, partners ascending, one code per pair (spec §5);
-- the Far Pairs: the index's pairs beyond near_bp, once each, in the earlier row (spec §5;
+- the Far Pairs: the pairs at that floor beyond near_bp, once each, in the earlier row (spec §5;
   ADR 0007), from the pairs a cut already keeps, with no second pass over r;
 - the Partner Rows: every pair within far_bp at its distance's floor, in both variants' rows, 16
   rows to a zstd frame (spec §5; partner-rows §5, §6.1; ADR 0011);
@@ -21,19 +20,17 @@ for blocks of rows in order, and at `finish` it supplies what only the source kn
 (`ogld.format.Sourced`).
 
 **Memory is bounded by the block and the far_bp window, never the chromosome.** These are
-measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near Band codes,
-731,767,394 Proxy Index entries). What is held:
+measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near Band codes).
+What is held:
 
 - **The Near Band carry:** less than one shard of `r`, 67,108,864 codes, so 128 MiB.
-- **The Proxy Index carry:** the pairs whose later row is not yet written. At most these are
+- **The Partner Rows carry:** the pairs whose later row is not yet written. At most these are
   the pairs spanning one row within far_bp, plus one bucket of `CARRY_ROWS` rows. At the MHC
-  that is 33,869,608 pairs at 10 B, 323 MiB. The Partner Rows carry the same pairs, once, and
-  never both components' copies at once: a row is written as its block arrives.
+  that is 33,869,608 pairs at 10 B, 323 MiB.
 - **The Partner Rows' frames:** at most `2 × workers` compressed frames in flight, and one frame
   of rows, 16 rows' partners, before it is compressed.
-- **The Proxy Index output:** less than one shard each of `partner` and `r`, 6 MiB.
-- **The Far Pairs output:** the same, 6 MiB. Nothing is carried: a row's Far Pairs are all in
-  its own block.
+- **The Far Pairs output:** less than one shard each of `partner` and `r`, 6 MiB. Nothing is
+  carried: a row's Far Pairs are all in its own block.
 - **Per-row arrays:** each `indptr`, n_c + 1 int64.
 - **A cut in flight,** between a producer's worker and `write`: at most 31 MiB for a 256-row
   block.
@@ -82,7 +79,8 @@ from ogld.store.location import ChunkCache, open_group
 from ogld.store.validation import PARTNER_RULES, ValidationFailed, validate_group
 
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
-#: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged.
+#: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged. That function is
+#: the only code left that reads the component (#72): no store this package writes holds one.
 DERIVE_ENTRIES: Final = 1 << 23
 #: Variant Set rows `derive_alid_index` reads at once: 1,048,576 ALIDs, whose keys are 32 MiB.
 ALID_ROWS: Final = 1 << 20
@@ -103,8 +101,8 @@ class Cut:
 
     `first` is the block's first global row and `rows` how many it holds, all on one chromosome.
     `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are their
-    Proxy Index pairs, as local rows lo < hi: each partner hi within far_bp of row lo whose code
-    reaches the far code floor, once, with its one code (spec §3, §5), ascending by (lo, hi).
+    pairs at the far code floor, as local rows lo < hi: each partner hi within far_bp of row lo
+    whose code reaches that floor, once, with its one code (spec §3, §5), ascending by (lo, hi).
     `far` marks those more than near_bp apart: the block's Far Pairs (spec §5). `far_candidates`
     counts the block's pairs more than near_bp and at most far_bp apart, all judged, and
     `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a cut is
@@ -436,8 +434,8 @@ class Rows:
 
 
 class RowCarry:
-    """The block-at-a-time row carry the Proxy Index and the Partner Rows share (spec §5;
-    partner-rows §6.1).
+    """The block-at-a-time row carry the Partner Rows are written by (spec §5; partner-rows
+    §6.1).
 
     A pair (lo, hi) goes into row lo as the block arrives, because both rows are the store's, and
     into row hi only when hi's block does. So row l's entries are the pairs whose earlier row is in
@@ -446,8 +444,8 @@ class RowCarry:
     that later row: at most the pairs spanning one row within far_bp and one bucket, however long
     the chromosome.
 
-    `complete` gives each row's partners in ascending order, as both components require (§3;
-    partner-rows §3), so a reader's binary search and a cumulative sum need no case for the row.
+    `complete` gives each row's partners in ascending order, as partner-rows §3 requires, so a
+    reader's binary search and a cumulative sum need no case for the row.
     The pairs handed to it are ascending by (lo, hi): the order a cut's Near Band codes and its
     kept pairs arrive in, once the caller has interleaved the two by row.
     """
@@ -548,39 +546,6 @@ class RowCarry:
         """Refuse a component whose rows were not all written, or whose carry is left over."""
         if self._carried or (self._counts < 0).any():
             raise ValueError("a sparse component has rows not written: a store assembly fault")
-
-
-class ProxyIndexStream:
-    """One chromosome's Proxy Index, both directions, written row by row as blocks arrive (§5).
-
-    Row l holds every pair (m, l) with m < l, which come from earlier blocks or its own, then
-    every pair (l, m) with m > l, which come from its own block. So row l is complete when its
-    own block arrives, and each block's rows are written then: partners below ascending, then
-    partners above, each with its pair's one code. `RowCarry` is the carry that gives them.
-
-    `partner` and `r` grow shard by shard (`Appender`). `indptr` is held, n_c + 1 int64, and
-    written at the end.
-    """
-
-    def __init__(self, group: zarr.Group, rows: int, encoding: REncoding) -> None:
-        self._group = group
-        self._rows = RowCarry(rows)
-        self._partner, self._codes = _entries(group, encoding)
-
-    def add(self, cut: Cut) -> None:
-        """Write the rows of `cut`, which continue the rows already written, and carry its
-        pairs whose later row is still to come."""
-        block = self._rows.complete(cut.rows, cut.lo, cut.hi, cut.codes)
-        self._partner.add(block.partner)
-        self._codes.add(block.codes)
-
-    def close(self) -> None:
-        """Write `indptr` and the last entries. A row not written, or a carried pair left over,
-        would be a row the index lacks, and is refused."""
-        self._rows.close()
-        layout.put_numbers(self._group, "indptr", indptr_of(self._rows.counts), layout.INT64_FILL)
-        self._partner.close()
-        self._codes.close()
 
 
 class PartnerRowsStream:
@@ -694,9 +659,9 @@ class FarPairsStream:
     """One chromosome's Far Pairs, written row by row as blocks arrive (spec §5; ADR 0007).
 
     Row l holds every pair (l, m), m > l, more than near_bp and at most far_bp apart whose code
-    reaches the far code floor, ascending in m: the Proxy Index's entries beyond near_bp in their
-    earlier row, once each. They all come from row l's own block, so each block's rows are
-    complete when it arrives, and nothing is carried. `partner` and `r` grow shard by shard
+    reaches the far code floor, ascending in m: the pairs beyond near_bp once each, in their
+    earlier row (spec §5; ADR 0007). They all come from row l's own block, so each block's rows
+    are complete when it arrives, and nothing is carried. `partner` and `r` grow shard by shard
     (`Appender`). `indptr` is held, n_c + 1 int64, and written at the end.
     """
 
@@ -757,6 +722,11 @@ def derive_far_pairs(
     built writes them, so the arrays are a build's, byte for byte. The index is not changed. An
     index element no store holds, which is what a lost chunk reads as, is refused, naming its
     array, rather than read as a row without Far Pairs.
+
+    This is the one place left in `ogld/` that reads the Proxy Index (#72): it migrates a store
+    built before ADR 0007, which is the only store that can hold an index and lack `far/`. No
+    store this package writes, or reads, is in that state, and no other code path names the
+    component's arrays (`tests/test_proxy_index_removed.py`).
     """
     indptr = _whole(index, "indptr")
     stream = FarPairsStream(far, len(indptr) - 1, encoding)
@@ -824,16 +794,13 @@ class Tally:
     far_candidates: int = 0
     far_pairs: int = 0
     partner_entries: int = 0
-    index_entries: int = 0
 
     def add(self, cut: Cut) -> None:
-        """Count a cut: its Near Band codes, its pairs judged and kept beyond near_bp, and two
-        Proxy Index entries for each pair it keeps, one in each of its rows (spec §5). The Partner
-        Rows' entries are their frames', counted when a chromosome is closed (§5.3)."""
+        """Count a cut: its Near Band codes, and its pairs judged and kept beyond near_bp. The
+        Partner Rows' entries are their frames', counted when a chromosome is closed (§5.3)."""
         self.near_pairs += len(cut.near)
         self.far_candidates += cut.far_candidates
         self.far_pairs += cut.far_pairs
-        self.index_entries += 2 * len(cut.codes)
 
     def counts(self, alids_left_out: int = 0) -> Counts:
         return {
@@ -841,14 +808,13 @@ class Tally:
             "far_candidates": self.far_candidates,
             "far_pairs": self.far_pairs,
             "partner_entries": self.partner_entries,
-            "index_entries": self.index_entries,
             "alids_left_out": alids_left_out,
         }
 
 
 class Chromosome:
-    """One chromosome being written: its Near Band, its Proxy Index, its Far Pairs and its
-    Partner Rows (spec §4, §5; partner-rows §5, §6.1)."""
+    """One chromosome being written: its Near Band, its Far Pairs and its Partner Rows
+    (spec §4, §5; partner-rows §5, §6.1)."""
 
     def __init__(
         self, root: zarr.Group, cutter: Cutter, name: str, *, compress_workers: int = 1
@@ -857,9 +823,6 @@ class Chromosome:
         position = cutter.positions(name)
         lengths = near_row_lengths(position, cutter.near_bp)
         self.near = NearBandStream(root.require_group(f"near/{name}"), lengths, cutter.encoding)
-        self.index = ProxyIndexStream(
-            root.require_group(f"index/{name}"), len(position), cutter.encoding
-        )
         self.far = FarPairsStream(root.require_group(f"far/{name}"), len(position), cutter.encoding)
         self.partners = PartnerRowsStream(
             root,
@@ -872,14 +835,12 @@ class Chromosome:
 
     def add(self, cut: Cut) -> None:
         self.near.add(cut.near)
-        self.index.add(cut)
         self.far.add(cut.rows, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
         self.partners.add(cut.rows, cut.near, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
 
     def close(self) -> int:
-        """Finish all four, and return the chromosome's Partner Rows entries (§5.3)."""
+        """Finish all three, and return the chromosome's Partner Rows entries (§5.3)."""
         self.near.close()
-        self.index.close()
         self.far.close()
         return self.partners.close()
 
@@ -1048,9 +1009,10 @@ def derive_partners(
     then. A store whose provenance already claims its Partner Rows is refused as nothing to do,
     unless `chromosomes` names ones it lacks.
 
-    `drop_index` is the Proxy Index's removal, a step of its own (partner-rows §6.2): it removes
-    `index/` and its count only from a store whose Partner Rows pass those rules, and never from
-    one whose derivation is incomplete.
+    `drop_index` removes a Proxy Index the store still holds — a leftover of a store derived
+    before #72 — and its count, a step of its own (partner-rows §6.2): it does so only for a store
+    whose Partner Rows pass those rules, and never for one whose derivation is incomplete. A store
+    this package writes holds no `index/`, so there it is nothing to do.
     """
     store = Path(location)
     root = _writable(store)
@@ -1184,7 +1146,8 @@ def _refuse_writes(plan: _Plan) -> None:
     through and published as the store's metadata.
 
     A store's read-only components may be links: the scratch stores #71 and #73 read are a copied
-    `zarr.json` beside links to the published store's `near/`, `far/`, `variants/` and `index/`.
+    `zarr.json` beside links to the published store's `near/`, `far/`, `variants/` and `index/`
+    (a published 0.1.0 store holds that last one until its rollout drops it).
 
     This check runs before the first write and is not a lock: a concurrent writer to the same store
     could still plant one between the check and the write. A store has one writer (as §6.1's carry
@@ -1518,15 +1481,15 @@ def _partner_entries(plan: _Plan) -> int:
 
 
 def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenance:
-    """Remove the Proxy Index from a store whose Partner Rows hold every entry it had
-    (partner-rows §6.2; ADR 0011, D1): its `index/` group and its count.
+    """Remove a Proxy Index a store still holds, whose Partner Rows hold every entry it had
+    (partner-rows §6.2; ADR 0011, D1): its `index/` group and its `counts.index_entries`.
 
-    The count goes with the arrays, in that order, and only after they are gone: a removal that
-    fails leaves the count in place and raises, naming the path, and a run killed between the two
-    leaves the store's provenance claiming an index it no longer holds, which `envelope.arrays`
-    refuses and a rerun finishes. Its six rules and `far.index` stay until #72 removes them, so
-    until then a store whose index is dropped here is one `ogld validate` reports the index rules
-    on.
+    From #72 a store this package writes has none, and no rule expects one: the removal is what
+    finishes a store derived by an earlier `ogld derive-partners`, and a store without one is left
+    as it is. The count goes with the arrays, in that order, and only after they are gone: a
+    removal that fails leaves the count in place and raises, naming the path, and a run killed
+    between the two leaves a count with no arrays, which validation reads as an extra provenance
+    key and ignores (spec §7).
 
     A scratch store's `index/` is a link to a published one, which is read, never removed: the link
     goes and the directory it names stays (partner-rows §6.2).
