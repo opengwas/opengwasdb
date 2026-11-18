@@ -237,35 +237,66 @@ Its two producers:
 Both MUST produce identical bytes for the same store. The derivation of a store built with Partner
 Rows reproduces its `frames` chunk file exactly, and a test holds this on the Test Store.
 
-### 6.2 Deriving the five existing stores (D6)
+### 6.2 Deriving the existing stores (D6)
 
-`ogld derive-partners <store> [--threads t] [--chromosomes …]`:
+`ogld derive-partners <store> --t-partner T [--threads t] [--processes p] [--chromosomes …]
+[--drop-index]` (ogld#69):
 
+- `--t-partner` is required and has no default (D3), and it is never above the store's recorded
+  `t_far`: a larger one is refused naming both. A store whose provenance already records Partner
+  Rows at another threshold is refused too, naming both, because a component at a second floor
+  would hold two.
 - Reads `near/<c>/r` with the direct decoder (ADR 0009) in blocks of rows, and `far/<c>/` whole
-  (101,886 pairs on EUR chr22).
-- Writes `partners/<c>/` into a temporary directory beside the store, then renames it into place
-  once every frame has been written and checked. The provenance gains its new keys only after
-  every chromosome is in place and §10's rules pass. A store with no provenance entry for the
-  Partner Rows does not have them, whatever directories exist.
+  (101,886 pairs on EUR chr22). It feeds both to §6.1's emitter, so the `frames` and `frames_idx`
+  chunk files are a build's, byte for byte, at any `--threads` and `--processes`.
+- Writes `partners/<c>/` into a temporary directory inside `partners/`, then renames it into place
+  once every frame has been written and checked (§5.1). `partners/` itself stays a plain directory
+  until the last step: a node of the store's hierarchy is one `partners.files` and the other nine
+  rules judge, and one a reader trusts, so it is made a node only when the component is whole. So
+  a run killed part-way leaves the store the `0.1.0` one it was, and so does a run that derives
+  some chromosomes and not others. A rerun removes the stale `partners/.<c>.tmp-*` a kill left,
+  skips the chromosomes already published, and completes (§5.1, §6.3).
+- The provenance gains `format_version` `0.2.0` and the four keys only after every chromosome of
+  the Variant Set is in place and §10's ten rules pass; `counts.partner_entries` is every
+  chromosome's own `entries`. Until then a store with no provenance entry for the Partner Rows
+  does not have them, whatever directories exist. `--chromosomes` names the ones to derive — all
+  the store lacks by default — and one the store does not have is refused.
 - Drops `index/` afterwards, as its own step and only on request (`--drop-index`), so a derived
-  store can be checked against its index before the index is removed.
+  store can be checked against its index before the index is removed. It removes the arrays and
+  `counts.index_entries`, only from a store whose Partner Rows pass §10's rules, and never in the
+  same invocation as a derivation that did not become whole. Until #72 removes the Proxy Index's
+  six rules, a store whose index is dropped here fails them, which is what that removal is for.
 
-### 6.3 Parallelising the build
+### 6.3 Parallelising the build and the derivation
 
 - **Across chromosomes: processes.** Chromosomes share nothing. A pool of P worker processes,
   each taking the largest remaining chromosome first, bounds memory at P chromosome carries plus
   their decode buffers. chr1, chr2 and chr6 dominate. Starting them first keeps the pool's
-  makespan near the largest chromosome's time.
-- **Within a chromosome: a pipeline of three stages.**
-  1. Decoder threads decode the next Near Band blocks ahead. zstd releases the GIL.
-  2. One thread thresholds, carries and assembles rows in row order.
-  3. A compressor pool compresses frames. zstd releases the GIL. Frames are appended strictly in
-     frame order, so the output does not depend on the pool's size or scheduling.
-- **Measured cost** (#65). Deriving EUR's Partner Rows from the published store took 47.9 s for
+  makespan near the largest chromosome's time. `--processes p` starts that pool with `spawn`, so
+  no worker inherits a reader, a chunk cache, a frame source's descriptor or a decoder's pool,
+  none of which is fork-safe (§7, §9.2); each worker opens the store itself.
+- **Within a chromosome: two stages.** The Near Band's blocks are decoded, thresholded, carried
+  and assembled in row order on one thread, and a pool of `--threads` compressor threads compresses
+  the frames. zstd releases the GIL, and frames are appended strictly in frame order, so the
+  output does not depend on the pool's size or scheduling.
+- **The inverse address rule is judged at the floor, not on the whole band.** A block's Near Band
+  codes are tested against the Partner Floor first, and only the codes that reach it are given
+  their pair by §4's address rule. On EUR chr22 that is 5.03% of 1,165,485,828 codes, and running
+  the rule on all of them was 37 s of the chromosome's 41 s of selection, the rest being the read:
+  the whole chromosome, frames included, is **29.4 s and 640 MiB peak RSS** at eight compressor
+  threads (16 cores' box, `taskset -c 0-7`, load 3.4), against 86.1 s and 790 MiB before. It
+  writes 7,477 frames, 153,561,655 bytes and 117,392,902 entries: #65's prototype counted
+  117,189,130 symmetric entries for the same chromosome, and the difference is exactly chr22's
+  101,886 Far Pairs in both directions, which §3 requires and that prototype did not write.
+- **The ten rules cost more than the derivation.** They read every frame and, through
+  `partners.near` and `partners.far`, the whole Near Band and Far Pairs again, on `--threads`.
+- **Measured cost** (#65's prototype, and #69's derivation). The prototype took 47.9 s for EUR
   chr22 at all four G, with the selection and the sort shared, and 1,179.3 s of group wall time
-  for the other 21 chromosomes at two G on two processes. That prototype sorts a whole
-  chromosome, which the streaming emitter does not: its 59.23 GB worker high water is the sort's,
-  and §6.1's 85,926,574-pair chr6 peak is what a carry-bounded emitter budgets.
+  for the other 21 chromosomes at two G on two processes; it sorts a whole chromosome, which the
+  streaming emitter does not: its 59.23 GB worker high water is the sort's, and §6.1's
+  85,926,574-pair chr6 peak is what a carry-bounded emitter budgets. #69 derived the published
+  EUR store's other 21 chromosomes in 12 min 49 s on four processes of eight compressor threads
+  (load 5–10), leaving them and chr22 as a 14.8 GB component.
 
 ## 7. Reading
 
