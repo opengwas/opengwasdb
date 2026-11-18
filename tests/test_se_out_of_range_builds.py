@@ -21,12 +21,12 @@ from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_v
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import VariantAxis
+from tests.ssf_builds import build_ragged_from_ssf
 
 #: An SE no float16 plane holds: above 65,504 and below 65,520, so a narrowing
 #: rounds it to 65,504 rather than to `+inf` -- a finite wrong value, the quiet kind.

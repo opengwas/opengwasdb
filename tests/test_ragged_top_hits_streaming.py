@@ -27,8 +27,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     write_eaf_reference,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
@@ -38,6 +37,7 @@ from opengwasdb.top_hits import (
     threshold_key,
 )
 from opengwasdb.validation import validate_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 # Small enough that the cells amortise the per-variant baseline: a residual
 # plane also stores one float32 per variant, so a plane with far more variants

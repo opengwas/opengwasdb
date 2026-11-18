@@ -55,8 +55,8 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import write_dense_cells
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -450,7 +450,7 @@ def _stored_crossovers(
 def _count_left_out_crossovers(dense_dir: Path, left_out: np.ndarray) -> None:
     """Add the crossovers left out to the completed Dense Component's own count
     and to its completion's `observed` part: each would have been a cell of that
-    component, which counts its own (issue #338, defect 1 of the 2 Nov review)."""
+    component, which counts its own (issue #338, ADR 0068, defect 1)."""
     if not left_out.any():
         return
     log_se_out_of_range(

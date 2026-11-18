@@ -31,8 +31,8 @@ from opengwasdb.encoding import (
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import write_encoded_planes
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import (
     RAGGED_ZARR_PATH,
     RaggedCSRWriter,

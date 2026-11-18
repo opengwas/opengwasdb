@@ -66,8 +66,8 @@ from opengwasdb.encoding import (
     StoreCodec,
     positions_pairs,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import Z_MISSING
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.by_variant import build_variant_index

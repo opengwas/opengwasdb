@@ -18,9 +18,9 @@ import pytest
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.variants import VariantAxis
+from tests.ssf_builds import build_ragged_from_ssf
 
 _ALID = "1:100000:A:G"
 _RSID = "rs16902359"

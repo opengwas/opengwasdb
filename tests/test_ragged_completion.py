@@ -473,7 +473,7 @@ class TestCompletionFiles:
         does, rather than asserting a vacuous equality on empty arrays."""
         import gzip
 
-        from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+        from tests.ssf_builds import build_ragged_from_ssf
 
         filtered_dir = tmp_path / "filtered"
         filtered_dir.mkdir()
@@ -804,9 +804,9 @@ class TestCompletedStoreKeepsObservedStatistics:
         (panel_dir / "block1.unphased.vcor1.gz").write_bytes(buf.getvalue())
 
     def test_observed_z_se_and_eaf_survive_completion(self, tmp_path):
-        from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
         from opengwasdb.layouts.ragged.complete import complete_ragged_store
         from opengwasdb.variants.axis import VariantAxis
+        from tests.ssf_builds import build_ragged_from_ssf
 
         filtered_dir = tmp_path / "filtered"
         filtered_dir.mkdir()
@@ -891,10 +891,10 @@ class TestAncestryMatchedRaggedCompletion:
     def test_only_matching_ancestry_analysis_is_imputed(self, tmp_path):
         import sqlite3
 
-        from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
         from opengwasdb.model.analyses import read_analyses
         from opengwasdb.variants import parse_canonical_alid
         from opengwasdb.variants.axis import VariantAxis
+        from tests.ssf_builds import build_ragged_from_ssf
 
         observed_bp = [800_000, 850_000, 900_000, 950_000, 1_000_000, 1_100_000, 1_150_000]
         z_values = [1.0, -1.2, 2.0, -0.5, 1.5, -2.0, 0.8]
@@ -2091,9 +2091,9 @@ def test_a_carried_analysis_is_written_in_the_completed_axis_order(tmp_path):
     segment is now written in variant order, the rows unchanged."""
     from contextlib import closing
 
-    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
     from opengwasdb.validation.rules.sequence import segment_order_errors
     from opengwasdb.variants.axis import VariantAxis
+    from tests.ssf_builds import build_ragged_from_ssf
 
     filtered = tmp_path / "filtered"
     filtered.mkdir()

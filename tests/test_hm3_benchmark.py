@@ -36,9 +36,9 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetError,
     list_indexed_subsets,
 )
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.query import query_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 #: The Hybrid fixture's on-panel ALIDs (its Dense Component's reference axis).
 _ON_PANEL = [HG38_ALID_1, HG38_ALID_3]

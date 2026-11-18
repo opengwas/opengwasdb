@@ -54,9 +54,9 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     list_indexed_subsets,
     open_indexed_subset,
 )
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.stats import p_value_from_z
+from tests.ssf_builds import build_ragged_from_ssf
 
 #: The subset's variant slots, chosen so the index carries every class the query
 #: path has to decode: overflow, missing, EAF exception, SE exception and two

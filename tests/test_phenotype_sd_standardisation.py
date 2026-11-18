@@ -20,11 +20,11 @@ import pytest
 
 import opengwasdb
 from opengwasdb.encoding.association_codec import CellValues, storable
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
 _PACKAGE = Path(opengwasdb.__file__).parent
-_OWNER = _PACKAGE / "encoding" / "phenotype_sd.py"
+_OWNER = _PACKAGE / "encoding" / "sd_units.py"
 #: A divisor whose spelling names a standard deviation.
 _SD_NAMED = re.compile(r"divisor|original_sd|phenotype_sd|\bsd\b|_sd\b", re.IGNORECASE)
 
@@ -116,7 +116,7 @@ def test_a_writer_that_does_not_say_which_scale_its_ses_are_in_does_not_run() ->
         assert parameter.default is inspect.Parameter.empty, entry
 
 
-# ── Fix round 1 (review of #366): no silent no-op, no default, no bypass ─────
+# ── Issue #366: no silent no-op, no default, no bypass ───────────────────────
 
 #: The only modules that may name `PhenotypeSd.APPLIED`, each a writer of cells a
 #: Store -- or a Hybrid Pass 2 spill -- already holds in SD Units. The scan below
@@ -124,7 +124,7 @@ def test_a_writer_that_does_not_say_which_scale_its_ses_are_in_does_not_run() ->
 #: purpose, with its reason; a source builder never is, whatever its filename.
 _MAY_SAY_APPLIED: dict[str, str] = {
     # Defines `APPLIED`.
-    "encoding/phenotype_sd.py": "the owner",
+    "encoding/sd_units.py": "the owner",
     # `encode` takes what a Store holds: a grid `storable` already standardised,
     # or a completion's cells.
     "encoding/association_codec.py": "AssociationCodec.encode re-judges stored cells",
@@ -205,7 +205,7 @@ def test_no_module_but_a_stored_cell_writer_can_say_its_ses_are_already_standard
     """`APPLIED` divides by nothing. A source builder that passed it would store
     its source's SEs, which is what the Ragged builders did before #366. Searched
     package-wide, not by filename: a builder copied to `layouts/ragged/source_ssf.py`,
-    or a helper in `source_sd.py`, is caught like `build_ssf.py` (#366 review r2)."""
+    or a helper in `source_sd.py`, is caught like `build_ssf.py` (issue #366)."""
     found = {
         module: lines
         for module, lines in _naming_applied(_PACKAGE).items()

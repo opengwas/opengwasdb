@@ -684,7 +684,7 @@ PANEL=/data/opengwasdb/work/odb430/panel-chr15-22
 OUT=docs/benchmark-output/ragged_completion_streams
 pixi run -e dev opengwasdb build-ragged-ssf /data/opengwasdb/stores/OGS-00006/work/analyses.tsv \
     /data/opengwasdb/stores/OGS-00006/source $SRC --store-id OGS-00006 --release-id OGS-00006 \
-    --association-coverage signals_only --stored-effect-scale sd \
+    --association-coverage signals_only \
     --admission-record $SRC.admission \
     --regions $STORES/stores/OGS-00006/sidecars/sparse_regions.tsv
 mkdir -p $PANEL/EUR

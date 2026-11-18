@@ -26,7 +26,6 @@ from opengwasdb.encoding.codec import (
     StoreCodec,
     se_from_log,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import (
     EAF_EXCEPTION,
     SE_EXCEPTION,
@@ -42,6 +41,7 @@ from opengwasdb.encoding.planes import (
     write_dense_cells,
     write_encoded_planes,
 )
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.store.arrays import ArrayRole, compressor
 
 NAN = np.float32(np.nan)

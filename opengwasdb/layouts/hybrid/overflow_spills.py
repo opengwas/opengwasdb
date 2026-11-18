@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.build.ordered_pool import ordered_map
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
 __all__ = ["assemble_overflow_csr"]

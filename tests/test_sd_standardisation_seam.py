@@ -34,13 +34,12 @@ from sd_scaling import require_not_rescaling, require_rescaling
 
 from opengwasdb.admission import Gate
 from opengwasdb.build.observed import build_dense_observed_from_manifest
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import _OffReferenceSpill, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged import build_ssf
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod
 from opengwasdb.query import query_store
@@ -263,13 +262,13 @@ def _ragged_ssf(tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyP
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
         "analysis_index\tanalysis_id\tanalysis_label\tn\tmhc\tfiltered_file"
-        "\tsource_genome_build\toriginal_sd_method\toriginal_sd\n"
+        "\tsource_genome_build\tstored_effect_scale\toriginal_sd_method\toriginal_sd\n"
         f"0\ttrait\tTrait\t1000\tFALSE\ttrait.tsv.gz\tGRCh38"
-        f"\t{declared.method_text}\t{declared.original_sd}\n",
+        f"\tsd\t{declared.method_text}\t{declared.original_sd}\n",
         encoding="utf-8",
     )
     store = tmp_path / "ssf.opengwasdb"
-    build_ragged_from_ssf(
+    build_ssf.build_ragged_from_ssf(
         manifest, filtered, store, store_id="s", release_id="r",
         association_coverage="cis_and_signals",
     )
@@ -375,9 +374,56 @@ def test_a_padded_method_is_refused_as_dense_refuses_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route
 ) -> None:
     """Ragged validated the method stripped but stored it as spelt, so a padded
-    one built and then failed `analyses.vocabularies` (#366 review, P2). Every
+    one built and then failed `analyses.vocabularies` (issue #366). Every
     builder refuses it, naming the Analysis and the spelling."""
     padded = Declared(OriginalSdMethod.SOURCE_PROVIDED, ORIGINAL_SD, " source_provided ")
 
     with pytest.raises(ValueError, match="invalid original_sd_method ' source_provided '"):
         route(tmp_path, padded, monkeypatch)
+
+
+# ── A row labelled SD Units must have been standardised (issue #366, ADR 0084) ──
+
+
+@pytest.mark.parametrize(
+    "route", [*RAGGED.values(), _dense], ids=[*RAGGED, "dense"]
+)
+def test_a_row_labelled_sd_units_with_a_method_that_standardises_nothing_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route
+) -> None:
+    """`stored_effect_scale=sd` over `binary_trait` would build an undivided
+    Analysis labelled SD Units. Every builder refuses it and names the Analysis."""
+    undivided = Declared(OriginalSdMethod.BINARY_TRAIT, "")
+
+    with pytest.raises(
+        ValueError, match=r"analysis '(trait|ENSG00000000001)'.*stored_effect_scale='sd'"
+    ):
+        route(tmp_path, undivided, monkeypatch)
+
+
+@pytest.mark.parametrize("route", RAGGED.values(), ids=list(RAGGED))
+def test_a_ragged_row_labelled_sd_units_with_no_method_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route
+) -> None:
+    """Ragged read an omitted method as divisor 1.0 and kept the label `sd`;
+    Dense already refuses a blank method as an invalid one."""
+    omitted = Declared(OriginalSdMethod.BINARY_TRAIT, "", spelling="")
+
+    with pytest.raises(
+        ValueError, match=r"analysis '(trait|ENSG00000000001)'.*stored_effect_scale='sd'"
+    ):
+        route(tmp_path, omitted, monkeypatch)
+
+
+@pytest.mark.parametrize("token", ["NA", ".", "   "])
+@pytest.mark.parametrize("route", RAGGED.values(), ids=list(RAGGED))
+def test_a_missing_token_for_the_method_is_no_method_so_an_sd_row_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route, token: str
+) -> None:
+    """The Ragged builders read `NA`, `.` and white space as a blank cell. A row
+    labelled `sd` over one is the no-method case, not an unknown spelling, so it is
+    refused for the same reason (issue #366)."""
+    missing = Declared(OriginalSdMethod.BINARY_TRAIT, "", spelling=token)
+
+    with pytest.raises(ValueError, match=r"stored_effect_scale='sd'"):
+        route(tmp_path, missing, monkeypatch)

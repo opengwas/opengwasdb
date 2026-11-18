@@ -51,8 +51,8 @@ from typing import Any
 import numpy as np
 
 from benchmarks._artifact import commit
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.store.arrays import (

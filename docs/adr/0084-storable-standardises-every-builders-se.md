@@ -6,7 +6,9 @@ Issue [#366](https://github.com/opengwas/opengwasdb/issues/366), under epic #347
 (`stored_se = original_se / sd` for `original_sd_method` methods 2-5) and
 amends [ADR 0077](0077-one-module-owns-how-an-association-is-encoded.md)
 (`storable` is the one judgement a writer makes before any plane holds a cell).
-No format change: the contract always said SD Units (spec §7).
+No format change: the contract always said SD Units (spec §7). The #338 out-of-range
+rule ([ADR 0068](0068-an-se-beyond-float16-is-missing.md)) judges the SE this ADR's
+divide produces.
 
 ## Context
 
@@ -28,7 +30,7 @@ owner rejected that shape on 18 Nov 2026.
 
 ## Decision
 
-**`opengwasdb.encoding.phenotype_sd.PhenotypeSd` holds the divide, and
+**`opengwasdb.encoding.sd_units.PhenotypeSd` holds the divide, and
 `storable` applies it to every cell a writer stores.** One other caller uses
 it: `validate`'s source-fidelity check calls `PhenotypeSd.standardised` to
 compute the SE a build stored from a source row. It stores nothing.
@@ -40,9 +42,9 @@ compute the SE a build stored from a source row. It stores nothing.
 - A builder hands its source's SEs with `PhenotypeSd.dividing_by(sd, ...)`,
   one SD per Analysis, indexed as `analyses` is. `dividing_by()` with no SD is
   refused, and so is a count that is not the batch's `n_analyses`, naming both
-  counts. "No rescaling" is the 1.0 that the manifest parser supplies, never an
-  omission or a default: no divisor parameter or field in the package has a
-  default (fix round 1, from review). `storable` returns the cells
+  counts. "No rescaling" is the 1.0 that the manifest parser supplies for a method that
+  carries no SD (see the 18 Nov 2026 addendum for a row that names none): no divisor parameter or field in the package has a
+  default (issue #366). `storable` returns the cells
   with each SE divided by its Analysis's SD. Every rule after that judges the
   divided SE, the one the Store holds: Admission's check and the #338
   out-of-range rule. The canonical-marker check judges the SE as it was handed
@@ -68,7 +70,7 @@ compute the SE a build stored from a source row. It stores nothing.
   `apply_se_divisor` used. It returns `se` itself, not a copy, when every SD
   is 1.0. `apply_se_divisor` is deleted.
 - `tests/test_phenotype_sd_standardisation.py` scans the package and fails on any division by
-  an SD-named value outside `phenotype_sd.py`. Run against the code before
+  an SD-named value outside `sd_units.py`. Run against the code before
   this ADR, it finds `apply_se_divisor`.
   `tests/test_sd_standardisation_seam.py` builds one source declaring
   `original_sd = 2.0` through all seven paths: Dense, Dense-from-VCF, the
@@ -86,11 +88,11 @@ compute the SE a build stored from a source row. It stores nothing.
     Hybrid and Ragged completion, and `hybrid/overflow_spills`. A new module
     that needs `APPLIED` is added to the list on purpose. An entry whose
     module no longer exists, or no longer names `APPLIED`, also fails, so the
-    list cannot keep a stale exception. Fix round 2 replaced a filename glob
+    list cannot keep a stale exception. A package-wide scan replaced a filename glob
     over the source builders: a builder copied to
     `layouts/ragged/source_ssf.py`, or a helper in `source_sd.py`, passed the
     glob but fails this scan;
-  - anything but `phenotype_sd.py` constructs a `PhenotypeSd`;
+  - anything but `sd_units.py` constructs a `PhenotypeSd`;
   - any divisor parameter or field has a default.
 
   An empty Ragged Analysis passes its own `dividing_by`, like any other.
@@ -150,3 +152,30 @@ validate clean.
   `APPLIED`. ADR 0077's "pure and idempotent" now holds for `APPLIED` only.
 - Repairing the four Releases is an opengwasdb-stores ticket. Until they are
   repaired, `validate` fails them.
+
+## Addendum, 18 Nov 2026: a blank method is "not standardised, scale unknown"
+
+The text above said "no rescaling" was never an omission. For the Ragged
+builders it was: a row with no `original_sd_method` was read as divisor 1.0, and
+`build-ragged-ssf` still labelled the Analysis `stored_effect_scale=sd` from its
+own default, so an undivided Analysis could be called SD Units. The code now
+reads it this way:
+
+- A blank `original_sd_method` with a blank `stored_effect_scale` means *not
+  standardised, scale unknown*. It claims nothing, and is what OGS-00001 and
+  OGS-00002 hold. Only the Ragged BESD builder can build it.
+- A row labelled `stored_effect_scale=sd` must name a rescaling method
+  (`SD_RESCALING_METHODS`) or `declared_standardised`. Any other method, or
+  none, is refused naming the Analysis, in `require_sd_scale_standardised`,
+  which Dense, Dense-from-VCF, Hybrid, `build-ragged-besd` and
+  `build-ragged-ssf` all call (issue #366).
+- `build-ragged-ssf` has no `--stored-effect-scale`: the scale is each manifest
+  row's, and a row that declares none is refused.
+
+No published Release is affected (census of `opengwasdb-stores/stores/*/analyses.tsv`:
+every Ragged Release declares a method, except OGS-00001 and OGS-00002, which are
+blank in both columns).
+
+The module is `opengwasdb/encoding/sd_units.py`, named for CONTEXT.md's SD Units; it was
+`encoding/phenotype_sd.py`, which `build/phenotype_sd.py` (the estimate of the SD) shared a
+name with. The class keeps its name, `PhenotypeSd`: it is the phenotype SD a builder divides by.

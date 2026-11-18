@@ -471,7 +471,7 @@ def test_hybrid_validation_refuses_a_tampered_overflow_only_sample(tmp_path: Pat
 def test_ragged_release_is_still_refused_for_build_and_query(tmp_path: Path) -> None:
     from test_ragged_build_ssf import _make_fixture
 
-    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+    from tests.ssf_builds import build_ragged_from_ssf
 
     manifest, filtered = _make_fixture(tmp_path)
     store = tmp_path / "ragged.opengwasdb"

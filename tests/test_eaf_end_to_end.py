@@ -22,10 +22,10 @@ import pytest
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 # Source reports effect allele G at 0.25. G sorts after A, so A is the stored
 # effect allele and the store must hold 1 - 0.25 = 0.75.

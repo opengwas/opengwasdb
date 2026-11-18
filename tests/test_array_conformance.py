@@ -201,8 +201,8 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     stores.append(_BuiltStore("dense-completion", completed, dense_planes_whole=False))
 
     # Ragged SSF, plus its top-hit index.
-    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
     from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
+    from tests.ssf_builds import build_ragged_from_ssf
 
     d = root / "ragged-ssf"
     d.mkdir()

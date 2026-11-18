@@ -11,7 +11,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZEncoding,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.store.arrays import ArrayRole, open_group, shard_layout
 

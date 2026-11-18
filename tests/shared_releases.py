@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from dense_sources import build_dense_fixture
 
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 if TYPE_CHECKING:
     from test_ragged_residual_completion import RaggedResidualScenario

@@ -951,6 +951,84 @@ def test_a_rescaling_method_without_a_finite_positive_original_sd_fails_naming_t
     assert _names_it(result, analysis, original_sd), result.errors
 
 
+def test_the_original_sd_rule_applies_to_a_release_stamped_0_2_0(ragged_store_path):
+    """The rule has no version gate: a release before 0.2.3 that records a rescaling
+    method without its SD fails it too, as OGS-00006's family does at its own
+    format (issue #366, ADR 0084)."""
+    from region_tables import edit_manifest
+
+    edit_manifest(ragged_store_path, lambda m: {**m, "format_version": "0.2.0"})
+    assert open_store(ragged_store_path).manifest.format_version == "0.2.0"
+    assert validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED}).ok
+    analysis = _shaped_like_ogs_00006(ragged_store_path, "")
+
+    result = validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED})
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, ""), result.errors
+
+
+def test_the_original_sd_rule_applies_to_a_release_stamped_0_1_0(tmp_path, dense_store_path):
+    """The same, on a genuine 0.1.0 (Zarr v2) release, the format the validator
+    still opens (see `test_a_fixture_0_1_0_release_still_spelling_full_opens_and_validates`)."""
+    from legacy_fixtures import relayout_as_0_1_0
+
+    legacy = relayout_as_0_1_0(dense_store_path, tmp_path / "legacy-0.1.0.opengwasdb")
+    assert open_store(legacy).manifest.format_version == "0.1.0"
+    assert validate_store(legacy, rules={_ORIGINAL_SD_RECORDED}).ok
+    analysis = _shaped_like_ogs_00006(legacy, "")
+
+    result = validate_store(legacy, rules={_ORIGINAL_SD_RECORDED})
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, ""), result.errors
+
+
+_SD_SCALE_STANDARDISED = "analyses.sd_scale_standardised"
+
+
+def _labelled(store: Path, scale: str, method: str) -> str:
+    """Give the store's first Analysis a Stored Effect Scale and method. Returns its id."""
+    analyses_path = store / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    row = table.rows[0]
+    row.update(stored_effect_scale=scale, original_sd_method=method, original_sd="")
+    write_analyses(analyses_path, table)
+    return str(row["analysis_id"])
+
+
+@pytest.mark.parametrize("method", ["", "binary_trait"])
+def test_an_sd_scale_with_no_standardising_method_fails_naming_the_analysis(
+    ragged_store_path, method
+):
+    """Issue #366, ADR 0084: `sd` over no method, or over `binary_trait`, is an
+    undivided Analysis labelled SD Units, which nothing else in the Store shows."""
+    assert validate_store(ragged_store_path, rules={_SD_SCALE_STANDARDISED}).ok
+    analysis = _labelled(ragged_store_path, "sd", method)
+
+    result = validate_store(ragged_store_path, rules={_SD_SCALE_STANDARDISED})
+
+    assert result.failed() == {_SD_SCALE_STANDARDISED}
+    assert any(
+        f"analysis {analysis!r}" in e and f"original_sd_method={method!r}" in e
+        for e in result.errors
+    ), result.errors
+
+
+@pytest.mark.parametrize(
+    ("scale", "method"),
+    [("sd", "declared_standardised"), ("log_or", "binary_trait"), ("log_or", ""), ("", "")],
+)
+def test_a_label_that_claims_no_unstandardised_sd_units_passes_the_sd_scale_rule(
+    ragged_store_path, scale, method
+):
+    """A non-`sd` scale claims no SD Units, and a blank scale with a blank method is
+    "not standardised, scale unknown" (spec §7): neither is this rule's."""
+    _labelled(ragged_store_path, scale, method)
+
+    assert validate_store(ragged_store_path, rules={_SD_SCALE_STANDARDISED}).ok
+
+
 def test_a_rescaling_method_with_the_sd_it_divided_by_validates(ragged_store_path):
     _shaped_like_ogs_00006(ragged_store_path, "0.984008520611909")
 

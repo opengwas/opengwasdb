@@ -53,9 +53,9 @@ from opengwasdb.encoding.codec import (
     table_end_to_end,
 )
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest

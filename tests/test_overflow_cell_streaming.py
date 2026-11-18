@@ -19,8 +19,8 @@ import zarr
 import opengwasdb.store.arrays as store_arrays
 from opengwasdb.encoding import EncodingMeasurements, OverflowCells, StoreEncoding
 from opengwasdb.encoding.codec import StoreCodec
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import OverflowCellBatches, optimise_dense_se_joint
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 

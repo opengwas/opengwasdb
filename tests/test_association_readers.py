@@ -35,8 +35,8 @@ from opengwasdb.associations import (
 )
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.codec import EAF_ABSENT, Z_MISSING
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
 from opengwasdb.layouts.ragged.by_variant import VariantIndexError, build_variant_index
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter

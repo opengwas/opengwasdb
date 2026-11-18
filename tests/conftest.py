@@ -9,7 +9,7 @@ import pytest
 import shared_releases
 
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+from tests.ssf_builds import build_ragged_from_ssf
 
 if TYPE_CHECKING:
     from test_ragged_residual_completion import RaggedResidualScenario

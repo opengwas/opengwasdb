@@ -21,7 +21,7 @@ import numpy as np
 from test_overflow_cell_streaming import _model_writer, _residual_se_encoding, _stored
 
 from opengwasdb.encoding import StoreEncoding
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged import zarr_csr
 
 #: The plane `test_overflow_cell_streaming`'s fixtures use: enough cells per
