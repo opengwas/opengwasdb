@@ -44,7 +44,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -1055,16 +1055,51 @@ def derive_partners(
     store = Path(location)
     root = _writable(store)
     plan = _plan(root, store, t_partner, chromosomes)
+    _refuse_links(plan)
     if drop_index and not plan.whole_after:
         raise InputError(_incomplete(plan))
     if plan.missing:
         _derive(plan, threads=threads, processes=processes)
-    else:
+    elif plan.claimed:
         _nothing_to_do(plan, drop_index)
+    else:
+        plan = _settle(root, plan, t_partner, threads, processes)
     if not plan.complete:
         return None
     made = _claim(root, plan, t_partner, threads)
     return _drop_index(root, store, made) if drop_index else made
+
+
+def _settle(root: zarr.Group, plan: _Plan, t_partner: float, threads: int, processes: int) -> _Plan:
+    """An unclaimed component — a whole `partners/` that no provenance claims, which a run killed
+    between publishing it and writing the provenance leaves — is completed or rebuilt, never
+    trusted (partner-rows §6.2).
+
+    The ten rules decide which: they read the component alone, so a component they accept is one
+    provenance write away from being the store's, and one they refuse is removed and derived again
+    from the band. Nothing reads it in the meantime: a reader and validation both key on the
+    provenance, never on a group being there (ogld#69).
+    """
+    if _rules_pass(root, plan, t_partner, threads):
+        return plan
+    _remove_component(plan.store)
+    fresh = _plan(root, plan.store, t_partner, tuple(plan.ranges))
+    _derive(fresh, threads=threads, processes=processes)
+    return fresh
+
+
+def _rules_pass(root: zarr.Group, plan: _Plan, t_partner: float, threads: int) -> bool:
+    """Whether the ten rules accept the component of a store that does not claim it yet."""
+    findings = validate_group(root, _claimed(plan, t_partner), PARTNER_RULES, threads=threads)
+    return not any(findings.values())
+
+
+def _remove_component(store: Path) -> None:
+    """Remove every chromosome's Partner Rows, and the directory that holds them: an unclaimed
+    component the rules refused, which a rerun derives again (partner-rows §6.2)."""
+    component = store / layout.PARTNERS
+    shutil.rmtree(component, ignore_errors=False)
+    component.mkdir()
 
 
 def _nothing_to_do(plan: _Plan, drop_index: bool) -> None:
@@ -1082,19 +1117,33 @@ def _claim(root: zarr.Group, plan: _Plan, t_partner: float, threads: int) -> Pro
     """Make the derived component the store's: the ten rules pass, `partners/` becomes a node of
     the hierarchy, and the provenance that describes it is written last (partner-rows §6.2, §10).
 
+    That last write is **the claim**, and it is one write: the root's metadata is replaced whole, so
+    a run killed before it leaves a store whose provenance says 0.1.0 — a store that does not have
+    the Partner Rows, whatever directories exist (§6.2). Nothing reads a component the provenance
+    does not claim, so the moment between the node and the claim is one no rule and no reader
+    trusts, and a rerun settles it (`_settle`).
+
     What a killed run left unpublished goes first: it is this run's own, no writer is live beside
-    it, and `partners.files` refuses a store that holds one (§5.1). The rules judge the directory's
-    groups before it is a node, which is what lets a component that fails them leave the store the
-    0.1.0 one it was (#68's `partners.files`).
+    it, and `partners.files` refuses a store that holds one (§5.1).
     """
     _clear_temporaries(plan.store / layout.PARTNERS)
     made = _claimed(plan, t_partner)
     findings = validate_group(root, made, PARTNER_RULES, threads=threads)
     if any(findings.values()):
         raise ValidationFailed(findings)
-    root.require_group(layout.PARTNERS)
-    root.attrs.update({"ld_store": made})
+    _publish(root)
+    _record(root, made)
     return cast(Provenance, made)
+
+
+def _publish(root: zarr.Group) -> None:
+    """Make `partners/` a node of the store's hierarchy, before the claim that activates it."""
+    root.require_group(layout.PARTNERS)
+
+
+def _record(root: zarr.Group, made: dict[str, Any]) -> None:
+    """The claim: the provenance, in one replaced metadata write (partner-rows §6.2)."""
+    root.attrs.update({"ld_store": made})
 
 
 def _writable(store: Path) -> zarr.Group:
@@ -1105,6 +1154,37 @@ def _writable(store: Path) -> zarr.Group:
         return zarr.open_group(str(store), mode="r+")
     except (OSError, ValueError) as unwritable:
         raise InputError(f"{store} cannot be written to: {unwritable}") from unwritable
+
+
+def _refuse_links(plan: _Plan) -> None:
+    """Refuse, before anything is written, a store whose writable parts resolve outside it: a
+    derivation writes the root metadata, `partners/`, and a group or a temporary for each
+    chromosome it derives, and a symbolic link at any of them would put those writes in another
+    directory (ogld#69).
+
+    A store's read-only components may be links: the scratch stores #71 reads are a copied
+    `zarr.json` beside links to the published store's `near/`, `far/`, `variants/` and `index/`.
+    """
+    root = plan.store.resolve()
+    for path in _written(plan):
+        resolved = path.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise InputError(
+                f"{path} resolves to {resolved}, outside the store at {root}: a derivation writes "
+                "only inside the store, and never through a symbolic link (partner-rows §6.2)"
+            )
+
+
+def _written(plan: _Plan) -> Iterator[Path]:
+    """The paths a run owns: the root metadata, `partners/`, and every entry of it — the groups it
+    derives or claims, and the temporaries it removes. A store is derived into, so its component
+    is the store's own, and a link at any of these would put it somewhere else."""
+    store = plan.store
+    yield store / "zarr.json"
+    component = store / layout.PARTNERS
+    yield component
+    if component.is_dir() and not component.is_symlink():
+        yield from component.iterdir()
 
 
 def _plan(
@@ -1208,9 +1288,22 @@ def _incomplete(plan: _Plan) -> str:
     )
 
 
-def _derive(plan: _Plan, *, threads: int, processes: int) -> None:
+def _derive(
+    plan: _Plan,
+    *,
+    threads: int,
+    processes: int,
+    work: Callable[[_Schedule], int] | None = None,
+) -> None:
     """Derive the chromosomes `plan` lacks, largest first, on `processes` worker processes
-    (partner-rows §6.3). One process derives them one after another; more take one each."""
+    (partner-rows §6.3). One process derives them one after another; more take one each.
+
+    `work` is the unit one worker runs, `derive_partner_rows` unless it is given: it is a
+    parameter so that the pool's own contract — a child process a chromosome, and a worker's
+    failure stopping the run and publishing nothing — is held by a test and not by a reading of
+    this function (ogld#69).
+    """
+    run = derive_partner_rows if work is None else work
     if threads < 1 or processes < 1:
         raise InputError(
             f"threads and processes count workers, so each is at least 1, not {threads} and "
@@ -1232,21 +1325,22 @@ def _derive(plan: _Plan, *, threads: int, processes: int) -> None:
     ]
     if processes == 1:
         for job in jobs:
-            derive_partner_rows(job)
+            run(job)
         return
     context = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=min(processes, len(jobs)), mp_context=context) as pool:
-        list(pool.map(derive_partner_rows, jobs))
+        list(pool.map(run, jobs))
 
 
 def derive_partner_rows(job: _Schedule) -> int:
     """Write one chromosome's Partner Rows from its store's Near Band and Far Pairs, and return
     them: every pair's code in both variants' rows, twice the pairs (partner-rows §5.3, §6.2).
 
-    The Near Band is read a block of rows at a time through the direct decoder (ADR 0009) and
-    the Far Pairs whole, and both are handed to the emitter a build hands its cuts, so the frames
-    are a build's, byte for byte (§6.1). `FramesGroup` publishes the group by one rename, so the
-    chromosome is whole or absent however the run ends (§5.1).
+    The Near Band is read a block of rows at a time through the direct decoder (ADR 0009), and the
+    Far Pairs as their `indptr` whole and their partner and code arrays one block's worth at a
+    time. Both are handed to the emitter a build hands its cuts, so the frames are a build's, byte
+    for byte (§6.1). `FramesGroup` publishes the group by one rename, so the chromosome is whole or
+    absent however the run ends (§5.1).
     """
     root = open_group(job.store)
     cache = ChunkCache(0)
@@ -1322,10 +1416,11 @@ def _clear_temporaries(component: Path) -> None:
     for stale in component.iterdir():
         if not stale.name.startswith("."):
             continue
-        if stale.is_dir():
-            shutil.rmtree(stale, ignore_errors=True)
-        else:
+        if stale.is_symlink() or not stale.is_dir():
+            # A link is removed, never followed: what it names is not this store's (ogld#69).
             stale.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(stale, ignore_errors=False)
 
 
 def _claimed(plan: _Plan, t_partner: float) -> dict[str, Any]:
@@ -1344,13 +1439,34 @@ def _claimed(plan: _Plan, t_partner: float) -> dict[str, Any]:
     return made
 
 
+def _removed(index: Path) -> None:
+    """Remove the Proxy Index a store holds at `index`: the link itself when it is one, and never
+    what a link names. A removal that fails raises, naming the path."""
+    try:
+        if index.is_symlink() or not index.is_dir():
+            index.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(index)
+    except OSError as failed:
+        raise InputError(
+            f"{index} could not be removed ({failed}): its count is kept, and the Proxy Index is "
+            "still the store's (partner-rows §6.2)"
+        ) from failed
+
+
 def _partner_entries(plan: _Plan) -> int:
     """Every chromosome's Partner Rows entries, from each published group's own attribute: twice
     the pairs the component holds (partner-rows §5.3). A group without it is refused rather than
     counted as none, which would claim a component smaller than the one in the store."""
     total = 0
     for chrom in plan.ranges:
-        group = zarr.open_group(str(plan.store / layout.PARTNERS / chrom), mode="r")
+        try:
+            group = zarr.open_group(str(plan.store / layout.PARTNERS / chrom), mode="r")
+        except (OSError, ValueError) as unreadable:
+            raise InputError(
+                f"{layout.partners_path(chrom)} cannot be read as a group ({unreadable}): its "
+                "Partner Rows are not a component a store claims (partner-rows §5.3)"
+            ) from unreadable
         entries = group.attrs.get("entries")
         if not isinstance(entries, int) or isinstance(entries, bool):
             raise InputError(
@@ -1365,12 +1481,17 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     """Remove the Proxy Index from a store whose Partner Rows hold every entry it had
     (partner-rows §6.2; ADR 0011, D1): its `index/` group and its count.
 
-    The count goes with the arrays, in that order, so a run killed between the two leaves the
-    store's provenance claiming an index it no longer holds, which `envelope.arrays` refuses and a
-    rerun finishes. Its six rules and `far.index` stay until #72 removes them, so until then a
-    store whose index is dropped here is one `ogld validate` reports the index rules on.
+    The count goes with the arrays, in that order, and only after they are gone: a removal that
+    fails leaves the count in place and raises, naming the path, and a run killed between the two
+    leaves the store's provenance claiming an index it no longer holds, which `envelope.arrays`
+    refuses and a rerun finishes. Its six rules and `far.index` stay until #72 removes them, so
+    until then a store whose index is dropped here is one `ogld validate` reports the index rules
+    on.
+
+    A scratch store's `index/` is a link to a published one, which is read, never removed: the link
+    goes and the directory it names stays (partner-rows §6.2).
     """
-    shutil.rmtree(store / "index", ignore_errors=True)
+    _removed(store / "index")
     counts = dict(cast(dict[str, Any], recorded["counts"]))
     counts.pop("index_entries", None)
     made: dict[str, Any] = dict(recorded)

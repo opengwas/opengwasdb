@@ -307,13 +307,17 @@ class _Store:
         return entries
 
     def partners_judged(self) -> bool:
-        """Whether this store's Partner Rows are judged: a 0.2.0 store has them (spec §13), and a
-        0.1.0 store, which need not, is held to them anyway when it carries the component — a
-        group a store writes is one a reader trusts."""
+        """Whether this store's Partner Rows are judged: its provenance claims them, which a store
+        of format 0.2.0 or later does and no other can (spec §13; partner-rows §6.2).
+
+        A 0.1.0 store that carries the component anyway is an **unclaimed** one: a derivation
+        killed between making `partners/` a node of the hierarchy and writing the provenance that
+        claims it. Nothing may read those frames — a reader refuses a store whose provenance has
+        no `t_partner` — so judging them here would fail a store no one can use and complete
+        nothing; the device that completes or rebuilds it is `ogld derive-partners` (ogld#69).
+        """
         version = _release(_lookup(self.provenance, "format_version"))
-        if version is not None and version >= (0, 2, 0):
-            return True
-        return self.node(layout.PARTNERS) is not None
+        return version is not None and version >= (0, 2, 0)
 
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """One chromosome's positions, kept as a reader keeps them (spec §10)."""

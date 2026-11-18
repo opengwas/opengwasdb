@@ -13,6 +13,7 @@ lands mid-chromosome with no clock to wait on and no injected exception for the 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,8 +23,10 @@ import pytest
 import zarr
 from store_copies import TEST_STORE, unpartnered
 
+import ogld
 from ogld import cli
 from ogld.format import InputError
+from ogld.store import assembly
 from ogld.store.assembly import derive_partners
 from ogld.store.validation import PARTNER_RULES, ValidationFailed, validate_at, validate_group
 
@@ -89,13 +92,13 @@ def test_a_derived_store_is_the_builds_byte_for_byte(tmp_path: Path) -> None:
     assert failing(store) == [], "the derived component passes the ten rules it is judged by"
 
 
-@pytest.mark.parametrize(("threads", "processes"), [(1, 1), (2, 2), (8, 8)])
+@pytest.mark.parametrize(("threads", "processes"), [(1, 1), (2, 2)])
 def test_the_bytes_do_not_depend_on_the_workers(
     tmp_path: Path, threads: int, processes: int
 ) -> None:
     """Compressor threads and chromosome processes are bounds on time, never on output
-    (partner-rows §6.3, §9.1). The pool takes one worker a chromosome at most, so eight
-    processes on a two-chromosome store derive two at once."""
+    (partner-rows §6.3, §9.1). Eight workers, whose spawn cost the default tier cannot pay for,
+    are held by `tests/realdata/test_derive_partners.py`."""
     store = unpartnered(tmp_path / "store")
     derive_partners(store, t_partner=T_PARTNER, threads=threads, processes=processes)
     assert_the_builds_bytes(store)
@@ -266,3 +269,204 @@ def test_drop_index_refuses_before_a_derivation_that_would_stay_partial(tmp_path
         derive_partners(store, t_partner=T_PARTNER, chromosomes=["21"], drop_index=True)
     assert not (store / "partners").exists(), "nothing was derived"
     assert (store / "index").exists()
+
+
+# ---------------------------------------------------------------- the pool's contract (ogld#69)
+
+
+def record_worker(job: assembly._Schedule) -> int:
+    """A worker that records the process it ran in, and derives nothing. A module-level function,
+    so a spawn worker resolves it by name as the pool pickles it."""
+    with (job.store.parent / "workers.txt").open("a") as told:
+        told.write(f"{os.getpid()}\n")
+    return 0
+
+
+def refuse_work(job: assembly._Schedule) -> int:
+    """A worker that fails, as a chromosome the store cannot read does."""
+    raise ValueError(f"chromosome {job.chrom} could not be derived: a worker fault")
+
+
+def test_the_pool_runs_its_work_in_child_processes(tmp_path: Path) -> None:
+    """A process pool is the point of `--processes`, so the test holds the pool, not only the
+    bytes: one child process a chromosome, none of them this one (partner-rows §6.3)."""
+    store = unpartnered(tmp_path / "store")
+    plan = assembly._plan(assembly.open_group(store), store, T_PARTNER, None)
+    assert len(plan.missing) == 2, "the fixture must have two chromosomes to fill two workers"
+    assembly._derive(plan, threads=1, processes=2, work=record_worker)
+    workers = [int(line) for line in (tmp_path / "workers.txt").read_text().split()]
+    assert len(workers) == 2, workers
+    assert os.getpid() not in workers, "the work ran in this process, not in a pool"
+
+
+def test_a_workers_failure_stops_the_run_and_claims_nothing(tmp_path: Path) -> None:
+    """A worker that raises fails the whole run, and a store whose component is not whole keeps
+    the provenance it had: no claim for a component one chromosome short (partner-rows §6.2)."""
+    store = unpartnered(tmp_path / "store")
+    before = provenance(store)
+    plan = assembly._plan(assembly.open_group(store), store, T_PARTNER, None)
+    with pytest.raises(ValueError, match=r"a worker fault"):
+        assembly._derive(plan, threads=1, processes=2, work=refuse_work)
+    assert provenance(store) == before, "nothing was claimed"
+    assert not (store / "partners" / "zarr.json").exists()
+
+
+def test_a_worker_that_finds_a_lost_chunk_fails_the_run(tmp_path: Path) -> None:
+    """The real worker, in a real pool, on a store whose Far Pairs hold the fill value a lost
+    chunk reads as: the failure crosses the process boundary and the run publishes nothing."""
+    store = unpartnered(tmp_path / "store")
+    before = provenance(store)
+    r = zarr.open_group(str(store), mode="r+")["far"]["21"]["r"]
+    assert isinstance(r, zarr.Array)
+    r[0] = r.dtype.type(-32768)  # the reserved code: a value no store holds there
+    with pytest.raises(ValueError, match=r"no LD Store holds there"):
+        derive_partners(store, t_partner=T_PARTNER, processes=2)
+    assert provenance(store) == before
+    assert not (store / "partners" / "zarr.json").exists()
+
+
+# ------------------------------------------------- the claim is one write, the rest is unclaimed
+
+
+#: The child that derives, publishes the component, and is killed before the claim: the store
+#: left is a 0.1.0 one whose `partners/` no provenance names (ogld#69).
+UNCLAIMED = """
+import os, signal
+from ogld.store import assembly
+def record(root, made):
+    os.kill(os.getpid(), signal.SIGKILL)
+assembly._record = record
+from ogld.cli import main
+raise SystemExit(main())
+"""
+
+
+@pytest.fixture(scope="module")
+def unclaimed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Test Store copy killed between `partners/` becoming a node and the provenance that
+    claims it, with the provenance it had before."""
+    store = unpartnered(tmp_path_factory.mktemp("unclaimed") / "store")
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            UNCLAIMED,
+            "derive-partners",
+            str(store),
+            "--t-partner",
+            str(T_PARTNER),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == -9, f"the run was killed, not finished: {done.returncode}"
+    assert (store / "partners" / "zarr.json").exists(), "the node was published before the kill"
+    assert "t_partner" not in provenance(store), "and the claim was not written"
+    return store
+
+
+def first_alid(store: Path) -> str:
+    """One variant ALID of a store, as a query asks for it."""
+    alid = zarr.open_group(str(store), mode="r")["variants"]["alid"]
+    assert isinstance(alid, zarr.Array)
+    return str(alid[0])
+
+
+def test_a_kill_before_the_claim_leaves_an_unclaimed_component(unclaimed: Path) -> None:
+    """The node is there and the provenance says 0.1.0, which is a store that does not have the
+    Partner Rows: validation judges nothing, and the store is the one it was (partner-rows §6.2,
+    ld-store §12)."""
+    assert [rule for rule, found in validate_at(unclaimed, threads=1).items() if found] == []
+    with pytest.raises(InputError, match=r"no Partner Rows"):
+        ogld.open(unclaimed).clump([first_alid(unclaimed)], [1.0], r2=0.01, kb=1000)
+
+
+def test_a_rerun_claims_an_unclaimed_component_once_the_rules_accept_it(unclaimed: Path) -> None:
+    """A rerun finds a whole component nothing claims, judges it, and writes the claim: it never
+    trusts it, and never derives it again for nothing (partner-rows §6.2)."""
+    made = derive_partners(unclaimed, t_partner=T_PARTNER)
+    assert made is not None
+    assert made["format_version"] == "0.2.0"
+    assert_the_builds_bytes(unclaimed)
+
+
+def test_a_rerun_rebuilds_an_unclaimed_component_the_rules_refuse(tmp_path: Path) -> None:
+    """An unclaimed component one rule refuses is removed and derived again: a component nothing
+    claims is one nothing may trust, however whole it looks (partner-rows §6.2, §10)."""
+    store = unpartnered(tmp_path / "store")
+    derive_partners(store, t_partner=T_PARTNER)
+    root = zarr.open_group(str(store), mode="r+")
+    prov = dict(root.attrs["ld_store"])
+    for key in ("t_partner", "partner_code_floor"):
+        prov.pop(key)
+    prov["format_version"] = "0.1.0"
+    prov["counts"] = {k: v for k, v in prov["counts"].items() if k != "partner_entries"}
+    prov["software"] = {k: v for k, v in prov["software"].items() if k != "zstd"}
+    root.attrs.update({"ld_store": prov})
+    frame = store / "partners" / "22" / "frames" / "c" / "0"
+    damaged = bytearray(frame.read_bytes())
+    damaged[0] ^= 0xFF
+    frame.write_bytes(bytes(damaged))
+    made = derive_partners(store, t_partner=T_PARTNER)
+    assert made is not None, "the rebuilt component is claimed"
+    assert_the_builds_bytes(store), "and it is the build's, not the damaged one"
+
+
+def test_a_partners_directory_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    """A derivation writes `partners/` and every group in it, so a link there would put a store's
+    component in another directory: it is refused before anything is written (ogld#69)."""
+    store = unpartnered(tmp_path / "store")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (store / "partners").symlink_to(outside)
+    with pytest.raises(InputError, match=r"outside the store"):
+        derive_partners(store, t_partner=T_PARTNER)
+    assert list(outside.iterdir()) == [], "nothing was written outside the store"
+
+
+def test_a_chromosome_group_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    """The same rule a group deeper: `partners/<chrom>` is a path the derivation writes, and a
+    link there would publish a chromosome where the store is not (ogld#69)."""
+    store = unpartnered(tmp_path / "store")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (store / "partners").mkdir()
+    (store / "partners" / "21").symlink_to(outside)
+    assert (store / "partners" / "21").is_dir(), "the link is a directory to a reader"
+    with pytest.raises(InputError, match=r"partners/21 resolves to .*outside the store"):
+        derive_partners(store, t_partner=T_PARTNER)
+    assert list(outside.iterdir()) == [], "nothing was written outside the store"
+
+
+def test_a_symlinked_index_is_unlinked_and_its_target_kept(tmp_path: Path) -> None:
+    """A scratch store's `index/` is a link to a published one: `--drop-index` removes the link
+    and never what it names (partner-rows §6.2)."""
+    store = unpartnered(tmp_path / "store")
+    published = tmp_path / "published-index"
+    (store / "index").rename(published)
+    (store / "index").symlink_to(published)
+    made = derive_partners(store, t_partner=T_PARTNER, drop_index=True)
+    assert made is not None
+    assert not (store / "index").is_symlink(), "the link is gone"
+    assert not (store / "index").exists(), "and no index is left in the store"
+    assert any(published.iterdir()), "the directory it named is untouched"
+    assert "index_entries" not in made["counts"]
+
+
+def test_a_failed_index_removal_keeps_its_count(tmp_path: Path) -> None:
+    """A removal that fails is named, and the count that describes the index is kept: the
+    provenance never claims a removal that did not happen (partner-rows §6.2)."""
+    store = unpartnered(tmp_path / "store")
+    derive_partners(store, t_partner=T_PARTNER)
+    before = provenance(store)
+    index = store / "index"
+    index.chmod(0o500)  # its entries cannot be unlinked from it
+    try:
+        with pytest.raises(InputError, match=r"could not be removed .*: its count is kept"):
+            derive_partners(store, t_partner=T_PARTNER, drop_index=True)
+        assert provenance(store) == before, "the provenance is untouched"
+        assert "index_entries" in provenance(store)["counts"]
+        assert index.is_dir(), "the index is still the store's"
+    finally:
+        index.chmod(0o700)
