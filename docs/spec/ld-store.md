@@ -638,7 +638,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 
 | key | type | meaning |
 |---|---|---|
-| `format_version` | string | `"0.1.0"` |
+| `format_version` | string | `"0.1.0"` before the Partner Rows, `"0.2.0"` with them (§13) |
 | `encoding.r_dtype` | string | `"int16"`, the container of every admitted encoding (§3) |
 | `encoding.r_scale` | int | the store's scale s, a whole number from 1 to 32767: r̂ = code / s. 511 for the HGDP+1kGP stores, 2047 for UK Biobank EUR (ADR 0004); a build records the `r_scale` it was given |
 | `encoding.r_reserved_code` | int | −32768 |
@@ -665,10 +665,13 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `t_far` | float | max(0.001, q / (n − k − 1)) in float64, the value every reader uses |
 | `t_far_q` | float | 20.84: the χ²₁ upper quantile at p = 5×10⁻⁶ |
 | `far_code_floor` | int | §3 |
+| `t_partner` | float | the **Partner Threshold**: the r² a pair within `near_bp` must reach to be in the Partner Rows, never above `t_far` (0.2.0; `docs/spec/partner-rows.md` §3) |
+| `partner_code_floor` | int | the **Partner Floor**: §3's floor rule at `t_partner` (0.2.0) |
 | `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `ogld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
 | `counts.near_pairs` | int | Near Band codes, over all chromosomes |
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them whose \|code\| reaches `far_code_floor`, each counted once; the entries of every `far/<chrom>/` together |
+| `counts.partner_entries` | int | Partner Rows entries, both directions, over all chromosomes: each `partners/<chrom>/` group's `entries` (0.2.0) |
 | `counts.index_entries` | int | Proxy Index entries, both directions and within `near_bp` included |
 | `counts.alids_left_out` | int | the table's count of ALIDs wider than the ALID index's 32-byte slot, counted from `variants/alid`, whose rows the index has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0010) |
 | `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |

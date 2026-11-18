@@ -437,7 +437,7 @@ def test_ogld_build_prints_the_provenance_and_exits_2_on_a_refusal(
     argv = ["build", str(tmp_path / "store"), "--pgen", str(pgen)]
     argv += ["--keep", str(testdata.panel().keep), "--panel-id", fx.PANEL_ID, "--ancestry", "EUR"]
     argv += ["--genotype-source", "Test Panel", "--k", "0", "--info-min", "none", "--threads", "2"]
-    argv += ["--r-scale", str(fx.R_SCALE)]
+    argv += ["--r-scale", str(fx.R_SCALE), "--t-partner", str(fx.T_PARTNER)]
     assert cli.main(argv) == 0
     printed = json.loads(capsys.readouterr().out)
     assert printed["panel"]["id"] == fx.PANEL_ID

@@ -31,7 +31,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import FORMAT_VERSION, InputError, Provenance, REncoding, judge_window
+from ogld.format import READABLE_FORMATS, InputError, Provenance, REncoding, judge_window
 from ogld.format.geometry import (
     blocks,
     chromosome_index,
@@ -190,10 +190,10 @@ class StoreReader:
             raise InputError(
                 f"{location} has no ld_store provenance: it is not a finished LD Store"
             )
-        if recorded.get("format_version") != FORMAT_VERSION:
+        if recorded.get("format_version") not in READABLE_FORMATS:
             raise InputError(
                 f"{location} is LD Store format {recorded.get('format_version')!r}; "
-                f"this ogld reads {FORMAT_VERSION!r} only (spec §13)"
+                f"this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
             )
         try:
             encoding = REncoding.of(recorded.get("encoding"))

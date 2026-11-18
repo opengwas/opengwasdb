@@ -18,7 +18,7 @@ import testdata
 import zarr
 from contract import support
 from script_modules import load_script
-from store_copies import FLOOR, R_SCALE, codes_at, stored_at
+from store_copies import FLOOR, R_SCALE, T_PARTNER, codes_at, stored_at
 
 from ogld.format import NEAR_BP, InputError, REncoding
 from ogld.identity import orient
@@ -32,7 +32,7 @@ TEST_STORE_ENCODING = REncoding(R_SCALE)
 @pytest.fixture(scope="module")
 def written(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return load_script("make_test_store").write_test_store(
-        K, tmp_path_factory.mktemp("s") / "store", R_SCALE
+        K, tmp_path_factory.mktemp("s") / "store", R_SCALE, T_PARTNER
     )
 
 
@@ -62,6 +62,7 @@ def test_the_fixture_reaches_every_array_kind(written: Path) -> None:
         expected |= {
             f"{kind}/{chrom}/{a}" for kind in ("index", "far") for a in ("indptr", "partner", "r")
         }
+        expected |= {f"partners/{chrom}/{a}" for a in ("frames", "frames_idx")}
     assert names == expected
 
 
@@ -76,8 +77,17 @@ def test_every_array_has_the_fill_value_and_codecs_spec_6_says(written: Path) ->
         "a1": "",
         "a2": "",
     }
+    one_chunk = {"frames": 0, "frames_idx": int(np.iinfo(np.uint64).max)}
     for name, array in arrays(zarr.open_group(written, mode="r")):
         leaf = name.rsplit("/", 1)[1]
+        if leaf in one_chunk and name.startswith("partners/"):
+            # The Partner Rows are one chunk each, its `frames`' bytes the frames themselves
+            # (partner-rows §5.1): no sharding, no compressor, and a fill value no offset is.
+            assert array.fill_value == one_chunk[leaf], name
+            assert [c["name"] for c in array.metadata.to_dict()["codecs"]] == ["bytes"], name
+            assert array.shards is None, name
+            assert array.chunks == array.shape, name
+            continue
         if name == "variants/alid_index/alid":
             # Keys are judged whole: no ALID is empty, which a key of 0 bytes would be (ADR 0010).
             assert array.fill_value == 0, name
@@ -165,6 +175,7 @@ def test_a_store_without_its_provenance_is_not_read_as_a_short_one(
         encoding=TEST_STORE_ENCODING,
         n=771,
         k=K,
+        t_partner=0.01,
     )
     with pytest.raises(ValueError, match="provenance"):
         StoreReader.open(tmp_path / "half")
@@ -172,11 +183,11 @@ def test_a_store_without_its_provenance_is_not_read_as_a_short_one(
 
 def test_the_script_writes_the_same_arrays_and_the_same_provenance_again(tmp_path: Path) -> None:
     script = load_script("make_test_store")
-    first = script.write_test_store(0, tmp_path / "one", R_SCALE)
-    second = script.write_test_store(0, tmp_path / "two", R_SCALE)
+    first = script.write_test_store(0, tmp_path / "one", R_SCALE, 0.01)
+    second = script.write_test_store(0, tmp_path / "two", R_SCALE, 0.01)
     one, two = zarr.open_group(first, mode="r"), zarr.open_group(second, mode="r")
     names = {name: np.asarray(array[:]) for name, array in arrays(one)}
-    assert len(names) == 23, "every array must be compared for this to mean anything"
+    assert len(names) == 27, "every array must be compared for this to mean anything"
     again = {name: np.asarray(array[:]) for name, array in arrays(two)}
     assert names.keys() == again.keys()
     for name, array in names.items():

@@ -181,6 +181,7 @@ def test_the_build_command_is_one_ogld_accepts(tmp_path):
     args = _parser().parse_args(command[1:])
     assert args.pgen == pgens
     assert (args.r_scale, args.k, args.threads) == (recipe.PANEL_SCALE, recipe.K, 16)
+    assert args.t_partner == recipe.PANEL_T_PARTNER
     assert (args.panel_id, args.ancestry) == (recipe.panel_id("AFR"), "AFR")
 
 

@@ -266,8 +266,8 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     ),
     "a format version this ogld does not read": (
         "provenance.encoding",
-        edit_ld_store(lambda p: p.update(format_version="0.2.0")),
-        "'0.2.0': this ogld reads '0.1.0' only",
+        edit_ld_store(lambda p: p.update(format_version="0.3.0")),
+        "'0.3.0': this ogld reads 0.1.0 and 0.2.0 only",
     ),
     "n_variants one short of the variant table": (
         "envelope.arrays",
@@ -720,6 +720,8 @@ DERIVED = (
     "t_far",
     "t_far_q",
     "far_code_floor",
+    "t_partner",
+    "partner_code_floor",
     "counts",
 )
 
@@ -742,6 +744,7 @@ def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> Stor
         far_bp=10_000_000,
         n=771,
         k=10,
+        t_partner=0.01,
     )
     r = np.full((4, 4), np.nan)
     r[np.triu_indices(4, k=1)] = np.array([10, -20, 30, 40, -50, 60]) / R_SCALE

@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypedDict
 
-FORMAT_VERSION: Final = "0.1.0"
+FORMAT_VERSION: Final = "0.2.0"
+
+#: The format versions this package reads: `0.1.0`, the stores built before the Partner Rows (no
+#: `partners/`, and `clump` and `proxies` read the Proxy Index), and `0.2.0`, which adds them
+#: (spec §13). A store records one, and a reader refuses any other.
+READABLE_FORMATS: Final = ("0.1.0", FORMAT_VERSION)
 
 
 class Encoding(TypedDict):
@@ -154,6 +159,7 @@ class Counts(TypedDict):
     near_pairs: int
     far_candidates: int
     far_pairs: int
+    partner_entries: int
     index_entries: int
     alids_left_out: int
 
@@ -182,6 +188,8 @@ class Provenance(TypedDict):
     t_far: float
     t_far_q: float
     far_code_floor: int
+    t_partner: float
+    partner_code_floor: int
     pc_diagnostic: PcDiagnostic | None
     counts: Counts
     software: dict[str, str]
@@ -194,7 +202,9 @@ class Sourced(TypedDict):
 
     A producer hands this to `StoreWriter.finish`, which adds what the store derives from itself:
     `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`,
-    `far_code_floor` and `counts`. Together they are `Provenance`, key for key.
+    `far_code_floor`, `t_partner`, `partner_code_floor` and `counts`. Together they are
+    `Provenance`, key for key. `software` is the producer's list of versions, to which the store
+    adds `zstd`, the library that compressed its Partner Rows' frames.
     """
 
     source: Source
@@ -237,10 +247,13 @@ REQUIRED_KEYS: Final = (
     "t_far",
     "t_far_q",
     "far_code_floor",
+    "t_partner",
+    "partner_code_floor",
     "pc_diagnostic",
     "counts.near_pairs",
     "counts.far_candidates",
     "counts.far_pairs",
+    "counts.partner_entries",
     "counts.index_entries",
     "counts.alids_left_out",
     "software",

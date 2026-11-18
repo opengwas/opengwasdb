@@ -20,6 +20,7 @@ from ogld.format.encoding import (
 from ogld.format.geometry import near_row_lengths
 from ogld.format.provenance import (
     FORMAT_VERSION,
+    READABLE_FORMATS,
     REQUIRED_KEYS,
     VALIDATION_RULES,
     Adjustment,
@@ -55,6 +56,7 @@ __all__ = [
     "FAR_BP",
     "FORMAT_VERSION",
     "NEAR_BP",
+    "READABLE_FORMATS",
     "REQUIRED_KEYS",
     "T_FAR_MIN",
     "T_FAR_Q",

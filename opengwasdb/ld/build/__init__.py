@@ -54,6 +54,11 @@ class BuildInputs:
       `ogld.format.REncoding` admits (spec §3). ADR 0004 sets each Source Panel's (owner,
       10 November 2026). There is no default, so no build falls back on a scale it was not
       given; provenance records it in `encoding`.
+    - `t_partner`: the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
+      the store's Partner Rows (CONTEXT.md; partner-rows §3). A build input with no default
+      (ADR 0011, D3): 0.01 for the HGDP+1kGP panels and 0.001 for UK Biobank EUR, where it
+      equals t_far. It is never above t_far, which the store refuses, naming both, once the
+      panel's n and the covariates' k give t_far. Provenance records it as `t_partner`.
     - `k`: the target number of PCs to regress out, taken in order from those the PC
       Check keeps (owner, 7 November 2026); provenance records it as `k_target`.
     - `k_min`: the fewest PCs a build may use. When fewer than `k` survive the PC Check,
@@ -75,6 +80,7 @@ class BuildInputs:
     ancestry: str
     genotype_source: str
     r_scale: int
+    t_partner: float
     k: int = pc_check.K_TARGET
     k_min: int = pc_check.K_MIN
     mac_min: int = 20
@@ -84,6 +90,7 @@ class BuildInputs:
         if not self.pgen:
             raise InputError("BuildInputs needs at least one pgen")
         self.encoding()
+        _check_partner(self.t_partner)
         _check_pc_counts(self.k, self.k_min)
         if self.k > 0 and (self.pcs is None or self.pc_source is None):
             raise InputError(
@@ -94,6 +101,17 @@ class BuildInputs:
         """The encoding the build writes, from `r_scale`; an InputError naming a scale the
         format does not admit, or none at all."""
         return REncoding(self.r_scale)
+
+
+def _check_partner(t_partner: float) -> None:
+    """The Partner Threshold is an r², and a build is given one: there is no default
+    (ADR 0011, D3). It is above t_far or not, which only the panel's n and k can say, so that
+    check is the store's (`REncoding.partner_code_floor`)."""
+    if not 0.0 <= t_partner <= 1.0:
+        raise InputError(
+            f"t_partner is the r² a pair within near_bp must reach, so it is an r² from 0 to 1, "
+            f"not {t_partner!r} (partner-rows §3)"
+        )
 
 
 def _check_pc_counts(k: int, k_min: int) -> None:
@@ -153,6 +171,8 @@ def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -
         far_bp=FAR_BP,
         n=plan.samples.n,
         k=k,
+        t_partner=inputs.t_partner,
+        compress_workers=threads,
     )
     change = passes.write_ld(writer, plan, chromosomes, chosen.covariates, threads)
     made = record.Made(found.dropped, diagnostic.pc_diagnostic(rates, plan.samples.n, k, change))

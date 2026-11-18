@@ -43,7 +43,7 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.format.provenance import FORMAT_VERSION, VALIDATION_RULES
+from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
@@ -487,6 +487,8 @@ _SCHEMA: Final = {
     "t_far": "number",
     "t_far_q": "number",
     "far_code_floor": "int",
+    "t_partner": "number",
+    "partner_code_floor": "int",
     "pc_diagnostic": "object?import",
     "pc_diagnostic.pairs": "object",
     "pc_diagnostic.pairs.source": "str",
@@ -499,6 +501,7 @@ _SCHEMA: Final = {
     "counts.near_pairs": "int",
     "counts.far_candidates": "int",
     "counts.far_pairs": "int",
+    "counts.partner_entries": "int",
     "counts.index_entries": "int",
     "counts.alids_left_out": "int",
     "software": "object",
@@ -623,8 +626,11 @@ def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
     `REncoding.of` (spec §3, §13). `ogld info` and every reader refuse a store with any other."""
     version = store.value("format_version")
-    if version != FORMAT_VERSION:
-        yield "format_version", f"{version!r}: this ogld reads {FORMAT_VERSION!r} only (spec §13)"
+    if version not in READABLE_FORMATS:
+        yield (
+            "format_version",
+            f"{version!r}: this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)",
+        )
     try:
         REncoding.of(store.value("encoding"))
     except InputError as unimplemented:

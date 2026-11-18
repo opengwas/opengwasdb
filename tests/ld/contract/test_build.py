@@ -61,6 +61,7 @@ def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
         "ancestry": "EUR",
         "genotype_source": "HGDP+1kGP phased v2, the Test Panel's slice",
         "r_scale": support.R_SCALE,
+        "t_partner": 0.01,
         "k": k,
         "info_min": None,
     }
@@ -215,7 +216,7 @@ def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     argv = ["build", str(out), "--pgen", str(PANEL.pgen), "--keep", str(PANEL.keep)]
     argv += ["--pcs", str(PANEL.pcs), "--pc-source", "the Test Panel's PC File"]
     argv += ["--panel-id", PANEL_ID, "--ancestry", "EUR", "--genotype-source", "Test Panel"]
-    argv += ["--r-scale", str(support.R_SCALE)]
+    argv += ["--r-scale", str(support.R_SCALE), "--t-partner", "0.01"]
     assert cli.main([*argv, "--info-min", "none"]) == 0
     assert not any(ogld.validate(out).values())
 
