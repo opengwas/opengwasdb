@@ -353,10 +353,8 @@ At k = 0, 9.4×10⁻⁵ (EUR) to 2.3×10⁻³ (AMR) of chr22's 3–10 Mb pairs a
 
 **The Partner Rows** (`partners/<chrom>/`; format 0.2.0, written by #67, derived by #69) hold, for
 each variant, every partner within `far_bp` on either side whose Stored r reaches the **Partner
-Floor** within `near_bp` and the far code floor beyond it, in both variants' rows with the same
-code. The Partner Floor is §3's rule with t_partner in place of t_far: the smallest code c ≥ 0 with
-(c / s)² ≥ t_partner at the store's scale s, which is 52 at × 511 for t_partner = 0.01. They are
-the Proxy Index's rule at t_partner instead of t_far, so they hold every index
+Floor** (§3) within `near_bp` and the far code floor beyond it, in both variants' rows with the
+same code. They are the Proxy Index's rule at t_partner instead of t_far, so they hold every index
 entry: t_partner is never above t_far, and every pair within `near_bp` at the far code floor is at
 the Partner Floor too. Rows are grouped 16 to a zstd frame, and the group, its two arrays and the
 frame bytes are `docs/spec/partner-rows.md` §5. Every code is a copy of one the store already
@@ -686,8 +684,7 @@ no Partner Rows has none of them:
 - `t_partner` (float): the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
 the Partner Rows. It is a required build input with no default (`docs/spec/build-inputs.md` §1),
 never above `t_far`: 0.01 for the five HGDP+1kGP stores, 0.001 for UK Biobank EUR.
-- `partner_code_floor` (int): the smallest code reaching `t_partner` at the recorded scale, by the
-far code floor's rule (§3): 52 at × 511 for t_partner = 0.01.
+- `partner_code_floor` (int): the **Partner Floor** (§3) at the recorded scale.
 - `counts.partner_entries` (int): the entries of every `partners/<chrom>/` together, twice the
 pairs the Partner Rows hold, as each chromosome's `entries` attribute gives it.
 - `software.zstd` (string): the zstd library's version, because a frame's bytes depend on it.
@@ -831,22 +828,35 @@ when r̂² ≥ r2 (§3). `clump` is the one exception, following `plink2 --clump
 refusals below are the same for both. The refusals are ADR 0001's, compared with the distances the store
 recorded (§7) and its recorded t_far, and from 0.2.0 its recorded t_partner:
 
-| request | answer |
-|---|---|
-| r2 outside [0, 1], kb negative or not finite, or a `clump` score that is not one finite, non-negative number per ALID | refused: `invalid` |
-| W > `far_bp` | refused: `window_over_far`. Pairs more than `far_bp` apart are Not Measured |
-| `near_bp` < W ≤ `far_bp` and r2 < t_far | refused: `threshold_below_t_far`. The store holds only the Bound for the pairs beyond `near_bp` that are not Far Pairs, and that does not decide r̂² ≥ r2 |
-| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | answered from the Near Band and the Proxy Index. Every pair beyond `near_bp` left out has r̂² < t_far ≤ r2, so none of them can reach r2 |
-| W ≤ `near_bp` | answered from the Near Band alone, at any r2; from 0.2.0, from the Partner Rows at r2 ≥ t_partner, and refused below it |
+| request | format | answer |
+|---|---|---|
+| r2 outside [0, 1], kb negative or not finite, or a `clump` score that is not one finite, non-negative number per ALID | both | refused: `invalid` |
+| W > `far_bp` | both | refused: `window_over_far`. Pairs more than `far_bp` apart are Not Measured |
+| `near_bp` < W ≤ `far_bp` and r2 < t_far | both | refused: `threshold_below_t_far`. The store holds only the Bound for the pairs beyond `near_bp` that are not Far Pairs, and that does not decide r̂² ≥ r2 |
+| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | 0.1.0 | answered from the Near Band and the Proxy Index |
+| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | 0.2.0 | answered from the Partner Rows. Every pair beyond `near_bp` left out is not a Far Pair, so r̂² < t_far ≤ r2 |
+| W ≤ `near_bp`, any r2 | 0.1.0 | answered from the Near Band alone |
+| W ≤ `near_bp` and r2 < t_partner | 0.2.0 | refused: `threshold_below_t_partner`. The Partner Rows hold only the pairs at or above the Partner Floor, and absence there decides nothing below it |
+| W ≤ `near_bp` and r2 ≥ t_partner | 0.2.0 | answered from the Partner Rows: every pair that could reach r2 is at or above its distance's floor, so it is in the row |
+
+**Why the answered rows are exact.** `clump` joins at r̂² > r2 and `proxies` keeps r̂² ≥ r2, so a
+request's r2 is at least t_partner within `near_bp` and at least t_far beyond it. Any pair that
+could reach r2 therefore has |code| at or above its distance's floor and is in the row it reads. A
+pair absent from that row has r̂² below a bound no higher than r2 (`docs/spec/partner-rows.md` §4),
+so it cannot reach r2. On 0.1.0's rows the Proxy Index and the Near Band give the same argument at
+t_far. It is a breaking change on HGDP+1kGP: an r² 0.001 clump with a 3 Mb window, answered today,
+is refused from 0.2.0, where about 90% of the pairs such a threshold passes are sampling noise.
 
 - r2 = t_far exactly is answered: the store keeps r̂² ≥ t_far, and the request asks for
-  r̂² ≥ t_far.
-- A request is compared with the recorded `t_far`, never with a rounded display of it.
+  r̂² ≥ t_far. r2 = t_partner exactly is answered from 0.2.0, for the same reason.
+- A request is compared with the recorded `t_far`, and from 0.2.0 its recorded `t_partner`, never
+  with a rounded display of either.
 - A Refusal MUST name its reason. A request MUST NOT be answered approximately instead. A region
   wider than `far_bp` is refused as `region_over_far`, and a negative radius as `invalid`.
 - On UK Biobank EUR (t_far = 0.001) only W > 10 Mb is refused at r2 ≥ 0.001, so MR's r² 0.001
-  with a 10 Mb window is answered there and nowhere else. On HGDP+1kGP AMR (t_far 0.0631515 at
-  k = 10, §3), r2 = 0.05 with a 5 Mb window is refused.
+  with a 10 Mb window is answered there and nowhere else; its t_partner is 0.001 too, so nothing
+  within `near_bp` is refused either. On HGDP+1kGP AMR (t_far 0.0631515 at k = 10, §3), r2 = 0.05
+  with a 5 Mb window is refused.
 - **`proxies`.** The defaults, r2 = 0.8 and a 10,000 kb window, are answered on every store with
   `far_bp` = 10 Mb, because every t_far is below 0.8. A variant is never its own proxy. Rows are
   grouped by query, in request order, then by r̂² descending, distance ascending and proxy ALID. At
@@ -861,16 +871,6 @@ recorded (§7) and its recorded t_far, and from 0.2.0 its recorded t_partner:
   strongest lead it reaches. plink2 compares r² with `>` and the window with `<` (checked on plink2 v2.0.0-a.6.9LM and
   recorded beside the equality test, `tests/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
   and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
-
-**The Partner Threshold's refusal (format 0.2.0; #71).** The table's last row splits. A request
-with W ≤ `near_bp` is answered from the Partner Rows when r2 ≥ t_partner, and refused as
-`threshold_below_t_partner` when r2 < t_partner. The reason is that the Partner Rows hold only the
-pairs at or above the Partner Floor, so a pair's absence there decides nothing about a threshold
-lower than that (`docs/spec/partner-rows.md` §4), and on HGDP+1kGP about 90% of the pairs that
-pass r² 0.001 are sampling noise. r2 = t_partner exactly is answered, as r2 = t_far is. It is a
-breaking change: r² 0.001 clumps on those stores, answered today, are refused from 0.2.0. A store
-records both thresholds, so a reader compares a request with the store's own t_partner, never with
-a value of its own.
 
 `ogld.format.judge_request` and `ogld.format.judge_region` implement the table's refusals, all but
 one: a `clump` score that is not one finite, non-negative number per ALID is refused as `invalid`

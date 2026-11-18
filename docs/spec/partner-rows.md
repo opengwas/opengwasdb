@@ -48,71 +48,51 @@ decision 1. The triangle stays for `matrix` and `region`.
 | D1 | **The Partner Rows replace the Proxy Index.** | They hold every index entry (§3), so `proxies` reads them too. Measured on EUR: 14.76 GB at G = 16 (11.82 GB at G = 64), which is +5.38 GB (+2.44 GB) net of its 9.38 GB index; the owner's scaling puts the five panels at about +53 GB net at G = 64 (§11) |
 | D2 | **`clump` and `proxies` with r2 below t_partner and W ≤ `near_bp` are refused**, `threshold_below_t_partner`. | On HGDP+1kGP at r² 0.001, 90% of the pairs that pass are sampling noise (§11). Today's answered r² 0.001 clumps on those stores become Refusals: a breaking change |
 | D3 | **t_partner is set per reference dataset and recorded in the store's metadata**, as t_far is. | A build input with no default: each Source Panel's build names its own (0.01 for HGDP+1kGP, 0.001 = t_far for UK Biobank EUR), and a build without one refuses. It never exceeds t_far (§3) |
-| D4 | **A Zarr group** per chromosome, inside the store's one hierarchy (§5; refined by the owner on 18 November 2026, ADR 0011). | `partners/<chrom>/` holds two arrays, `frames` and `frames_idx`, each one chunk, and the manifest's keys as the group's attributes. One read per frame, with no shard index. Plain files make zarr's `members()` warn, which a node in the hierarchy does not |
+| D4 | **A Zarr group** per chromosome, inside the store's one hierarchy (§5; refined by the owner on 18 November 2026, ADR 0011). | `partners/<chrom>/` holds two arrays, `frames` and `frames_idx`, each one chunk, and the manifest's keys as the group's attributes. One read per frame, with no shard index. Plain files make zarr's `members()` warn; a node in the hierarchy is what removes it, and #67 measures that on a real store |
 | D5 | **Format version 0.2.0.** | A new component, a removed one and a changed refusal table |
 | D6 | **Derive** the five existing stores' Partner Rows from their Near Band and Far Pairs (§6.2). | No genotypes needed. Byte-identical to a build |
 
-**Fixed on the measurements, not by these decisions** (18 November 2026):
+**Fixed by the measurements of 18 November 2026:**
 
-- **G = 16** (orchestrator, on #65's evidence; §5.2, §11). It is the smallest G of those equally
-  fast: 14.76 GB of EUR genome bytes against G = 8's 16.68 GB, and 1.067 s cold LD against
-  1.051 s, a difference inside the samples' spread.
+- **G = 16** (measured on #65; §5.2, §11). It is the smallest G of those equally fast: 14.76 GB of
+  EUR genome bytes against G = 8's 16.68 GB, and 1.067 s cold LD against 1.051 s, a difference
+  inside the samples' spread.
 - **Component workers are capped at 4** for #71 (§9.2, option B). At eight, cold LD regresses to
   1.913 / 5.753 / 5.109 s at G = 4 / 8 / 16, against 1.051–1.169 s where each G was fastest.
-- **The under-1 s LD target moves to #71** (owner's rule for this round). The best cold LD is
-  1.051 s and warm 0.921 s, so nothing here claims the target; #71's acceptance criterion holds
-  it.
+- **The under-1 s LD target moves to #71** (owner, 18 November 2026). The best cold LD is 1.051 s
+  (G = 8) and at G = 16 it is 1.067 s cold and 1.058 s warm, so nothing here claims the target;
+  #71's acceptance criterion holds it.
 
 §12 records the alternatives that were weighed and what they would have cost.
 
 ## 2. Terms
 
-These are in `CONTEXT.md`.
+The **Partner Rows**, the **Partner Threshold**, the **Partner Floor** and the **Frame** are
+`CONTEXT.md`'s terms, and this document uses them as it defines them. §4 adds the one thing the
+glossary does not say: a pair within reach that is not in a row has a known bound, never a 0.
 
-**Partner Rows**:
-For each variant on a chromosome, every partner within `far_bp` on either side whose Stored r
-reaches the row's floor, with its code: the **Partner Floor** within `near_bp`, the far code floor
-beyond it. A pair appears in both variants' rows with the same code. `clump` and `proxies` read
-them, and nothing else does. A pair within reach that is not in a row has a known bound, never a
-0 (§4).
-_Avoid_: sparse band, clump index, thresholded LD; "Proxy Index", which they replace.
+## 3. Which pairs the Partner Rows hold
 
-**Partner Threshold** (t_partner):
-The r̂² a pair within `near_bp` must reach to be in the Partner Rows. Recorded per store, never
-above t_far. Set per reference dataset as a build input and recorded in provenance (D3): 0.01 for
-the HGDP+1kGP stores, 0.001 for UK Biobank EUR.
-_Avoid_: clumping threshold. A request's r2 is compared against it, and is a different number.
+`ld-store.md` §5 defines which pairs a row holds; this section gives the reasons behind that rule.
 
-**Partner Floor** (`partner_code_floor`):
-The smallest integer c ≥ 0 with (c / s)² ≥ t_partner in float64, at the store's scale s: the
-same rule as `far_code_floor` (`ld-store.md` §3). 52 at × 511 for t_partner = 0.01.
-
-**Frame**:
-The unit of storage and of reading: the Partner Rows of G = 16 consecutive rows of one chromosome,
-compressed as one zstd frame (§5). Its rows are never cut across frames, and a reader takes G from
-the group's attributes.
-
-## 3. What the Partner Rows hold
-
-For chromosome c with n_c rows and positions p:
-
-- Row l holds every m ≠ l with |p_m − p_l| ≤ `far_bp` and
-  - |code(l, m)| ≥ `partner_code_floor` when |p_m − p_l| ≤ `near_bp`;
-  - |code(l, m)| ≥ `far_code_floor` when |p_m − p_l| > `near_bp`: exactly the Far Pairs, in both
-    directions.
-- Entries within a row are in strictly ascending m. A row never holds l itself.
-- **Both directions.** (l, m, c) is an entry exactly when (m, l, c) is.
+- A pair within `far_bp` is in both variants' rows, with the same code. One row therefore answers a
+  variant's partners on both sides, which is the whole point: the Near Band's column read is what
+  made `clump` and `proxies` slow.
+- Beyond `near_bp` the floor is the far code floor, which is exactly the Far Pairs. So the rows
+  beyond `near_bp` are the Far Pairs' codes, in both directions rather than once.
+- Entries within a row are in strictly ascending m. A row never holds l itself, so a cumulative
+  sum needs no case for it.
 - **Copies, by design.** Every code within `near_bp` is the Near Band's code for that pair, and
   every code beyond it is the Far Pairs' code. The component holds no value the store does not
   already hold. It is a second layout of the same codes, chosen for clump and proxy reads.
-- **It contains the Proxy Index.** t_partner ≤ t_far, so `partner_code_floor` ≤
+- **It contains the Proxy Index.** t_partner ≤ t_far, so the Partner Floor is no higher than
   `far_code_floor`. Every Proxy Index entry is therefore an entry here, with the same code: the
   Proxy Index is the Partner Rows thresholded at `far_code_floor`. This is what lets D1 retire
   the index.
-- t_partner is a REQUIRED build input, with no default (D3). A build without one refuses.
-- t_partner MUST be ≤ t_far. A build given a larger one refuses, naming both values. With a larger
-  one, a pair between t_far and t_partner within `near_bp` would be in neither component, and a
-  request at r2 ≥ t_far could not be answered.
+- t_partner is a REQUIRED build input, with no default (D3), and MUST be ≤ t_far: a build without
+  one refuses naming it, and one given a larger refuses naming both values. With a larger one, a
+  pair between t_far and t_partner within `near_bp` would be in neither component, and a request
+  at r2 ≥ t_far could not be answered.
 
 ## 4. Pair answers from the Partner Rows
 
@@ -146,11 +126,11 @@ the absence only to decide that a threshold at or above the matching bound is no
 the owner on 18 November 2026; ADR 0011). So `ld-store.md` §1's envelope stays "one Zarr v3
 hierarchy", and a reader that lists the store sees the component.
 
-The alternative, plain files in a directory with no group metadata, was measured on zarr-python
-3.4.2 (#65): `zarr.open_group`, `ogld.open` and all 27 of `ogld.validate`'s rules are clean, but
-`members()` emits `ZarrUserWarning: Object at partners is not recognized as a component of a Zarr
-hierarchy.` A group removes the warning, and the single-chunk form below was tested to list
-without it.
+The alternative, plain files in a directory with no group metadata, was measured on the published
+EUR store (#65, zarr-python 3.4.2): `zarr.open_group`, `ogld.open` and all 27 of `ogld.validate`'s
+rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is not recognized as a
+component of a Zarr hierarchy.` The single-chunk form below removes that warning. It was checked
+only by a small synthetic test so far: #67 measures it on a real store.
 
 Both arrays have **one chunk each**, of the whole array, and no shard index. The `frames` array's
 codec chain is `bytes` alone, with **no compressor**, because the bytes it holds are already zstd
@@ -242,8 +222,8 @@ today (`ld-store.md` §6, "How a store is written"):
 
 Its two producers:
 
-- **The build** (`StoreWriter`): the emitter replaces the Proxy Index writer, fed by the same
-  blocks. No new pass over genotypes.
+- **The build** (`StoreWriter`): the emitter sits beside the Proxy Index writer until #72 removes
+  it, and is fed by the same blocks. No new pass over genotypes.
 - **Derivation** (§6.2): the same emitter fed by reading the Near Band and the Far Pairs back.
 
 Both MUST produce identical bytes for the same store. The derivation of a store built with Partner
@@ -308,23 +288,14 @@ partner_row(chrom, l) -> (partners: int32[E_l], codes: int16[E_l])
 
 ### 8.1 What each request reads
 
-The refusal table of `ld-store.md` §9 becomes:
+`ld-store.md` §9's refusal table carries the rows from 0.2.0; this section does not restate them.
+Two rows change: r2 ≥ t_far with a 3–10 Mb window is answered from the Partner Rows rather than the
+Proxy Index, and within 3 Mb the table splits at t_partner, refusing `threshold_below_t_partner`
+below it (D2). The rest of the table is unchanged.
 
-| request | answer |
-|---|---|
-| invalid r2, kb or score | refused: `invalid` (unchanged) |
-| W > `far_bp` | refused: `window_over_far` (unchanged) |
-| `near_bp` < W ≤ `far_bp` and r2 < t_far | refused: `threshold_below_t_far` (unchanged) |
-| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | answered from the Partner Rows |
-| W ≤ `near_bp` and r2 < t_partner | **refused: `threshold_below_t_partner`** (D2) |
-| W ≤ `near_bp` and r2 ≥ t_partner | answered from the Partner Rows |
-
-**Why every answered request is exact.** `clump` joins at r̂² > r2 and `proxies` keeps r̂² ≥ r2.
-In both cases r2 ≥ t_partner within `near_bp` and r2 ≥ t_far beyond it, so any pair that could
-reach r2 has |code| at or above that distance's floor, and is in the row. A pair not in the row
-has r̂² below a bound that is ≤ r2, so it cannot reach r2 (§4). On every request both answer, the
-answers are those of the current reader, element for element, which §13's acceptance criteria
-hold.
+**Why every answered request is exact** — `ld-store.md` §9's argument, which 0.2.0's rows are the
+reason for. On every request both versions answer, the answers are those of the 0.1.0 reader,
+element for element, which #71's acceptance criteria hold.
 
 `matrix` and `region` are unchanged and never read the Partner Rows.
 
@@ -439,7 +410,7 @@ has a breaker in `tests/contract/test_store.py`.
 ## 11. Size
 
 **Measured on the published HGDP+1kGP EUR k = 10 store, 18 November 2026** (#65), genome-wide at
-the Partner Floor (52 at × 511) and the Far Pairs in both directions. Bytes are the `frames` and
+the Partner Floor and the Far Pairs in both directions. Bytes are the `frames` and
 `frames_idx` arrays with the group's attributes, in decimal units; the net column subtracts EUR's
 Proxy Index, 9,381,954,206 bytes.
 
@@ -462,9 +433,9 @@ Proxy Index, 9,381,954,206 bytes.
   +33 GB (+6%); #73 returns to the owner before dropping an index whose panel exceeds its
   projection by more than 25%.
 - **AMR is the panel to watch.** At n = 341, 7.2% of unlinked pairs pass r² 0.01 by chance, so
-  about 44% of AMR's Partner Rows would be sampling noise at 0.01, and chr22 keeps 16.3% of its
-  band there against EUR's 5.0%. D3 lets AMR's build set a higher t_partner, up to its t_far
-  (0.0632), at the price of refusing AMR clumps below it.
+  about 44% of AMR's Partner Rows would be sampling noise at that floor, and chr22 keeps 16.3% of
+  its band there against EUR's 5.0%. A store records its own t_partner, at most its t_far; the
+  five HGDP+1kGP builds use 0.01.
 - **Why not lower.** At r² > 0.001, 46.2% of EUR chr22's band passes, against 41.9% expected
   from sampling alone, so about 90% of those pairs are noise. A sparse row there would be larger
   than the dense band (6 bytes × 46% > 2 bytes). D2 refuses such requests. On UK Biobank EUR
@@ -490,8 +461,8 @@ subdividing the G = 16 frames) and
   clumping slow, and on HGDP+1kGP they would serve thresholds where 90% of passing pairs are
   noise.
 - **One rule for every store, min(0.01, t_far)** (against D3): simpler, but it fixes AMR's cost
-  at the projected +38%. A per-dataset t_partner lets AMR's build choose a higher one: at its
-  t_far, the AMR row of §11 falls to about its share there, 2.4% of pairs (`ld-store.md` §5).
+  at the projected +38%. A per-dataset t_partner lets a store's build choose a higher one, up to
+  its t_far, for a panel whose chance LD is a larger share of its rows.
 - **Plain files for the frames** (against the refined D4): a directory of plain files serves a
   reader, but it makes zarr's `members()` warn that `partners` is not a component of the
   hierarchy, as #65 measured (ADR 0011). One chunk per array keeps the frame read one read; a
@@ -505,43 +476,10 @@ subdividing the G = 16 frames) and
 - **Framed triangle rows** (#45's other rejected arm): a lead's upstream partners still fan out
   across thousands of earlier rows. Symmetric rows have no upstream fan-out.
 
-## 13. Plan and acceptance
+## 13. Plan
 
-1. **Prototype (one lane)** — **done**, on the published EUR store, chr22 then the genome
-   (#65, `proto/partner-rows@912a9fa`):
-   - derived Partner Rows at G ∈ {1, 4, 16, 64} on chr22 and at G ∈ {16, 64} genome-wide, with
-     G = 4 and 8 re-framed from the G = 16 rows, and reported bytes, derive time and peak memory;
-   - clumped the 37 chr22 Analyses at r² 0.01 and GCST90476460, cold and warm, under options A
-     and B, reporting frame reads, bytes, decode CPU and wall time, separated from ALID
-     resolution;
-   - checked exact fingerprints: **228/228** full-field comparisons and **294/294** timed results
-     equal to the current reader's, and the whole target equals #46's frozen oracle;
-   - checked that zarr-python opens and lists a store holding `partners/` without complaint,
-     which found the warning that D4's refinement answers.
-2. **ADR 0011** records D1–D6, and its clarification of 18 November 2026 records the refinement,
-   G = 16 and the measured sizes. Decision 6 stands: build and derivation make the same bytes.
-3. **Implementation**: the emitter in `StoreWriter`; `derive-partners`; `partner_row` and the frame
-   cache; `clump` and `proxies` on Partner Rows; the refusal; the §10 rules and their breakers;
-   `ld-store.md` §1, §3, §5, §6, §7, §9, §10, §12 and §13 amended, as are the `CONTEXT.md` terms
-   and `docs/architecture/`, in #66; a changelog fragment (`breaking`, for D2's new refusal).
-4. **Rollout**: derive for the five stores; pass the realdata tier on the IEU nodes; then drop
-   `index/` (D1). #73 measures the other four panels there and records their sizes here.
-
-Acceptance:
-
-- [ ] `clump` and `proxies` answers are identical to the current reader's on every request both
-      answer: the contract tests, the Test Store, the 37 chr22 Analyses at r² 0.01, the realdata
-      tier and `acceptance-clump` with its eight explained differences.
-- [ ] Requests below t_partner within `near_bp` are refused with `threshold_below_t_partner`,
-      tested at r2 one step below and at the floor.
-- [ ] A derived store's `frames` chunk file equals the built one's, byte for byte, on the Test
-      Store.
-- [ ] Every §10 rule fails its breaker. A truncated `frames` chunk file, a flipped byte in a
-      frame and a short payload are each refused, naming the chromosome and the frame.
-- [ ] Results are identical at 1, 2 and 8 query workers: the pool's default is capped at 4, and
-      any concurrency gives the same answer.
-- [ ] **#71**: GCST90476460 clumps at r² 0.01 in under 1 s of LD work, cold, local disk, at most
-      eight CPUs, excluding ALID resolution, which is reported separately. The measured best here
-      is 1.051 s cold and 0.921 s warm, at four workers, so the target is #71's to hold.
-- [ ] The measured size of each of the five panels' Partner Rows is recorded here (#73 replaces
-      this section's EUR-only measurement with all five).
+Epic [#64](https://github.com/opengwas/ogld/issues/64) carries this design's plan and acceptance
+criteria: #67 writes the rows from `StoreWriter`, #69 derives them for the existing stores, #70
+reads them, #71 moves `clump` and `proxies` onto them, #68 validates them, #72 removes the Proxy
+Index, and #73 rolls them out to the five HGDP+1kGP stores. This document specifies the format those
+tickets build, and does not restate their acceptance.

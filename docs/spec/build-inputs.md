@@ -34,7 +34,7 @@ field is recorded in the store's provenance (`ld-store.md` §7).
 | `k_min` | int | 5 | the fewest kept PCs a build accepts; below it the build is refused, naming the dropped PCs (§8). Provenance records it, and `k`, the number used, which is t_far's k. It applies only when PCs are used: with `k` = 0 no PC File is read, nothing is refused for want of PCs, and provenance records k = 0 and `k_min` as null |
 | `mac_min` | int | 20 | the minor allele count floor (§6) |
 | `info_min` | float or None | 0.8 | the INFO floor (§6); None for a sequenced panel, explicitly |
-| `t_partner` | float | — | the r² a pair within `near_bp` (3 Mb) must reach to be in the store's **Partner Rows**: the **Partner Threshold** (`ld-store.md` §5, §7; `docs/spec/partner-rows.md` §3). There is no default: a build without one is refused, naming it. It MUST be ≤ t_far, and a build given a larger one is refused, naming both values. 0.01 for the five HGDP+1kGP panels; 0.001 for UK Biobank EUR, where it equals t_far. Provenance records it as `t_partner` |
+| `t_partner` | float | — | **From format 0.2.0**, the r² a pair within `near_bp` (3 Mb) must reach to be in the store's **Partner Rows**: the **Partner Threshold** (`ld-store.md` §5, §7; `docs/spec/partner-rows.md` §3). There is no default: a build without one is refused, naming it. It MUST be ≤ t_far, and a build given a larger one is refused, naming both values. 0.01 for the five HGDP+1kGP panels; 0.001 for UK Biobank EUR, where it equals t_far. Provenance records it as `t_partner` |
 
 There is **no call-rate field**: genotypes must be complete (§7). A missing call is a refusal,
 not a filter, so there is nothing to tune.
@@ -43,10 +43,11 @@ not a filter, so there is nothing to tune.
 `t_far` follows from n and k (ADR 0001); `t_partner` does not, because it decides how much LD a
 row must hold to be worth storing for `clump` and `proxies`, and a small panel keeps more pairs by
 chance at the same threshold: at n = 341, 7.2% of AMR's unlinked pairs pass r² 0.01, against EUR's
-1.05% at n = 665. So a build must be told it, and a build without it is refused rather than
-defaulted. It also MUST NOT exceed `t_far`: a pair between the two thresholds within `near_bp`
-would then be in neither the Near Band's partner component nor anywhere else, and a request at
-r2 ≥ t_far within `near_bp` could not be answered exactly (`docs/spec/partner-rows.md` §3).
+1.05% at n = 665. So from format 0.2.0 a build must be told it, and a build without it is refused
+rather than defaulted. It also MUST NOT exceed `t_far`: a pair between the two thresholds within
+`near_bp` would then be in neither the Near Band's partner component nor anywhere else, and a
+request at r2 ≥ t_far within `near_bp` could not be answered exactly
+(`docs/spec/partner-rows.md` §3).
 
 ## 2. The pgen
 

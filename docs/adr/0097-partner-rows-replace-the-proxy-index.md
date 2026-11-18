@@ -45,8 +45,10 @@ sampling alone, so about 90% of the passing pairs are noise.
    the far code floor beyond it. Every code is a copy of a Near Band or Far Pairs code. `clump`
    and `proxies` read only this component.
 2. **It replaces the Proxy Index** (D1). Since t_partner ≤ t_far, the index is the Partner Rows
-   thresholded at the far code floor. `index/` and its validation rules are removed. Net about
-   +33 GB (+6%) over the five panels.
+   thresholded at the far code floor. `index/` and its validation rules are removed. Net an
+   estimated **+33 GB (+6%)** over the five panels: that number is this decision's projection from
+   chr22, and the clarification below measures +53 GB net at G = 64, EUR's own being +5.38 GB at
+   G = 16.
 3. **Below t_partner within `near_bp`, `clump` and `proxies` refuse** (D2), naming
    `threshold_below_t_partner`. They never read the Near Band. This is a breaking change: r²
    0.001 clumps on the HGDP+1kGP stores, answered today, are refused.
@@ -102,8 +104,9 @@ The reason is the compatibility check, not a measurement of speed. `zarr.open_gr
 `ogld.open` on a store with a plain-file `partners/` are clean, and `ogld.validate` passes all 27
 rules, none of which looks at the new component. But zarr-python 3.4.2's `members()` emits
 `ZarrUserWarning: Object at partners is not recognized as a component of a Zarr hierarchy.` A node
-in the hierarchy removes the warning, and the single-chunk form was tested to list without it.
-Decision 5's one-read rule survives because one chunk has no shard index to resolve first.
+in the hierarchy removes the warning. The single-chunk form was checked only by a small synthetic
+test so far; #67 measures it on a real store. Decision 5's one-read rule survives because one chunk
+has no shard index to resolve first.
 
 **The measured size is larger than the projection, and the owner accepted it.** EUR's Partner Rows
 are **14.765 GB at G = 16** and **11.821 GB at G = 64**, against decision 5's and §11's 9.0 GB
@@ -113,10 +116,10 @@ projected chromosome was unrepresentative. Net of EUR's 9.382 GB Proxy Index the
 at roughly **+53 GB net at G = 64**. Decisions 1, 2 and 6 stand; §11's table is the measurements
 now, and #73 measures the other four panels.
 
-**G = 16, and component workers capped at 4** (orchestrator, on that evidence;
-`docs/spec/partner-rows.md` §1, §5.2, §9.2). EUR genome bytes are 18.506 GB at G = 4, 16.677 GB at
-G = 8, 14.765 GB at G = 16 and 11.821 GB at G = 64. With the row-local unshuffle, cold LD on the
-whole of GCST90476460 is 1.169 s at G = 4 with two workers and 1.051 / 1.067 s at G = 8 / 16 with
-four, and 5.753 / 5.109 s with eight at G = 8 / 16: eight workers regress. G = 16 is the smallest
-of the configurations that are equally fast. **The under-1 s LD target moves to #71** (the
-owner's rule for this round): the best cold time is 1.051 s, so nothing here claims it.
+**G = 16, and component workers capped at 4** (measured on #65; `docs/spec/partner-rows.md` §1,
+§5.2, §9.2). EUR genome bytes are 18.506 GB at G = 4, 16.677 GB at G = 8, 14.765 GB at G = 16 and
+11.821 GB at G = 64. With the row-local unshuffle, cold LD on the whole of GCST90476460 is 1.169 s
+at G = 4 with two workers and 1.051 / 1.067 s at G = 8 / 16 with four, and 5.753 / 5.109 s with
+eight at G = 8 / 16: eight workers regress. G = 16 is the smallest of the configurations that are
+equally fast. **The under-1 s LD target moves to #71** (owner, 18 November 2026): the best cold time
+is 1.051 s, so nothing here claims it.
