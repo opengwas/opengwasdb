@@ -391,19 +391,24 @@ def test_a_rerun_claims_an_unclaimed_component_once_the_rules_accept_it(unclaime
     assert_the_builds_bytes(unclaimed)
 
 
+def drop_claim(store: Path) -> None:
+    """Make a store's component unclaimed again: the provenance a derivation had not yet written."""
+    root = zarr.open_group(str(store), mode="r+")
+    prov = dict(root.attrs["ld_store"])
+    prov.pop("t_partner", None)
+    prov.pop("partner_code_floor", None)
+    prov["format_version"] = "0.1.0"
+    prov["counts"] = {k: v for k, v in prov["counts"].items() if k != "partner_entries"}
+    prov["software"] = {k: v for k, v in prov["software"].items() if k != "zstd"}
+    root.attrs.update({"ld_store": prov})
+
+
 def test_a_rerun_rebuilds_an_unclaimed_component_the_rules_refuse(tmp_path: Path) -> None:
     """An unclaimed component one rule refuses is removed and derived again: a component nothing
     claims is one nothing may trust, however whole it looks (partner-rows §6.2, §10)."""
     store = unpartnered(tmp_path / "store")
     derive_partners(store, t_partner=T_PARTNER)
-    root = zarr.open_group(str(store), mode="r+")
-    prov = dict(root.attrs["ld_store"])
-    for key in ("t_partner", "partner_code_floor"):
-        prov.pop(key)
-    prov["format_version"] = "0.1.0"
-    prov["counts"] = {k: v for k, v in prov["counts"].items() if k != "partner_entries"}
-    prov["software"] = {k: v for k, v in prov["software"].items() if k != "zstd"}
-    root.attrs.update({"ld_store": prov})
+    drop_claim(store)
     frame = store / "partners" / "22" / "frames" / "c" / "0"
     damaged = bytearray(frame.read_bytes())
     damaged[0] ^= 0xFF
@@ -420,7 +425,7 @@ def test_a_partners_directory_that_is_a_link_is_refused(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (store / "partners").symlink_to(outside)
-    with pytest.raises(InputError, match=r"outside the store"):
+    with pytest.raises(InputError, match=r"partners is a symbolic link"):
         derive_partners(store, t_partner=T_PARTNER)
     assert list(outside.iterdir()) == [], "nothing was written outside the store"
 
@@ -434,7 +439,7 @@ def test_a_chromosome_group_that_is_a_link_is_refused(tmp_path: Path) -> None:
     (store / "partners").mkdir()
     (store / "partners" / "21").symlink_to(outside)
     assert (store / "partners" / "21").is_dir(), "the link is a directory to a reader"
-    with pytest.raises(InputError, match=r"partners/21 resolves to .*outside the store"):
+    with pytest.raises(InputError, match=r"partners/21 is a symbolic link"):
         derive_partners(store, t_partner=T_PARTNER)
     assert list(outside.iterdir()) == [], "nothing was written outside the store"
 
@@ -470,3 +475,83 @@ def test_a_failed_index_removal_keeps_its_count(tmp_path: Path) -> None:
         assert index.is_dir(), "the index is still the store's"
     finally:
         index.chmod(0o700)
+
+
+def test_a_0_1_0_store_that_keeps_the_keys_answers_no_partner_read(tmp_path: Path) -> None:
+    """A store's provenance may hold extra keys (spec §7), and one of them does not make it a
+    store with Partner Rows: the recorded **format version** does. A 0.1.0 store carrying a
+    whole component nothing claims is refused by both reads that would use it, rather than
+    answered from frames no rule has judged (partner-rows §6.2; spec §13; ogld#69)."""
+    store = unpartnered(tmp_path / "store")
+    derive_partners(store, t_partner=T_PARTNER)
+    recorded = json.loads((store / "zarr.json").read_text())
+    recorded["attributes"]["ld_store"]["format_version"] = "0.1.0"
+    (store / "zarr.json").write_text(json.dumps(recorded))
+    assert "t_partner" in provenance(store), "the fixture keeps the keys, or it proves nothing"
+    assert [rule for rule, found in validate_at(store, threads=1).items() if found] == []
+    alid = first_alid(store)
+    with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
+        ogld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000)
+    with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
+        ogld.open(store).proxies([alid], r2=T_PARTNER, kb=1000)
+
+
+# ---- item 3: no link anywhere the derivation writes, and no planted metadata temporary --------
+
+
+def test_a_partners_link_inside_the_store_is_refused(tmp_path: Path) -> None:
+    """`partners/` is the derivation's own directory, so a link at it is refused even when it
+    stays inside the store: a cleanup or a claim would then write, and delete, in the directory
+    the link names (partner-rows §6.2; ogld#69)."""
+    store = unpartnered(tmp_path / "store")
+    stash = store / "stash"
+    stash.mkdir()
+    (stash / ".keep").write_text("not the component's")
+    (store / "partners").symlink_to(stash)
+    with pytest.raises(InputError, match=r"partners is a symbolic link"):
+        derive_partners(store, t_partner=T_PARTNER)
+    assert (stash / ".keep").exists(), "nothing the link names was touched"
+
+
+def test_a_planted_metadata_temporary_is_refused(tmp_path: Path) -> None:
+    """Zarr writes a metadata document through `zarr.<uuid>.partial` beside it, and follows a link
+    there: a store holding one before a derivation is refused, so a planted or stale temporary is
+    never written through (partner-rows §6.2)."""
+    store = unpartnered(tmp_path / "store")
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}")
+    (store / "zarr.0123456789abcdef0123456789abcdef.partial").symlink_to(outside)
+    with pytest.raises(InputError, match=r"zarr\.[0-9a-f]+\.partial is a temporary"):
+        derive_partners(store, t_partner=T_PARTNER)
+    assert outside.read_text() == "{}", "the file the temporary names is untouched"
+    assert not (store / "partners").exists(), "nothing was derived"
+
+
+def test_a_root_metadata_link_is_refused(tmp_path: Path) -> None:
+    """The claim replaces the root metadata, so a link at it would put the store's provenance in
+    another file (partner-rows §6.2)."""
+    store = unpartnered(tmp_path / "store")
+    outside = tmp_path / "zarr.json"
+    outside.write_bytes((store / "zarr.json").read_bytes())
+    (store / "zarr.json").unlink()
+    (store / "zarr.json").symlink_to(outside)
+    with pytest.raises(InputError, match=r"zarr.json is a symbolic link"):
+        derive_partners(store, t_partner=T_PARTNER)
+    assert json.loads(outside.read_text()) == json.loads((store / "zarr.json").read_text())
+
+
+# ---- item 4: a residue whose own metadata is unreadable is a rejection, not a crash -----------
+
+
+def test_a_rerun_rebuilds_an_unclaimed_component_that_has_no_count(tmp_path: Path) -> None:
+    """A chromosome group with no `entries` cannot be counted, so the residue cannot be claimed:
+    the rules reject it and `_settle` derives it again, rather than the run crashing before the
+    rules are ever asked (partner-rows §6.2, §10)."""
+    store = unpartnered(tmp_path / "store")
+    derive_partners(store, t_partner=T_PARTNER)
+    drop_claim(store)
+    group = zarr.open_group(str(store / "partners" / "21"), mode="r+")
+    del group.attrs["entries"]
+    made = derive_partners(store, t_partner=T_PARTNER)
+    assert made is not None
+    assert_the_builds_bytes(store)

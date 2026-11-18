@@ -38,6 +38,7 @@ from ogld.format.provenance import (
     Sourced,
     SourceKind,
     VariantFilters,
+    release_of,
 )
 from ogld.format.semantics import (
     AnswerKind,
@@ -91,5 +92,6 @@ __all__ = [
     "judge_request",
     "judge_window",
     "near_row_lengths",
+    "release_of",
     "t_far",
 ]

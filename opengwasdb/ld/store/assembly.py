@@ -1055,7 +1055,7 @@ def derive_partners(
     store = Path(location)
     root = _writable(store)
     plan = _plan(root, store, t_partner, chromosomes)
-    _refuse_links(plan)
+    _refuse_writes(plan)
     if drop_index and not plan.whole_after:
         raise InputError(_incomplete(plan))
     if plan.missing:
@@ -1089,8 +1089,22 @@ def _settle(root: zarr.Group, plan: _Plan, t_partner: float, threads: int, proce
 
 
 def _rules_pass(root: zarr.Group, plan: _Plan, t_partner: float, threads: int) -> bool:
-    """Whether the ten rules accept the component of a store that does not claim it yet."""
-    findings = validate_group(root, _claimed(plan, t_partner), PARTNER_RULES, threads=threads)
+    """Whether the ten rules accept the component of a store that does not claim it yet, which
+    only their answer can say: `partners/` is made a node first, since a 0.2.0 store's component is
+    one (`partners.files`), and the claim that would make it the store's is not written here.
+
+    The residue's own metadata is part of what they judge: a group that cannot say how many
+    entries it holds — no `entries`, or metadata that will not parse — is a component that cannot
+    be claimed, so it is a **rejection** and `_settle` derives it again. A failure to read the
+    store's *source* — its variant table, its Near Band, its Far Pairs — is the store's own, and
+    propagates instead (ogld#69).
+    """
+    _publish(root)
+    try:
+        made = _claimed(plan, t_partner)
+    except InputError:
+        return False
+    findings = validate_group(root, made, PARTNER_RULES, threads=threads)
     return not any(findings.values())
 
 
@@ -1120,18 +1134,20 @@ def _claim(root: zarr.Group, plan: _Plan, t_partner: float, threads: int) -> Pro
     That last write is **the claim**, and it is one write: the root's metadata is replaced whole, so
     a run killed before it leaves a store whose provenance says 0.1.0 — a store that does not have
     the Partner Rows, whatever directories exist (§6.2). Nothing reads a component the provenance
-    does not claim, so the moment between the node and the claim is one no rule and no reader
-    trusts, and a rerun settles it (`_settle`).
+    does not claim, so the node comes first and the rules judge the component as the store will
+    hold it: a 0.2.0 store's Partner Rows are a node of its hierarchy (`partners.files`), and only
+    the claim that follows makes them the store's.
 
     What a killed run left unpublished goes first: it is this run's own, no writer is live beside
     it, and `partners.files` refuses a store that holds one (§5.1).
     """
     _clear_temporaries(plan.store / layout.PARTNERS)
     made = _claimed(plan, t_partner)
+    _refuse_temporaries(plan.store)
+    _publish(root)
     findings = validate_group(root, made, PARTNER_RULES, threads=threads)
     if any(findings.values()):
         raise ValidationFailed(findings)
-    _publish(root)
     _record(root, made)
     return cast(Provenance, made)
 
@@ -1156,22 +1172,46 @@ def _writable(store: Path) -> zarr.Group:
         raise InputError(f"{store} cannot be written to: {unwritable}") from unwritable
 
 
-def _refuse_links(plan: _Plan) -> None:
-    """Refuse, before anything is written, a store whose writable parts resolve outside it: a
-    derivation writes the root metadata, `partners/`, and a group or a temporary for each
-    chromosome it derives, and a symbolic link at any of them would put those writes in another
-    directory (ogld#69).
+def _refuse_writes(plan: _Plan) -> None:
+    """Refuse, before anything is written, a store whose writable paths are not plainly the
+    store's own: a derivation writes the root metadata, `partners/` and every group and temporary
+    in it, and a symbolic link at any of them puts a write, or a deletion, in the directory the
+    link names — even one inside the store, which a cleanup would then empty (ogld#69).
 
-    A store's read-only components may be links: the scratch stores #71 reads are a copied
+    It also refuses a `zarr.*.partial` a store already holds, in the root or in `partners/`: zarr
+    writes a metadata document through one (`<path>.<uuid>.partial`, opened `wb` with no
+    `O_NOFOLLOW`) and then replaces the document with it, so a link at that name would be written
+    through and published as the store's metadata.
+
+    A store's read-only components may be links: the scratch stores #71 and #73 read are a copied
     `zarr.json` beside links to the published store's `near/`, `far/`, `variants/` and `index/`.
+
+    This check runs before the first write and is not a lock: a concurrent writer to the same store
+    could still plant one between the check and the write. A store has one writer (as §6.1's carry
+    and `FramesGroup` assume), and a derivation is it.
     """
-    root = plan.store.resolve()
     for path in _written(plan):
-        resolved = path.resolve()
-        if resolved != root and root not in resolved.parents:
+        if path.is_symlink():
             raise InputError(
-                f"{path} resolves to {resolved}, outside the store at {root}: a derivation writes "
-                "only inside the store, and never through a symbolic link (partner-rows §6.2)"
+                f"{path} is a symbolic link: a derivation writes only what is plainly inside the "
+                f"store at {plan.store.resolve()}, and never through a link (partner-rows §6.2)"
+            )
+    _refuse_temporaries(plan.store)
+
+
+def _refuse_temporaries(store: Path) -> None:
+    """Refuse a store holding a metadata temporary, which zarr would write through and publish.
+
+    It is checked again immediately before the claim, so a temporary that appeared while the
+    derivation ran is refused too (ogld#69)."""
+    for directory in (store, store / layout.PARTNERS):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for temporary in sorted(directory.glob("zarr.*.partial")):
+            raise InputError(
+                f"{temporary} is a temporary a metadata write left behind or was planted at, and "
+                "zarr writes through it: remove it before deriving into this store "
+                "(partner-rows §6.2)"
             )
 
 

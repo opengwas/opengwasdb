@@ -48,7 +48,7 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
+from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES, release_of
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
@@ -667,13 +667,8 @@ def _quantile_problems(provenance: dict[str, Any]) -> _Problems:
 
 
 def _release(version: object) -> tuple[int, ...] | None:
-    """A `MAJOR.MINOR.PATCH` version as numbers, or None for one that is not that."""
-    if not isinstance(version, str):
-        return None
-    try:
-        return tuple(int(part) for part in version.split("."))
-    except ValueError:
-        return None
+    """A `MAJOR.MINOR.PATCH` version as numbers, or None for one that is not that (§13)."""
+    return release_of(version)
 
 
 def _added_later(key: str, version: object) -> bool:
@@ -2123,12 +2118,24 @@ def _partners_files(store: _Store) -> _Problems:
     """Every chromosome of the Variant Set has a `partners/<c>/` group with both arrays, its
     attributes are the sizes §5.3 names, its `frames_idx` is F + 1 ascending offsets from 0 to
     `frames_bytes`, and both chunk files are the ones its hashes name (partner-rows §5.1, §5.3,
-    §10). A store whose version has no Partner Rows has nothing to judge (spec §13)."""
+    §10). A store whose version has no Partner Rows has nothing to judge (spec §13).
+
+    `partners/` is a group of the store's one hierarchy, never a directory beside it (§1, §5.1):
+    a 0.2.0 store whose root does not list it is a damaged one even when every chromosome's group
+    still resolves by its own path, because a listing of the store would not show its component.
+    """
     if not store.partners_judged():
         return
     group = store.node(layout.PARTNERS)
     if isinstance(group, zarr.Group):
         yield from _temporary_entries(layout.PARTNERS, group)
+    else:
+        yield (
+            layout.PARTNERS,
+            "is not a group of the store's hierarchy: a 0.2.0 store's Partner Rows are a node of "
+            "it, listed by `members()` with both arrays of every chromosome (spec §1, §5.1; "
+            "partner-rows §5.1)",
+        )
     for chrom, start, stop in store.chromosomes():
         yield from _partner_files(store, chrom, stop - start)
 
