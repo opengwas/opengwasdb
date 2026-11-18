@@ -1,10 +1,11 @@
-"""The `ogld` command: `ogld build`, `ogld validate`, `ogld info` (layer 3).
+"""The `ogld` command: `ogld build`, `ogld validate`, `ogld info`, `ogld derive-partners`
+(layer 3).
 
 A thin shell over the public functions, so a job and a person run exactly what a caller
-of the package runs: `build` (ogld#5), `validate` and `info` (ogld#4). Exit status: 0
-done, 1 the store breaks a rule, 2 a `Refusal` or an `InputError`. Any other exception is a
-fault inside ogld and propagates with its traceback. An option left out takes the default
-`BuildInputs` and `build` declare, so no default is written twice.
+of the package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners`
+(ogld#69). Exit status: 0 done, 1 the store breaks a rule, 2 a `Refusal` or an `InputError`. Any
+other exception is a fault inside ogld and propagates with its traceback. An option left out
+takes the default `BuildInputs` and `build` declare, so no default is written twice.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from ogld.format import InputError, Refusal
 from ogld.identity import IdentityError
 from ogld.query import open as open_store
 from ogld.store import Finding
+from ogld.store.assembly import derive_partners
 from ogld.store.validation import validate_at
 
 
@@ -80,6 +82,36 @@ def _parser() -> argparse.ArgumentParser:
     v = commands.add_parser("validate", help="run every validation rule")
     v.add_argument("location")
     v.add_argument("--threads", type=_threads, default=1, help="blocks read and checked at once")
+    d = commands.add_parser(
+        "derive-partners",
+        help="add the Partner Rows to an existing LD Store (docs/spec/partner-rows.md §6.2)",
+    )
+    d.add_argument("store", type=Path)
+    d.add_argument(
+        "--t-partner",
+        type=float,
+        required=True,
+        help="the r² a pair within near_bp must reach to be in the Partner Rows; no default, and "
+        "never above the store's t_far (partner-rows §3)",
+    )
+    d.add_argument(
+        "--threads", type=_threads, default=1, help="compressor threads within one chromosome"
+    )
+    d.add_argument(
+        "--processes", type=_threads, default=1, help="chromosomes derived at once, largest first"
+    )
+    d.add_argument(
+        "--chromosomes",
+        nargs="+",
+        default=None,
+        metavar="CHROM",
+        help="the chromosomes to derive; every one the store lacks by default",
+    )
+    d.add_argument(
+        "--drop-index",
+        action="store_true",
+        help="afterwards remove the Proxy Index, if the store's Partner Rows pass their rules",
+    )
     commands.add_parser("info", help="print the provenance").add_argument("location")
     return parser
 
@@ -125,10 +157,36 @@ def _info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _derive(args: argparse.Namespace) -> int:
+    made = derive_partners(
+        args.store,
+        t_partner=args.t_partner,
+        threads=args.threads,
+        processes=args.processes,
+        chromosomes=args.chromosomes,
+        drop_index=args.drop_index,
+    )
+    if made is None:
+        print(
+            f"ogld derive-partners: {args.store}: the chromosomes asked for are derived, and the "
+            "provenance is not written until every chromosome of the Variant Set has its Partner "
+            "Rows (partner-rows §6.2)",
+            file=sys.stderr,
+        )
+        return 0
+    print(json.dumps(made, indent=1))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one `ogld` command and return its exit status."""
     args = _parser().parse_args(argv)
-    run = {"build": _build, "validate": _validate, "info": _info}[args.command]
+    run = {
+        "build": _build,
+        "validate": _validate,
+        "info": _info,
+        "derive-partners": _derive,
+    }[args.command]
     try:
         return run(args)
     except (Refusal, InputError, IdentityError) as problem:

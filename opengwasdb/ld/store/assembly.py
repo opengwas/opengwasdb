@@ -12,6 +12,8 @@ store"). It handles:
   ADR 0007), from the pairs a cut already keeps, with no second pass over r;
 - the Partner Rows: every pair within far_bp at its distance's floor, in both variants' rows, 16
   rows to a zstd frame (spec §5; partner-rows §5, §6.1; ADR 0011);
+- their derivation for a store built before them, from that store's own Near Band and Far Pairs,
+  through the same emitter a build feeds (partner-rows §6.2; ogld#69);
 - the counts, and the rest of the provenance a store derives from itself (spec §7).
 
 Validation at `finish` runs every rule of spec §12 through `validate_group`. A producer supplies r
@@ -39,8 +41,13 @@ measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near 
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import multiprocessing
+import os
+import shutil
+from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final, cast
 
 import numpy as np
@@ -52,6 +59,7 @@ from ogld.format import (
     T_FAR_Q,
     Codes,
     Counts,
+    InputError,
     Provenance,
     REncoding,
     Sourced,
@@ -70,6 +78,8 @@ from ogld.format.geometry import (
     within,
 )
 from ogld.store import frames, layout
+from ogld.store.location import ChunkCache, open_group
+from ogld.store.validation import PARTNER_RULES, ValidationFailed, validate_group
 
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
 #: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged.
@@ -597,15 +607,20 @@ class PartnerRowsStream:
         partner_floor: int,
         *,
         workers: int = 1,
+        container: Path | None = None,
     ) -> None:
         """The Partner Rows of chromosome `chrom`, whose Near Band rows are `lengths` codes long
-        and whose pairs are kept at `partner_floor` within near_bp."""
+        and whose pairs are kept at `partner_floor` within near_bp. `container` is the directory
+        the group is published into, the store's `partners/` group by default; a derivation gives
+        a directory that is not yet one (#69)."""
         self._chrom = chrom
         self._encoding = encoding
         self._indptr = indptr_of(lengths)
         self._floor = partner_floor
         self._rows = RowCarry(len(lengths))
-        self._group = frames.FramesGroup(root, chrom, len(lengths), workers=workers)
+        self._group = frames.FramesGroup(
+            root, chrom, len(lengths), workers=workers, container=container
+        )
         self._pending: list[tuple[_Rows, Codes]] = []
 
     @property
@@ -632,13 +647,17 @@ class PartnerRowsStream:
                 f"a block of {rows} rows of chromosome {self._chrom} carries {len(near)} Near "
                 f"Band codes, not its band's {len(at)}: a store assembly fault"
             )
-        near_lo, near_hi = near_pair_of(self._indptr[first : first + rows + 1], at)
+        # The floor is judged on the code alone, so only the codes that reach it need their pair:
+        # the address rule runs on those, and never on a whole block. On EUR chr22 that is 5.0% of
+        # the band's codes, and computing the other 95%'s pairs and discarding them was 37 s of
+        # the chromosome's 41 s of selection (ogld#69).
         keep = np.abs(near) >= self._floor
+        near_lo, near_hi = near_pair_of(self._indptr[first : first + rows + 1], at[keep])
         # The Near Band's kept pairs come first and every one of them is closer than the Far Pairs
         # of its row, so a stable sort by the earlier row gives the (lo, hi) order `RowCarry` needs.
-        rows_lo = np.concatenate([near_lo[keep] + first, lo]).astype(np.int32)
+        rows_lo = np.concatenate([near_lo + first, lo]).astype(np.int32)
         order = np.argsort(rows_lo, kind="stable")
-        rows_hi = np.concatenate([near_hi[keep] + first, hi]).astype(np.int32)
+        rows_hi = np.concatenate([near_hi + first, hi]).astype(np.int32)
         block = self._rows.complete(
             rows,
             rows_lo[order],
@@ -943,3 +962,395 @@ def provenance(
     }
     order = Provenance.__annotations__
     return cast(Provenance, {key: derived.get(key, given.get(key)) for key in order})
+
+
+# ---------------------------------------------------------------- deriving Partner Rows (ogld#69)
+
+
+@dataclass(frozen=True)
+class _Schedule:
+    """One chromosome's derivation, and what every chromosome of its store shares
+    (partner-rows §6.2, §6.3): the job a process worker is handed.
+
+    `start` and `stop` are the chromosome's rows in the Variant Set, so a worker needs nothing
+    from the parent but this. A worker opens the store itself rather than inheriting a group, a
+    chunk cache or a decoder's pool: none is fork-safe (partner-rows §9; ogld#70).
+    """
+
+    store: Path
+    chrom: str
+    start: int
+    stop: int
+    near_bp: int
+    floor: int
+    encoding: REncoding
+    threads: int
+
+    @property
+    def rows(self) -> int:
+        """The chromosome's rows in the Variant Set."""
+        return self.stop - self.start
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """What one `derive-partners` run reads from its store before it writes anything."""
+
+    store: Path
+    encoding: REncoding
+    near_bp: int
+    floor: int
+    recorded: dict[str, Any]
+    ranges: dict[str, tuple[int, int]]
+    missing: tuple[str, ...]
+    claimed: bool
+
+    def present(self, chrom: str) -> bool:
+        """Whether `chrom`'s Partner Rows are published: a group at `partners/<chrom>/`."""
+        return (self.store / layout.PARTNERS / chrom).is_dir()
+
+    @property
+    def complete(self) -> bool:
+        """Whether every chromosome of the Variant Set has its Partner Rows: what the provenance
+        claims, and the only state in which it may (partner-rows §6.2)."""
+        return all(self.present(chrom) for chrom in self.ranges)
+
+
+def derive_partners(
+    location: str | os.PathLike[str],
+    *,
+    t_partner: float,
+    threads: int = 1,
+    processes: int = 1,
+    chromosomes: Sequence[str] | None = None,
+    drop_index: bool = False,
+) -> Provenance | None:
+    """Add the Partner Rows to the existing LD Store at `location`, from its own Near Band and
+    Far Pairs, and return the provenance that claims them (partner-rows §6.2; ADR 0011, D6).
+
+    `t_partner` is the **Partner Threshold**, a required input with no default, and never above
+    the store's recorded `t_far`. Chromosomes are derived `processes` at a time, largest first,
+    each on `threads` compressor threads, and `chromosomes` names the ones to derive (all of them
+    by default). The rules run on `threads` too: on EUR's genome they read the whole Near Band and
+    every frame, and that is the larger half of a derivation's time (ogld#69).
+
+    The provenance is written once, at the end, and only when every chromosome of the Variant Set
+    has its Partner Rows and the ten rules of `PARTNER_RULES` pass: a run that derives some
+    chromosomes and not all leaves the provenance as it was and returns None, and an interrupted
+    run leaves the store the one it was, since `partners/` is not a node of its hierarchy until
+    then. A store whose provenance already claims its Partner Rows is refused as nothing to do,
+    unless `chromosomes` names ones it lacks.
+
+    `drop_index` is the Proxy Index's removal, a step of its own (partner-rows §6.2): it removes
+    `index/` and its count only from a store whose Partner Rows pass those rules, and never from
+    one whose derivation is incomplete.
+    """
+    store = Path(location)
+    root = _writable(store)
+    plan = _plan(root, store, t_partner, chromosomes)
+    if plan.missing:
+        _derive(plan, threads=threads, processes=processes)
+    elif plan.claimed and not drop_index:
+        raise InputError(
+            f"{store} already records Partner Rows at t_partner = {plan.recorded['t_partner']!r} "
+            f"over {len(plan.ranges)} chromosome(s): there is nothing to derive, and "
+            "--chromosomes names one it lacks"
+        )
+    if not plan.complete:
+        if drop_index:
+            raise InputError(_incomplete(plan))
+        return None
+    # What a killed run left unpublished goes first: it is this run's own, no writer is live
+    # beside it, and `partners.files` refuses a store that holds one (partner-rows §5.1, §6.2).
+    _clear_temporaries(plan.store / layout.PARTNERS)
+    # The rules judge the directory's groups before it is a node, which is what lets a component
+    # that fails them leave the store readable as the 0.1.0 one it was (#68's partners.files).
+    made = _claimed(plan, t_partner)
+    findings = validate_group(root, made, PARTNER_RULES, threads=threads)
+    if any(findings.values()):
+        raise ValidationFailed(findings)
+    root.require_group(layout.PARTNERS)
+    root.attrs.update({"ld_store": made})
+    if drop_index:
+        return _drop_index(root, store, made)
+    return cast(Provenance, made)
+
+
+def _writable(store: Path) -> zarr.Group:
+    """The store's root group, opened to be written: a derivation writes `partners/` and the
+    provenance, and nothing else, and neither until every chromosome is in place (§6.2)."""
+    open_group(store)  # names a location that is no Zarr group at all, as a reader does
+    try:
+        return zarr.open_group(str(store), mode="r+")
+    except (OSError, ValueError) as unwritable:
+        raise InputError(f"{store} cannot be written to: {unwritable}") from unwritable
+
+
+def _plan(
+    root: zarr.Group, store: Path, t_partner: float, chromosomes: Sequence[str] | None
+) -> _Plan:
+    """What `derive_partners` reads before it writes: the store's encoding, its distances, the
+    threshold's floor, and the chromosomes that lack Partner Rows, largest first (§6.3)."""
+    recorded = root.attrs.get("ld_store")
+    if not isinstance(recorded, dict):
+        raise InputError(f"{store} has no ld_store provenance: it is not a finished LD Store")
+    encoding = REncoding.of(recorded.get("encoding"))
+    floor = encoding.partner_code_floor(t_partner, _number(recorded, "t_far", store))
+    ranges = _ranges(root)
+    named = _named(chromosomes, ranges, store)
+    claimed = _claimed_at(recorded, t_partner, floor, store)
+    missing = tuple(
+        sorted(
+            (chrom for chrom in named if not (store / layout.PARTNERS / chrom).is_dir()),
+            key=lambda chrom: ranges[chrom][1] - ranges[chrom][0],
+            reverse=True,
+        )
+    )
+    return _Plan(
+        store,
+        encoding,
+        _integer(recorded, "near_bp", store),
+        floor,
+        recorded,
+        ranges,
+        missing,
+        claimed,
+    )
+
+
+def _named(
+    chromosomes: Sequence[str] | None, ranges: dict[str, tuple[int, int]], store: Path
+) -> tuple[str, ...]:
+    """The chromosomes a run was asked for, in the order asked, each one of the store's."""
+    if chromosomes is None:
+        return tuple(ranges)
+    unknown = [chrom for chrom in chromosomes if chrom not in ranges]
+    if unknown:
+        raise InputError(
+            f"{', '.join(unknown)}: not a chromosome of {store}, whose Variant Set is on "
+            f"{', '.join(ranges)}"
+        )
+    return tuple(dict.fromkeys(chromosomes))
+
+
+def _claimed_at(recorded: dict[str, Any], t_partner: float, floor: int, store: Path) -> bool:
+    """Whether the provenance claims Partner Rows already, and at this floor. A store derived at
+    another one is refused rather than given frames at a second: a row would hold two floors."""
+    if "t_partner" not in recorded:
+        return False
+    said, at = recorded.get("t_partner"), recorded.get("partner_code_floor")
+    if said != t_partner or at != floor:
+        raise InputError(
+            f"{store} records Partner Rows at t_partner = {said!r} (code floor {at!r}), not "
+            f"{t_partner!r} (code floor {floor}): deriving at a second floor would put two in "
+            "one store's rows (partner-rows §3)"
+        )
+    return True
+
+
+def _ranges(root: zarr.Group) -> dict[str, tuple[int, int]]:
+    """Each chromosome's rows in the Variant Set, as the `variants` group records them (spec §2)."""
+    variants = root.get("variants")
+    if not isinstance(variants, zarr.Group):
+        raise InputError("the store has no variants group: it is not an LD Store")
+    try:
+        listed = layout.chromosomes_listed(variants.attrs.get("chromosomes"))
+    except ValueError as malformed:
+        raise InputError(f"the chromosomes ranges are malformed: {malformed}") from malformed
+    return {name: (start, stop) for name, start, stop in listed}
+
+
+def _number(recorded: dict[str, Any], key: str, store: Path) -> float:
+    """A provenance number, refused for a missing one with the store that lacks it named."""
+    value = recorded.get(key)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise InputError(f"{store} records no {key}, which is what a derivation thresholds at")
+    return float(value)
+
+
+def _integer(recorded: dict[str, Any], key: str, store: Path) -> int:
+    """A provenance integer, refused for a missing one with the store that lacks it named."""
+    value = recorded.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise InputError(f"{store} records no {key}, which is what a derivation reads the band by")
+    return value
+
+
+def _incomplete(plan: _Plan) -> str:
+    """Why a store's Proxy Index is not removed: its Partner Rows are not all there."""
+    absent = [chrom for chrom in plan.ranges if not plan.present(chrom)]
+    return (
+        f"{plan.store} is missing the Partner Rows of {len(absent)} chromosome(s), "
+        f"{', '.join(absent)}: --drop-index removes the Proxy Index only from a store whose "
+        "Partner Rows are whole (partner-rows §6.2)"
+    )
+
+
+def _derive(plan: _Plan, *, threads: int, processes: int) -> None:
+    """Derive the chromosomes `plan` lacks, largest first, on `processes` worker processes
+    (partner-rows §6.3). One process derives them one after another; more take one each."""
+    if threads < 1 or processes < 1:
+        raise InputError(
+            f"threads and processes count workers, so each is at least 1, not {threads} and "
+            f"{processes}"
+        )
+    component = plan.store / layout.PARTNERS
+    component.mkdir(exist_ok=True)
+    jobs = [
+        _Schedule(
+            plan.store,
+            chrom,
+            *plan.ranges[chrom],
+            plan.near_bp,
+            plan.floor,
+            plan.encoding,
+            threads,
+        )
+        for chrom in plan.missing
+    ]
+    if processes == 1:
+        for job in jobs:
+            derive_partner_rows(job)
+        return
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=min(processes, len(jobs)), mp_context=context) as pool:
+        list(pool.map(derive_partner_rows, jobs))
+
+
+def derive_partner_rows(job: _Schedule) -> int:
+    """Write one chromosome's Partner Rows from its store's Near Band and Far Pairs, and return
+    them: every pair's code in both variants' rows, twice the pairs (partner-rows §5.3, §6.2).
+
+    The Near Band is read a block of rows at a time through the direct decoder (ADR 0009) and
+    the Far Pairs whole, and both are handed to the emitter a build hands its cuts, so the frames
+    are a build's, byte for byte (§6.1). `FramesGroup` publishes the group by one rename, so the
+    chromosome is whole or absent however the run ends (§5.1).
+    """
+    root = open_group(job.store)
+    cache = ChunkCache(0)
+    lengths = near_row_lengths(
+        _slice(cache, _array(root, "variants/position"), job.start, job.rows).astype(np.int64),
+        job.near_bp,
+    )
+    far = root.get(f"far/{job.chrom}")
+    if not isinstance(far, zarr.Group):
+        raise InputError(f"{job.store} has no far/{job.chrom}: the store holds no Far Pairs")
+    stream = PartnerRowsStream(
+        root,
+        job.chrom,
+        lengths,
+        job.encoding,
+        job.floor,
+        workers=job.threads,
+        container=job.store / layout.PARTNERS,
+    )
+    _fed(stream, cache, _array(root, f"near/{job.chrom}/r"), far, indptr_of(lengths))
+    return stream.close()
+
+
+def _fed(
+    stream: PartnerRowsStream,
+    cache: ChunkCache,
+    near: zarr.Array[Any],
+    far: zarr.Group,
+    indptr: npt.NDArray[np.int64],
+) -> None:
+    """Feed `stream` the chromosome's rows a block at a time: the block's Near Band codes, and its
+    rows' Far Pairs as their earlier row and partner (partner-rows §6.1, §6.2)."""
+    rows = len(indptr) - 1
+    far_indptr = _slice(cache, _array(far, "indptr"), 0, rows + 1)
+    partner, codes = _array(far, "partner"), _array(far, "r")
+    for a, b in blocks((indptr, DERIVE_ENTRIES)):
+        first, last = int(indptr[a]), int(indptr[b])
+        at, many = int(far_indptr[a]), int(far_indptr[b] - far_indptr[a])
+        stream.add(
+            b - a,
+            _slice(cache, near, first, last - first),
+            owners(np.diff(far_indptr[a : b + 1]), np.arange(a, b, dtype=np.int64)).astype(
+                np.int32
+            ),
+            _slice(cache, partner, at, many),
+            _slice(cache, codes, at, many),
+        )
+
+
+def _array(group: zarr.Group, path: str) -> zarr.Array[Any]:
+    """The array at `path` of `group` or of the store, refused where the store has none: a 0.1.0
+    store is derived from its Near Band and its Far Pairs, and a store without them has no
+    Partner Rows to derive (partner-rows §6.2)."""
+    found = group.get(path)
+    if not isinstance(found, zarr.Array):
+        raise InputError(
+            f"{path} is missing: a store is derived from its own Near Band and Far Pairs"
+        )
+    return found
+
+
+def _slice(cache: ChunkCache, array: zarr.Array[Any], first: int, length: int) -> npt.NDArray[Any]:
+    """Elements `first` … `first + length − 1` of `array`, read through the direct decoder, and
+    refused where one is a value no store holds there: a chunk the store lost (ADR 0009)."""
+    return layout.refused_if_lost(array, cache.runs(array, [first], [length])[0])
+
+
+def _clear_temporaries(component: Path) -> None:
+    """Remove the groups a killed run never renamed into place: an entry of `partners/` whose
+    name begins with a dot is one, and none can be live while a run derives (partner-rows §5.1,
+    §6.2). A store that keeps one is refused by `partners.files`, so it is removed, not claimed
+    over."""
+    for stale in component.iterdir():
+        if not stale.name.startswith("."):
+            continue
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+        else:
+            stale.unlink(missing_ok=True)
+
+
+def _claimed(plan: _Plan, t_partner: float) -> dict[str, Any]:
+    """`plan.recorded` as the store's provenance once its Partner Rows are claimed: format
+    0.2.0's four keys, the count over every chromosome's own `entries`, and no other change
+    (partner-rows §5.3; spec §7)."""
+    made = dict(plan.recorded)
+    made["format_version"] = FORMAT_VERSION
+    made["t_partner"] = t_partner
+    made["partner_code_floor"] = plan.floor
+    made["counts"] = {
+        **cast(dict[str, Any], made["counts"]),
+        "partner_entries": _partner_entries(plan),
+    }
+    made["software"] = {**cast(dict[str, Any], made["software"]), "zstd": frames.zstd_version()}
+    return made
+
+
+def _partner_entries(plan: _Plan) -> int:
+    """Every chromosome's Partner Rows entries, from each published group's own attribute: twice
+    the pairs the component holds (partner-rows §5.3). A group without it is refused rather than
+    counted as none, which would claim a component smaller than the one in the store."""
+    total = 0
+    for chrom in plan.ranges:
+        group = zarr.open_group(str(plan.store / layout.PARTNERS / chrom), mode="r")
+        entries = group.attrs.get("entries")
+        if not isinstance(entries, int) or isinstance(entries, bool):
+            raise InputError(
+                f"{layout.partners_path(chrom)} records no entries: its Partner Rows are not a "
+                "group a build or a derivation wrote (partner-rows §5.3)"
+            )
+        total += entries
+    return total
+
+
+def _drop_index(root: zarr.Group, store: Path, recorded: dict[str, Any]) -> Provenance:
+    """Remove the Proxy Index from a store whose Partner Rows hold every entry it had
+    (partner-rows §6.2; ADR 0011, D1): its `index/` group and its count.
+
+    The count goes with the arrays, in that order, so a run killed between the two leaves the
+    store's provenance claiming an index it no longer holds, which `envelope.arrays` refuses and a
+    rerun finishes. Its six rules and `far.index` stay until #72 removes them, so until then a
+    store whose index is dropped here is one `ogld validate` reports the index rules on.
+    """
+    shutil.rmtree(store / "index", ignore_errors=True)
+    counts = dict(cast(dict[str, Any], recorded["counts"]))
+    counts.pop("index_entries", None)
+    made = {**recorded, "counts": counts}
+    root.attrs.update({"ld_store": made})
+    return cast(Provenance, made)
