@@ -70,8 +70,8 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
-from opengwasdb.layouts import build_manifest
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -253,9 +253,7 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-def _off_reference_spill(
-    unmatched: Unmatched, se_divisor: float, gate: Gate
-) -> _OffReferenceSpill:
+def _off_reference_spill(unmatched: Unmatched, gate: Gate) -> _OffReferenceSpill:
     """The associations the route table does not hold, one uint64 key per raw
     coordinate, their duplicates on that key resolved as an axis's are
     (`collapse_duplicates`): a conflicting key's rows are dropped and logged
@@ -286,7 +284,6 @@ def _off_reference_spill(
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    se = build_manifest.apply_se_divisor(se, se_divisor)
     return keys, z, se, eaf, hashed_index, hashed_raw
 
 
@@ -305,9 +302,8 @@ def _resolve_column_hybrid(
     each ``(index/key, z f32, se f32, eaf f32)`` with its duplicates resolved
     (`collapse_duplicates`); ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
-    The row's ``se_divisor`` divides every returned ``se``, dense and overflow
-    alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
-    SD rescaling applies whichever component an association routes to. The
+    Every ``se`` is the source's: `_stored_parts` standardises all three parts
+    by the row's phenotype SD, through `storable` (issue #18, ADR 0084). The
     Analysis's imputation-score declaration reaches the reader, and ``gate``
     judges each batch before it is matched. The study is read as its reader's
     association batches where it offers them, else one association at a time
@@ -332,12 +328,10 @@ def _resolve_column_hybrid(
         # unmatched row onto it later: it is dropped here, and logged.
         gate.unplaced_off_axis(unmatched.keys, off_primary)
         unmatched = Unmatched.none()
-    divisor = row.se_divisor
-    overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
     return (
-        (dense.index, dense.z, build_manifest.apply_se_divisor(dense.se, divisor), dense.eaf),
-        (overflow.index, overflow.z, overflow_se, overflow.eaf),
-        _off_reference_spill(unmatched, divisor, gate),
+        (dense.index, dense.z, dense.se, dense.eaf),
+        (overflow.index, overflow.z, overflow.se, overflow.eaf),
+        _off_reference_spill(unmatched, gate),
     )
 
 
@@ -454,17 +448,28 @@ def _route_column(
         dense, overflow, off_reference = _resolve_column_hybrid(
             context.table, row, gate, context.axes, context.folds, context.off_primary
         )
-        parts, left_out = _stored_parts(row.trait_id, dense, overflow, off_reference)
+        parts, left_out = _stored_parts(
+            row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
+        )
         _spill_hybrid_column(context.spill_dir, col_idx, *parts)
     return col_idx, left_out[0], left_out[1]
 
 
 def _stored_parts(
-    trait_id: str, dense: _Component, overflow: _Overflow, off_reference: _OffReferenceSpill
+    trait_id: str,
+    phenotype_sd: PhenotypeSd,
+    dense: _Component,
+    overflow: _Overflow,
+    off_reference: _OffReferenceSpill,
 ) -> tuple[tuple[_Component, _Overflow, _OffReferenceSpill], tuple[int, int]]:
     """Each part of one column as `storable` returns it: the rows it stores,
     with their values. A spill holds rows, so a row not stored is left out, and
     its frequency with it.
+
+    The parts hold the source's SEs, and `storable` divides all three by the
+    Analysis's ``phenotype_sd``, whichever component an association routes to
+    (issue #18, ADR 0084). What is spilled is therefore standardised, and the
+    phases that read a spill back hand it on with `PhenotypeSd.APPLIED`.
 
     Also how many associations each component lost for an SE above `float16`'s
     range (issue #338), logged here: the Dense part's, and the Overflow's with
@@ -473,7 +478,7 @@ def _stored_parts(
 
     def judged(name: str, z: np.ndarray, se: np.ndarray, eaf: np.ndarray) -> Storable:
         where = f"build-hybrid {trait_id} {name}"
-        kept = storable(CellValues(z, se, eaf), 0, 1, where=where)
+        kept = storable(CellValues(z, se, eaf), 0, 1, where=where, phenotype_sd=phenotype_sd)
         log_se_out_of_range(kept.se_out_of_range, where=where)
         return kept
 
@@ -582,10 +587,16 @@ def _assemble_overflow_csr(
                 np.empty(0, dtype=np.int32),
                 np.empty(0, dtype=np.float32),
                 np.empty(0, dtype=np.float32),
+                phenotype_sd=PhenotypeSd.APPLIED,
             )
             continue
         column_has_eaf[col] = result.eaf is not None
-        csr.add_analysis(result.variant_index, result.z, result.se, eaf=result.eaf)
+        # Pass 2 standardised the spill (`_stored_parts`); dividing again would
+        # standardise twice.
+        csr.add_analysis(
+            result.variant_index, result.z, result.se, eaf=result.eaf,
+            phenotype_sd=PhenotypeSd.APPLIED,
+        )
         if consume_spills:
             (spill_dir / f"{col}.ovf.npz").unlink()
     return csr, column_has_eaf

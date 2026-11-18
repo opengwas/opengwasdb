@@ -2785,8 +2785,8 @@ def test_a_two_pass_build_refuses_an_off_reference_spill(tmp_path, monkeypatch):
     appears all the same is refused, where it used to be deleted unread."""
     real_spill = hybrid_build._off_reference_spill
 
-    def _spill_a_row(unmatched, se_divisor, gate):
-        spill = real_spill(unmatched, se_divisor, gate)
+    def _spill_a_row(unmatched, gate):
+        spill = real_spill(unmatched, gate)
         assert not len(spill[0]), "a two-pass Pass 2 spills nothing of its own"
         one = np.ones(1, dtype=np.float32)
         keys = encode_keys(["1:5:A:G"])

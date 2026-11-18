@@ -66,6 +66,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     positions_pairs,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import Z_MISSING
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
@@ -496,7 +497,9 @@ def _rewrite_overflow(store: Path, edit: Callable[[str, _Rows], _Rows]) -> None:
     writer = RaggedCSRWriter(_n_shared(store))
     for rows in edited:
         order = np.argsort(rows.variant_index, kind="stable")
-        writer.add_analysis(*(np.asarray(column)[order] for column in rows))
+        writer.add_analysis(
+            *(np.asarray(column)[order] for column in rows), phenotype_sd=PhenotypeSd.APPLIED
+        )
     writer.flush(store, open_store(store).manifest.encoding, eaf_baseline=baseline)
     build_variant_index(store, n_axis=_n_shared(store))
 

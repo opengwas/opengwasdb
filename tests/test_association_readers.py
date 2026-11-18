@@ -35,6 +35,7 @@ from opengwasdb.associations import (
 )
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.codec import EAF_ABSENT, Z_MISSING
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
 from opengwasdb.layouts.ragged.by_variant import VariantIndexError, build_variant_index
@@ -124,6 +125,7 @@ def _write_csr(path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = EN
             z,
             np.where(stand_in, np.float32(1.0), se),
             eaf=np.array([c.eaf for c in rows], np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
         flags.extend(c.flag for c in rows)
     writer.flush(path, encoding)
@@ -552,6 +554,7 @@ def test_n_rides_with_its_rows(tmp_path) -> None:
         np.array([1.0, 2.0], np.float32),
         np.array([0.5, 0.25], np.float32),
         n=np.array([1000, 2000], np.uint32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     encoding = StoreEncoding(
         z=ENCODING.z, se=ENCODING.se, eaf=EafEncoding(kind="absent"), n=_n_encoding()

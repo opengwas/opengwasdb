@@ -27,6 +27,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     write_eaf_reference,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
@@ -63,7 +64,7 @@ def _writer(sizes, *, seed: int = 0, with_eaf: bool = True) -> RaggedCSRWriter:
         if with_eaf:
             noisy = np.clip(truth[vi] + rng.normal(0, 0.002, count), 1e-4, 1 - 1e-4)
             eaf = noisy.astype(np.float32)
-        writer.add_analysis(vi, z, se, eaf)
+        writer.add_analysis(vi, z, se, eaf, phenotype_sd=PhenotypeSd.APPLIED)
     return writer
 
 
@@ -266,6 +267,7 @@ def test_empty_component_writes_zero_offsets_and_empty_tiers(tmp_path: Path):
             np.empty(0, dtype=np.int32),
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=4))
     store = _flush_store(tmp_path, "empty", writer, encoding)

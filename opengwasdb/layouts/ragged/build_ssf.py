@@ -37,6 +37,8 @@ from opengwasdb.build.eaf_orientation import (
     select_sites,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.layouts.build_manifest import original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult, trait_positions
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
@@ -112,6 +114,11 @@ class AnalyteInput:
     #: ``hg38``, or ``hg19`` for a source the build lifts. A row declaring none is refused.
     source_build: str
     assigned_ancestry: str = ""  # optional manifest column (ADR 0028); "" when omitted
+    #: The phenotype SD this Analysis's SEs standardise by (issue #18, #366), and
+    #: the manifest value it is recorded from. 1.0 and "" when the row declares no
+    #: rescaling SD; see `original_sd_divisor`.
+    se_divisor: float = 1.0
+    original_sd: str = ""
     # Shared-core analyses.tsv columns the manifest supplies and this builder only
     # copies (issue #83). Blank when the manifest omits them; see PassthroughMetadata.
     metadata: PassthroughMetadata = field(default_factory=PassthroughMetadata)
@@ -127,6 +134,7 @@ def _analyte_from_row(
     r: dict[str, str],
     cols: ManifestColumns,
     filtered_dir: str | Path,
+    manifest_path: str | Path,
 ) -> AnalyteInput:
     """Parse one AnalyteInput from a manifest row."""
     bp = _opt(r.get("trait_bp"))
@@ -151,6 +159,8 @@ def _analyte_from_row(
         filtered_path=filtered_path,
         source_build=_declared_source(r, analysis_id),
         assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
+        se_divisor=original_sd_divisor(r, analysis_id, manifest_path),
+        original_sd=_opt(r.get("original_sd")) or "",
         metadata=PassthroughMetadata.from_manifest_row(r),
     )
 
@@ -204,7 +214,7 @@ def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[
         require_columns(fieldnames, manifest_path, "analysis_index")
         cols = resolve_manifest_columns(fieldnames, manifest_path)
         for r in reader:
-            rows.append(_analyte_from_row(r, cols, filtered_dir))
+            rows.append(_analyte_from_row(r, cols, filtered_dir, manifest_path))
     rows.sort(key=lambda a: a.analysis_index)
     # analysis_index must be a dense 0..n-1 sequence for CSR offset alignment.
     for expected, a in enumerate(rows):
@@ -426,15 +436,11 @@ def _build_ssf_release(
     )
     csr, encoding, eaf_scopes = _encode_ssf_csr(
         ingested.per_analysis, alid_to_idx, len(analytes), len(variants), staged.path,
+        [a.se_divisor for a in analytes],
     )
     _write_indexes_and_metadata(
-        staged,
-        analytes,
-        eaf_scopes,
-        encoding=encoding,
-        eaf_report=eaf_report,
-        stored_effect_scale=request.stored_effect_scale,
-        csr=csr,
+        staged, analytes, eaf_scopes, encoding=encoding, eaf_report=eaf_report,
+        stored_effect_scale=request.stored_effect_scale, csr=csr,
     )
     regions = None
     if request.regions is not None:
@@ -902,8 +908,13 @@ def _encode_ssf_csr(
     n_analyses: int,
     n_variants: int,
     output: Path,
+    se_divisors: list[float],
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[str]]:
     """Stream every analysis's associations into the CSR and flush.
+
+    ``se_divisors`` is each Analysis's phenotype SD, in Manifest Row order
+    (issue #18, #366): its SEs are divided by it as they reach the writer, where
+    `storable` judges them, as every other builder divides theirs.
 
     An analysis that ends up empty -- a source whose every row was unusable,
     or whose rows all resolved to conflicting duplicates (issue #101) --
@@ -914,12 +925,14 @@ def _encode_ssf_csr(
     """
     csr = RaggedCSRWriter(n_variants)
     eaf_scopes: list[str] = []
-    for index, recs in enumerate(per_analysis):
+    for index, (recs, se_divisor) in enumerate(
+        zip(per_analysis, se_divisors, strict=True)
+    ):
         if not recs:
             _add_empty_analysis(csr)
             eaf_scopes.append(EafScope.ABSENT.value)
             continue
-        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index))
+        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index, se_divisor))
     eaf_measurements = csr.eaf_measurements()
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
@@ -939,14 +952,23 @@ def _encode_ssf_csr(
 def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
     """An analysis with no associations still occupies its CSR slot."""
     csr.add_analysis(
-        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32)
+        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,  # no SE to standardise
     )
 
 
 def _add_ssf_associations(
-    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int], index: int
+    csr: RaggedCSRWriter,
+    recs: list[_Assoc],
+    alid_to_idx: dict[str, int],
+    index: int,
+    se_divisor: float,
 ) -> str:
     """Append one non-empty analysis, sorted by variant_index.
+
+    ``se_divisor`` is the Analysis's phenotype SD. The writer's `storable`
+    divides every SE by it, as it does every builder's (issue #18, #366, ADR
+    0084); `z` is scale-free and is stored as the source gave it.
 
     Returns the EAF scope the analysis's own rows earned: association when
     any row carries a frequency (rows without one contribute NaN, ADR 0036),
@@ -961,11 +983,11 @@ def _add_ssf_associations(
     where = f"build-ragged-ssf, analysis_index {index}"
     order = np.argsort(vi, kind="stable")
     has_eaf = bool(np.isfinite(eaf_arr).any())
-    if has_eaf:
-        csr.add_analysis(vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order], where=where)
-        return EafScope.ASSOCIATION.value
-    csr.add_analysis(vi[order], z_arr[order], se_arr[order], where=where)
-    return EafScope.ABSENT.value
+    csr.add_analysis(
+        vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order] if has_eaf else None,
+        where=where, phenotype_sd=PhenotypeSd.dividing_by(se_divisor),
+    )
+    return EafScope.ASSOCIATION.value if has_eaf else EafScope.ABSENT.value
 
 
 def _write_indexes_and_metadata(
@@ -1002,6 +1024,7 @@ def _write_indexes_and_metadata(
             n=a.n,
             stored_effect_scale=stored_effect_scale,
             assigned_ancestry=a.assigned_ancestry,
+            original_sd=a.original_sd,
             metadata=a.metadata,
             eaf_scope=eaf_scope,
         )

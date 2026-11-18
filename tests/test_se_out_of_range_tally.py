@@ -19,6 +19,7 @@ import test_ragged_completion as trc
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
 from opengwasdb.admission import NotAdmitted
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -44,6 +45,7 @@ def test_the_ragged_writer_refuses_an_association_admission_would_not_admit() ->
             np.array([1.0, 2.0], np.float32),
             np.array([0.1, np.nan], np.float32),
             where="build-x, Analysis a",
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
 
 
@@ -52,7 +54,8 @@ def test_the_ragged_writer_logs_each_analysis_s_out_of_range_ses(caplog) -> None
     with caplog.at_level(logging.WARNING):
         for se in ([0.1, 0.2], [70_000.0, 65_504.0]):
             writer.add_analysis(
-                np.array([0, 2]), np.array([1.0, 2.0], np.float32), np.array(se, np.float32)
+                np.array([0, 2]), np.array([1.0, 2.0], np.float32), np.array(se, np.float32),
+                phenotype_sd=PhenotypeSd.APPLIED,
             )
     assert _tally_lines(caplog) == [f"the Ragged writer, analysis_index 1: 1 {_TALLY} {_WHY}"]
 

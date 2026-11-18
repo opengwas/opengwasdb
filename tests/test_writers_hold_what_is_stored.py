@@ -34,6 +34,7 @@ from opengwasdb.encoding import (
     association_codec,
 )
 from opengwasdb.encoding.association_codec import CellValues, Storable
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.dense import build_vcf
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build
@@ -75,10 +76,13 @@ def _inject(
     real = association_codec.storable
     judged: list[tuple[str, CellValues]] = []
 
-    def gate(cells: CellValues, analyses, n_analyses: int, *, where: str) -> Storable:
+    def gate(
+        cells: CellValues, analyses, n_analyses: int, *, where: str, phenotype_sd: PhenotypeSd
+    ) -> Storable:
         judged.append((where, cells))
-        kept = real(cells, analyses, n_analyses, where=where)
+        kept = real(cells, analyses, n_analyses, where=where, phenotype_sd=phenotype_sd)
         out = refused(cells, where)
+        cells = kept.cells  # standardised, as the writer must hold them
 
         def blanked(values: np.ndarray, fill: float) -> np.ndarray:
             copy = np.array(values, copy=True)
@@ -148,6 +152,7 @@ def test_the_ragged_writer_keeps_only_the_rows_it_stores(tmp_path, monkeypatch) 
         np.array([1.0, 2.0, 3.0], np.float32),
         np.array([0.1, REFUSED_SE, 0.2], np.float32),
         eaf=np.array([0.3, 0.4, 0.5], np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     plan = StoreEncoding(
         z=ZEncoding("int16_fixed", scale=1024), se=SeEncoding("float16"), eaf=EafEncoding("float32")

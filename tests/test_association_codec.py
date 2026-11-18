@@ -26,6 +26,7 @@ from opengwasdb.encoding.codec import (
     StoreCodec,
     se_from_log,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import (
     EAF_EXCEPTION,
     SE_EXCEPTION,
@@ -63,7 +64,7 @@ def test_a_cell_with_one_statistic_missing_is_refused_by_admissions_rule(z, se) 
         r"complete-x: cells Association Admission does not admit \(one of z and SE missing: 1\)"
     )
     with pytest.raises(NotAdmitted, match=message + r"; first one of z and SE missing at \(1,\)"):
-        storable(CellValues(z, se), 0, 1, where="complete-x")
+        storable(CellValues(z, se), 0, 1, where="complete-x", phenotype_sd=PhenotypeSd.APPLIED)
 
 
 @pytest.mark.parametrize(
@@ -76,7 +77,7 @@ def test_a_cell_with_one_statistic_missing_is_refused_by_admissions_rule(z, se) 
 def test_an_imputed_flag_admission_forbids_is_refused(imputed, rule) -> None:
     cells = CellValues(_f32(1.0, NAN), _f32(0.1, NAN), imputed=imputed)
     with pytest.raises(NotAdmitted, match=rule):
-        storable(cells, 0, 1, where="complete-x")
+        storable(cells, 0, 1, where="complete-x", phenotype_sd=PhenotypeSd.APPLIED)
 
 
 @pytest.mark.parametrize(
@@ -86,7 +87,7 @@ def test_an_imputed_flag_admission_forbids_is_refused(imputed, rule) -> None:
 )
 def test_a_present_cell_admission_would_not_admit_is_refused(z, se) -> None:
     with pytest.raises(NotAdmitted, match="present with an infinite z"):
-        storable(CellValues(z, se), 0, 1, where="complete-x")
+        storable(CellValues(z, se), 0, 1, where="complete-x", phenotype_sd=PhenotypeSd.APPLIED)
 
 
 #: float16 NaNs other than `np.nan`'s 0x7e00: a payload, a sign and a signalling NaN.
@@ -113,19 +114,23 @@ def test_a_missing_marker_other_than_the_canonical_nan_is_refused(plane, bits, d
         match=r"complete-x: .*a missing marker other than the canonical NaN: 1\); first .* "
         r"at \(1,\)",
     ):
-        storable(CellValues(z, se), 0, 1, where="complete-x")
+        storable(CellValues(z, se), 0, 1, where="complete-x", phenotype_sd=PhenotypeSd.APPLIED)
 
 
 def test_the_canonical_marker_is_stored() -> None:
     z, se = np.array([1.0, np.nan], np.float16), np.array([0.1, np.nan], np.float16)
     assert int(se[1:].view(np.uint16)[0]) == 0x7E00
-    assert storable(CellValues(z, se), 0, 1, where="x").stored.tolist() == [True, True]
+    kept = storable(CellValues(z, se), 0, 1, where="x", phenotype_sd=PhenotypeSd.APPLIED)
+    assert kept.stored.tolist() == [True, True]
 
 
 def test_an_infinite_se_is_left_out_and_counted() -> None:
     """The `+inf` a release before format 0.2.3 holds is above the bound like any
     larger SE, so a writer leaves it out (issue #338)."""
-    kept = storable(CellValues(_f32(1.0, NAN), _f32(np.inf, NAN)), 0, 1, where="x")
+    kept = storable(
+        CellValues(_f32(1.0, NAN), _f32(np.inf, NAN)), 0, 1, where="x",
+        phenotype_sd=PhenotypeSd.APPLIED,
+    )
     assert kept.stored.tolist() == [False, True]
     assert kept.se_out_of_range.tolist() == [1]
 
@@ -145,12 +150,15 @@ def test_an_infinite_se_is_left_out_and_counted() -> None:
 def test_a_batch_whose_arrays_are_not_parallel_is_refused(cells, named) -> None:
     """One shape for every array of a batch, and the refusal names each length."""
     with pytest.raises(ValueError, match=f"{named}.*must be parallel"):
-        storable(cells, 0, 1, where="complete-x")
+        storable(cells, 0, 1, where="complete-x", phenotype_sd=PhenotypeSd.APPLIED)
 
 
 def test_the_count_starts_just_above_float16s_largest_value() -> None:
     se = np.array([SE_FLOAT16_MAX, np.nextafter(SE_FLOAT16_MAX, np.inf), 70_000.0, np.inf, 0.5])
-    kept = storable(CellValues(np.ones(5), se), np.array([0, 0, 1, 2, 2]), 4, where="x")
+    kept = storable(
+        CellValues(np.ones(5), se), np.array([0, 0, 1, 2, 2]), 4, where="x",
+        phenotype_sd=PhenotypeSd.APPLIED,
+    )
     assert SE_FLOAT16_MAX == 65_504.0
     assert kept.se_out_of_range.tolist() == [1, 1, 1, 0]
 
@@ -158,18 +166,21 @@ def test_the_count_starts_just_above_float16s_largest_value() -> None:
 def test_a_band_counts_each_column_against_its_own_analysis() -> None:
     se = np.full((3, 2), 0.5, dtype=np.float32)
     se[0, 1] = se[2, 1] = np.inf
-    kept = storable(CellValues(np.ones((3, 2), np.float32), se), np.array([5, 6]), 7, where="x")
+    kept = storable(
+        CellValues(np.ones((3, 2), np.float32), se), np.array([5, 6]), 7, where="x",
+        phenotype_sd=PhenotypeSd.APPLIED,
+    )
     assert kept.se_out_of_range.tolist() == [0, 0, 0, 0, 0, 0, 2]
 
 
 def test_storable_changes_nothing_it_keeps_and_is_idempotent() -> None:
     cells = CellValues(_f32(1.0, NAN, 3.0), _f32(0.1, NAN, 0.2), eaf=_f32(0.2, 0.3, NAN))
-    once = storable(cells, 0, 1, where="x")
+    once = storable(cells, 0, 1, where="x", phenotype_sd=PhenotypeSd.APPLIED)
     assert once.cells is cells
     assert once.stored.tolist() == [True, True, True]
     left_out = CellValues(_f32(1.0, NAN, 3.0), _f32(0.1, NAN, np.inf), eaf=_f32(0.2, 0.3, NAN))
-    first = storable(left_out, 0, 1, where="x")
-    second = storable(first.cells, 0, 1, where="x")
+    first = storable(left_out, 0, 1, where="x", phenotype_sd=PhenotypeSd.APPLIED)
+    second = storable(first.cells, 0, 1, where="x", phenotype_sd=PhenotypeSd.APPLIED)
     assert first.stored.tolist() == [True, True, False]
     assert second.stored.tolist() == [True, True, True]  # missing now, and held as missing
     assert first.se_out_of_range.tolist() == [1] and second.se_out_of_range.tolist() == [0]
@@ -181,13 +192,11 @@ def test_a_batch_wider_than_one_window_is_judged_window_by_window(monkeypatch) -
     z = np.ones((6, 2), dtype=np.float32)
     se = np.full((6, 2), 0.5, dtype=np.float32)
     se[5, 0] = np.inf
-    assert storable(CellValues(z, se), np.arange(2), 2, where="x").se_out_of_range.tolist() == [
-        1,
-        0,
-    ]
+    kept = storable(CellValues(z, se), np.arange(2), 2, where="x", phenotype_sd=PhenotypeSd.APPLIED)
+    assert kept.se_out_of_range.tolist() == [1, 0]
     z[4, 1] = np.nan
     with pytest.raises(NotAdmitted, match=r"from index 4 of the batch's first axis.*at \(0, 1\)"):
-        storable(CellValues(z, se), np.arange(2), 2, where="x")
+        storable(CellValues(z, se), np.arange(2), 2, where="x", phenotype_sd=PhenotypeSd.APPLIED)
 
 
 def test_the_count_is_logged_once_naming_each_analysis(caplog) -> None:
@@ -222,7 +231,8 @@ def test_one_analysis_index_of_a_sequence_stands_for_every_cell() -> None:
     """A scalar broadcasts by design: the whole run belongs to that Analysis."""
     at = Placement.sequence(0, np.arange(3), 1, 2)
     kept = storable(
-        CellValues(_f32(1.0, 1.0, 1.0), _f32(0.5, np.inf, 0.5)), at.analyses, 2, where="x"
+        CellValues(_f32(1.0, 1.0, 1.0), _f32(0.5, np.inf, 0.5)), at.analyses, 2, where="x",
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     assert kept.se_out_of_range.tolist() == [0, 1]
 

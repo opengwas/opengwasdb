@@ -19,7 +19,7 @@ from opengwasdb.associations import present as present_cells
 from opengwasdb.encoding import (
     StoreCodec,
 )
-from opengwasdb.layouts.build_manifest import apply_se_divisor
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
     read_analyses,
@@ -412,6 +412,7 @@ def _stream_unit(
     # source, and neither the scale nor the EAF plays a part in that.
     capability = GWAS_VCF_CAPABILITY if is_vcf else ASSOCIATION_TSV_CAPABILITY
     reader = resolve_reader(capability, path, StoredEffectScale.SD)
+    standardised = PhenotypeSd.dividing_by(se_divisor)
     # Read as the build reads it: a row it dropped as malformed is not a failure.
     for association in reader.stream_associations(StreamTally()):
         a1, a2 = alid_alleles(association.ref, association.alt)
@@ -420,7 +421,8 @@ def _stream_unit(
             a1, a2, z = a2, a1, -z
         se = association.se
         if se_divisor != 1.0:
-            se = float(apply_se_divisor(np.array([se], dtype=np.float32), se_divisor)[0])
+            # The build's own standardisation (ADR 0084): the SE it stored, to the bit.
+            se = float(standardised.standardised(np.array([se], dtype=np.float32), 0)[0])
         yield (analysis_id, association.chromosome, association.position, a1, a2, z, se)
 
 

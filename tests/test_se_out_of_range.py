@@ -23,6 +23,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import SeOutOfRange, StoreCodec
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.model import analyses as model
 from opengwasdb.model.analyses import (
@@ -54,7 +55,8 @@ def test_storable_keeps_the_edge_and_leaves_out_anything_above_it() -> None:
     assert int(np.count_nonzero(se > EDGE)) == 2, "fixture: two SEs above the bound"
 
     kept = storable(
-        CellValues(z, se, eaf, imputed), np.arange(3)[None, :], 3, where="test"
+        CellValues(z, se, eaf, imputed), np.arange(3)[None, :], 3, where="test",
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
 
     # A missing cell is held as missing; only the two above the bound are left out.
@@ -74,8 +76,8 @@ def test_storable_keeps_the_edge_and_leaves_out_anything_above_it() -> None:
 def test_storable_is_idempotent_and_counts_nothing_the_second_time() -> None:
     z = np.array([1.0, 2.0], dtype=np.float32)
     se = np.array([0.1, 1e6], dtype=np.float32)
-    once = storable(CellValues(z, se), 0, 1, where="test")
-    twice = storable(once.cells, 0, 1, where="test")
+    once = storable(CellValues(z, se), 0, 1, where="test", phenotype_sd=PhenotypeSd.APPLIED)
+    twice = storable(once.cells, 0, 1, where="test", phenotype_sd=PhenotypeSd.APPLIED)
     assert once.se_out_of_range.tolist() == [1]
     assert twice.se_out_of_range.tolist() == [0]
     assert twice.stored.tolist() == [True, True]

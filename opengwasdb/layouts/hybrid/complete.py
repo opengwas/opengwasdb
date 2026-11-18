@@ -55,6 +55,7 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import write_index
@@ -439,6 +440,7 @@ def _stored_crossovers(
         analysis_of[at],
         n_analyses,
         where="complete-hybrid, the crossovers",
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     folded = is_crossover.copy()
     folded[at[~kept.stored]] = False
@@ -630,7 +632,10 @@ def _write_shared_tables_and_overflow(
     )
     for ai in range(overflow.n_analyses):
         new_vi, z, se, eaf = _remapped_analysis_arrays(ai, overflow, axis)
-        csr.add_analysis(new_vi, z, se, eaf=eaf, where=f"complete-hybrid, the Overflow {ai}")
+        csr.add_analysis(
+            new_vi, z, se, eaf=eaf, where=f"complete-hybrid, the Overflow {ai}",
+            phenotype_sd=PhenotypeSd.APPLIED,
+        )
     csr.flush(
         staged.path,
         src_manifest.encoding,

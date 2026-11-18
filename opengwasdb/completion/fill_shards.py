@@ -33,6 +33,7 @@ from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
 from opengwasdb.encoding import association_codec
 from opengwasdb.encoding.association_codec import CellValues
 from opengwasdb.encoding.memory import pool_workers
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)
@@ -240,8 +241,9 @@ def _without_se_out_of_range(
         return None, quality, {}
     rows, ai, z, se = fills
     n_analyses = int(ai.max()) + 1 if ai.size else 0
-    judged = association_codec.storable(
-        CellValues(z, se), ai, n_analyses, where=f"{ckpt}, the fills"
+    judged = association_codec.storable(  # fills are imputed in SD Units: never standardised
+        CellValues(z, se), ai, n_analyses, where=f"{ckpt}, the fills",
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     if judged.stored.all():
         return fills, quality, {}

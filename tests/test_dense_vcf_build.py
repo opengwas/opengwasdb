@@ -473,6 +473,25 @@ def test_stray_original_sd_without_a_rescale_method_fails_the_build_loudly(tmp_p
         )
 
 
+def test_a_non_finite_original_sd_is_refused(tmp_path):
+    """Issue #366: `inf` would store every SE as 0, so the build refuses it
+    naming the Analysis rather than dividing by it."""
+    rows = [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
+    vcf = _make_vcf(tmp_path, "trait_a", rows)
+    manifest = _make_manifest(
+        tmp_path,
+        [("trait_a", vcf, "Trait A")],
+        sd_methods={"trait_a": "source_provided"},
+        sds={"trait_a": "inf"},
+    )
+
+    with pytest.raises(ValueError, match="trait_a") as raised:
+        build_dense_from_vcf_manifest(
+            manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r"
+        )
+    assert "original_sd" in str(raised.value)
+
+
 def test_liftover_failure_above_threshold_raises(tmp_path):
     """A manifest where all VCF positions fail liftover raises LiftoverFailureError."""
     from opengwasdb.build.liftover import LiftoverFailureError

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -43,6 +43,7 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     se_above_bound,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import StoreEncoding
 from opengwasdb.store.arrays import SE_COEFFICIENTS
 
@@ -55,6 +56,7 @@ __all__ = [
     "Decoded",
     "Encoded",
     "Placement",
+    "PhenotypeSd",
     "Storable",
     "log_se_out_of_range",
     "require_parallel",
@@ -114,14 +116,19 @@ class Storable:
 
 
 def storable(
-    cells: CellValues, analyses: np.ndarray | int, n_analyses: int, *, where: str
+    cells: CellValues, analyses: np.ndarray | int, n_analyses: int, *, where: str,
+    phenotype_sd: PhenotypeSd,
 ) -> Storable:
     """What a Store holds of `cells`, whose Analysis indices are `analyses`.
 
     `analyses` broadcasts against the cells' shape: one Analysis's index for a
     column, one per cell for a cell list, one per column for a row band.
-    `where` names the writer, for the refusal. Pure and idempotent: the plan
-    plays no part, so a writer calls it before the SE plan exists.
+    `where` names the writer, for the refusal. Pure: the plan plays no part, so
+    a writer calls it before the SE plan exists.
+
+    The cells returned hold each SE divided by its Analysis's `phenotype_sd`,
+    the one place a Store's SEs are standardised (ADR 0084): idempotent only
+    under `PhenotypeSd.APPLIED`. Everything below judges the divided SE.
 
     An association whose SE exceeds `SE_FLOAT16_MAX` (65,504), `+inf` included,
     is not stored: its z, SE and frequency become NaN, its imputed flag 0, and
@@ -141,37 +148,42 @@ def storable(
     ADR 0070), judged in the dtype the writer hands it: a `float16` plane would
     store that NaN as itself.
     """
-    # Imported here: Admission's package imports the association readers, whose
-    # Ragged adapter imports the writer that imports this module, and importing
-    # any module of either package runs its `__init__` first.
+    # Imported here: Admission's package imports the association readers, whose Ragged
+    # adapter imports the writer that imports this module (an import cycle).
     from opengwasdb.admission.cells import require_admitted
 
-    z, se, imputed = _parallel(cells, where)
+    z, handed_se, imputed = _parallel(cells, where)
     owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), z.shape)
+    se = phenotype_sd.standardised(handed_se, owner)
+    if se is not handed_se:
+        cells = replace(cells, se=se)
     over = np.zeros(n_analyses, dtype=np.int64)
     over_imputed = np.zeros(n_analyses, dtype=np.int64)
-    left_out: list[tuple[tuple[slice, ...], np.ndarray]] = []
+    stored = np.ones(z.shape, dtype=bool)
     for window in _windows(z.shape):
-        z_w, se_w = z[window], se[window]
         at = _where(where, window, z.shape)
         imputed_w = None if imputed is None else imputed[window]
-        require_admitted(z_w, se_w, imputed=imputed_w, where=at, narrowed_se=True)
-        _refuse_odd_markers(z_w, se_w, where=at)
-        out = _out_of_range(se_w)
-        if not out.any():
-            continue
-        left_out.append((window, out))
-        over += _per_analysis(owner[window][out], n_analyses)
-        if imputed_w is not None:
-            flagged = out & (np.asarray(imputed_w) == 1)
-            over_imputed += _per_analysis(owner[window][flagged], n_analyses)
-    stored = np.ones(z.shape, dtype=bool)
-    for window, out in left_out:
-        stored[window][out] = False
-    kept = cells if not left_out else _left_out(cells, ~stored)
+        require_admitted(z[window], se[window], imputed=imputed_w, where=at, narrowed_se=True)
+        # The marker is judged as handed over: a divide could change its dtype.
+        _refuse_odd_markers(z[window], handed_se[window], where=at)
+        out = _out_of_range(se[window])
+        if out.any():
+            stored[window][out] = False
+            over += _per_analysis(owner[window][out], n_analyses)
+            over_imputed += _flagged_out(out, imputed_w, owner[window], n_analyses)
+    kept = cells if stored.all() else _left_out(cells, ~stored)
     return Storable(
         cells=kept, stored=stored, se_out_of_range=over, imputed_out_of_range=over_imputed
     )
+
+
+def _flagged_out(
+    out: np.ndarray, imputed: np.ndarray | None, owner: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Per Analysis, how many of the cells left out at `out` are flagged imputed."""
+    if imputed is None:
+        return np.zeros(n_analyses, dtype=np.int64)
+    return _per_analysis(owner[out & (np.asarray(imputed) == 1)], n_analyses)
 
 
 def _left_out(cells: CellValues, out: np.ndarray) -> CellValues:
@@ -363,6 +375,11 @@ class AssociationCodec:
     ) -> Encoded:
         """`storable`, then each plane's codes, in the order the planes allow.
 
+        `cells` are what a Store holds -- a builder's grid `storable` has
+        already standardised, or a completion's cells read from its source
+        Store and its fills -- so their SEs are in SD Units already and are
+        judged with `PhenotypeSd.APPLIED`: encoding never standardises (ADR 0084).
+
         `carried` marks cells decoded from another Store, whose SE must decode
         to exactly the value given: Ragged completion's observed cells (issue
         #301). Under a residual SE plan a carried cell whose code would decode
@@ -377,7 +394,9 @@ class AssociationCodec:
         per cell of the batch (issue #392).
         """
         require_parallel((*_cell_arrays(cells), *at.per_cell, ("carried", carried)), where=where)
-        kept = storable(cells, at.analyses, at.n_analyses, where=where)
+        kept = storable(
+            cells, at.analyses, at.n_analyses, where=where, phenotype_sd=PhenotypeSd.APPLIED
+        )
         values = kept.cells
         z_overflow = ZOverflowBuilder()
         z = self._codec.encode_z(values.z, positions=at.positions, overflow=z_overflow)

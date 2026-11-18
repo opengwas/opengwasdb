@@ -1,5 +1,10 @@
 # One module owns how an association is encoded
 
+> **Amended by [ADR 0084](0084-storable-standardises-every-builders-se.md) (issue #366).**
+> `storable` takes a required `phenotype_sd` and divides a builder's SEs by each
+> Analysis's phenotype SD; it is idempotent only under `PhenotypeSd.APPLIED`,
+> which every writer that re-judges stored cells passes (`encode` among them).
+
 > **Amended by [ADR 0068](0068-an-se-beyond-float16-is-missing.md) (issue #338).**
 > `storable` no longer accepts an SE above 65,504, `+inf` included: it leaves the
 > association out, z and SE together, counts it per Analysis, and every writer holds

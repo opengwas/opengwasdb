@@ -42,6 +42,8 @@ from opengwasdb.build.liftover import (
     require_lifted_alleles_match_reference,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.layouts.build_manifest import original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_eaf import per_probe_report, verify_esi_orientation
@@ -231,13 +233,13 @@ def _build_besd_release(
     write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
     # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
     positions, trait_lift = _trait_positions(axis, request)
-    analyses = _analysis_records(axis.probes, request.tissue, request.analyses_path, positions)
+    analyses, se_divisors = _analysis_records(
+        axis.probes, request.tissue, request.analyses_path, positions
+    )
     staged.index_connection().close()
     # Phase 4 — CSR ingestion and the encoding plan it decides.
-    sample_sizes = (
-        None
-        if request.sample_size_table is None
-        else SampleSizeTable(Path(request.sample_size_table), [p.probe_id for p in axis.probes])
+    sample_sizes = None if request.sample_size_table is None else SampleSizeTable(
+        Path(request.sample_size_table), [p.probe_id for p in axis.probes]
     )
     record = AdmissionRecord.open(
         request.admission_record,
@@ -248,7 +250,7 @@ def _build_besd_release(
     rules = _besd_rules(request.analyses_path, analyses, axis)
     csr, encoding, scopes = _ingest_besd(
         _ProbeSources(prefix, request.source_build), axis, staged.path, sample_sizes,
-        record, rules,
+        record, rules, se_divisors,
     )
     analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
@@ -914,22 +916,23 @@ def _overlay_n(
 
 def _overlay_sd(
     r: dict[str, str], analysis_id: str, manifest_path: str | Path | None = None
-) -> tuple[str, str]:
-    """Validate and resolve original_sd_method and original_sd from manifest row."""
+) -> tuple[str, str, float]:
+    """Validate and resolve original_sd_method, original_sd, and their divisor.
+
+    The divisor is the one every other builder standardises SEs by
+    (`original_sd_divisor`, issue #18/#366). BESD used to validate the column and
+    then store every SE unscaled, so a declared phenotype SD never reached the
+    statistics it describes; the Analysis's SEs are divided by it before they are
+    encoded, exactly as in Dense, Dense-from-VCF and Hybrid.
+    """
     sd_method = _opt(r.get("original_sd_method"))
     sd_val = _opt(r.get("original_sd"))
-    if not sd_val:
-        return sd_method or "", ""
-    try:
-        val_float = float(sd_val)
-        if val_float <= 0 or not math.isfinite(val_float):
-            raise ValueError
-    except ValueError:
-        loc = f"analyses manifest {manifest_path}: " if manifest_path else ""
-        raise ValueError(
-            f"{loc}analysis {analysis_id!r} has invalid original_sd {sd_val!r}"
-        ) from None
-    return sd_method or "", sd_val
+    if sd_method is None and sd_val is None:
+        return "", "", 1.0
+    divisor = original_sd_divisor(
+        r, analysis_id, manifest_path if manifest_path is not None else "<analyses>"
+    )
+    return sd_method or "", sd_val or "", divisor
 
 
 def _overlay_probe_analysis(
@@ -938,8 +941,11 @@ def _overlay_probe_analysis(
     position: _TraitPosition,
     manifest_row: dict[str, str],
     analyses_path: str | Path | None = None,
-) -> Analysis:
-    """Overlay manifest metadata onto a probe record while keeping coordinates authoritative."""
+) -> tuple[Analysis, float]:
+    """Overlay manifest metadata onto a probe record while keeping coordinates authoritative.
+
+    Returns the Analysis and the phenotype-SD divisor its SEs standardise by.
+    """
     analysis_id = f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id
     is_ensembl = probe.probe_id.startswith("ENSG")
     def_id = f"ENSEMBL:{probe.probe_id}" if is_ensembl else None
@@ -951,9 +957,9 @@ def _overlay_probe_analysis(
     m_tissue = _opt(r.get("tissue"))
     tissue_val = m_tissue if m_tissue is not None else tissue
     n = _overlay_n(r, analysis_id, analyses_path)
-    _sd_method, original_sd = _overlay_sd(r, analysis_id, analyses_path)
+    _sd_method, original_sd, se_divisor = _overlay_sd(r, analysis_id, analyses_path)
 
-    return molecular_analysis(
+    analysis = molecular_analysis(
         analysis_id,
         analysis_label=label,
         trait_ontology_id=ont_id,
@@ -968,6 +974,7 @@ def _overlay_probe_analysis(
         original_sd=original_sd,
         metadata=PassthroughMetadata.from_manifest_row(r),
     )
+    return analysis, se_divisor
 
 
 def _analysis_record_for_probe(
@@ -976,8 +983,8 @@ def _analysis_record_for_probe(
     manifest_row: dict[str, str] | None,
     analyses_path: str | Path | None = None,
     trait_position: _TraitPosition | None = None,
-) -> Analysis:
-    """Build one Analysis record for a probe, optionally overlaying manifest metadata.
+) -> tuple[Analysis, float]:
+    """Build one Analysis record for a probe, and the divisor its SEs standardise by.
 
     ``trait_position`` is the Trait position in the Store's assembly; ``None``
     takes the probe's own, which is right only when the source is that assembly.
@@ -988,7 +995,7 @@ def _analysis_record_for_probe(
 
     analysis_id = f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id
     is_ensembl = probe.probe_id.startswith("ENSG")
-    return molecular_analysis(
+    analysis = molecular_analysis(
         analysis_id,
         analysis_label=probe.gene,
         trait_ontology_id=f"ENSEMBL:{probe.probe_id}" if is_ensembl else None,
@@ -999,6 +1006,7 @@ def _analysis_record_for_probe(
         trait_bp=position[1],
         n=None,
     )
+    return analysis, 1.0
 
 
 #: An Analysis's Trait position: ``(chromosome, bp)``, both ``None`` when it has none.
@@ -1052,11 +1060,13 @@ def _analysis_records(
     tissue: str | None,
     analyses_path: str | Path | None = None,
     trait_positions: dict[str, _TraitPosition] | None = None,
-) -> list[Analysis]:
-    """One Analysis per EPI probe, optionally overlaid with manifest metadata (issue #173).
+) -> tuple[list[Analysis], dict[str, float]]:
+    """One Analysis per EPI probe, and each one's SE divisor (issue #173, #366).
 
     ``trait_positions`` maps each Analysis id to its Trait position in the
-    Store's assembly; ``None`` takes the EPI's own.
+    Store's assembly; ``None`` takes the EPI's own. The divisors are 1.0 for a
+    build given no manifest: nothing declared a phenotype SD, so nothing is
+    standardised (and nothing is claimed in analyses.tsv either).
     """
     positions = trait_positions or {}
 
@@ -1064,23 +1074,26 @@ def _analysis_records(
         return positions.get(_analysis_id(probe, tissue))
 
     if analyses_path is None:
-        return [
+        built = [
             _analysis_record_for_probe(probe, tissue, None, trait_position=position_of(probe))
             for probe in probes
         ]
-
-    expected_ids = [_analysis_id(probe, tissue) for probe in probes]
-    overlay_by_id = _load_analyses_overlay(analyses_path, expected_ids)
-    return [
-        _analysis_record_for_probe(
-            probe,
-            tissue,
-            overlay_by_id[_analysis_id(probe, tissue)],
-            analyses_path,
-            position_of(probe),
-        )
-        for probe in probes
-    ]
+    else:
+        expected_ids = [_analysis_id(probe, tissue) for probe in probes]
+        overlay_by_id = _load_analyses_overlay(analyses_path, expected_ids)
+        built = [
+            _analysis_record_for_probe(
+                probe,
+                tissue,
+                overlay_by_id[_analysis_id(probe, tissue)],
+                analyses_path,
+                position_of(probe),
+            )
+            for probe in probes
+        ]
+    return [analysis for analysis, _ in built], {
+        analysis.analysis_id: divisor for analysis, divisor in built
+    }
 
 
 def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
@@ -1090,6 +1103,7 @@ def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float32),
         np.empty(0, dtype=np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,  # no SE to standardise
     )
 
 
@@ -1258,8 +1272,13 @@ def _ingest_probe(
     axis: _EsiAxis,
     sample_sizes: SampleSizeTable | None,
     gate: Gate,
+    se_divisor: float,
 ) -> tuple[_ProbeScopes, bool]:
     """Add one probe's associations, with their frequency and sample size.
+
+    ``se_divisor`` is the Analysis's phenotype SD. The writer's `storable`
+    divides the probe's SEs by it, as it does every builder's (issue #18, #366,
+    ADR 0084); `z` is scale-free and is stored as given.
 
     Returns what the probe carries and whether every one of its BESD rows was
     filtered out. The table is asked for every probe, in `.epi` order, which is
@@ -1286,14 +1305,14 @@ def _ingest_probe(
     esi = rows.esi_row[order]
     eaf = rows.eaf[order] if stores_frequencies else None
     n = None if sample_sizes is None else _pair_sample_sizes(esi, axis, sample_sizes, sizes)
-    z, se = rows.z.astype(np.float32)[order], rows.se.astype(np.float32)[order]
     csr.add_analysis(
         rows.variant_index.astype(np.int32)[order],
-        z,
-        se,
+        rows.z.astype(np.float32)[order],
+        rows.se.astype(np.float32)[order],
         eaf=eaf,
         n=n,
         where=f"build-ragged-besd, probe {probe.probe_id}",
+        phenotype_sd=PhenotypeSd.dividing_by(se_divisor),
     )
     return _ProbeScopes.of(eaf, n), False
 
@@ -1339,6 +1358,7 @@ def _ingest_besd(
     sample_sizes: SampleSizeTable | None,
     record: AdmissionRecord,
     rules: Mapping[str, AnalysisRules],
+    se_divisors: Mapping[str, float],
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[_ProbeScopes]]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
@@ -1346,7 +1366,8 @@ def _ingest_besd(
     was performed under, and what each probe's associations carry. Associations
     are sorted by variant_index per Analysis (every builder sorts before
     writing), so readers can resolve ``(variant, analysis)`` pairs with one
-    ``searchsorted`` per Analysis.
+    ``searchsorted`` per Analysis. ``se_divisors`` is `_analysis_records`'s
+    phenotype-SD divisor per Analysis (issue #366).
     """
     print(f"Reading BESD: {sources.prefix}.besd")
     csr = RaggedCSRWriter(len(axis.variants))
@@ -1355,7 +1376,8 @@ def _ingest_besd(
     for probe, analysis_id in zip(axis.probes, record.analyses, strict=True):
         with record.gate(rules[analysis_id]) as gate:
             scope, skipped = _ingest_probe(
-                csr, sources.reader(probe), probe, axis, sample_sizes, gate
+                csr, sources.reader(probe), probe, axis, sample_sizes, gate,
+                se_divisors[analysis_id],
             )
         scopes.append(scope)
         skipped_probes += skipped

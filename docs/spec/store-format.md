@@ -987,6 +987,27 @@ There is no `other`, `unknown`, or original-units Stored Effect Scale in v0.1. U
 
 Original Effect Scale MAY be recorded as free-text provenance. For continuous traits, builders SHOULD store effects in SD Units when phenotype standard deviation is available or can be derived with acceptable provenance, by rescaling the source statistics with a per-study phenotype SD rather than reconstructing them from Z, N, and allele frequency (ADR 0029). The method used to obtain that SD (`original_sd_method`) and a dispersion diagnostic over its supporting evidence MUST be recorded as Analytical Metadata (§7a).
 
+Every builder that reads a build manifest applies that rescaling, and applies it
+identically: an `original_sd_method` in a tier that carries an SD magnitude
+(`source_provided`, `estimated_from_source_maf`,
+`estimated_from_reference_maf`, `estimated_from_beta_distribution`) divides each
+of that Analysis's standard errors by `original_sd` before the association is
+encoded, in `build-dense`, `build-dense-vcf`, `build-hybrid` (its Dense
+Component, its Overflow and its off-reference associations),
+`build-ragged-besd` and `build-ragged-ssf` alike, and records that
+`original_sd` in `analyses.tsv` (§7a). The divide is one module's, applied where
+a writer judges what a Store holds (`storable`, ADR 0084): a builder hands each
+Analysis's SD with its source's SEs, and a writer handing SEs a Store already
+holds — a Reference Completion, an encode — hands none, so an SE is divided
+exactly once. `z` is scale-free and MUST be stored as the source gave it, so
+dividing the SE never moves it. In every one of them a magnitude that is
+missing, non-finite or not positive refuses the build, naming the Analysis: an
+`inf` SD would store every SE as `0`, and `0` or a negative SD is no divisor. A
+tier that carries no magnitude (`declared_standardised`, `binary_trait`)
+divides by nothing and is refused if a magnitude is supplied beside it, and
+`unavailable` is refused because nothing may be standardised without an SD that
+was established (issue #18, #366).
+
 ## 7a. Analytical Metadata, Attribution Metadata, and `analyses.tsv`
 
 A Store Release MUST carry its own Analytical Metadata — metadata affecting the
@@ -1778,6 +1799,15 @@ none, whatever the `.esi` reports.
 written only when the build is given a per-association sample size (§8). The
 top-hit indexes do not carry it; a top-hit query resolves each hit to its CSR
 cell for `n`, as it does for `eaf` when an index carries none.
+
+A Ragged build standardises its standard errors from the same manifest, and in
+the same place, as every other builder (§7, ADR 0084): `build-ragged-besd` and
+`build-ragged-ssf` divide each Analysis's `se` by its `original_sd` before the
+association is encoded, record that `original_sd`, and store `z` as the source
+gave it. A Ragged SSF Release built before issue #366 corrected this records the
+manifest's rescaling `original_sd_method` with a blank `original_sd` while
+holding the source's own standard errors; it is rebuilt or repaired rather than
+read as SD Units.
 
 ### 11.1 The variant-centric index (`ragged/by_variant/`)
 

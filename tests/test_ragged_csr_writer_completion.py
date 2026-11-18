@@ -31,6 +31,7 @@ from opengwasdb.encoding import (
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.ragged.zarr_csr import (
     RAGGED_ZARR_PATH,
@@ -126,7 +127,8 @@ def _write_streamed(store, offsets, vi, cells):
     for a in range(3):
         at = slice(int(offsets[a]), int(offsets[a + 1]))
         writer.add_analysis(
-            vi[at], cells.z[at], cells.se[at], eaf=cells.eaf[at], imputed=cells.imputed[at]
+            vi[at], cells.z[at], cells.se[at], eaf=cells.eaf[at], imputed=cells.imputed[at],
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     return writer.flush(store, PLAN, eaf_baseline=_baseline(), se_coefficients=COEFFICIENTS)
 
@@ -189,6 +191,7 @@ def test_an_imputed_flag_on_a_missing_cell_is_refused():
             np.array([1.0, np.nan], dtype=np.float32),
             np.array([0.1, np.nan], dtype=np.float32),
             imputed=np.array([0, 1], dtype=np.uint8),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
 
 
@@ -200,6 +203,7 @@ def test_a_build_given_no_imputed_masks_writes_neither_plane(tmp_path):
         np.array([1, 2], dtype=np.int32),
         np.array([1.0, 2.0], dtype=np.float32),
         np.array([0.1, 0.2], dtype=np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     writer.flush(tmp_path, StoreEncoding(z=PLAN.z, se=SeEncoding(kind="float16")))
 
@@ -214,7 +218,8 @@ def test_a_completion_naming_other_analyses_than_it_writes_is_refused(tmp_path):
     writer = RaggedCSRWriter(N_VARIANTS, ReferenceCompletion(("a",), None, where="the test"))
     for _ in range(2):
         writer.add_analysis(
-            np.array([1], dtype=np.int32), np.array([1.0], np.float32), np.array([0.1], np.float32)
+            np.array([1], dtype=np.int32), np.array([1.0], np.float32), np.array([0.1], np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     with pytest.raises(ValueError, match="1 Analysis ids name a sequence of 2 Analyses"):
         writer.flush(tmp_path, StoreEncoding(z=PLAN.z, se=SeEncoding(kind="float16")))
