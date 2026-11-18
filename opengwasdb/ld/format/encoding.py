@@ -184,6 +184,24 @@ class REncoding:
             code += 1
         return code
 
+    def partner_code_floor(self, t_partner: float, t_far: float) -> int:
+        """The Partner Floor: the smallest code c ≥ 0 with (c / scale)² ≥ t_partner, in float64,
+        the same rule as the far code floor at the Partner Threshold (spec §3; partner-rows §3,
+        §5.3).
+
+        `t_partner` is a build input with no default (ADR 0011, D3), and it is never above the
+        store's t_far: a partner threshold above it would leave a pair between the two in neither
+        component, and a request at r2 ≥ t_far could not be answered (partner-rows §3). So a
+        `t_partner` above `t_far` is refused here, naming both, before anything is written.
+        """
+        if not 0.0 <= t_partner <= t_far:
+            raise InputError(
+                f"t_partner = {t_partner!r} is above t_far = {t_far!r}: the Partner Threshold is "
+                "never above the Far Threshold, or a pair between the two within near_bp would "
+                "be in neither component (spec §3; partner-rows §3)"
+            )
+        return self.far_code_floor(t_partner)
+
     def least_r(self, code: int) -> float:
         """A bound below every |r| whose code reaches |code|: (code − 1) / scale. The exact edge
         is (code − ½) / scale; half a step lower, float error in r × scale cannot lose a pair,
