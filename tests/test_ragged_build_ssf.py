@@ -594,6 +594,51 @@ def test_an_sd_row_with_no_standardising_method_is_refused_by_name(tmp_path, met
     assert not (tmp_path / "out.opengwasdb").exists()
 
 
+def test_a_log_or_row_with_no_method_builds_and_records_the_blank(tmp_path):
+    """Only `sd` claims SD Units, so a `log_or` row needs no method; the Store records
+    what the manifest said, a blank, and invents none (issue #366)."""
+    from opengwasdb.model.analyses import read_analyses
+
+    out = _build_with_scale_column(tmp_path, "log_or", "")
+
+    rows = read_analyses(out / "analyses.tsv").rows
+    assert {r["stored_effect_scale"] for r in rows} == {"log_or"}
+    assert {r["original_sd_method"] for r in rows} == {""}
+
+
+def test_provenance_records_the_distinct_scales_comma_joined(tmp_path):
+    """Rows that declare different scales leave one provenance value: the distinct
+    scales, sorted and comma-joined (spec §7)."""
+    import json
+
+    manifest, filtered_dir = _make_fixture(tmp_path)
+    lines = manifest.read_text().splitlines()
+    header = lines[0].split("\t")
+    at = header.index("original_sd_method")
+    rows = [line.split("\t") for line in lines[1:]]
+    declared = [("sd", "declared_standardised"), ("log_or", "binary_trait")]
+    for row, (_scale, method) in zip(rows, declared, strict=True):
+        row[at] = method
+    manifest.write_text(
+        "\t".join([*header, "stored_effect_scale"]) + "\n"
+        + "\n".join(
+            "\t".join([*row, scale])
+            for row, (scale, _method) in zip(rows, declared, strict=True)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.opengwasdb"
+
+    real_build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+
+    provenance = json.loads((out / "manifest.json").read_text())["provenance"]
+    assert provenance["stored_effect_scale"] == "log_or,sd"
+
+
 def test_an_sd_row_declaring_standardised_builds_and_is_recorded(tmp_path):
     out = _build_with_scale_column(tmp_path, "sd", "declared_standardised")
     from opengwasdb.model.analyses import read_analyses

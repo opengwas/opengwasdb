@@ -237,7 +237,7 @@ def test_no_stored_cell_decodes_above_the_bound_under_any_model() -> None:
     assert moved > 1000, "fixture: some predictions move far when the EAF narrows"
 
 
-def test_the_reviewed_far_below_the_bound_cell_is_held_exactly() -> None:
+def test_a_cell_far_below_the_bound_is_held_exactly_when_the_eaf_narrows() -> None:
     """SE 10,000 under a model whose float32-EAF prediction differs by whole units."""
     from opengwasdb.encoding.codec import SeExceptionBuilder
 

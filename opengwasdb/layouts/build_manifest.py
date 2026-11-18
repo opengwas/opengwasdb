@@ -193,6 +193,20 @@ def _parse_original_sd(
     return se_divisor
 
 
+#: The spellings of "no value" the Ragged builders read as a blank cell (their `_opt`
+#: helpers): the union of both, so one judgement serves BESD and SSF.
+MISSING_TOKENS = frozenset({"", ".", "NA", "NaN", "nan", "null", "None"})
+
+
+def blank_if_missing(value: str | None) -> str:
+    """A manifest cell as the Ragged builders read it: a missing token as ``""``.
+
+    A cell that is not one is returned as spelt, padding included: the Store records
+    `original_sd_method` verbatim, so a padded spelling is for the parser to refuse."""
+    text = value or ""
+    return "" if text.strip() in MISSING_TOKENS else text
+
+
 def require_sd_scale_standardised(
     scale: str, method: str, analysis_id: str, manifest_path: str | Path
 ) -> None:
@@ -245,7 +259,7 @@ def original_sd_divisor(
     # The method is judged as spelt, as Dense's parser judges it: the Store records
     # it verbatim (`PassthroughMetadata`), so a spelling that passed here only once
     # stripped would build and then fail `analyses.vocabularies` (issue #366).
-    method = row.get("original_sd_method") or ""
+    method = blank_if_missing(row.get("original_sd_method"))
     original_sd = (row.get("original_sd") or "").strip()
     if not method:
         if original_sd:
@@ -268,7 +282,7 @@ def check_ragged_sd_scale(
     """Apply `require_sd_scale_standardised` to one Ragged manifest row."""
     require_sd_scale_standardised(
         (row.get("stored_effect_scale") or "").strip(),
-        row.get("original_sd_method") or "",
+        blank_if_missing(row.get("original_sd_method")),
         analysis_id,
         manifest_path,
     )

@@ -15,6 +15,7 @@ import pytest
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf as real_build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -158,13 +159,14 @@ def test_ragged_manifest_without_optional_columns_leaves_them_blank(tmp_path: Pa
     filtered_dir = _ragged_source(tmp_path)
     manifest = tmp_path / "bare_manifest.tsv"
     manifest.write_text(
-        "analysis_index\tanalysis_id\tfiltered_file\tn\tsource_genome_build\n"
-        "0\tbinary\ttrait_a.tsv.gz\t10000\tGRCh38\n",
+        "analysis_index\tanalysis_id\tfiltered_file\tn\tsource_genome_build"
+        "\tstored_effect_scale\n"
+        "0\tbinary\ttrait_a.tsv.gz\t10000\tGRCh38\tlog_or\n",
         encoding="utf-8",
     )
     store = tmp_path / "bare.opengwasdb"
 
-    build_ragged_from_ssf(
+    real_build_ragged_from_ssf(
         manifest, filtered_dir, store, store_id="metadata-test", release_id="r1",
         association_coverage="cis_and_signals",
     )
@@ -172,10 +174,9 @@ def test_ragged_manifest_without_optional_columns_leaves_them_blank(tmp_path: Pa
     row = read_analyses(store / "analyses.tsv").rows[0]
     blank = (
         "ancestry_assignment_method", "sample_size_kind", "sample_size_scope",
-        "n_cases", "n_controls", "original_effect_scale",
+        "n_cases", "n_controls", "original_effect_scale", "original_sd_method",
         "license", "publication_doi", "publication_pmid", "consortium", "first_author",
     )
     assert all(row[column] == "" for column in blank)
-    # The scale and method are the builder's to require, so the fixture helper states them
-    # (`tests/ssf_builds.py`); nothing else is invented.
+    assert row["stored_effect_scale"] == "log_or"
     assert row["sample_size"] == "10000"

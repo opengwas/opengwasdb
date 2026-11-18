@@ -413,3 +413,17 @@ def test_a_ragged_row_labelled_sd_units_with_no_method_is_refused(
         ValueError, match=r"analysis '(trait|ENSG00000000001)'.*stored_effect_scale='sd'"
     ):
         route(tmp_path, omitted, monkeypatch)
+
+
+@pytest.mark.parametrize("token", ["NA", ".", "   "])
+@pytest.mark.parametrize("route", RAGGED.values(), ids=list(RAGGED))
+def test_a_missing_token_for_the_method_is_no_method_so_an_sd_row_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route, token: str
+) -> None:
+    """The Ragged builders read `NA`, `.` and white space as a blank cell. A row
+    labelled `sd` over one is the no-method case, not an unknown spelling, so it is
+    refused for the same reason (issue #366)."""
+    missing = Declared(OriginalSdMethod.BINARY_TRAIT, "", spelling=token)
+
+    with pytest.raises(ValueError, match=r"stored_effect_scale='sd'"):
+        route(tmp_path, missing, monkeypatch)
