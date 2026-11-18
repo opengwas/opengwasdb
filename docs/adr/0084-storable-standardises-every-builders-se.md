@@ -29,14 +29,20 @@ owner rejected that shape on 18 Nov 2026.
 ## Decision
 
 **`opengwasdb.encoding.phenotype_sd.PhenotypeSd` holds the divide, and
-`storable` is the only caller that applies it.**
+`storable` applies it to every cell a writer stores.** One other caller uses
+it: `validate`'s source-fidelity check calls `PhenotypeSd.standardised` to
+compute the SE a build stored from a source row. It stores nothing.
 
 - `storable(cells, analyses, n_analyses, *, where, phenotype_sd)` has no
   default for `phenotype_sd`, and neither has `RaggedCSRWriter.add_analysis`,
   which hands it on. A writer that does not say which scale its SEs are in
   does not run.
 - A builder hands its source's SEs with `PhenotypeSd.dividing_by(sd, ...)`,
-  one SD per Analysis, indexed as `analyses` is. `storable` returns the cells
+  one SD per Analysis, indexed as `analyses` is. `dividing_by()` with no SD is
+  refused, and so is a count that is not the batch's `n_analyses`, naming both
+  counts. "No rescaling" is the 1.0 that the manifest parser supplies, never an
+  omission or a default: no divisor parameter or field in the package has a
+  default (fix round 1, from review). `storable` returns the cells
   with each SE divided by its Analysis's SD. Every rule after that judges the
   divided SE, the one the Store holds: Admission's check and the #338
   out-of-range rule. The canonical-marker check judges the SE as it was handed
@@ -48,8 +54,10 @@ owner rejected that shape on 18 Nov 2026.
   - `AssociationCodec.encode`, whose cells are what a Store holds (a builder's
     grid already through `storable`, or a completion's cells), so encoding
     never standardises;
-  - the Hybrid Overflow assembly, which writes the Pass 2 spills that
-    `_stored_parts` already took through `storable`.
+  - the Hybrid Overflow assembly (`layouts/hybrid/overflow_spills.py`), which
+    writes the Pass 2 spills that `_stored_parts` already took through
+    `storable`. It reads no source row, and it lives outside `build.py` so
+    that `build.py`, which does, stays off the allowlist below.
 - The SD itself is still parsed from the manifest, once, by
   `layouts.build_manifest` (`_parse_original_sd`, and `original_sd_divisor`
   for Ragged's optional columns). It refuses an SD that is missing, non-finite
@@ -66,16 +74,44 @@ owner rejected that shape on 18 Nov 2026.
   `original_sd = 2.0` through all seven paths: Dense, Dense-from-VCF, the
   Hybrid Dense axis, Overflow and off-reference spill, Ragged BESD and Ragged
   SSF. Each stores SE 0.25 from the source's 0.5. On the code before #366 the
-  BESD and SSF cases fail.
+  BESD and SSF cases fail. A negative test makes Ragged SSF pass `APPLIED` and
+  watches the seam assertion fail.
+- **What is enforced, and how.** `APPLIED` is a public value, and no type stops
+  a writer from passing it with a source's SEs. Instead, the same test file
+  fails when:
+  - any module in `opengwasdb/` names `APPLIED` (found by AST, whatever its
+    filename) unless it is on an explicit allowlist of stored-cell writers,
+    `_MAY_SAY_APPLIED`. Each entry carries a one-line reason. The list is:
+    the owner, `association_codec` (`encode`), `completion/fill_shards`,
+    Hybrid and Ragged completion, and `hybrid/overflow_spills`. A new module
+    that needs `APPLIED` is added to the list on purpose. An entry whose
+    module no longer exists, or no longer names `APPLIED`, also fails, so the
+    list cannot keep a stale exception. Fix round 2 replaced a filename glob
+    over the source builders: a builder copied to
+    `layouts/ragged/source_ssf.py`, or a helper in `source_sd.py`, passed the
+    glob but fails this scan;
+  - anything but `phenotype_sd.py` constructs a `PhenotypeSd`;
+  - any divisor parameter or field has a default.
+
+  An empty Ragged Analysis passes its own `dividing_by`, like any other.
 
 ### Divided once
 
-A source SE reaches a Store through exactly one `storable` call that carries the
-Analysis's SD. Every later call that sees the same value is one of the
-`APPLIED` writers above, and each of them says so at its call site. Completion
-reads a Store, never a source, so its SEs are always in SD Units. Even if a
-completion wanted the SD, it has no way to learn it: `original_sd` lives in
-`analyses.tsv`, and no completion reads that column.
+Each source builder judges each source association in one `storable` call that
+carries the Analysis's SD:
+- the grid, for Dense;
+- the Pass 2 column, for Dense-from-VCF and Hybrid;
+- `add_analysis`, for Ragged.
+
+Every later writer of the same values is one of the `APPLIED` writers above.
+None of them is a source builder, and the allowlist scan checks that nothing
+else names `APPLIED`. Completion reads a
+Store, never a source, and reads no `original_sd`. The seam test pins the
+outcome, one division per route, with literal values.
+
+Nothing in the types prevents a second `dividing_by` call on cells that are
+already standardised. A builder that made one would fail the seam test for
+its route, not an import or a type check.
 
 ### `validate` checks what the builders now record
 

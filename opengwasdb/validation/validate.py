@@ -312,7 +312,7 @@ class _Unit(NamedTuple):
     analysis_id: str | None
     path: Path
     is_vcf: bool
-    se_divisor: float = 1.0
+    se_divisor: float
 
 
 def _source_units(
@@ -385,7 +385,9 @@ def _unnamed_units(
                 f"source-fidelity: {path} is an association TSV, which names no Analysis; "
                 "give the build manifest that lists it"
             )
-    return [_Unit(None, path, _is_vcf_path(path)) for path in paths]
+    # No manifest declares an SD for these, so the comparison is against the
+    # source as it stands: a Store that standardised it fails, rather than passes.
+    return [_Unit(None, path, _is_vcf_path(path), 1.0) for path in paths]
 
 
 def _stream_unit(
@@ -422,7 +424,7 @@ def _stream_unit(
         se = association.se
         if se_divisor != 1.0:
             # The build's own standardisation (ADR 0084): the SE it stored, to the bit.
-            se = float(standardised.standardised(np.array([se], dtype=np.float32), 0)[0])
+            se = float(standardised.standardised(np.array([se], dtype=np.float32), 0, 1)[0])
         yield (analysis_id, association.chromosome, association.position, a1, a2, z, se)
 
 

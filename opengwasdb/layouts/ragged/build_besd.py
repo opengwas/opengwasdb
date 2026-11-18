@@ -1096,14 +1096,15 @@ def _analysis_records(
     }
 
 
-def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
+def _add_empty_analysis(csr: RaggedCSRWriter, se_divisor: float) -> None:
     """Record an Analysis with no associations at all (a source with no rows,
-    or whose every row was filtered out)."""
+    or whose every row was filtered out), under its own phenotype SD like any
+    other: a source builder never says `APPLIED`."""
     csr.add_analysis(
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float32),
         np.empty(0, dtype=np.float32),
-        phenotype_sd=PhenotypeSd.APPLIED,  # no SE to standardise
+        phenotype_sd=PhenotypeSd.dividing_by(se_divisor),
     )
 
 
@@ -1298,7 +1299,7 @@ def _ingest_probe(
     ]
     rows = _resolved_duplicates(_concatenated(placed), gate)
     if not len(rows.variant_index):
-        _add_empty_analysis(csr)
+        _add_empty_analysis(csr, se_divisor)
         return _ProbeScopes(has_eaf=False, has_n=False), n_raw > 0
     # Sort by variant_index for consistent ordering within each analysis.
     order = np.argsort(rows.variant_index)

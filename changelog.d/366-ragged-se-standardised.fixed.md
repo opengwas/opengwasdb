@@ -8,8 +8,11 @@
   `original_sd` blank, and hold the source's own SEs.
 
   The divide now happens in `storable`, the one gate every writer passes. Its
-  `phenotype_sd` argument has no default, and a completion passes "already
-  applied", so each SE is divided exactly once. `z` is scale-free and is stored
+  `phenotype_sd` argument has no default: every source builder passes its
+  Analysis's SD, one per Analysis (a missing or miscounted one is refused), and
+  only a writer of cells a Store already holds, such as a completion, passes
+  "already applied". Tests hold every builder to that, so each SE is divided
+  once. `z` is scale-free and is stored
   as given. `build-ragged-ssf` now records `original_sd` in `analyses.tsv`.
   Dense, Dense-from-VCF and Hybrid Stores hold the same values as before.
 

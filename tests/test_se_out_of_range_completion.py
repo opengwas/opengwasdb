@@ -69,7 +69,7 @@ def _as_before_0_2_3(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         cells: CellValues, analyses, n_analyses: int, *, where: str, phenotype_sd: PhenotypeSd
     ) -> Storable:
         owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), np.shape(cells.z))
-        se_values = phenotype_sd.standardised(np.asarray(cells.se), owner)
+        se_values = phenotype_sd.standardised(np.asarray(cells.se), owner, n_analyses)
         cells = CellValues(cells.z, se_values, cells.eaf, cells.imputed)
         with np.errstate(invalid="ignore"):
             stand_in = np.where(se_values > 65504.0, np.float32(1.0), se_values)

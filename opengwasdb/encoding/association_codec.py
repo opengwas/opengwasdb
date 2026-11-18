@@ -154,7 +154,7 @@ def storable(
 
     z, handed_se, imputed = _parallel(cells, where)
     owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), z.shape)
-    se = phenotype_sd.standardised(handed_se, owner)
+    se = phenotype_sd.standardised(handed_se, owner, n_analyses)
     if se is not handed_se:
         cells = replace(cells, se=se)
     over = np.zeros(n_analyses, dtype=np.int64)

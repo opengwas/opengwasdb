@@ -113,12 +113,13 @@ class AnalyteInput:
     #: The build the manifest row declares (`source_genome_build`), normalised:
     #: ``hg38``, or ``hg19`` for a source the build lifts. A row declaring none is refused.
     source_build: str
+    #: The phenotype SD this Analysis's SEs are divided by (issue #18, #366), and
+    #: the manifest value it is recorded from. Required: the parser supplies 1.0
+    #: and "" for a row declaring no rescaling SD (`original_sd_divisor`), never
+    #: a default here.
+    se_divisor: float
+    original_sd: str
     assigned_ancestry: str = ""  # optional manifest column (ADR 0028); "" when omitted
-    #: The phenotype SD this Analysis's SEs standardise by (issue #18, #366), and
-    #: the manifest value it is recorded from. 1.0 and "" when the row declares no
-    #: rescaling SD; see `original_sd_divisor`.
-    se_divisor: float = 1.0
-    original_sd: str = ""
     # Shared-core analyses.tsv columns the manifest supplies and this builder only
     # copies (issue #83). Blank when the manifest omits them; see PassthroughMetadata.
     metadata: PassthroughMetadata = field(default_factory=PassthroughMetadata)
@@ -929,7 +930,7 @@ def _encode_ssf_csr(
         zip(per_analysis, se_divisors, strict=True)
     ):
         if not recs:
-            _add_empty_analysis(csr)
+            _add_empty_analysis(csr, se_divisor)
             eaf_scopes.append(EafScope.ABSENT.value)
             continue
         eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index, se_divisor))
@@ -949,11 +950,12 @@ def _encode_ssf_csr(
     return csr, encoding, eaf_scopes
 
 
-def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
-    """An analysis with no associations still occupies its CSR slot."""
+def _add_empty_analysis(csr: RaggedCSRWriter, se_divisor: float) -> None:
+    """An analysis with no associations still occupies its CSR slot, under its
+    own phenotype SD like any other: a source builder never says `APPLIED`."""
     csr.add_analysis(
         np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32),
-        phenotype_sd=PhenotypeSd.APPLIED,  # no SE to standardise
+        phenotype_sd=PhenotypeSd.dividing_by(se_divisor),
     )
 
 

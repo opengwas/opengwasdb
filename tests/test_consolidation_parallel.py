@@ -20,10 +20,8 @@ from test_hybrid_build import _make_manifest, _make_vcf, _panel
 import opengwasdb.layouts.dense.build_vcf as dense_build
 from opengwasdb.build.eaf_orientation import site_hashes
 from opengwasdb.layouts.dense.build_vcf import survey_eaf_spills
-from opengwasdb.layouts.hybrid.build import (
-    _assemble_overflow_csr,
-    build_hybrid_from_vcf_manifest,
-)
+from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.hybrid.overflow_spills import assemble_overflow_csr
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
 # The first column is far larger than the rest, so under any pool it is the
@@ -138,10 +136,10 @@ def test_overflow_csr_parallel_matches_serial(tmp_path: Path) -> None:
     _write_overflow_spills(serial_dir, n_variants)
     _write_overflow_spills(parallel_dir, n_variants)
 
-    serial_csr, serial_has_eaf = _assemble_overflow_csr(
+    serial_csr, serial_has_eaf = assemble_overflow_csr(
         serial_dir, len(_ID_BY_COL), n_variants, n_workers=1
     )
-    parallel_csr, parallel_has_eaf = _assemble_overflow_csr(
+    parallel_csr, parallel_has_eaf = assemble_overflow_csr(
         parallel_dir, len(_ID_BY_COL), n_variants, n_workers=4
     )
 
@@ -184,7 +182,7 @@ def test_overflow_spill_removed_only_after_use(tmp_path: Path, monkeypatch) -> N
 
     monkeypatch.setattr(RaggedCSRWriter, "add_analysis", flaky)
     with pytest.raises(RuntimeError, match="assembly failed"):
-        _assemble_overflow_csr(tmp_path, len(_ID_BY_COL), 1_000_000, n_workers=1)
+        assemble_overflow_csr(tmp_path, len(_ID_BY_COL), 1_000_000, n_workers=1)
 
     assert not (tmp_path / "0.ovf.npz").exists()  # used, then deleted
     assert (tmp_path / "1.ovf.npz").exists()  # the failing column, still unused

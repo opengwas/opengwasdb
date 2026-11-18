@@ -34,9 +34,11 @@ from sd_scaling import require_not_rescaling, require_rescaling
 
 from opengwasdb.admission import Gate
 from opengwasdb.build.observed import build_dense_observed_from_manifest
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import _OffReferenceSpill, build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.ragged import build_ssf
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses
@@ -59,20 +61,26 @@ OFF_PANEL_ALID = "1:1064620:C:T"
 
 @dataclass(frozen=True)
 class Declared:
-    """What the manifest row declares about the Analysis's phenotype SD."""
+    """What the manifest row declares about the Analysis's phenotype SD, and how
+    the manifest spells the method (the method's own value unless given)."""
 
     method: OriginalSdMethod
     original_sd: str
+    spelling: str | None = None
+
+    @property
+    def method_text(self) -> str:
+        return self.method.value if self.spelling is None else self.spelling
 
 
 @dataclass(frozen=True)
 class Built:
-    """A built Store, the association to read back, and its source's z."""
+    """A built Store, its Analysis, and each association to read back -- every
+    component the route reaches -- with its source's z."""
 
     store: Path
     analysis_id: str
-    alid: str
-    source_z: float
+    source_z: dict[str, float]
 
 
 RESCALING = Declared(OriginalSdMethod.SOURCE_PROVIDED, ORIGINAL_SD)
@@ -92,14 +100,14 @@ def _dense(tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyPatch)
     manifest = tmp_path / "manifest.tsv"
     manifest.write_text(
         "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\toriginal_sd\n"
-        f"trait\t{source}\tsd\t{declared.method.value}\t{declared.original_sd}\n",
+        f"trait\t{source}\tsd\t{declared.method_text}\t{declared.original_sd}\n",
         encoding="utf-8",
     )
     store = tmp_path / "dense.opengwasdb"
     build_dense_observed_from_manifest(
         manifest, store, store_id="s", release_id="r", admission_record=tmp_path / "adm"
     )
-    return Built(store, "trait", ON_PANEL_ALID, 2.0)
+    return Built(store, "trait", {ON_PANEL_ALID: 2.0})
 
 
 # ── GWAS-VCF sources: Dense-from-VCF and the three Hybrid routes ─────────────
@@ -125,7 +133,7 @@ def _vcf_manifest(tmp_path: Path, declared: Declared) -> Path:
     manifest.write_text(
         "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
         "\toriginal_sd_method\toriginal_sd\n"
-        f"trait\t{vcf}\tTrait\t1000\tsd\t{declared.method.value}\t{declared.original_sd}\n",
+        f"trait\t{vcf}\tTrait\t1000\tsd\t{declared.method_text}\t{declared.original_sd}\n",
         encoding="utf-8",
     )
     return manifest
@@ -143,7 +151,7 @@ def _dense_vcf(tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyPa
     build_dense_from_vcf_manifest(
         _vcf_manifest(tmp_path, declared), store, store_id="s", release_id="r"
     )
-    return Built(store, "trait", ON_PANEL_ALID, -2.0)
+    return Built(store, "trait", {ON_PANEL_ALID: -2.0})
 
 
 def _components_by_alid(store: Path) -> dict[str, str]:
@@ -161,36 +169,27 @@ def _components_by_alid(store: Path) -> dict[str, str]:
     }
 
 
-def _hybrid_two_pass(tmp_path: Path, declared: Declared) -> Path:
+def _hybrid_two_pass(
+    tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyPatch
+) -> Built:
+    """One two-pass build reaches both components: the on-panel association
+    the Dense Component, the off-panel one the Overflow."""
     store = tmp_path / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
         _vcf_manifest(tmp_path, declared), store, reference_panel=_panel(tmp_path),
         store_id="s", release_id="r",
     )
-    return store
-
-
-def _hybrid_dense_axis(
-    tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyPatch
-) -> Built:
-    store = _hybrid_two_pass(tmp_path, declared)
-    assert _components_by_alid(store).get(ON_PANEL_ALID) == "dense", (
+    components = _components_by_alid(store)
+    assert components.get(ON_PANEL_ALID) == "dense", (
         "the on-panel association must reach the Dense Component, or this route proves nothing"
     )
-    return Built(store, "trait", ON_PANEL_ALID, -2.0)
-
-
-def _hybrid_overflow(
-    tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyPatch
-) -> Built:
-    store = _hybrid_two_pass(tmp_path, declared)
-    assert _components_by_alid(store).get(OFF_PANEL_ALID) == "overflow", (
+    assert components.get(OFF_PANEL_ALID) == "overflow", (
         "the off-panel association must reach the Overflow, or this route proves nothing"
     )
-    return Built(store, "trait", OFF_PANEL_ALID, -2.0)
+    return Built(store, "trait", {ON_PANEL_ALID: -2.0, OFF_PANEL_ALID: -2.0})
 
 
-def _hybrid_off_reference(
+def _hybrid_single_pass(
     tmp_path: Path, declared: Declared, monkeypatch: pytest.MonkeyPatch
 ) -> Built:
     """A single-pass build whose variant reference names only the on-panel
@@ -214,10 +213,12 @@ def _hybrid_off_reference(
         f"the off-panel association must reach the off-reference spill (spilled {spilled}), "
         "or this route proves nothing"
     )
-    assert _components_by_alid(store).get(OFF_PANEL_ALID) == "overflow", (
+    components = _components_by_alid(store)
+    assert components.get(OFF_PANEL_ALID) == "overflow", (
         "the folded off-reference association must reach the Overflow"
     )
-    return Built(store, "trait", OFF_PANEL_ALID, -2.0)
+    assert components.get(ON_PANEL_ALID) == "dense"
+    return Built(store, "trait", {ON_PANEL_ALID: -2.0, OFF_PANEL_ALID: -2.0})
 
 
 # ── Ragged, from BESD and from filtered GWAS-SSF ─────────────────────────────
@@ -238,7 +239,7 @@ def _ragged_besd(tmp_path: Path, declared: Declared, _monkeypatch: pytest.Monkey
     overlay = tmp_path / "analyses.tsv"
     overlay.write_text(
         "analysis_id\tsample_size\tstored_effect_scale\toriginal_sd_method\toriginal_sd\n"
-        f"ENSG00000000001\t1000\tsd\t{declared.method.value}\t{declared.original_sd}\n",
+        f"ENSG00000000001\t1000\tsd\t{declared.method_text}\t{declared.original_sd}\n",
         encoding="utf-8",
     )
     store = tmp_path / "besd.opengwasdb"
@@ -246,7 +247,7 @@ def _ragged_besd(tmp_path: Path, declared: Declared, _monkeypatch: pytest.Monkey
         fixture / "test", store, store_id="s", release_id="r", analyses_path=overlay,
         association_coverage="cis_and_signals",
     )
-    return Built(store, "ENSG00000000001", ON_PANEL_ALID, 2.0)
+    return Built(store, "ENSG00000000001", {ON_PANEL_ALID: 2.0})
 
 
 def _ragged_ssf(tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyPatch) -> Built:
@@ -264,7 +265,7 @@ def _ragged_ssf(tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyP
         "analysis_index\tanalysis_id\tanalysis_label\tn\tmhc\tfiltered_file"
         "\tsource_genome_build\toriginal_sd_method\toriginal_sd\n"
         f"0\ttrait\tTrait\t1000\tFALSE\ttrait.tsv.gz\tGRCh38"
-        f"\t{declared.method.value}\t{declared.original_sd}\n",
+        f"\t{declared.method_text}\t{declared.original_sd}\n",
         encoding="utf-8",
     )
     store = tmp_path / "ssf.opengwasdb"
@@ -272,7 +273,7 @@ def _ragged_ssf(tmp_path: Path, declared: Declared, _monkeypatch: pytest.MonkeyP
         manifest, filtered, store, store_id="s", release_id="r",
         association_coverage="cis_and_signals",
     )
-    return Built(store, "trait", ON_PANEL_ALID, 2.0)
+    return Built(store, "trait", {ON_PANEL_ALID: 2.0})
 
 
 Route = Callable[[Path, Declared, pytest.MonkeyPatch], Built]
@@ -280,22 +281,27 @@ Route = Callable[[Path, Declared, pytest.MonkeyPatch], Built]
 ROUTES: dict[str, Route] = {
     "dense": _dense,
     "dense-vcf": _dense_vcf,
-    "hybrid-dense-axis": _hybrid_dense_axis,
-    "hybrid-overflow": _hybrid_overflow,
-    "hybrid-off-reference-spill": _hybrid_off_reference,
+    "hybrid-two-pass": _hybrid_two_pass,
+    "hybrid-single-pass": _hybrid_single_pass,
     "ragged-besd": _ragged_besd,
     "ragged-ssf": _ragged_ssf,
 }
 
 
-def _stored(built: Built) -> tuple[float, float]:
-    """The Store's z and SE for the route's one association."""
+def _stored(built: Built) -> dict[str, tuple[float, float]]:
+    """The Store's z and SE for each of the route's associations."""
+    alids = list(built.source_z)
     with query_store(built.store) as query:
-        found = query.lookup([built.alid], [built.analysis_id])
-    assert len(found["se"]) == 1, (
-        f"{built.alid} must be stored for {built.analysis_id}, or there is nothing to judge"
+        found = query.lookup(alids, [built.analysis_id])
+    assert len(found["se"]) == len(alids), (
+        f"{alids} must all be stored for {built.analysis_id}, or there is nothing to judge"
     )
-    return float(found["z"][0]), float(found["se"][0])
+    with query_store(built.store) as query:
+        alid_of = {index: v["alid"] for index, v in query.variants_table().items()}
+    return {
+        alid_of[int(index)]: (float(z), float(se))
+        for index, z, se in zip(found["variant_index"], found["z"], found["se"], strict=True)
+    }
 
 
 def _recorded(built: Built) -> dict[str, str]:
@@ -303,24 +309,26 @@ def _recorded(built: Built) -> dict[str, str]:
     return rows[built.analysis_id]
 
 
-@pytest.mark.parametrize("route", ROUTES.values(), ids=ROUTES.keys())
-def test_every_builder_divides_the_se_by_a_rescaling_original_sd_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route
-) -> None:
+def _assert_standardised(built: Built) -> None:
     """SE 0.5 under a declared SD of 2.0 is stored as 0.25, z as the source gave it."""
-    require_rescaling(RESCALING.method)
-
-    built = route(tmp_path, RESCALING, monkeypatch)
-
-    z, se = _stored(built)
-    assert se == pytest.approx(0.25, rel=5e-3), f"stored SE {se}, source SE 0.5 / SD 2.0"
-    assert z == pytest.approx(built.source_z, rel=5e-3), "z is scale-free and must not move"
+    for alid, (z, se) in _stored(built).items():
+        assert se == pytest.approx(0.25, rel=5e-3), f"{alid}: stored SE {se}, source 0.5 / SD 2.0"
+        assert z == pytest.approx(built.source_z[alid], rel=5e-3), "z is scale-free"
     recorded = _recorded(built)
     assert recorded["original_sd_method"] == RESCALING.method.value
     assert recorded["original_sd"] and float(recorded["original_sd"]) == 2.0, (
         "a standardised Analysis must record the SD it was standardised by, "
         f"not {recorded['original_sd']!r}"
     )
+
+
+@pytest.mark.parametrize("route", ROUTES.values(), ids=ROUTES.keys())
+def test_every_builder_divides_the_se_by_a_rescaling_original_sd_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route
+) -> None:
+    require_rescaling(RESCALING.method)
+
+    _assert_standardised(route(tmp_path, RESCALING, monkeypatch))
 
 
 @pytest.mark.parametrize("route", ROUTES.values(), ids=ROUTES.keys())
@@ -332,9 +340,27 @@ def test_every_builder_leaves_the_se_alone_under_a_method_without_a_magnitude(
 
     built = route(tmp_path, NOT_RESCALING, monkeypatch)
 
-    z, se = _stored(built)
-    assert se == pytest.approx(SOURCE_SE, rel=5e-3), f"stored SE {se}, source SE 0.5"
-    assert z == pytest.approx(built.source_z, rel=5e-3)
+    for alid, (z, se) in _stored(built).items():
+        assert se == pytest.approx(SOURCE_SE, rel=5e-3), f"{alid}: stored SE {se}, source 0.5"
+        assert z == pytest.approx(built.source_z[alid], rel=5e-3)
     recorded = _recorded(built)
     assert recorded["original_sd_method"] == NOT_RESCALING.method.value
     assert recorded["original_sd"] == ""
+
+
+def test_a_route_that_hands_its_source_ses_over_as_already_standardised_fails_the_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seam test can fail: Ragged SSF made to pass `APPLIED`, as the Ragged
+    builders in effect did before #366, stores SE 0.5 and is caught."""
+
+    class _Unstandardised:
+        @staticmethod
+        def dividing_by(*_divisors: float) -> PhenotypeSd:
+            return PhenotypeSd.APPLIED
+
+    monkeypatch.setattr(build_ssf, "PhenotypeSd", _Unstandardised)
+    built = _ragged_ssf(tmp_path, RESCALING, monkeypatch)
+
+    with pytest.raises(AssertionError, match="stored SE 0.5"):
+        _assert_standardised(built)

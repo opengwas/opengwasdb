@@ -185,7 +185,7 @@ def _sorted_variant_indices(variant_index: np.ndarray) -> np.ndarray:
     """One Analysis's variant indices, refused unless ascending.
 
     Every builder sorts an Analysis's associations by variant_index before
-    adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
+    adding them (build_besd, build_ssf, Hybrid's `overflow_spills._assemble_overflow_column`
     and completion's `_remapped_analysis_arrays` all argsort). The variant-
     side queries rely on it: `lookup` and the Hybrid overflow lookup
     binary-search each Analysis's segment instead of scanning the store
