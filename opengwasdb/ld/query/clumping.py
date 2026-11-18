@@ -53,7 +53,9 @@ def clump(
     # Each distinct row is one hit, however many requests name it; duplicates scatter afterwards,
     # and a row is ordered by its strongest request's score, as the greedy takes it.
     hits, first, back = np.unique(rows, return_index=True, return_inverse=True)
-    strength = np.zeros(len(hits), dtype=np.float64)
+    # A hit's strength is the strongest score any request of it gives; every score is ≥ 0, so
+    # the max over none is −inf rather than a zero a score could equal.
+    strength = np.full(len(hits), -np.inf)
     np.maximum.at(strength, back, scores)
     chrom, position = reader.loci_of(hits)
     lead, r_lead = _components(reader, hits, strength, chrom, position, r2=r2, window=window)

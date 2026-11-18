@@ -549,6 +549,10 @@ class StoreReader:
 
         The reader owns candidate geometry and selection of the stored part. Warming is
         optional: a missed chunk still goes through the ordinary bounded read (ADR 0009).
+
+        **No query calls this since #71**: `clump` reads the Partner Rows and its own frame
+        cache, so the Near Band's warm windows warm nothing a clump reads. It is kept, tested
+        and unused until #72 removes it with the Near Band partner reads it serves.
         """
         if r2 >= self._provenance["t_far"] or not len(rows) or self.cache_bytes == 0:
             return lambda row: None

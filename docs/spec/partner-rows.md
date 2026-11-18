@@ -351,11 +351,31 @@ ALID, a hit joins a lead at r̂² > r2 and d < W, results in request order inclu
 component's row span, so filtering a row costs O(E_l) vector operations with no hashing.
 Duplicate ALIDs share a row and follow today's scatter rule.
 
-**Cost** (measured in #65). One frame read and decode per lead that has not hit the frame cache.
-No speculative reads and no reads for eliminated hits. On the whole of GCST90476460, whose 3,869
-leads fall in 95 components, G = 16 with four component workers made 3,854 frame reads and
-101,810,367 bytes: 1.067 s of LD work cold and 1.058 s warm, against 23–26 s today and 10.7 GB
-read. ALID resolution is separate, and took 2.0–2.8 s in the same runs.
+**Cost** (measured in #65 and #71). One frame read and decode per lead that has not hit the frame
+cache. No speculative reads and no reads for eliminated hits. On the whole of GCST90476460, whose
+3,869 leads fall in 95 components, G = 16 with four component workers made 3,854 frame reads and
+101,810,367 bytes, with 15 cache hits. Its LD work, cold and warm, in seconds, by the reader's
+worker count, median of three alternating fresh subprocesses on 8 CPUs with `taskset -c 0-7`, while
+another lane derived Partner Rows (load average 5.6–6.5):
+
+| workers | cold | warm |
+|---|---|---|
+| 1 | 3.279 (best 2.603) | 1.078 (best 0.975) |
+| 2 | 1.904 (best 1.513) | 1.254 (best 1.019) |
+| 4 | 1.846 (best 1.832) | 1.552 (best 1.293) |
+
+Under a lighter load (3.5–5) the same configuration measured 1.33–1.87 s cold and 1.33–1.40 s warm
+at four workers. `rows_of` is separate and slower than the LD work, 2.3–3.6 s for its 260,821
+ALIDs, and the store opens in 0.02–0.05 s. Where the 1.85 s cold goes at four workers: 1.31 s of
+`partner_row` CPU — the frames' decompress on a miss, 0.94 s of it in the warm runs — and 0.82 s
+of row gather (2.13 s of `partner_row` CPU less that decode), spread over four threads and so
+bounded by the GIL, plus the component split, the greedy and the cold reads' latency. Serially the
+same parts are 0.87 s of LD CPU: 0.49 s decode, 0.17 s gather, and 0.21 s of the split and the
+greedy. **The under-1 s LD target is not met** (owner, 18 November 2026,
+moved it here from #65). The options the numbers point at, measured rather than guessed: a reusable
+row buffer in `FramePayload.row` (#70's module) is 31.7 µs a row against 40.8 µs on a 628-entry
+median row, some 35 ms over 3,854 leads; G = 8, which #65 measured a little faster than G = 16; and
+more than four workers, which regresses here as it did there.
 
 ### 8.3 `proxies`
 

@@ -39,9 +39,9 @@ _PASSED = ("Content-Range", "Content-Type", "Accept-Ranges", "Last-Modified", "E
 
 def array_of(path: str) -> str:
     """The array a request is for, as `kind/name` (`near/r`, `index/partner`, `far/r`,
-    `partners/frames`, `variants/alid`), or `metadata` for a `zarr.json` document and for the Zarr v2 documents
-    (`.zgroup`, `.zattrs`, `.zmetadata`) zarr probes for when it opens a URL. A chunk's path is
-    the array's, then `/c/...`."""
+    `partners/frames`, `variants/alid`), or `metadata` for a `zarr.json` document and for the
+    Zarr v2 documents (`.zgroup`, `.zattrs`, `.zmetadata`) zarr probes for when it opens a URL. A
+    chunk's path is the array's, then `/c/...`."""
     last = path.rsplit("/", 1)[-1]
     if last == "zarr.json" or last.startswith("."):
         return "metadata"

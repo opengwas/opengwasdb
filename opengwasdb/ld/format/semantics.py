@@ -219,6 +219,13 @@ def judge_window(
             f"a {window:,.0f} bp window reaches past {far_bp:,} bp, where pairs are Not Measured"
         )
         return Decision(RefusalReason.WINDOW_OVER_FAR, detail, window)
+    return _threshold(r2=r2, window=window, t_far=t_far, near_bp=near_bp, t_partner=t_partner)
+
+
+def _threshold(
+    *, r2: float, window: float, t_far: float, near_bp: int, t_partner: float | None
+) -> Decision:
+    """The two thresholds' refusals: below t_far past `near_bp`, and below t_partner within it."""
     if window > near_bp and r2 < t_far:
         detail = (
             f"r2={r2} is below t_far={t_far}: beyond {near_bp:,} bp the store holds only the Bound "

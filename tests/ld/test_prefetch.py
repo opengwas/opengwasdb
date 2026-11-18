@@ -17,7 +17,7 @@ from store_copies import TEST_STORE, resharded
 from zarr.storage import LocalStore
 
 import ogld
-from ogld.store import decoding, location
+from ogld.store import StoreReader, decoding, location
 
 
 def test_prefetch_fits_or_declines_without_reading(tmp_path: Path) -> None:
@@ -106,6 +106,54 @@ def test_empty_unsupported_and_key_limited_prefetch(
     monkeypatch.setattr(location, "_PREFETCH_CHUNKS", 1)
     assert not cache.prefetch(near, [0, 1024], [512, 512])
     assert cache._bytes == 0
+
+
+def test_the_clump_warmer_still_plans_its_bounded_windows_while_nothing_calls_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`clump_warmer` is kept, and tested, until #72 removes it: no query calls it since clump
+    reads the Partner Rows, but its own plan is still the bounded one (#40)."""
+    store = ogld.open(TEST_STORE)
+    reader = store._reader
+    rows = np.array([500, 520, 540], dtype=np.int64)
+    # A threshold at or above t_far warms nothing: no chunk of the band is read at all.
+    assert reader.clump_warmer(rows, r2=store.t_far, window_bp=3_000_000)(rows[0]) is None
+    assert reader.clump_warmer(np.empty(0, dtype=np.int64), r2=0.01, window_bp=3_000_000)(0) is None
+    assert (
+        StoreReader.open(TEST_STORE, cache_bytes=0).clump_warmer(
+            rows, r2=0.01, window_bp=3_000_000
+        )(rows[0])
+        is None
+    )
+    monkeypatch.setattr(reader, "_prefetch_hits", lambda *args: True)
+    assert reader.clump_warmer(rows, r2=0.01, window_bp=3_000_000)(rows[0]) is None
+
+    # Otherwise it is one positional warm range: a plan that fits sets it, a lead inside it plans
+    # nothing, and one whose plans keep missing halves its window until it is the lead alone.
+    spans: list[int] = []
+
+    def none_fit(c: Any, local: Any, reach: int) -> bool:
+        spans.append(len(local))
+        return False
+
+    monkeypatch.setattr(reader, "_prefetch_hits", none_fit)
+    reader.clump_warmer(rows, r2=0.01, window_bp=3_000_000)(rows[0])
+    assert spans[0] > 1
+    assert spans[-1] == 1, "the window halves until it is the lead alone"
+    assert spans == sorted(spans, reverse=True), "and never grows"
+
+    spans.clear()
+    answers = iter([False, True])
+
+    def second_fits(c: Any, local: Any, reach: int) -> bool:
+        spans.append(len(local))
+        return next(answers)
+
+    monkeypatch.setattr(reader, "_prefetch_hits", second_fits)
+    warm = reader.clump_warmer(rows, r2=0.01, window_bp=3_000_000)
+    warm(rows[0])
+    warm(rows[0])
+    assert len(spans) == 2, "one plan, and the second lead is inside the range it set"
 
 
 def test_proxies_read_the_partner_rows_and_no_near_band_or_index_chunk(

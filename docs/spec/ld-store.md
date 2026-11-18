@@ -856,6 +856,11 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   r̂² ≥ t_far. r2 = t_partner exactly is answered from 0.2.0, for the same reason.
 - A request is compared with the recorded `t_far`, and from 0.2.0 its recorded `t_partner`, never
   with a rounded display of either.
+- A 0.1.0 store records no `t_partner` and holds no `partners/<chrom>/`, so from 0.2.0 `clump` and
+  `proxies` refuse it with an `ogld.InputError` naming the missing component and
+  `ogld derive-partners`, before any read. They are never answered from the Near Band and the
+  Proxy Index: that fallback is what the Partner Rows exist to replace (§13;
+  `docs/spec/partner-rows.md` §8.1).
 - A Refusal MUST name its reason. A request MUST NOT be answered approximately instead. A region
   wider than `far_bp` is refused as `region_over_far`, and a negative radius as `invalid`.
 - On UK Biobank EUR (t_far = 0.001) only W > 10 Mb is refused at r2 ≥ 0.001, so MR's r² 0.001
@@ -901,15 +906,19 @@ and the reads map onto the arrays as follows.
 | a region | `region_r` | `region` | for each of its rows, one contiguous slice of `near/<c>/r`, from the row's first code to its last partner inside the region, never its partners past the region; for its pairs beyond `near_bp`, the Far Pairs rows of its variants, each pair inside the region scattered into the matrix. No Proxy Index entry |
 | a submatrix for any variant list | `pair_r` | `matrix` | one element of `near/<c>/r` per pair within `near_bp`; for the pairs beyond it, the Far Pairs rows of the listed variants, each pair whose partner is listed scattered into the matrix. No Proxy Index entry |
 | a list of pairs, or one row against many | `r_of_pairs` | `partners` below t_far with `among`; `pair_r`, within `near_bp` only | one element of `near/<c>/r` per pair within `near_bp`; the Far Pairs row of each farther pair's earlier variant, searched. `pair_r`'s pairs beyond `near_bp` are not looked up this way: they are scattered from Far Pairs rows, as its own row says |
-| partners at r2 ≥ t_far | `partners` | `proxies`; `clump` | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No chunk of `near/<c>/r` |
-| partners below t_far, W ≤ `near_bp` | `partners` | `proxies` | each variant's Near Band row up to W, and its column within W: one element in each row of the preceding W (§11) |
-| partners below t_far among a list, W ≤ `near_bp` | `partners`, `among` | `clump` | one element of `near/<c>/r` per pair of a variant and a listed variant within W, and nothing else |
-| a variant's Partner Rows row, or many at once | `partner_row`, `partner_rows` | `proxies`; `clump` from #71 | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. Many rows are read together only where their frames are physically adjacent. No `near/` or `index/` array and no shard index. Format 0.2.0, #70 |
+| partners at r2 ≥ t_far (0.1.0 only; #72 removes `partners`) | `partners` | nothing | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No chunk of `near/<c>/r` |
+| partners below t_far, W ≤ `near_bp` (0.1.0 only) | `partners` | nothing | each variant's Near Band row up to W, and its column within W: one element in each row of the preceding W (§11) |
+| partners below t_far among a list, W ≤ `near_bp` (0.1.0 only) | `partners`, `among` | nothing | one element of `near/<c>/r` per pair of a variant and a listed variant within W, and nothing else |
+| a variant's Partner Rows row, or many at once | `partner_row`, `partner_rows` | `clump`; `proxies` | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. Many rows are read together only where their frames are physically adjacent. No `near/` or `index/` array and no shard index. Format 0.2.0, #70 |
 
-So the stored part a query reads depends on its threshold, and the reader chooses it; no query
-compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
+In **0.1.0** the stored part a query read depended on its threshold, and the reader chose it; no
+query compared r2 with t_far itself. That table is the record of what the Near Band's row and
+column and the Proxy Index served, and **from 0.2.0 there is no part to choose**: `clump` and
+`proxies` read the Partner Rows at every answered r2, and only `matrix` and `region` read the Near
+Band and the Far Pairs. The Proxy Index row read, the Near Band's row and column reads and clump's
+use of the chunk cache, single-flight and admission go with them (#72).
 
-| query | r2 ≥ t_far | r2 < t_far (answered only for W ≤ `near_bp`, §9) |
+| query | 0.1.0, r2 ≥ t_far | 0.1.0, r2 < t_far (answered only for W ≤ `near_bp`, §9) |
 |---|---|---|
 | `matrix`, `region` | no threshold: the Near Band within `near_bp`, the Far Pairs beyond it | |
 | `proxies` | the Proxy Index row of each query variant | the Near Band row and column of each query variant, within W |
@@ -919,9 +928,11 @@ compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
 `partner_row` finds frame ⌊l / G⌋, reads its byte range from the chromosome's `frames` chunk file,
 verifies the content checksum and content size its zstd header declares and then the checksum,
 checks k and the payload length, and keeps the frame's decompressed payload in a byte-bounded LRU:
-256 MiB unless the caller sets another budget — a **chosen, unmeasured** default that #71's
-measurements settle — the least recently used frame dropped first, and a row is unshuffled from its
-frame's payload for the row alone. A local store's chunk file is held open and read with
+256 MiB unless the caller sets another budget, the least recently used frame dropped first, and a
+row is unshuffled from its frame's payload for the row alone. **The 256 MiB default is measured**
+(#71): on GCST90476460 and the 37 chr22 Analyses in one reader, no cache made 4,323 frame reads,
+16 MiB 4,205, 64 MiB 4,188 and 256 MiB 4,132, and 1 GiB made the same 4,132, so 256 MiB is the
+smallest budget that kept every hit the workload offered (`docs/spec/partner-rows.md` §7). A local store's chunk file is held open and read with
 `os.pread`, one descriptor per chromosome, opened on its first use and closed with the reader; a
 store that is not on this disk answers one Range request a frame, and a read shorter than the
 frame's bytes is a refusal. That cache is per reader and separate from the Near Band chunk
@@ -934,21 +945,20 @@ with 15 cache hits, and did 1.067 s of LD work cold and 1.058 s warm. The Proxy 
 the Near Band's row and column reads and clump's use of the chunk cache, single-flight and
 admission go with them (#72); everything else in this section stays for `matrix` and `region`.
 
-`clump` visits one chromosome at a time, strongest first inside it, and scatters results
-back into the original request order, including duplicates (ogld#40; ADR 0009). A clump
-cannot cross chromosomes, so this changes no lead or member, but avoids evicting chunks to
-visit other chromosomes between leads. It reads ALIDs, chromosomes and positions, not the
-alleles or allele frequencies it never returns. A sparse chunk-cache read gathers only its
-requested elements, rather than concatenating whole cached chunks on every warm lead.
+**From 0.2.0** `clump` splits the present hits into **components** — per chromosome, cut wherever
+two consecutive positions are W apart — and runs each component's greedy strongest first inside it,
+serially or on the reader's pool of at most four threads, scattering results back into the request
+order, including duplicates (ogld#40; `docs/spec/partner-rows.md` §8.2, §9.2). A clump cannot cross
+chromosomes, and no lead can reach a hit in another component, so neither the split nor the
+concurrency changes a lead or a member. It reads ALIDs, chromosomes and positions, not the alleles
+or allele frequencies it never returns.
 
-`clump` asks for one lead's partners at a time, among the hits no stronger lead has taken, and
-never for a square among a lead and its m candidates, which resolves every pair among them. On the
-Test Store's 1,056 hits within 3 Mb, at its × 511 encoding, the leads need 23,228 pairs at r² 0.1.
-The squares resolved 1,489,250 of them and took 1,587,155 Stored r from the chunk cache; `partners`
-takes 3,122, the 438 leads' Proxy Index rows. At r² 0.01, below t_far, the leads need 7,311 pairs
-and `partners` takes exactly those. `tests/test_partner_reads.py` holds both, and `proxies`
-reading no string column but the ALIDs it returns. A chromosome's `near/<c>/indptr` is still read when a request first
-touches it, as below, at any threshold.
+`clump` reads one Partner Rows row per lead — 3,869 for GCST90476460's whole input — and `proxies`
+one per present query variant; neither reads a Near Band element or a Proxy Index entry, and neither
+resolves a square among the hits (§9). `tests/test_partner_reads.py` holds the one row a lead, and
+`proxies` reading no string column but the ALIDs it returns. A chromosome's position range and its
+`near/<c>/indptr` are still read when a request first touches it, as below, at any threshold; the
+Proxy Index's and Far Pairs' `indptr` are not, until #72 removes them.
 
 What the reads hold, measured with tracemalloc and held by `tests/test_partner_reads.py`:
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import shutil
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -430,23 +429,27 @@ def test_a_saturated_pool_still_progresses_and_never_overruns_its_workers(
                             r2=0.01, kb=100)  # fmt: skip
     never = StoreReader.open(TEST_STORE, query_workers=2)
     real = clumping._component
-    lock = threading.Lock()
+    state = threading.Condition()
     running, peak, done = 0, 0, 0
 
-    def slow(reader: StoreReader, task: Any, **kwargs: Any) -> Any:
+    def saturated(reader: StoreReader, task: Any, **kwargs: Any) -> Any:
+        """Hold each task until the pool's two threads are both inside one, so the pool is
+        saturated by construction, then let it go."""
         nonlocal running, peak, done
-        with lock:
+        with state:
             running += 1
             peak = max(peak, running)
+            state.notify_all()
+            state.wait_for(lambda: running >= 2, timeout=1.0)
         try:
-            time.sleep(0.005)
             return real(reader, task, **kwargs)
         finally:
-            with lock:
+            with state:
                 running -= 1
                 done += 1
+                state.notify_all()
 
-    monkeypatch.setattr(clumping, "_component", slow)
+    monkeypatch.setattr(clumping, "_component", saturated)
     got = clumping.clump(never, names, score, r2=0.01, kb=100)
     assert peak == 2, f"the pool ran {peak} tasks at once, not its two"
     assert done > 2 * peak, "the fixture must hold many more components than the pool"
