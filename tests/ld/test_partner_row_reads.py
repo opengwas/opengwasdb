@@ -16,11 +16,13 @@ from __future__ import annotations
 import contextlib
 import http.server
 import json
+import os
 import shutil
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
+from dataclasses import dataclass, field
+from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
@@ -30,19 +32,17 @@ import numpy.typing as npt
 import pytest
 import zarr
 from contract.support import RangeHandler
-from store_copies import TEST_STORE
+from store_copies import PARTNER_FLOOR, TEST_STORE
 from zarr.abc.store import RangeByteRequest
 
 from ogld.format import InputError
 from ogld.store import frames
 from ogld.store.reader import StoreReader
 
-#: The Test Store's distances and its t_partner, whose Partner Floor is the smallest code c ≥ 0 with
-#: (c / 511)² ≥ 0.01: written out here, not read from the store (spec §3; partner-rows §3).
-NEAR_BP = 3_000_000
-T_PARTNER = 0.01
-R_SCALE = 511
-PARTNER_FLOOR = 52
+#: The Test Store's distances (spec §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
+#: the one independent owner of its encoding (ownership.md, "Test oracles"), so the reconstruction
+#: below still depends on nothing in `frames.py`.
+NEAR_BP, FAR_BP = 3_000_000, 10_000_000
 CHROMOSOMES = ("21", "22")
 #: The frames the Test Store's chr22 has, and the one the damage cases damage.
 CHR22_FRAMES = 37
@@ -84,6 +84,7 @@ def far_pairs(group: zarr.Group, chrom: str) -> Pairs:
     return rows, np.asarray(held["partner"][:], dtype=np.int64), np.asarray(held["r"][:], np.int16)
 
 
+@cache
 def expected(chrom: str) -> Pairs:
     """Each row's partners and codes as partner-rows §3 requires them: every Near Band pair at the
     Partner Floor and every Far Pair, in both variants' rows, ascending within a row."""
@@ -139,12 +140,25 @@ def serving(directory: Path) -> Iterator[tuple[str, list[tuple[str, str | None]]
         worker.join()
 
 
-def test_every_row_over_http_is_the_near_band_and_the_far_pairs_at_their_floors() -> None:
+def sampled(chrom: str) -> list[int]:
+    """The rows an HTTP pass reads: every seventh row, and the first and last row of every frame, so
+    every frame of the chromosome is read at both its ends without reading all of its rows. The
+    frames are the store's own, from its `rows_per_frame`, never a constant (§5.2)."""
+    held = store()["partners"][chrom]
+    rows, per_frame = int(held.attrs["rows"]), int(held.attrs["rows_per_frame"])
+    firsts = range(0, rows, per_frame)
+    lasts = [min(first + per_frame - 1, rows - 1) for first in firsts]
+    return sorted({*range(0, rows, 7), *firsts, *lasts})
+
+
+def test_rows_over_http_are_the_near_band_and_the_far_pairs_at_their_floors() -> None:
     with serving(TEST_STORE) as (url, _):
         reader = StoreReader.open(url)
         for chrom in CHROMOSOMES:
             indptr, partners, codes = expected(chrom)
-            for local_row in range(0, len(indptr) - 1, 7):
+            rows = sampled(chrom)
+            assert len(rows) > 100, "the sample must touch most frames and rows"
+            for local_row in rows:
                 span = slice(int(indptr[local_row]), int(indptr[local_row + 1]))
                 got_partners, got_codes = reader.partner_row(chrom, local_row)
                 np.testing.assert_array_equal(got_partners, partners[span])
@@ -195,25 +209,42 @@ def test_store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Serve
             yield url, copied
 
 
-Counted = list[tuple[str, int, int]]
+@dataclass
+class Reads:
+    """The chunk-file reads one reader made, however they were served (§7): `os.pread` calls on a
+    local store's kept descriptor, and byte ranges asked of the store on a remote one."""
+
+    preads: list[tuple[int, int]] = field(default_factory=list)
+    ranges: list[tuple[str, int, int]] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.preads) + len(self.ranges)
 
 
 @contextlib.contextmanager
-def counted_ranges(reader: StoreReader, monkeypatch: pytest.MonkeyPatch) -> Iterator[Counted]:
-    """Count the byte-range reads the reader's own store is asked for: one `RangeByteRequest` each,
-    whatever the transport is (§7). Opening a chromosome's group, its `frames_idx` chunk and any
-    whole-chunk read are none of them: only a frame's bytes are."""
+def counted_reads(reader: StoreReader, monkeypatch: pytest.MonkeyPatch) -> Iterator[Reads]:
+    """Count a reader's chunk-file reads on both transport paths, so a count is a count either way:
+    `os.pread(length, offset)` for a local store, a `RangeByteRequest(key, start, stop)` for one
+    that is not. Opening a chromosome's group, its `frames_idx` chunk and any whole-chunk read are
+    none of them: only a frame's bytes are."""
     held = reader._root.store  # the store every array of the reader shares
-    seen: Counted = []
-    original = held.get
+    reads = Reads()
+    original_get = held.get
+    original_pread = os.pread
 
     async def get(key: str, prototype: Any, byte_range: Any = None) -> Any:
         if isinstance(byte_range, RangeByteRequest):
-            seen.append((key, byte_range.start, byte_range.end))
-        return await original(key, prototype, byte_range)
+            reads.ranges.append((key, byte_range.start, byte_range.end))
+        return await original_get(key, prototype, byte_range)
+
+    def pread(fd: int, length: int, offset: int) -> bytes:
+        reads.preads.append((length, offset))
+        return original_pread(fd, length, offset)
 
     monkeypatch.setattr(held, "get", get)
-    yield seen
+    monkeypatch.setattr(os, "pread", pread)
+    yield reads
 
 
 def frames_read(seen: list[tuple[str, str | None]]) -> list[tuple[str, str | None]]:
@@ -233,19 +264,21 @@ def frame_range(store_root: Path, chrom: str, number: int) -> tuple[int, int]:
     return int(offsets[number]), int(offsets[number + 1])
 
 
-def test_one_uncached_row_is_one_byte_range_read_and_a_kept_frame_none(
+def test_one_uncached_row_is_one_positional_read_and_a_kept_frame_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reader = StoreReader.open(TEST_STORE)
-    with counted_ranges(reader, monkeypatch) as seen:
+    start, stop = frame_range(TEST_STORE, "22", 6)
+    with counted_reads(reader, monkeypatch) as reads:
         reader.partner_row("22", 100)
-        assert seen == [("partners/22/frames/c/0", *frame_range(TEST_STORE, "22", 6))], (
-            "one uncached row is one byte-range read of the frame that holds it"
+        assert reads.preads == [(stop - start, start)], (
+            "one uncached row is one pread of the frame that holds it, at its offset"
         )
+        assert reads.ranges == [], "a local store's frames take no store call and no event loop"
         assert len(reader.partner_row("22", 100)[0]) > 0
-        assert len(seen) == 1, "the kept frame is read no more"
+        assert reads.total == 1, "the kept frame is read no more"
         reader.partner_row("22", 0)
-        assert len(seen) == 2, "a row in another frame is another read"
+        assert reads.total == 2, "a row in another frame is another read"
 
 
 def test_one_uncached_row_over_http_is_one_range_request() -> None:
@@ -263,18 +296,52 @@ def test_a_bulk_read_coalesces_only_physically_adjacent_frames(
     reader = StoreReader.open(TEST_STORE)
     start = frame_range(TEST_STORE, "22", 0)[0]
     stop = frame_range(TEST_STORE, "22", 1)[1]
-    with counted_ranges(reader, monkeypatch) as seen:
+    with counted_reads(reader, monkeypatch) as reads:
         indptr, partners, codes = reader.partner_rows("22", np.array([0, 16]))
-        assert seen == [("partners/22/frames/c/0", start, stop)], "two adjacent frames, one read"
+        assert reads.preads == [(stop - start, start)], "two adjacent frames, one read"
     assert len(indptr) == 3, "one indptr entry a row, and one more"
     for i, local_row in enumerate((0, 16)):
         want_partners, want_codes = reader.partner_row("22", local_row)
         np.testing.assert_array_equal(partners[indptr[i] : indptr[i + 1]], want_partners)
         np.testing.assert_array_equal(codes[indptr[i] : indptr[i + 1]], want_codes)
     fresh = StoreReader.open(TEST_STORE)
-    with counted_ranges(fresh, monkeypatch) as seen:
+    with counted_reads(fresh, monkeypatch) as reads:
         fresh.partner_rows("22", np.array([0, 80]))
-        assert len(seen) == 2, "frames 0 and 5 are not adjacent, so each is a read of its own"
+        assert reads.total == 2, "frames 0 and 5 are not adjacent, so each is a read of its own"
+
+
+class Decompressions:
+    """Counts a frame's decompressions, and does what `_ZSTD` does."""
+
+    def __init__(self, codec: Any) -> None:
+        self._codec = codec
+        self.count = 0
+
+    def decode(self, raw: bytes) -> Any:
+        self.count += 1
+        return self._codec.decode(raw)
+
+    def encode(self, payload: bytes) -> Any:
+        return self._codec.encode(payload)
+
+
+def test_a_bulk_read_decodes_its_rows_from_the_run_it_fetched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bulk read answers from the bytes it just read, not from the cache it hopes still holds
+    them: with no cache at all, two adjacent rows are one read and each frame one decompress."""
+    reader = StoreReader.open(TEST_STORE, frame_cache_bytes=0)
+    counting = Decompressions(frames._ZSTD)
+    monkeypatch.setattr(frames, "_ZSTD", counting)
+    with counted_reads(reader, monkeypatch) as reads:
+        indptr, partners, codes = reader.partner_rows("22", np.array([0, 16]))
+    assert reads.total == 1, "two adjacent frames, one read, even with no cache"
+    assert counting.count == 2, "each frame decompressed once, not once a row"
+    assert len(indptr) == 3
+    for i, local_row in enumerate((0, 16)):
+        want_partners, want_codes = reader.partner_row("22", local_row)
+        np.testing.assert_array_equal(partners[indptr[i] : indptr[i + 1]], want_partners)
+        np.testing.assert_array_equal(codes[indptr[i] : indptr[i + 1]], want_codes)
 
 
 def test_a_bulk_read_answers_each_row_asked_for_in_order() -> None:
@@ -286,6 +353,48 @@ def test_a_bulk_read_answers_each_row_asked_for_in_order() -> None:
         want_partners, want_codes = reader.partner_row("22", int(local_row))
         np.testing.assert_array_equal(partners[indptr[i] : indptr[i + 1]], want_partners)
         np.testing.assert_array_equal(codes[indptr[i] : indptr[i + 1]], want_codes)
+
+
+def test_four_threads_first_use_read_the_offsets_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chromosome's first use is one load, however many threads make it (§7): the offsets chunk
+    is read once and one descriptor is opened, not one per thread."""
+    reader = StoreReader.open(TEST_STORE)
+    held = reader._root.store
+    seen: list[str] = []
+    original = held.get
+
+    async def get(key: str, prototype: Any, byte_range: Any = None) -> Any:
+        if "frames_idx/c/" in key:
+            seen.append(key)
+        return await original(key, prototype, byte_range)
+
+    monkeypatch.setattr(held, "get", get)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rows = list(pool.map(lambda _: reader.partner_row("22", 100), range(4)))
+    assert len(seen) == 1, f"four first calls read the offsets chunk {len(seen)} times"
+    for partners, codes in rows[1:]:
+        np.testing.assert_array_equal(partners, rows[0][0])
+        np.testing.assert_array_equal(codes, rows[0][1])
+
+
+def test_a_reader_closes_the_chunk_file_it_kept_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local frame read keeps one descriptor for the reader's life, and the reader closes it
+    (§7): closed twice is closed once."""
+    closed: list[int] = []
+    original = os.close
+    monkeypatch.setattr(os, "close", lambda fd: closed.append(fd) or original(fd))
+    reader = StoreReader.open(TEST_STORE)
+    reader.partner_row("22", 100)
+    reader.partner_row("21", 100)
+    assert closed == [], "an open reader keeps its descriptors"
+    reader.close()
+    assert len(closed) == 2, "one descriptor a chromosome read, closed with the reader"
+    reader.close()
+    assert len(closed) == 2, "closing a closed reader closes nothing"
 
 
 def test_four_threads_reading_one_frame_get_equal_rows() -> None:
@@ -311,10 +420,10 @@ def test_the_frame_cache_keeps_no_more_than_its_bytes() -> None:
 
 def test_a_frame_cache_of_no_bytes_keeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     reader = StoreReader.open(TEST_STORE, frame_cache_bytes=0)
-    with counted_ranges(reader, monkeypatch) as seen:
+    with counted_reads(reader, monkeypatch) as reads:
         reader.partner_row("22", 100)
         reader.partner_row("22", 100)
-        assert len(seen) == 2, "nothing kept, so the second read fetches the frame again"
+        assert reads.total == 2, "nothing kept, so the second read fetches the frame again"
     assert reader._frame_cache.held == 0
 
 
@@ -372,10 +481,55 @@ def test_a_flipped_byte_in_a_frame_is_refused_naming_the_chromosome_and_the_fram
 def test_a_short_payload_is_refused_naming_the_chromosome_and_the_frame(
     test_store: Served,
 ) -> None:
+    """A payload one entry shorter than its lengths say, recompressed with a valid checksum: the one
+    thing wrong with it is that it is short (§5.2)."""
+    location, copied = test_store
+    raw = frame_bytes(copied, "22", DAMAGED_FRAME)
+    held = payload(raw)
+    shorter = held[:-6]
+    assert len(shorter) == len(held) - 6, "one entry's bytes are 4 of a delta and 2 of a code"
+    restamped(copied, "22", DAMAGED_FRAME, bytes(_ZSTD.encode(shorter)))
+    with pytest.raises(ValueError, match=rf"frame {DAMAGED_FRAME} of chromosome 22.*4 \+ 4k \+ 6E"):
+        StoreReader.open(location).partner_row("22", DAMAGED_FRAME * 16 + 1)
+
+
+def test_an_oversized_payload_is_refused_naming_the_chromosome_and_the_frame(
+    test_store: Served,
+) -> None:
     location, copied = test_store
     raw = frame_bytes(copied, "22", DAMAGED_FRAME)
     restamped(copied, "22", DAMAGED_FRAME, bytes(_ZSTD.encode(payload(raw) + b"\x00")))
     with pytest.raises(ValueError, match=rf"frame {DAMAGED_FRAME} of chromosome 22.*4 \+ 4k \+ 6E"):
+        StoreReader.open(location).partner_row("22", DAMAGED_FRAME * 16 + 1)
+
+
+def test_a_frame_without_a_content_checksum_is_refused_naming_the_chromosome_and_the_frame(
+    test_store: Served,
+) -> None:
+    """A frame compressed without its content checksum cannot be verified, so it is refused before
+    it is decoded (§5.2): the header must declare the checksum."""
+    location, copied = test_store
+    raw = frame_bytes(copied, "22", DAMAGED_FRAME)
+    unchecked = numcodecs.Zstd(level=frames.ZSTD_LEVEL, checksum=False).encode(payload(raw))
+    restamped(copied, "22", DAMAGED_FRAME, bytes(unchecked))
+    with pytest.raises(
+        ValueError, match=rf"frame {DAMAGED_FRAME} of chromosome 22.*content checksum"
+    ):
+        StoreReader.open(location).partner_row("22", DAMAGED_FRAME * 16 + 1)
+
+
+def test_a_frame_without_a_content_size_is_refused_naming_the_chromosome_and_the_frame(
+    test_store: Served,
+) -> None:
+    """A frame whose header declares no content size is refused too (§5.2). Its descriptor has the
+    content-size flag and the single-segment flag cleared; the check reads the header alone, so the
+    declaration is what refuses it."""
+    location, copied = test_store
+    raw = bytearray(frame_bytes(copied, "22", DAMAGED_FRAME))
+    assert raw[4] >> 6, "the committed frame declares its content size"
+    raw[4] &= ~((0b11 << 6) | (1 << 5))
+    restamped(copied, "22", DAMAGED_FRAME, bytes(raw))
+    with pytest.raises(ValueError, match=rf"frame {DAMAGED_FRAME} of chromosome 22.*content size"):
         StoreReader.open(location).partner_row("22", DAMAGED_FRAME * 16 + 1)
 
 
@@ -400,7 +554,7 @@ def test_a_truncated_frames_file_is_refused_naming_the_chromosome_and_the_frame(
     held = copied / "partners" / "22" / "frames" / "c" / "0"
     held.write_bytes(held.read_bytes()[:-64])
     with pytest.raises(
-        ValueError, match=rf"frame {CHR22_FRAMES - 1} of chromosome 22 does not decompress"
+        ValueError, match=rf"frame {CHR22_FRAMES - 1} of chromosome 22 holds \d+ of the \d+ bytes"
     ):
         StoreReader.open(location).partner_row("22", CHR22_ROWS - 1)
 

@@ -34,7 +34,7 @@ import struct
 import tempfile
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +50,7 @@ from zarr.storage import LocalStore
 from ogld.format import Codes, InputError, REncoding
 from ogld.format.geometry import indptr_of, owners
 from ogld.store import layout
-from ogld.store.location import chunk_range
+from ogld.store.location import FrameSource, frame_source
 
 #: Rows a frame holds (partner-rows §1, §5.2: G = 16, the smallest G of those equally fast). A
 #: reader takes it from the group's `rows_per_frame` attribute, never from here.
@@ -273,9 +273,42 @@ def encode_frame(
     return bytes(_ZSTD.encode(payload))
 
 
+#: A zstd frame's magic number, little-endian as it lies on disk (RFC 8878 §3.1.1).
+ZSTD_MAGIC: Final = b"\x28\xb5\x2f\xfd"
+
+
+def _header(raw: bytes, where: str) -> None:
+    """Refuse a frame whose zstd header does not declare its content checksum and its content size
+    (partner-rows §5.2; RFC 8878 §3.1.1.1).
+
+    The checksum and the content size are what make a frame verifiable: a decoder that verifies
+    neither accepts a damaged frame as data, and configuring the compressor with them does not
+    require an incoming frame to carry them. So both are read from the header descriptor and
+    refused when absent, before anything is decoded.
+    """
+    if len(raw) < 5 or not raw.startswith(ZSTD_MAGIC):
+        raise ValueError(
+            f"{where} does not begin a zstd frame: its first bytes are "
+            f"{raw[:5].hex() or 'none'} (partner-rows §5.2)"
+        )
+    descriptor = raw[4]
+    size_flag, single_segment = descriptor >> 6, descriptor & 0b0010_0000
+    if not descriptor & 0b0000_0100:
+        raise ValueError(
+            f"{where} declares no content checksum: a frame's header carries one, or the frame "
+            "cannot be verified (partner-rows §5.2)"
+        )
+    if size_flag == 0 and not single_segment:
+        raise ValueError(
+            f"{where} declares no content size: a frame's header carries one, or its payload "
+            "cannot be checked against it (partner-rows §5.2)"
+        )
+
+
 def _payload(raw: bytes, where: str) -> bytes:
     """`raw`'s decompressed payload, or a refusal naming `where` when its zstd frame or its
     checksum fails (§5.4)."""
+    _header(raw, where)
     try:
         return bytes(_ZSTD.decode(raw))
     except Exception as failed:
@@ -436,6 +469,9 @@ class FramePayload:
 
 
 # ---------------------------------------------------------------- reading (§7)
+
+#: One row decoded: its partners, chromosome-local and ascending, and their codes (§5.2).
+_Row = tuple[npt.NDArray[np.int32], Codes]
 
 #: The frames a reader keeps unless its caller says otherwise, in bytes (§7): 256 MiB, which holds
 #: about 3,400 of a panel store's frames (a median frame's payload is some 77 KB) and all 58 of the
@@ -620,6 +656,10 @@ class PartnerFrames:
                 f"{self._array.chunks} and {self._array.dtype}, not one chunk of the {size} bytes "
                 "of frames the group records (partner-rows §5.1)"
             )
+        try:
+            self._source: FrameSource = frame_source(self._array)
+        except ValueError as unreadable:
+            raise ValueError(f"{path}: {unreadable}") from unreadable
 
     @property
     def rows(self) -> int:
@@ -636,7 +676,12 @@ class PartnerFrames:
         kept = self._cache.take(self._chrom, number)
         if kept is not None:
             return kept
-        return self._read(number, number)[0]
+        return self._cache.keep(self._read(number, number)[0])
+
+    def close(self) -> None:
+        """Release the chunk file this chromosome's frames are read from (§7): a local store's
+        descriptor, closed by the reader that owns it."""
+        self._source.close()
 
     def row(self, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         """Row `local_row`'s partners and codes, decoded from the frame that holds it (§7 step 3).
@@ -669,56 +714,97 @@ class PartnerFrames:
                 f"rows {outside[:5].tolist()} are not in chromosome {self._chrom}, which holds "
                 f"{self._rows} rows (partner-rows §5.2)"
             )
-        self._read_missing(np.unique(at // self._per_frame))
-        pieces = [self.row(int(row)) for row in at]
-        lengths = np.array([len(partners) for partners, _ in pieces], dtype=np.int64)
-        indptr = indptr_of(lengths)
-        if not pieces:
+        rows = self._decoded(at)
+        indptr = indptr_of(np.array([len(partners) for partners, _ in rows], dtype=np.int64))
+        if not rows:
             return indptr, np.empty(0, np.int32), np.empty(0, REncoding.dtype)
         return (
             indptr,
-            np.concatenate([partners for partners, _ in pieces]),
-            np.concatenate([codes for _, codes in pieces]),
+            np.concatenate([partners for partners, _ in rows]),
+            np.concatenate([codes for _, codes in rows]),
         )
 
-    def _read_missing(self, numbers: npt.NDArray[np.int64]) -> None:
-        """Read and keep the frames among `numbers` the cache does not hold, a run at a time."""
-        missing = [
-            int(number) for number in numbers if self._cache.take(self._chrom, int(number)) is None
-        ]
-        run: list[int] = []
-        for number in [*missing, -1]:
-            if run and number != run[-1] + 1:
-                self._read(run[0], run[-1])
-                run = []
-            if number >= 0:
-                run.append(number)
+    def _decoded(self, at: npt.NDArray[np.int64]) -> list[_Row]:
+        """Each of `at`'s rows decoded, in that order (§7): from the cache where it holds the
+        frame, and from the runs of frames just read where it does not."""
+        pieces, missing = self._from_cache(at)
+        self._from_runs(at, pieces, missing)
+        rows = [piece for piece in pieces if piece is not None]
+        assert len(rows) == len(at), "every row asked for is decoded"
+        return rows
+
+    def _from_cache(
+        self, at: npt.NDArray[np.int64]
+    ) -> tuple[list[_Row | None], dict[int, list[int]]]:
+        """Each row's slice of its frame where the cache holds it, and the rows it does not, by the
+        frame each needs."""
+        pieces: list[_Row | None] = [None] * len(at)
+        missing: dict[int, list[int]] = {}
+        which = at // self._per_frame
+        for i, (row, number) in enumerate(zip(at.tolist(), which.tolist(), strict=True)):
+            kept = self._cache.take(self._chrom, number)
+            if kept is None:
+                missing.setdefault(number, []).append(i)
+            else:
+                pieces[i] = kept.row(row)
+        return pieces, missing
+
+    def _from_runs(
+        self, at: npt.NDArray[np.int64], pieces: list[_Row | None], missing: dict[int, list[int]]
+    ) -> None:
+        """Decode the rest from the runs of adjacent frames just read, then offer those payloads to
+        the cache: a run is decoded while it is owned, so no budget can evict it between the read
+        and the row, and only one run's payloads are held at a time beside the result (§9.2)."""
+        for run in _runs(sorted(missing)):
+            held = self._read(run[0], run[-1])
+            for number, payload in zip(run, held, strict=True):
+                for i in missing[number]:
+                    pieces[i] = payload.row(int(at[i]))
+            for payload in held:
+                self._cache.keep(payload)
 
     def _read(self, first: int, last: int) -> list[FramePayload]:
-        """Frames [first, last] in one byte-range read of the chunk file, parsed and kept (§9.2).
+        """Frames [first, last] as one read of the chunk file, parsed and handed back unkept (§9.2).
 
         They are physically adjacent, so one read serves them all; the bytes of a frame are its own
-        slice of what was read, and each is parsed on its own, so a frame that fails its checksum,
-        its k or its payload length is refused naming itself.
+        slice of what was read, and each is parsed on its own, so a frame that fails its header,
+        its checksum, its k or its payload length is refused naming itself. The caller owns the
+        payloads it gets: a bulk read decodes its rows from them before the cache is offered any,
+        so a run is never read twice for want of a budget.
         """
         start, stop = int(self._offsets[first]), int(self._offsets[last + 1])
         try:
-            raw = chunk_range(self._array, start, stop)
+            raw = self._source.read(start, stop)
         except ValueError as unread:
             raise ValueError(f"{_run(first, last, self._chrom)}: {unread}") from unread
-        base = start
+        if len(raw) != stop - start:
+            raise ValueError(
+                f"{_run(first, last, self._chrom)} holds {len(raw)} of the {stop - start} bytes at "
+                f"[{start}, {stop}): a short read is a damaged chunk file, never a short row "
+                "(partner-rows §5.4)"
+            )
         return [
-            self._cache.keep(
-                FramePayload.parse(
-                    raw[int(self._offsets[number]) - base : int(self._offsets[number + 1]) - base],
-                    chrom=self._chrom,
-                    number=number,
-                    first=number * self._per_frame,
-                    rows=min(self._per_frame, self._rows - number * self._per_frame),
-                )
+            FramePayload.parse(
+                raw[int(self._offsets[number]) - start : int(self._offsets[number + 1]) - start],
+                chrom=self._chrom,
+                number=number,
+                first=number * self._per_frame,
+                rows=min(self._per_frame, self._rows - number * self._per_frame),
             )
             for number in range(first, last + 1)
         ]
+
+
+def _runs(numbers: list[int]) -> Iterator[list[int]]:
+    """`numbers`, ascending and distinct, as the runs of physically adjacent frames among them:
+    each a read of its own, and none bridging a frame that was not asked for (§9.2)."""
+    run: list[int] = []
+    for number in [*numbers, -1]:
+        if run and number != run[-1] + 1:
+            yield run
+            run = []
+        if number >= 0:
+            run.append(number)
 
 
 def _run(first: int, last: int, chrom: str) -> str:

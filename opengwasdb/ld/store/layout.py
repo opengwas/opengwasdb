@@ -17,7 +17,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 from zarr.codecs import ZstdCodec
-from zarr.storage import LocalStore, StorePath
+from zarr.storage import LocalStore, StorePath, WrapperStore
 
 from ogld.format import REncoding
 
@@ -280,8 +280,14 @@ def new_frames_index(group: zarr.Group, length: int) -> zarr.Array[Any]:
 def local_root(store_path: StorePath) -> Path:
     """The local directory a store at `store_path` is rooted at, refused for a store that is not
     one: a one-chunk array's chunk file is a file, which a remote store has none of (partner-rows
-    §5.1). A reader never needs it: it reads the chunk by key, whatever the transport is."""
+    §5.1).
+
+    A reader's store is wrapped by the cache (`location._KeptIndexes`), so the wrapper is seen
+    through: the file is the same one, and a local frame is read from it with `os.pread` (§7).
+    """
     store = store_path.store
+    while isinstance(store, WrapperStore):
+        store = store._store
     if not isinstance(store, LocalStore):
         raise ValueError(
             f"the Partner Rows are written to a local directory, and {type(store).__name__} is "

@@ -917,10 +917,14 @@ compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
 
 **From 0.2.0** (#70, #71), a variant's partners at every answered threshold are one frame read.
 `partner_row` finds frame ⌊l / G⌋, reads its byte range from the chromosome's `frames` chunk file,
-verifies the zstd checksum, checks k and the payload length, decodes it and keeps it in a
-byte-bounded LRU of frames' decompressed payloads: 256 MiB unless the caller sets another budget,
-the least recently used frame dropped first, and a row is unshuffled from its frame's payload for
-the row alone. That cache is per reader and separate from the Near Band chunk
+verifies the content checksum and content size its zstd header declares and then the checksum,
+checks k and the payload length, and keeps the frame's decompressed payload in a byte-bounded LRU:
+256 MiB unless the caller sets another budget — a **chosen, unmeasured** default that #71's
+measurements settle — the least recently used frame dropped first, and a row is unshuffled from its
+frame's payload for the row alone. A local store's chunk file is held open and read with
+`os.pread`, one descriptor per chromosome, opened on its first use and closed with the reader; a
+store that is not on this disk answers one Range request a frame, and a read shorter than the
+frame's bytes is a refusal. That cache is per reader and separate from the Near Band chunk
 cache, which keeps serving `matrix` and `region`: neighbouring leads often share a frame, and
 repeated Analyses on one reader hit it. A store of format 0.1.0, which holds no Partner Rows, is
 refused naming the missing component rather than answered from another one (§13), and a damaged

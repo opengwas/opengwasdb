@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cached_property, partial
@@ -158,6 +159,7 @@ class StoreReader:
     _cache: ChunkCache
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
+    _partner_lock: threading.Lock
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
 
@@ -184,6 +186,9 @@ class StoreReader:
         self._loaded = {}
         self._far = {}
         self._partner_frames = {}
+        # A chromosome's first use is one load, however many threads make it (§7): the offsets chunk
+        # is read once and one chunk-file descriptor is opened.
+        self._partner_lock = threading.Lock()
         # Each handle is opened once: opening one reads its metadata document, which over
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
@@ -236,6 +241,22 @@ class StoreReader:
     def frame_cache_bytes(self) -> int:
         """The bytes of decoded Partner Rows frames this reader keeps at most (partner-rows §7)."""
         return self._frame_cache.budget
+
+    def close(self) -> None:
+        """Release what this reader holds open: a local store's chunk file, one descriptor for each
+        chromosome whose Partner Rows it read (partner-rows §7).
+
+        A reader is usable until it is closed, and closing twice is closing once. A store read over
+        HTTP holds nothing, so closing it is nothing to do.
+        """
+        for frames in self._partner_frames.values():
+            frames.close()
+
+    def __enter__(self) -> StoreReader:
+        return self
+
+    def __exit__(self, kind: object, value: object, traceback: object) -> None:
+        self.close()
 
     @property
     def provenance(self) -> Provenance:
@@ -669,24 +690,28 @@ class StoreReader:
         Opening one reads its group's attributes, its `frames_idx` chunk and its `frames` metadata:
         a request that never asks for a Partner Rows row — `matrix`, `region` — reads none of them.
         """
-        if chrom not in self._partner_frames:
-            if chrom not in self._ranges:
-                raise ValueError(
-                    f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
-                    f"{', '.join(self._names)} (spec §2)"
-                )
-            # A 0.1.0 store records none of the Partner Rows' keys, because it holds no Partner
-            # Rows (spec §13): the read is refused naming the component, never answered from
-            # another one.
-            if "t_partner" not in self._provenance:
-                raise InputError(
-                    f"this LD Store is format {self._provenance['format_version']}, which has no "
-                    f"Partner Rows ({layout.PARTNERS}/): partner_row reads them, and a store "
-                    "without them is refused naming the missing component (spec §13; "
-                    "partner-rows §5.1)"
-                )
-            self._partner_frames[chrom] = open_partner_frames(self._root, chrom, self._frame_cache)
-        return self._partner_frames[chrom]
+        frames = self._partner_frames.get(chrom)
+        if frames is not None:
+            return frames
+        if chrom not in self._ranges:
+            raise ValueError(
+                f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
+                f"{', '.join(self._names)} (spec §2)"
+            )
+        # A 0.1.0 store records none of the Partner Rows' keys, because it holds no Partner Rows
+        # (spec §13): the read is refused naming the component, never answered from another one.
+        if "t_partner" not in self._provenance:
+            raise InputError(
+                f"this LD Store is format {self._provenance['format_version']}, which has no "
+                f"Partner Rows ({layout.PARTNERS}/): partner_row reads them, and a store without "
+                "them is refused naming the missing component (spec §13; partner-rows §5.1)"
+            )
+        with self._partner_lock:
+            frames = self._partner_frames.get(chrom)
+            if frames is None:
+                frames = open_partner_frames(self._root, chrom, self._frame_cache)
+                self._partner_frames[chrom] = frames
+        return frames
 
     # ------------------------------------------------------------ resolving pairs
 

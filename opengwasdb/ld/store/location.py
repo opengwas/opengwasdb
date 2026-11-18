@@ -21,12 +21,14 @@ import asyncio
 import math
 import os
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Final
+from pathlib import Path
+from typing import Any, Final, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -84,37 +86,113 @@ def _opened(location: str | os.PathLike[str]) -> zarr.Group:
         ) from unreadable
 
 
-def chunk_range(array: zarr.Array[Any], start: int, stop: int) -> bytes:
-    """Bytes [start, stop) of a one-chunk array's chunk file, as one byte-range read.
+class FrameSource(Protocol):
+    """The bytes of one array's chunk file, read one range at a time (partner-rows §7).
 
-    It goes through the array's own store path and chunk key (`layout.chunk_key`), so a local file
-    and an HTTP Range request take the same call: the Partner Rows' frames are read this way, one
-    frame at a time, whatever the store is served by (partner-rows §7). The path is never assumed to
-    be `c/0`; the metadata says where the chunk is.
-
-    A chunk file that is not there is refused, naming its key. A file shorter than `stop` gives the
-    bytes it holds, which the caller's own checks refuse: a truncated frame is never read as a short
-    row (§5.4).
+    A reader takes frames through this seam so a local store and a remote one differ in one place:
+    `PreadSource` reads a file it holds open, and `RangeSource` asks the store, which over HTTP is
+    one Range request.
     """
-    if not 0 <= start < stop:
-        raise ValueError(
-            f"bytes [{start}, {stop}) are not a byte range: a read ends after it starts"
-        )
-    key = layout.chunk_key(array)
-    store = array.store_path.store
+
+    def read(self, start: int, stop: int) -> bytes:
+        """Bytes [start, stop) of the chunk file, which may be fewer when the file ends early."""
+        ...
+
+    def close(self) -> None:
+        """Release whatever the source holds, a local file's descriptor included."""
+        ...
+
+
+class PreadSource:
+    """A local chunk file held open and read at an offset with `os.pread` (partner-rows §5.4, §7).
+
+    The descriptor is opened once, when the chromosome is first read, and kept for the reader's
+    life, which `close` ends. A read is one `os.pread` and no zarr call, so a local store pays no
+    event-loop hop a frame: `scripts/bench/frame_read.py` measures it against the store's own path
+    on the same file.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        except OSError as failed:
+            raise ValueError(f"{path} cannot be opened: {failed}") from failed
+        self._descriptor: int | None = descriptor
+        # A reader that is dropped without being closed still releases its descriptor, so a caller
+        # that opens a store per request leaks nothing (`ogld.open` has no close of its own).
+        self._finalizer: Final = weakref.finalize(self, _closed, descriptor)
+
+    def read(self, start: int, stop: int) -> bytes:
+        if self._descriptor is None:
+            raise ValueError(f"{self._path} is closed: a reader that is closed is not read")
+        try:
+            return os.pread(self._descriptor, stop - start, start)
+        except OSError as failed:
+            raise ValueError(
+                f"{self._path}'s bytes [{start}, {stop}) could not be read: {failed}"
+            ) from failed
+
+    def close(self) -> None:
+        self._descriptor = None
+        self._finalizer()
+
+
+def _closed(descriptor: int) -> None:
+    """Close a descriptor, once: the read path's, and the finalizer's for a source never closed."""
+    with suppress(OSError):
+        os.close(descriptor)
+
+
+class RangeSource:
+    """A chunk file fetched through the array's own store path, one range a request (§7).
+
+    Over HTTP this is one Range request (partner-rows §10); for a store on this disk it is the
+    store's own read, which is why `frame_source` gives a local store a `PreadSource` instead. The
+    key is the array's metadata's, never `c/0` assumed (`layout.chunk_key`).
+    """
+
+    def __init__(self, array: zarr.Array[Any]) -> None:
+        self._array = array
+        self._key = layout.chunk_key(array)
+
+    def read(self, start: int, stop: int) -> bytes:
+        store = self._array.store_path.store
+        try:
+            fetched = sync(
+                store.get(self._key, default_buffer_prototype(), RangeByteRequest(start, stop))
+            )
+        except ValueError:
+            raise
+        except Exception as failed:
+            raise ValueError(
+                f"{self._key} could not be read as bytes [{start}, {stop}): "
+                f"{type(failed).__name__}: {failed}"
+            ) from failed
+        if fetched is None:
+            raise ValueError(
+                f"{self._key} is not there: a one-chunk array's chunk file the store lost, never a "
+                "short read"
+            )
+        return bytes(fetched.to_bytes())
+
+    def close(self) -> None:
+        """Nothing is held: each read is the store's own."""
+
+
+def frame_source(array: zarr.Array[Any]) -> FrameSource:
+    """The source a one-chunk array's frames are read from (partner-rows §7): `os.pread` on a local
+    store's file, held open, and the store's own range request for one that is not on this disk.
+
+    A local store is the one whose chunk file `layout.chunk_file` can name; for any other, that
+    resolution is refused and the store answers the range. The path is never assumed to be `c/0`:
+    the array's metadata and chunk key encoding say where its chunk is.
+    """
     try:
-        fetched = sync(store.get(key, default_buffer_prototype(), RangeByteRequest(start, stop)))
+        path = layout.chunk_file(array)
     except ValueError:
-        raise
-    except Exception as failed:
-        raise ValueError(
-            f"{key} could not be read as bytes [{start}, {stop}): {type(failed).__name__}: {failed}"
-        ) from failed
-    if fetched is None:
-        raise ValueError(
-            f"{key} is not there: a one-chunk array's chunk file the store lost, never a short read"
-        )
-    return bytes(fetched.to_bytes())
+        return RangeSource(array)
+    return PreadSource(path)
 
 
 @dataclass(frozen=True)
