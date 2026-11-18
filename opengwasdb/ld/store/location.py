@@ -21,12 +21,14 @@ import asyncio
 import math
 import os
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Final
+from pathlib import Path
+from typing import Any, Final, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -38,6 +40,7 @@ from zarr.storage import LocalStore, StorePath, WrapperStore
 
 from ogld.format import InputError
 from ogld.format.geometry import spans
+from ogld.store import layout
 from ogld.store.decoding import Decoded, DecodedChunk, NumericDecoder, on_pool
 
 #: The decoded inner chunks and shard indexes a reader keeps unless its caller says otherwise,
@@ -81,6 +84,152 @@ def _opened(location: str | os.PathLike[str]) -> zarr.Group:
             f"{location}'s metadata cannot be read as a Zarr group: "
             f"{type(unreadable).__name__}: {unreadable}"
         ) from unreadable
+
+
+class FrameSource(Protocol):
+    """The bytes of one array's chunk file, read one range at a time (partner-rows §7).
+
+    A reader takes frames through this seam so a local store and a remote one differ in one place:
+    `PreadSource` reads a file it holds open, and `RangeSource` asks the store, which over HTTP is
+    one Range request.
+    """
+
+    def read(self, start: int, stop: int) -> bytes:
+        """Bytes [start, stop) of the chunk file, which may be fewer when the file ends early."""
+        ...
+
+    def close(self) -> None:
+        """Release whatever the source holds, a local file's descriptor included."""
+        ...
+
+
+class PreadSource:
+    """A local chunk file read at an offset with `os.pread` (partner-rows §5.4, §7).
+
+    The descriptor is opened by the first read and kept for the reader's life, so a frame is one
+    `os.pread` and no zarr call: a local store pays no event-loop hop a frame
+    (`scripts/bench/frame_read.py` measures both paths on one file). Opening it lazily is what keeps
+    a refusal's context: a file that is missing or unopenable refuses the read that needed it,
+    naming the chromosome and the frame the caller asked for, as a remote store's empty Range does.
+
+    `close` marks the source closed, waits for the reads in flight, and only then closes the
+    descriptor, so no read ever runs on a closed descriptor — and so never on the descriptor a later
+    `open` reused for another file. A read after close refuses. Reads do not serialise each other:
+    only the count of them is locked, and the `pread` runs outside the lock.
+
+    A source, and the reader that owns it, is not fork-safe: a process worker opens its own reader,
+    because a descriptor and a lock are not inherited across `fork` (partner-rows §7; ogld#71).
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._state = threading.Condition()
+        self._descriptor: int | None = None
+        self._active = 0
+        self._closed = False
+        self._finalizer: weakref.finalize[Any, Any] | None = None
+
+    def read(self, start: int, stop: int) -> bytes:
+        with self._state:
+            if self._closed:
+                raise ValueError(f"{self._path} is closed: a source that is closed is not read")
+            descriptor = self._descriptor if self._descriptor is not None else self._opened()
+            self._active += 1
+        try:
+            return self._pread(descriptor, start, stop)
+        finally:
+            with self._state:
+                self._active -= 1
+                if not self._active:
+                    self._state.notify_all()
+
+    def _opened(self) -> int:
+        """The descriptor, opened once; the caller holds the state's lock."""
+        try:
+            descriptor = os.open(self._path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        except OSError as failed:
+            raise ValueError(f"{self._path} cannot be opened: {failed}") from failed
+        self._descriptor = descriptor
+        # A reader dropped without being closed still releases its descriptor: `ogld.open` has no
+        # close of its own, so a caller that opens a store per request would otherwise leak one.
+        self._finalizer = weakref.finalize(self, _closed, descriptor)
+        return descriptor
+
+    def _pread(self, descriptor: int, start: int, stop: int) -> bytes:
+        """One positional read on `descriptor`, which no close can reach while it is counted."""
+        try:
+            return os.pread(descriptor, stop - start, start)
+        except OSError as failed:
+            raise ValueError(
+                f"{self._path}'s bytes [{start}, {stop}) could not be read: {failed}"
+            ) from failed
+
+    def close(self) -> None:
+        """Refuse later reads, wait for those in flight, and close the descriptor (§7)."""
+        with self._state:
+            self._closed = True
+            while self._active:
+                self._state.wait()
+            finalizer, self._finalizer = self._finalizer, None
+        if finalizer is not None:
+            finalizer()
+
+
+def _closed(descriptor: int) -> None:
+    """Close a descriptor, once: the finalizer's, for a source that was never closed."""
+    with suppress(OSError):
+        os.close(descriptor)
+
+
+class RangeSource:
+    """A chunk file fetched through the array's own store path, one range a request (§7).
+
+    Over HTTP this is one Range request (partner-rows §10); for a store on this disk it is the
+    store's own read, which is why `frame_source` gives a local store a `PreadSource` instead. The
+    key is the array's metadata's, never `c/0` assumed (`layout.chunk_key`).
+    """
+
+    def __init__(self, array: zarr.Array[Any]) -> None:
+        self._array = array
+        self._key = layout.chunk_key(array)
+
+    def read(self, start: int, stop: int) -> bytes:
+        store = self._array.store_path.store
+        try:
+            fetched = sync(
+                store.get(self._key, default_buffer_prototype(), RangeByteRequest(start, stop))
+            )
+        except ValueError:
+            raise
+        except Exception as failed:
+            raise ValueError(
+                f"{self._key} could not be read as bytes [{start}, {stop}): "
+                f"{type(failed).__name__}: {failed}"
+            ) from failed
+        if fetched is None:
+            raise ValueError(
+                f"{self._key} is not there: a one-chunk array's chunk file the store lost, never a "
+                "short read"
+            )
+        return bytes(fetched.to_bytes())
+
+    def close(self) -> None:
+        """Nothing is held: each read is the store's own."""
+
+
+def frame_source(array: zarr.Array[Any]) -> FrameSource:
+    """The source a one-chunk array's frames are read from (partner-rows §7): `os.pread` on a local
+    store's file, held open, and the store's own range request for one that is not on this disk.
+
+    A local store is the one whose chunk file `layout.chunk_file` can name; for any other, that
+    resolution is refused and the store answers the range. The path is never assumed to be `c/0`:
+    the array's metadata and chunk key encoding say where its chunk is.
+    """
+    try:
+        path = layout.chunk_file(array)
+    except ValueError:
+        return RangeSource(array)
+    return PreadSource(path)
 
 
 @dataclass(frozen=True)

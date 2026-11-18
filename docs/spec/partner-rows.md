@@ -192,8 +192,12 @@ version, because frame bytes depend on it). `counts.index_entries` goes with the
 - **One lead, one read, one decode.** The reader holds the `frames_idx` array (8 bytes per G rows:
   4.3 MB for EUR's 8.59 M variants at G = 16, against 69 MB for a Near Band `indptr`). It finds
   frame ⌊l / G⌋, reads its byte range from the `frames` chunk file and decompresses it. There is no
-  shard index, no codec chain to recognise and no event loop. Local reads are `os.pread` on a kept
-  descriptor or an mmap slice. HTTP reads are one Range request.
+  shard index and no codec chain to recognise. A local store's frames are read with one
+  `os.pread(fd, length, offset)` on a descriptor the reader opens once for the chromosome and keeps
+  until it is closed, which costs no store call and no event loop: 10.8 µs a 25,600-byte read on a
+  512 MiB file, against 1,257 µs through the store's own path on the same file and page cache
+  (`scripts/bench/frame_read.py`). An HTTP store's frames are one Range request through the store's
+  interface, which is one event-loop hop and one round trip.
 - **Corruption is loud.** A missing or short `frames` chunk file, a frame whose checksum fails,
   or a payload of the wrong length is refused, naming the chromosome and the frame. It is never
   read as a short row. This is the store's rule that a truncated window is not a short answer.
@@ -270,23 +274,44 @@ partner reads:
 
 ```text
 partner_row(chrom, l) -> (partners: int32[E_l], codes: int16[E_l])
+partner_rows(chrom, l…) -> (indptr, partners, codes)
 ```
 
 1. On the chromosome's first use, read the group's attributes and the `frames_idx` chunk whole,
    and check `frames_idx[F]` against `frames_bytes`.
 2. f = ⌊l / G⌋. If frame f is in the frame cache, use it. Otherwise read its byte range from the
    `frames` chunk file, whose path the array's metadata gives (§5.1), decompress it (the zstd
-   checksum is verified), check k and the payload length (§5.2), unshuffle and decode the deltas,
-   and cache the decoded frame.
-3. Return row l's slice of the decoded frame.
+   checksum is verified), check k and the payload length (§5.2), and cache the frame's
+   decompressed payload with its rows' lengths.
+3. Gather row l's own bytes from the payload's planes — the **row-local unshuffle** — cumulate its
+   deltas and return its partners and codes. The frame's other rows are never unshuffled to answer
+   one row, so a row costs one row's work: measured on a median EUR frame (16 rows, 800 entries
+   each, a 76.9 KiB payload), one row is 21 µs against 272 µs to unshuffle and decode the whole
+   frame, of which the decompress is 87 µs either way.
 
-- **The frame cache** is a byte-bounded LRU of decoded frames, per reader. Neighbouring leads
+- **The frame cache** is a byte-bounded LRU of frames' decompressed payloads, per reader, which
+  drops the least recently used frame first. Its 256 MiB default is **chosen, not measured**: it
+  holds some 3,400 of a panel store's frames, and #71's measurements settle it. Neighbouring leads
   often share a frame, and repeated Analyses on one reader hit it. It is separate from the Near
   Band chunk cache, which keeps serving `matrix` and `region`.
-- **Local stores** read with `os.pread` on a kept file descriptor, or slice an mmap. Both go
-  through the OS page cache. A cold read is one random read of a frame, typically 4–64 KiB.
-- **HTTP stores** read one Range request per frame. A request for several frames at once
-  (§9.2, option E) coalesces only physically adjacent frames.
+- **One seam, two transports.** A frame's bytes are read through the array's own chunk file, whose
+  path the metadata gives (§5.1) and whose name is never assumed. A local store's file is held open
+  and read with `os.pread` — one syscall a read, no store call, no event loop — and the descriptor
+  is opened once per chromosome, on that chromosome's first use, and closed with the reader. A
+  store that is not on this disk answers each read as one Range request through its store's
+  interface. A cold read is one random read of a frame, typically 4–64 KiB, which the operating
+  system's page cache serves warm.
+- **Many rows at once** is `partner_rows`, which returns the rows' entries back to back as CSR, in
+  the order asked, and coalesces only physically adjacent frames into one read (§9.2): frames with
+  bytes between them are read one at a time, because the bytes between them would be read for
+  nothing.
+- **A store with no Partner Rows is refused, naming the missing component**, and so is a frame
+  that fails its declared content checksum or content size, its checksum, its k or its payload
+  length, naming the chromosome and the frame. The frame's zstd header MUST declare both the
+  content checksum and the content size (§5.2), and a header that does not is refused before
+  anything is decoded: a decoder verifies only what a frame's header says is there. A read shorter
+  than the frame's bytes — a truncated chunk file, on either transport — is a refusal too. A row is
+  never answered from a damaged frame, nor as a short one.
 
 ## 8. Queries
 
