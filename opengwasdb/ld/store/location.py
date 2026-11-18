@@ -38,6 +38,7 @@ from zarr.storage import LocalStore, StorePath, WrapperStore
 
 from ogld.format import InputError
 from ogld.format.geometry import spans
+from ogld.store import layout
 from ogld.store.decoding import Decoded, DecodedChunk, NumericDecoder, on_pool
 
 #: The decoded inner chunks and shard indexes a reader keeps unless its caller says otherwise,
@@ -81,6 +82,39 @@ def _opened(location: str | os.PathLike[str]) -> zarr.Group:
             f"{location}'s metadata cannot be read as a Zarr group: "
             f"{type(unreadable).__name__}: {unreadable}"
         ) from unreadable
+
+
+def chunk_range(array: zarr.Array[Any], start: int, stop: int) -> bytes:
+    """Bytes [start, stop) of a one-chunk array's chunk file, as one byte-range read.
+
+    It goes through the array's own store path and chunk key (`layout.chunk_key`), so a local file
+    and an HTTP Range request take the same call: the Partner Rows' frames are read this way, one
+    frame at a time, whatever the store is served by (partner-rows §7). The path is never assumed to
+    be `c/0`; the metadata says where the chunk is.
+
+    A chunk file that is not there is refused, naming its key. A file shorter than `stop` gives the
+    bytes it holds, which the caller's own checks refuse: a truncated frame is never read as a short
+    row (§5.4).
+    """
+    if not 0 <= start < stop:
+        raise ValueError(
+            f"bytes [{start}, {stop}) are not a byte range: a read ends after it starts"
+        )
+    key = layout.chunk_key(array)
+    store = array.store_path.store
+    try:
+        fetched = sync(store.get(key, default_buffer_prototype(), RangeByteRequest(start, stop)))
+    except ValueError:
+        raise
+    except Exception as failed:
+        raise ValueError(
+            f"{key} could not be read as bytes [{start}, {stop}): {type(failed).__name__}: {failed}"
+        ) from failed
+    if fetched is None:
+        raise ValueError(
+            f"{key} is not there: a one-chunk array's chunk file the store lost, never a short read"
+        )
+    return bytes(fetched.to_bytes())
 
 
 @dataclass(frozen=True)

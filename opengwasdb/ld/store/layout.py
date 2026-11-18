@@ -277,22 +277,36 @@ def new_frames_index(group: zarr.Group, length: int) -> zarr.Array[Any]:
     )
 
 
-def local_directory(store_path: StorePath) -> Path:
-    """The local directory a store path names, refused for a store that is not one: the Partner
-    Rows' frames are appended to a file, which a remote store has none of (partner-rows §5.1)."""
+def local_root(store_path: StorePath) -> Path:
+    """The local directory a store at `store_path` is rooted at, refused for a store that is not
+    one: a one-chunk array's chunk file is a file, which a remote store has none of (partner-rows
+    §5.1). A reader never needs it: it reads the chunk by key, whatever the transport is."""
     store = store_path.store
     if not isinstance(store, LocalStore):
         raise ValueError(
             f"the Partner Rows are written to a local directory, and {type(store).__name__} is "
             "not one (partner-rows §5.1)"
         )
-    return Path(store.root) / store_path.path
+    return Path(store.root)
+
+
+def local_directory(store_path: StorePath) -> Path:
+    """The local directory a store path names, refused for a store that is not local: the Partner
+    Rows' frames are appended to a file, which a remote store has none of (partner-rows §5.1)."""
+    return local_root(store_path) / store_path.path
+
+
+def chunk_key(array: zarr.Array[Any]) -> str:
+    """The key an array's whole chunk is stored under, resolved from the array's own metadata and
+    chunk key encoding, never assumed to be `c/0` (partner-rows §5.1): what a reader fetches a
+    frame's byte range by, and what a writer puts the file at."""
+    return f"{array.store_path.path}/{array.metadata.encode_chunk_key((0,))}"
 
 
 def chunk_file(array: zarr.Array[Any]) -> Path:
-    """The file `array`'s whole chunk is written to, resolved from the array's own metadata and
-    its chunk key encoding, never assumed to be `c/0` (partner-rows §5.1)."""
-    return local_directory(array.store_path) / array.metadata.encode_chunk_key((0,))
+    """The local file `array`'s whole chunk is written to, resolved from the array's own metadata
+    and its chunk key encoding, never assumed to be `c/0` (partner-rows §5.1)."""
+    return local_root(array.store_path) / chunk_key(array)
 
 
 def put_numbers(

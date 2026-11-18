@@ -32,7 +32,9 @@ import os
 import shutil
 import struct
 import tempfile
-from collections.abc import Sequence
+import threading
+from collections import OrderedDict
+from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,9 +47,10 @@ from zarr.abc.store import RangeByteRequest
 from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import LocalStore
 
-from ogld.format import Codes, REncoding
+from ogld.format import Codes, InputError, REncoding
 from ogld.format.geometry import indptr_of, owners
 from ogld.store import layout
+from ogld.store.location import chunk_range
 
 #: Rows a frame holds (partner-rows §1, §5.2: G = 16, the smallest G of those equally fast). A
 #: reader takes it from the group's `rows_per_frame` attribute, never from here.
@@ -330,6 +333,316 @@ def decode_frame(raw: bytes, *, chrom: str, number: int, first: int, rows: int) 
         _partners(first, lengths, deltas),
         codes,
     )
+
+
+# ---------------------------------------------------------------- reading (§7)
+
+#: The decoded frames a reader keeps unless its caller says otherwise, in bytes (§7): 256 MiB,
+#: which holds about 3,400 of a panel store's frames (a median frame decodes to some 77 KB) and all
+#: 58 of the Test Store's. It is the frame cache's own budget, beside `location.CACHE_BYTES`, which
+#: keeps the Near Band's inner chunks for `matrix` and `region`.
+FRAME_CACHE_BYTES: Final = 1 << 28
+
+
+def _frame_bytes(frame: Frame) -> int:
+    """What a decoded frame holds: its two arrays and its entry offsets."""
+    return int(frame.partners.nbytes + frame.codes.nbytes + frame.indptr.nbytes)
+
+
+class FrameCache:
+    """Decoded frames kept by one reader, byte-bounded, the least recently used dropped first
+    (partner-rows §7).
+
+    It is separate from `location.ChunkCache`, which keeps the Near Band's inner chunks for
+    `matrix` and `region`: a frame is not a chunk of a Zarr array, and a request that reads one
+    never reads the other. Neighbouring leads often share a frame, and repeated Analyses on one
+    reader hit it, so a frame decoded once serves every row taken from it.
+
+    One lock guards lookup, insertion and eviction, so the count stays the sum of what is kept and
+    a frame another thread kept first is the one given back. Decoding runs outside it: two threads
+    that miss the same frame may each decode it and keep one copy, which costs a duplicate decode
+    and never a different row (partner-rows §9.2 needs no single-flight for that).
+    """
+
+    def __init__(self, budget: int | None = None) -> None:
+        if budget is not None and (
+            isinstance(budget, bool) or not isinstance(budget, int) or budget < 0
+        ):
+            raise InputError(f"frame_cache_bytes is a count of bytes, an int ≥ 0, not {budget!r}")
+        self._budget = FRAME_CACHE_BYTES if budget is None else budget
+        self._bytes = 0
+        self._kept: OrderedDict[tuple[str, int], tuple[Frame, int]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    @property
+    def budget(self) -> int:
+        """The bytes this cache keeps at most (§7)."""
+        return self._budget
+
+    @property
+    def held(self) -> int:
+        """The bytes it keeps now, as it counts them: never more than the budget."""
+        with self._lock:
+            return self._bytes
+
+    def take(self, chrom: str, number: int) -> Frame | None:
+        """Frame `number` of `chrom` if it is kept, marked as just used; None otherwise."""
+        key = (chrom, number)
+        with self._lock:
+            kept = self._kept.get(key)
+            if kept is None:
+                return None
+            self._kept.move_to_end(key)
+        return kept[0]
+
+    def keep(self, frame: Frame) -> Frame:
+        """Keep `frame` in the budget, or the copy another thread kept first, and give it back.
+
+        The least recently used frames are dropped until the count is within the budget, a frame
+        larger than the whole budget included: a cache keeps no more than it says it does.
+        """
+        key = (frame.chrom, frame.number)
+        counted = _frame_bytes(frame)
+        with self._lock:
+            kept = self._kept.get(key)
+            if kept is not None:
+                self._kept.move_to_end(key)
+                return kept[0]
+            self._kept[key] = (frame, counted)
+            self._bytes += counted
+            while self._bytes > self._budget and self._kept:
+                _, (_, dropped) = self._kept.popitem(last=False)
+                self._bytes -= dropped
+            return frame
+
+
+def _member(group: zarr.Group, name: str) -> zarr.Array[Any]:
+    """The array `name` of a Partner Rows group, refused naming it when the group holds none."""
+    path = f"{group.path}/{name}"
+    try:
+        member = group[name]
+    except KeyError:
+        raise ValueError(
+            f"{path} is missing: a Partner Rows group holds it (partner-rows §5.1)"
+        ) from None
+    if not isinstance(member, zarr.Array):
+        raise ValueError(
+            f"{path} is not an array: a Partner Rows group holds two (partner-rows §5.1)"
+        )
+    return member
+
+
+def _attribute(attributes: Mapping[str, Any], name: str, path: str) -> int:
+    """One of a Partner Rows group's integer attributes, refused naming it when it is not there."""
+    value = attributes.get(name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"{path} records no {name}: a Partner Rows group holds it (partner-rows §5.3)"
+        )
+    return value
+
+
+def _offsets(index: zarr.Array[Any], frames: int, size: int, chrom: str) -> npt.NDArray[np.uint64]:
+    """A chromosome's frame offsets, read whole and checked before any frame is (partner-rows §7).
+
+    They are the group's `frames` + 1 byte offsets of one chunk: 0 first, strictly ascending, and
+    ending at the `frames_bytes` the group records, so a frame's range is inside the file the
+    metadata names. An offsets chunk the store lost reads as its fill value, which the last of these
+    checks refuses.
+    """
+    path = layout.partners_path(chrom)
+    if index.shape != (frames + 1,) or index.chunks != index.shape:
+        raise ValueError(
+            f"{path}/frames_idx has shape {index.shape} and chunks {index.chunks}, not one chunk "
+            f"of the {frames + 1} offsets of {frames} frames (partner-rows §5.1)"
+        )
+    offsets = np.asarray(index[:], dtype=np.uint64)
+    if (offsets > size).any() or int(offsets[0]) != 0 or int(offsets[-1]) != size:
+        raise ValueError(
+            f"chromosome {chrom}'s frames_idx runs from {int(offsets[0])} to {int(offsets[-1])}, "
+            f"and the group's frames_bytes is {size}: the offsets must start at 0, ascend and end "
+            "at the file's length (partner-rows §5.2)"
+        )
+    steps = np.diff(offsets.astype(np.int64))
+    if len(steps) and (steps <= 0).any():
+        raise ValueError(
+            f"chromosome {chrom}'s frames_idx does not ascend at offset "
+            f"{int(np.flatnonzero(steps <= 0)[0])}: every frame holds bytes (partner-rows §5.2)"
+        )
+    return offsets
+
+
+class PartnerFrames:
+    """One chromosome's Partner Rows, opened to be read a row or a frame at a time (§5.1, §7).
+
+    Opening reads what a chromosome's first use needs and nothing else: the group's attributes and
+    the `frames_idx` chunk whole (§7 step 1), whose offsets are checked against the group's `frames`
+    and `frames_bytes` before any frame is read, and the `frames` array's metadata, which names the
+    one chunk file the frames are byte ranges of.
+
+    A frame is one byte-range read (`location.chunk_range`) and one `decode_frame`, the store's one
+    decoder, so a frame that fails its checksum, its k or its payload length is refused naming the
+    chromosome and the frame, and never read as a short row (§5.4). Each decoded frame is kept in
+    the reader's `FrameCache`, so a row of a frame another row already fetched costs no read.
+    """
+
+    def __init__(self, group: zarr.Group, chrom: str, cache: FrameCache) -> None:
+        path = layout.partners_path(chrom)
+        attributes = group.attrs
+        self._chrom = chrom
+        self._cache = cache
+        self._rows = _attribute(attributes, "rows", path)
+        self._per_frame = _attribute(attributes, "rows_per_frame", path)
+        frames = _attribute(attributes, "frames", path)
+        size = _attribute(attributes, "frames_bytes", path)
+        due = -(-self._rows // self._per_frame) if self._per_frame > 0 else -1
+        if self._rows < 1 or self._per_frame < 1:
+            raise ValueError(
+                f"{path} holds {self._rows} rows in frames of {self._per_frame}: a Partner Rows "
+                "group holds at least one row, in a frame of at least one (partner-rows §5.2)"
+            )
+        if frames != due:
+            raise ValueError(
+                f"{path} records {frames} frames for {self._rows} rows in frames of "
+                f"{self._per_frame}: it holds {due} (partner-rows §5.2)"
+            )
+        self._frames = frames
+        self._offsets = _offsets(_member(group, layout.FRAMES_INDEX), frames, size, chrom)
+        self._array = _member(group, layout.FRAMES)
+        if (
+            self._array.shape != (size,)
+            or self._array.chunks != self._array.shape
+            or self._array.dtype != np.uint8
+        ):
+            raise ValueError(
+                f"{path}/{layout.FRAMES} is shape {self._array.shape}, chunks "
+                f"{self._array.chunks} and {self._array.dtype}, not one chunk of the {size} bytes "
+                "of frames the group records (partner-rows §5.1)"
+            )
+
+    @property
+    def rows(self) -> int:
+        """The rows this chromosome's Partner Rows hold, the group's `rows` (§5.3)."""
+        return self._rows
+
+    def frame(self, number: int) -> Frame:
+        """Frame `number`, from the cache or one byte-range read and one decode (§7 steps 2–3)."""
+        if not 0 <= number < self._frames:
+            raise ValueError(
+                f"frame {number} is not one of chromosome {self._chrom}'s {self._frames} frames "
+                "(partner-rows §5.2)"
+            )
+        kept = self._cache.take(self._chrom, number)
+        if kept is not None:
+            return kept
+        return self._read(number, number)[0]
+
+    def row(self, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
+        """Row `local_row`'s partners and codes: its slice of the frame that holds it (§7 step 3).
+
+        The arrays are views into the cached frame, so they are read-only: a caller that wrote to
+        one would change what the next row read from that frame returns.
+        """
+        if not 0 <= local_row < self._rows:
+            raise ValueError(
+                f"row {local_row} is not in chromosome {self._chrom}, which holds {self._rows} "
+                "rows (partner-rows §5.2)"
+            )
+        partners, codes = self.frame(local_row // self._per_frame).row(local_row)
+        partners.flags.writeable = False
+        codes.flags.writeable = False
+        return partners, codes
+
+    def rows_of(
+        self, local_rows: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int32], Codes]:
+        """Each of `local_rows`' rows, back to back, as (indptr, partners, codes), in the order
+        asked for and with a repeated row sliced again (§7).
+
+        The frames the rows need that are not kept are read in runs of physically adjacent frames,
+        one byte-range read a run: frames that do not touch are never coalesced, because the bytes
+        between them would be read for nothing (§9.2).
+        """
+        at = np.asarray(local_rows, dtype=np.int64)
+        outside = at[(at < 0) | (at >= self._rows)]
+        if len(outside):
+            raise ValueError(
+                f"rows {outside[:5].tolist()} are not in chromosome {self._chrom}, which holds "
+                f"{self._rows} rows (partner-rows §5.2)"
+            )
+        self._read_missing(np.unique(at // self._per_frame))
+        pieces = [self.row(int(row)) for row in at]
+        lengths = np.array([len(partners) for partners, _ in pieces], dtype=np.int64)
+        indptr = indptr_of(lengths)
+        if not pieces:
+            return indptr, np.empty(0, np.int32), np.empty(0, REncoding.dtype)
+        return (
+            indptr,
+            np.concatenate([partners for partners, _ in pieces]),
+            np.concatenate([codes for _, codes in pieces]),
+        )
+
+    def _read_missing(self, numbers: npt.NDArray[np.int64]) -> None:
+        """Read and keep the frames among `numbers` the cache does not hold, a run at a time."""
+        missing = [
+            int(number) for number in numbers if self._cache.take(self._chrom, int(number)) is None
+        ]
+        run: list[int] = []
+        for number in [*missing, -1]:
+            if run and number != run[-1] + 1:
+                self._read(run[0], run[-1])
+                run = []
+            if number >= 0:
+                run.append(number)
+
+    def _read(self, first: int, last: int) -> list[Frame]:
+        """Frames [first, last] in one byte-range read of the chunk file, decoded and kept (§9.2).
+
+        They are physically adjacent, so one read serves them all; the bytes of a frame are its own
+        slice of what was read, and each is decoded on its own, so a frame that fails its checks is
+        refused naming itself.
+        """
+        start, stop = int(self._offsets[first]), int(self._offsets[last + 1])
+        try:
+            raw = chunk_range(self._array, start, stop)
+        except ValueError as unread:
+            raise ValueError(f"{_run(first, last, self._chrom)}: {unread}") from unread
+        base = start
+        return [
+            self._cache.keep(
+                decode_frame(
+                    raw[int(self._offsets[number]) - base : int(self._offsets[number + 1]) - base],
+                    chrom=self._chrom,
+                    number=number,
+                    first=number * self._per_frame,
+                    rows=min(self._per_frame, self._rows - number * self._per_frame),
+                )
+            )
+            for number in range(first, last + 1)
+        ]
+
+
+def _run(first: int, last: int, chrom: str) -> str:
+    """A frame, or the run of frames one read served, as a refusal names it."""
+    return _where(chrom, first) if first == last else f"frames {first}–{last} of chromosome {chrom}"
+
+
+def open_partner_frames(root: zarr.Group, chrom: str, cache: FrameCache) -> PartnerFrames:
+    """Chromosome `chrom`'s Partner Rows of `root`, opened for reading, refused naming the group
+    when the store holds none for it (partner-rows §5.1)."""
+    path = layout.partners_path(chrom)
+    try:
+        member = root[path]
+    except KeyError:
+        raise ValueError(
+            f"{path} is missing: this LD Store holds no Partner Rows for chromosome {chrom} "
+            "(partner-rows §5.1)"
+        ) from None
+    if not isinstance(member, zarr.Group):
+        raise ValueError(
+            f"{path} is not a group: a Partner Rows component is one (partner-rows §5.1)"
+        )
+    return PartnerFrames(member, chrom, cache)
 
 
 class FramesGroup:
