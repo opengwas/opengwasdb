@@ -156,6 +156,20 @@ def _unshuffled(raw: bytes, dtype: np.dtype[Any]) -> npt.NDArray[Any]:
     return planes.T.copy().ravel().view(dtype)
 
 
+def _row_of_planes(
+    raw: bytes, *, offset: int, elements: int, start: int, count: int, dtype: np.dtype[Any]
+) -> npt.NDArray[Any]:
+    """Elements [start, start + count) of the byte-shuffled array at `offset`, gathered from its
+    planes: the inverse of `_shuffled` (§5.2) for one row of a frame, without unshuffling the rows
+    a reader did not ask for. `elements` is the array's whole length, which is each plane's stride.
+    """
+    planes = np.empty((dtype.itemsize, count), dtype=np.uint8)
+    for byte in range(dtype.itemsize):
+        at = offset + byte * elements + start
+        planes[byte] = np.frombuffer(raw[at : at + count], dtype=np.uint8)
+    return planes.T.copy().ravel().view(dtype)
+
+
 def _lengths(
     rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]], first: int, where: str
 ) -> npt.NDArray[np.uint32]:
@@ -318,35 +332,121 @@ def decode_frame(raw: bytes, *, chrom: str, number: int, first: int, rows: int) 
     borrowed row (§5.4). A wrong k, a payload that is not exactly 4 + 4k + 6E bytes and a failed
     checksum all raise `ValueError` naming the chromosome and the frame.
     """
-    where = _where(chrom, number)
-    payload = _payload(raw, where)
-    k, lengths = _counted(payload, where, rows)
-    head = 4 + 4 * k
-    entries = int(lengths.sum())
-    deltas = _unshuffled(payload[head : head + 4 * entries], _LITTLE_DELTA).astype(np.int64)
-    codes = _unshuffled(payload[head + 4 * entries :], _LITTLE_CODES).astype(REncoding.dtype)
-    return Frame(
-        chrom,
-        number,
-        first,
-        indptr_of(lengths),
-        _partners(first, lengths, deltas),
-        codes,
-    )
+    return FramePayload.parse(raw, chrom=chrom, number=number, first=first, rows=rows).decode()
+
+
+@dataclass(frozen=True)
+class FramePayload:
+    """One frame's decompressed payload, with the rows' lengths that address it (§5.2).
+
+    A reader keeps this rather than every decoded row: the decompress is the expensive half of a
+    frame, and a row's own bytes are a gather from each of the payload's planes. `row` does that
+    gather and decodes one row (the row-local unshuffle, §7), so reading one row of a frame costs
+    one row's work and not the other fifteen; `decode` unshuffles the whole payload and gives the
+    `Frame` that validation and the frames' own tests read.
+    """
+
+    chrom: str
+    number: int
+    first: int
+    lengths: npt.NDArray[np.int64]
+    payload: bytes
+
+    @classmethod
+    def parse(cls, raw: bytes, *, chrom: str, number: int, first: int, rows: int) -> FramePayload:
+        """The payload `raw` holds — one zstd frame, its checksum verified — checked as the frame
+        of rows [first, first + `rows`) of chromosome `chrom` (§5.2, §5.4)."""
+        where = _where(chrom, number)
+        held = _payload(raw, where)
+        _, lengths = _counted(held, where, rows)
+        return cls(chrom, number, first, lengths.astype(np.int64), held)
+
+    @property
+    def rows(self) -> int:
+        """The rows this frame holds, its k (§5.2)."""
+        return len(self.lengths)
+
+    @property
+    def entries(self) -> int:
+        """The entries it holds, E."""
+        return int(self.lengths.sum())
+
+    @property
+    def bytes(self) -> int:
+        """What keeping it holds: the payload and the offsets into it."""
+        return len(self.payload) + int(self.lengths.nbytes)
+
+    def decode(self) -> Frame:
+        """The whole frame, every row's partners and codes (§5.2): one unshuffle of each plane."""
+        head = 4 + 4 * self.rows
+        entries = self.entries
+        deltas = _unshuffled(self.payload[head : head + 4 * entries], _LITTLE_DELTA)
+        codes = _unshuffled(self.payload[head + 4 * entries :], _LITTLE_CODES)
+        return Frame(
+            self.chrom,
+            self.number,
+            self.first,
+            indptr_of(self.lengths),
+            _partners(self.first, self.lengths, deltas.astype(np.int64)),
+            codes.astype(REncoding.dtype),
+        )
+
+    def row(self, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
+        """Row `local_row`'s partners and codes, decoded from the payload's planes alone (§5.2).
+
+        The deltas are gathered from their planes for this row's entries and cumulated from its own
+        row, so the rest of the frame is never unshuffled: one row costs one row's bytes.
+        """
+        if not self.first <= local_row < self.first + self.rows:
+            raise ValueError(
+                f"row {local_row} is not in frame {self.number} of chromosome {self.chrom}, "
+                f"which holds rows {self.first}–{self.first + self.rows - 1} (spec §5.2)"
+            )
+        at = local_row - self.first
+        start = int(self.lengths[:at].sum())
+        count = int(self.lengths[at])
+        if not count:
+            return np.empty(0, np.int32), np.empty(0, REncoding.dtype)
+        head = 4 + 4 * self.rows
+        entries = self.entries
+        deltas = _row_of_planes(
+            self.payload,
+            offset=head,
+            elements=entries,
+            start=start,
+            count=count,
+            dtype=_LITTLE_DELTA,
+        ).astype(np.int64)
+        codes = _row_of_planes(
+            self.payload,
+            offset=head + 4 * entries,
+            elements=entries,
+            start=start,
+            count=count,
+            dtype=_LITTLE_CODES,
+        ).astype(REncoding.dtype)
+        partners = np.cumsum(deltas) + local_row
+        bounds = np.iinfo(np.int32)
+        if partners.min() < 0 or partners.max() > bounds.max:
+            raise ValueError(
+                f"frame {self.number} of chromosome {self.chrom} decodes to a partner that is not "
+                "a row (spec §5.2)"
+            )
+        return partners.astype(np.int32), codes
 
 
 # ---------------------------------------------------------------- reading (§7)
 
-#: The decoded frames a reader keeps unless its caller says otherwise, in bytes (§7): 256 MiB,
-#: which holds about 3,400 of a panel store's frames (a median frame decodes to some 77 KB) and all
-#: 58 of the Test Store's. It is the frame cache's own budget, beside `location.CACHE_BYTES`, which
+#: The frames a reader keeps unless its caller says otherwise, in bytes (§7): 256 MiB, which holds
+#: about 3,400 of a panel store's frames (a median frame's payload is some 77 KB) and all 58 of the
+#: Test Store's. It is the frame cache's own budget, beside `location.CACHE_BYTES`, which
 #: keeps the Near Band's inner chunks for `matrix` and `region`.
 FRAME_CACHE_BYTES: Final = 1 << 28
 
 
-def _frame_bytes(frame: Frame) -> int:
-    """What a decoded frame holds: its two arrays and its entry offsets."""
-    return int(frame.partners.nbytes + frame.codes.nbytes + frame.indptr.nbytes)
+def _frame_bytes(frame: FramePayload) -> int:
+    """What keeping a frame holds: its decompressed payload and the rows' lengths (§7)."""
+    return frame.bytes
 
 
 class FrameCache:
@@ -371,7 +471,7 @@ class FrameCache:
             raise InputError(f"frame_cache_bytes is a count of bytes, an int ≥ 0, not {budget!r}")
         self._budget = FRAME_CACHE_BYTES if budget is None else budget
         self._bytes = 0
-        self._kept: OrderedDict[tuple[str, int], tuple[Frame, int]] = OrderedDict()
+        self._kept: OrderedDict[tuple[str, int], tuple[FramePayload, int]] = OrderedDict()
         self._lock = threading.Lock()
 
     @property
@@ -385,7 +485,7 @@ class FrameCache:
         with self._lock:
             return self._bytes
 
-    def take(self, chrom: str, number: int) -> Frame | None:
+    def take(self, chrom: str, number: int) -> FramePayload | None:
         """Frame `number` of `chrom` if it is kept, marked as just used; None otherwise."""
         key = (chrom, number)
         with self._lock:
@@ -395,7 +495,7 @@ class FrameCache:
             self._kept.move_to_end(key)
         return kept[0]
 
-    def keep(self, frame: Frame) -> Frame:
+    def keep(self, frame: FramePayload) -> FramePayload:
         """Keep `frame` in the budget, or the copy another thread kept first, and give it back.
 
         The least recently used frames are dropped until the count is within the budget, a frame
@@ -480,10 +580,11 @@ class PartnerFrames:
     and `frames_bytes` before any frame is read, and the `frames` array's metadata, which names the
     one chunk file the frames are byte ranges of.
 
-    A frame is one byte-range read (`location.chunk_range`) and one `decode_frame`, the store's one
-    decoder, so a frame that fails its checksum, its k or its payload length is refused naming the
-    chromosome and the frame, and never read as a short row (§5.4). Each decoded frame is kept in
-    the reader's `FrameCache`, so a row of a frame another row already fetched costs no read.
+    A frame is one byte-range read (`location.chunk_range`) and one `FramePayload.parse`, the
+    store's one frame decoder, so a frame that fails its checksum, its k or its payload length is
+    refused naming the chromosome and the frame, and never read as a short row (§5.4). Each frame
+    parsed is kept in the reader's `FrameCache`, so a row of a frame another row already fetched
+    costs no read, and a row costs only its own gather from the payload's planes (§7).
     """
 
     def __init__(self, group: zarr.Group, chrom: str, cache: FrameCache) -> None:
@@ -525,8 +626,8 @@ class PartnerFrames:
         """The rows this chromosome's Partner Rows hold, the group's `rows` (§5.3)."""
         return self._rows
 
-    def frame(self, number: int) -> Frame:
-        """Frame `number`, from the cache or one byte-range read and one decode (§7 steps 2–3)."""
+    def frame(self, number: int) -> FramePayload:
+        """Frame `number`: from the cache, or one byte-range read and one decompress (§7)."""
         if not 0 <= number < self._frames:
             raise ValueError(
                 f"frame {number} is not one of chromosome {self._chrom}'s {self._frames} frames "
@@ -538,20 +639,18 @@ class PartnerFrames:
         return self._read(number, number)[0]
 
     def row(self, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
-        """Row `local_row`'s partners and codes: its slice of the frame that holds it (§7 step 3).
+        """Row `local_row`'s partners and codes, decoded from the frame that holds it (§7 step 3).
 
-        The arrays are views into the cached frame, so they are read-only: a caller that wrote to
-        one would change what the next row read from that frame returns.
+        The row is gathered from the frame's planes and its deltas cumulated, so a row costs one
+        row's work: the frame's other rows are never unshuffled to answer it. The arrays are new
+        ones, owned by the caller, and the cached payload they came from is not changed by them.
         """
         if not 0 <= local_row < self._rows:
             raise ValueError(
                 f"row {local_row} is not in chromosome {self._chrom}, which holds {self._rows} "
                 "rows (partner-rows §5.2)"
             )
-        partners, codes = self.frame(local_row // self._per_frame).row(local_row)
-        partners.flags.writeable = False
-        codes.flags.writeable = False
-        return partners, codes
+        return self.frame(local_row // self._per_frame).row(local_row)
 
     def rows_of(
         self, local_rows: npt.NDArray[np.int64]
@@ -595,12 +694,12 @@ class PartnerFrames:
             if number >= 0:
                 run.append(number)
 
-    def _read(self, first: int, last: int) -> list[Frame]:
-        """Frames [first, last] in one byte-range read of the chunk file, decoded and kept (§9.2).
+    def _read(self, first: int, last: int) -> list[FramePayload]:
+        """Frames [first, last] in one byte-range read of the chunk file, parsed and kept (§9.2).
 
         They are physically adjacent, so one read serves them all; the bytes of a frame are its own
-        slice of what was read, and each is decoded on its own, so a frame that fails its checks is
-        refused naming itself.
+        slice of what was read, and each is parsed on its own, so a frame that fails its checksum,
+        its k or its payload length is refused naming itself.
         """
         start, stop = int(self._offsets[first]), int(self._offsets[last + 1])
         try:
@@ -610,7 +709,7 @@ class PartnerFrames:
         base = start
         return [
             self._cache.keep(
-                decode_frame(
+                FramePayload.parse(
                     raw[int(self._offsets[number]) - base : int(self._offsets[number + 1]) - base],
                     chrom=self._chrom,
                     number=number,

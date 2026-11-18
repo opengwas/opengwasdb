@@ -918,8 +918,9 @@ compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
 **From 0.2.0** (#70, #71), a variant's partners at every answered threshold are one frame read.
 `partner_row` finds frame ⌊l / G⌋, reads its byte range from the chromosome's `frames` chunk file,
 verifies the zstd checksum, checks k and the payload length, decodes it and keeps it in a
-byte-bounded LRU of decoded frames: 256 MiB unless the caller sets another budget, the least
-recently used frame dropped first. That cache is per reader and separate from the Near Band chunk
+byte-bounded LRU of frames' decompressed payloads: 256 MiB unless the caller sets another budget,
+the least recently used frame dropped first, and a row is unshuffled from its frame's payload for
+the row alone. That cache is per reader and separate from the Near Band chunk
 cache, which keeps serving `matrix` and `region`: neighbouring leads often share a frame, and
 repeated Analyses on one reader hit it. A store of format 0.1.0, which holds no Partner Rows, is
 refused naming the missing component rather than answered from another one (§13), and a damaged
@@ -953,9 +954,10 @@ What the reads hold, measured with tracemalloc and held by `tests/test_partner_r
   72 bytes each. The index's entries take 30 bytes each and the Near Band's 53–70.
 - `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
   that step's index rows. One row against many is never copied out to a full list.
-- `partner_row`: the decoded frame it read, kept by the frame cache, and its row's partners and
-  codes as views into it: 6 bytes an entry while the frame is kept, plus the frame's own arrays
-  and the `frames_idx` chunk.
+- `partner_row`: the frame's decompressed payload, kept by the frame cache: 6 bytes an entry while
+  the frame is kept, plus its rows' lengths and the `frames_idx` chunk. Its row's partners and
+  codes are gathered from that payload for the row alone, so they are 6 bytes an entry of the
+  result.
 - `pair_r` and `region_r`: their n × n float64 result, written in place, and one step or block
   beside it. `matrix` and `region` apply a `fill` in place, so each holds one float64 copy of
   its result.

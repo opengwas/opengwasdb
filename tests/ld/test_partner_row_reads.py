@@ -151,6 +151,34 @@ def test_every_row_over_http_is_the_near_band_and_the_far_pairs_at_their_floors(
                 np.testing.assert_array_equal(got_codes, codes[span])
 
 
+def test_a_row_decoded_alone_is_the_row_of_the_whole_frame() -> None:
+    """The row-local gather and the whole-frame decode are two readings of one payload, so they
+    must give the same row for every frame of the committed store: the row-local one is what a read
+    uses, and the whole-frame one is what validation reads (§7)."""
+    group = store()["partners"]
+    for chrom in CHROMOSOMES:
+        held = group[chrom]
+        rows, per_frame = int(held.attrs["rows"]), int(held.attrs["rows_per_frame"])
+        offsets = np.asarray(held["frames_idx"][:], dtype=np.int64)
+        raw = np.asarray(held["frames"][:], dtype=np.uint8).tobytes()
+        assert len(offsets) > 3, "the Test Store's chromosome holds several frames"
+        for number in range(len(offsets) - 1):
+            first = number * per_frame
+            payload = frames.FramePayload.parse(
+                raw[offsets[number] : offsets[number + 1]],
+                chrom=chrom,
+                number=number,
+                first=first,
+                rows=min(per_frame, rows - first),
+            )
+            whole = payload.decode()
+            for local_row in range(first, first + payload.rows):
+                alone_partners, alone_codes = payload.row(local_row)
+                frame_partners, frame_codes = whole.row(local_row)
+                np.testing.assert_array_equal(alone_partners, frame_partners)
+                np.testing.assert_array_equal(alone_codes, frame_codes)
+
+
 Served = tuple[str, Path]
 
 

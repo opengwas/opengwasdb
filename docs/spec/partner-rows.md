@@ -277,12 +277,16 @@ partner_rows(chrom, l…) -> (indptr, partners, codes)
    and check `frames_idx[F]` against `frames_bytes`.
 2. f = ⌊l / G⌋. If frame f is in the frame cache, use it. Otherwise read its byte range from the
    `frames` chunk file, whose path the array's metadata gives (§5.1), decompress it (the zstd
-   checksum is verified), check k and the payload length (§5.2), unshuffle and decode the deltas,
-   and cache the decoded frame.
-3. Return row l's slice of the decoded frame.
+   checksum is verified), check k and the payload length (§5.2), and cache the frame's
+   decompressed payload with its rows' lengths.
+3. Gather row l's own bytes from the payload's planes — the **row-local unshuffle** — cumulate its
+   deltas and return its partners and codes. The frame's other rows are never unshuffled to answer
+   one row, so a row costs one row's work: measured on a median EUR frame (16 rows, 800 entries
+   each, a 76.9 KiB payload), one row is 21 µs against 272 µs to unshuffle and decode the whole
+   frame, of which the decompress is 87 µs either way.
 
-- **The frame cache** is a byte-bounded LRU of decoded frames, per reader: 256 MiB unless its
-  caller sets another budget, which drops the least recently used frame first. Neighbouring leads
+- **The frame cache** is a byte-bounded LRU of frames' decompressed payloads, per reader: 256 MiB
+  unless its caller sets another budget, which drops the least recently used frame first. Neighbouring leads
   often share a frame, and repeated Analyses on one reader hit it. It is separate from the Near
   Band chunk cache, which keeps serving `matrix` and `region`.
 - **One byte-range read, whatever serves the store.** A frame's bytes are fetched by the `frames`
