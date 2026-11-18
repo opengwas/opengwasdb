@@ -1,5 +1,13 @@
 # Store format 0.2.0: Zarr v3 with sharding
 
+> **The current version is 0.2.3 ([ADR 0068](0068-an-se-beyond-float16-is-missing.md),
+> issue #338).** The addendum's "`CURRENT_FORMAT_VERSION` is `0.2.0`" was true at
+> #247. Since then #430 stamps each release the lowest version its features use,
+> #381 spells indels reference first (0.2.2, ADR 0079), and #338 adds
+> `analyses.tsv`'s `n_missing_se_out_of_range` (0.2.3): every release this package
+> builds or completes is 0.2.3, and the converter still writes 0.2.0. The physical
+> layout this ADR decides is unchanged.
+
 > **Amended by the addendum at the end (#247).** Decision 2's interim —
 > `CURRENT_FORMAT_VERSION` held at `0.1.0` "until #247" — is over: the builders
 > write 0.2.0. The addendum records the one decision the ticket left open, that

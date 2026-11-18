@@ -427,22 +427,21 @@ def test_a_different_analyses_order_fails(tmp_path, pair):
 
 # --- an infinite value is a value (issue #337) -----------------------------
 
-# A source SE above float16's maximum (65,504) passes the reader's finite, non-negative
-# check and is then narrowed to `+inf` beside a finite Z (issue #338). Spec §15 makes such
-# a cell present, so the check must compare it, not call it missing (issue #337).
+# Before format 0.2.3 a source SE above float16's maximum (65,504) was narrowed to `+inf`
+# beside a finite Z, and a completion carried it unchanged; from 0.2.3 neither stores one
+# (issue #338). Spec §15 makes such a cell present, so where both Stores hold it the check
+# must compare it, not call it missing (issue #337).
 INFINITE_SE_ALID = "1:1000000:A:G"
 
 
 def _with_an_infinite_se(root: Path) -> tuple[Path, Path]:
-    """The fixture pair with one source SE above float16's range, so both Stores hold `+inf`.
-
-    Completion copies an observed cell unchanged, so the infinite cell lands on both sides;
-    what a Dense plane narrows it to is the `+inf` a query reads back.
-    """
-    fields = [row.split("\t") for row in ROWS]
-    assert (fields[2][0], fields[2][4], fields[2][5]) == ("a1", "1", "1000000")
-    fields[2][9] = "100000"
-    return _build_pair(root, ["\t".join(row) for row in fields], tdc._make_ld_panel(root))
+    """The fixture pair with `+inf` planted at the same observed cell of both Stores: what
+    a build and a completion before format 0.2.3 wrote for an SE above float16's range."""
+    observed, completed = _build_pair(root, ROWS, tdc._make_ld_panel(root))
+    for store in (observed, completed):
+        rows, cols = np.array([_row_of(store, INFINITE_SE_ALID)]), np.array([0])
+        _patch(store, DenseSePlane, rows, cols, np.array([np.inf], dtype=np.float32))
+    return observed, completed
 
 
 @pytest.fixture(scope="module")

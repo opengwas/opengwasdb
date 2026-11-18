@@ -70,11 +70,14 @@ from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
+from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding import (
     EAF_BASELINE,
     SE_EXCEPTION_BUDGET,
     StoreEncoding,
 )
+from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
@@ -573,6 +576,26 @@ class _CompletedCsr:
     writer: RaggedCSRWriter
     total_imputed: int
     total_missing: int
+    #: Per Analysis, the fills the checkpoint merge left missing for an SE above
+    #: `float16`'s range (issue #338); set once the merge has run.
+    left_missing: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+
+    @property
+    def left_out(self) -> LeftOut:
+        """What this completion left out for an SE above `float16`'s range: the
+        source rows the writer did not keep, and the fills the merge left missing.
+
+        The merge left every such fill missing, so a fill the writer leaves out is
+        one the merge did not judge -- refused, as `completion_quality` would then
+        count an imputed row the release lacks."""
+        imputed_at_write = self.writer.imputed_out_of_range
+        if imputed_at_write.any():
+            raise ValueError(
+                f"complete-ragged: the writer left out {int(imputed_at_write.sum()):,} "
+                "imputed row(s) for an SE above float16's range, which the checkpoint "
+                "merge should have left missing"
+            )
+        return LeftOut.of(self.writer.se_out_of_range, self.left_missing)
 
 
 @dataclass
@@ -1066,7 +1089,7 @@ def _checkpoint_and_assemble(
     # No impute_mask here: Phase 1 is where the ancestry-match filter applies
     # (ADR 0028), since an Analysis it excludes is given no block, so its
     # checkpoints hold neither fills nor completion_quality rows to drop.
-    fill_shard_dir, quality_count = fill_shards.shard_checkpoint_fills(
+    fill_shard_dir, quality_count, left_missing = fill_shards.shard_checkpoint_fills(
         checkpoint_dir / "blocks",
         staged,
         union,
@@ -1081,7 +1104,9 @@ def _checkpoint_and_assemble(
     )
     shutil.rmtree(fill_shard_dir)
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
-    return csr
+    return replace(
+        csr, left_missing=LeftOut.from_merge(left_missing, plan.state.n_analyses)
+    )
 
 
 @dataclass(frozen=True)
@@ -1493,19 +1518,28 @@ def _write_top_hits_and_analyses(
     encode_plan: _EncodePlan,
     *,
     ancestry: str,
+    left_out: LeftOut,
+    source_format_version: str,
 ) -> None:
     """Phase 5 metadata: top-hit indexes built with the completed encoding,
     and analyses.tsv -- rollup from index.sqlite (ADR 0030), `eaf_scope` from
-    what the release holds, completion columns refreshed, and the source's
-    pre-completion hit counts zeroed so add_hit_counts recomputes them; and the
-    source's regions.tsv, carried unchanged (`_carry_regions`)."""
+    what the release holds, completion columns refreshed,
+    `n_missing_se_out_of_range` the source's plus what `left_out` counts (issue
+    #338), and the source's pre-completion hit counts zeroed so add_hit_counts
+    recomputes them; and the source's regions.tsv, carried unchanged
+    (`_carry_regions`)."""
+    ids = [a.analysis_id for a in state.src_analyses]
+    log_se_out_of_range(left_out.total, ids, where="complete-ragged")
+    carried = carried_counts(
+        state.src_analyses, source_format_version, source=f"source release {state.src}"
+    )
     print("Building top-hit indexes...")
     build_ragged_top_hit_indexes(staged.path, encoding=encode_plan.encoding)
 
     print("Writing analyses.tsv...")
     with staged.index_connection() as quality_db:
         quality_rollup = completion_quality_rollup(quality_db, state.n_analyses)
-    dst_analyses = reset_top_hit_counts(
+    dst_analyses = reset_top_hit_counts(left_out.recorded(
         [
             replace(
                 a,
@@ -1524,8 +1558,9 @@ def _write_top_hits_and_analyses(
                 completion_n_missing_total=quality_rollup[i].n_missing_total,
             )
             for i, a in enumerate(state.src_analyses)
-        ]
-    )
+        ],
+        carried,
+    ))
     write_analysis_records(
         staged.path / "analyses.tsv", top_hits.add_hit_counts(staged.path, dst_analyses)
     )
@@ -1577,6 +1612,7 @@ def _completed_manifest(
             cis_window_bp=cis_window_bp,
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
+            **{SE_OUT_OF_RANGE_KEY: csr.left_out.provenance()},
             **panel_placement,
             **({} if se_exceptions is None else {"se_exceptions": se_exceptions}),
         ),
@@ -1653,22 +1689,16 @@ def _run_completion(
         se_exceptions = _write_completed_zarr(
             staged, encode_plan, csr, state.src_analyses, len(axis.variants), n_workers
         )
-        _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
+        _write_top_hits_and_analyses(
+            staged, state, encode_plan, ancestry=ancestry, left_out=csr.left_out,
+            source_format_version=source_format_version,
+        )
         staged.write_manifest(
             _completed_manifest(
-                manifest,
-                staged=staged,
-                source_format_version=source_format_version,
-                release_id=release_id,
-                ld_panel_id=ld_panel_id,
-                ancestry=ancestry,
-                min_cor=min_cor,
-                thresh=thresh,
-                cis_window_bp=cis_window_bp,
-                axis=axis,
-                panel_placement=plan.panel_placement,
-                csr=csr,
-                encode_plan=encode_plan,
+                manifest, staged=staged, source_format_version=source_format_version,
+                release_id=release_id, ld_panel_id=ld_panel_id, ancestry=ancestry,
+                min_cor=min_cor, thresh=thresh, cis_window_bp=cis_window_bp, axis=axis,
+                panel_placement=plan.panel_placement, csr=csr, encode_plan=encode_plan,
                 se_exceptions=se_exceptions,
             )
         )

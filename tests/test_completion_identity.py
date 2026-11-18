@@ -22,6 +22,14 @@ record states how the panel placed its rows (`panel_indels`,
 `panel_snvs_unplaced`). Each fixture's panel places every row, so those counts
 hold no unplaced row, and every other value in a pin is `1ab2b09`'s, as #430
 re-derived it.
+
+Since #338 three more entries are pinned as the code writes them (ADR 0068):
+`format_version` is 0.2.3, `analyses.tsv` gains `n_missing_se_out_of_range`
+(0 for every Analysis, as no fixture holds an SE above 65,504), and the completion
+record gains `se_out_of_range`, its two parts all 0; the Dense pin's
+`overview.html` renders the new column. Re-derived with every array, `index.sqlite`
+and other file unchanged, and each `analyses.tsv` without the new column hashing
+to the pin it had.
 """
 
 from __future__ import annotations

@@ -434,6 +434,7 @@ def _build_ssf_release(
         encoding=encoding,
         eaf_report=eaf_report,
         stored_effect_scale=request.stored_effect_scale,
+        csr=csr,
     )
     regions = None
     if request.regions is not None:
@@ -975,13 +976,15 @@ def _write_indexes_and_metadata(
     encoding: StoreEncoding,
     eaf_report: EafOrientationReport,
     stored_effect_scale: str,
+    csr: RaggedCSRWriter,
 ) -> None:
     """Build the top-hit index and write analyses.tsv from the manifest.
 
     The shared-core metadata columns arrive as one PassthroughMetadata per
     analysis and are copied verbatim (issue #83); the orientation evidence
-    each analysis earned in Phase 2 is stamped onto its row, and the hit
-    counts are added from the just-built index.
+    each analysis earned in Phase 2 is stamped onto its row, the hit counts
+    are added from the just-built index, and `csr` counts what it left out of
+    each (issue #338).
     """
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
@@ -1006,7 +1009,7 @@ def _write_indexes_and_metadata(
     ]
     write_analysis_records(
         staged.path / "analyses.tsv",
-        add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report)),
+        csr.counted(add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report))),
     )
 
 

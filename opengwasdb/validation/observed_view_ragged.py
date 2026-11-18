@@ -70,6 +70,7 @@ from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.validation.observed_view import (
+    SE_OUT_OF_RANGE_FAILING,
     ObservedViewRefused,
     ObservedViewVerdict,
     _AlidIndex,
@@ -80,7 +81,10 @@ from opengwasdb.validation.observed_view import (
     _open_checked,
     _plane_difference,
     _store_record,
+    above_the_bound,
     count_infinite_cells,
+    leaves_out,
+    se_out_of_range_accounting,
 )
 from opengwasdb.variants import VariantAxis, is_indexable_alid
 
@@ -107,6 +111,7 @@ FAILING_COUNTERS = (
     "non_canonical_marker",
     "target_variants_unordered",
     "quality_blocks_not_in_regions",
+    *SE_OUT_OF_RANGE_FAILING,
 )
 _INFORMATIONAL_COUNTERS = (
     "observed_in_source",
@@ -114,6 +119,7 @@ _INFORMATIONAL_COUNTERS = (
     "nan_rows",
     "regions",
     "infinite_cells",
+    "se_out_of_range_left_out",
 )
 _TOTAL_KEYS = (*_INFORMATIONAL_COUNTERS, *FAILING_COUNTERS)
 _DIFF_PLANES = ("z", "se", "eaf")
@@ -471,16 +477,24 @@ def _sample_and_compare(
     totals = dict.fromkeys(_TOTAL_KEYS, 0)
     max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
     listing: list[dict[str, Any]] = []
+    # A sampled Analysis is compared whole, so what it finds left out is exact for it.
+    found = np.zeros(len(source), dtype=np.int64)
+    exact = np.zeros(len(source), dtype=bool)
     for i in sampled:
         counts, diffs = _compare_analysis(pair, axis, sample, i)
+        found[i], exact[i] = counts["se_out_of_range_left_out"], True
+        # The accounting's counters are decided over the whole sample, below.
         for key in totals:
-            totals[key] += counts[key]
+            totals[key] += counts.get(key, 0)
         for plane in _DIFF_PLANES:
             max_diff[plane] = max(max_diff[plane], diffs[plane])
         entry = _listing_entry(source[i], i, chosen[i], bool(admitted[i]), counts)
         entry["blocks"] = sorted(b.block_id for b in sample.retained.blocks.get(i, []))
         listing.append(entry)
+    counters, accounting = se_out_of_range_accounting(pair.source, pair.target, found, exact)
+    totals.update(counters)
     return {
+        "se_out_of_range": accounting,
         "sample": {
             "analyses_checked": len(sampled),
             "non_admitted": sum(not admitted[i] for i in sampled),
@@ -515,7 +529,8 @@ def _listing_entry(
         "strata": sorted(strata), "admitted": admitted, "regions": counts["regions"],
         "observed_in_source": counts["observed_in_source"],
         "imputed": counts["imputed"], "nan_rows": counts["nan_rows"],
-        "failing": [k for k in FAILING_COUNTERS if counts[k]],
+        # The accounting's counters are the whole sample's, not one Analysis's.
+        "failing": [k for k in FAILING_COUNTERS if counts.get(k, 0)],
     }
 
 
@@ -533,6 +548,7 @@ def _unsampled_record() -> dict[str, Any]:
         },
         "totals": dict.fromkeys(_TOTAL_KEYS),
         "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
+        "se_out_of_range": None,
     }
 
 
@@ -603,8 +619,9 @@ def _check_analysis(
     present, at, gather = _locate(target_vi, mapped)
 
     imputed = raw_imputed.astype(np.uint8)
-    source_observed = _observed(source_cells)
     target_observed = _observed(target_cells)
+    left_out = _left_out(pair, source_cells, present)
+    source_observed = _observed(source_cells) & ~left_out
     both = source_observed & present
     matched = np.zeros(len(target_vi), dtype=bool)
     matched[at[both]] = True
@@ -630,6 +647,7 @@ def _check_analysis(
         "imputed_in_non_admitted": 0 if admitted else int(is_imputed.sum()),
         "imputed_outside_retained": int((is_imputed & outside).sum()) if admitted else 0,
         "missing_outside_retained": int((added & (tgt.state == State.MISSING) & outside).sum()),
+        "se_out_of_range_left_out": int(left_out.sum()),
     }
     diffs: dict[str, float] = {}
     for plane in _DIFF_PLANES:
@@ -637,6 +655,15 @@ def _check_analysis(
             getattr(source_cells, plane)[both], getattr(target_cells, plane)[at[both]]
         )
     return counts, diffs
+
+
+def _left_out(pair: _Pair, source_cells: _Cells, present: np.ndarray) -> np.ndarray:
+    """Source rows whose SE is above 65,504 that the target does not hold: the ones a
+    completion that `leaves_out` did not carry (issue #338), set aside and counted."""
+    if not leaves_out(pair.source, pair.target):
+        return np.zeros(len(present), dtype=bool)
+    left: np.ndarray = _observed(source_cells) & above_the_bound(source_cells) & ~present
+    return left
 
 
 def _added(n_target: int, from_source: np.ndarray) -> np.ndarray:

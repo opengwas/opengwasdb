@@ -30,6 +30,8 @@ import numpy as np
 
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
+from opengwasdb.encoding import association_codec
+from opengwasdb.encoding.association_codec import CellValues
 from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.variants.routing import collapse_duplicates
 
@@ -196,11 +198,13 @@ class _ShardPlan:
 
 @dataclass(frozen=True)
 class _ResolvedCheckpoint:
-    """One checkpoint's completion_quality rows and its fills, resolved and keyed."""
+    """One checkpoint's completion_quality rows and its fills, resolved and keyed,
+    and per Analysis the fills it left missing for an SE above `float16`'s range."""
 
     quality: list[_QualityRow]
     fills: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
     shard_ids: np.ndarray | None
+    left_out: dict[int, int]
 
 
 def _resolve_checkpoint(plan: _ShardPlan, ckpt: Path) -> _ResolvedCheckpoint:
@@ -208,8 +212,54 @@ def _resolve_checkpoint(plan: _ShardPlan, ckpt: Path) -> _ResolvedCheckpoint:
     with np.load(ckpt, allow_pickle=False) as d:
         quality = _checkpoint_quality_rows(d, plan.impute_mask)
         fills = _resolved_fills(d, plan.union, plan.n_variants, plan.impute_mask)
+    fills, quality, left_out = _without_se_out_of_range(fills, quality, ckpt)
     shard_ids = None if fills is None else plan.shard_key(fills[0], fills[1])
-    return _ResolvedCheckpoint(quality, fills, shard_ids)
+    return _ResolvedCheckpoint(quality, fills, shard_ids, left_out)
+
+
+def _without_se_out_of_range(
+    fills: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+    quality: list[_QualityRow],
+    ckpt: Path,
+) -> tuple[
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+    list[_QualityRow],
+    dict[int, int],
+]:
+    """The fills a Store holds, the block's quality rows counting them, and per
+    Analysis how many it left missing (issue #338).
+
+    `storable` judges the fills, as it judges every cell a writer holds (ADR
+    0077): one whose SE is above the largest a `float16` plane holds is an
+    association no Store of this format holds, so it is left missing here, where
+    a candidate fill becomes the release's -- as the ancestry filter is -- and the
+    block's `completion_quality` row counts it missing, not imputed. Dropped
+    later, at the write, the table and the arrays would disagree.
+    """
+    if fills is None:
+        return None, quality, {}
+    rows, ai, z, se = fills
+    n_analyses = int(ai.max()) + 1 if ai.size else 0
+    judged = association_codec.storable(
+        CellValues(z, se), ai, n_analyses, where=f"{ckpt}, the fills"
+    )
+    if judged.stored.all():
+        return fills, quality, {}
+    counts = judged.se_out_of_range
+    left_out = {int(a): int(counts[a]) for a in np.flatnonzero(counts)}
+    adjusted = []
+    for row in quality:
+        k = left_out.get(row[0], 0)
+        adjusted.append(row if not k else (row[0], row[1], row[2], row[3] - k, row[4] + k))
+    unaccounted = set(left_out) - {row[0] for row in quality}
+    if unaccounted or any(row[3] < 0 for row in adjusted):
+        raise ValueError(
+            f"{ckpt}: fills left missing for an SE above float16's range are not "
+            f"among the imputed cells the block's completion_quality rows count "
+            f"(Analyses {sorted(left_out)})"
+        )
+    keep = judged.stored
+    return (rows[keep], ai[keep], z[keep], se[keep]), adjusted, left_out
 
 
 def shard_checkpoint_fills(
@@ -220,7 +270,7 @@ def shard_checkpoint_fills(
     shard_key: ShardKey,
     impute_mask: np.ndarray | None = None,
     n_workers: int = 1,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, dict[int, int]]:
     """Resolve checkpoint fills into raw shard files, one per `shard_key` value.
 
     Checkpoints store fill rows by ALID because the union variant axis is built
@@ -241,7 +291,8 @@ def shard_checkpoint_fills(
     the write, left ``completion_quality`` -- and through it ``analyses.tsv``'s
     ``completion_n_imputed_total`` and ``eaf_scope`` -- counting cells the
     release does not contain. Filtered once, here, the table and the arrays
-    cannot disagree.
+    cannot disagree. So is a fill whose SE is above 65,504 (issue #338,
+    `_without_se_out_of_range`), counted per Analysis index in the third value.
     """
     fill_shard_dir = staged.path / "fill_shards"
     if fill_shard_dir.exists():
@@ -250,12 +301,15 @@ def shard_checkpoint_fills(
 
     quality_count = 0
     quality_batch: list[_QualityRow] = []
+    left_out: dict[int, int] = {}
     checkpoints = sorted(blocks_dir.glob("*.npz"))
     plan = _ShardPlan(union, n_variants, shard_key, impute_mask)
     workers = _resolve_workers(checkpoints, n_workers)
 
     with staged.index_connection() as dst_db:
         for resolved in ordered_map(_resolve_checkpoint, checkpoints, workers, shared=plan):
+            for analysis, count in resolved.left_out.items():
+                left_out[analysis] = left_out.get(analysis, 0) + count
             quality_count += len(resolved.quality)
             quality_batch.extend(resolved.quality)
             if len(quality_batch) >= _QUALITY_BATCH_SIZE:
@@ -267,7 +321,7 @@ def shard_checkpoint_fills(
 
         insert_completion_quality_batch(dst_db, quality_batch)
 
-    return fill_shard_dir, quality_count
+    return fill_shard_dir, quality_count, left_out
 
 
 def _resolve_workers(checkpoints: list[Path], n_workers: int) -> int:

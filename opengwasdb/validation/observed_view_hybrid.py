@@ -29,6 +29,13 @@ Store's observed view across both, by ALID:
   Over every Analysis, the completed Overflow holds the source's count less its
   crossovers, none of its associations is at a Dense variant, and none is
   marked imputed.
+* **What completion left out, exactly (issue #338).** A source before format
+  0.2.3 may hold an SE above 65,504. Completion does not carry such an
+  association: an Overflow row is dropped, and a crossover is not folded, so
+  its Dense cell keeps what Dense completion put there. Both are found over
+  every Analysis; the Dense Component's own are sampled. The root's count and
+  the Dense Component's are each held to their source's plus the parts their
+  completions record (`se_out_of_range_accounting`).
 """
 
 from __future__ import annotations
@@ -49,10 +56,11 @@ from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import inner_chunk_of
-from opengwasdb.store.open import OpenGWASDBStore
+from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.observed_view import (
     _DIFF_PLANES,
     FAILING_COUNTERS,
+    SE_OUT_OF_RANGE_FAILING,
     ObservedViewRefused,
     ObservedViewVerdict,
     _analyses_record,
@@ -69,7 +77,10 @@ from opengwasdb.validation.observed_view import (
     _sample_and_compare,
     _shard_rows,
     _unsampled_record,
+    above_the_bound,
     count_infinite_cells,
+    leaves_out,
+    se_out_of_range_accounting,
 )
 from opengwasdb.variants import VariantAxis
 
@@ -90,6 +101,7 @@ _OVERFLOW_INFORMATIONAL = (
     "crossovers",
     "child_associations",
     "infinite_cells",
+    "se_out_of_range_left_out",
 )
 _EVERY_ANALYSIS_FAILING = ("observed_in_both", "imputed_cells", "analyses_count_mismatch")
 CROSSOVER_FAILING = (
@@ -100,6 +112,8 @@ CROSSOVER_FAILING = (
     "observed_missing_in_child",
     "z_se_missingness_mismatch",
     "non_canonical_marker",
+    # A crossover completion left out for its SE, yet an observed Dense cell (#338).
+    "left_out_but_observed",
 )
 
 
@@ -135,6 +149,7 @@ def check_hybrid(
     record = {"layout": "hybrid", **record}
     record["components"] = {"dense": dense, "overflow": overflow}
     record["crossovers"] = sides.crossovers
+    record["se_out_of_range"] = sides.accounting
     record["failures"] = _failures(record, axes)
     record["passed"] = not record["failures"]
     record["seconds"] = {"axis": round(axis_seconds, 1), "total": round(time.time() - started, 1)}
@@ -302,6 +317,8 @@ class _Sides(NamedTuple):
     dense: dict[str, Any]
     overflow: dict[str, Any]
     crossovers: dict[str, Any]
+    #: The root's accounting of what completion left out for an SE above 65,504.
+    accounting: dict[str, Any] | None
 
 
 def _compare_both(
@@ -311,17 +328,33 @@ def _compare_both(
     seed: int,
     n_random: int,
 ) -> _Sides:
-    crossovers, every_analysis = _scan_overflows(pair, axes)
-    crossover_record = _check_crossovers(pair, crossovers)
+    crossovers, every_analysis, overflow_left_out = _scan_overflows(pair, axes)
+    crossover_record, crossovers_left_out = _check_crossovers(pair, crossovers)
     on_inserted = axes.inserted[crossovers.rows]
     child = _CrossoversSetAside(
         pair.child_component, crossovers.rows[on_inserted], crossovers.cols[on_inserted]
     )
-    dense = _sample_and_compare(axes.dense, pair.dense.parent, child, geometry, seed, n_random)
+    dense, dense_found = _sample_and_compare(
+        axes.dense, pair.dense.parent, child, geometry, seed, n_random,
+        leaves_out=leaves_out(pair.dense.source, pair.dense.target),
+    )
     dense["totals"]["crossover_cells"] = child.set_aside
+    exact = np.full(len(dense_found), dense["bands_checked"] == -(-pair.dense.parent.n_rows
+                                                                    // geometry[0]))
+    # The Dense Component counts its own cells, the crossovers it was not given among
+    # them; the root both components (issue #338).
+    counters, dense["se_out_of_range"] = se_out_of_range_accounting(
+        open_store(dense_component_path(pair.dense.source_path)), pair.child_component,
+        dense_found + crossovers_left_out, exact,
+    )
+    dense["totals"].update(counters)
+    root_counters, accounting = se_out_of_range_accounting(
+        pair.dense.source, pair.dense.target,
+        dense_found + crossovers_left_out + overflow_left_out, exact,
+    )
     overflow = _sample_overflow(pair, axes, seed, n_random)
     overflow["all_analyses"] = every_analysis
-    return _Sides(dense, overflow, crossover_record)
+    return _Sides(dense, overflow, crossover_record, {**accounting, "totals": root_counters})
 
 
 def _unchecked() -> _Sides:
@@ -349,7 +382,8 @@ def _unchecked() -> _Sides:
         "max_abs_diff": dict.fromkeys(_DIFF_PLANES),
         "reencoding_max_abs_diff": dict.fromkeys(_DIFF_PLANES),
     }
-    return _Sides(dense, overflow, crossovers)
+    dense["se_out_of_range"] = None
+    return _Sides(dense, overflow, crossovers, None)
 
 
 def _failures(record: Mapping[str, Any], axes: _HybridAxes) -> list[str]:
@@ -364,6 +398,11 @@ def _failures(record: Mapping[str, Any], axes: _HybridAxes) -> list[str]:
         ("crossovers", record["crossovers"]["totals"], CROSSOVER_FAILING),
     ):
         failures.extend(f"{prefix}.{name}" for name in names if counts[name])
+    accounting = record["se_out_of_range"]
+    if accounting is not None:
+        failures.extend(
+            f"root.{name}" for name in SE_OUT_OF_RANGE_FAILING if accounting["totals"][name]
+        )
     return failures
 
 
@@ -390,17 +429,26 @@ class _Crossovers(NamedTuple):
     source: _Cells
 
 
-def _scan_overflows(pair: _HybridPair, axes: _HybridAxes) -> tuple[_Crossovers, dict[str, int]]:
+def _scan_overflows(
+    pair: _HybridPair, axes: _HybridAxes
+) -> tuple[_Crossovers, dict[str, int], np.ndarray]:
     """Read both Overflows' variant indices once, Analysis by Analysis.
 
     Each source association is a crossover when its completed shared row is a
     completed Dense row. The completed Overflow must then hold the source's count
-    less those, none at a Dense variant, and none marked imputed.
+    less those, and less the rows completion left out for an SE above 65,504,
+    none at a Dense variant, and none marked imputed. Those rows are returned per
+    Analysis. Only a source before format 0.2.3 can hold one, so only such a
+    source's SEs are read: a later one's are 0 by its format, which `validate`
+    holds it to.
     """
     parent, child = pair.parent_overflow, pair.child_overflow
     counts = dict.fromkeys(_EVERY_ANALYSIS_FAILING, 0)
     found: list[tuple[np.ndarray, np.ndarray, _Cells]] = []
-    for analysis in range(len(parent.offsets) - 1):
+    n_analyses = len(parent.offsets) - 1
+    left_out = np.zeros(n_analyses, dtype=np.int64)
+    read_ses = leaves_out(pair.dense.source, pair.dense.target)
+    for analysis in range(n_analyses):
         dense_rows = axes.dense_row_of_shared[
             axes.shared.source_to_target[parent.variant_indices(analysis, "source")]
         ]
@@ -408,13 +456,17 @@ def _scan_overflows(pair: _HybridPair, axes: _HybridAxes) -> tuple[_Crossovers, 
         if crossing.size:
             found.append((dense_rows[crossing], np.full(crossing.size, analysis),
                           _values_at(parent.reader, parent.segment(analysis)[0] + crossing)))
+        if read_ses:
+            lo, _ = parent.segment(analysis)
+            kept = np.flatnonzero(dense_rows < 0)
+            left_out[analysis] = int(above_the_bound(_values_at(parent.reader, lo + kept)).sum())
         child_indices = child.variant_indices(analysis, "target")
         counts["observed_in_both"] += int((axes.dense_row_of_shared[child_indices] >= 0).sum())
         counts["analyses_count_mismatch"] += int(
-            child_indices.size != len(dense_rows) - crossing.size
+            child_indices.size != len(dense_rows) - crossing.size - left_out[analysis]
         )
         counts["imputed_cells"] += _imputed_in(child, analysis)
-    return _gather_crossovers(found), counts
+    return _gather_crossovers(found), counts, left_out
 
 
 def _values_at(reader: CsrReader, positions: np.ndarray) -> _Cells:
@@ -468,7 +520,7 @@ class _Tally:
 
 
 # The crossover counters, which the crossover check and the unchecked record share.
-_CROSSOVER_KEYS = (*CROSSOVER_FAILING, "infinite_cells")
+_CROSSOVER_KEYS = (*CROSSOVER_FAILING, "infinite_cells", "se_out_of_range_left_out")
 
 
 def _crossover_tally() -> _Tally:
@@ -477,16 +529,25 @@ def _crossover_tally() -> _Tally:
     return _Tally(_CROSSOVER_KEYS)
 
 
-def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, Any]:
+def _check_crossovers(
+    pair: _HybridPair, crossovers: _Crossovers
+) -> tuple[dict[str, Any], np.ndarray]:
     """Compare every crossover with its completed Dense cell, one completed chunk-row at a time.
 
     A chunk-row is read whole across its Analyses, as a Dense read costs whatever
     it touches. `reencoding_max_abs_diff` is how far the Dense codec moved the
     source values; it is informational, as moving them is what the codec does.
+
+    A crossover whose SE is above 65,504 is one a completion at format 0.2.3 or
+    later does not fold (issue #338): its Dense cell is Dense completion's, imputed
+    or missing, and must not hold an observed one. Those are returned per Analysis.
     """
     child = pair.dense.child
     codec = _DenseCodec.of(pair.child_component)
     tally, shift = _crossover_tally(), _crossover_tally()
+    n_analyses = pair.dense.child.n_analyses
+    left_out_by_analysis = np.zeros(n_analyses, dtype=np.int64)
+    unfolded = leaves_out(pair.dense.source, pair.dense.target)
     for lo, hi in _runs_by_chunk_row(crossovers.rows, int(inner_chunk_of(child.z_array)[0])):
         rows, cols = crossovers.rows[lo:hi], crossovers.cols[lo:hi]
         source = _Cells(*(getattr(crossovers.source, p)[lo:hi] for p in _DIFF_PLANES))
@@ -495,6 +556,14 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
         assert band.flags is not None  # refused when the pair was opened
         imputed = band.flags[rows - r0, cols]
         found = _Cells(*(getattr(band, p)[rows - r0, cols] for p in _DIFF_PLANES))
+        left = above_the_bound(source) if unfolded else np.zeros(len(rows), dtype=bool)
+        if left.any():
+            left_out_by_analysis += _tally_unfolded(tally, cols, found, imputed, left, n_analyses)
+            kept = np.flatnonzero(~left)
+            rows, cols, imputed = rows[kept], cols[kept], imputed[kept]
+            source, found = _cells_at(source, kept), _cells_at(found, kept)
+            if not len(rows):
+                continue
         expected = codec.round_trip(rows, cols, source)
         tally.totals["observed_missing_in_child"] += int((~_observed(found)).sum())
         tally.totals["observed_marked_imputed"] += int((imputed != 0).sum())
@@ -516,7 +585,25 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
         "rows": len(np.unique(crossovers.rows)),
         **tally.record(),
         "reencoding_max_abs_diff": shift.max_abs_diff,
-    }
+    }, left_out_by_analysis
+
+
+def _tally_unfolded(
+    tally: _Tally,
+    cols: np.ndarray,
+    found: _Cells,
+    imputed: np.ndarray,
+    left: np.ndarray,
+    n_analyses: int,
+) -> np.ndarray:
+    """Count the crossovers completion did not fold (`left`), and those whose Dense
+    cell is nonetheless observed and unflagged; return them per Analysis."""
+    tally.totals["se_out_of_range_left_out"] += int(left.sum())
+    tally.totals["left_out_but_observed"] += int(
+        (_observed(_cells_at(found, np.flatnonzero(left))) & (imputed[left] == 0)).sum()
+    )
+    by_analysis: np.ndarray = np.bincount(cols[left], minlength=n_analyses)
+    return by_analysis
 
 
 def _runs_by_chunk_row(rows: np.ndarray, chunk_rows: int) -> Iterator[tuple[int, int]]:
@@ -552,12 +639,19 @@ class _DenseCodec(NamedTuple):
         tally counts (spec §15). It is still compared statistic by statistic: its
         Z as the plane holds it, and its SE beside a stand-in Z. A crossover with
         both missing is a missing cell, and round-trips as one.
+
+        A crossover whose SE is above 65,504 is compared here only where completion
+        carried it (`_check_crossovers` sets aside the ones it left out): as a fold
+        before format 0.2.3 wrote it, its SE as a `float16` plane holds it and its
+        other statistics beside a stand-in SE, since the codec now leaves such an
+        association out (issue #338).
         """
         z_gone, se_gone = np.isnan(values.z), np.isnan(values.se)
         z_only, se_only = se_gone & ~z_gone, z_gone & ~se_gone
+        big = above_the_bound(values)
         paired = CellValues(
             np.where(z_only, np.nan, np.where(se_only, np.float32(0.0), values.z)),
-            values.se,
+            np.where(big, np.float32(1.0), values.se),
             values.eaf,
         )
         back = self.codec.round_trip(
@@ -570,7 +664,8 @@ class _DenseCodec(NamedTuple):
             StoreCodec(self.codec.plan).quantise_z(values.z),
             np.where(z_gone, np.float32(np.nan), back.z),
         ).astype(np.float32)
-        return _Cells(z, back.se, back.eaf)
+        held = StoreCodec(self.codec.plan).float16_se(values.se).astype(np.float32)
+        return _Cells(z, np.where(big, held, back.se).astype(np.float32), back.eaf)
 
 
 class _CrossoversSetAside(_Planes):
@@ -636,12 +731,19 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
     off_dense = np.flatnonzero(axes.dense_row_of_shared[child.variant_index] < 0)
     p, c = _match(keys[kept], child.variant_index[off_dense])
     p, c = kept[p], off_dense[c]
+    # A row the completed Overflow lacks whose SE is above 65,504 is one completion
+    # left out (issue #338), which `_scan_overflows` accounts for over every Analysis.
+    unmatched = np.setdiff1d(kept, p)
+    left_out = 0
+    if leaves_out(pair.dense.source, pair.dense.target):
+        left_out = int(above_the_bound(_cells_at(parent.cells, unmatched)).sum())
     parent_markers, child_markers = parent.cells.marker_tally(), child.cells.marker_tally()
     counts = {
         "parent_associations": len(keys),
         "crossovers": int(crossing.sum()),
         "child_associations": len(child.variant_index),
-        "observed_missing_in_child": len(kept) - len(p),
+        "se_out_of_range_left_out": left_out,
+        "observed_missing_in_child": len(kept) - len(p) - left_out,
         "missing_became_observed": len(off_dense) - len(c),
         "z_se_missingness_mismatch": (
             parent_markers.count(State.PARTIAL) + child_markers.count(State.PARTIAL)

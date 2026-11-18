@@ -36,6 +36,7 @@ __all__ = [
     "check_format_version_stamp",
     "check_writable_format_version",
     "check_writable_zarr_layout",
+    "completed_format_version",
     "destination_lock",
     "directory_lock",
     "format_version_for",

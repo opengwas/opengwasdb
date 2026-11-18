@@ -554,7 +554,7 @@ def _merge_and_write(
     try:
         with _patched(merge, stages), _patched(band, stages):
             with stages.stage("merge_other"):
-                encoding, _, effective_chunks, fill_dir = dense._merge_checkpoint_fills(
+                encoding, _, effective_chunks, fill_dir, _ = dense._merge_checkpoint_fills(
                     staged, sliced, blocks_dir, ld_dir, ancestry, source_encoding, write_workers
                 )
             assert dense.completion_band_rows(

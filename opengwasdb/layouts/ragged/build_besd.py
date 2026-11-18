@@ -252,7 +252,7 @@ def _build_besd_release(
     )
     analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
-    _write_besd_outputs(staged, analyses, encoding)
+    _write_besd_outputs(staged, csr.counted(analyses), encoding)
     _write_manifest(
         staged,
         request.store_id,

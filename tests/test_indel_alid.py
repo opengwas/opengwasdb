@@ -531,15 +531,16 @@ def _sorted_deletion(line: str, *, source_alid: str | None = None) -> str:
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
-def test_a_build_is_0_2_2_and_passes_the_indel_order_rule(tmp_path, layout: str) -> None:
-    """Every build spells an indel reference first, so stamps 0.2.2 (spec §21.3) and is
+def test_a_build_is_0_2_3_and_passes_the_indel_order_rule(tmp_path, layout: str) -> None:
+    """Every build spells an indel reference first, so stamps 0.2.2 or later -- 0.2.3,
+    as it also counts what it left out for an SE above 65,504 (spec §21.3) -- and is
     held to the rule (ADR 0079)."""
     from opengwasdb.store.open import open_store
     from opengwasdb.validation.validate import validate_store
 
     store = _observed_deletion_store(tmp_path, layout)
     assert DELETION_AT_950000 in _alids_at_950000(store), "the fixture must hold the deletion"
-    assert open_store(store).manifest.format_version == "0.2.2"
+    assert open_store(store).manifest.format_version == "0.2.3"
 
     result = validate_store(store, rules={"variant_table.indel_order"})
 

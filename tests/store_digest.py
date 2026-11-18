@@ -22,8 +22,8 @@ completion's Phase 3 streamed: running the identity tests with
 `OPENGWASDB_WRITE_PINS` set to a directory writes each fixture's digest there
 instead of comparing it, and the pins are those files, merged. A test compares
 the new code with the old one, never the new code with itself. The two manifest
-entries #381 changed are the one exception: each pin carries them as that code
-writes them (`test_completion_identity`).
+entries #381 changed, and the three #338 changed, are the exceptions: each pin
+carries them as that code writes them (`test_completion_identity`).
 
 The Ragged pins were re-derived once, at issue #430, which completes a Store whose
 coverage is not `cis` only from the region table it carries: each pinned source

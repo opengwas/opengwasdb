@@ -1,11 +1,10 @@
 """Every writer holds what `storable` returns, not the cells it was handed (#350).
 
-Today's gate stores every cell unchanged, so a writer that ignored its result
-would write the same bytes and nothing would show it. Issue #338 changes only
-the gate, so each writer must already honour a result that leaves an
-association out: here a gate is injected that refuses one chosen association,
-blanking its cells as a refusal does, and the Store must hold neither the
-association nor its frequency (#350 D5).
+The gate leaves out an association only for an SE above `float16`'s range
+(issue #338), which few fixtures hold, so a writer that ignored its result would
+mostly write the same bytes and nothing would show it. Here a gate is injected
+that refuses one chosen association, blanking its cells as a refusal does, and
+the Store must hold neither the association nor its frequency (#350 D5).
 """
 
 from __future__ import annotations
@@ -92,7 +91,9 @@ def _inject(
             None if cells.eaf is None else blanked(cells.eaf, np.nan),
             None if cells.imputed is None else blanked(cells.imputed, 0),
         )
-        return Storable(cells_kept, kept.stored & ~out, kept.se_out_of_range)
+        return Storable(
+            cells_kept, kept.stored & ~out, kept.se_out_of_range, kept.imputed_out_of_range
+        )
 
     for module in modules:
         monkeypatch.setattr(module, "storable", gate, raising=False)

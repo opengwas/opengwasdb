@@ -58,6 +58,7 @@ _FULL_ANALYSIS = Analysis(
     completion_median_pearson_r="0.91",
     completion_n_imputed_total="1200",
     completion_n_missing_total="3",
+    n_missing_se_out_of_range="2",
     eaf_orientation="passed",
     eaf_orientation_r="0.999200",
     eaf_orientation_n="18422",
@@ -78,7 +79,8 @@ def test_analysis_columns_match_the_adr_0035_order():
     # `eaf_scope` joined the list in ADR 0036, between the sample-size
     # interpretation columns and the effect-scale ones it sits alongside.
     # `eaf_orientation*` joined it for issue #115, alongside the other
-    # build-time evidence columns a store carries and a manifest cannot.
+    # build-time evidence columns a store carries and a manifest cannot, and
+    # `n_missing_se_out_of_range` for issue #338, beside the completion counts.
     assert ANALYSIS_COLUMNS == (
         "analysis_index",
         "analysis_id",
@@ -111,6 +113,7 @@ def test_analysis_columns_match_the_adr_0035_order():
         "completion_median_pearson_r",
         "completion_n_imputed_total",
         "completion_n_missing_total",
+        "n_missing_se_out_of_range",
         "eaf_orientation",
         "eaf_orientation_r",
         "eaf_orientation_n",
