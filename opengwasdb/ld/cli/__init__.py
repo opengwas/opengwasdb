@@ -42,6 +42,15 @@ def _parser() -> argparse.ArgumentParser:
         prog="ogld", description="Build, validate and inspect LD Stores."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    _build_command(commands)
+    _validate_command(commands)
+    _derive_command(commands)
+    commands.add_parser("info", help="print the provenance").add_argument("location")
+    return parser
+
+
+def _build_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """`ogld build`: a Source Panel's genotypes to a store (docs/spec/build-inputs.md)."""
     b = commands.add_parser(
         "build", help="build an LD Store from a Source Panel (docs/spec/build-inputs.md)"
     )
@@ -79,9 +88,17 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--mac-min", type=int, default=unset)
     b.add_argument("--info-min", type=_optional_float, default=unset, help="a number, or none")
     b.add_argument("--threads", type=int, default=unset)
+
+
+def _validate_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """`ogld validate`: every rule of spec §12 against a store."""
     v = commands.add_parser("validate", help="run every validation rule")
     v.add_argument("location")
     v.add_argument("--threads", type=_threads, default=1, help="blocks read and checked at once")
+
+
+def _derive_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """`ogld derive-partners`: the Partner Rows for a store built before them (§6.2)."""
     d = commands.add_parser(
         "derive-partners",
         help="add the Partner Rows to an existing LD Store (docs/spec/partner-rows.md §6.2)",
@@ -112,8 +129,6 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="afterwards remove the Proxy Index, if the store's Partner Rows pass their rules",
     )
-    commands.add_parser("info", help="print the provenance").add_argument("location")
-    return parser
 
 
 def _given(args: argparse.Namespace, *names: str) -> dict[str, Any]:

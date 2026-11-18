@@ -86,17 +86,10 @@ _NAMED: Final = 5
 #: derive-partners` runs these alone, because the band, the index and the Far Pairs of a store it
 #: derives from were judged when it was built and re-reading them would cost a whole validation
 #: per run (ogld#69).
-PARTNER_RULES: Final = (
-    "partners.files",
-    "partners.frames",
-    "partners.rows",
-    "partners.codes",
-    "partners.distance",
-    "partners.threshold",
-    "partners.symmetric",
-    "partners.near",
-    "partners.far",
-    "provenance.partner_threshold",
+PARTNER_RULES: Final = tuple(
+    rule
+    for rule in VALIDATION_RULES
+    if rule.startswith("partners.") or rule == "provenance.partner_threshold"
 )
 
 

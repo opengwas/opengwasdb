@@ -844,6 +844,26 @@ def open_partner_frames(root: zarr.Group, chrom: str, cache: FrameCache) -> Part
     return PartnerFrames(member, chrom, cache)
 
 
+def _beside(root: zarr.Group, container: Path | None) -> Path:
+    """The directory a chromosome's group is built in and published into: `container`, or the
+    store's own `partners/` group, which this makes a node of its hierarchy (spec §1, §5.1).
+
+    A derivation supplies a plain directory and makes it a node only once every chromosome is in
+    place, so a run killed part-way leaves the store it was (#69)."""
+    if container is None:
+        return layout.local_directory(root.require_group(layout.PARTNERS).store_path)
+    return container
+
+
+def _remove_stale(beside: Path, chrom: str) -> None:
+    """Remove what a writer that crashed left of this chromosome: a group at `.<chrom>.tmp-*`
+    beside where it is published, which a zarr listing warns about. None can be live, because a
+    store has one writer (see `FramesGroup`)."""
+    for stale in beside.iterdir():
+        if stale.name.startswith(f".{chrom}.tmp-"):
+            shutil.rmtree(stale, ignore_errors=True)
+
+
 class FramesGroup:
     """One chromosome's Partner Rows group, written a frame at a time (§5.1, §5.3; ogld#67).
 
@@ -895,24 +915,14 @@ class FramesGroup:
         self._chrom = chrom
         self._rows = rows
         self._root = root
-        # `partners/` is a node of the store's own hierarchy (spec §1): its metadata is what keeps
-        # zarr's `members()` from warning that the component is not one. A derivation supplies the
-        # directory alone, and makes it a node only once every chromosome is in place (#69).
-        if container is None:
-            beside = layout.local_directory(root.require_group(layout.PARTNERS).store_path)
-        else:
-            beside = container
+        beside = _beside(root, container)
         self._final = beside / chrom
         if self._final.exists():
             raise FileExistsError(
                 f"{layout.partners_path(chrom)} exists: a chromosome's Partner Rows are written "
                 "once"
             )
-        # A writer that crashed left a group of this chromosome at `.<chrom>.tmp-*`, which a
-        # zarr listing warns about: none can be live, because a store has one writer (see below).
-        for stale in beside.iterdir():
-            if stale.name.startswith(f".{chrom}.tmp-"):
-                shutil.rmtree(stale, ignore_errors=True)
+        _remove_stale(beside, chrom)
         self._directory = Path(tempfile.mkdtemp(prefix=f".{chrom}.tmp-", dir=beside))
         # `mkdtemp` made the directory, so `w` only fills it; no other writer can see it.
         self._group = zarr.open_group(str(self._directory), mode="w", zarr_format=3)
