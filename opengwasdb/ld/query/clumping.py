@@ -18,6 +18,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format import Refusal, RefusalReason
+from ogld.format.geometry import global_rows, local_rows
 from ogld.query.requests import window_of
 from ogld.query.results import Clumps
 from ogld.store import StoreReader
@@ -77,15 +78,17 @@ class _Component:
     """Hits with no gap of W or more between neighbours: one unit of independent work.
 
     `part` is the component's indices in the clump's hit array, so its results scatter back
-    without a search; `rows` are those hits' Variant Set rows, ascending, and `position` their
-    positions. `start` is the first Variant Set row of the hits' chromosome, which is what turns a
-    Partner Rows row's chromosome-local partner into a Variant Set row (partner-rows §7).
+    without a search; `rows` are those hits' Variant Set rows, ascending, `local` the same hits as
+    their chromosome's rows, and `position` their positions. `start` is the first Variant Set row of
+    the hits' chromosome, which is what turns a Partner Rows row's chromosome-local partner into a
+    Variant Set row (partner-rows §7).
     """
 
     chrom: str
     start: int
     part: npt.NDArray[np.int64]
     rows: npt.NDArray[np.int64]
+    local: npt.NDArray[np.int64]
     position: npt.NDArray[np.int64]
     score: npt.NDArray[np.float64]
 
@@ -118,10 +121,18 @@ def _components(
         # Hits on one chromosome ascend with their rows, and so with their positions (spec §2).
         cuts = np.flatnonzero(np.diff(position[members]) >= window) + 1
         tasks.extend(
-            _Component(str(name), start, part, rows[part], position[part], scores[part])
+            _Component(
+                str(name),
+                start,
+                part,
+                rows[part],
+                local_rows(rows[part], start),
+                position[part],
+                scores[part],
+            )
             for part in np.split(members, cuts)
         )
-    workers = reader.query_workers
+    workers = reader._query_workers
     if workers == 1 or len(tasks) <= 1:
         results = [_component(reader, task, r2=r2, window=window) for task in tasks]
     else:
@@ -176,8 +187,8 @@ def _component(
         if lead[i] >= 0:
             continue
         lead[i], r_lead[i] = i, 1.0
-        partners, codes = reader.partner_row(task.chrom, int(task.rows[i]) - task.start)
-        at_rows = partners.astype(np.int64) + task.start
+        partners, codes = reader.partner_row(task.chrom, int(task.local[i]))
+        at_rows = global_rows(partners, task.start)
         inside = (at_rows >= lo) & (at_rows <= hi)
         at = slots[at_rows[inside] - lo]
         r = reader.encoding.dequantise(codes[inside])

@@ -8,6 +8,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format import Codes
+from ogld.format.geometry import global_rows, local_rows, owners
 from ogld.query.requests import window_of
 from ogld.query.results import Proxies
 from ogld.store import StoreReader
@@ -74,9 +75,9 @@ def _partner_rows(
     for name in np.unique(chrom):
         members = np.flatnonzero(chrom == name)
         start = reader.chromosome_range(str(name))[0]
-        indptr, at, row_codes = reader.partner_rows(str(name), queries[members] - start)
-        owner.append(np.repeat(members, np.diff(indptr)))
-        partner.append(at.astype(np.int64) + start)
+        indptr, at, row_codes = reader.partner_rows(str(name), local_rows(queries[members], start))
+        owner.append(owners(np.diff(indptr), members))
+        partner.append(global_rows(at, start))
         codes.append(row_codes)
     if not codes:
         return (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ogld.format import judge_request
+from ogld.format import judge_partner_request
 from ogld.store import StoreReader
 
 
@@ -18,7 +18,7 @@ def window_of(reader: StoreReader, *, r2: float, kb: float) -> float:
     """
     t_partner = reader.require_partner_rows()
     p = reader.provenance
-    decision = judge_request(
+    decision = judge_partner_request(
         r2=r2,
         kb=kb,
         t_far=p["t_far"],

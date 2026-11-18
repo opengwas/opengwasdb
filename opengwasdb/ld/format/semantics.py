@@ -162,28 +162,53 @@ class Decision:
             raise Refusal(self.refusal, self.detail)
 
 
-def judge_request(
-    *, r2: float, kb: float, t_far: float, near_bp: int, far_bp: int, t_partner: float | None = None
-) -> Decision:
+def judge_request(*, r2: float, kb: float, t_far: float, near_bp: int, far_bp: int) -> Decision:
     """Answered or refused, for `clump` and `proxies` (spec §9).
 
     The pairs considered are those with d ≤ W = kb × 1,000 bp, and one reaches the
-    threshold when r̂² ≥ r2. Answered when W ≤ near_bp with r2 ≥ t_partner, because the
-    Partner Rows hold every pair that could reach it, and when near_bp < W ≤ far_bp with
-    r2 ≥ t_far, because every pair the store left out there has r̂² < t_far ≤ r2. r2 equal
-    to t_partner or t_far is answered. The distances and the two thresholds are the store's
-    recorded ones; `t_partner` is None for a 0.1.0 store, which holds no Partner Rows and
-    records no Partner Threshold, and then the window is judged as it was before 0.2.0.
+    threshold when r̂² ≥ r2. Answered when W ≤ near_bp, at any r2, because the Near Band
+    is complete; and when near_bp < W ≤ far_bp with r2 ≥ t_far, because every pair the
+    store left out there has r̂² < t_far ≤ r2. r2 = t_far exactly is answered. The
+    distances and t_far are the store's recorded ones.
     """
     if not (math.isfinite(kb) and kb >= 0):
-        return Decision(
-            RefusalReason.INVALID,
-            f"r2 must be in [0, 1] and kb finite and ≥ 0: r2={r2}, kb={kb}",
-            math.nan,
-        )
-    return judge_window(
+        return _invalid(r2, kb)
+    return _judged_window(
+        r2=r2, window=kb * 1000, t_far=t_far, near_bp=near_bp, far_bp=far_bp, t_partner=None
+    )
+
+
+def judge_window(
+    *, r2: float, window_bp: float, t_far: float, near_bp: int, far_bp: int
+) -> Decision:
+    """`judge_request` for a window already in bp, W: the same rule, one copy of it.
+
+    The reader asks this before it reads a variant's partners (ogld#14), so a window it is
+    handed is answered or refused exactly as the request that made it was, never re-decided
+    at another edge."""
+    return _judged_window(
+        r2=r2, window=window_bp, t_far=t_far, near_bp=near_bp, far_bp=far_bp, t_partner=None
+    )
+
+
+def judge_partner_request(
+    *, r2: float, kb: float, t_far: float, near_bp: int, far_bp: int, t_partner: float
+) -> Decision:
+    """Answered or refused, for `clump` and `proxies`, which read the Partner Rows (spec §9).
+
+    It is `judge_request`'s rule and one more row: from format 0.2.0 a request within `near_bp`
+    whose r2 is below the store's recorded `t_partner` is refused with
+    `threshold_below_t_partner`, because the Partner Rows hold only the pairs at or above the
+    Partner Floor and a row's absence decides nothing below it (partner-rows §8.1). Above
+    `near_bp` nothing changes: the Far Pairs' floor is t_far. r2 = t_partner exactly is answered.
+    A store that records no `t_partner` never reaches this: the queries refuse it first, naming
+    the missing component.
+    """
+    if not (math.isfinite(kb) and kb >= 0):
+        return _invalid(r2, kb)
+    return _judged_window(
         r2=r2,
-        window_bp=kb * 1000,
+        window=kb * 1000,
         t_far=t_far,
         near_bp=near_bp,
         far_bp=far_bp,
@@ -191,23 +216,19 @@ def judge_request(
     )
 
 
-def judge_window(
-    *,
-    r2: float,
-    window_bp: float,
-    t_far: float,
-    near_bp: int,
-    far_bp: int,
-    t_partner: float | None = None,
-) -> Decision:
-    """`judge_request` for a window already in bp, W: the same rule, one copy of it.
+def _invalid(r2: float, kb: float) -> Decision:
+    """The refusal a window that is not a distance, or an r2 outside [0, 1], is given."""
+    return Decision(
+        RefusalReason.INVALID,
+        f"r2 must be in [0, 1] and kb finite and ≥ 0: r2={r2}, kb={kb}",
+        math.nan,
+    )
 
-    The reader asks this before it reads a variant's partners (ogld#14), so a window it is
-    handed is answered or refused exactly as the request that made it was, never re-decided
-    at another edge. `t_partner` is passed only by the two queries that read the Partner
-    Rows; a reader resolving a stored part without one judges the pre-0.2.0 table (spec §9).
-    """
-    window = window_bp
+
+def _judged_window(
+    *, r2: float, window: float, t_far: float, near_bp: int, far_bp: int, t_partner: float | None
+) -> Decision:
+    """The one copy of the rule: the window in bp, and the thresholds it is judged against."""
     if not (math.isfinite(r2) and 0.0 <= r2 <= 1.0 and math.isfinite(window) and window >= 0):
         return Decision(
             RefusalReason.INVALID,
