@@ -1002,6 +1002,7 @@ class _Plan:
     floor: int
     recorded: dict[str, Any]
     ranges: dict[str, tuple[int, int]]
+    named: tuple[str, ...]
     missing: tuple[str, ...]
     claimed: bool
 
@@ -1014,6 +1015,12 @@ class _Plan:
         """Whether every chromosome of the Variant Set has its Partner Rows: what the provenance
         claims, and the only state in which it may (partner-rows §6.2)."""
         return all(self.present(chrom) for chrom in self.ranges)
+
+    @property
+    def whole_after(self) -> bool:
+        """Whether this run would leave every chromosome with its Partner Rows, which is what
+        `--drop-index` needs before it does anything (partner-rows §6.2)."""
+        return all(self.present(chrom) or chrom in self.named for chrom in self.ranges)
 
 
 def derive_partners(
@@ -1048,31 +1055,45 @@ def derive_partners(
     store = Path(location)
     root = _writable(store)
     plan = _plan(root, store, t_partner, chromosomes)
+    if drop_index and not plan.whole_after:
+        raise InputError(_incomplete(plan))
     if plan.missing:
         _derive(plan, threads=threads, processes=processes)
-    elif plan.claimed and not drop_index:
-        raise InputError(
-            f"{store} already records Partner Rows at t_partner = {plan.recorded['t_partner']!r} "
-            f"over {len(plan.ranges)} chromosome(s): there is nothing to derive, and "
-            "--chromosomes names one it lacks"
-        )
+    else:
+        _nothing_to_do(plan, drop_index)
     if not plan.complete:
-        if drop_index:
-            raise InputError(_incomplete(plan))
         return None
-    # What a killed run left unpublished goes first: it is this run's own, no writer is live
-    # beside it, and `partners.files` refuses a store that holds one (partner-rows §5.1, §6.2).
+    made = _claim(root, plan, t_partner, threads)
+    return _drop_index(root, store, made) if drop_index else made
+
+
+def _nothing_to_do(plan: _Plan, drop_index: bool) -> None:
+    """Refuse a run whose store already has every Partner Rows' chromosome, unless it is the
+    Proxy Index's removal that was asked for."""
+    if plan.claimed and not drop_index:
+        raise InputError(
+            f"{plan.store} already records Partner Rows at t_partner = "
+            f"{plan.recorded['t_partner']!r} over {len(plan.ranges)} chromosome(s): there is "
+            "nothing to derive, and --chromosomes names one it lacks"
+        )
+
+
+def _claim(root: zarr.Group, plan: _Plan, t_partner: float, threads: int) -> Provenance:
+    """Make the derived component the store's: the ten rules pass, `partners/` becomes a node of
+    the hierarchy, and the provenance that describes it is written last (partner-rows §6.2, §10).
+
+    What a killed run left unpublished goes first: it is this run's own, no writer is live beside
+    it, and `partners.files` refuses a store that holds one (§5.1). The rules judge the directory's
+    groups before it is a node, which is what lets a component that fails them leave the store the
+    0.1.0 one it was (#68's `partners.files`).
+    """
     _clear_temporaries(plan.store / layout.PARTNERS)
-    # The rules judge the directory's groups before it is a node, which is what lets a component
-    # that fails them leave the store readable as the 0.1.0 one it was (#68's partners.files).
     made = _claimed(plan, t_partner)
     findings = validate_group(root, made, PARTNER_RULES, threads=threads)
     if any(findings.values()):
         raise ValidationFailed(findings)
     root.require_group(layout.PARTNERS)
     root.attrs.update({"ld_store": made})
-    if drop_index:
-        return _drop_index(root, store, made)
     return cast(Provenance, made)
 
 
@@ -1113,6 +1134,7 @@ def _plan(
         floor,
         recorded,
         ranges,
+        named,
         missing,
         claimed,
     )
@@ -1339,7 +1361,7 @@ def _partner_entries(plan: _Plan) -> int:
     return total
 
 
-def _drop_index(root: zarr.Group, store: Path, recorded: dict[str, Any]) -> Provenance:
+def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenance:
     """Remove the Proxy Index from a store whose Partner Rows hold every entry it had
     (partner-rows §6.2; ADR 0011, D1): its `index/` group and its count.
 
@@ -1351,6 +1373,7 @@ def _drop_index(root: zarr.Group, store: Path, recorded: dict[str, Any]) -> Prov
     shutil.rmtree(store / "index", ignore_errors=True)
     counts = dict(cast(dict[str, Any], recorded["counts"]))
     counts.pop("index_entries", None)
-    made = {**recorded, "counts": counts}
+    made: dict[str, Any] = dict(recorded)
+    made["counts"] = counts
     root.attrs.update({"ld_store": made})
     return cast(Provenance, made)

@@ -255,3 +255,14 @@ def test_a_stale_temporary_left_by_a_kill_is_removed(tmp_path: Path) -> None:
         "zarr.json",
     ]
     assert_the_builds_bytes(store)
+
+
+def test_drop_index_refuses_before_a_derivation_that_would_stay_partial(tmp_path: Path) -> None:
+    """`--drop-index` never rides on an incomplete derivation, so a subset of chromosomes is
+    refused before anything is derived (partner-rows §6.2): the index is the only component a
+    0.1.0 store can clump from, and it must not go first."""
+    store = unpartnered(tmp_path / "store")
+    with pytest.raises(InputError, match=r"--drop-index removes the Proxy Index only from a store"):
+        derive_partners(store, t_partner=T_PARTNER, chromosomes=["21"], drop_index=True)
+    assert not (store / "partners").exists(), "nothing was derived"
+    assert (store / "index").exists()
