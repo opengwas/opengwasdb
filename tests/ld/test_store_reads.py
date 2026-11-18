@@ -955,14 +955,8 @@ def test_at_every_answered_r2_the_partner_rows_are_read_and_no_near_band_or_inde
                 clumping.clump(reader, names, z, r2=r2, kb=kb)
             else:
                 proxies_query.proxies(reader, names[::5], r2=r2, kb=kb)
-        assert not [
-            path for path, _ in sent if path.startswith(("/near/21/r/c/", "/near/22/r/c/"))
-        ], "no Near Band code byte"
-        assert not [
-            path
-            for path, _ in sent
-            if path.startswith(("/index/21/", "/index/22/")) and "/c/" in path
-        ], "no Proxy Index entry; a chromosome's arrays are still opened on first touch"
+        offending = [path for path, _ in sent if path.startswith(("/near/", "/index/"))]
+        assert offending == [], f"a Near Band or Proxy Index read: {offending[:5]}"
         assert [path for path, _ in sent if path.startswith("/partners/")], "the frames are read"
 
 

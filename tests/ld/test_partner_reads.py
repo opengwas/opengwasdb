@@ -18,6 +18,7 @@ import pytest
 import zarr
 from contract import support
 from contract.support import alids, panel_data, passing_rows
+from store_copies import store_reads
 
 from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
@@ -120,11 +121,14 @@ def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
         return read(chrom, local_row)
 
     monkeypatch.setattr(reader, "partner_row", counted_row)
-    ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
+    with store_reads() as keys:
+        ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
     assert list(ours.lead) == alids(rows[lead])
     assert len(asked) == len(np.unique(lead)), "one Partner Rows row per lead, and no other"
     assert len(set(asked)) == len(asked), "no row is read twice"
     assert cache.resolved() == 0, "no Near Band or Proxy Index code is read at any r2"
+    offending = [key for key in keys if key.startswith(("near/", "index/"))]
+    assert offending == [], f"clump read {offending[:5]}"
 
 
 #: The Variant Set's string columns (spec §2).

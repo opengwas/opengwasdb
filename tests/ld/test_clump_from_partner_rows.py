@@ -22,13 +22,14 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import pytest
-from store_copies import PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store
+from store_copies import PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store, store_reads
 
 import ogld
 from ogld.format import InputError, Refusal, RefusalReason, t_far
 from ogld.identity import alid_locus
 from ogld.query import clumping
 from ogld.store import StoreReader
+from ogld.store.reader import COMPONENT_WORKERS_MAX
 
 #: The Test Store's rows, all of them: a clump of every variant, and a proxies query on each.
 ALL = np.arange(1056, dtype=np.int64)
@@ -228,6 +229,20 @@ def test_every_answer_is_the_previous_reader_s(name: str) -> None:
     assert fingerprint(ogld.open(TEST_STORE), name) == FROZEN[name]
 
 
+def test_both_queries_read_nothing_of_the_near_band_or_the_proxy_index() -> None:
+    """Their one LD read is the Partner Rows: the ALID index, the positions and the frames, but no
+    `near/<c>/indptr`, no Near Band code, no Proxy Index array and none of their metadata
+    (partner-rows §8.1, §8.4; ld-store §10)."""
+    names, score = _subset("small", ogld.open(TEST_STORE))
+    for query in ("clump", "proxies"):
+        store = ogld.open(TEST_STORE)
+        with store_reads() as keys:
+            _ask(store, query, names, score, r2=0.01, kb=3000)
+        offending = [key for key in keys if key.startswith(("near/", "index/"))]
+        assert offending == [], f"{query} read {offending[:5]}"
+        assert store._reader._frame_cache.held > 0, f"{query} read no frame"
+
+
 # --------------------------------------------------------------- the refusal table
 
 
@@ -373,7 +388,8 @@ def test_a_gap_of_exactly_w_cuts_and_one_of_w_minus_one_does_not(
 ) -> None:
     """Two consecutive hits W apart are separate components, and W − 1 apart are one: the cut is
     at W, and a pair at d = W − 1 can join where one at d = W cannot (partner-rows §8.2)."""
-    reader = StoreReader.open(TEST_STORE, query_workers=1)
+    reader = StoreReader.open(TEST_STORE)
+    reader._set_query_workers(1)
     names, score, gap = _gap_of_w(reader)
     real = clumping._component
     for window, want in (
@@ -402,8 +418,11 @@ def test_one_two_and_eight_requested_workers_give_one_answer() -> None:
     names, score = _subset("all", store)
     answers = {}
     for requested in (1, 2, 8):
-        reader = StoreReader.open(TEST_STORE, query_workers=requested)
-        assert reader.query_workers == min(requested, 4), "the reader's budget caps the pool"
+        reader = StoreReader.open(TEST_STORE)
+        reader._set_query_workers(requested)
+        assert reader._query_workers == min(requested, COMPONENT_WORKERS_MAX), (
+            "the reader's budget caps the pool"
+        )
         answers[requested] = clumping.clump(reader, names, score, r2=0.01, kb=3000)
     for requested in (2, 8):
         for column in answers[1].columns():
@@ -412,35 +431,42 @@ def test_one_two_and_eight_requested_workers_give_one_answer() -> None:
             )
 
 
-@pytest.mark.parametrize("workers", [0, -1, 1.5, True, "4"])
-def test_query_workers_is_a_count_of_threads(workers: Any) -> None:
-    with pytest.raises(InputError, match="query_workers"):
-        StoreReader.open(TEST_STORE, query_workers=workers)
+@pytest.mark.parametrize("requested", [0, -1, 1.5, True, "4"])
+def test_the_pool_size_is_a_count_of_threads(requested: Any) -> None:
+    """The seam is private (#71 keeps the pool's size internal), and a count below 1 is refused."""
+    reader = StoreReader.open(TEST_STORE)
+    with pytest.raises(InputError, match="component thread count"):
+        reader._set_query_workers(requested)
 
 
+@pytest.mark.parametrize("requested", [2, 8])
 def test_a_saturated_pool_still_progresses_and_never_overruns_its_workers(
-    monkeypatch: pytest.MonkeyPatch,
+    requested: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """More components than threads: every task runs, at most `workers` at once, and the answer is
-    the serial one (partner-rows §9.2)."""
-    store = ogld.open(TEST_STORE)
-    names, score = _subset("all", store)
-    serial = clumping.clump(StoreReader.open(TEST_STORE, query_workers=1), names, score,
-                            r2=0.01, kb=100)  # fmt: skip
-    never = StoreReader.open(TEST_STORE, query_workers=2)
+    """More components than threads: every task runs, exactly `workers` at once and never more —
+    eight requested is four (partner-rows §9.2) — and the answer is the serial one."""
+    assert COMPONENT_WORKERS_MAX == 4, "the cap #65's measurement fixed"
+    names, score = _subset("all", ogld.open(TEST_STORE))
+    once = StoreReader.open(TEST_STORE)
+    once._set_query_workers(1)
+    serial = clumping.clump(once, names, score, r2=0.01, kb=100)
+    never = StoreReader.open(TEST_STORE)
+    never._set_query_workers(requested)
+    workers = never._query_workers
+    assert workers == min(requested, COMPONENT_WORKERS_MAX)
     real = clumping._component
     state = threading.Condition()
     running, peak, done = 0, 0, 0
 
     def saturated(reader: StoreReader, task: Any, **kwargs: Any) -> Any:
-        """Hold each task until the pool's two threads are both inside one, so the pool is
-        saturated by construction, then let it go."""
+        """Hold each task until the pool's threads are all inside one, so the pool is saturated by
+        construction, then let it go."""
         nonlocal running, peak, done
         with state:
             running += 1
             peak = max(peak, running)
             state.notify_all()
-            state.wait_for(lambda: running >= 2, timeout=1.0)
+            state.wait_for(lambda: running >= workers, timeout=1.0)
         try:
             return real(reader, task, **kwargs)
         finally:
@@ -451,7 +477,7 @@ def test_a_saturated_pool_still_progresses_and_never_overruns_its_workers(
 
     monkeypatch.setattr(clumping, "_component", saturated)
     got = clumping.clump(never, names, score, r2=0.01, kb=100)
-    assert peak == 2, f"the pool ran {peak} tasks at once, not its two"
+    assert peak == workers, f"the pool ran {peak} tasks at once, not its {workers}"
     assert done > 2 * peak, "the fixture must hold many more components than the pool"
     for column in got.columns():
         np.testing.assert_array_equal(got.columns()[column], serial.columns()[column])
@@ -477,8 +503,9 @@ def test_a_damaged_frame_fails_the_whole_request_with_no_partial_result(
     frame[(start + stop) // 2] ^= 0xFF
     (copy / "partners" / "22" / "frames" / "c" / "0").write_bytes(bytes(frame))
 
-    healthy = clumping.clump(StoreReader.open(TEST_STORE, query_workers=4), names, score,
-                             r2=0.01, kb=3000)  # fmt: skip
+    healthy = clumping.clump(StoreReader.open(TEST_STORE), names, score, r2=0.01, kb=3000)
     assert healthy.lead[0] == healthy.alid[0], "the fixture's first hit must be a lead"
+    damaged_reader = StoreReader.open(copy)
+    damaged_reader._set_query_workers(4)
     with pytest.raises(ValueError, match=rf"frame {damaged // 16} of chromosome 22"):
-        clumping.clump(StoreReader.open(copy, query_workers=4), names, score, r2=0.01, kb=3000)
+        clumping.clump(damaged_reader, names, score, r2=0.01, kb=3000)

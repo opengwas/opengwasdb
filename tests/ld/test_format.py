@@ -563,14 +563,18 @@ def judge(
     far_bp: int = fmt.FAR_BP,
     t_partner: float | None = None,
 ) -> fmt.Decision:
-    return fmt.judge_request(
-        r2=r2,
-        kb=kb,
-        t_far=tf,
-        near_bp=fmt.NEAR_BP,
-        far_bp=far_bp,
-        t_partner=t_partner,
-    )
+    """The judgement `clump` and `proxies` make: with a store's t_partner it is
+    `judge_partner_request`, and without one `judge_request`, which is a 0.1.0 store's table."""
+    if t_partner is not None:
+        return fmt.judge_partner_request(
+            r2=r2,
+            kb=kb,
+            t_far=tf,
+            near_bp=fmt.NEAR_BP,
+            far_bp=far_bp,
+            t_partner=t_partner,
+        )
+    return fmt.judge_request(r2=r2, kb=kb, t_far=tf, near_bp=fmt.NEAR_BP, far_bp=far_bp)
 
 
 UKB = fmt.t_far(49766, 10)

@@ -13,8 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 import zarr
-from store_copies import TEST_STORE, resharded
-from zarr.storage import LocalStore
+from store_copies import TEST_STORE, resharded, store_reads
 
 import ogld
 from ogld.store import StoreReader, decoding, location
@@ -156,20 +155,13 @@ def test_the_clump_warmer_still_plans_its_bounded_windows_while_nothing_calls_it
     assert len(spans) == 2, "one plan, and the second lead is inside the range it set"
 
 
-def test_proxies_read_the_partner_rows_and_no_near_band_or_index_chunk(
+def test_proxies_read_the_partner_rows_and_nothing_of_near_or_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`rows_of` answers from the ALID index, and from 0.2.0 a variant's proxies are its Partner
-    Rows row: no `index/` array and, beyond its `indptr`, no `near/` array is read
-    (partner-rows §8.3, §8.4). The frames are the one chunk file it does read."""
+    Rows row: no `near/` array of any kind, no `index/` array, and none of their metadata
+    (partner-rows §8.3, §8.4; ld-store §10). The frames are the one chunk file it reads."""
     names = ogld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
-    read = LocalStore.get_sync
-    keys: list[str] = []
-
-    def recording(self: Any, key: str, **kwargs: Any) -> Any:
-        keys.append(key)
-        return read(self, key, **kwargs)
-
     preads: list[int] = []
     original = os.pread
 
@@ -177,19 +169,14 @@ def test_proxies_read_the_partner_rows_and_no_near_band_or_index_chunk(
         preads.append(length)
         return original(fd, length, offset)
 
-    monkeypatch.setattr(LocalStore, "get_sync", recording)
     monkeypatch.setattr(os, "pread", recording_pread)
     store = ogld.open(TEST_STORE)
-    assert (store._reader.rows_of(names) >= 0).all()
-    assert not any(key.startswith("index/") for key in keys)
-    store.proxies(names, r2=0.8, kb=3000)
+    with store_reads() as keys:
+        assert (store._reader.rows_of(names) >= 0).all()
+        store.proxies(names, r2=0.8, kb=3000)
     assert preads, "a local frame is one pread of the chunk file (partner-rows §7)"
-    assert not any(key.startswith("index/") and "/c/" in key for key in keys), (
-        "no Proxy Index entry is read, though a chromosome's arrays are opened on first touch"
-    )
-    assert not any(key.startswith("near/") and key.endswith("/r/c/") for key in keys), (
-        "no Near Band code is"
-    )
+    offending = [key for key in keys if key.startswith(("near/", "index/"))]
+    assert offending == [], f"proxies read {offending}"
 
 
 def test_completed_worker_does_not_retain_released_buffers(monkeypatch: pytest.MonkeyPatch) -> None:
