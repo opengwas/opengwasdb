@@ -55,6 +55,8 @@ from opengwasdb.encoding.codec import (
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
+from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
@@ -183,7 +185,7 @@ def _sorted_variant_indices(variant_index: np.ndarray) -> np.ndarray:
     """One Analysis's variant indices, refused unless ascending.
 
     Every builder sorts an Analysis's associations by variant_index before
-    adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
+    adding them (build_besd, build_ssf, Hybrid's `overflow_spills._assemble_overflow_column`
     and completion's `_remapped_analysis_arrays` all argsort). The variant-
     side queries rely on it: `lookup` and the Hybrid overflow lookup
     binary-search each Analysis's segment instead of scanning the store
@@ -233,8 +235,11 @@ class RaggedCSRWriter:
         #: lazily, like `n`, so a build -- whose every cell is observed -- pays
         #: nothing for the plane only a Reference Completion writes (issue #424).
         self._imputed: list[np.ndarray | None] = []
-        #: Per Analysis, how many of its SEs exceed `float16`'s range.
+        #: Per Analysis, how many of its associations `storable` left out for
+        #: an SE above `float16`'s range (issue #338), and how many of those
+        #: were a completion's imputed cells.
         self._se_out_of_range: list[int] = []
+        self._imputed_out_of_range: list[int] = []
         self._offsets: list[int] = [0]
         #: The baseline this writer has already derived, or `None` before the
         #: first ask. `None` can only mean "not derived": a derivation under a
@@ -256,12 +261,14 @@ class RaggedCSRWriter:
         eaf: np.ndarray | None = None,
         n: np.ndarray | None = None,
         *,
+        phenotype_sd: PhenotypeSd,
         imputed: np.ndarray | None = None,
         where: str | None = None,
     ) -> None:
         """Append one analysis. Arrays must be parallel and the same length.
 
-        Its associations are judged whole first (`storable`): one Association
+        Its associations are judged whole first (`storable`), each SE divided by
+        `phenotype_sd`, which has no default (ADR 0084): one Association
         Admission would not admit refuses the build, named by `where` (the
         builder and the Analysis; this writer's Analysis index by default),
         and an SE above `float16`'s range is logged. The writer then holds
@@ -289,24 +296,36 @@ class RaggedCSRWriter:
         variants -- or indexed with a mask of the wrong length (issue #364).
         """
         where = where or f"the Ragged writer, analysis_index {self.n_analyses}"
-        require_parallel(
-            (
-                ("variant_index", variant_index), ("z", z), ("se", se), ("eaf", eaf), ("n", n),
-                ("imputed", imputed),
-            ),
-            where=where,
-        )
+        arrays = (("variant_index", variant_index), ("z", z), ("se", se), ("eaf", eaf))
+        require_parallel((*arrays, ("n", n), ("imputed", imputed)), where=where)
         vi = _sorted_variant_indices(variant_index)
         # Judged as handed over, so a missing marker is judged before a cast
         # could make it canonical; then held as float32 and quantised once, by
         # the codec, at flush -- never pre-rounded into a stored dtype here.
         kept = storable(
-            CellValues(np.asarray(z), np.asarray(se), eaf, imputed=imputed), 0, 1, where=where
+            CellValues(np.asarray(z), np.asarray(se), eaf, imputed=imputed), 0, 1, where=where,
+            phenotype_sd=phenotype_sd,
         )
         self._se_out_of_range.append(int(np.sum(kept.se_out_of_range)))
+        self._imputed_out_of_range.append(int(np.sum(kept.imputed_out_of_range)))
         if self._completion is None:
             log_se_out_of_range(kept.se_out_of_range, where=where)
         self._hold(vi, kept, n, flagged=imputed is not None)
+
+    @property
+    def se_out_of_range(self) -> np.ndarray:
+        """Per Analysis added, the associations left out for an SE above `float16`'s
+        range: what `analyses.tsv` records as `n_missing_se_out_of_range` (issue #338)."""
+        return np.asarray(self._se_out_of_range, dtype=np.int64)
+
+    def counted(self, analyses: list[Analysis]) -> list[Analysis]:
+        """`analyses`, one per Analysis added, with the count this writer left out."""
+        return with_se_out_of_range(analyses, self.se_out_of_range)
+
+    @property
+    def imputed_out_of_range(self) -> np.ndarray:
+        """Per Analysis added, how many of `se_out_of_range` were flagged imputed."""
+        return np.asarray(self._imputed_out_of_range, dtype=np.int64)
 
     def _hold(
         self, vi: np.ndarray, kept: Storable, n: np.ndarray | None, *, flagged: bool

@@ -1,5 +1,17 @@
 # One module owns how an association is encoded
 
+> **Amended by [ADR 0084](0084-storable-standardises-every-builders-se.md) (issue #366).**
+> `storable` takes a required `phenotype_sd` and divides a builder's SEs by each
+> Analysis's phenotype SD; it is idempotent only under `PhenotypeSd.APPLIED`,
+> which every writer that re-judges stored cells passes (`encode` among them).
+
+> **Amended by [ADR 0068](0068-an-se-beyond-float16-is-missing.md) (issue #338).**
+> `storable` no longer accepts an SE above 65,504, `+inf` included: it leaves the
+> association out, z and SE together, counts it per Analysis, and every writer holds
+> what it returns, as decided below. `StoreCodec.encode_se` refuses such an SE. The
+> statements below that `storable` accepts `+inf` and that "today every cell is
+> stored" describe the state before #338.
+
 Issue [#350](https://github.com/opengwas/opengwasdb/issues/350), part of epic
 #58. Records where a Store's writers turn an association's z, SE and EAF into
 stored codes, and where they judge what a Store may hold. Amends ADR 0013,
@@ -139,6 +151,10 @@ A grid writer writes `storable`'s cells, so the cell is missing. A writer of
 rows keeps only the rows in `stored`, so the row is dropped. No writer
 changes: `tests/test_writers_hold_what_is_stored.py` injects such a gate into
 every writer.
+
+*Done in ADR 0068:* the two edits above, as written, and the count persisted
+(`n_missing_se_out_of_range`, format 0.2.3). The Dense build, which measures its
+plan from its in-memory grid, judges that grid once before measuring.
 
 One consequence is open. Ragged completion refits a residual SE model on the
 rows it stores. An Analysis that a refusal leaves with fewer than two SEs has

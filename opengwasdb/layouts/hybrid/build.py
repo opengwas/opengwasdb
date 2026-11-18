@@ -70,8 +70,8 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
-from opengwasdb.layouts import build_manifest
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -110,6 +110,7 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     PROVENANCE_SOURCE,
     RESUME_FUNCTION,
     RSID_CONFLICTS,
+    SE_OUT_OF_RANGE,
     CheckpointState,
     checkpoint_dir_for,
     completed_phases,
@@ -157,6 +158,7 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_component_path,
     dense_to_shared_path,
 )
+from opengwasdb.layouts.hybrid.overflow_spills import assemble_overflow_csr
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
@@ -171,7 +173,7 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_p
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis
+from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
@@ -252,9 +254,7 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-def _off_reference_spill(
-    unmatched: Unmatched, se_divisor: float, gate: Gate
-) -> _OffReferenceSpill:
+def _off_reference_spill(unmatched: Unmatched, gate: Gate) -> _OffReferenceSpill:
     """The associations the route table does not hold, one uint64 key per raw
     coordinate, their duplicates on that key resolved as an axis's are
     (`collapse_duplicates`): a conflicting key's rows are dropped and logged
@@ -285,7 +285,6 @@ def _off_reference_spill(
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    se = build_manifest.apply_se_divisor(se, se_divisor)
     return keys, z, se, eaf, hashed_index, hashed_raw
 
 
@@ -304,9 +303,8 @@ def _resolve_column_hybrid(
     each ``(index/key, z f32, se f32, eaf f32)`` with its duplicates resolved
     (`collapse_duplicates`); ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
-    The row's ``se_divisor`` divides every returned ``se``, dense and overflow
-    alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
-    SD rescaling applies whichever component an association routes to. The
+    Every ``se`` is the source's: `_stored_parts` standardises all three parts
+    by the row's phenotype SD, through `storable` (issue #18, ADR 0084). The
     Analysis's imputation-score declaration reaches the reader, and ``gate``
     judges each batch before it is matched. The study is read as its reader's
     association batches where it offers them, else one association at a time
@@ -331,12 +329,10 @@ def _resolve_column_hybrid(
         # unmatched row onto it later: it is dropped here, and logged.
         gate.unplaced_off_axis(unmatched.keys, off_primary)
         unmatched = Unmatched.none()
-    divisor = row.se_divisor
-    overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
     return (
-        (dense.index, dense.z, build_manifest.apply_se_divisor(dense.se, divisor), dense.eaf),
-        (overflow.index, overflow.z, overflow_se, overflow.eaf),
-        _off_reference_spill(unmatched, divisor, gate),
+        (dense.index, dense.z, dense.se, dense.eaf),
+        (overflow.index, overflow.z, overflow.se, overflow.eaf),
+        _off_reference_spill(unmatched, gate),
     )
 
 
@@ -437,9 +433,12 @@ class _Pass2Context:
     off_primary: frozenset[str] = frozenset()
 
 
-def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
+def _route_column(
+    context: _Pass2Context, task: tuple[int, ManifestRow]
+) -> tuple[int, int, int]:
     """Route one study and spill it; its Admission part is written beside the
-    Store, and only its column returns."""
+    Store, and only its column returns, with how many associations it left out
+    of the Dense Component and of the Overflow (issue #338)."""
     col_idx, row = task
     rules = AnalysisRules(
         row.trait_id,
@@ -450,29 +449,39 @@ def _route_column(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
         dense, overflow, off_reference = _resolve_column_hybrid(
             context.table, row, gate, context.axes, context.folds, context.off_primary
         )
-        _spill_hybrid_column(
-            context.spill_dir, col_idx, *_stored_parts(row.trait_id, dense, overflow, off_reference)
+        parts, left_out = _stored_parts(
+            row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
         )
-    return col_idx
+        _spill_hybrid_column(context.spill_dir, col_idx, *parts)
+    return col_idx, left_out[0], left_out[1]
 
 
 def _stored_parts(
-    trait_id: str, dense: _Component, overflow: _Overflow, off_reference: _OffReferenceSpill
-) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
+    trait_id: str,
+    phenotype_sd: PhenotypeSd,
+    dense: _Component,
+    overflow: _Overflow,
+    off_reference: _OffReferenceSpill,
+) -> tuple[tuple[_Component, _Overflow, _OffReferenceSpill], tuple[int, int]]:
     """Each part of one column as `storable` returns it: the rows it stores,
     with their values. A spill holds rows, so a row not stored is left out, and
     its frequency with it.
 
-    The Dense part's SEs above `float16`'s range are logged here; the
-    Overflow's and the off-reference rows' are logged by the Ragged writer
-    they reach.
+    The parts hold the source's SEs, and `storable` divides all three by the
+    Analysis's ``phenotype_sd``, whichever component an association routes to
+    (issue #18, ADR 0084). What is spilled is therefore standardised, and the
+    Overflow assembly that reads the spill back (`overflow_spills`) hands it
+    on as already standardised.
+
+    Also how many associations each component lost for an SE above `float16`'s
+    range (issue #338), logged here: the Dense part's, and the Overflow's with
+    the off-reference rows', which reach the Overflow or no component at all.
     """
 
     def judged(name: str, z: np.ndarray, se: np.ndarray, eaf: np.ndarray) -> Storable:
         where = f"build-hybrid {trait_id} {name}"
-        kept = storable(CellValues(z, se, eaf), 0, 1, where=where)
-        if name == "Dense":
-            log_se_out_of_range(kept.se_out_of_range, where=where)
+        kept = storable(CellValues(z, se, eaf), 0, 1, where=where, phenotype_sd=phenotype_sd)
+        log_se_out_of_range(kept.se_out_of_range, where=where)
         return kept
 
     def values(kept: Storable) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -480,10 +489,13 @@ def _stored_parts(
         return np.asarray(cells.z)[rows], np.asarray(cells.se)[rows], np.asarray(cells.eaf)[rows]
 
     kept = judged("Dense", *dense[1:])
+    dense_left_out = int(kept.se_out_of_range.sum())
     stored_dense = (dense[0][kept.stored], *values(kept))
     kept = judged("Overflow", *overflow[1:])
+    overflow_left_out = int(kept.se_out_of_range.sum())
     stored_overflow = (overflow[0][kept.stored], *values(kept))
     kept = judged("off-reference", *off_reference[1:4])
+    overflow_left_out += int(kept.se_out_of_range.sum())
     keys, _, _, _, hashed_index, hashed_raw = off_reference
     stored, position = kept.stored, np.cumsum(kept.stored) - 1
     hashed_kept = stored[hashed_index]
@@ -493,95 +505,9 @@ def _stored_parts(
         position[hashed_index[hashed_kept]].astype(np.int64),
         [raw for raw, keep in zip(hashed_raw, hashed_kept.tolist(), strict=True) if keep],
     )
-    return stored_dense, stored_overflow, stored_off_reference
-
-
-@dataclass(frozen=True)
-class _OverflowColumn:
-    """One Analysis's overflow spill, read, sorted and ready for the CSR.
-
-    `eaf` is ``None`` when the column carries no finite frequency, which is
-    what the writer turns into an all-NaN row (ADR 0036).
-    """
-
-    variant_index: np.ndarray
-    z: np.ndarray
-    se: np.ndarray
-    eaf: np.ndarray | None
-
-
-def _assemble_overflow_column(task: tuple[int, str]) -> _OverflowColumn | None:
-    """Load and sort one ``.ovf.npz`` column. Runs in a forked worker.
-
-    Returns `None` for a column with no spill file. The spill is *not* deleted
-    here: the parent deletes it once the column has been added to the CSR, so a
-    failure partway through combination cannot lose a spill that was never
-    used.
-    """
-    col, spill_dir = task
-    path = Path(spill_dir) / f"{col}.ovf.npz"
-    if not path.exists():
-        return None
-    with np.load(path) as data:
-        vi = data["variant_index"].astype(np.int32)
-        z = data["z"].astype(np.float32)
-        se = data["se"].astype(np.float32)
-        eaf = data["eaf"].astype(np.float32)
-    # Sort by variant_index for consistent within-analysis ordering (matches
-    # the ragged BESD builder and lets top-hit CSR cross-validation searchsort).
-    order = np.argsort(vi, kind="stable")
-    has_eaf = bool(np.isfinite(eaf).any())
-    return _OverflowColumn(
-        variant_index=vi[order],
-        z=z[order],
-        se=se[order],
-        eaf=eaf[order] if has_eaf else None,
+    return (stored_dense, stored_overflow, stored_off_reference), (
+        dense_left_out, overflow_left_out
     )
-
-
-def _assemble_overflow_csr(
-    spill_dir: Path,
-    n_analyses: int,
-    n_variants: int,
-    n_workers: int = 1,
-    *,
-    consume_spills: bool = True,
-) -> tuple[RaggedCSRWriter, np.ndarray]:
-    """Assemble the overflow CSR from per-column ``.ovf.npz`` spills, in analysis
-    order (so CSR offsets align with analysis_index).
-
-    Also returns a per-column bool array saying which Analyses carried an EAF
-    into the *overflow* component. An Analysis can have EAF off-panel and none
-    on it, so `eaf_scope` is the union of this and the Dense Component's own
-    answer, never either alone (ADR 0036).
-
-    The columns are independent, so `n_workers` > 1 loads and sorts them through
-    `ordered_map`, which keeps only a bounded number of results in flight, and
-    the parent adds them to the CSR in analysis order. `n_workers <= 1` is the
-    serial path.
-
-    ``consume_spills=False`` keeps each plate after it has been added (issue
-    #227): the build tail that a checkpoint re-runs wholesale re-assembles the
-    CSR, and the assembled writer lives only in memory, so the plates are its
-    only durable input. The plates are read and combined identically either
-    way -- the two differ in what is left on disk, not in what is written.
-    """
-    csr = RaggedCSRWriter(n_variants)
-    column_has_eaf = np.zeros(n_analyses, dtype=bool)
-    tasks = ((col, str(spill_dir)) for col in range(n_analyses))
-    for col, result in enumerate(ordered_map(_assemble_overflow_column, tasks, n_workers)):
-        if result is None:
-            csr.add_analysis(
-                np.empty(0, dtype=np.int32),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float32),
-            )
-            continue
-        column_has_eaf[col] = result.eaf is not None
-        csr.add_analysis(result.variant_index, result.z, result.se, eaf=result.eaf)
-        if consume_spills:
-            (spill_dir / f"{col}.ovf.npz").unlink()
-    return csr, column_has_eaf
 
 
 # ── Deep-phase helpers for the build entry point (issue #130) ────────────────
@@ -692,6 +618,39 @@ class _RoutedSpills:
     id_by_col: dict[int, str]
     pass2_start: float
     info_counts: Mapping[str, AdmissionCounts] = field(default_factory=dict)
+    #: Per Analysis, the associations `storable` left out of each component for
+    #: an SE above `float16`'s range (issue #338): the Dense Component's, and the
+    #: Overflow's with the off-reference rows that reach it.
+    left_out: _LeftOut = field(default_factory=lambda: _LeftOut.none(0))
+
+
+@dataclass(frozen=True)
+class _LeftOut:
+    """Per Analysis and component, what Pass 2 left out for an SE above `float16`'s
+    range: what each `analyses.tsv` records as `n_missing_se_out_of_range`."""
+
+    dense: np.ndarray
+    overflow: np.ndarray
+
+    @classmethod
+    def none(cls, n_analyses: int) -> _LeftOut:
+        return cls(np.zeros(n_analyses, np.int64), np.zeros(n_analyses, np.int64))
+
+    def payload(self) -> dict[str, list[int]]:
+        return {"dense": self.dense.tolist(), "overflow": self.overflow.tolist()}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any], n_analyses: int) -> _LeftOut:
+        out = cls(
+            np.asarray(payload["dense"], dtype=np.int64),
+            np.asarray(payload["overflow"], dtype=np.int64),
+        )
+        if len(out.dense) != n_analyses or len(out.overflow) != n_analyses:
+            raise ValueError(
+                f"the checkpoint's {SE_OUT_OF_RANGE} counts {len(out.dense)} and "
+                f"{len(out.overflow)} Analyses, and the build has {n_analyses}"
+            )
+        return out
 
 
 @dataclass(frozen=True)
@@ -2053,11 +2012,16 @@ def _route_studies(
         off_primary=prepared.off_primary,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
+    left_out = _LeftOut.none(n_analyses)
     routed = fork_each(_route_column, context, tasks, options.n_workers)
-    for i, col in enumerate(routed):
+    for i, (col, dense_left_out, overflow_left_out) in enumerate(routed):
+        left_out.dense[col], left_out.overflow[col] = dense_left_out, overflow_left_out
         log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
     return _RoutedSpills(
-        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=record.finish().counts
+        id_by_col=id_by_col,
+        pass2_start=pass2_start,
+        info_counts=record.finish().counts,
+        left_out=left_out,
     )
 
 
@@ -2213,7 +2177,7 @@ def _assemble_overflow(
     """Phase - assemble the Ragged Overflow CSR from the per-column overflow
     spills, in analysis order so CSR offsets align with analysis_index."""
     log.info("Assembling Ragged Overflow CSR from %d columns", prepared.n_analyses)
-    csr, overflow_has_eaf = _assemble_overflow_csr(
+    csr, overflow_has_eaf = assemble_overflow_csr(
         prepared.spill_dir,
         prepared.n_analyses,
         prepared.partition.n_shared,
@@ -2614,11 +2578,11 @@ def _pass2_phase(
     resumed run keeps.
     """
     if state is not None and state.has("pass2"):
-        return _recorded_routing(prepared, options)
+        return _recorded_routing(prepared, options, state)
     routed = _route_studies(prepared, options)
     _log_spill_bytes(prepared.spill_dir)
     if state is not None:
-        _record_pass2_product(state)
+        _record_pass2_product(state, routed)
     return routed
 
 
@@ -2632,24 +2596,32 @@ def _log_spill_bytes(spill_dir: Path) -> None:
     )
 
 
-def _record_pass2_product(state: CheckpointState) -> None:
+def _record_pass2_product(state: CheckpointState, routed: _RoutedSpills) -> None:
     """Record Pass 2's product: its plates, with their sizes, so a resume can
     refuse a spill directory that lost one rather than build a store short of
-    the associations it claims. Its counts are the Admission record's.
+    the associations it claims. Its Admission counts are the Admission record's;
+    what it left out for an SE above `float16`'s range is recorded here, as
+    nothing else can recover it (issue #338).
     """
     record_plates(state.path, (path.name for path in state.spill_dir.iterdir()))
+    write_json(state.path / SE_OUT_OF_RANGE, routed.left_out.payload())
     mark_phase(state.path, "pass2")
 
 
-def _recorded_routing(prepared: _PreparedBuild, options: _BuildOptions) -> _RoutedSpills:
+def _recorded_routing(
+    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState
+) -> _RoutedSpills:
     """Rebuild the routing records a resumed run does not route again: the
     counts are re-read from the Admission record's parts, and a record that
-    lost one is refused."""
+    lost one is refused; what Pass 2 left out for its SE, from the checkpoint."""
     record = _admission_record(prepared, options, resume=True)
     return _RoutedSpills(
         id_by_col={col: row.trait_id for col, row in enumerate(prepared.manifest_rows)},
         pass2_start=time.monotonic(),
         info_counts=record.finish().counts,
+        left_out=_LeftOut.from_payload(
+            read_json(state.path / SE_OUT_OF_RANGE), prepared.n_analyses
+        ),
     )
 
 
@@ -2819,15 +2791,20 @@ def _tail_phase(
     analyses = _stamp_analyses(prepared, dense, overflow, evidence)
     _write_overflow_eaf_plane(prepared, plan, overflow)
     encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
+    left_out = routed.left_out
+    # The Dense Component counts its own cells; the root both components, which
+    # partition an Analysis's associations (issue #338, as ADR 0032's counts do).
     eaf_provenance = _finish_dense_component(
-        prepared, dense, analyses, encoding, evidence, options
+        prepared, dense, with_se_out_of_range(analyses, left_out.dense), encoding, evidence,
+        options,
     )
+    overflow_left_out = left_out.overflow + overflow.csr.se_out_of_range
     return prepared, _ComponentResult(
         csr=overflow.csr,
         encoding=encoding,
         se_coefficients=se_coefficients,
         eaf_provenance=eaf_provenance,
-        analyses=analyses,
+        analyses=with_se_out_of_range(analyses, left_out.dense + overflow_left_out),
         info_counts=routed.info_counts,
     )
 

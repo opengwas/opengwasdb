@@ -46,15 +46,16 @@ from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.associations import Cells
 from opengwasdb.encoding import EafRead
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.by_variant import VariantIndexError
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.validation.rules import sequence as sequence_rules
 from opengwasdb.validation import validate_store
+from opengwasdb.validation.rules import sequence as sequence_rules
+from tests.ssf_builds import build_ragged_from_ssf
 
 
 @pytest.fixture(scope="module")
@@ -619,6 +620,7 @@ def test_writer_refuses_an_unsorted_analysis() -> None:
             np.array([5, 9, 7], dtype=np.int32),
             np.zeros(3, dtype=np.float32),
             np.ones(3, dtype=np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
 
 
@@ -628,6 +630,7 @@ def test_writer_accepts_a_sorted_analysis() -> None:
         np.array([5, 7, 9], dtype=np.int32),
         np.zeros(3, dtype=np.float32),
         np.ones(3, dtype=np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     assert writer.n_associations == 3
 

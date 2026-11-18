@@ -27,7 +27,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -71,6 +71,8 @@ from opengwasdb.completion.manifest import (
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
+from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EAF_REFERENCE,
@@ -450,6 +452,9 @@ class _CompletedArrays:
     n_missing_off_panel_total: int
     n_missing_imputation_failed: int
     total_imputed: int
+    #: What the completion left out for an SE above `float16`'s range, per
+    #: Analysis: source cells it did not carry, and fills it left missing (#338).
+    left_out: LeftOut
 
 
 def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _SourceAxis:
@@ -696,7 +701,7 @@ def _merge_checkpoint_fills(
     ancestry: str,
     source_encoding: StoreEncoding,
     n_workers: int = 1,
-) -> tuple[StoreEncoding, bool, tuple[int, int], Path]:
+) -> _MergedFills:
     """Resolve every block checkpoint's fills to union rows and shard them by
     output row-band on disk, creating the empty completed planes alongside.
     The final zarr writer then reads only the shard for the band it is
@@ -728,7 +733,7 @@ def _merge_checkpoint_fills(
         eaf_reference=eaf_reference,
     )
     band_rows = completion_band_rows(_dense_shard_rows(staged, effective_chunks))
-    fill_shard_dir, quality_count = shard_checkpoint_fills(
+    fill_shard_dir, quality_count, left_missing = shard_checkpoint_fills(
         blocks_dir,
         staged,
         union,
@@ -738,7 +743,22 @@ def _merge_checkpoint_fills(
         n_workers=n_workers,
     )
     print(f"Wrote {quality_count:,} completion quality rows")
-    return encoding, eaf_reference is not None, effective_chunks, fill_shard_dir
+    return _MergedFills(
+        encoding, eaf_reference is not None, effective_chunks, fill_shard_dir,
+        LeftOut.from_merge(left_missing, axis.n_analyses),
+    )
+
+
+class _MergedFills(NamedTuple):
+    """The merge's product: the completed plan, whether the panel's frequency is
+    held, the planes' chunks, the fill shards, and per Analysis the fills it left
+    missing for an SE above `float16`'s range (issue #338)."""
+
+    encoding: StoreEncoding
+    eaf_reference_present: bool
+    effective_chunks: tuple[int, int]
+    fill_shard_dir: Path
+    left_missing: np.ndarray
 
 
 def _stream_completed_arrays(
@@ -757,11 +777,10 @@ def _stream_completed_arrays(
     returning the counts the metadata phases must state. The merge and the
     band write are charged to ``timer`` separately."""
     with _completion_phase(timer, MERGE_PHASE):
-        encoding, eaf_reference_present, effective_chunks, fill_shard_dir = (
-            _merge_checkpoint_fills(
-                staged, axis, blocks_dir, ld_dir, ancestry, source_encoding, n_workers
-            )
+        merged = _merge_checkpoint_fills(
+            staged, axis, blocks_dir, ld_dir, ancestry, source_encoding, n_workers
         )
+    encoding, eaf_reference_present, effective_chunks, fill_shard_dir, _ = merged
     print("Writing data.zarr (band-streamed)...")
     with _completion_phase(timer, BAND_PHASE):
         tallies = _write_completed_bands(
@@ -780,15 +799,27 @@ def _stream_completed_arrays(
             n_workers=n_workers,
         )
     shutil.rmtree(fill_shard_dir, ignore_errors=True)
-    return _completed_arrays(axis, tallies, encoding, eaf_reference_present)
+    return _completed_arrays(axis, tallies, merged)
 
 
 def _completed_arrays(
-    axis: _UnionAxis, tallies: _BandTallies, encoding: StoreEncoding, eaf_reference_present: bool
+    axis: _UnionAxis, tallies: _BandTallies, merged: _MergedFills
 ) -> _CompletedArrays:
-    """The band write's counts, said once and returned for the metadata phases."""
+    """The band write's counts, said once and returned for the metadata phases.
+
+    The merge left every fill above `float16`'s SE range missing, so a band
+    write that leaves one out is a fill the merge did not judge: refused, as
+    `completion_quality` would then count an imputed cell the release lacks.
+    """
+    if tallies.imputed_out_of_range.any():
+        raise ValueError(
+            "complete-dense: the band write left out "
+            f"{int(tallies.imputed_out_of_range.sum()):,} imputed cell(s) for an SE above "
+            "float16's range, which the checkpoint merge should have left missing"
+        )
+    left_out = LeftOut.of(tallies.se_out_of_range, merged.left_missing)
     log_se_out_of_range(
-        tallies.se_out_of_range,
+        left_out.total,
         [analysis.analysis_id for analysis in axis.src_analyses],
         where="complete-dense",
     )
@@ -802,12 +833,13 @@ def _completed_arrays(
         f"{n_missing_off_panel_total:,} off-panel missing"
     )
     return _CompletedArrays(
-        encoding=encoding,
-        eaf_reference_present=eaf_reference_present,
+        encoding=merged.encoding,
+        eaf_reference_present=merged.eaf_reference_present,
         n_missing_off_panel=n_missing_off_panel,
         n_missing_off_panel_total=n_missing_off_panel_total,
         n_missing_imputation_failed=n_missing_imputation_failed,
         total_imputed=total_imputed,
+        left_out=left_out,
     )
 
 
@@ -871,6 +903,7 @@ def _write_completed_manifest(
             n_imputed=arrays.total_imputed,
             n_missing_off_panel=arrays.n_missing_off_panel_total,
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+            **{SE_OUT_OF_RANGE_KEY: arrays.left_out.provenance()},
             **axis.panel_placement,
         ),
     )
@@ -917,15 +950,19 @@ def _completed_analysis_rows(
     arrays: _CompletedArrays,
     *,
     ancestry: str,
+    source: str,
+    source_format_version: str,
 ) -> list[Analysis]:
     """Phase 4b — the completed ``analyses.tsv`` rows: the source's rows with
-    the completion rollup columns refreshed and the pre-completion Top-Hit
-    Counts zeroed so ``add_hit_counts`` sets fresh post-completion counts
-    rather than adding onto stale ones."""
+    the completion rollup columns refreshed, ``n_missing_se_out_of_range`` the
+    source's carried forward plus what this completion left out (issue #338),
+    and the pre-completion Top-Hit Counts zeroed so ``add_hit_counts`` sets
+    fresh post-completion counts rather than adding onto stale ones."""
+    carried = carried_counts(axis.src_analyses, source_format_version, source=source)
     print("Writing analyses.tsv...")
     with staged.index_connection() as dst_db:
         quality_rollup = completion_quality_rollup(dst_db, axis.n_analyses)
-    return reset_top_hit_counts(
+    return reset_top_hit_counts(arrays.left_out.recorded(
         [
             replace(
                 a,
@@ -941,8 +978,9 @@ def _completed_analysis_rows(
                 completion_n_missing_total=str(int(arrays.n_missing_off_panel[i])),
             )
             for i, a in enumerate(axis.src_analyses)
-        ]
-    )
+        ],
+        carried,
+    ))
 
 
 def _finalise_release(
@@ -1027,7 +1065,10 @@ def _run_completion(
             min_cor=min_cor,
             thresh=thresh,
         )
-        dst_analyses = _completed_analysis_rows(staged, axis, arrays, ancestry=ancestry)
+        dst_analyses = _completed_analysis_rows(
+            staged, axis, arrays, ancestry=ancestry, source=f"source release {src}",
+            source_format_version=source_format_version,
+        )
         with _completion_phase(timer, TOP_HIT_PHASE):
             result = _finalise_release(staged, dst, axis, arrays, dst_analyses, n_workers)
     _log_phase_report(timer, started)
@@ -1261,6 +1302,7 @@ class _BandOutcome:
     band: int
     n_missing_off_panel: np.ndarray
     se_out_of_range: np.ndarray
+    imputed_out_of_range: np.ndarray
     n_imputed: int
     n_missing_imputation_failed: int
     tables: SideTables
@@ -1286,11 +1328,11 @@ def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
         impute_mask=plan.impute_mask,
     )
     n_failed = _count_band_imputation_failed(cells.z, plan.on_panel, r0, r1)
-    codes, tables, se_out_of_range = _encode_band(plan, cells, r0)
+    codes, tables, left_out = _encode_band(plan, cells, r0)
     del cells
     _write_band(plan, codes, r0, r1)
     return _BandOutcome(
-        band, n_missing_off_panel, se_out_of_range, n_imputed, n_failed, tables, dropped,
+        band, n_missing_off_panel, *left_out, n_imputed, n_failed, tables, dropped,
         n_conflicted,
     )
 
@@ -1457,9 +1499,10 @@ def _band_planes(plan: _BandPlan) -> tuple[str, ...]:
 
 def _encode_band(
     plan: _BandPlan, cells: CellValues, r0: int
-) -> tuple[dict[str, np.ndarray], SideTables, np.ndarray]:
+) -> tuple[dict[str, np.ndarray], SideTables, tuple[np.ndarray, np.ndarray]]:
     """Judge and encode the band a step at a time: each plane's codes, the
-    band's side-table entries, and its SEs above `float16`'s range per Analysis.
+    band's side-table entries, and per Analysis the cells it left out for an SE
+    above `float16`'s range, and how many of those were flagged imputed.
 
     Each step is placed at its own rows, so a cell's code and its side-table
     entry are the ones a whole-band encode gives it.
@@ -1471,6 +1514,7 @@ def _encode_band(
         ZOverflowBuilder(), EafExceptionBuilder(), SeExceptionBuilder()
     )
     se_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
+    imputed_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
     for s0, s1 in plan.steps(n_rows):
         step = CellValues(
             cells.z[s0:s1],
@@ -1484,6 +1528,7 @@ def _encode_band(
             where=f"complete-dense, rows {r0 + s0:,} to {r0 + s1:,}",
         )
         se_out_of_range += encoded.storable.se_out_of_range
+        imputed_out_of_range += encoded.storable.imputed_out_of_range
         held = {"z": encoded.z, "se": encoded.se, "imputed": encoded.imputed, "eaf": encoded.eaf}
         for name in codes:
             codes[name][s0:s1] = held[name]
@@ -1494,7 +1539,7 @@ def _encode_band(
         ):
             builder.add(table.index, table.value)
     tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
-    return codes, tables, se_out_of_range
+    return codes, tables, (se_out_of_range, imputed_out_of_range)
 
 
 def _write_band(plan: _BandPlan, codes: dict[str, np.ndarray], r0: int, r1: int) -> None:
@@ -1510,12 +1555,14 @@ class _BandTallies:
 
     n_missing_off_panel: np.ndarray
     se_out_of_range: np.ndarray
+    imputed_out_of_range: np.ndarray
     total_imputed: int = 0
     n_missing_imputation_failed: int = 0
 
     def add(self, outcome: _BandOutcome) -> None:
         self.n_missing_off_panel += outcome.n_missing_off_panel
         self.se_out_of_range += outcome.se_out_of_range
+        self.imputed_out_of_range += outcome.imputed_out_of_range
         self.total_imputed += outcome.n_imputed
         self.n_missing_imputation_failed += outcome.n_missing_imputation_failed
 
@@ -1644,6 +1691,7 @@ def _run_bands(
     tallies = _BandTallies(
         n_missing_off_panel=np.zeros(plan.n_analyses, dtype=np.int64),
         se_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
+        imputed_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
     )
     tables = _BandTables()
     n_bands = -(-plan.n_variants // plan.band_rows)

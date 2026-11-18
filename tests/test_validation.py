@@ -39,7 +39,7 @@ def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request,
 
     store = request.getfixturevalue(fixture)
     assert validate_store(store).ok, "the fixture must validate before it is restamped"
-    assert open_store(store).manifest.format_version == "0.2.2"
+    assert open_store(store).manifest.format_version == "0.2.3"
     edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.1"})
 
     result = validate_store(store)
@@ -55,11 +55,11 @@ def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request,
 def test_a_release_stamped_newer_than_this_build_writes_is_told_to_upgrade(
     request, fixture, caplog
 ):
-    """A 0.2.3 release is a later package's format: its stamp rule is that package's.
+    """A 0.2.4 release is a later package's format: its stamp rule is that package's.
     `validate` reads it with the newer-remainder warning, and `manifest.format_stamp`
     warns that the package must be upgraded instead of judging the stamp -- never that
-    the stamp is wrong: re-stamped 0.2.2 as such an error would say, it is a release
-    this build completes, whatever 0.2.3 changed. A warning, not a skip, because the
+    the stamp is wrong: re-stamped 0.2.3 as such an error would say, it is a release
+    this build completes, whatever 0.2.4 changed. A warning, not a skip, because the
     text report prints warnings and not skips."""
     import logging
 
@@ -67,7 +67,7 @@ def test_a_release_stamped_newer_than_this_build_writes_is_told_to_upgrade(
 
     store = request.getfixturevalue(fixture)
     assert validate_store(store).ok, "the fixture must validate before it is restamped"
-    edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.3"})
+    edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.4"})
 
     with caplog.at_level(logging.WARNING):
         result = validate_store(store)
@@ -215,8 +215,8 @@ def test_the_zarr_format_rule_reports_nodes_in_name_order(
 
     assert result.failed() == {"zarr.format"}
     assert result.errors == [
-        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.2; a "
-        "0.2.2 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.3; a "
+        "0.2.3 release is Zarr v3, and a half-converted release is invalid (issue #245)"
         for node in ("se", "z")
     ]
 
@@ -402,6 +402,16 @@ def _infinite_se_warnings(result) -> list[str]:
     return [warning for warning in result.warnings if "infinite se" in warning]
 
 
+def _as_written_before_0_2_3(store: Path) -> None:
+    """Restamp a fixture (and a Hybrid's Dense Component) 0.2.2: the format a `+inf`
+    SE was written in, before issue #338 left such an association out."""
+    from region_tables import edit_manifest
+
+    for release in (store, store / "dense"):
+        if (release / "manifest.json").exists():
+            edit_manifest(release, lambda manifest: {**manifest, "format_version": "0.2.2"})
+
+
 def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
     """An SE above float16's range is `+inf` beside a finite Z: a warning, not an error.
 
@@ -413,6 +423,7 @@ def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
     Mutation that makes this fail: count nothing in `associations.se_infinite`'s
     measure, or stop judging its total.
     """
+    _as_written_before_0_2_3(dense_store_path)
     root = open_store(dense_store_path).arrays(mode="a")
     assert root["se"].dtype == np.dtype("float16")  # fixture sanity
     root["se"][0, 0] = float("inf")
@@ -436,6 +447,7 @@ def test_validator_warns_about_an_infinite_ragged_se(ragged_store_path):
     Mutation that makes this fail: drop the Ragged plane from `_ragged_se_planes`, or
     scan the plane with the Analysis boundaries ignored (the id would be wrong).
     """
+    _as_written_before_0_2_3(ragged_store_path)
     ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
     index = ragged["by_variant"]
     assert ragged["se"].dtype == np.dtype("float16")  # fixture sanity
@@ -494,6 +506,7 @@ def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path
     labelling both planes alike (the label assertions).
     """
     store = _hybrid_store_with_both_components(tmp_path)
+    _as_written_before_0_2_3(store)
     component = open_store(store).dense_component()
     dense_se = DenseSePlane.open(component.arrays(mode="r+"), component.manifest.encoding)
     assert component.manifest.encoding.se.kind == "float16"  # fixture sanity
@@ -523,6 +536,24 @@ def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path
     }
     assert "'trait_a'" in by_plane["1 cell(s) of data.zarr/ragged/se"]
     assert "'trait_c'" in by_plane["1 cell(s) of dense/data.zarr/se"]
+
+
+def test_a_0_2_3_release_holding_an_infinite_se_fails(dense_store_path):
+    """From format 0.2.3 an association whose SE is above 65,504 is not stored (issue
+    #338), so a release holding one is invalid, not merely reported as before.
+
+    Mutation that makes this fail: keep the old warning for a 0.2.3 release.
+    """
+    assert open_store(dense_store_path).manifest.format_version == "0.2.3"  # fixture sanity
+    root = open_store(dense_store_path).arrays(mode="a")
+    root["se"][0, 0] = float("inf")
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"associations.se_out_of_range"}, result.errors
+    assert _infinite_se_warnings(result) == []
+    (message,) = result.errors
+    assert "1 cell(s) of data.zarr/se hold an SE above 65,504" in message and "'a1'" in message
 
 
 def test_a_store_without_an_infinite_se_gets_no_infinite_se_warning(
@@ -861,6 +892,147 @@ def test_validator_accepts_valid_original_sd_method(dense_store_path):
     write_analyses(analyses_path, table)
 
     result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+
+
+def _shaped_like_ogs_00006(store: Path, original_sd: str) -> str:
+    """Give the store's first Analysis OGS-00006's published SD columns: a
+    rescaling method, with `original_sd` as given (blank there). Returns its id."""
+    analyses_path = store / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    row = table.rows[0]
+    row.update(
+        original_effect_scale="sd",
+        original_sd_method="estimated_from_source_maf",
+        original_sd=original_sd,
+    )
+    write_analyses(analyses_path, table)
+    return str(row["analysis_id"])
+
+
+_ORIGINAL_SD_RECORDED = "analyses.original_sd_recorded"
+
+
+def _names_it(result, analysis: str, original_sd: str) -> bool:
+    return any(
+        f"analysis {analysis!r} declares original_sd_method='estimated_from_source_maf'" in e
+        and f"original_sd {original_sd!r}" in e
+        for e in result.errors
+    )
+
+
+def test_a_release_shaped_like_ogs_00006_fails_only_for_its_blank_original_sd(
+    ragged_store_path,
+):
+    """Issue #366: OGS-00006, -00024, -00025 and -00026 record
+    `estimated_from_source_maf` with a blank `original_sd`, and hold their
+    sources' SEs undivided. Nothing else in a Store shows it."""
+    assert validate_store(ragged_store_path).ok, "the fixture must validate before it is edited"
+    analysis = _shaped_like_ogs_00006(ragged_store_path, "")
+
+    result = validate_store(ragged_store_path)
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, ""), result.errors
+
+
+@pytest.mark.parametrize("original_sd", ["inf", "nan", "0", "-0.984008520611909", "sd"])
+def test_a_rescaling_method_without_a_finite_positive_original_sd_fails_naming_the_analysis(
+    ragged_store_path, original_sd
+):
+    """The rule alone (and what it runs after), so each value costs one table read."""
+    assert validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED}).ok
+    analysis = _shaped_like_ogs_00006(ragged_store_path, original_sd)
+
+    result = validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED})
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, original_sd), result.errors
+
+
+def test_the_original_sd_rule_applies_to_a_release_stamped_0_2_0(ragged_store_path):
+    """The rule has no version gate: a release before 0.2.3 that records a rescaling
+    method without its SD fails it too, as OGS-00006's family does at its own
+    format (issue #366, ADR 0084)."""
+    from region_tables import edit_manifest
+
+    edit_manifest(ragged_store_path, lambda m: {**m, "format_version": "0.2.0"})
+    assert open_store(ragged_store_path).manifest.format_version == "0.2.0"
+    assert validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED}).ok
+    analysis = _shaped_like_ogs_00006(ragged_store_path, "")
+
+    result = validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED})
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, ""), result.errors
+
+
+def test_the_original_sd_rule_applies_to_a_release_stamped_0_1_0(tmp_path, dense_store_path):
+    """The same, on a genuine 0.1.0 (Zarr v2) release, the format the validator
+    still opens (see `test_a_fixture_0_1_0_release_still_spelling_full_opens_and_validates`)."""
+    from legacy_fixtures import relayout_as_0_1_0
+
+    legacy = relayout_as_0_1_0(dense_store_path, tmp_path / "legacy-0.1.0.opengwasdb")
+    assert open_store(legacy).manifest.format_version == "0.1.0"
+    assert validate_store(legacy, rules={_ORIGINAL_SD_RECORDED}).ok
+    analysis = _shaped_like_ogs_00006(legacy, "")
+
+    result = validate_store(legacy, rules={_ORIGINAL_SD_RECORDED})
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, ""), result.errors
+
+
+_SD_SCALE_STANDARDISED = "analyses.sd_scale_standardised"
+
+
+def _labelled(store: Path, scale: str, method: str) -> str:
+    """Give the store's first Analysis a Stored Effect Scale and method. Returns its id."""
+    analyses_path = store / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    row = table.rows[0]
+    row.update(stored_effect_scale=scale, original_sd_method=method, original_sd="")
+    write_analyses(analyses_path, table)
+    return str(row["analysis_id"])
+
+
+@pytest.mark.parametrize("method", ["", "binary_trait"])
+def test_an_sd_scale_with_no_standardising_method_fails_naming_the_analysis(
+    ragged_store_path, method
+):
+    """Issue #366, ADR 0084: `sd` over no method, or over `binary_trait`, is an
+    undivided Analysis labelled SD Units, which nothing else in the Store shows."""
+    assert validate_store(ragged_store_path, rules={_SD_SCALE_STANDARDISED}).ok
+    analysis = _labelled(ragged_store_path, "sd", method)
+
+    result = validate_store(ragged_store_path, rules={_SD_SCALE_STANDARDISED})
+
+    assert result.failed() == {_SD_SCALE_STANDARDISED}
+    assert any(
+        f"analysis {analysis!r}" in e and f"original_sd_method={method!r}" in e
+        for e in result.errors
+    ), result.errors
+
+
+@pytest.mark.parametrize(
+    ("scale", "method"),
+    [("sd", "declared_standardised"), ("log_or", "binary_trait"), ("log_or", ""), ("", "")],
+)
+def test_a_label_that_claims_no_unstandardised_sd_units_passes_the_sd_scale_rule(
+    ragged_store_path, scale, method
+):
+    """A non-`sd` scale claims no SD Units, and a blank scale with a blank method is
+    "not standardised, scale unknown" (spec §7): neither is this rule's."""
+    _labelled(ragged_store_path, scale, method)
+
+    assert validate_store(ragged_store_path, rules={_SD_SCALE_STANDARDISED}).ok
+
+
+def test_a_rescaling_method_with_the_sd_it_divided_by_validates(ragged_store_path):
+    _shaped_like_ogs_00006(ragged_store_path, "0.984008520611909")
+
+    result = validate_store(ragged_store_path)
 
     assert result.ok, result.errors
 

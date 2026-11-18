@@ -12,15 +12,14 @@ before any source is opened.
 from __future__ import annotations
 
 import csv
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import numpy as np
-
 from opengwasdb.build.liftover import normalise_build
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata
-from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.enums import SD_RESCALING_METHODS, OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest_columns import (
     ManifestColumns,
     manifest_n,
@@ -41,9 +40,9 @@ from opengwasdb.readers.registry import SourceSpec, known_capabilities
 
 __all__ = [
     "ManifestRow",
-    "apply_se_divisor",
     "column_map_provenance",
     "manifest_row_to_analysis",
+    "original_sd_divisor",
     "read_manifest",
 ]
 
@@ -57,7 +56,8 @@ class ManifestRow:
     trait_name: str
     n: int
     stored_effect_scale: str
-    se_divisor: float  # divides original_se to standardise to SD units (issue #18); 1.0 = no-op
+    se_divisor: float  # the phenotype SD `storable` divides this Analysis's SEs by (issue #18,
+    # ADR 0084); 1.0 = no-op. Parsed here, applied only through `PhenotypeSd`.
     source_reader_capability: str  # resolves to a SourceReader (issue #20); GWAS_VCF_CAPABILITY
     # when the manifest omits the column -- the only format this builder has ever supported.
     source_assembly: str  # normalised "hg19"/"hg38" (issue #85); "hg19" when the manifest omits
@@ -98,16 +98,6 @@ class ManifestRow:
         )
 
 
-def apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
-    """Continuous-trait phenotype-SD standardisation (issue #18):
-    ``stored_se = original_se / sd``. Shared by the dense and hybrid builders,
-    both of which resolve an association stream to ``(index, z, se)`` and need
-    the same no-op-when-1.0 divide applied to ``se`` before spilling."""
-    if se_divisor == 1.0:
-        return se
-    return se / np.float32(se_divisor)
-
-
 def manifest_row_to_analysis(row: ManifestRow) -> Analysis:
     """A manifest row's Analytical + Attribution Metadata (issue #22, ADR
     0034), shared by the dense and hybrid manifest builders.
@@ -128,19 +118,6 @@ def manifest_row_to_analysis(row: ManifestRow) -> Analysis:
             original_sd=row.original_sd,
         )
     )
-
-
-# original_sd_method tiers that carry an actual phenotype-SD magnitude to divide
-# by (ADR-0029 methods 2-5). declared_standardised implies sd=1 (no magnitude
-# recorded); binary_trait is not SD-scale at all -- neither rescales.
-_SD_RESCALE_METHODS = frozenset(
-    {
-        OriginalSdMethod.SOURCE_PROVIDED,
-        OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
-        OriginalSdMethod.ESTIMATED_FROM_REFERENCE_MAF,
-        OriginalSdMethod.ESTIMATED_FROM_BETA_DISTRIBUTION,
-    }
-)
 
 
 def _parse_source_assembly(
@@ -191,7 +168,7 @@ def _parse_original_sd(
         )
     se_divisor = 1.0
     original_sd_raw = row.get("original_sd", "")
-    if sd_method in _SD_RESCALE_METHODS:
+    if sd_method in SD_RESCALING_METHODS:
         try:
             se_divisor = float(original_sd_raw)
         except ValueError as exc:
@@ -200,10 +177,12 @@ def _parse_original_sd(
                 f"original_sd_method={sd_method.value!r} but original_sd "
                 f"{original_sd_raw!r} is not a valid number"
             ) from exc
-        if not se_divisor > 0:
+        if not math.isfinite(se_divisor) or se_divisor <= 0:
             raise ValueError(
                 f"manifest {manifest_path}: analysis {trait_id!r} has "
-                f"non-positive original_sd {original_sd_raw!r}"
+                f"original_sd {original_sd_raw!r}, which is not a finite positive "
+                "number: dividing by it would store every standard error as 0 "
+                "(issue #366)"
             )
     elif original_sd_raw:
         raise ValueError(
@@ -212,6 +191,101 @@ def _parse_original_sd(
             f"magnitude, but original_sd={original_sd_raw!r} was supplied"
         )
     return se_divisor
+
+
+#: The spellings of "no value" the Ragged builders read as a blank cell (their `_opt`
+#: helpers): the union of both, so one judgement serves BESD and SSF.
+MISSING_TOKENS = frozenset({"", ".", "NA", "NaN", "nan", "null", "None"})
+
+
+def blank_if_missing(value: str | None) -> str:
+    """A manifest cell as the Ragged builders read it: a missing token as ``""``.
+
+    A cell that is not one is returned as spelt, padding included: the Store records
+    `original_sd_method` verbatim, so a padded spelling is for the parser to refuse."""
+    text = value or ""
+    return "" if text.strip() in MISSING_TOKENS else text
+
+
+def require_sd_scale_standardised(
+    scale: str, method: str, analysis_id: str, manifest_path: str | Path
+) -> None:
+    """Refuse an Analysis labelled SD Units that no SD standardised (issue #366, ADR 0084).
+
+    ``stored_effect_scale=sd`` says the stored z and SE are in SD Units, which
+    holds only when the SEs were divided by a phenotype SD
+    (`SD_RESCALING_METHODS`) or the source declared them already standardised
+    (``declared_standardised``). Any other method, or none, would build an
+    undivided Analysis under an SD Units label. A scale that is not ``sd``
+    claims no SD Units, so it is not this rule's. Every builder applies it
+    through its own manifest parser.
+    """
+    if scale != StoredEffectScale.SD.value:
+        return
+    standardised = {m.value for m in SD_RESCALING_METHODS}
+    standardised.add(OriginalSdMethod.DECLARED_STANDARDISED.value)
+    if method and method not in {m.value for m in OriginalSdMethod}:
+        return  # an unknown spelling is the method parser's to refuse, by name
+    if method not in standardised:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {analysis_id!r} has "
+            f"stored_effect_scale='sd' but original_sd_method={method!r}: SD Units "
+            "need a rescaling method or declared_standardised, else the Store would "
+            "label an unstandardised Analysis as SD Units (issue #366, ADR 0084)"
+        )
+
+
+def original_sd_divisor(
+    row: Mapping[str, str], analysis_id: str, manifest_path: str | Path
+) -> float:
+    """The phenotype SD one Ragged manifest row's standard errors are divided by (issue #18).
+
+    The value only: the divide is `PhenotypeSd`'s, applied by `storable` (ADR
+    0084). The rule is every builder's -- `SD_RESCALING_METHODS` rescale by
+    ``original_sd``, every other tier leaves the SEs alone -- read through the
+    same `_parse_original_sd` so the Ragged builders cannot drift from Dense
+    and Hybrid (issue #366). Ragged's manifests differ in one way only:
+    ``original_sd_method`` and ``original_sd`` are optional columns there
+    (ADR 0042, issue #83), so a row declaring neither declares no SD and
+    standardises nothing.
+
+    Two checks sit outside `_parse_original_sd`. A row that names a magnitude
+    without a method is refused rather than copied: the built Store would
+    claim an SD it never divided by, which is the contradiction epic #347 is
+    about. Every other rule -- including that a non-finite or non-positive
+    magnitude is no divisor -- is the shared parser's, so Dense, Dense-from-VCF,
+    Hybrid and both Ragged builders refuse the same manifests (issue #366).
+    """
+    # The method is judged as spelt, as Dense's parser judges it: the Store records
+    # it verbatim (`PassthroughMetadata`), so a spelling that passed here only once
+    # stripped would build and then fail `analyses.vocabularies` (issue #366).
+    method = blank_if_missing(row.get("original_sd_method"))
+    original_sd = (row.get("original_sd") or "").strip()
+    if not method:
+        if original_sd:
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {analysis_id!r} declares "
+                f"original_sd {original_sd!r} but no original_sd_method, so the build "
+                "cannot tell whether to standardise by it"
+            )
+        return 1.0
+    return _parse_original_sd(
+        {"original_sd_method": method, "original_sd": original_sd},
+        analysis_id,
+        manifest_path,
+    )
+
+
+def check_ragged_sd_scale(
+    row: Mapping[str, str], analysis_id: str, manifest_path: str | Path
+) -> None:
+    """Apply `require_sd_scale_standardised` to one Ragged manifest row."""
+    require_sd_scale_standardised(
+        (row.get("stored_effect_scale") or "").strip(),
+        blank_if_missing(row.get("original_sd_method")),
+        analysis_id,
+        manifest_path,
+    )
 
 
 def _parse_manifest_row(
@@ -234,6 +308,7 @@ def _parse_manifest_row(
     assembly = _parse_source_assembly(row, fallback_assembly, trait_id, manifest_path)
     capability = _parse_reader_capability(row, fallback_capability, trait_id, manifest_path)
     se_divisor = _parse_original_sd(row, trait_id, manifest_path)
+    require_sd_scale_standardised(scale, row["original_sd_method"], trait_id, manifest_path)
     return ManifestRow(
         trait_id=trait_id,
         file_path=row[cols.source_file],

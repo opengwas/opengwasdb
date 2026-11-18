@@ -15,6 +15,7 @@ from liftover_fixtures import (
     write_cross_chromosome_chain,
     write_two_strand_chain,
 )
+from sd_scaling import require_not_rescaling, require_rescaling
 from stored_rows import stored_rows
 
 from opengwasdb.associations import Cells, CsrReader
@@ -533,11 +534,11 @@ def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
         "original_sd_method\toriginal_sd\tassigned_ancestry\tancestry_assignment_method\t"
         "ancestry_prop_EUR\tlicense\tpublication_doi\tpublication_pmid\tconsortium\t"
         "first_author\ttissue\n"
-        "ENSG00000000001\t31684\ttotal\tanalysis\tsd\tmeasured_sd\t4.2\tEUR\tconsensus\t"
+        "ENSG00000000001\t31684\ttotal\tanalysis\tsd\tsource_provided\t4.2\tEUR\tconsensus\t"
         "0.95\tCC-BY-4.0\t10.1038/s41588-021-00913-z\t34475573\teQTLGen\tVosa\tWhole_Blood\n"
-        "ENSG00000000002\t31684\ttotal\tanalysis\tsd\tmeasured_sd\t4.2\tEUR\tconsensus\t"
+        "ENSG00000000002\t31684\ttotal\tanalysis\tsd\tsource_provided\t4.2\tEUR\tconsensus\t"
         "0.95\tCC-BY-4.0\t10.1038/s41588-021-00913-z\t34475573\teQTLGen\tVosa\tWhole_Blood\n"
-        "ENSG00000000003\t31684\ttotal\tanalysis\tsd\tmeasured_sd\t4.2\tEUR\tconsensus\t"
+        "ENSG00000000003\t31684\ttotal\tanalysis\tsd\tsource_provided\t4.2\tEUR\tconsensus\t"
         "0.95\tCC-BY-4.0\t10.1038/s41588-021-00913-z\t34475573\teQTLGen\tVosa\tWhole_Blood\n",
         encoding="utf-8",
     )
@@ -555,7 +556,7 @@ def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
     assert r0["sample_size"] == "31684"
     assert r0["sample_size_kind"] == "total"
     assert r0["sample_size_scope"] == "analysis"
-    assert r0["original_sd_method"] == "measured_sd"
+    assert r0["original_sd_method"] == "source_provided"
     assert r0["original_sd"] == "4.2"
     assert r0["assigned_ancestry"] == "EUR"
     assert r0["ancestry_assignment_method"] == "consensus"
@@ -565,6 +566,124 @@ def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
     assert r0["consortium"] == "eQTLGen"
     assert r0["first_author"] == "Vosa"
     assert r0["tissue"] == "Whole_Blood"
+
+
+# ── phenotype-SD standardisation (issue #18, #366) ───────────────────────────
+
+def _write_sd_manifest(tmp_path: Path, method: str, sd: str) -> Path:
+    """One overlay manifest declaring an `original_sd` tier for every probe."""
+    manifest = tmp_path / "sd_overlay.tsv"
+    rows = "".join(
+        f"ENSG0000000000{probe}\t1000\tsd\t{method}\t{sd}\n" for probe in (1, 2, 3)
+    )
+    manifest.write_text(
+        "analysis_id\tsample_size\tstored_effect_scale\toriginal_sd_method\toriginal_sd\n"
+        + rows,
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def test_besd_se_is_standardised_by_the_manifests_original_sd(tmp_path):
+    """Issue #366: a rescaling `original_sd` divides BESD's SEs, as it does in
+    Dense, Dense-from-VCF and Hybrid, and `z` is scale-free so it stays as given.
+
+    The values are the fixture's own, not the new code's arithmetic: probe 1
+    holds beta=0.5 and se=0.05, so it stores z=10.0 and se=0.025 (0.05 / 2.0).
+    """
+    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.model.enums import OriginalSdMethod
+
+    require_rescaling(OriginalSdMethod.SOURCE_PROVIDED)
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = _write_sd_manifest(tmp_path, "source_provided", "2.0")
+    out = tmp_path / "out_sd.opengwasdb"
+
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", analyses_path=manifest,
+        association_coverage="cis_and_signals",
+    )
+
+    declared = {
+        row["analysis_id"]: (row["original_sd_method"], row["original_sd"])
+        for row in read_analyses(out / "analyses.tsv").rows
+    }
+    assert declared["ENSG00000000002"] == ("source_provided", "2.0"), (
+        "the declared SD must reach analyses.tsv, or the fixture declared nothing to divide by"
+    )
+
+    probe1 = stored_rows(out, 1)
+    assert len(probe1.variant_index) == 1, "probe 1 must carry its one association"
+    assert float(probe1.se[0]) == pytest.approx(0.025, rel=1e-3)  # source 0.05 / 2.0
+    assert float(probe1.z[0]) == pytest.approx(10.0, rel=1e-3)  # beta 0.5 / se 0.05
+
+    probe0 = stored_rows(out, 0)
+    assert sorted(float(value) for value in probe0.se) == pytest.approx(
+        [0.01, 0.015], rel=1e-3  # source 0.02 and 0.03, each / 2.0
+    )
+
+
+def test_besd_se_is_untouched_by_a_method_that_does_not_rescale(tmp_path):
+    """Issue #366: `declared_standardised` carries no SD magnitude, so the SEs
+    are stored as the source gave them."""
+    from opengwasdb.model.enums import OriginalSdMethod
+
+    require_not_rescaling(OriginalSdMethod.DECLARED_STANDARDISED)
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = _write_sd_manifest(tmp_path, "declared_standardised", "")
+    out = tmp_path / "out_no_rescale.opengwasdb"
+
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", analyses_path=manifest,
+        association_coverage="cis_and_signals",
+    )
+
+    probe1 = stored_rows(out, 1)
+    assert len(probe1.variant_index) == 1, "probe 1 must carry its one association"
+    assert float(probe1.se[0]) == pytest.approx(0.05, rel=1e-3)  # source se, undivided
+
+
+@pytest.mark.parametrize("bad_sd", ["inf", "0", "-1"])
+def test_besd_refuses_a_non_finite_or_non_positive_original_sd(tmp_path, bad_sd):
+    """Issue #366 acceptance 2: an `inf` SD would store every SE as 0, and 0 or a
+    negative SD is no divisor at all; the build stops and names the Analysis."""
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = _write_sd_manifest(tmp_path, "source_provided", bad_sd)
+
+    with pytest.raises(ValueError, match="ENSG00000000001") as raised:
+        build_ragged_from_besd(
+            prefix, tmp_path / "out_bad_sd.opengwasdb", store_id="test", release_id="v1",
+            analyses_path=manifest, association_coverage="cis_and_signals",
+        )
+    assert "original_sd" in str(raised.value)
+
+
+def test_besd_refuses_an_original_sd_that_names_no_method(tmp_path):
+    """Issue #366: a magnitude with no tier would be copied into analyses.tsv
+    while never being divided by -- a Store claiming an SD it did not apply."""
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = _write_sd_manifest(tmp_path, "", "2.0")
+
+    with pytest.raises(ValueError, match="no original_sd_method") as raised:
+        build_ragged_from_besd(
+            prefix, tmp_path / "out_no_method.opengwasdb", store_id="test", release_id="v1",
+            analyses_path=manifest, association_coverage="cis_and_signals",
+        )
+    assert "ENSG00000000001" in str(raised.value)
+
+
+def test_besd_refuses_original_sd_method_unavailable(tmp_path):
+    """Issue #18: `unavailable` says the SD could not be established upstream, so
+    there is nothing to standardise by; every other builder refuses it too."""
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = _write_sd_manifest(tmp_path, "unavailable", "")
+
+    with pytest.raises(ValueError, match="ENSG00000000001") as raised:
+        build_ragged_from_besd(
+            prefix, tmp_path / "out_unavailable.opengwasdb", store_id="test", release_id="v1",
+            analyses_path=manifest, association_coverage="cis_and_signals",
+        )
+    assert "unavailable" in str(raised.value)
 
 
 def test_analyses_overlay_malformed_sample_size_fails_loudly(tmp_path):

@@ -20,6 +20,7 @@ import opengwasdb.store.arrays as store_arrays
 from opengwasdb.encoding import EncodingMeasurements, OverflowCells, StoreEncoding
 from opengwasdb.encoding.codec import StoreCodec
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import OverflowCellBatches, optimise_dense_se_joint
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
@@ -49,7 +50,7 @@ def _writer(sizes, *, seed=0, without_eaf=()):
         se = np.abs(rng.standard_normal(count) * 0.1 + 0.2).astype(np.float32)
         noisy = np.clip(truth[vi] + rng.normal(0, 0.002, count), 1e-4, 1 - 1e-4)
         eaf = None if i in without_eaf else noisy.astype(np.float32)
-        writer.add_analysis(vi, z, se, eaf)
+        writer.add_analysis(vi, z, se, eaf, phenotype_sd=PhenotypeSd.APPLIED)
     return writer
 
 
@@ -213,6 +214,7 @@ def _model_writer(sizes, *, seed=0):
             rng.standard_normal(count).astype(np.float32),
             se.astype(np.float32),
             eaf.astype(np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     return writer
 

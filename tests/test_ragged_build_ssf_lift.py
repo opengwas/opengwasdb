@@ -25,9 +25,9 @@ from stored_rows import stored_rows
 
 from opengwasdb.admission import admission_record_for
 from opengwasdb.build.liftover import LiftoverFailureError
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.variants.axis import VariantAxis
+from tests.ssf_builds import build_ragged_from_ssf, declare_scale
 
 _HEADER = [
     "chromosome", "base_pair_location", "effect_allele", "other_allele", "beta",
@@ -294,6 +294,7 @@ def test_the_cli_takes_a_chain_file_and_a_failure_threshold(tmp_path, chain):
     unmapped = {**_GRCH37_ROWS[2], "chromosome": "4"}
     manifest, source_dir = _stage(tmp_path, "in", [("a", "GRCh37", [*_GRCH37_ROWS, unmapped])])
     out = tmp_path / "cli.opengwasdb"
+    declare_scale(manifest)
     args = [
         "build-ragged-ssf", str(manifest), str(source_dir), str(out),
         "--admission-record", f"{out}.admission", "--store-id", "s", "--release-id", "v1",

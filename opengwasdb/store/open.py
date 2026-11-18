@@ -40,11 +40,12 @@ if TYPE_CHECKING:
 #:
 #: Two entries since #245: `0.1` (Zarr v2, read but never written again) and
 #: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on), read to
-#: 0.2.2: `0.2.1` adds #430's region table, `0.2.2` #381's indel ALIDs spelt
-#: reference first (ADR 0079). The four pre-reset versions are not in it and are not
-#: readable -- see `PRE_RESET_FORMAT_VERSIONS`.
+#: 0.2.3: `0.2.1` adds #430's region table, `0.2.2` #381's indel ALIDs spelt
+#: reference first (ADR 0079), `0.2.3` #338's `n_missing_se_out_of_range` (ADR
+#: 0068). The four pre-reset versions are not in it and are not readable -- see
+#: `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,), (0, 2): (2,)}
+    {(0, 1): (0,), (0, 2): (3,)}
 )
 
 #: The format_versions this build writes, oldest first. A build stamps each release
@@ -60,16 +61,23 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: the v2 reader (ADR 0057). `0.2.1` since #430: 0.2.0 plus a Ragged release's
 #: optional, manifest-declared `regions.tsv`, so a 0.2.0 release is a 0.2.1 one
 #: without the file. `0.2.2` since #381: 0.2.1 with an indel's ALID spelt reference
-#: first rather than sorted (ADR 0079), `regions.tsv` still optional. Package
-#: v0.9.0 wrote 0.2.0 and 0.2.1 with sorted indels; this build writes 0.2.2 for
-#: every release it builds or completes, and 0.2.0 for one it converts from 0.1.0
-#: (`opengwasdb.store.convert`), whose indels it cannot re-spell.
-WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1", "0.2.2")
+#: first rather than sorted (ADR 0079), `regions.tsv` still optional. `0.2.3`
+#: since #338: 0.2.2 whose `analyses.tsv` records `n_missing_se_out_of_range` on
+#: every row, and which holds no association whose SE is above 65,504 (ADR 0068).
+#: Package v0.9.0 wrote 0.2.0 and 0.2.1 with sorted indels; this build writes 0.2.3
+#: for every release it builds or completes, and 0.2.0 for one it converts from
+#: 0.1.0 (`opengwasdb.store.convert`), whose indels it cannot re-spell.
+WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
 
 #: The first `format_version` whose indel ALIDs spell the reference allele first
 #: (ADR 0079). Every earlier one sorts an indel's alleles, so its deletion reads
 #: like the insertion of the same sequence; nothing rewrites such a Store.
 REFERENCE_FIRST_INDELS_SINCE = (0, 2, 2)
+
+#: The first `format_version` whose `analyses.tsv` must record
+#: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the
+#: column may be absent or blank, which reads as unknown, never 0.
+SE_OUT_OF_RANGE_COUNTED_SINCE = (0, 2, 3)
 
 
 def indels_reference_first(version: str) -> bool:
@@ -82,7 +90,18 @@ def indels_reference_first(version: str) -> bool:
     return parse_format_version(version) >= REFERENCE_FIRST_INDELS_SINCE
 
 
-def format_version_for(*, carries_regions: bool, reference_first_indels: bool) -> str:
+def records_se_out_of_range(version: str) -> bool:
+    """Whether a Store of ``version`` records `n_missing_se_out_of_range` on every
+    Analysis, and so holds no association whose SE is above 65,504 (ADR 0068)."""
+    return parse_format_version(version) >= SE_OUT_OF_RANGE_COUNTED_SINCE
+
+
+def format_version_for(
+    *,
+    carries_regions: bool,
+    reference_first_indels: bool,
+    records_se_out_of_range: bool = True,
+) -> str:
     """The `format_version` a release this build writes is stamped: the lowest whose
     features it uses (spec §21.3). The one rule every writer stamps by -- the builders,
     completion, the converter -- so a release no older reader can fully read says so,
@@ -92,10 +111,31 @@ def format_version_for(*, carries_regions: bool, reference_first_indels: bool) -
     `reference_first_indels`: its indel ALIDs spell the reference first, which 0.2.2
     adds (ADR 0079); every release this build builds or completes does, one it
     converts from 0.1.0 does not.
+    `records_se_out_of_range`: its `analyses.tsv` counts, on every row, the
+    associations left out for an SE above 65,504, which 0.2.3 adds (ADR 0068). Every
+    release this build builds or completes does. 0.2.3 is 0.2.2 and the count, so a
+    release whose indels are sorted is stamped by its indels, whatever it counts.
     """
     if reference_first_indels:
-        return WRITTEN_FORMAT_VERSIONS[2]
+        return WRITTEN_FORMAT_VERSIONS[3 if records_se_out_of_range else 2]
     return WRITTEN_FORMAT_VERSIONS[1] if carries_regions else WRITTEN_FORMAT_VERSIONS[0]
+
+
+def completed_format_version(source_version: str, *, carries_regions: bool) -> str:
+    """The `format_version` a Reference Completion of a ``source_version`` release is
+    stamped: its source's features, and the count every completion records.
+
+    A completion writes into its source's arrays, so it keeps every feature its
+    source's stamp declares (ADR 0038 §4), and adds `n_missing_se_out_of_range`,
+    which it counts as it writes (issue #338): a 0.2.2 source completes to 0.2.3.
+    The source must already be one this build completes (`check_writable_format_version`).
+    """
+    check_format_version_stamp(source_version, carries_regions=carries_regions)
+    return format_version_for(
+        carries_regions=carries_regions,
+        reference_first_indels=indels_reference_first(source_version),
+        records_se_out_of_range=True,
+    )
 
 
 #: The format_version a release that uses no optional feature is stamped: what
@@ -128,6 +168,7 @@ def check_format_version_stamp(
     stamp = format_version_for(
         carries_regions=carries_regions,
         reference_first_indels=indels_reference_first(version),
+        records_se_out_of_range=records_se_out_of_range(version),
     )
     if version != stamp:
         carried = "regions.tsv" if carries_regions else "no region table"

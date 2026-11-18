@@ -727,6 +727,23 @@ names it (§20). Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
 clips.
 
+Under either plan no SE above 65,504 -- the largest a `float16` plane holds --
+is stored (§15, issue #338): from format 0.2.3 such an association is left out
+before the plan is measured, so it plays no part in choosing the range or
+fitting `se_coefficients`, and an SE encoder handed one refuses it rather than
+narrow it to `+inf` or hold it as an exact exception. A residual exception
+table therefore holds no value above 65,504. Nor does a code decode above it.
+A code is the nearest step, so a kept SE at or near 65,504 could read up to half
+a step above itself (65,520 from 65,504 under a 0.5 range); and a reader predicts
+from the frequency it decodes, narrowed to `float32`, which under a steep model
+moves the prediction by whole units, so an SE far below the bound could read
+above it too (10,000 as 11,806,119 under a slope of 1e9). The encoder decodes
+every kept cell's code as a reader will and holds any that would read above
+65,504 as an exact exception. That is one decision, with the residual-range and
+exact-carry rules (`se_residual_codes`): the candidate measurement, the Dense
+rewrite's exception count and the encoder all make it, so the 2% cap below and
+the side table's size count these exceptions too.
+
 **Residual SE is all-or-nothing per component, and that verdict is reached
 before the fit and the measurements.** One Analysis whose cells carry a finite
 SE and no frequency, or from which the fit yields no coefficients — fewer than
@@ -968,7 +985,35 @@ log_hazard
 
 There is no `other`, `unknown`, or original-units Stored Effect Scale in v0.1. Unsupported stored scales MUST fail ingestion until the vocabulary is deliberately extended.
 
+An Analysis whose Stored Effect Scale is `sd` MUST have an `original_sd_method` that is a rescaling method (below) or `declared_standardised`: SD Units are claimed only for statistics that were divided by a phenotype SD or arrived already standardised. A builder refuses a manifest row that says otherwise, naming the Analysis, and `validate` fails a Store that holds one (`analyses.sd_scale_standardised`, §20.0), at every `format_version`. A blank `original_sd_method` beside a blank Stored Effect Scale is not a scale and not the vocabulary's missing value: it is an absent declaration, "not standardised, scale unknown" (ADR 0084), and no reader may treat it as SD Units. OGS-00001 and OGS-00002 hold it. A builder does not write it from a manifest that names a scale; `build-ragged-besd` reads a blank cell as absent and builds it, and `build-ragged-ssf` refuses a row with no scale.
+
+`build-ragged-ssf` records `provenance.stored_effect_scale` in `manifest.json` as the scale its rows declare: the one value when they agree, else the distinct values sorted and comma-joined (`log_or,sd`). The per-Analysis scale is `analyses.tsv`'s.
+
 Original Effect Scale MAY be recorded as free-text provenance. For continuous traits, builders SHOULD store effects in SD Units when phenotype standard deviation is available or can be derived with acceptable provenance, by rescaling the source statistics with a per-study phenotype SD rather than reconstructing them from Z, N, and allele frequency (ADR 0029). The method used to obtain that SD (`original_sd_method`) and a dispersion diagnostic over its supporting evidence MUST be recorded as Analytical Metadata (§7a).
+
+Every builder that reads a build manifest applies that rescaling, and applies it
+identically: an `original_sd_method` in a tier that carries an SD magnitude
+(`source_provided`, `estimated_from_source_maf`,
+`estimated_from_reference_maf`, `estimated_from_beta_distribution`) divides each
+of that Analysis's standard errors by `original_sd` before the association is
+encoded, in `build-dense`, `build-dense-vcf`, `build-hybrid` (its Dense
+Component, its Overflow and its off-reference associations),
+`build-ragged-besd` and `build-ragged-ssf` alike, and records that
+`original_sd` in `analyses.tsv` (§7a). The divide is one module's, applied where
+a writer judges what a Store holds (`storable`, ADR 0084): a builder hands each
+Analysis's SD with its source's SEs, and a writer handing SEs a Store already
+holds — a Reference Completion, an encode — hands none: an SE MUST be divided
+exactly once. A builder judges `original_sd_method` as the manifest spells it,
+and refuses a spelling outside the vocabulary — a padded `' source_provided '`
+included — in every builder alike, rather than build a Release that records it
+and then fails validation. `z` is scale-free and MUST be stored as the source gave it, so
+dividing the SE never moves it. In every one of them a magnitude that is
+missing, non-finite or not positive refuses the build, naming the Analysis: an
+`inf` SD would store every SE as `0`, and `0` or a negative SD is no divisor. A
+tier that carries no magnitude (`declared_standardised`, `binary_trait`)
+divides by nothing and is refused if a magnitude is supplied beside it, and
+`unavailable` is refused because nothing may be standardised without an SD that
+was established (issue #18, #366).
 
 ## 7a. Analytical Metadata, Attribution Metadata, and `analyses.tsv`
 
@@ -1019,6 +1064,7 @@ completed_against   (Reference-Completed releases only; null when unimputed)
 completion_median_pearson_r   (Reference-Completed releases only)
 completion_n_imputed_total
 completion_n_missing_total
+n_missing_se_out_of_range   (associations not stored for an SE above 65,504; required from format 0.2.3)
 eaf_orientation      (see §9.1; `passed`, `failed` or `unverified`; blank only on a store built before the check existed)
 eaf_orientation_r    (the observed correlation; blank when none was computed)
 eaf_orientation_n    (variants the correlation was computed over)
@@ -1061,6 +1107,16 @@ be that specific term's human-readable name; for a gene-centric CURIE, whose
 human-readable name is already `analysis_label`, it instead names the
 identifying vocabulary (`"Ensembl"`) rather than repeating the gene name.
 `analysis_id` MUST be unique within a Store Release.
+
+An Analysis whose `original_sd_method` carries an SD magnitude (§7) MUST record
+that magnitude in `original_sd`, finite and positive: it is the SD its standard
+errors were divided by, and the one value that reads them back in the source's
+units. `validate` fails a row that gives such a method with an `original_sd`
+that is blank, non-finite or not positive (`analyses.original_sd_recorded`,
+§20.0), at every `format_version`. `build-ragged-ssf` before issue #366 wrote
+exactly that row, while storing its source's standard errors undivided; OGS-00006,
+OGS-00024, OGS-00025 and OGS-00026 (4,443 Analyses) are such Releases, and
+`validate` fails them until they are rebuilt or repaired.
 
 For CORE build-input manifests (stores #175), optional `info_score_threshold`,
 `imputation_score_column`, `imputation_score_kind`, and
@@ -1126,6 +1182,29 @@ time. A store whose associations are split across more than one on-disk top-hit
 index for the same Analysis (a Hybrid store's Dense Component and Ragged
 Overflow Component) records the sum, since the two partition an Analysis's
 associations disjointly.
+
+`n_missing_se_out_of_range` counts the Analysis's associations the Store does
+not hold because their SE is above 65,504, the largest a `float16` plane holds
+(§15, issue #338, ADR 0068). It is a non-negative integer. A release at format
+0.2.3 or later MUST record it on every row, 0 included; in a release before
+0.2.3 the column MAY be absent or blank, which means **unknown, never 0**. Each
+writer counts what it leaves out; a Hybrid store's root counts both components
+and its Dense Component counts its own cells, as the Top-Hit Counts do. A
+Reference Completion records the source cells it does not carry and the fills
+it leaves missing, the two parts per Analysis in
+`provenance.completion.se_out_of_range` (`observed` and `imputed`, each a list
+in `analysis_index` order), and its count is their sum plus its source's count
+where that is known. A source at 0.2.3 or later records one, which is carried
+forward. A source before 0.2.3 records none: its count is unknown, and is never
+read as 0. Its completion counts instead each source association above 65,504
+as it meets it -- exactly, because a completion reads every observed cell of
+its source -- so the completed count is the two parts alone. A completion that
+could not count a source's cells exactly would record the count as unknown
+(blank), never as 0; none does. **A counted cell may hold an imputed value after
+completion:** the count says how many of the Analysis's source associations the
+Store could not hold, and a completion may impute a cell its source's build left
+out, as it imputes any missing cell. The count is store-only: a build manifest
+never carries it.
 
 ## 8. Sample size metadata
 
@@ -1738,6 +1817,15 @@ written only when the build is given a per-association sample size (§8). The
 top-hit indexes do not carry it; a top-hit query resolves each hit to its CSR
 cell for `n`, as it does for `eaf` when an index carries none.
 
+A Ragged build standardises its standard errors from the same manifest, and in
+the same place, as every other builder (§7, ADR 0084): `build-ragged-besd` and
+`build-ragged-ssf` divide each Analysis's `se` by its `original_sd` before the
+association is encoded, record that `original_sd`, and store `z` as the source
+gave it. A Ragged SSF Release built before issue #366 corrected this records the
+manifest's rescaling `original_sd_method` with a blank `original_sd` while
+holding the source's own standard errors; `validate` fails it (§7a), and it is
+rebuilt or repaired rather than read as SD Units.
+
 ### 11.1 The variant-centric index (`ragged/by_variant/`)
 
 In the 0.2 series, every Ragged component (a Ragged Store Release or a
@@ -1804,6 +1892,19 @@ A Hybrid crossover also removes the overwritten imputed or missing attempt from
 each owning block's `completion_quality` row, using the LD panel while completing,
 and refreshes the imputed rollup and completion counts. An observed association
 is not a completion attempt merely because the Dense phase first imputed it.
+
+The one exception is an association whose SE is above 65,504 (§15, issue #338),
+which only a source before format 0.2.3 holds. Completion does not carry it: a
+Dense cell is written missing and unflagged, a Ragged row is not written, and a
+Hybrid crossover is not folded, so its Dense cell keeps what Dense completion put
+there, imputed or missing. A fill whose SE is above 65,504 is left missing where
+candidate fills become the release's, so its block's `completion_quality` row
+counts it missing, not imputed. Completion records both per Analysis
+(`provenance.completion.se_out_of_range`) and adds them to the count it carries
+forward (§7a); `check-observed-view` holds the completed count to exactly that.
+Completion fits no SE model (ADR 0078), so an Analysis left with fewer than two
+SEs under a residual plan is coded against its source's model like any other.
+A completion of a 0.2.2 source is stamped 0.2.3 (§21.3).
 
 ## 13. LD Reference Panel requirements
 
@@ -1926,7 +2027,9 @@ Reference-Completed Stores encode Association Status using a per-plane **missing
 
 Each statistic plane's missing marker is defined by that plane's declared encoding, not by its dtype: a floating-point plane marks a missing cell with NaN, and an integer plane with the reserved sentinel its codec declares. Every release declares an encoding (§6a), so there is no plane whose marker has to be inferred. Stating it in terms of the codec rather than of NaN is what lets an integer `z` plane, which cannot hold NaN, express the same contract (ADR 0037, ADR 0038 §6).
 
-A cell is **present** exactly when neither its Z nor its SE carries its plane's missing marker. Finiteness plays no part: **an infinite value is a value.** An SE above a `float16` plane's range is stored `+inf` beside a finite Z (issue #338), and that cell is present, `observed` or `imputed` by its mask, in every reader of every layout (ADR 0070).
+A cell is **present** exactly when neither its Z nor its SE carries its plane's missing marker. Finiteness plays no part: **an infinite value is a value.** A release before format 0.2.3 may hold an SE above a `float16` plane's range as `+inf` beside a finite Z, and that cell is present, `observed` or `imputed` by its mask, in every reader of every layout (ADR 0070).
+
+**An SE above 65,504 is not stored** (issue #338, ADR 0068). 65,504 is the largest value a `float16` plane holds; an SE above it -- `+inf` included -- is not a value this format stores: the SE is judged as stored (§7), after any SD standardisation (ADR 0084), so a source SE can pass or fail by its Analysis's `original_sd`. From format 0.2.3 a writer MUST NOT store such an association under any plan: a grid holds the cell missing, in Z and SE together (and so with no frequency and no imputed flag), a sequence holds no row for it, and `analyses.tsv` counts it per Analysis (`n_missing_se_out_of_range`, §7a). Whether an association is kept never depends on the plan: an `int8_residual` plane could hold such an SE as an exact exception, and does not. Nor does a kept SE decode above 65,504 under any plan: a residual code whose decoded value would read above it is an exact exception, held as its value (§6a). The rule is the writers' one gate (`storable`, ADR 0077), applied before an encoding is measured, and an SE encoder refuses such an SE rather than write it. A Reference Completion applies it to the cells it carries from its source and to its fills alike (§12). A release at 0.2.3 or later holding an SE above 65,504 is invalid (`associations.se_out_of_range`, §20); one before 0.2.3 holding `+inf` is reported (`associations.se_infinite`), as it is a value there.
 
 State derivation:
 
@@ -2141,10 +2244,16 @@ Validators MUST check at least:
 - `reference_assembly` is single-valued across the release;
 - canonical variant identity is valid and unique within the Store Variant Table;
 - signed statistics have been normalised to canonical allele orientation;
-- `se >= 0` for all finite SE values, and a **warning** — not a failure — when a Store holds an
-  infinite `se`, naming the cell count and up to five Analyses holding one: an SE above a
-  `float16` plane's range is stored as `+inf` beside a finite Z, so `beta = z × se` reads as
-  infinity although the source value was finite (issues #337, #338);
+- `se >= 0` for all finite SE values, and, in a release before `format_version` 0.2.3, a
+  **warning** — not a failure — when it holds an infinite `se`, naming the cell count and up to
+  five Analyses holding one: such a release stored an SE above a `float16` plane's range as
+  `+inf` beside a finite Z, so `beta = z × se` reads as infinity although the source value was
+  finite (issue #337). From 0.2.3 a release holding any SE above 65,504 — `+inf` or an exact
+  exception — **fails**: it stores no such association (§15, issue #338);
+- from `format_version` 0.2.3, `analyses.tsv` (a Hybrid root's included) records
+  `n_missing_se_out_of_range` as a non-negative integer on every row; below it the column may
+  be absent or blank, and a value it holds is still a non-negative integer; and a Hybrid
+  root counts at least what its Dense Component counts, Analysis by Analysis (§7a);
 - Z and SE missingness is consistent, each read through its own plane's missing marker (§6a, §15);
 - each statistic plane's dtype matches the `encoding` the manifest declares, and a plane with a declared `kind` this build does not implement fails the release rather than being decoded (§6a);
 - every out-of-range Z cell has an entry in the plane's overflow table, and the table describes no other cell (§6a) — a lost entry is the *largest* |z| in the store, which is the one value that must never read as something plausible instead;
@@ -2161,6 +2270,7 @@ Validators MUST check at least:
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
 - from `format_version` 0.2.2, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
+- an Analysis whose `original_sd_method` carries an SD magnitude records it in `original_sd`, finite and positive (§7a, ADR 0084, issue #366): a blank one is what a Ragged SSF build that stored its source's standard errors undivided wrote, and nothing else in a Store shows it;
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows, the association scan's (§20.0, within one 1 GiB decoded budget), carries the preceding cell across a window boundary and resets at each Analysis boundary, so peak memory is the window and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
@@ -2244,7 +2354,11 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.analysis_id` | release | check | no `analysis_id` names two rows |
 | `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
 | `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
+| `analyses.original_sd_recorded` | release | check | an Analysis whose `original_sd_method` rescales records a finite, positive `original_sd`, at every `format_version` (§7a) |
+| `analyses.sd_scale_standardised` | release | check | an Analysis with `stored_effect_scale=sd` has a rescaling `original_sd_method` or `declared_standardised`, at every `format_version` (§7) |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
+| `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
+| `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a) |
 | `regions.table` | release | check | `regions.tsv`, when present or declared, is declared by the manifest's `regions` entry, has its SHA-256, parses as a region table and names only Analyses the release holds (§2, §17) |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
 | `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
@@ -2276,7 +2390,8 @@ change to this table, which the test suite holds to the registry, in its order.
 | `hybrid.partition` | sequence | fold | no Overflow association is at a Dense Component variant |
 | `by_variant.counts` | sequence | fold | each variant holds as many index rows as the sequence holds cells |
 | `associations.decodable` | grid, sequence | fold | every block's SE decodes under the declared plan |
-| `associations.se_infinite` | grid, sequence | fold, warning | names the cells of a `float16` `se` plane holding `+inf` |
+| `associations.se_infinite` | grid, sequence | fold, warning | names the cells of a `float16` `se` plane holding `+inf`, in a release before `format_version` 0.2.3 |
+| `associations.se_out_of_range` | grid, sequence | fold | from `format_version` 0.2.3, no decoded `se` is above 65,504, `+inf` included (§15) |
 | `associations.se_negative` | grid, sequence | fold | no finite SE is negative |
 | `associations.markers_paired` | grid, sequence | fold | Z and SE are missing in exactly the same cells |
 | `associations.markers_canonical` | grid, sequence | fold | every missing marker is the canonical one |
@@ -2567,8 +2682,24 @@ replaces its Store under the same id, so this check gates the swap.
     (Z and SE both present) and flagged imputed, which is what completion is for.
   - `parent_rows_without_finite` (informational): sampled `SOURCE` rows with no observed cell.
   - `infinite_cells` (informational): the sampled cells, in `SOURCE` or `TARGET`, whose Z or
-    SE is present and infinite. They are reported and never fail the check: a source SE above
-    the plane's range is stored as `+inf` (issues #337, #338).
+    SE is present and infinite. They are reported and never fail the check: a release before
+    format 0.2.3 stored a source SE above the plane's range as `+inf` (issue #337).
+  - `se_out_of_range_left_out` (informational): sampled `SOURCE` cells whose SE is above
+    65,504 that `TARGET` holds missing and unflagged -- completion left them out (§12, issue
+    #338). Only a `SOURCE` before format 0.2.3 completed into a `TARGET` at 0.2.3 or later has
+    any; such a cell is set aside, not compared or counted as lost.
+  - `se_out_of_range_miscounted` and `se_out_of_range_unaccounted` (failing), decided per
+    Analysis over the whole sample, and explained in the verdict's `se_out_of_range` record:
+    the first counts Analyses whose `TARGET` `n_missing_se_out_of_range` is not exactly
+    both parts `TARGET`'s completion records in `provenance.completion.se_out_of_range`
+    plus `SOURCE`'s count where that is known (a `SOURCE` before 0.2.3 has none: unknown,
+    not 0, §7a; the record's `source_counts` is then null) -- or is blank, never read as
+    0, or whose parts are not recorded, or holds a part that is not a non-negative integer; the second counts cells left out beyond the recorded
+    `observed` part and, where the sample compared every `SOURCE` cell, cells of that part
+    it did not find. A sample bounds the `observed` part from below, so a count inflated
+    together with its part is caught only where the sample is whole; the `imputed` part is
+    held by the arithmetic alone. A `TARGET` before 0.2.3 left nothing out, so every such
+    cell it lacks counts as `observed_missing_in_child`.
   - Failing, each over the sampled cells: `z_mismatch`, `se_mismatch`, `eaf_mismatch` (a
     source-observed cell whose decoded value differs, NaN equal to NaN);
     `observed_marked_imputed`; `observed_missing_in_child`; `missing_became_observed`
@@ -2635,20 +2766,30 @@ replaces its Store under the same id, so this check gates the swap.
   | `crossovers` | `n` associations on `rows` Dense rows (null when the comparison was skipped), `totals`, `max_abs_diff` (`TARGET` against the round trip) and `reencoding_max_abs_diff` (the round trip against `SOURCE`; informational) |
 
   `components.overflow.totals` sums over the sampled Analyses, each side's cells counted as
-  the Dense part counts them: `parent_associations`, `crossovers`, `child_associations` and
-  `infinite_cells` are informational; `z_mismatch`, `se_mismatch`,
+  the Dense part counts them: `parent_associations`, `crossovers`, `child_associations`,
+  `infinite_cells` and `se_out_of_range_left_out` (a `SOURCE` row `TARGET`'s Overflow lacks
+  because completion left it out, §12) are informational; `z_mismatch`, `se_mismatch`,
   `eaf_mismatch` (a matched association whose decoded value differs, NaN equal to NaN),
   `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
   `missing_became_observed` (a `TARGET` association that `SOURCE` lacks),
   `z_se_missingness_mismatch` and `non_canonical_marker` fail. `components.overflow.all_analyses`
   covers every Analysis and all fail: `observed_in_both`, `imputed_cells`, and
-  `analyses_count_mismatch` (Analyses whose count is not `SOURCE`'s less its crossovers).
-  `crossovers.totals` counts `infinite_cells` (informational) and the rest all fail:
+  `analyses_count_mismatch` (Analyses whose count is not `SOURCE`'s less its crossovers and
+  the rows completion left out, which a `SOURCE` before format 0.2.3 is read in full to find).
+  `crossovers.totals` counts `infinite_cells` and `se_out_of_range_left_out` (crossovers whose
+  SE is above 65,504, which completion did not fold) as informational, and the rest all fail,
+  `left_out_but_observed` (such a crossover whose Dense cell is observed and unflagged) among
+  them:
   `z_mismatch`, `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`,
   `observed_missing_in_child`, `z_se_missingness_mismatch` (a crossover cell, in the `SOURCE`
   Overflow or the `TARGET` Dense Component, with only one of Z and SE missing — the Dense part
   cannot see it, because a crossover is set aside there) and `non_canonical_marker` (likewise
   counted on both sides, and here or nowhere, for the same reason).
+  The accounting is made twice: for the Dense Component, against its own counts, with the
+  crossovers left out among the cells found (`components.dense.se_out_of_range`, its two
+  counters in `components.dense.totals`), and for the root, against the root's counts, with
+  the Overflow rows left out too (`se_out_of_range`, whose `totals` hold its two counters,
+  named `root.` in `failures`).
   `failures` names each nonzero failing counter with the part that counted it
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
   `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
@@ -2710,15 +2851,21 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `regions.tsv` and its SHA-256, or is `null`. `--ld-panel` for a Dense or Hybrid pair is
   refused.
 - **Totals.** `observed_in_source`, `imputed`, `nan_rows`, `regions` (retained
-  Analysis-by-block regions) and `infinite_cells` (present-but-infinite cells, in `SOURCE` or
-  `TARGET`, which never fail the check) are informational. Failing: `z_mismatch`, `se_mismatch`,
+  Analysis-by-block regions), `infinite_cells` (present-but-infinite cells, in `SOURCE` or
+  `TARGET`, which never fail the check) and `se_out_of_range_left_out` (`SOURCE` rows whose SE
+  is above 65,504 that `TARGET` does not hold, which completion left out, §12) are
+  informational. A sampled Analysis is compared whole, so its rows left out are found
+  exactly: `se_out_of_range_unaccounted` there also counts recorded ones not found, beside
+  `se_out_of_range_miscounted`, both as the Dense check decides them (the verdict's
+  `se_out_of_range` record). Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
   `target_observed_not_in_source`, `imputed_outside_retained`, `missing_outside_retained`,
   `imputed_in_non_admitted`,
   `imputed_mask_invalid`, `z_se_missingness_mismatch`, `non_canonical_marker` (a cell, in
   `SOURCE` or `TARGET`, whose Z or SE holds a NaN other than the canonical one: an invalid
   state, not a `nan_rows` row — issue #373), `target_variants_unordered` (an Analysis's
-  variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
+  variant indices not strictly increasing), `quality_blocks_not_in_regions`,
+  `se_out_of_range_miscounted` and `se_out_of_range_unaccounted`. `sample` lists
   each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
   them. An unmapped variant or differing Analyses skip the sample: `sample.analyses_checked`
   is 0, and `totals`, `max_abs_diff` and `sample.by_stratum` are `null` throughout rather than
@@ -2836,6 +2983,7 @@ The distinction is defined by **what a reader that does not know about the chang
 | a new `analyses.tsv` column | patch |
 | a new optional, manifest-declared sidecar (`regions.tsv`, 0.2.1, issue #430) | patch |
 | an indel's ALID spelt reference first, its statistic signed for that allele (0.2.2, issue #381, ADR 0079) | patch |
+| `analyses.tsv`'s `n_missing_se_out_of_range`, and no SE above 65,504 stored (0.2.3, issue #338, ADR 0068) | patch |
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 
@@ -2859,9 +3007,11 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). The 0.2 series has three releases, `0.2.0`, `0.2.1` and `0.2.2` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). The 0.2 series has four releases, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
 `0.2.2` moves the remainder, not the series. A reader that knows only `0.2.0` or `0.2.1` reads a `0.2.2` release's data as written — an ALID is a string it looks up as given, and a statistic is signed for the ALID's `A1` in all three — and warns that the release is newer. What such a reader does not know is how a `0.2.2` builder spells an indel: a completion run by it would spell its panel's indels sorted, beside the release's reference-first deletions. Only a build that knows `0.2.2` completes one. Nor does it know which stamp a `0.2.2` release's features give: package 0.9.0's `validate` fails every `0.2.2` release with one error, `release is stamped 0.2.2, but a release carrying no region table is 0.2.0` (`… carrying regions.tsv is 0.2.1` with the table). The remedy is to upgrade the package, never to re-stamp the release: re-stamped, it passes 0.9.0's `validate`, and 0.9.0 completes it. So this build does not judge the stamp of a release newer than every version it writes: `manifest.format_stamp` warns that the package must be upgraded (§20).
+
+`0.2.3` moves the remainder too. A reader that knows only `0.2.2` reads a `0.2.3` release's data as written: an association the release left out for an SE above 65,504 is a missing cell or an absent row, as any other is, and `n_missing_se_out_of_range` is a column it does not know, which it ignores (ADR 0034's superset rule). What it does not know is that such a release holds no SE above 65,504 and that its `analyses.tsv` counts the ones it left out; a completion run by it would carry `+inf` through and not count it, so only a build that knows `0.2.3` completes one. It warns that the release is newer.
 
 A reader meeting a feature it does not implement — an encoding kind, an index type, or a value in a controlled vocabulary it does not know — MUST reject the release rather than guess or fall back. Before `1.0.0` that refusal is exactly what a §21.0 vocabulary change produces in an older package: the "MUST accept a newer remainder" rows above govern a release whose *content* a reader understands, and §21.0 is the pre-release substitute for the version bump those rows would otherwise require.
 
@@ -2876,11 +3026,14 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 | `0.1.0` | the reset (ADR 0041): Zarr v2 | no release this build writes |
 | `0.2.0` | Zarr v3 with sharding (§10a, ADR 0057) | a release this build converts from `0.1.0`, which carries no `regions.tsv` and sorts its indels |
 | `0.2.1` | a Ragged release's optional `regions.tsv`, declared by the manifest's `regions` entry (§1, §2, §17; issue #430) | no release this build writes: package 0.9.0's, for a Ragged release carrying one |
-| `0.2.2` | an indel's ALID spelt reference first (§4, ADR 0079; issue #381), `regions.tsv` still optional | every release this build builds or completes |
+| `0.2.2` | an indel's ALID spelt reference first (§4, ADR 0079; issue #381), `regions.tsv` still optional | no release this build writes: package 0.11's, and earlier builds since #381 |
+| `0.2.3` | `analyses.tsv`'s `n_missing_se_out_of_range` on every row, and no association whose SE is above 65,504 (§7a, §15; ADR 0068, issue #338), on 0.2.2's features | every release this build builds or completes |
 
-A package before 0.2.1 reads a 0.2.1 release, warned that it is newer than it fully understands (§21.2), and ignores the `regions` entry; its `validate` refuses `regions.tsv` as an entry outside the envelope, and its completion refuses the release, whose format it reads but cannot write (§21.4), so it cannot complete one outside its regions or drop its table (`docs/store-format-compatibility.md`). A package before 0.2.2 reads a 0.2.2 release the same way, warned, and its completion refuses it too, so it cannot spell its panel's indels sorted beside the release's reference-first ones. Package 0.9.0's `validate` also fails a 0.2.2 release, on its stamp rule (§21.2): upgrade the package, do not re-stamp the release.
+A package before 0.2.1 reads a 0.2.1 release, warned that it is newer than it fully understands (§21.2), and ignores the `regions` entry; its `validate` refuses `regions.tsv` as an entry outside the envelope, and its completion refuses the release, whose format it reads but cannot write (§21.4), so it cannot complete one outside its regions or drop its table (`docs/store-format-compatibility.md`). A package before 0.2.2 reads a 0.2.2 release the same way, warned, and its completion refuses it too, so it cannot spell its panel's indels sorted beside the release's reference-first ones. Package 0.9.0's `validate` also fails a 0.2.2 release, on its stamp rule (§21.2): upgrade the package, do not re-stamp the release. A package before 0.2.3 reads a 0.2.3 release, warned, and its completion refuses it. Its `validate` does not judge the newer stamp: packages 0.10.0 to 0.12.0 warn that the package must be upgraded (§21.2), and 0.9.0, whose stamp rule judges every 0.2 release, fails it, as it fails a 0.2.2 one (`docs/store-format-compatibility.md`). The remedy is again to upgrade, not to re-stamp.
 
-**Since #381**, every builder and Reference Completion write `0.2.2` (`CURRENT_FORMAT_VERSION` for a release without `regions.tsv`). The converter (§21.4) stamps by the same rule from a `SOURCE_FORMAT_VERSION = "0.1.0"` release: it copies the source's stored codes and ALIDs, and a `0.1.0` release carries no `regions.tsv` and sorts an indel's alleles without saying which is the reference, so its copy is honestly `0.2.0`. From #247 to #381 a built and a converted release both declared `0.2.0`, which is what let #249 check their identity; they now differ in their indel ALIDs and in `format_version`, and carry the same layout. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0`, `0.2.0` or `0.2.1` source cannot be Reference-Completed by this build: completing one would add panel ALIDs spelt by §4 beside its own deletions spelt like insertions, and nothing in it says which of its indels are deletions. **The one executable order is to rebuild the release, with its region table where it has one, and complete the rebuilt one.** Completion refuses such a source and says so. A completed release keeps its source's version, since it carries every feature its source has.
+**Since #338**, every builder and Reference Completion write `0.2.3` (`CURRENT_FORMAT_VERSION`): 0.2.3 is 0.2.2 with the count, so a release is stamped it exactly when its indels are spelt reference first, and a completion of a `0.2.2` source is stamped `0.2.3` -- it carries every feature its source has, and adds the count, which it records for every Analysis (§12). The converter is unchanged: its copy of a `0.1.0` source sorts its indels, so it is `0.2.0`, whose `analyses.tsv` need not carry the count, and it carries none. It refuses a source holding an SE above 65,504, naming each Analysis and array, because it copies stored codes and cannot leave an association out (§21.4).
+
+**From #381 to #338**, every builder and Reference Completion wrote `0.2.2` (`CURRENT_FORMAT_VERSION` for a release without `regions.tsv`). The converter (§21.4) stamps by the same rule from a `SOURCE_FORMAT_VERSION = "0.1.0"` release: it copies the source's stored codes and ALIDs, and a `0.1.0` release carries no `regions.tsv` and sorts an indel's alleles without saying which is the reference, so its copy is honestly `0.2.0`. From #247 to #381 a built and a converted release both declared `0.2.0`, which is what let #249 check their identity; they now differ in their indel ALIDs and in `format_version`, and carry the same layout. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0`, `0.2.0` or `0.2.1` source cannot be Reference-Completed by this build: completing one would add panel ALIDs spelt by §4 beside its own deletions spelt like insertions, and nothing in it says which of its indels are deletions. **The one executable order is to rebuild the release, with its region table where it has one, and complete the rebuilt one.** Completion refuses such a source and says so. A completed release carries every feature its source has, so it keeps its source's version, and adds the count (above).
 
 ### 21.4 I have an old store — now what?
 
@@ -2893,9 +3046,9 @@ association data and no Analytical Metadata, and every edited Store is
 re-validated.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), and a Hybrid without its nested Dense Component. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.
 
-**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #381 the refusal fires on a `0.1.0` or a `0.2.0` source, converted or built: both sort an indel's alleles (§4), so it is rebuilt and the rebuilt release completed; the message says so.
+**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source, but for the count of associations left out for an SE above 65,504, which every completion records and which moves a `0.2.2` source's completion to `0.2.3` (§21.3). A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #381 the refusal fires on a `0.1.0` or a `0.2.0` source, converted or built: both sort an indel's alleles (§4), so it is rebuilt and the rebuilt release completed; the message says so.

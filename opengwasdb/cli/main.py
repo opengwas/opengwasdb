@@ -1652,7 +1652,6 @@ def build_ragged_ssf_command(
     association_coverage: REQUIRED_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
-    stored_effect_scale: str = typer.Option("sd", help="sd, log_or, or log_hazard"),
     overwrite: bool = typer.Option(False),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
@@ -1667,8 +1666,11 @@ def build_ragged_ssf_command(
     MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id (or
     legacy trait_id), analysis_label (or legacy trait_name), trait_ontology_id,
     trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
-    tissue, context, mhc, source_file (or legacy filtered_file), and
-    source_genome_build (or source_assembly). Every row must declare
+    tissue, context, mhc, source_file (or legacy filtered_file),
+    stored_effect_scale, original_sd_method (with original_sd for a rescaling
+    method) and source_genome_build (or source_assembly). A row labelled
+    ``sd`` must name a rescaling method or ``declared_standardised`` (#366).
+    Every row must declare
     source_genome_build. The Store is GRCh38: a GRCh37 (hg19) row is lifted to
     it by --chain-file, which it requires. The build fails when more than
     --liftover-failure-threshold of the lifted sites have no place on the
@@ -1693,7 +1695,6 @@ def build_ragged_ssf_command(
         store_id=store_id,
         release_id=release_id,
         association_coverage=association_coverage,
-        stored_effect_scale=stored_effect_scale,
         overwrite=overwrite,
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,

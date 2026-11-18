@@ -19,7 +19,7 @@ from opengwasdb.associations import present as present_cells
 from opengwasdb.encoding import (
     StoreCodec,
 )
-from opengwasdb.layouts.build_manifest import apply_se_divisor
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.analyses import (
     read_analyses,
@@ -312,7 +312,7 @@ class _Unit(NamedTuple):
     analysis_id: str | None
     path: Path
     is_vcf: bool
-    se_divisor: float = 1.0
+    se_divisor: float
 
 
 def _source_units(
@@ -385,7 +385,9 @@ def _unnamed_units(
                 f"source-fidelity: {path} is an association TSV, which names no Analysis; "
                 "give the build manifest that lists it"
             )
-    return [_Unit(None, path, _is_vcf_path(path)) for path in paths]
+    # No manifest declares an SD for these, so the comparison is against the
+    # source as it stands: a Store that standardised it fails, rather than passes.
+    return [_Unit(None, path, _is_vcf_path(path), 1.0) for path in paths]
 
 
 def _stream_unit(
@@ -412,6 +414,7 @@ def _stream_unit(
     # source, and neither the scale nor the EAF plays a part in that.
     capability = GWAS_VCF_CAPABILITY if is_vcf else ASSOCIATION_TSV_CAPABILITY
     reader = resolve_reader(capability, path, StoredEffectScale.SD)
+    standardised = PhenotypeSd.dividing_by(se_divisor)
     # Read as the build reads it: a row it dropped as malformed is not a failure.
     for association in reader.stream_associations(StreamTally()):
         a1, a2 = alid_alleles(association.ref, association.alt)
@@ -420,7 +423,8 @@ def _stream_unit(
             a1, a2, z = a2, a1, -z
         se = association.se
         if se_divisor != 1.0:
-            se = float(apply_se_divisor(np.array([se], dtype=np.float32), se_divisor)[0])
+            # The build's own standardisation (ADR 0084): the SE it stored, to the bit.
+            se = float(standardised.standardised(np.array([se], dtype=np.float32), 0, 1)[0])
         yield (analysis_id, association.chromosome, association.position, a1, a2, z, se)
 
 
@@ -631,7 +635,7 @@ def _compare_fidelity_cells(
     the store's own codec. Under a residual `se` plan it is the source's own
     `float32`: an exact exception is that value, and an ordinary cell is within
     the coding's tolerance of it (spec §6a). Under a `float16` plan it is the
-    codec's rounding of the source, because an SE of 65,520 or more is `+inf`
+    codec's rounding of the source, because, before 0.2.3, an SE of 65,520 or more is `+inf`
     there (spec §15). A cell whose store value is missing is skipped, not
     compared: a store holding *no* finite value at any matched cell is a
     different failure (dropped associations), reported by the caller.

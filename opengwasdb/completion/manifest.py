@@ -22,7 +22,7 @@ from opengwasdb.completion.block import COMPLETION_METHOD
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.open import check_format_version_stamp
+from opengwasdb.store.open import completed_format_version
 
 
 def build_completion_provenance(
@@ -94,7 +94,9 @@ def completed_release_manifest(
         encoding=encoding,
         store_id=source_manifest.store_id,
         release_id=release_id or f"{source_manifest.release_id}-completed",
-        format_version=check_format_version_stamp(
+        # The source's features and the count every completion records: a 0.2.2
+        # source completes to 0.2.3 (issue #338, ADR 0068).
+        format_version=completed_format_version(
             source_format_version, carries_regions=source_manifest.regions is not None
         ),
         primary_layout=source_manifest.primary_layout,

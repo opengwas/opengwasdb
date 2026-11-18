@@ -37,7 +37,6 @@ from opengwasdb.encoding import (
     ZEncoding,
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.stats import log10_p_two_sided
 from opengwasdb.store.open import (
@@ -45,6 +44,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.validation import validate_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 # The FADS1/FADS2 pilot hit, the largest |z| in `ukb-b`, one just inside the
 # representable range, and one ordinary value.
@@ -134,9 +134,10 @@ def test_dense_missing_cells_still_read_as_absent(dense_store):
 
 def test_dense_declares_its_encoding_and_validates_against_it(dense_store):
     manifest = json.loads((dense_store / "manifest.json").read_text())
-    # Every build spells an indel reference first, which 0.2.2 adds; a Dense Store
-    # carries no region table (spec §21.3).
-    assert manifest["format_version"] == "0.2.2"
+    # Every build spells an indel reference first, which 0.2.2 adds, and counts what it
+    # left out for an SE above 65,504, which 0.2.3 adds; a Dense Store carries no region
+    # table (spec §21.3).
+    assert manifest["format_version"] == "0.2.3"
     assert manifest["encoding"]["z"] == {"kind": "int16_fixed", "scale": 1024}
     assert manifest["encoding"]["se"] == {"kind": "float16"}
     assert validate_store(dense_store).ok

@@ -37,6 +37,8 @@ from opengwasdb.build.eaf_orientation import (
     select_sites,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult, trait_positions
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
@@ -111,6 +113,15 @@ class AnalyteInput:
     #: The build the manifest row declares (`source_genome_build`), normalised:
     #: ``hg38``, or ``hg19`` for a source the build lifts. A row declaring none is refused.
     source_build: str
+    #: The phenotype SD this Analysis's SEs are divided by (issue #18, #366), and
+    #: the manifest value it is recorded from. Required: the parser supplies 1.0
+    #: and "" for a row declaring no rescaling SD (`original_sd_divisor`), never
+    #: a default here.
+    se_divisor: float
+    original_sd: str
+    #: The row's declared `stored_effect_scale`: a build holds no scale of its
+    #: own, so none can be assumed for a row that names none (issue #366).
+    stored_effect_scale: StoredEffectScale
     assigned_ancestry: str = ""  # optional manifest column (ADR 0028); "" when omitted
     # Shared-core analyses.tsv columns the manifest supplies and this builder only
     # copies (issue #83). Blank when the manifest omits them; see PassthroughMetadata.
@@ -127,6 +138,7 @@ def _analyte_from_row(
     r: dict[str, str],
     cols: ManifestColumns,
     filtered_dir: str | Path,
+    manifest_path: str | Path,
 ) -> AnalyteInput:
     """Parse one AnalyteInput from a manifest row."""
     bp = _opt(r.get("trait_bp"))
@@ -136,6 +148,9 @@ def _analyte_from_row(
     filtered_path = raw_path if raw_path.is_absolute() else Path(filtered_dir) / raw_path
     label = _opt(r.get(cols.analysis_label)) if cols.analysis_label else None
     analysis_id = r[cols.analysis_id]
+    scale = _declared_scale(r, analysis_id, manifest_path)
+    se_divisor = original_sd_divisor(r, analysis_id, manifest_path)
+    check_ragged_sd_scale(r, analysis_id, manifest_path)
     return AnalyteInput(
         analysis_index=int(r["analysis_index"]),
         analysis_id=analysis_id,
@@ -151,8 +166,27 @@ def _analyte_from_row(
         filtered_path=filtered_path,
         source_build=_declared_source(r, analysis_id),
         assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
+        se_divisor=se_divisor,
+        original_sd=_opt(r.get("original_sd")) or "",
+        stored_effect_scale=scale,
         metadata=PassthroughMetadata.from_manifest_row(r),
     )
+
+
+def _declared_scale(
+    row: Mapping[str, str], analysis_id: str, manifest_path: str | Path
+) -> StoredEffectScale:
+    """The row's declared `stored_effect_scale`; refused when absent or unknown."""
+    raw = (row.get("stored_effect_scale") or "").strip()
+    try:
+        return StoredEffectScale(raw)
+    except ValueError as exc:
+        allowed = ", ".join(s.value for s in StoredEffectScale)
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {analysis_id!r} has invalid or missing "
+            f"stored_effect_scale {raw!r}; expected one of {allowed}. The scale is the "
+            "manifest row's to declare; a build assumes none (issue #366)"
+        ) from exc
 
 
 def _declared_source(row: Mapping[str, str], analysis_id: str) -> str:
@@ -204,7 +238,7 @@ def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[
         require_columns(fieldnames, manifest_path, "analysis_index")
         cols = resolve_manifest_columns(fieldnames, manifest_path)
         for r in reader:
-            rows.append(_analyte_from_row(r, cols, filtered_dir))
+            rows.append(_analyte_from_row(r, cols, filtered_dir, manifest_path))
     rows.sort(key=lambda a: a.analysis_index)
     # analysis_index must be a dense 0..n-1 sequence for CSR offset alignment.
     for expected, a in enumerate(rows):
@@ -226,9 +260,7 @@ class _Assoc(NamedTuple):
     eaf: float | None
 
 
-def _admitted_batches(
-    a: AnalyteInput, gate: admission.Gate, scale: StoredEffectScale
-) -> list[ReaderBatch]:
+def _admitted_batches(a: AnalyteInput, gate: admission.Gate) -> list[ReaderBatch]:
     """One filtered file's rows that its Analysis's Admission gate keeps, in file order.
 
     Read by the GWAS-SSF Source Reader, oriented to A1. The gate judges them
@@ -238,7 +270,10 @@ def _admitted_batches(
     """
     declaration = gate.rules.info.imputation_score_declaration
     reader = open_source(
-        SourceSpec(a.analysis_id, str(a.filtered_path), GWAS_SSF_CAPABILITY, a.source_build, scale),
+        SourceSpec(
+            a.analysis_id, str(a.filtered_path), GWAS_SSF_CAPABILITY, a.source_build,
+            a.stored_effect_scale,
+        ),
         imputation_score_declaration=declaration,
     )
     tally = StreamTally()
@@ -330,7 +365,6 @@ def build_ragged_from_ssf(
     store_id: str,
     release_id: str,
     association_coverage: AssociationCoverage | str,
-    stored_effect_scale: str = StoredEffectScale.SD.value,
     overwrite: bool = False,
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
@@ -359,7 +393,6 @@ def build_ragged_from_ssf(
     anything is built and written into the Store as `regions.tsv` (issue #430).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
-    _validate_stored_effect_scale(stored_effect_scale)
     table = None if regions is None else read_region_table(regions, RAGGED_REFERENCE_ASSEMBLY)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -370,7 +403,6 @@ def build_ragged_from_ssf(
             _SsfBuildRequest(
                 store_id=store_id,
                 release_id=release_id,
-                stored_effect_scale=stored_effect_scale,
                 coverage=coverage,
                 eaf_reference=eaf_reference,
                 eaf_reference_ancestry=eaf_reference_ancestry,
@@ -390,7 +422,6 @@ class _SsfBuildRequest:
 
     store_id: str
     release_id: str
-    stored_effect_scale: str
     coverage: AssociationCoverage
     eaf_reference: str | Path | None
     eaf_reference_ancestry: str | None
@@ -426,14 +457,11 @@ def _build_ssf_release(
     )
     csr, encoding, eaf_scopes = _encode_ssf_csr(
         ingested.per_analysis, alid_to_idx, len(analytes), len(variants), staged.path,
+        [a.se_divisor for a in analytes],
     )
     _write_indexes_and_metadata(
-        staged,
-        analytes,
-        eaf_scopes,
-        encoding=encoding,
-        eaf_report=eaf_report,
-        stored_effect_scale=request.stored_effect_scale,
+        staged, analytes, eaf_scopes, encoding=encoding, eaf_report=eaf_report,
+        csr=csr,
     )
     regions = None
     if request.regions is not None:
@@ -447,7 +475,7 @@ def _build_ssf_release(
         n_analyses=len(analytes),
         n_associations=csr.n_associations,
         manifest_path=str(manifest_path),
-        stored_effect_scale=request.stored_effect_scale,
+        stored_effect_scale=",".join(sorted({a.stored_effect_scale.value for a in analytes})),
         association_coverage=request.coverage,
         mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
         encoding=encoding,
@@ -544,17 +572,6 @@ def _finalise_result(
     return result
 
 
-def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
-    """Reject an unsupported stored_effect_scale before any I/O happens."""
-    try:
-        StoredEffectScale(stored_effect_scale)
-    except ValueError as exc:
-        allowed = [member.value for member in StoredEffectScale]
-        raise ValueError(
-            f"invalid stored_effect_scale {stored_effect_scale!r}; expected one of {allowed}"
-        ) from exc
-
-
 @dataclass(frozen=True)
 class _Ingested:
     """What reading every source gives the build: each Analysis's associations,
@@ -588,14 +605,13 @@ def _ingest_ssf_sources(
     build with a source to lift holds every Analysis's admitted rows until the
     lift has placed their sites together (`_ingest_lifted`).
     """
-    scale = StoredEffectScale(request.stored_effect_scale)
     if any(a.source_build != STORE_BUILD for a in analytes):
-        return _ingest_lifted(analytes, record, rules, scale, request.lift)
+        return _ingest_lifted(analytes, record, rules, request.lift)
     per_analysis: list[list[_Assoc]] = []
     harvest = _Harvest()
     for a in analytes:
         with record.gate(rules[a.analysis_id]) as gate:
-            batches = _admitted_batches(a, gate, scale)
+            batches = _admitted_batches(a, gate)
             for batch in batches:
                 harvest.add(batch)
             recs, n_consistent, n_conflicting = _dedupe_per_analysis(batches, gate)
@@ -609,7 +625,6 @@ def _ingest_lifted(
     analytes: list[AnalyteInput],
     record: admission.AdmissionRecord,
     rules: Mapping[str, admission.AnalysisRules],
-    scale: StoredEffectScale,
     options: LiftOptions,
 ) -> _Ingested:
     """`_ingest_ssf_sources` for a build with a source on another build.
@@ -623,7 +638,7 @@ def _ingest_lifted(
     """
     with ExitStack() as stack:
         gates = [stack.enter_context(record.gate(rules[a.analysis_id])) for a in analytes]
-        held = [_admitted_batches(a, g, scale) for a, g in zip(analytes, gates, strict=True)]
+        held = [_admitted_batches(a, g) for a, g in zip(analytes, gates, strict=True)]
         lifted = [a.source_build != STORE_BUILD for a in analytes]
         placement = place_held_sources(list(zip(lifted, held, strict=True)), options)
         harvest = _Harvest()
@@ -901,8 +916,13 @@ def _encode_ssf_csr(
     n_analyses: int,
     n_variants: int,
     output: Path,
+    se_divisors: list[float],
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[str]]:
     """Stream every analysis's associations into the CSR and flush.
+
+    ``se_divisors`` is each Analysis's phenotype SD, in Manifest Row order
+    (issue #18, #366): its SEs are divided by it as they reach the writer, where
+    `storable` judges them, as every other builder divides theirs.
 
     An analysis that ends up empty -- a source whose every row was unusable,
     or whose rows all resolved to conflicting duplicates (issue #101) --
@@ -913,12 +933,14 @@ def _encode_ssf_csr(
     """
     csr = RaggedCSRWriter(n_variants)
     eaf_scopes: list[str] = []
-    for index, recs in enumerate(per_analysis):
+    for index, (recs, se_divisor) in enumerate(
+        zip(per_analysis, se_divisors, strict=True)
+    ):
         if not recs:
-            _add_empty_analysis(csr)
+            _add_empty_analysis(csr, se_divisor)
             eaf_scopes.append(EafScope.ABSENT.value)
             continue
-        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index))
+        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx, index, se_divisor))
     eaf_measurements = csr.eaf_measurements()
     preliminary = StoreEncoding.decide(
         EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
@@ -935,17 +957,27 @@ def _encode_ssf_csr(
     return csr, encoding, eaf_scopes
 
 
-def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
-    """An analysis with no associations still occupies its CSR slot."""
+def _add_empty_analysis(csr: RaggedCSRWriter, se_divisor: float) -> None:
+    """An analysis with no associations still occupies its CSR slot, under its
+    own phenotype SD like any other: a source builder never says `APPLIED`."""
     csr.add_analysis(
-        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32)
+        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float32),
+        phenotype_sd=PhenotypeSd.dividing_by(se_divisor),
     )
 
 
 def _add_ssf_associations(
-    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int], index: int
+    csr: RaggedCSRWriter,
+    recs: list[_Assoc],
+    alid_to_idx: dict[str, int],
+    index: int,
+    se_divisor: float,
 ) -> str:
     """Append one non-empty analysis, sorted by variant_index.
+
+    ``se_divisor`` is the Analysis's phenotype SD. The writer's `storable`
+    divides every SE by it, as it does every builder's (issue #18, #366, ADR
+    0084); `z` is scale-free and is stored as the source gave it.
 
     Returns the EAF scope the analysis's own rows earned: association when
     any row carries a frequency (rows without one contribute NaN, ADR 0036),
@@ -960,11 +992,11 @@ def _add_ssf_associations(
     where = f"build-ragged-ssf, analysis_index {index}"
     order = np.argsort(vi, kind="stable")
     has_eaf = bool(np.isfinite(eaf_arr).any())
-    if has_eaf:
-        csr.add_analysis(vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order], where=where)
-        return EafScope.ASSOCIATION.value
-    csr.add_analysis(vi[order], z_arr[order], se_arr[order], where=where)
-    return EafScope.ABSENT.value
+    csr.add_analysis(
+        vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order] if has_eaf else None,
+        where=where, phenotype_sd=PhenotypeSd.dividing_by(se_divisor),
+    )
+    return EafScope.ASSOCIATION.value if has_eaf else EafScope.ABSENT.value
 
 
 def _write_indexes_and_metadata(
@@ -974,14 +1006,15 @@ def _write_indexes_and_metadata(
     *,
     encoding: StoreEncoding,
     eaf_report: EafOrientationReport,
-    stored_effect_scale: str,
+    csr: RaggedCSRWriter,
 ) -> None:
     """Build the top-hit index and write analyses.tsv from the manifest.
 
     The shared-core metadata columns arrive as one PassthroughMetadata per
     analysis and are copied verbatim (issue #83); the orientation evidence
-    each analysis earned in Phase 2 is stamped onto its row, and the hit
-    counts are added from the just-built index.
+    each analysis earned in Phase 2 is stamped onto its row, the hit counts
+    are added from the just-built index, and `csr` counts what it left out of
+    each (issue #338).
     """
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
@@ -997,8 +1030,9 @@ def _write_indexes_and_metadata(
             trait_chr=a.trait_chr,
             trait_bp=a.trait_bp,
             n=a.n,
-            stored_effect_scale=stored_effect_scale,
+            stored_effect_scale=a.stored_effect_scale.value,
             assigned_ancestry=a.assigned_ancestry,
+            original_sd=a.original_sd,
             metadata=a.metadata,
             eaf_scope=eaf_scope,
         )
@@ -1006,7 +1040,7 @@ def _write_indexes_and_metadata(
     ]
     write_analysis_records(
         staged.path / "analyses.tsv",
-        add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report)),
+        csr.counted(add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report))),
     )
 
 

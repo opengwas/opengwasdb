@@ -35,9 +35,9 @@ from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged import RaggedBuildResult
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.readers.interface import ImputationScoreStatus
+from tests.ssf_builds import build_ragged_from_ssf
 
 FILTERED_MAF = MafPolicy(0.05, MafState.FILTERED)
 
@@ -532,7 +532,7 @@ def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
         alt=["G", "G", "T", "T", "C"],
     )
     gate = counting_gate(AnalysisRules("A"))
-    keys, z, *_ = _off_reference_spill(unmatched, 1.0, gate)
+    keys, z, *_ = _off_reference_spill(unmatched, gate)
 
     assert z.tolist() == [1.0, 3.0]
     assert len(keys) == 2

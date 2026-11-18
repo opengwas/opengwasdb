@@ -61,12 +61,12 @@ from opengwasdb.encoding.codec import (
     require_parallel,
 )
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
-    apply_se_divisor,
     column_map_provenance,
     manifest_row_to_analysis,
     read_manifest,
@@ -84,7 +84,7 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis
+from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.model.enums import (
     AssociationCoverage,
     EafScope,
@@ -294,6 +294,9 @@ class _EncodedBands:
     encoding: StoreEncoding
     hits: _HitCandidates
     column_has_eaf: np.ndarray
+    #: Per Analysis, the associations Pass 2 left out for an SE above
+    #: `float16`'s range (issue #338); empty until the spill phase sets it.
+    se_out_of_range: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
 
 
 @dataclass(frozen=True)
@@ -552,13 +555,16 @@ def _unmatched_off_primary(
     return frozenset(candidates - _declared_by_grch38(candidates, lift))
 
 
-def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> int:
+def _route_and_spill(
+    context: _Pass2Context, task: tuple[int, ManifestRow]
+) -> tuple[int, int]:
     """Route one Analysis's column through the shared table and spill it.
 
-    Returns the column index only: the compact result stays on disk, never in
-    a pipe. An earlier design returned each column over IPC, and at
-    genome-wide scale (~9.85M rows per file, thousands of files) that pipe
-    traffic deadlocked the pool.
+    Returns the column index and how many of its associations `storable` left
+    out (issue #338): the compact result stays on disk, never in a pipe. An
+    earlier design returned each column over IPC, and at genome-wide scale
+    (~9.85M rows per file, thousands of files) that pipe traffic deadlocked the
+    pool.
     """
     col_idx, row = task
     rules = context.rules[row.trait_id]
@@ -576,12 +582,14 @@ def _route_and_spill(context: _Pass2Context, task: tuple[int, ManifestRow]) -> i
         gate.unplaced_off_axis(
             routed.unmatched.keys, _unmatched_off_primary(routed.unmatched.keys, row, context)
         )
-        se = apply_se_divisor(placed.se, row.se_divisor)
         where = f"build-dense-vcf, Analysis {row.trait_id}"
-        kept = storable(CellValues(placed.z, se, placed.eaf), 0, 1, where=where)
+        kept = storable(
+            CellValues(placed.z, placed.se, placed.eaf), 0, 1, where=where,
+            phenotype_sd=PhenotypeSd.dividing_by(row.se_divisor),
+        )
         log_se_out_of_range(kept.se_out_of_range, where=where)
         _spill_stored(context.spill_dir, col_idx, placed.index, kept)
-    return col_idx
+    return col_idx, int(kept.se_out_of_range.sum())
 
 
 def _spill_stored(spill_dir: Path, col_idx: int, rows: np.ndarray, kept: Storable) -> None:
@@ -608,9 +616,11 @@ def _spill_columns(
     admission_record: Path,
     n_workers: int,
     pass2_start: float,
-) -> None:
+) -> np.ndarray:
     """Pass 2: route and spill one column per Analysis, here or in a fork pool,
     each through its Admission gate, then finish the record the gates wrote.
+    Returns, per column, the associations left out for an SE above `float16`'s
+    range (issue #338).
 
     With ``n_workers <= 1`` each column is routed in this process, one Analysis
     at a time, so peak memory is one routed column; with more, the workers
@@ -632,8 +642,10 @@ def _spill_columns(
         prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules,
         prepared.off_primary, prepared.unmatched_lift,
     )
+    left_out = np.zeros(len(prepared.axis.analyses), dtype=np.int64)
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
-    for i, col_idx in enumerate(columns):
+    for i, (col_idx, n_left_out) in enumerate(columns):
+        left_out[col_idx] = n_left_out
         log_progress(
             "Pass 2",
             i + 1,
@@ -643,6 +655,7 @@ def _spill_columns(
             every=25,
         )
     record.finish()
+    return left_out
 
 
 def _survey_and_verify_eaf(
@@ -755,7 +768,7 @@ def _spill_verify_and_encode(
     )
     try:
         pass2_start = time.monotonic()
-        _spill_columns(
+        left_out = _spill_columns(
             manifest_rows,
             spill_dir,
             prepared,
@@ -785,7 +798,7 @@ def _spill_verify_and_encode(
         )
     finally:
         shutil.rmtree(spill_dir, ignore_errors=True)
-    return eaf_report, encoded
+    return eaf_report, replace(encoded, se_out_of_range=left_out)
 
 
 def _finalize_store(
@@ -833,7 +846,10 @@ def _finalize_store(
     analyses = apply_orientation_evidence(
         apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
     )
-    write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
+    write_analyses_tsv(
+        staged.path,
+        with_se_out_of_range(add_hit_counts(staged.path, analyses), encoded.se_out_of_range),
+    )
 
 
 def write_index(

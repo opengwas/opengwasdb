@@ -1,11 +1,10 @@
 """Every writer holds what `storable` returns, not the cells it was handed (#350).
 
-Today's gate stores every cell unchanged, so a writer that ignored its result
-would write the same bytes and nothing would show it. Issue #338 changes only
-the gate, so each writer must already honour a result that leaves an
-association out: here a gate is injected that refuses one chosen association,
-blanking its cells as a refusal does, and the Store must hold neither the
-association nor its frequency (#350 D5).
+The gate leaves out an association only for an SE above `float16`'s range
+(issue #338), which few fixtures hold, so a writer that ignored its result would
+mostly write the same bytes and nothing would show it. Here a gate is injected
+that refuses one chosen association, blanking its cells as a refusal does, and
+the Store must hold neither the association nor its frequency (#350 D5).
 """
 
 from __future__ import annotations
@@ -35,6 +34,7 @@ from opengwasdb.encoding import (
     association_codec,
 )
 from opengwasdb.encoding.association_codec import CellValues, Storable
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense import build_vcf
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build
@@ -76,10 +76,13 @@ def _inject(
     real = association_codec.storable
     judged: list[tuple[str, CellValues]] = []
 
-    def gate(cells: CellValues, analyses, n_analyses: int, *, where: str) -> Storable:
+    def gate(
+        cells: CellValues, analyses, n_analyses: int, *, where: str, phenotype_sd: PhenotypeSd
+    ) -> Storable:
         judged.append((where, cells))
-        kept = real(cells, analyses, n_analyses, where=where)
+        kept = real(cells, analyses, n_analyses, where=where, phenotype_sd=phenotype_sd)
         out = refused(cells, where)
+        cells = kept.cells  # standardised, as the writer must hold them
 
         def blanked(values: np.ndarray, fill: float) -> np.ndarray:
             copy = np.array(values, copy=True)
@@ -92,7 +95,9 @@ def _inject(
             None if cells.eaf is None else blanked(cells.eaf, np.nan),
             None if cells.imputed is None else blanked(cells.imputed, 0),
         )
-        return Storable(cells_kept, kept.stored & ~out, kept.se_out_of_range)
+        return Storable(
+            cells_kept, kept.stored & ~out, kept.se_out_of_range, kept.imputed_out_of_range
+        )
 
     for module in modules:
         monkeypatch.setattr(module, "storable", gate, raising=False)
@@ -147,6 +152,7 @@ def test_the_ragged_writer_keeps_only_the_rows_it_stores(tmp_path, monkeypatch) 
         np.array([1.0, 2.0, 3.0], np.float32),
         np.array([0.1, REFUSED_SE, 0.2], np.float32),
         eaf=np.array([0.3, 0.4, 0.5], np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     plan = StoreEncoding(
         z=ZEncoding("int16_fixed", scale=1024), se=SeEncoding("float16"), eaf=EafEncoding("float32")

@@ -220,10 +220,9 @@ def test_overflow_measurement_charges_its_partial_flat_plane_at_padded_size() ->
         default=None,
     )
     assert accepted is not None, "fixture data must code cleanly at some candidate"
-    residual = np.log(np.asarray(se, dtype=np.float64)) - prediction
     codes, _ = se_residual_codes(
-        se, residual, accepted / 127
-    )  # the same single-site quantiser the codec uses
+        se, eaf, analyses, coefficients, accepted / 127
+    )  # the same single exception decision the codec uses
     honest = _real_zarr_bytes(codes, (chunk,), "int8", 0)
     assert cost.candidate_bytes[accepted] == honest
 

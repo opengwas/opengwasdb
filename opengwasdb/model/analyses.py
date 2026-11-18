@@ -25,6 +25,7 @@ draft spelling -- see `opengwasdb.model.enums`.
 from __future__ import annotations
 
 import csv
+import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
@@ -96,6 +97,17 @@ EAF_ORIENTATION_COLUMNS: tuple[str, ...] = (
     "eaf_orientation_n",
 )
 
+# How many of an Analysis's associations the Store does not hold because their
+# SE is above 65,504, the largest a `float16` plane holds (issue #338, ADR 0068,
+# store-format spec §7a). A non-negative integer, required on every row of a
+# release at `format_version` 0.2.3 or later; below it the column may be absent
+# or blank, which means unknown and never 0. Carried forward by Reference
+# Completion, so a counted cell may hold an imputed value after completion.
+N_MISSING_SE_OUT_OF_RANGE = "n_missing_se_out_of_range"
+#: The values that column may hold: a non-negative integer, spelt without a sign
+#: or a leading zero, or blank (unknown, below format 0.2.3).
+NON_NEGATIVE_INTEGER_OR_BLANK = r"^(0|[1-9][0-9]*)?$"
+
 # Produced during or after the build; must not be required of a release
 # manifest, which is generated before a build runs.
 STORE_ONLY_COLUMNS: tuple[str, ...] = (
@@ -103,6 +115,7 @@ STORE_ONLY_COLUMNS: tuple[str, ...] = (
     "completion_median_pearson_r",
     "completion_n_imputed_total",
     "completion_n_missing_total",
+    N_MISSING_SE_OUT_OF_RANGE,
     *EAF_ORIENTATION_COLUMNS,
     *TOP_HIT_COUNT_COLUMNS,
 )
@@ -283,7 +296,7 @@ def validate_analyses(table: AnalysesTable) -> list[str]:
                     f"analysis {analysis_id!r} has invalid {column} {value!r}; "
                     f"expected one of {allowed}"
                 )
-        _validate_case_control_counts(row, analysis_id, fieldnames, errors)
+        _validate_counts(row, analysis_id, fieldnames, errors)
         _validate_info_policy(row, analysis_id, errors)
         _validate_maf_policy(row, analysis_id, errors)
 
@@ -326,6 +339,29 @@ def _validate_maf_policy(row: dict[str, str], analysis_id: str, errors: list[str
         errors.append(f"analysis {analysis_id!r} has invalid MAF policy: {exc}")
 
 
+def _validate_counts(
+    row: dict[str, str], analysis_id: str, fieldnames: set[str], errors: list[str]
+) -> None:
+    """The per-Analysis counts a row carries: case/control counts and
+    `n_missing_se_out_of_range`."""
+    _validate_case_control_counts(row, analysis_id, fieldnames, errors)
+    _validate_se_out_of_range_count(row, analysis_id, errors)
+
+
+def _validate_se_out_of_range_count(
+    row: dict[str, str], analysis_id: str, errors: list[str]
+) -> None:
+    """A recorded `n_missing_se_out_of_range` is a non-negative integer; blank is
+    unknown (issue #338). Whether blank is allowed is the release's format's
+    question, which `validate` asks."""
+    value = row.get(N_MISSING_SE_OUT_OF_RANGE, "")
+    if not re.fullmatch(NON_NEGATIVE_INTEGER_OR_BLANK, value):
+        errors.append(
+            f"analysis {analysis_id!r} has {N_MISSING_SE_OUT_OF_RANGE} {value!r}; "
+            "expected a non-negative integer"
+        )
+
+
 def _validate_case_control_counts(
     row: dict[str, str],
     analysis_id: str,
@@ -356,6 +392,16 @@ def to_json_schema() -> dict[str, Any]:
         vocabulary = _VOCABULARIES.get(column)
         if vocabulary is not None:
             prop["enum"] = [member.value for member in vocabulary]
+        if column == N_MISSING_SE_OUT_OF_RANGE:
+            # A TSV cell, so a string: a non-negative integer, or blank -- unknown,
+            # in a release before format 0.2.3 (issue #338). Whether blank is
+            # allowed depends on the release's format_version, which a row cannot
+            # see, so `validate` holds a 0.2.3 release to a value on every row.
+            prop["pattern"] = NON_NEGATIVE_INTEGER_OR_BLANK
+            prop["description"] = (
+                "Associations not stored for an SE above 65,504: a non-negative "
+                "integer; blank (unknown) only below format_version 0.2.3."
+            )
         properties[column] = prop
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -413,12 +459,7 @@ ANALYSIS_COLUMNS: tuple[str, ...] = (
     "publication_pmid",
     "consortium",
     "first_author",
-    "completed_against",
-    "completion_median_pearson_r",
-    "completion_n_imputed_total",
-    "completion_n_missing_total",
-    *EAF_ORIENTATION_COLUMNS,
-    *TOP_HIT_COUNT_COLUMNS,
+    *STORE_ONLY_COLUMNS,
 )
 
 # Columns a prior `analyses.tsv` schema carried that this one deliberately
@@ -500,6 +541,11 @@ class Analysis:
     completion_median_pearson_r: str = ""
     completion_n_imputed_total: str = ""
     completion_n_missing_total: str = ""
+    # Associations not stored for an SE above 65,504 (issue #338, spec §7a).
+    # Blank means unknown -- a release written before format 0.2.3 -- and is
+    # never read as 0. After Reference Completion a counted cell may hold an
+    # imputed value: the count says what the source could not hold.
+    n_missing_se_out_of_range: str = ""
     # EAF orientation evidence (issue #115). Blank on an Analysis no build-time
     # check ever ran over -- which validation treats as a store that predates
     # the check, not as one that passed it.
@@ -629,6 +675,7 @@ def _analysis_row(index: int, a: Analysis, fieldnames: tuple[str, ...]) -> dict[
         "completion_median_pearson_r": a.completion_median_pearson_r,
         "completion_n_imputed_total": a.completion_n_imputed_total,
         "completion_n_missing_total": a.completion_n_missing_total,
+        N_MISSING_SE_OUT_OF_RANGE: a.n_missing_se_out_of_range,
         "eaf_orientation": a.eaf_orientation,
         "eaf_orientation_r": a.eaf_orientation_r,
         "eaf_orientation_n": a.eaf_orientation_n,
@@ -680,6 +727,7 @@ def _analysis_from_row(row: dict[str, str], fieldnames: tuple[str, ...]) -> Anal
         completion_median_pearson_r=row.get("completion_median_pearson_r", ""),
         completion_n_imputed_total=row.get("completion_n_imputed_total", ""),
         completion_n_missing_total=row.get("completion_n_missing_total", ""),
+        n_missing_se_out_of_range=row.get(N_MISSING_SE_OUT_OF_RANGE, ""),
         eaf_orientation=row.get("eaf_orientation", ""),
         eaf_orientation_r=row.get("eaf_orientation_r", ""),
         eaf_orientation_n=row.get("eaf_orientation_n", ""),
@@ -719,6 +767,35 @@ def read_analysis_records(path: str | Path) -> list[Analysis]:
     """Read `analyses.tsv` at `path` back into `Analysis` records, in file order."""
     table = read_analyses(path)
     return [_analysis_from_row(row, table.fieldnames) for row in table.rows]
+
+
+def with_se_out_of_range(
+    analyses: list[Analysis], counts: np.ndarray, *, carried_forward: bool = False
+) -> list[Analysis]:
+    """`analyses` with `n_missing_se_out_of_range` set from `counts`, one per Analysis.
+
+    `carried_forward` adds each count onto the one the Analysis already
+    records -- Reference Completion carrying its source's count (issue #338) --
+    and refuses an Analysis whose count is unknown (blank) rather than read it
+    as 0: what a release before format 0.2.3 left out is the caller's to state.
+    """
+    counts = np.asarray(counts, dtype=np.int64)
+    if len(counts) != len(analyses):
+        raise ValueError(f"{len(counts)} counts for {len(analyses)} Analyses")
+    if (counts < 0).any():
+        raise ValueError(f"a negative {N_MISSING_SE_OUT_OF_RANGE}: {counts.tolist()}")
+    out = []
+    for a, count in zip(analyses, counts.tolist(), strict=True):
+        if carried_forward:
+            recorded = a.n_missing_se_out_of_range
+            if not recorded:
+                raise ValueError(
+                    f"analysis {a.analysis_id!r}: {N_MISSING_SE_OUT_OF_RANGE} is unknown "
+                    "(blank), so a count cannot be added onto it"
+                )
+            count += int(recorded)
+        out.append(replace(a, n_missing_se_out_of_range=str(count)))
+    return out
 
 
 def reset_top_hit_counts(analyses: list[Analysis]) -> list[Analysis]:

@@ -22,6 +22,7 @@ from opengwasdb.encoding.codec import (
     positions_flat,
     positions_row_band,
     require_parallel,
+    require_se_in_range,
     se_float16,
     se_residual_codes,
     table_end_to_end,
@@ -316,14 +317,8 @@ def _candidate_codes(
     coefficients: np.ndarray,
     candidate: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    values = np.asarray(se, dtype=np.float64)
-    frequencies = np.asarray(eaf, dtype=np.float64)
-    analyses = np.asarray(analysis_index, dtype=np.int64)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        x = np.log(2 * frequencies * (1 - frequencies))
-        prediction = coefficients[analyses, 0] + coefficients[analyses, 1] * x
-        residual = np.log(values) - prediction
-    return se_residual_codes(values, residual, candidate / 127)
+    """One candidate range's codes and exceptions, by the encoder's own rule."""
+    return se_residual_codes(se, eaf, analysis_index, coefficients, candidate / 127)
 
 
 def _charged(
@@ -1683,7 +1678,11 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
         with _optional_phase(timer, "rewrite.narrow"):
             for index, r0 in enumerate(starts, start=1):
                 r1 = min(r0 + row_chunk, n_rows)
-                pending[r0:r1] = se_float16(source[r0:r1])
+                band = np.asarray(source[r0:r1])
+                # The one SE write that does not pass through `encode_se`, so it
+                # carries the encoders' guard itself (issue #338).
+                require_se_in_range(band, where=f"SE float16 narrowing, rows {r0:,} to {r1:,}")
+                pending[r0:r1] = se_float16(band)
                 log_progress(
                     log,
                     "SE float16 narrowing",

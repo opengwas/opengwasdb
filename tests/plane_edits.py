@@ -88,9 +88,10 @@ def _patch_se(
             exceptions=se_entries,
         )
     else:
-        codes = StoreCodec(encoding).encode_se(
-            values, eaf=values, analysis_index=cols, coefficients=np.zeros((0, 2))
-        )
+        # Narrowed here, not encoded: `encode_se` refuses an SE above 65,504 (issue
+        # #338), and a test plants exactly that -- the `+inf` a release before format
+        # 0.2.3 holds.
+        codes = side.se_float16(np.asarray(values, dtype=np.float32))
     write_shard_cells(group["se"], rows, cols, codes)
     if encoding.se.is_residual:
         previous = side.SeExceptionTable.read(group)

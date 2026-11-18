@@ -17,12 +17,21 @@ so a built store leaves them honestly blank.
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
 
 from opengwasdb.encoding import EafEncoding
-from opengwasdb.model.analyses import RETIRED_ANALYSIS_COLUMNS, TOP_HIT_COUNT_COLUMNS
+from opengwasdb.model.analyses import (
+    N_MISSING_SE_OUT_OF_RANGE,
+    NON_NEGATIVE_INTEGER_OR_BLANK,
+    RETIRED_ANALYSIS_COLUMNS,
+    TOP_HIT_COUNT_COLUMNS,
+    read_analyses,
+)
 from opengwasdb.model.enums import (
+    SD_RESCALING_METHODS,
     AncestryAssignmentMethod,
     EafOrientationOutcome,
     EafScope,
@@ -36,6 +45,7 @@ from opengwasdb.model.regions import (
     check_region_table,
     read_store_regions,
 )
+from opengwasdb.store.open import records_se_out_of_range
 from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.release import REQUIRED
 
@@ -154,6 +164,63 @@ def vocabularies(target: Target) -> Iterator[str]:
                 )
 
 
+def original_sd_recorded(target: Target) -> Iterator[str]:
+    """An Analysis whose `original_sd_method` rescales records the SD it was
+    divided by: finite and positive (ADR 0029 methods 2-5, ADR 0084).
+
+    A builder divides such an Analysis's SEs by `original_sd` and records it.
+    A blank one is what a Ragged SSF build before issue #366 wrote while storing
+    its source's SEs undivided -- OGS-00006, -00024, -00025 and -00026, 4,443
+    Analyses -- and nothing else in the Store says so: z is scale-free, and the
+    SEs look like SEs. A Store whose SEs were standardised by an SD it does not
+    record cannot be read back in the source's units either.
+    """
+    rescaling = {method.value for method in SD_RESCALING_METHODS}
+    for row in target.analyses.rows:
+        method = row.get("original_sd_method", "")
+        if method not in rescaling:
+            continue
+        raw = row.get("original_sd", "")
+        try:
+            value = float(raw)
+        except ValueError:
+            value = math.nan
+        if not (math.isfinite(value) and value > 0):
+            yield (
+                f"analysis {row.get('analysis_id', '')!r} declares original_sd_method="
+                f"{method!r}, which divides its standard errors by a phenotype SD, but "
+                f"records original_sd {raw!r}: a Release that does not record a finite, "
+                "positive SD cannot show its SEs were standardised, and one built by "
+                "build-ragged-ssf before issue #366 holds its source's SEs (spec §7a)"
+            )
+
+
+def sd_scale_standardised(target: Target) -> Iterator[str]:
+    """An Analysis labelled SD Units was standardised: its `original_sd_method` is a
+    rescaling method or `declared_standardised` (spec §7, ADR 0084).
+
+    `stored_effect_scale=sd` over any other method, or none, is an Analysis whose
+    SEs were stored undivided under an SD Units label, which nothing else in the
+    Store shows. A scale that is not `sd` claims no SD Units, and a blank scale
+    with a blank method is "not standardised, scale unknown", so neither fails.
+    """
+    standardised = {method.value for method in SD_RESCALING_METHODS}
+    standardised.add(OriginalSdMethod.DECLARED_STANDARDISED.value)
+    for row in target.analyses.rows:
+        if row.get("stored_effect_scale", "") != StoredEffectScale.SD.value:
+            continue
+        method = row.get("original_sd_method", "")
+        if method and method not in {m.value for m in OriginalSdMethod}:
+            continue  # an unknown spelling is `analyses.vocabularies`'s to report
+        if method not in standardised:
+            yield (
+                f"analysis {row.get('analysis_id', '')!r} has stored_effect_scale='sd' but "
+                f"original_sd_method={method!r}: SD Units need a rescaling method or "
+                "declared_standardised, else its standard errors may be a source's own "
+                "(spec §7, ADR 0084)"
+            )
+
+
 def top_hit_count_columns(target: Target) -> Iterator[str]:
     """The Top-Hit Count columns (ADR 0032) are present and hold non-negative integers.
 
@@ -173,6 +240,78 @@ def top_hit_count_columns(target: Target) -> Iterator[str]:
                     f"analyses.tsv analysis {row.get('analysis_id')!r} has invalid "
                     f"{column} {value!r} (must be a non-negative integer)"
                 )
+
+
+# --- n_missing_se_out_of_range (issue #338, ADR 0068) ---
+
+
+def se_out_of_range_count(target: Target) -> Iterator[str]:
+    """`n_missing_se_out_of_range` holds a non-negative integer on every row of a
+    release at format 0.2.3 or later; below it the column may be absent or blank
+    (unknown, never 0), and a value it does hold is still a non-negative integer.
+
+    Every `analyses.tsv` a release carries is judged, a Hybrid root's included:
+    the root counts both its components, the Dense Component its own.
+    """
+    table = target.analyses
+    version = target.store.manifest.format_version
+    required = records_se_out_of_range(version)
+    if N_MISSING_SE_OUT_OF_RANGE not in table.fieldnames:
+        if required:
+            yield (
+                f"analyses.tsv has no {N_MISSING_SE_OUT_OF_RANGE} column, which a release at "
+                f"format_version {version} records for every Analysis (spec §7a, issue #338)"
+            )
+        return
+    for row in table.rows:
+        value = row.get(N_MISSING_SE_OUT_OF_RANGE, "")
+        analysis = row.get("analysis_id", "")
+        if not re.fullmatch(NON_NEGATIVE_INTEGER_OR_BLANK, value):
+            yield (
+                f"analysis {analysis!r} has {N_MISSING_SE_OUT_OF_RANGE} {value!r}; expected a "
+                "non-negative integer"
+            )
+        elif not value and required:
+            yield (
+                f"analysis {analysis!r} has a blank {N_MISSING_SE_OUT_OF_RANGE}: a release at "
+                f"format_version {version} records the count for every Analysis, and blank "
+                "(unknown) belongs only to a release before 0.2.3 (spec §7a, issue #338)"
+            )
+
+
+def se_out_of_range_partition(target: Target) -> Iterator[str]:
+    """A Hybrid root counts at least what its Dense Component counts, Analysis by
+    Analysis: the root's count is both components' (issue #338)."""
+    root = _counts(target.analyses.rows)
+    for child in target.children:
+        if not child.store.analyses_path.exists():
+            continue
+        dense = _counts(read_analyses(child.store.analyses_path).rows)
+        for analysis, count in dense.items():
+            at_root = root.get(analysis)
+            if at_root is not None and count is not None and at_root < count:
+                yield (
+                    f"analysis {analysis!r} counts {at_root} associations left out for an "
+                    f"SE above float16's range at the root but {count} in its Dense "
+                    "Component; the root counts both components"
+                )
+
+
+def _counts(rows: Iterable[dict[str, str]]) -> dict[str, int | None]:
+    out: dict[str, int | None] = {}
+    for row in rows:
+        value = row.get(N_MISSING_SE_OUT_OF_RANGE, "")
+        out[row.get("analysis_id", "")] = int(value) if value.isdigit() else None
+    return out
+
+
+def _with_analyses(target: Target) -> bool:
+    """Any release with an `analyses.tsv`, a Hybrid root's included."""
+    return target.store.analyses_path.exists()
+
+
+def _hybrid_root(target: Target) -> bool:
+    return target.layout is PrimaryStorageLayout.HYBRID and _with_analyses(target)
 
 
 # --- EAF orientation (issue #115) ---
@@ -372,7 +511,17 @@ TABLE_RULES: tuple[Rule, ...] = (
     _table_rule("analyses.analysis_id", analysis_id),
     _table_rule("analyses.completion_declared", completion_declared),
     _table_rule("analyses.vocabularies", vocabularies),
+    _table_rule("analyses.original_sd_recorded", original_sd_recorded),
+    _table_rule("analyses.sd_scale_standardised", sd_scale_standardised),
     _table_rule("analyses.top_hit_count_columns", top_hit_count_columns),
+    Check(
+        name="analyses.se_out_of_range_count", kinds=Kind.RELEASE, when=_with_analyses,
+        after=(READABLE,), run=se_out_of_range_count,
+    ),
+    Check(
+        name="analyses.se_out_of_range_partition", kinds=Kind.RELEASE, when=_hybrid_root,
+        after=("analyses.se_out_of_range_count",), run=se_out_of_range_partition,
+    ),
     Check(
         name="regions.table", kinds=Kind.RELEASE, when=_with_regions, after=(READABLE,),
         run=regions_table,

@@ -41,7 +41,6 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.analyses import (
     read_analyses,
@@ -56,6 +55,7 @@ from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 # Eight variants across four Analyses. The frequencies agree closely between
 # Analyses -- which is what makes an 8-bit residual work at all -- except at
@@ -261,7 +261,7 @@ def test_a_build_with_frequencies_declares_the_residual_coding(
     manifest = json.loads((store / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["kind"] == "int8_residual"
     assert manifest["encoding"]["eaf"]["residual_range"] in (0.5, 1.0, 2.0)
-    assert manifest["format_version"] == "0.2.2"
+    assert manifest["format_version"] == "0.2.3"
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])

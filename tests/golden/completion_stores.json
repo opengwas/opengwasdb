@@ -1,7 +1,7 @@
 {
  "dense": {
   "store": {
-   "analyses.tsv": "f38c4c2b637ce3b0294f4f22a1159dc8fd6b2d08d06e51c3ea4c065e39ed0a4a",
+   "analyses.tsv": "a64189cb0eb684312c033ec9eebcbbd08e6b0e541dca17734390417ec81d7843",
    "attrs": {
     "data.zarr": {
      "chunk_shape": [
@@ -74,7 +74,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "dense",
     "provenance": {
      "builder": "opengwasdb.v0.1_dense_observed",
@@ -105,7 +105,15 @@
        "identity_invalid": 0,
        "no_effect_allele": 0
       },
-      "pca_thresh": 0.9
+      "pca_thresh": 0.9,
+      "se_out_of_range": {
+       "imputed": [
+        0
+       ],
+       "observed": [
+        0
+       ]
+      }
      },
      "dense": {
       "chunk_shape": [
@@ -151,7 +159,7 @@
     "release_id": "comp-signal-v1",
     "store_id": "test"
    },
-   "overview.html": "e26aeacd971db08c4590fc56547be570dd72e797a4d2797545c47e3dc5db9289",
+   "overview.html": "c88a74531e974da48b6f49b04b16390f930a320a23eb6a31c17ab2ee7659a4e0",
    "variant_alid_bytes.npy": "3cb8b9c34563b0ac041960f253d8b051c128b221e8e99d9380f5b7873f62c684",
    "variant_alid_rows.npy": "9ccf3e85bb79bd039402a5a311525246f94bfe8b513da8488538b7f6653b7f62",
    "variant_offsets.npy": "822301c55ee68d54cfeaf60599429aca7d7e05c18a5accfd845e7a5ee5eb656c",
@@ -922,11 +930,11 @@
    "n_missing_off_panel": 0,
    "n_variants": 12
   },
-  "written_by": "1ab2b09; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_besd": {
   "store": {
-   "analyses.tsv": "790fde163cb184cd61f3639d1dce2a65529464fd8f282d0645fb691f88a3ed67",
+   "analyses.tsv": "78ef3eb6539b7752ed57c8697214ceb87964cc91de1b91f476c0c2f59604264c",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -986,7 +994,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -1017,7 +1025,17 @@
        "identity_invalid": 0,
        "no_effect_allele": 0
       },
-      "pca_thresh": 0.9
+      "pca_thresh": 0.9,
+      "se_out_of_range": {
+       "imputed": [
+        0,
+        0
+       ],
+       "observed": [
+        0,
+        0
+       ]
+      }
      },
      "n_analyses": 2,
      "n_associations": 4,
@@ -1980,11 +1998,11 @@
    "n_missing": 3,
    "n_variants": 4
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_nothing_imputed": {
   "store": {
-   "analyses.tsv": "8b963bc422dd643deac40f5e04d19d68c45a97775ffad11db6d7856ca57b69f2",
+   "analyses.tsv": "5d5d832947966b77a50dd31d5b1d9a7123b26ff2b025c3329388d6edb5a47953",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -2046,7 +2064,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -2099,6 +2117,16 @@
        ],
        "budget": 0.02,
        "over_budget": []
+      },
+      "se_out_of_range": {
+       "imputed": [
+        0,
+        0
+       ],
+       "observed": [
+        0,
+        0
+       ]
       }
      },
      "eaf_orientation": {
@@ -3342,11 +3370,11 @@
   "totals": {
    "n_imputed": 0
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_off_grid": {
   "store": {
-   "analyses.tsv": "96270ab1f38d4d9d8aef032fa919f4249cf10e5c47c4e5a8e51ff8aebdb8b1b1",
+   "analyses.tsv": "db8f8ebcd2c1f98f70b3b131bef46758374c90ccf241ced4c90d83c01867bbb6",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -3408,7 +3436,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -3461,6 +3489,16 @@
        ],
        "budget": 0.02,
        "over_budget": []
+      },
+      "se_out_of_range": {
+       "imputed": [
+        0,
+        0
+       ],
+       "observed": [
+        0,
+        0
+       ]
       }
      },
      "eaf_orientation": {
@@ -4704,11 +4742,11 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_out_of_range": {
   "store": {
-   "analyses.tsv": "b47fcff846293fd0051a81531dcff1129acec47d638f40bf33b0060e3aa73ea3",
+   "analyses.tsv": "146384921eb21f2ca4bb3dcde5e472d81526134adc566cc23d8a86e1988bf4ec",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -4770,7 +4808,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -4824,6 +4862,16 @@
        "budget": 0.02,
        "over_budget": [
         "b"
+       ]
+      },
+      "se_out_of_range": {
+       "imputed": [
+        0,
+        0
+       ],
+       "observed": [
+        0,
+        0
        ]
       }
      },
@@ -6068,11 +6116,11 @@
   "totals": {
    "n_imputed": 16
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_overlap": {
   "store": {
-   "analyses.tsv": "ccf28f09f8d52ad102de7c3352310c3d086791847ea9a9c9be4515849824ea9a",
+   "analyses.tsv": "9551cee3a53ec9349c935257ad86b9e3973dc755e962ae6e5e0923b3062ee801",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -6133,7 +6181,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -6164,7 +6212,15 @@
        "identity_invalid": 0,
        "no_effect_allele": 0
       },
-      "pca_thresh": 0.9
+      "pca_thresh": 0.9,
+      "se_out_of_range": {
+       "imputed": [
+        0
+       ],
+       "observed": [
+        0
+       ]
+      }
      },
      "n_analyses": 1,
      "n_associations": 5,
@@ -7132,11 +7188,11 @@
    "n_missing": 1,
    "n_variants": 7
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_panel_only_eaf": {
   "store": {
-   "analyses.tsv": "724e87d6dc895236971079268eaf1aa97e4461f8b8af0c4131b7afd2b255ba13",
+   "analyses.tsv": "a33b7e5b144d54a763bd8c480a849a36c0a5b038dfaf6ad97436cd048fa80a6a",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -7197,7 +7253,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -7228,7 +7284,21 @@
        "identity_invalid": 0,
        "no_effect_allele": 0
       },
-      "pca_thresh": 0.99
+      "pca_thresh": 0.99,
+      "se_out_of_range": {
+       "imputed": [
+        0,
+        0,
+        0,
+        0
+       ],
+       "observed": [
+        0,
+        0,
+        0,
+        0
+       ]
+      }
      },
      "eaf_orientation": {
       "allow_unverified": true,
@@ -8235,11 +8305,11 @@
    }
   },
   "totals": {},
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_residual": {
   "store": {
-   "analyses.tsv": "96270ab1f38d4d9d8aef032fa919f4249cf10e5c47c4e5a8e51ff8aebdb8b1b1",
+   "analyses.tsv": "db8f8ebcd2c1f98f70b3b131bef46758374c90ccf241ced4c90d83c01867bbb6",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -8301,7 +8371,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_ssf",
@@ -8354,6 +8424,16 @@
        ],
        "budget": 0.02,
        "over_budget": []
+      },
+      "se_out_of_range": {
+       "imputed": [
+        0,
+        0
+       ],
+       "observed": [
+        0,
+        0
+       ]
       }
      },
      "eaf_orientation": {
@@ -9597,11 +9677,11 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  },
  "ragged_trait_less": {
   "store": {
-   "analyses.tsv": "13ba437a04bc192b3ae65244d03ffd1bde5d285ad7425b4f8597c31e0215b639",
+   "analyses.tsv": "9c644dfa9364ff159a193c1e2ea512e28f4abd5bb315c80a3f46eab4cef8cf46",
    "attrs": {
     "data.zarr": {},
     "data.zarr/ragged": {
@@ -9662,7 +9742,7 @@
       "scale": 1024
      }
     },
-    "format_version": "0.2.2",
+    "format_version": "0.2.3",
     "primary_layout": "ragged",
     "provenance": {
      "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -9693,7 +9773,15 @@
        "identity_invalid": 0,
        "no_effect_allele": 0
       },
-      "pca_thresh": 0.9
+      "pca_thresh": 0.9,
+      "se_out_of_range": {
+       "imputed": [
+        0
+       ],
+       "observed": [
+        0
+       ]
+      }
      },
      "n_analyses": 1,
      "n_associations": 5,
@@ -10661,6 +10749,6 @@
    "n_missing": 0,
    "n_variants": 6
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes"
  }
 }

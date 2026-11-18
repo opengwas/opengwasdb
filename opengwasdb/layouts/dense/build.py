@@ -13,6 +13,7 @@ from opengwasdb.admission.rules import AnalysisRules
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
+    association_codec,
     eaf_baseline_from_grid,
     fit_se_grid,
     measure_eaf_grid,
@@ -24,8 +25,8 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
 )
 from opengwasdb.encoding.planes import write_encoded_planes
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.index import initialise_schema, set_metadata
-from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
@@ -35,7 +36,12 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
+from opengwasdb.model.analyses import (
+    Analysis,
+    analyses_table_from_records,
+    with_se_out_of_range,
+    write_analyses,
+)
 from opengwasdb.model.enums import (
     AssociationCoverage,
     EafOrientationOutcome,
@@ -157,7 +163,7 @@ def build_dense_observed_store(
         records, rsid_by_alid = _admitted_records(sources, directory)
         variants = _collect_variants(records)
         analyses = _collect_analyses(records, sources)
-        z, se, eaf = _scatter_records(records, variants, analyses)
+        z, se, eaf, left_out = _stored_grid(records, variants, analyses, sources)
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
@@ -176,10 +182,43 @@ def build_dense_observed_store(
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
-        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding, analyses)
+        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
-        write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
+        write_analyses_tsv(
+            staged.path, with_se_out_of_range(add_hit_counts(staged.path, analyses), left_out)
+        )
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _stored_grid(
+    records: list[NormalisedAssociation],
+    variants: list[CanonicalVariant],
+    analyses: list[Analysis],
+    sources: Sequence[AnalysisSource],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The records' grid as the Store will hold it (`storable`), and per Analysis
+    how many associations it leaves out for an SE above `float16`'s range (#338).
+
+    The records hold their sources' SEs; `storable` standardises each column by
+    its Analysis's phenotype SD (#18, ADR 0084). Judged before the plan is
+    measured, so the plan is fitted to the cells the Store holds and not to one
+    it leaves out (ADR 0068).
+    """
+    z, se, eaf = _scatter_records(records, variants, analyses)
+    n_analyses = len(analyses)
+    divisor = {source.analysis.analysis_id: source.se_divisor for source in sources}
+    kept = association_codec.storable(
+        CellValues(z, se, eaf), np.arange(n_analyses)[None, :], n_analyses, where="build-dense",
+        phenotype_sd=PhenotypeSd.of_analyses(divisor[a.analysis_id] for a in analyses),
+    )
+    log_se_out_of_range(
+        kept.se_out_of_range, [a.analysis_id for a in analyses], where="build-dense"
+    )
+    cells = kept.cells
+    assert cells.eaf is not None  # the grid always carries an EAF plane, NaN where absent
+    return (
+        np.asarray(cells.z), np.asarray(cells.se), np.asarray(cells.eaf), kept.se_out_of_range
+    )
 
 
 def _refuse_unbuildable(sources: Sequence[AnalysisSource]) -> None:
@@ -218,9 +257,10 @@ def _records_of(source: AnalysisSource) -> list[NormalisedAssociation]:
 def _admitted_records(
     sources: Sequence[AnalysisSource], directory: Path
 ) -> tuple[list[NormalisedAssociation], dict[str, str]]:
-    """The records each Analysis's Admission gate keeps, in source order, with
-    each Analysis's standard errors standardised (#18), and the names those
-    records give their variants (`_harvested_names`).
+    """The records each Analysis's Admission gate keeps, in source order, as
+    their sources give them, and the names those records give their variants
+    (`_harvested_names`). Their SEs are standardised where the grid is judged
+    (`_stored_grid`).
 
     Analyses are judged in the order of ``sources``, which is the order the
     Store's columns take (`_collect_analyses`), each under the filters its
@@ -241,7 +281,7 @@ def _admitted_records(
     record_.finish()
     kept_at = np.flatnonzero(keep).tolist()
     names = _harvested_names(sources, records, kept_at)
-    return _standardised([records[i] for i in kept_at], sources), names
+    return [records[i] for i in kept_at], names
 
 
 def _harvested_names(
@@ -293,25 +333,6 @@ def _gathered(
         positions.append(list(range(len(records), len(records) + len(own))))
         records.extend(own)
     return records, positions
-
-
-def _standardised(
-    records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
-) -> list[NormalisedAssociation]:
-    """``records`` with each Analysis's standard errors divided by its phenotype SD (#18)."""
-    divisor = {s.analysis.analysis_id: s.se_divisor for s in sources}
-    return [
-        record if divisor[record.analysis_id] == 1.0
-        else replace(
-            record,
-            se=float(
-                apply_se_divisor(
-                    np.array([record.se], dtype=np.float32), divisor[record.analysis_id]
-                )[0]
-            ),
-        )
-        for record in records
-    ]
 
 
 def _admitted(
@@ -561,10 +582,9 @@ def _write_zarr(
     se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
     encoding: StoreEncoding,
-    analyses: list[Analysis],
 ) -> None:
-    """Encode the `(z, se, eaf)` grid once, write each plane with its side
-    arrays, and log each Analysis's SEs above `float16`'s range."""
+    """Encode the `(z, se, eaf)` grid once and write each plane with its side
+    arrays. The grid is already what the Store holds (`_stored_grid`)."""
     z, se, eaf = grids
     root = staged.arrays(mode="w")
     baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
@@ -588,8 +608,3 @@ def _write_zarr(
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))
-    log_se_out_of_range(
-        encoded.storable.se_out_of_range,
-        [analysis.analysis_id for analysis in analyses],
-        where="build-dense",
-    )

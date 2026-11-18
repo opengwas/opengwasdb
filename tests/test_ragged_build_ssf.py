@@ -12,15 +12,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from sd_scaling import require_rescaling
 from stored_rows import stored_rows
 
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf as real_build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
+from tests.ssf_builds import build_ragged_from_ssf, declare_scale
 
 _SSF_HEADER = [
     "chromosome",
@@ -61,6 +63,8 @@ _MANIFEST_HEADER = [
     "mhc",
     "filtered_file",
     "source_genome_build",
+    "original_sd_method",
+    "original_sd",
 ]
 
 
@@ -298,6 +302,56 @@ def test_ssf_build_queries_and_validates_residual_se(tmp_path):
     assert validate_store(out).ok
 
 
+def test_ssf_se_is_standardised_by_the_manifests_original_sd(tmp_path):
+    """Issue #366: Ragged SSF standardises SEs by a rescaling `original_sd`
+    exactly as BESD, Dense, Dense-from-VCF and Hybrid do, stores `z` unchanged,
+    and records the SD it divided by in analyses.tsv (a Store that standardised
+    by an unrecorded number would be unreadable in original units).
+
+    The values are the fixture's own: the one source association holds
+    beta=1.0 and se=0.5, so it stores z=2.0 and se=0.25 (0.5 / 2.0).
+    """
+    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.model.enums import OriginalSdMethod
+
+    require_rescaling(OriginalSdMethod.SOURCE_PROVIDED)
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_one_association(filtered_dir)
+    manifest = tmp_path / "manifest.tsv"
+    _write_manifest(
+        manifest,
+        [
+            {
+                "analysis_index": 0,
+                "analysis_id": "trait_a",
+                "analysis_label": "Trait A",
+                "n": 1000,
+                "mhc": "FALSE",
+                "filtered_file": "trait_a.tsv.gz",
+                "source_genome_build": "GRCh38",
+                "original_sd_method": "source_provided",
+                "original_sd": "2.0",
+            }
+        ],
+    )
+    out = tmp_path / "out_sd.opengwasdb"
+
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+
+    recorded = read_analyses(out / "analyses.tsv").rows[0]
+    assert (recorded["original_sd_method"], recorded["original_sd"]) == (
+        "source_provided", "2.0"
+    ), "a standardised Analysis must record the SD it was standardised by"
+    stored = stored_rows(out, 0)
+    assert len(stored.variant_index) == 1, "the fixture must place one association"
+    assert float(stored.se[0]) == pytest.approx(0.25, rel=5e-3)  # source 0.5 / 2.0
+    assert float(stored.z[0]) == pytest.approx(2.0, rel=5e-3)  # beta 1.0 / se 0.5
+
+
 def test_manifest_fields(tmp_path):
     import json
 
@@ -494,16 +548,104 @@ def test_overwrite_flag(tmp_path):
     assert out.exists()
 
 
-def test_invalid_stored_effect_scale_rejected(tmp_path):
+def _build_with_scale_column(tmp_path, scale: str | None, method: str):
+    """The package's own build over `_make_fixture`'s manifest, with the scale and
+    method it states (a scale of None leaves the column out)."""
     manifest, filtered_dir = _make_fixture(tmp_path)
+    with open(manifest, encoding="utf-8") as fh:
+        rows = [line.rstrip("\n").split("\t") for line in fh]
+    header = rows[0]
+    at = header.index("original_sd_method")
+    extra = [] if scale is None else ["stored_effect_scale"]
+    manifest.write_text(
+        "\n".join(
+            "\t".join(
+                [*row[:at], method if i else "original_sd_method", *row[at + 1:],
+                 *(extra if not i else [scale] * len(extra))]
+            )
+            for i, row in enumerate(rows)
+        ) + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.opengwasdb"
+    real_build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    return out
+
+
+@pytest.mark.parametrize("scale", ["sd_units", None, ""])
+def test_a_scale_the_manifest_does_not_declare_is_refused(tmp_path, scale):
+    """The build assumes no scale: an unknown or absent one is refused, naming the
+    Analysis, before anything is written (issue #366)."""
+    with pytest.raises(ValueError, match=r"analysis 'trait_a'.*stored_effect_scale"):
+        _build_with_scale_column(tmp_path, scale, "declared_standardised")
+    assert not (tmp_path / "out.opengwasdb").exists()
+
+
+@pytest.mark.parametrize("method", ["", "binary_trait"])
+def test_an_sd_row_with_no_standardising_method_is_refused_by_name(tmp_path, method):
+    """Ragged SSF used to default the scale to `sd` and read a blank method as
+    divisor 1.0, building an undivided Analysis labelled SD Units (issue #366,
+    ADR 0084)."""
+    with pytest.raises(ValueError, match=r"analysis 'trait_a'.*SD Units need a rescaling"):
+        _build_with_scale_column(tmp_path, "sd", method)
+    assert not (tmp_path / "out.opengwasdb").exists()
+
+
+def test_a_log_or_row_with_no_method_builds_and_records_the_blank(tmp_path):
+    """Only `sd` claims SD Units, so a `log_or` row needs no method; the Store records
+    what the manifest said, a blank, and invents none (issue #366)."""
+    from opengwasdb.model.analyses import read_analyses
+
+    out = _build_with_scale_column(tmp_path, "log_or", "")
+
+    rows = read_analyses(out / "analyses.tsv").rows
+    assert {r["stored_effect_scale"] for r in rows} == {"log_or"}
+    assert {r["original_sd_method"] for r in rows} == {""}
+
+
+def test_provenance_records_the_distinct_scales_comma_joined(tmp_path):
+    """Rows that declare different scales leave one provenance value: the distinct
+    scales, sorted and comma-joined (spec §7)."""
+    import json
+
+    manifest, filtered_dir = _make_fixture(tmp_path)
+    lines = manifest.read_text().splitlines()
+    header = lines[0].split("\t")
+    at = header.index("original_sd_method")
+    rows = [line.split("\t") for line in lines[1:]]
+    declared = [("sd", "declared_standardised"), ("log_or", "binary_trait")]
+    for row, (_scale, method) in zip(rows, declared, strict=True):
+        row[at] = method
+    manifest.write_text(
+        "\t".join([*header, "stored_effect_scale"]) + "\n"
+        + "\n".join(
+            "\t".join([*row, scale])
+            for row, (scale, _method) in zip(rows, declared, strict=True)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     out = tmp_path / "out.opengwasdb"
 
-    with pytest.raises(ValueError, match="stored_effect_scale"):
-        build_ragged_from_ssf(
-            manifest, filtered_dir, out, store_id="test", release_id="v1",
-            stored_effect_scale="sd_units", association_coverage="cis_and_signals",
-        )
-    assert not out.exists()  # fails before any I/O
+    real_build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+
+    provenance = json.loads((out / "manifest.json").read_text())["provenance"]
+    assert provenance["stored_effect_scale"] == "log_or,sd"
+
+
+def test_an_sd_row_declaring_standardised_builds_and_is_recorded(tmp_path):
+    out = _build_with_scale_column(tmp_path, "sd", "declared_standardised")
+    from opengwasdb.model.analyses import read_analyses
+
+    rows = read_analyses(out / "analyses.tsv").rows
+    assert {r["stored_effect_scale"] for r in rows} == {"sd"}
+    assert {r["original_sd_method"] for r in rows} == {"declared_standardised"}
 
 
 def test_non_dense_analysis_index_fails_loudly(tmp_path):
@@ -685,6 +827,7 @@ def _invoke_cli_build(manifest, filtered_dir, out, *extra: str):
 
     from opengwasdb.cli.main import app
 
+    declare_scale(manifest)
     return CliRunner().invoke(
         app,
         [

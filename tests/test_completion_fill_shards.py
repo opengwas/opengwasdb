@@ -93,7 +93,7 @@ def _shard(tmp_path: Path, key: fill_shards.ShardKey, impute_mask=None, **worker
         with closing(staged.index_connection()) as db:
             create_completion_quality_table(db)
             db.commit()
-        shard_dir, n_quality = fill_shards.shard_checkpoint_fills(
+        shard_dir, n_quality, _ = fill_shards.shard_checkpoint_fills(
             blocks, staged, union, len(AXIS), key, impute_mask=impute_mask, **workers
         )
         shard_bytes.clear()
@@ -250,7 +250,7 @@ def test_each_long_alid_fill_reaches_its_own_row(tmp_path) -> None:
         with closing(staged.index_connection()) as db:
             create_completion_quality_table(db)
             db.commit()
-        shard_dir, _ = fill_shards.shard_checkpoint_fills(
+        shard_dir, _, _ = fill_shards.shard_checkpoint_fills(
             blocks, staged, union, len(LONG_AXIS), fill_shards.by_row_band(100)
         )
         shards = {
@@ -337,7 +337,7 @@ def test_alids_of_63_64_and_65_bytes_each_reach_their_own_row(tmp_path) -> None:
         with closing(staged.index_connection()) as db:
             create_completion_quality_table(db)
             db.commit()
-        shard_dir, _ = fill_shards.shard_checkpoint_fills(
+        shard_dir, _, _ = fill_shards.shard_checkpoint_fills(
             blocks, staged, union, len(EDGE_AXIS), fill_shards.by_row_band(100)
         )
         shards = {

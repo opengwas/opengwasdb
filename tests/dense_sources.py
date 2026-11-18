@@ -139,7 +139,11 @@ def build_dense_from_records(
         by_analysis.setdefault(record.analysis_id, []).append(record)
     sources = [
         AnalysisSource(
-            analysis=Analysis(analysis_id=analysis_id, stored_effect_scale="sd"),
+            analysis=Analysis(
+                analysis_id=analysis_id,
+                stored_effect_scale="sd",
+                original_sd_method="declared_standardised",
+            ),
             rules=AnalysisRules(analysis_id),
             se_divisor=1.0,
             batches=[_batch(rows)],

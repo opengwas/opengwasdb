@@ -45,14 +45,18 @@ from opengwasdb import top_hits
 from opengwasdb.associations import Cells, CsrReader, DenseGridReader, Status
 from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
 from opengwasdb.completion.schema import completion_quality_rollup
+from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
+from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
 from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
     CellValues,
     Placement,
     log_se_out_of_range,
+    storable,
 )
 from opengwasdb.encoding.planes import write_dense_cells
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -66,13 +70,13 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
-from opengwasdb.model.analyses import Analysis, read_analysis_records
+from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_out_of_range
 from opengwasdb.model.enums import (
     CompletionState,
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store import check_format_version_stamp
+from opengwasdb.store import check_format_version_stamp, completed_format_version
 from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -222,12 +226,14 @@ def complete_hybrid_store(
         # Phase 3: shared index/variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
-        n_overflow = _write_shared_tables_and_overflow(
+        n_overflow, overflow_left_out = _write_shared_tables_and_overflow(
             staged, src, src_manifest, dense, axis, overflow, analyses
         )
         # Phase 4: manifest, overflow top hits and the shared rollups.
         _finalize_completed_hybrid(
-            staged, src_manifest, release_id, analyses, axis, overflow, n_overflow
+            staged, src_manifest, release_id,
+            _root_analyses(src, analyses, overflow_left_out), axis, overflow, n_overflow,
+            overflow_left_out,
         )
 
     return HybridCompletionResult(
@@ -371,7 +377,8 @@ def _remap_shared_axis(
         if len(overflow_alids)
         else np.empty(0, dtype=bool)
     )
-    _correct_crossover_quality(dense, overflow, overflow_alids, is_crossover, ld_dir, ancestry)
+    folded, left_out = _stored_crossovers(overflow, is_crossover)
+    _correct_crossover_quality(dense, overflow, overflow_alids, folded, ld_dir, ancestry)
     n_reclaimed_imputed = _fold_panel_crossovers(
         dense.dir,
         dense.alid_to_row,
@@ -380,9 +387,10 @@ def _remap_shared_axis(
         overflow.se,
         overflow.eaf,
         overflow_alids,
-        is_crossover,
+        folded,
         dense_encoding=dense.encoding,
     )
+    _count_left_out_crossovers(dense.dir, left_out)
     n_imputed = dense.n_imputed - n_reclaimed_imputed
     if is_crossover.any():
         log.info(
@@ -407,6 +415,94 @@ def _remap_shared_axis(
         n_panel=len(dense.alids),
         n_off_panel=len(union) - len(dense.alids),
         n_imputed=n_imputed,
+    )
+
+
+def _stored_crossovers(
+    overflow: _SourceOverflow, is_crossover: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The crossovers the fold writes, and per Analysis those it leaves out.
+
+    A crossover is judged as any association is (`storable`): one whose SE is
+    above `float16`'s range -- only a source before format 0.2.3 holds one -- is
+    not an association a Store holds (issue #338). It is not folded, so it
+    replaces nothing: the Dense cell keeps what Dense completion put there,
+    imputed or missing, as it would had the source never held the row. It is
+    not in the rebuilt Overflow either, being a crossover, and it is counted.
+    """
+    n_analyses = overflow.n_analyses
+    at = np.flatnonzero(is_crossover)
+    if not len(at):
+        return is_crossover, np.zeros(n_analyses, dtype=np.int64)
+    analysis_of = np.repeat(np.arange(n_analyses), np.diff(overflow.offsets))
+    kept = storable(
+        CellValues(overflow.z[at], overflow.se[at], overflow.eaf[at]),
+        analysis_of[at],
+        n_analyses,
+        where="complete-hybrid, the crossovers",
+        phenotype_sd=PhenotypeSd.APPLIED,
+    )
+    folded = is_crossover.copy()
+    folded[at[~kept.stored]] = False
+    return folded, kept.se_out_of_range
+
+
+def _count_left_out_crossovers(dense_dir: Path, left_out: np.ndarray) -> None:
+    """Add the crossovers left out to the completed Dense Component's own count
+    and to its completion's `observed` part: each would have been a cell of that
+    component, which counts its own (issue #338, ADR 0068, defect 1)."""
+    if not left_out.any():
+        return
+    log_se_out_of_range(
+        left_out,
+        [analysis.analysis_id for analysis in _read_analyses(dense_dir)],
+        where="complete-hybrid, the crossovers",
+    )
+    write_analyses_tsv(
+        dense_dir, with_se_out_of_range(_read_analyses(dense_dir), left_out, carried_forward=True)
+    )
+    store = open_store(dense_dir)
+    completion = dict(store.manifest.provenance["completion"])
+    recorded = LeftOut.from_provenance(completion, len(left_out))
+    completion[SE_OUT_OF_RANGE_KEY] = (
+        recorded + LeftOut.of(left_out, np.zeros_like(left_out))
+    ).provenance()
+    provenance = {**store.manifest.provenance, "completion": completion}
+    StagedRelease(dense_dir).write_manifest(replace(store.manifest, provenance=provenance))
+
+
+def _root_analyses(
+    src: Path, dense_analyses: list[Analysis], overflow_left_out: np.ndarray
+) -> list[Analysis]:
+    """The completed root's Analyses: the completed Dense Component's, counting
+    both components (issue #338) -- the Dense Component's own count, the source
+    Overflow's carried forward where it is known, and what the rebuilt Overflow
+    left out.
+
+    The source Overflow's count is its root's less its Dense Component's: the
+    two partition an Analysis's associations, as ADR 0032's counts do. A source
+    before 0.2.3 records neither, so it is unknown and nothing is carried
+    (`counted`).
+    """
+    root, dense = open_store(src), open_store(dense_component_path(src))
+    carried_root = carried_counts(
+        read_analysis_records(src / "analyses.tsv"), root.manifest.format_version,
+        source=f"source release {src}",
+    )
+    carried_dense = carried_counts(
+        _read_analyses(dense_component_path(src)), dense.manifest.format_version,
+        source=f"source Dense Component {dense_component_path(src)}",
+    )
+    source_overflow = (
+        None if carried_root is None or carried_dense is None else carried_root - carried_dense
+    )
+    if source_overflow is not None and (source_overflow < 0).any():
+        raise HybridCompletionError(
+            f"source release {src} counts fewer associations left out for an SE above "
+            "float16's range than its Dense Component does"
+        )
+    return with_se_out_of_range(
+        dense_analyses, counted(source_overflow, overflow_left_out), carried_forward=True
     )
 
 
@@ -506,11 +602,12 @@ def _write_shared_tables_and_overflow(
     axis: _SharedAxis,
     overflow: _SourceOverflow,
     analyses: list[Analysis],
-) -> int:
+) -> tuple[int, np.ndarray]:
     """Write the shared index, variant table and dense_to_shared map on the
     completed axis, then rebuild the overflow CSR on its remapped shared
     indices minus the folded crossovers. Returns the overflow association
-    count.
+    count, and per Analysis the rows the rebuild left out for an SE above
+    `float16`'s range -- only a source before format 0.2.3 holds one (#338).
 
     Completion writes into the source's arrays in the source's encoding --
     never re-encoding data an operator asked only to complete (ADR 0038 §4).
@@ -535,7 +632,10 @@ def _write_shared_tables_and_overflow(
     )
     for ai in range(overflow.n_analyses):
         new_vi, z, se, eaf = _remapped_analysis_arrays(ai, overflow, axis)
-        csr.add_analysis(new_vi, z, se, eaf=eaf)
+        csr.add_analysis(
+            new_vi, z, se, eaf=eaf, where=f"complete-hybrid, the Overflow {ai}",
+            phenotype_sd=PhenotypeSd.APPLIED,
+        )
     csr.flush(
         staged.path,
         src_manifest.encoding,
@@ -543,7 +643,7 @@ def _write_shared_tables_and_overflow(
         se_coefficients=_shared_se_coefficients(dense.dir, src_manifest.encoding),
     )
     build_variant_index(staged.path, n_axis=axis.n_shared)
-    return csr.n_associations
+    return csr.n_associations, csr.se_out_of_range
 
 
 def _remapped_analysis_arrays(
@@ -613,6 +713,7 @@ def _finalize_completed_hybrid(
     axis: _SharedAxis,
     overflow: _SourceOverflow,
     n_overflow: int,
+    overflow_left_out: np.ndarray,
 ) -> None:
     """Write the reference-completed Hybrid manifest, the overflow top-hit
     index, and the shared analyses.tsv rollup over both components."""
@@ -633,6 +734,7 @@ def _finalize_completed_hybrid(
         # re-stamped from this function's arguments (issue #116: one panel
         # per completed store, recorded in `manifest.json`).
         dense_completion=_dense_completion_provenance(staged.path),
+        overflow_left_out=overflow_left_out,
     )
 
     build_ragged_top_hit_indexes(staged.path, encoding=src_manifest.encoding)
@@ -710,20 +812,18 @@ def _fold_panel_crossovers(
         Placement.pairs(row_idx, col_idx, int(root["z"].shape[1])),
         where="complete-hybrid, a crossover fold",
     )
+    _refuse_unjudged_crossovers(encoded.storable.se_out_of_range)
     write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
-    _log_fold_tally(dense_dir, encoded.storable.se_out_of_range)
     return n_reclaimed
 
 
-def _log_fold_tally(dense_dir: Path, out_of_range: np.ndarray) -> None:
-    """Log the crossovers' SEs above `float16`'s range. Only the fold holds these
-    cells: Dense completion ran before they were folded in, and the rebuilt
-    Overflow leaves them out."""
-    if out_of_range.any():
-        log_se_out_of_range(
-            out_of_range,
-            [analysis.analysis_id for analysis in _read_analyses(dense_dir)],
-            where="complete-hybrid, the crossover fold",
+def _refuse_unjudged_crossovers(left_out: np.ndarray) -> None:
+    """`_stored_crossovers` judged every crossover already; one the fold's own
+    gate leaves out would be written missing over what Dense completion put there."""
+    if left_out.any():
+        raise HybridCompletionError(
+            f"the crossover fold was handed {int(left_out.sum()):,} crossover(s) with an SE "
+            "above float16's range, which it must not write"
         )
 
 
@@ -798,6 +898,7 @@ def _write_completed_manifest(
     n_overflow: int,
     n_imputed: int,
     dense_completion: Mapping[str, Any],
+    overflow_left_out: np.ndarray,
 ) -> None:
     manifest = StoreManifest(
         # Preserved with the format version below: a completed release is
@@ -805,10 +906,10 @@ def _write_completed_manifest(
         encoding=src_manifest.encoding,
         store_id=src_manifest.store_id,
         release_id=release_id,
-        # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path,
-        # which checked it writable before any work began -- and the stamp its
-        # features give (spec §21.3), as the source was checked to be.
-        format_version=check_format_version_stamp(
+        # The source's features -- see ADR 0038 §4 and the dense path, which
+        # checked it writable before any work began -- and the count every
+        # completion records: a 0.2.2 source completes to 0.2.3 (issue #338).
+        format_version=completed_format_version(
             src_manifest.format_version, carries_regions=src_manifest.regions is not None
         ),
         primary_layout=PrimaryStorageLayout.HYBRID,
@@ -829,6 +930,8 @@ def _write_completed_manifest(
             overflow=n_overflow,
             imputed=n_imputed,
             dense_completion=dense_completion,
+            left_out=LeftOut.from_provenance(dense_completion, n_analyses)
+            + LeftOut.of(overflow_left_out, np.zeros_like(overflow_left_out)),
         ),
     )
     staged.write_manifest(manifest)
@@ -845,8 +948,11 @@ def _completed_hybrid_provenance(
     off_panel: int,
     overflow: int,
     imputed: int,
+    left_out: LeftOut,
 ) -> dict[str, Any]:
-    """A completed Hybrid release's provenance: the source's, restamped."""
+    """A completed Hybrid release's provenance: the source's, restamped, with
+    what the completion left out for an SE above `float16`'s range across both
+    components: the Dense Component's parts and the rebuilt Overflow's (#338)."""
     return {
         **src_manifest.provenance,
         "source_release_id": src_manifest.release_id,
@@ -880,6 +986,7 @@ def _completed_hybrid_provenance(
             "component_completed": "dense",
             "overflow_completion_state": "observed_only",
             "n_imputed_dense": imputed,
+            SE_OUT_OF_RANGE_KEY: left_out.provenance(),
         },
     }
 

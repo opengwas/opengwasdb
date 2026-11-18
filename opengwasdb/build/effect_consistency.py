@@ -7,13 +7,21 @@ row looks wrong on its own. The source's own p-value is the independent witness:
 for a source that is what it says it is, the two-sided p implied by `beta / se`
 tracks the p-value the file reports, and for one that is not, it does not.
 
-The statistic is the median over a bounded sample of rows of
-``|log10 p_implied - log10 p_source|``. Logs, because the p-values here span
-300 orders of magnitude and an absolute difference of p is blind to all but the
-largest; computed in log space, because ``2 * sf(|z|)`` underflows to 0 at the
-|z| this project sees (137). A median, because a minority of rows with a
-different test statistic behind their p-value (a saddlepoint or Firth p beside a
-Wald beta) must not decide a file's fate; a scale error moves every row.
+Two statistics are taken over a bounded sample of rows, where
+``Δ = log10 p_implied - log10 p_source``: the median of ``|Δ|`` and the median of
+signed ``Δ``. Logs, because the p-values here span 300 orders of magnitude and
+an absolute difference of p is blind to all but the largest; computed in log
+space, because ``2 * sf(|z|)`` underflows to 0 at the |z| this project sees
+(137). Medians, because a minority of rows with a different test statistic
+behind their p-value (a saddlepoint or Firth p beside a Wald beta) must not
+decide a file's fate; a scale error moves every row.
+
+The median ``|Δ|`` catches an effect on the wrong scale (an odds ratio in
+``beta``), whose z is wrong by orders of magnitude. It cannot catch a stored z
+that carries no signal (``beta`` 9.0 beside ``se`` 1000): then ``p_implied`` is
+about 1 and ``Δ`` about ``-log10 p_source``, whose null median is log10 2 = 0.30,
+under the ``|Δ|`` threshold. The median signed ``Δ`` catches that: every clean
+source's is near 0, so a positive median above 0.1 is a deflated z (#370).
 
 Rows whose standard error was *derived from* the p-value are excluded: their
 z is the p-value's own quantile, so the comparison would agree by construction
@@ -37,6 +45,7 @@ from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
     "DEFAULT_MAX_MEDIAN_ABS_DELTA",
+    "DEFAULT_MAX_MEDIAN_DELTA",
     "DEFAULT_MIN_COMPARED_ROWS",
     "DEFAULT_EFFECT_CONSISTENCY_POLICY",
     "ConsistencySkip",
@@ -51,6 +60,11 @@ __all__ = [
 #: measurement; see ADR 0069 for the calibration.
 DEFAULT_MAX_MEDIAN_ABS_DELTA = 1.0
 
+#: Refusal threshold on the median signed Δ. A stored z deflated towards 0 makes
+#: Δ ≈ -log10 p_source, whose null median is log10 2 = 0.30, which the |Δ| rule
+#: above can never refuse. Chosen from measurement; see ADR 0069's addendum.
+DEFAULT_MAX_MEDIAN_DELTA = 0.1
+
 #: Fewest comparable rows a verdict is drawn from.
 DEFAULT_MIN_COMPARED_ROWS = 50
 
@@ -64,18 +78,22 @@ class EffectConsistencyPolicy:
 
     max_median_abs_delta: float = DEFAULT_MAX_MEDIAN_ABS_DELTA
     min_compared_rows: int = DEFAULT_MIN_COMPARED_ROWS
+    max_median_delta: float = DEFAULT_MAX_MEDIAN_DELTA
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.max_median_abs_delta) and self.max_median_abs_delta > 0):
             raise ValueError(
                 f"max_median_abs_delta must be positive, got {self.max_median_abs_delta!r}"
             )
+        if not (math.isfinite(self.max_median_delta) and self.max_median_delta > 0):
+            raise ValueError(f"max_median_delta must be positive, got {self.max_median_delta!r}")
         if self.min_compared_rows < 1:
             raise ValueError(f"min_compared_rows must be >= 1, got {self.min_compared_rows!r}")
 
     def as_fingerprint(self) -> dict[str, float | int]:
         return {
             "max_median_abs_delta": self.max_median_abs_delta,
+            "max_median_delta": self.max_median_delta,
             "min_compared_rows": self.min_compared_rows,
         }
 
@@ -112,6 +130,8 @@ class EffectConsistency:
     median_delta: float | None
     skip_reason: ConsistencySkip | None
     refused: bool = False
+    #: Which rule refused: `"median_abs_delta"` or `"median_delta"`; `None` unless refused.
+    refused_by: str | None = None
 
 
 def check_sample_bound(evidence_sample: int, policy: EffectConsistencyPolicy) -> None:
@@ -165,14 +185,21 @@ class ConsistencySample:
         z = np.array([row[0] for row in retained])
         delta = log10_two_sided_p(z) - np.array([row[1] for row in retained])
         median_abs = float(np.median(np.abs(delta)))
+        median_signed = float(np.median(delta))
+        refused_by = None
+        if median_abs > policy.max_median_abs_delta:
+            refused_by = "median_abs_delta"
+        elif median_signed > policy.max_median_delta:
+            refused_by = "median_delta"
         return EffectConsistency(
             n_rows_considered=considered,
             n_rows_compared=len(retained),
             sampled=self._sample.sampled,
             median_abs_delta=median_abs,
-            median_delta=float(np.median(delta)),
+            median_delta=median_signed,
             skip_reason=None,
-            refused=median_abs > policy.max_median_abs_delta,
+            refused=refused_by is not None,
+            refused_by=refused_by,
         )
 
     def _skip(

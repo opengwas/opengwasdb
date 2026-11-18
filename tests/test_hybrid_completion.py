@@ -180,7 +180,7 @@ def completed_hybrid(
 def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     tmp_path: Path, completed_hybrid: tuple[Path, Path, HybridCompletionResult]
 ) -> None:
-    """A Hybrid build is 0.2.2, its indels spelt reference first (spec §21.3, ADR 0079).
+    """A Hybrid build is 0.2.3, its indels spelt reference first (spec §21.3, ADR 0079).
     Stamped 0.2.1, it claims sorted indels, which completion refuses before it reads the
     stamp's other feature, rather than spell the panel's indels beside them."""
     from region_tables import edit_manifest
@@ -188,7 +188,7 @@ def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     from opengwasdb.store.open import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
-    assert StoreManifest.load(src).format_version == "0.2.2"
+    assert StoreManifest.load(src).format_version == "0.2.3"
     edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
     dst = tmp_path / "restamped-dst.opengwasdb"
 

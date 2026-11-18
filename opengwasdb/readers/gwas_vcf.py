@@ -6,7 +6,10 @@ header-probed for its FORMAT tags and sample count, and exit-checked -- whose
 records become `SourceRow`s (`_record_rows`), presented by
 `opengwasdb.readers.rows`: the associations, the resolver's metric blocks and
 the sites ancestry assignment and phenotype-SD estimation read. ALT is the
-effect allele; a record's z is its `EZ` where it reports one, else `ES/SE`.
+effect allele; a record's z is its `EZ` where it reports one, else `ES/SE`. A
+header declaring neither `EZ` nor both `ES` and `SE` gives no record a z, so the
+file is refused before a record is read rather than stored as an Analysis with
+0 associations (issue #363).
 
 `stored_effect_scale` is supplied at construction rather than read from the
 VCF: the source header is not authoritative for effect scale (issue #17, the
@@ -241,7 +244,7 @@ def _format_tags(path: str | Path) -> set[str]:
     )
     if result.returncode != 0:
         message = result.stderr.strip() or "no diagnostic"
-        raise OSError(f"bcftools header query failed ({result.returncode}): {message}")
+        raise OSError(f"{path}: bcftools header query failed ({result.returncode}): {message}")
     lines = result.stdout.splitlines()
     columns = next((line.split("\t") for line in lines if line.startswith("#CHROM\t")), [])
     sample_count = max(0, len(columns) - 9)
@@ -255,6 +258,24 @@ def _format_tags(path: str | Path) -> set[str]:
         for line in lines
         if line.startswith(prefix)
     }
+
+
+def _require_effect_tags(path: str | Path, tags: set[str]) -> None:
+    """Refuse a header that cannot give a record its z (issue #363).
+
+    A GWAS-VCF reports an effect as ``EZ``, or as ``ES`` with ``SE``. A file
+    declaring neither still reads: every record's z is ``None``, so the Analysis
+    is stored with 0 associations and nothing says why. The refusal is on the
+    declared tags alone -- a declared tag whose *records* hold ``.`` is a record
+    with no association, not a broken file, and stays a missing association.
+    """
+    if "EZ" in tags or {"ES", "SE"} <= tags:
+        return
+    declared = ", ".join(sorted(tags)) or "no FORMAT tags"
+    raise ValueError(
+        f"{path}: a GWAS-VCF source requires FORMAT/EZ, or FORMAT/ES with FORMAT/SE; "
+        f"the header declares {declared}"
+    )
 
 
 #: The FORMAT tags a record row reads, in query order. A tag the header does
@@ -295,13 +316,15 @@ def _bounded_wait(proc: subprocess.Popen[str]) -> tuple[int, bool]:
         raise OSError("bcftools query could not be reaped after kill") from exc
 
 
-def _raise_query_failure(returncode: int, errors: TextIO) -> None:
+def _raise_query_failure(path: str | Path, returncode: int, errors: TextIO) -> None:
     errors.seek(0)
     message = errors.read().strip() or "no diagnostic"
-    raise OSError(f"bcftools record query failed ({returncode}): {message}")
+    raise OSError(f"{path}: bcftools record query failed ({returncode}): {message}")
 
 
-def _finish_query(proc: subprocess.Popen[str], errors: TextIO, completed: bool) -> None:
+def _finish_query(
+    proc: subprocess.Popen[str], errors: TextIO, completed: bool, path: str | Path
+) -> None:
     returncode = proc.poll()
     cancelled = not completed and returncode is None
     if cancelled:
@@ -313,7 +336,7 @@ def _finish_query(proc: subprocess.Popen[str], errors: TextIO, completed: bool) 
     if killed:
         expected_signals.add(-signal.SIGKILL)
     if returncode != 0 and not (cancelled and returncode in expected_signals):
-        _raise_query_failure(returncode, errors)
+        _raise_query_failure(path, returncode, errors)
 
 
 def _query(
@@ -337,7 +360,7 @@ def _query(
             yield from _validated_cells(proc.stdout, n_fields)
             completed = True
         finally:
-            _finish_query(proc, errors, completed)
+            _finish_query(proc, errors, completed, path)
 
 
 #: A one-base allele in either case, which nearly every record holds.
@@ -463,8 +486,10 @@ def _record_rows(
 ) -> Generator[SourceRow, None, None]:
     """Every biallelic record of one GWAS-VCF as a `SourceRow`, in file order.
 
-    ALT is the effect allele and REF the other. A record whose identity is
-    malformed is named in ``tally`` and left out (#365), as is one with an
+    ALT is the effect allele and REF the other. A file whose header declares
+    neither ``EZ`` nor both ``ES`` and ``SE`` is refused rather than read as a
+    source of no association (issue #363; `_require_effect_tags`). A record whose
+    identity is malformed is named in ``tally`` and left out (#365), as is one with an
     unparseable position or two spellings of one allele. With ``liftover``
     each row is lifted onto the reference build before its identity is formed
     (`oriented_variant`), which refuses an indel or an ambiguous mapping.
@@ -472,7 +497,12 @@ def _record_rows(
     or a palindromic pair, is passed over before it is lifted.
     """
     tally = tally or StreamTally()
-    query_format = _record_query_format(_format_tags(path))
+    tags = _format_tags(path)
+    if not sites:
+        # A site extraction reads AF and SE alone (issue #21), so only a read
+        # that forms an association or a metric block needs the effect fields.
+        _require_effect_tags(path, tags)
+    query_format = _record_query_format(tags)
     with contextlib.closing(_query(path, query_format, _RECORD_FIELDS, restriction)) as records:
         # A site extraction's frequencies are not the stream's to count (D7).
         frequencies = None if sites else tally.frequencies

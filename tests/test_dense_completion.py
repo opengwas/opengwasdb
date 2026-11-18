@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -520,7 +521,11 @@ class TestValidation:
         # warns about the infinity (#337) instead of reading it as a missing SE.
         # The fixture imputed nothing, so one present on-panel cell is flagged, as
         # `test_corrupt_imputed_nan_se_fails` does; the completion-count rules that
-        # flag disagrees with are not what this test is about.
+        # flag disagrees with are not what this test is about. Stamped 0.2.2: from
+        # 0.2.3 a release holds no SE above 65,504, and one that does fails (#338).
+        manifest_path = completed_store / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_path.write_text(json.dumps({**manifest, "format_version": "0.2.2"}))
         root = open_store(completed_store).arrays(mode="r+")
         on_panel_rows = np.where(root["on_panel"][:] == 1)[0]
         se = root["se"][:]

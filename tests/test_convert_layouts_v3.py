@@ -47,7 +47,6 @@ from benchmarks.benchmark_store_comparison import assert_identical, result_diges
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
@@ -62,6 +61,7 @@ from opengwasdb.store.arrays import (
 from opengwasdb.store.convert import ConversionError, convert_release, verify_conversion
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 DENSE_ANALYSIS_CHUNK = 4
 DENSE_SHARD = (1000, 8)

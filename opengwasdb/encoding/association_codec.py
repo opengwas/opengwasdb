@@ -3,11 +3,12 @@
 `storable` is the one judgement a writer makes before any plane is written:
 every cell must be one Association Admission would admit (ADR 0072), judged by
 Admission's own check, every missing marker must be the canonical NaN (spec
-§15), and an SE above the largest a `float16` plane holds is counted per
-Analysis. Admission guarantees the first for every source row, so
-a cell that breaks it here was produced after admission -- a completion fill,
-a merged pass, a re-encode -- and the write is refused. A writer writes what
-`storable` returns; today that is every cell it was handed, unchanged.
+§15), and an association whose SE is above the largest a `float16` plane holds
+is not stored, in z and SE together, and is counted per Analysis (issue #338,
+ADR 0068). Admission guarantees the first for every source row, so a cell that
+breaks it here was produced after admission -- a completion fill, a merged
+pass, a re-encode -- and the write is refused. A writer writes what `storable`
+returns, never the cells it was handed.
 
 `AssociationCodec` encodes a batch under one component's plan, in the one
 order the planes allow: `storable`, then z, then EAF against each cell's
@@ -21,14 +22,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any, Final, NamedTuple
+from dataclasses import dataclass, replace
+from typing import Any, NamedTuple
 
 import numpy as np
 
 from opengwasdb.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
+    SE_FLOAT16_MAX,
     EafExceptionBuilder,
     PositionSource,
     SeExceptionBuilder,
@@ -39,8 +41,10 @@ from opengwasdb.encoding.codec import (
     positions_pairs,
     positions_row_band,
     require_parallel,
+    se_above_bound,
 )
 from opengwasdb.encoding.plan import StoreEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.store.arrays import SE_COEFFICIENTS
 
 log = logging.getLogger(__name__)
@@ -52,16 +56,12 @@ __all__ = [
     "Decoded",
     "Encoded",
     "Placement",
+    "PhenotypeSd",
     "Storable",
     "log_se_out_of_range",
     "require_parallel",
     "storable",
 ]
-
-#: The largest SE a `float16` plane holds (65,504). A larger one is rounded to
-#: 65,504 below 65,520 and stored as `+inf` from there; either way it is still an
-#: association (spec §15, issue #337).
-SE_FLOAT16_MAX: Final = float(np.finfo(np.float16).max)
 
 #: Cells `storable` checks at a time, so a Dense band costs window-sized masks.
 _WINDOW = 1 << 22
@@ -101,50 +101,106 @@ class Storable:
     frequency and no imputed flag. A writer of association rows (a CSR, a
     spill) keeps the rows `stored` names, with `cells`' values, and a writer
     that holds frequencies apart from z and SE drops them where `stored` is
-    False. Today every cell is stored, unchanged.
+    False. An association is not stored when its SE exceeds `SE_FLOAT16_MAX`
+    (issue #338); every other cell is stored, unchanged.
     """
 
     cells: CellValues
     stored: np.ndarray
-    #: Per Analysis, how many SEs exceed `SE_FLOAT16_MAX`, `+inf` included.
+    #: Per Analysis, how many associations were not stored because their SE
+    #: exceeds `SE_FLOAT16_MAX`, `+inf` included: the cells `stored` leaves out.
     se_out_of_range: np.ndarray
+    #: Per Analysis, how many of those were flagged imputed: a completion's
+    #: fills, where the rest are cells it carried from its source.
+    imputed_out_of_range: np.ndarray
 
 
 def storable(
-    cells: CellValues, analyses: np.ndarray | int, n_analyses: int, *, where: str
+    cells: CellValues, analyses: np.ndarray | int, n_analyses: int, *, where: str,
+    phenotype_sd: PhenotypeSd,
 ) -> Storable:
     """What a Store holds of `cells`, whose Analysis indices are `analyses`.
 
     `analyses` broadcasts against the cells' shape: one Analysis's index for a
     column, one per cell for a cell list, one per column for a row band.
-    `where` names the writer, for the refusal. Pure and idempotent: the plan
-    plays no part, so a writer calls it before the SE plan exists.
+    `where` names the writer, for the refusal. Pure: the plan plays no part, so
+    a writer calls it before the SE plan exists.
+
+    The cells returned hold each SE divided by its Analysis's `phenotype_sd`,
+    the one place a Store's SEs are standardised (ADR 0084): idempotent only
+    under `PhenotypeSd.APPLIED`. Everything below judges the divided SE.
+
+    An association whose SE exceeds `SE_FLOAT16_MAX` (65,504), `+inf` included,
+    is not stored: its z, SE and frequency become NaN, its imputed flag 0, and
+    `stored` is False there (issue #338, ADR 0068). Such an SE is almost
+    certainly an error in its source, and no plane holds it as itself: a
+    `float16` one would round it to 65,504 or `+inf` beside a finite z. The
+    batch handed over is not edited; the cells returned are copies when any
+    association is left out.
 
     Raises `opengwasdb.admission.NotAdmitted` when a cell is one Admission
     would not admit, by Admission's own check (`require_admitted`): one of z and
     SE missing, an infinite z, an SE not positive, an imputed flag that is not
     0/1 or sits on a missing cell. An SE of `+inf` is not refused: it is what a
-    `float16` plane holds for an SE of 65,520 or more. It raises `NotAdmitted`
+    `float16` plane written before format 0.2.3 holds for an SE of 65,520 or
+    more, so it is left out like any SE above the bound. It raises `NotAdmitted`
     too for a missing z or SE whose NaN is not the canonical marker (spec §15,
     ADR 0070), judged in the dtype the writer hands it: a `float16` plane would
     store that NaN as itself.
     """
-    # Imported here: Admission's package imports the association readers, whose
-    # Ragged adapter imports the writer that imports this module, and importing
-    # any module of either package runs its `__init__` first.
+    # Imported here: Admission's package imports the association readers, whose Ragged
+    # adapter imports the writer that imports this module (an import cycle).
     from opengwasdb.admission.cells import require_admitted
 
-    z, se, imputed = _parallel(cells, where)
+    z, handed_se, imputed = _parallel(cells, where)
     owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), z.shape)
+    se = phenotype_sd.standardised(handed_se, owner, n_analyses)
+    if se is not handed_se:
+        cells = replace(cells, se=se)
     over = np.zeros(n_analyses, dtype=np.int64)
+    over_imputed = np.zeros(n_analyses, dtype=np.int64)
+    stored = np.ones(z.shape, dtype=bool)
     for window in _windows(z.shape):
-        z_w, se_w = z[window], se[window]
         at = _where(where, window, z.shape)
         imputed_w = None if imputed is None else imputed[window]
-        require_admitted(z_w, se_w, imputed=imputed_w, where=at, narrowed_se=True)
-        _refuse_odd_markers(z_w, se_w, where=at)
-        over += _out_of_range(se_w, owner[window], n_analyses)
-    return Storable(cells=cells, stored=np.ones(z.shape, dtype=bool), se_out_of_range=over)
+        require_admitted(z[window], se[window], imputed=imputed_w, where=at, narrowed_se=True)
+        # The marker is judged as handed over: a divide could change its dtype.
+        _refuse_odd_markers(z[window], handed_se[window], where=at)
+        out = _out_of_range(se[window])
+        if out.any():
+            stored[window][out] = False
+            over += _per_analysis(owner[window][out], n_analyses)
+            over_imputed += _flagged_out(out, imputed_w, owner[window], n_analyses)
+    kept = cells if stored.all() else _left_out(cells, ~stored)
+    return Storable(
+        cells=kept, stored=stored, se_out_of_range=over, imputed_out_of_range=over_imputed
+    )
+
+
+def _flagged_out(
+    out: np.ndarray, imputed: np.ndarray | None, owner: np.ndarray, n_analyses: int
+) -> np.ndarray:
+    """Per Analysis, how many of the cells left out at `out` are flagged imputed."""
+    if imputed is None:
+        return np.zeros(n_analyses, dtype=np.int64)
+    return _per_analysis(owner[out & (np.asarray(imputed) == 1)], n_analyses)
+
+
+def _left_out(cells: CellValues, out: np.ndarray) -> CellValues:
+    """`cells`, copied, with the associations at `out` missing: z, SE and
+    frequency NaN (the canonical marker, spec §15), the imputed flag 0."""
+
+    def blanked(values: Any, fill: float) -> np.ndarray:
+        copy = np.array(values, copy=True)
+        copy[out] = fill
+        return copy
+
+    return CellValues(
+        blanked(cells.z, np.nan),
+        blanked(cells.se, np.nan),
+        None if cells.eaf is None else blanked(cells.eaf, np.nan),
+        None if cells.imputed is None else blanked(cells.imputed, 0),
+    )
 
 
 def _refuse_odd_markers(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
@@ -319,6 +375,11 @@ class AssociationCodec:
     ) -> Encoded:
         """`storable`, then each plane's codes, in the order the planes allow.
 
+        `cells` are what a Store holds -- a builder's grid `storable` has
+        already standardised, or a completion's cells read from its source
+        Store and its fills -- so their SEs are in SD Units already and are
+        judged with `PhenotypeSd.APPLIED`: encoding never standardises (ADR 0084).
+
         `carried` marks cells decoded from another Store, whose SE must decode
         to exactly the value given: Ragged completion's observed cells (issue
         #301). Under a residual SE plan a carried cell whose code would decode
@@ -333,7 +394,9 @@ class AssociationCodec:
         per cell of the batch (issue #392).
         """
         require_parallel((*_cell_arrays(cells), *at.per_cell, ("carried", carried)), where=where)
-        kept = storable(cells, at.analyses, at.n_analyses, where=where)
+        kept = storable(
+            cells, at.analyses, at.n_analyses, where=where, phenotype_sd=PhenotypeSd.APPLIED
+        )
         values = kept.cells
         z_overflow = ZOverflowBuilder()
         z = self._codec.encode_z(values.z, positions=at.positions, overflow=z_overflow)
@@ -467,13 +530,13 @@ def _float32_or_none(values: np.ndarray | None) -> np.ndarray | None:
 def log_se_out_of_range(
     counts: np.ndarray, analysis_ids: Sequence[str] | None = None, *, where: str
 ) -> None:
-    """Log, as one warning, the SEs above `SE_FLOAT16_MAX`, by Analysis when
-    `analysis_ids` names them (`where` names the one Analysis otherwise).
+    """Log, as one warning, the associations left out for an SE above
+    `SE_FLOAT16_MAX`, by Analysis when `analysis_ids` names them (`where` names
+    the one Analysis otherwise).
 
-    A `float16` plane cannot hold such an SE as itself: it rounds one below
-    65,520 to 65,504 and stores the rest as `+inf`, and either stays an
-    association. The count is the one issue #338 makes each Store record.
-    Nothing is logged for none.
+    The count is the one each Store records as `n_missing_se_out_of_range`
+    (issue #338, spec §7a); the warning says, while the build runs, which
+    Analyses lost associations to it. Nothing is logged for none.
     """
     counts = np.asarray(counts, dtype=np.int64)
     found = np.flatnonzero(counts)
@@ -485,7 +548,8 @@ def log_se_out_of_range(
         else ": " + ", ".join(f"{analysis_ids[i]}: {int(counts[i]):,}" for i in found.tolist())
     )
     log.warning(
-        "%s: %s SE value(s) above %s, more than a float16 plane holds (spec §15)%s",
+        "%s: %s association(s) not stored: an SE above %s, more than a float16 plane "
+        "holds (spec §15, issue #338)%s",
         where,
         f"{int(counts.sum()):,}",
         f"{SE_FLOAT16_MAX:,.0f}",
@@ -510,11 +574,13 @@ def _parallel(cells: CellValues, where: str) -> tuple[np.ndarray, np.ndarray, np
     return z, se, imputed
 
 
-def _out_of_range(se: np.ndarray, owner: np.ndarray, n_analyses: int) -> np.ndarray:
-    """Per Analysis, the SEs above `SE_FLOAT16_MAX` among these cells."""
-    with np.errstate(invalid="ignore"):
-        over = se > SE_FLOAT16_MAX
-    return np.bincount(owner[over], minlength=n_analyses).astype(np.int64)
+def _out_of_range(se: np.ndarray) -> np.ndarray:
+    """Which of these cells hold an SE above `SE_FLOAT16_MAX`; a missing one does not."""
+    return se_above_bound(se)
+
+
+def _per_analysis(owners: np.ndarray, n_analyses: int) -> np.ndarray:
+    return np.bincount(owners, minlength=n_analyses).astype(np.int64)
 
 
 def _windows(shape: tuple[int, ...]) -> list[tuple[slice, ...]]:

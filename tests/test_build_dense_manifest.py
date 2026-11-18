@@ -65,6 +65,21 @@ def test_an_sd_rescaling_method_divides_the_analysis_standard_errors(tmp_path: P
     assert se[1] == pytest.approx(0.2, rel=1e-3)
 
 
+def test_a_non_finite_original_sd_is_refused_naming_the_analysis(tmp_path: Path) -> None:
+    """Issue #366: `inf` is no divisor -- it would store every standard error as
+    0 and say nothing -- so a Dense build refuses it at manifest read, as every
+    other builder reading the same manifest now does."""
+    row = {
+        **_analysis(tmp_path, "infinite"),
+        "original_sd_method": "source_provided",
+        "original_sd": "inf",
+    }
+
+    with pytest.raises(ValueError, match="infinite") as raised:
+        _build(tmp_path, row)
+    assert "original_sd" in str(raised.value)
+
+
 def test_a_row_in_another_assembly_is_refused_because_build_dense_does_not_lift(
     tmp_path: Path,
 ) -> None:
