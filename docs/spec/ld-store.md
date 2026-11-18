@@ -1366,8 +1366,17 @@ holds every pair it should and no other.
 Partner Rows, so a 0.1.0 store with no `partners/` passes these ten with nothing to judge: every
 one of them says so and moves on. A 0.2.0 store has the component, so a missing
 `partners/<chrom>/` is a finding of `partners.files`, and a rule that needs its frames reports
-that it cannot be checked — neither passes it. A 0.1.0 store that carries a `partners/` anyway is
-judged by them, as an older store that carries a later key is held to its type (§7).
+that it cannot be checked — neither passes it.
+
+A 0.1.0 store that carries a `partners/` anyway is **unclaimed**, and these ten judge nothing in
+it. The component is not the store's until its provenance says so: `format_version` 0.2.0 and
+`t_partner` are the claim, and a derivation writes them in one metadata write, after the rules
+pass (partner-rows §6.2; ogld#69). So the residue of a run killed after `partners/` became a node
+and before that write is a store that has no Partner Rows — one that validates as the 0.1.0 one it
+was, and one a reader refuses, since a reader keys on the recorded `t_partner` and never on a
+group being there (§10, §13). Judging the residue instead would fail a store no one can read, for
+keys it has no use for; `ogld derive-partners` completes it (the rules accept it) or removes it and
+derives it again (they do not).
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.

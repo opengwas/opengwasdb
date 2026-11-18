@@ -246,26 +246,39 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   `t_far`: a larger one is refused naming both. A store whose provenance already records Partner
   Rows at another threshold is refused too, naming both, because a component at a second floor
   would hold two.
-- Reads `near/<c>/r` with the direct decoder (ADR 0009) in blocks of rows, and `far/<c>/` whole
-  (101,886 pairs on EUR chr22). It feeds both to §6.1's emitter, so the `frames` and `frames_idx`
-  chunk files are a build's, byte for byte, at any `--threads` and `--processes`.
+- Reads `near/<c>/r` with the direct decoder (ADR 0009) in blocks of rows, and the Far Pairs as
+  their `indptr` whole (n_c + 1 entries) and their `partner` and `r` arrays one block of rows'
+  worth at a time (101,886 pairs on EUR chr22). It feeds both to §6.1's emitter, so the `frames`
+  and `frames_idx` chunk files are a build's, byte for byte, at any `--threads` and
+  `--processes`.
 - Writes `partners/<c>/` into a temporary directory inside `partners/`, then renames it into place
-  once every frame has been written and checked (§5.1). `partners/` itself stays a plain directory
-  until the last step: a node of the store's hierarchy is one `partners.files` and the other nine
-  rules judge, and one a reader trusts, so it is made a node only when the component is whole. So
-  a run killed part-way leaves the store the `0.1.0` one it was, and so does a run that derives
-  some chromosomes and not others. A rerun removes the stale `partners/.<c>.tmp-*` a kill left,
-  skips the chromosomes already published, and completes (§5.1, §6.3).
-- The provenance gains `format_version` `0.2.0` and the four keys only after every chromosome of
-  the Variant Set is in place and §10's ten rules pass; `counts.partner_entries` is every
-  chromosome's own `entries`. Until then a store with no provenance entry for the Partner Rows
-  does not have them, whatever directories exist. `--chromosomes` names the ones to derive — all
-  the store lacks by default — and one the store does not have is refused.
+  once every frame has been written and checked (§5.1). A run killed part-way therefore leaves
+  every chromosome whole or absent, plus at most a `partners/.<c>.tmp-*` a rerun removes; a run
+  that derives some chromosomes and not others leaves the others absent (§6.3).
+- **The claim is one write, and it is the provenance's.** Only once every chromosome of the Variant
+  Set is in place and §10's ten rules pass does a run make `partners/` a node of the store's
+  hierarchy and write `format_version` `0.2.0` with the four keys, `counts.partner_entries` being
+  every chromosome's own `entries`. That second write is the claim — one replaced metadata
+  document — so a `partners/` no provenance names is **unclaimed**: a store that does not have the
+  Partner Rows, whatever directories exist. Validation judges nothing in it and a reader refuses
+  it, since both key on the recorded `format_version` and `t_partner`, never on a group being there
+  (`ld-store.md` §12, §13). A rerun of an unclaimed store settles it: the ten rules judge the
+  residue, and one they accept is claimed while one they refuse is removed and derived again —
+  never trusted, and never derived again for nothing.
+- Writes only inside the store, and never through a symbolic link: before anything is written, a
+  run refuses a path it owns — the root `zarr.json`, `partners/`, or any entry of `partners/` —
+  that resolves outside the store's own directory, naming both. A store's read-only components
+  may be links, which is how the scratch stores #71 and #73 read are laid out.
+- `--chromosomes` names the ones to derive — all the store lacks by default — and one the store
+  does not have is refused; one it already has is skipped.
 - Drops `index/` afterwards, as its own step and only on request (`--drop-index`), so a derived
-  store can be checked against its index before the index is removed. It removes the arrays and
-  `counts.index_entries`, only from a store whose Partner Rows pass §10's rules, and never in the
-  same invocation as a derivation that did not become whole. Until #72 removes the Proxy Index's
-  six rules, a store whose index is dropped here fails them, which is what that removal is for.
+  store can be checked against its index before the index is removed. It removes the arrays, then
+  `counts.index_entries`, and only from a store whose Partner Rows pass §10's rules, and never in
+  the same invocation as a derivation that did not become whole. A removal that fails raises,
+  naming the path, and the count stays: the provenance never claims a removal that did not happen.
+  An `index/` that is a symbolic link is unlinked and the directory it names is left whole, which
+  is what a scratch store over a published one needs. Until #72 removes the Proxy Index's six
+  rules, a store whose index is dropped here fails them, which is what that removal is for.
 
 ### 6.3 Parallelising the build and the derivation
 
@@ -285,11 +298,14 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   the rule on all of them was 37 s of the chromosome's 41 s of selection, the rest being the read:
   the whole chromosome, frames included, is **29.4 s and 640 MiB peak RSS** at eight compressor
   threads (16 cores' box, `taskset -c 0-7`, load 3.4), against 86.1 s and 790 MiB before. It
-  writes 7,477 frames, 153,561,655 bytes and 117,392,902 entries: #65's prototype counted
-  117,189,130 symmetric entries for the same chromosome, and the difference is exactly chr22's
-  101,886 Far Pairs in both directions, which §3 requires and that prototype did not write.
+  writes 7,477 frames, 153,561,655 bytes and **117,392,902 entries** — which is #65's own chr22
+  output, to the count and the byte: `derive_chr22.json` at `912a9fa` records that many entries at
+  G = 16, and its two chunk-file SHA-256s are this run's. The 117,189,130 that §11's `sym_entries`
+  records for the chromosome is the Near Band's directed count, twice its 58,594,565 kept pairs,
+  and the difference is exactly the 101,886 Far Pairs in both directions.
 - **The ten rules cost more than the derivation.** They read every frame and, through
-  `partners.near` and `partners.far`, the whole Near Band and Far Pairs again, on `--threads`.
+  `partners.near` and `partners.far`, the whole Near Band and Far Pairs again, on `--threads`:
+  on EUR's genome, at eight threads, 25 min 11 s against the 12 min 49 s the derivation took.
 - **Measured cost** (#65's prototype, and #69's derivation). The prototype took 47.9 s for EUR
   chr22 at all four G, with the selection and the sort shared, and 1,179.3 s of group wall time
   for the other 21 chromosomes at two G on two processes; it sorts a whole chromosome, which the
