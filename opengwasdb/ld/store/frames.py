@@ -38,13 +38,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 from zarr.abc.store import RangeByteRequest
 from zarr.core.buffer import default_buffer_prototype
+from zarr.core.sync import sync
 from zarr.storage import LocalStore
 
 from ogld.format import Codes, InputError, REncoding
@@ -1148,14 +1149,19 @@ class FramesGroup:
 
 def _ranged(array: zarr.Array[Any], span: slice) -> bytes:
     """Bytes `span` of a one-chunk array's chunk file, read through the array's own store path and
-    chunk key, as a reader's range request does (partner-rows §7)."""
-    store = cast(LocalStore, array.store_path.store)
+    chunk key, as a reader's range request does (partner-rows §7).
+
+    A local store's own synchronous read is taken as it is; any other store — an HTTP one, which
+    has no synchronous read of its own — is read through zarr's async API, one Range request.
+    """
+    store = array.store_path.store
     key = array.store_path.path + "/" + array.metadata.encode_chunk_key((0,))
-    fetched = store.get_sync(
-        key,
-        prototype=default_buffer_prototype(),
-        byte_range=RangeByteRequest(span.start, span.stop),
-    )
+    request = RangeByteRequest(span.start, span.stop)
+    prototype = default_buffer_prototype()
+    if isinstance(store, LocalStore):
+        fetched = store.get_sync(key, prototype=prototype, byte_range=request)
+    else:
+        fetched = sync(store.get(key, prototype=prototype, byte_range=request))
     if fetched is None:
         raise ValueError(f"{key} is not there: a frames chunk file a store lost")
     return bytes(fetched.to_bytes())
