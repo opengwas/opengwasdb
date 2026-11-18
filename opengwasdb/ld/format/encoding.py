@@ -30,8 +30,8 @@ T_FAR_Q: Final = 20.84
 T_FAR_MIN: Final = 0.001
 
 #: The builder's distances (ADR 0001): the Near Band is complete up to NEAR_BP, and the
-#: Proxy Index reaches FAR_BP. A store records the distances it measured (spec §7) and
-#: readers use those, never these.
+#: Far Pairs and Partner Rows reach FAR_BP. A store records the distances it measured (spec §7)
+#: and readers use those, never these.
 NEAR_BP: Final = 3_000_000
 FAR_BP: Final = 10_000_000
 

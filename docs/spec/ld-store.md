@@ -1171,8 +1171,11 @@ index and then for the chunks.
 ## 11. The upstream half: the Proxy Index, and its removal
 
 **The Proxy Index is gone** (#72; ADR 0011, D1). The Partner Rows (§5) hold every entry it held,
-`clump` and `proxies` read them, and no array of `index/` is written or read. This section keeps
-the record: the measurements that decided the component, **settled** by the owner on 7 November
+`clump` and `proxies` read them, a build writes no array of `index/`, and no query or validation
+reads one. One exception is kept deliberately: `derive_far_pairs` (§12, `scripts/derive_far_pairs.py`)
+reads a 0.1.0 store's index to derive its Far Pairs, for a store built before ADR 0007 whose Far
+Pairs are missing — `realdata/EUR-k0.store` is one, and #73 derives it before its Partner Rows. This
+section keeps the record: the measurements that decided the component, **settled** by the owner on 7 November
 2026 (epic #1, comment of that date) as a sparse symmetric Proxy Index; the merge of the Far Pairs
 into the index that the owner made on 8 November 2026; its reversal on 12 November 2026, on
 ogld#8's measurements, which put the Far Pairs back beside the index (ADR 0007); and the reason it
@@ -1340,9 +1343,10 @@ not asked to — and for a **0.1.0** store, whose format describes the component
 with it in #72. Such a store validates exactly as one without it, and a reader answers exactly as
 it does (`tests/test_far_pairs.py`, `tests/test_proxy_index_removed.py`); a 0.1.0 store with every
 index chunk lost still passes all 30 and still answers `matrix` and `region`. This is not silent
-damage: no code this package ships reads an index, so there is nothing to get wrong, and
-`ogld derive-partners --drop-index` removes a 0.2.0 store's leftover with its `counts.index_entries`
-(§7).
+damage: no query and no rule this package ships reads an index, so a reader or a validation has
+nothing to get wrong. Two paths do read one, both deliberately: `derive_far_pairs` (§11), for a
+store built before ADR 0007 whose Far Pairs are missing, and `ogld derive-partners --drop-index`,
+which removes a 0.2.0 store's leftover with its `counts.index_entries` (§7).
 
 **The Partner Rows' rules (format 0.2.0).** The ten rows after `far.threshold` are the component's,
 and `docs/spec/partner-rows.md` §10 is their reasons. They read the frames of
@@ -1497,9 +1501,10 @@ is recorded: the refusal table and the component set changed, and a reader that 
 for a 0.1.0 one would answer a request 0.2.0 refuses.
 
 **Version `0.1.0`** is an unreleased draft: no LD Store in it has been published, so the owner's
-decisions of 7 November 2026, the Proxy Index among them (a 0.1.0 store holds one; no rule
-validates it and no read here opens it, and this package refuses its `clump` and `proxies` rather
-than answer from it, §12), of 10 November 2026, the per-store
+decisions of 7 November 2026, the Proxy Index among them (a 0.1.0 store may hold one; no rule
+validates it and no query opens it, and this package refuses the store's `clump` and `proxies`
+rather than answer from it, §12; only `derive_far_pairs` still reads one, for a store whose Far
+Pairs are missing, §11), of 10 November 2026, the per-store
 encoding (ADR 0004), of 12 November 2026, the Far Pairs beside the index (ADR 0007), and of
 15 November 2026, the ALID index beside the variant table (ADR 0010), are part of `0.1.0` rather
 than a new version. The Partner Rows are the first change big enough to be its own version (§5,

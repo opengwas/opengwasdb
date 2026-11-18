@@ -255,10 +255,9 @@ def _endian(codec: Any) -> Literal["<", ">"]:
 
 def _byte_runs(
     entries: npt.NDArray[np.uint64],
-    *,
-    gap: int = 0,
 ) -> Iterator[tuple[int, int, _ChunkRanges]]:
-    """Coalesce physical ranges, reading intervening bytes only within the caller's gap."""
+    """Coalesce physically adjacent ranges: one range per run of neighbouring chunks, each
+    yielding the bytes between its chunks and no others."""
     absent = np.iinfo(np.uint64).max
     chunks = sorted(
         ((k, int(a), int(b)) for k, (a, b) in enumerate(entries) if (a, b) != (absent, absent)),
@@ -267,7 +266,7 @@ def _byte_runs(
     run: _ChunkRanges = []
     lo, hi = 0, 0
     for k, start, length in chunks:
-        if run and _split_range(lo, hi, start, length, gap):
+        if run and _split_range(hi, start):
             yield lo, hi, run
             run = []
         if not run:
@@ -278,5 +277,7 @@ def _byte_runs(
         yield lo, hi, run
 
 
-def _split_range(lo: int, hi: int, start: int, length: int, gap: int) -> bool:
-    return start > hi + gap or bool(gap and start + length - lo > 1 << 24)
+def _split_range(hi: int, start: int) -> bool:
+    """Whether a run ending at `hi` must be cut before a chunk at `start`: a run is neighbouring
+    chunks only, so bytes between two of them are not read to join them."""
+    return start > hi
