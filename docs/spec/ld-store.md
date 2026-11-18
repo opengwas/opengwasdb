@@ -1,7 +1,8 @@
 # LD Store Format Specification
 
 Status: draft
-Format version described: `0.1.0`
+Format version described: `0.1.0`, the code at this commit; `0.2.0` is specified in §1, §3, §5, §7,
+§9, §10, §12 and §13, and lands with the writer (#67).
 
 This document defines a valid **LD Store**: the arrays, their dtypes and Zarr layout, how r is
 quantised, the provenance an LD Store carries, what a reader answers for a pair, what the four
@@ -9,8 +10,10 @@ queries return, and when a request is refused. The decisions behind it are in AD
 (`docs/adr/0001-near-band-and-thresholded-far-pairs.md`), including its clarification of
 7 November 2026, each store's encoding of r in ADR 0004
 (`docs/adr/0004-per-store-encoding.md`), the Far Pairs beside the Proxy Index in ADR 0007
-(`docs/adr/0007-far-pairs-beside-the-proxy-index.md`), and the ALID search index in ADR 0010
-(`docs/adr/0010-alid-search-index.md`); the build inputs are in `docs/spec/build-inputs.md` (ADR
+(`docs/adr/0007-far-pairs-beside-the-proxy-index.md`), the ALID search index in ADR 0010
+(`docs/adr/0010-alid-search-index.md`), and the Partner Rows in ADR 0011
+(`docs/adr/0011-partner-rows-replace-the-proxy-index.md`) with their design in
+`docs/spec/partner-rows.md`; the build inputs are in `docs/spec/build-inputs.md` (ADR
 0002); the terms are in
 `CONTEXT.md`. **ALID**, its **A1** and **Reference Assembly** are the engine's
 (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here. The engine's glossary
@@ -61,24 +64,41 @@ per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
 ├── near/<chrom>/            the Near Band of one chromosome (§4)
 │   ├── indptr               int64, rows + 1
 │   └── r                    int16, every row's codes, row after row
-├── index/<chrom>/           the Proxy Index of one chromosome (§5)
+├── index/<chrom>/           the Proxy Index of one chromosome (§5; removed by #72)
 │   ├── indptr               int64, rows + 1
 │   ├── partner              int32, chromosome-local row of the partner, either side
 │   └── r                    int16
-└── far/<chrom>/             the Far Pairs of one chromosome (§5)
-    ├── indptr               int64, rows + 1
-    ├── partner              int32, chromosome-local row of the later variant
-    └── r                    int16
+├── far/<chrom>/             the Far Pairs of one chromosome (§5)
+│   ├── indptr               int64, rows + 1
+│   ├── partner              int32, chromosome-local row of the later variant
+│   └── r                    int16
+└── partners/<chrom>/        the Partner Rows of one chromosome (§5; 0.2.0)
+    ├── frames               uint8, one chunk: the chromosome's zstd frames, back to back
+    └── frames_idx           uint64, F + 1: the byte offsets of those frames
 ```
 
 `<chrom>` is the engine's canonical chromosome label (`1`–`22`, `X`, `Y`, `MT`, no `chr` prefix).
 The format allows every one of them. For now a builder builds autosomes only and refuses a record
 on X, Y, a PAR or MT, because the diploid dosage model has no rule for a male's hemizygous
 genotypes (ADR 0002, decision 9). Each chromosome of the Variant Set has its own `near/<chrom>`,
-`index/<chrom>` and `far/<chrom>` groups. No component crosses a chromosome, so per-chromosome
+`index/<chrom>`, `far/<chrom>` and, from 0.2.0, `partners/<chrom>` groups. No component crosses a
+chromosome, so per-chromosome
 arrays lose nothing. They also let a builder
 write chromosomes in parallel: a Zarr shard is written whole, and no shard can then span two
 chromosomes.
+
+**The Partner Rows** (format 0.2.0; ADR 0011, `docs/spec/partner-rows.md`) are
+`partners/<chrom>/`, a Zarr v3 group per chromosome. It holds that chromosome's Partner Rows:
+for each variant, every partner within `far_bp` on either side whose Stored r reaches the Partner
+Floor within `near_bp` and the far code floor beyond it, in both variants' rows with the same code
+(§3 of `docs/spec/partner-rows.md`). The group is a node in this one hierarchy, so a reader that
+lists the store sees it, and it has two arrays of one chunk each: `frames`, `uint8` with the
+`bytes` codec alone and no compressor, whose chunk file is the chromosome's zstd frames back to
+back, and `frames_idx`, `uint64`, their F + 1 byte offsets. The group's attributes are what a
+manifest beside them would carry: the rows, the rows to a frame, the frame count, the
+entry count, the chunk files' sizes and SHA-256s, and the zstd level. A reader resolves the chunk
+file's path from the array's metadata, never by assuming one. `clump` and `proxies` read the
+Partner Rows from #71, and the Proxy Index goes with them (#72). A 0.1.0 store has no `partners/`.
 
 An LD Store MUST NOT contain individual-level data (ADR 0001, decision 5): no genotypes, no sample
 identifiers, no per-sample values of any kind. A reader ignores any array or group it does not know.
@@ -218,6 +238,11 @@ float64, at the store's scale s. A pair is in the Proxy Index exactly when it is
 and |code| ≥ `far_code_floor`, so a pair more than `near_bp` apart is a **Far Pair** exactly then.
 It is recorded in provenance, and validation recomputes it at the recorded scale.
 
+**The Partner Floor** is the same rule at the Partner Threshold: `partner_code_floor`, the
+smallest integer c ≥ 0 with (c / s)² ≥ t_partner in float64, at the store's scale s, 52 at × 511
+for t_partner = 0.01. From 0.2.0 a pair is in the Partner Rows exactly when it is within `far_bp`
+and |code| ≥ `partner_code_floor` within `near_bp` or ≥ `far_code_floor` beyond it (§5, §7).
+
 **Where a pair at exactly t_far lands.** Such a pair's code is rint(√t_far × s). It is a Far
 Pair when that reaches the floor, and reads as the Bound when it does not. In true r², the cut
 between the two is ((`far_code_floor` − ½) / s)². That cut lies within about √t_far / s of
@@ -282,10 +307,11 @@ For chromosome c with n_c rows, local rows l = 0 … n_c − 1 and positions p_l
 about 3.7×10¹⁰ (`largest_chromosome_mac20` in
 `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/s08_meta.json`).
 
-## 5. Proxy Index and Far Pairs (`index/<chrom>/`, `far/<chrom>/`)
+## 5. Proxy Index, Far Pairs and Partner Rows (`index/<chrom>/`, `far/<chrom>/`, `partners/<chrom>/`)
 
-The Proxy Index holds, for each variant, every partner within `far_bp` on either side whose Stored
-r reaches t_far (owner, 7 November 2026; §11):
+The Proxy Index (removed by #72, when the Partner Rows take its place) holds, for each variant,
+every partner within `far_bp` on either side whose Stored r reaches t_far (owner, 7 November 2026;
+§11):
 
 - Row l holds every m ≠ l on the chromosome with |p_m − p_l| ≤ `far_bp` and |code(l, m)| ≥
   `far_code_floor` (§3), in ascending m. `far_bp` is the distance the store measured: 10,000,000
@@ -325,10 +351,23 @@ At k = 0, 9.4×10⁻⁵ (EUR) to 2.3×10⁻³ (AMR) of chr22's 3–10 Mb pairs a
 1.0% (AFR) to 2.4% (AMR) of Near Band pairs reach t_far
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/upstream_alternatives_sizes_inner262144.tsv`).
 
+**The Partner Rows** (`partners/<chrom>/`; format 0.2.0, written by #67, derived by #69) hold, for
+each variant, every partner within `far_bp` on either side whose Stored r reaches the **Partner
+Floor** (§3) within `near_bp` and the far code floor beyond it, in both variants' rows with the
+same code. They are the Proxy Index's rule at t_partner instead of t_far, so they hold every index
+entry: t_partner is never above t_far, and every pair within `near_bp` at the far code floor is at
+the Partner Floor too. Rows are grouped 16 to a zstd frame, and the group, its two arrays and the
+frame bytes are `docs/spec/partner-rows.md` §5. Every code is a copy of one the store already
+holds, a Near Band code within `near_bp` or a Far Pair beyond it, in a second layout chosen so a
+lead is one positional read; `partners.near` and `partners.far` (§12) hold the copies to one code
+per pair. `clump` and `proxies` read them from #71; until then they read the Proxy Index below,
+which #72 removes.
+
 ## 6. Physical layout
 
-Every array is Zarr v3 with `sharding_indexed`. Inside a shard, each kind of array has one codec
-chain. The shard index is `bytes` then `crc32c`, at the end of the shard (zarr-python's default).
+Every array but the Partner Rows' is Zarr v3 with `sharding_indexed`. Inside a shard, each kind of
+array has one codec chain. The shard index is `bytes` then `crc32c`, at the end of the shard
+(zarr-python's default).
 
 | array kind | codecs inside the shard |
 |---|---|
@@ -373,6 +412,11 @@ but a whole key of 0 bytes is one it never holds — no ALID is empty. So a chun
 reads a whole key of NULs, which the reader refuses, naming the array, rather than a run of empty
 ALIDs; and `variants/alid_index/alid`'s fill value being anything else would let a lost chunk read
 as keys (`refused_if_lost`, §12's `envelope.fill`).
+
+The Partner Rows' two arrays are the exception to this section: each has one chunk of the whole
+array, no shard index, and `bytes` alone for `frames` (§1, `docs/spec/partner-rows.md` §5.1).
+Their chunk files' sizes and SHA-256s are the group's attributes, so `envelope.fill` and the rest
+of this section's rules apply to them only where §12's Partner Rows rules say so.
 
 **How a store is written** (ogld#17, ADR 0005). Every producer, a build or an import of a
 published r, writes through `StoreWriter`, and the store makes its arrays from the r it is given,
@@ -633,6 +677,20 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `build.peak_memory_bytes` | int | peak memory over the same span: the build's own on Linux, whose high-water mark the build resets when it starts; elsewhere the process's |
 | `build.threads` | int | threads used: the build's worker threads, which bound it, since BLAS runs one thread inside a build |
 
+**The Partner Rows' keys (format 0.2.0; written by #67, derived by #69).** Four keys join the
+table above, and `ogld.format.REQUIRED_KEYS`, in the commit that writes them, because a store with
+no Partner Rows has none of them:
+
+- `t_partner` (float): the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
+the Partner Rows. It is a required build input with no default (`docs/spec/build-inputs.md` §1),
+never above `t_far`: 0.01 for the five HGDP+1kGP stores, 0.001 for UK Biobank EUR.
+- `partner_code_floor` (int): the **Partner Floor** (§3) at the recorded scale.
+- `counts.partner_entries` (int): the entries of every `partners/<chrom>/` together, twice the
+pairs the Partner Rows hold, as each chromosome's `entries` attribute gives it.
+- `software.zstd` (string): the zstd library's version, because a frame's bytes depend on it.
+
+`counts.index_entries` leaves with the Proxy Index, in #72.
+
 `pc_diagnostic` holds `pairs` (the pair set: `source`, opengwas/opengwasdb#405's seeded
 cross-chromosome pairs; `seed`, 405; `n_pairs`, 200,000), `rate_r2_ge_0_01_unadjusted` (the share
 of those pairs with r² ≥ 0.01 at k = 0), `rate_r2_ge_0_01_adjusted` (the same share after PC
@@ -768,29 +826,43 @@ r̂² (§3).
 when r̂² ≥ r2 (§3). `clump` is the one exception, following `plink2 --clump` (owner, 10 November
 2026): it considers the pairs with d < W, and a pair reaches the threshold when r̂² > r2. The
 refusals below are the same for both. The refusals are ADR 0001's, compared with the distances the store
-recorded (§7) and its recorded t_far:
+recorded (§7) and its recorded t_far, and from 0.2.0 its recorded t_partner:
 
-| request | answer |
-|---|---|
-| r2 outside [0, 1], kb negative or not finite, or a `clump` score that is not one finite, non-negative number per ALID | refused: `invalid` |
-| W > `far_bp` | refused: `window_over_far`. Pairs more than `far_bp` apart are Not Measured |
-| `near_bp` < W ≤ `far_bp` and r2 < t_far | refused: `threshold_below_t_far`. The store holds only the Bound for the pairs beyond `near_bp` that are not Far Pairs, and that does not decide r̂² ≥ r2 |
-| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | answered from the Near Band and the Proxy Index. Every pair beyond `near_bp` left out has r̂² < t_far ≤ r2, so none of them can reach r2 |
-| W ≤ `near_bp` | answered from the Near Band alone, at any r2 |
+| request | format | answer |
+|---|---|---|
+| r2 outside [0, 1], kb negative or not finite, or a `clump` score that is not one finite, non-negative number per ALID | both | refused: `invalid` |
+| W > `far_bp` | both | refused: `window_over_far`. Pairs more than `far_bp` apart are Not Measured |
+| `near_bp` < W ≤ `far_bp` and r2 < t_far | both | refused: `threshold_below_t_far`. The store holds only the Bound for the pairs beyond `near_bp` that are not Far Pairs, and that does not decide r̂² ≥ r2 |
+| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | 0.1.0 | answered from the Near Band and the Proxy Index |
+| `near_bp` < W ≤ `far_bp` and r2 ≥ t_far | 0.2.0 | answered from the Partner Rows. Every pair beyond `near_bp` left out is not a Far Pair, so r̂² < t_far ≤ r2 |
+| W ≤ `near_bp`, any r2 | 0.1.0 | answered from the Near Band alone |
+| W ≤ `near_bp` and r2 < t_partner | 0.2.0 | refused: `threshold_below_t_partner`. The Partner Rows hold only the pairs at or above the Partner Floor, and absence there decides nothing below it |
+| W ≤ `near_bp` and r2 ≥ t_partner | 0.2.0 | answered from the Partner Rows: every pair that could reach r2 is at or above its distance's floor, so it is in the row |
+
+**Why the answered rows are exact.** `clump` joins at r̂² > r2 and `proxies` keeps r̂² ≥ r2, so a
+request's r2 is at least t_partner within `near_bp` and at least t_far beyond it. Any pair that
+could reach r2 therefore has |code| at or above its distance's floor and is in the row it reads. A
+pair absent from that row has r̂² below a bound no higher than r2 (`docs/spec/partner-rows.md` §4),
+so it cannot reach r2. On 0.1.0's rows the Proxy Index and the Near Band give the same argument at
+t_far. It is a breaking change on HGDP+1kGP: an r² 0.001 clump with a 3 Mb window, answered today,
+is refused from 0.2.0, where about 90% of the pairs such a threshold passes are sampling noise.
 
 - r2 = t_far exactly is answered: the store keeps r̂² ≥ t_far, and the request asks for
-  r̂² ≥ t_far.
-- A request is compared with the recorded `t_far`, never with a rounded display of it.
+  r̂² ≥ t_far. r2 = t_partner exactly is answered from 0.2.0, for the same reason.
+- A request is compared with the recorded `t_far`, and from 0.2.0 its recorded `t_partner`, never
+  with a rounded display of either.
 - A Refusal MUST name its reason. A request MUST NOT be answered approximately instead. A region
   wider than `far_bp` is refused as `region_over_far`, and a negative radius as `invalid`.
 - On UK Biobank EUR (t_far = 0.001) only W > 10 Mb is refused at r2 ≥ 0.001, so MR's r² 0.001
-  with a 10 Mb window is answered there and nowhere else. On HGDP+1kGP AMR (t_far 0.0631515 at
-  k = 10, §3), r2 = 0.05 with a 5 Mb window is refused.
+  with a 10 Mb window is answered there and nowhere else; its t_partner is 0.001 too, so nothing
+  within `near_bp` is refused either. On HGDP+1kGP AMR (t_far 0.0631515 at k = 10, §3), r2 = 0.05
+  with a 5 Mb window is refused.
 - **`proxies`.** The defaults, r2 = 0.8 and a 10,000 kb window, are answered on every store with
   `far_bp` = 10 Mb, because every t_far is below 0.8. A variant is never its own proxy. Rows are
   grouped by query, in request order, then by r̂² descending, distance ascending and proxy ALID. At
   r2 ≥ t_far a variant's proxies are its Proxy Index row; below t_far, which is answered only
-  within `near_bp`, they are its Near Band row and column (§10).
+  within `near_bp`, they are its Near Band row and column (§10). From 0.2.0 every answered r2 is
+  one Partner Rows frame read (§10, #71), and the Near Band's row and column go (#72).
 - **`region`.** Its chromosome passes through the engine's label normalisation
   (`ogld.identity.normalise_chromosome`), so `chr22` reads as `22`. Its variants are those with
   centre − radius ≤ position ≤ centre + radius, in the Variant Set's order.
@@ -827,15 +899,27 @@ and the reads map onto the arrays as follows.
 | partners at r2 ≥ t_far | `partners` | `proxies`; `clump` | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No chunk of `near/<c>/r` |
 | partners below t_far, W ≤ `near_bp` | `partners` | `proxies` | each variant's Near Band row up to W, and its column within W: one element in each row of the preceding W (§11) |
 | partners below t_far among a list, W ≤ `near_bp` | `partners`, `among` | `clump` | one element of `near/<c>/r` per pair of a variant and a listed variant within W, and nothing else |
+| a variant's Partner Rows row | `partner_row` | `proxies`; `clump` from #71 | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. No `near/` or `index/` array and no shard index. Format 0.2.0, #70 |
 
 So the stored part a query reads depends on its threshold, and the reader chooses it; no query
-compares r2 with t_far itself:
+compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
 
 | query | r2 ≥ t_far | r2 < t_far (answered only for W ≤ `near_bp`, §9) |
 |---|---|---|
 | `matrix`, `region` | no threshold: the Near Band within `near_bp`, the Far Pairs beyond it | |
 | `proxies` | the Proxy Index row of each query variant | the Near Band row and column of each query variant, within W |
 | `clump` | the Proxy Index row of each lead, among the hits still unclumped | one Near Band element for each lead and each hit still unclumped within W |
+
+**From 0.2.0** (#70, #71), a variant's partners at every answered threshold are one frame read.
+`partner_row` finds frame ⌊l / G⌋, reads its byte range from the chromosome's `frames` chunk file,
+verifies the zstd checksum, checks k and the payload length, decodes it and keeps it in a
+byte-bounded LRU of decoded frames. That cache is per reader and separate from the Near Band chunk
+cache, which keeps serving `matrix` and `region`: neighbouring leads often share a frame, and
+repeated Analyses on one reader hit it. Measured on GCST90476460 (#65), whose 3,869 leads fall in
+95 components: G = 16 with four component workers read 3,854 frames and 101,810,367 bytes cold,
+with 15 cache hits, and did 1.067 s of LD work cold and 1.058 s warm. The Proxy Index row read,
+the Near Band's row and column reads and clump's use of the chunk cache, single-flight and
+admission go with them (#72); everything else in this section stays for `matrix` and `region`.
 
 `clump` visits one chromosome at a time, strongest first inside it, and scatters results
 back into the original request order, including duplicates (ogld#40; ADR 0009). A clump
@@ -861,6 +945,9 @@ What the reads hold, measured with tracemalloc and held by `tests/test_partner_r
   72 bytes each. The index's entries take 30 bytes each and the Near Band's 53–70.
 - `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
   that step's index rows. One row against many is never copied out to a full list.
+- `partner_row`: the decoded frame it read, kept by the frame cache, and its row's partners and
+  codes as views into it: 6 bytes an entry while the frame is kept, plus the frame's own arrays
+  and the `frames_idx` chunk.
 - `pair_r` and `region_r`: their n × n float64 result, written in place, and one step or block
   beside it. `matrix` and `region` apply a `fill` in place, so each holds one float64 copy of
   its result.
@@ -921,7 +1008,9 @@ range and its Near Band's `indptr` are read the first time a request touches tha
 through the numeric cache, and kept. Its Proxy Index's `indptr` is read only when used;
 its Far Pairs' `indptr` the first time a request needs its pairs
 beyond `near_bp`, so `proxies` and `clump`, which never do, read no more than they did before
-the Far Pairs (ADR 0007). Every other read the reader makes goes through its cache of decoded inner chunks
+the Far Pairs (ADR 0007). From 0.2.0 a chromosome's `partners/<chrom>/` adds its group's attributes
+and the `frames_idx` chunk, read the first time a request asks for one of its rows, and a frame
+cache of its own (§10's Partner Rows paragraph). Every other read the reader makes goes through its cache of decoded inner chunks
 (`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case. So a query that reads a few
 pairs at a time fetches each chunk once: clumping the Test Store's 1,056 variants, one read per
@@ -1191,7 +1280,7 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 
 | rule | checks |
 |---|---|
-| `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it, the Far Pairs' included; `n_variants` is the variant table's length |
+| `envelope.arrays` | the hierarchy is Zarr v3, and every §1 array exists with its §1 dtype and the length §2, §4 and §5 give it, the Far Pairs' included and the Partner Rows' left to their own rules in 0.2.0; `n_variants` is the variant table's length |
 | `envelope.fill` | the fill value of every array is one a valid store never holds there (§6): −32768 in every `r` array, at every scale, so an unwritten chunk can never read as r = 0, and so on for the others |
 | `provenance.complete` | every §7 key is present with its type, null only where §7 allows; other keys are allowed |
 | `provenance.encoding` | `format_version` is one this package reads, and `encoding` is one it implements: exactly the four keys, `int16`, −32768 reserved, `half_to_even`, and a whole `r_scale` from 1 to 32767 (§3). A reader refuses any other before decoding (§13) |
@@ -1223,6 +1312,17 @@ No rule checks chunk shapes, shards or codecs (§6). No rule can
 check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
 an independent reference on the Test Panel. Each rule has a store that breaks it, in
 `tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 27.
+
+**The Partner Rows' rules (format 0.2.0).** Ten rules join these in #68, beside the `index.*` rules
+and `far.index`, and replace them in #72:
+`partners.files`, `partners.frames`, `partners.rows`, `partners.codes`, `partners.distance`,
+`partners.threshold`, `partners.symmetric`, `partners.near`, `partners.far` and
+`provenance.partner_threshold`. `docs/spec/partner-rows.md` §10 specifies each. They read the
+frames of `partners/<chrom>/` in bounded blocks, never a whole chromosome, sharing this section's
+one pass per chromosome and its thread option; `partners.symmetric` and `partners.near` reuse
+`index.symmetric`'s and `index.near`'s 64-bit hash sums, at the Partner Floor; and
+`partners.near` with `partners.far` hold every entry equal to the Near Band's code within
+`near_bp` or the Far Pairs' beyond it.
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
@@ -1304,8 +1404,32 @@ it does not implement, naming the version or the encoding, rather than decode it
 refuses at open, with an `ogld.InputError`. A change to any array's dtype, encoding or meaning, or
 to §8's answers, is a new format version. A change of chunk or shard shape is not, and neither is
 a store's scale: any whole scale from 1 to 32767 in the `int16` container is version `0.1.0`, and
-each store records its own (§3, §7). Version `0.1.0` is an unreleased draft: no LD Store in it
-has been published, so the owner's decisions of 7 November 2026, the Proxy Index among them, of
-10 November 2026, the per-store encoding (ADR 0004), of 12 November 2026, the Far Pairs beside
-the index (ADR 0007), and of 15 November 2026, the ALID index beside the variant table (ADR 0010),
-are part of `0.1.0` rather than a new version.
+each store records its own (§3, §7).
+
+**Version `0.2.0`** (the decision; the bump lands with the writer, #67, and the derivation in #69
+writes it too). A store has one `format_version`, so what 0.2.0 requires is everything below, not
+a stage of it: a 0.1.0 store is upgraded by deriving its Partner Rows, and a 0.2.0 store without
+them is not one. It:
+
+- adds `partners/<chrom>/` (§1, §5): the Partner Rows, whose frames are compressed copies of codes
+the store already holds, plus the four provenance keys that describe them and `software.zstd`,
+  less `counts.index_entries` (§7);
+- refuses `threshold_below_t_partner`, which turns an answered 0.1.0 request below t_partner within
+  `near_bp` into a Refusal (§9);
+- reads `partner_row` from a frame cache, in place of the Proxy Index row and the Near Band's row
+  and column (§10);
+- has no Proxy Index: `index/`, its writer, its six rules and `far.index` go (#72), and the Far
+  Pairs and the Near Band stay as they are. A reader of a store that still holds both components
+  reads the Partner Rows, as #67-#71's does.
+
+A 0.1.0 reader reading a 0.2.0 store sees groups it does not know and ignores them (§1), answering
+from the Near Band, the Proxy Index and the Far Pairs if they are there. That is why the version
+is recorded: the refusal table and the component set changed, and a reader that took a 0.2.0 store
+for a 0.1.0 one would answer a request 0.2.0 refuses.
+
+**Version `0.1.0`** is an unreleased draft: no LD Store in it has been published, so the owner's
+decisions of 7 November 2026, the Proxy Index among them, of 10 November 2026, the per-store
+encoding (ADR 0004), of 12 November 2026, the Far Pairs beside the index (ADR 0007), and of
+15 November 2026, the ALID index beside the variant table (ADR 0010), are part of `0.1.0` rather
+than a new version. The Partner Rows are the first change big enough to be its own version (§5,
+ADR 0011).
