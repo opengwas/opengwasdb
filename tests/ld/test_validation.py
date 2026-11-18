@@ -462,6 +462,42 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         lambda store: contract().bytes_appended_to_the_frames_file(store),
         "its chunk file holds 44,682 bytes, not the 44,656",
     ),
+    "a partner group with no frames array": (
+        "partners.files",
+        lambda store: shutil.rmtree(store / "partners" / "22" / "frames"),
+        "missing (spec §5.1)",
+    ),
+    "a partner frames array of another dtype": (
+        "partners.files",
+        edit_doc("partners/22/frames", lambda doc: doc.update(data_type="int8")),
+        "its dtype is int8, not uint8",
+    ),
+    "a partner frames array of another length": (
+        "partners.files",
+        lambda store: zarr.open_group(store / "partners" / "22", mode="r+").attrs.update(
+            frames_bytes=44_700
+        ),
+        "its shape is (44656,), not (44,700,), the frames' bytes",
+    ),
+    "offsets that do not start at 0": (
+        "partners.files",
+        write_array("partners/22/frames_idx", slice(0, 1), 1),
+        "starts at 1, not 0",
+    ),
+    "offsets that do not ascend": (
+        "partners.files",
+        lambda store: write_array(
+            "partners/22/frames_idx",
+            slice(3, 4),
+            int(zarr.open_array(store / "partners" / "22" / "frames_idx", mode="r")[2]),
+        )(store),
+        "does not ascend strictly at offset(s) 3",
+    ),
+    "offsets that end short of frames_bytes": (
+        "partners.files",
+        write_array("partners/22/frames_idx", slice(-1, None), 44_000),
+        "ends at 44,000, but frames_bytes is 44,656",
+    ),
     "a frames chunk file the store lost": (
         "partners.files",
         lambda store: (store / "partners" / "22" / "frames" / "c" / "0").unlink(),
@@ -1015,6 +1051,14 @@ DAMAGE: dict[str, tuple[Callable[[Path], None], int]] = {
     # the file ends after frame 3, so the first frame a read cannot give whole is the fourth
     "a truncated chunk file": (truncate_frames, 4),
     "a flipped byte inside a frame": (lambda store: contract().flip_a_byte_in_a_frame(store), 2),
+    "a frame with no content checksum": (
+        lambda store: contract().a_frame_without_a_checksum(store),
+        2,
+    ),
+    "a frame with no content size": (
+        lambda store: contract().a_frame_without_a_content_size(store),
+        2,
+    ),
     "a payload of the wrong length": (
         lambda store: replace_frame(store, 3, repayload(store, extra=2)),
         3,

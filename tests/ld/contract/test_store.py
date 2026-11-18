@@ -16,6 +16,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+import numcodecs
 import numpy as np
 import pytest
 import support
@@ -26,7 +27,7 @@ import ogld
 from ogld import cli
 from ogld.format import VALIDATION_RULES, RefusalReason, REncoding, t_far
 from ogld.store import StoreWriter, layout
-from ogld.store.frames import decode_frame, encode_frame
+from ogld.store.frames import ZSTD_MAGIC, decode_frame, encode_frame
 
 
 def two(store: ogld.LDStore, i: int, j: int) -> tuple[float, str]:
@@ -623,18 +624,23 @@ def partner_rows(store: Path, chrom: str) -> tuple[list[tuple[np.ndarray, np.nda
     return rows, per_frame
 
 
-def write_partner_rows(
-    store: Path, chrom: str, rows: list[tuple[np.ndarray, np.ndarray]], per_frame: int
-) -> None:
-    """Write `chrom`'s Partner Rows from `rows`, re-encoding every frame and recording the group's
-    attributes and both hashes: a store only a test makes, which the other rules still pass."""
+def frame_bytes(store: Path, chrom: str) -> tuple[list[bytes], dict[str, Any]]:
+    """One chromosome's Partner Rows as the frames the group holds, and its attributes."""
+    group = zarr.open_group(store / "partners" / chrom, mode="r")
+    attrs = dict(group.attrs)
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    raw = np.asarray(group["frames"][:]).tobytes()
+    held = [raw[offsets[n] : offsets[n + 1]] for n in range(len(offsets) - 1)]
+    return held, attrs
+
+
+def write_frames(store: Path, chrom: str, frames: list[bytes], attrs: dict[str, Any]) -> None:
+    """Write `chrom`'s Partner Rows from already-encoded `frames`, recording `attrs`' rows, rows a
+    frame and entries, and restamping the offsets, the length and both hashes: a store only a test
+    makes, which the rules beside the one it breaks still pass."""
     path = store / "partners" / chrom
     shutil.rmtree(path)
     group = zarr.open_group(path, mode="w", zarr_format=3)
-    frames = [
-        encode_frame(at, rows[at : at + per_frame], chrom=chrom, number=at // per_frame)
-        for at in range(0, len(rows), per_frame)
-    ]
     data = b"".join(frames)
     array = layout.new_frames_array(group, len(data))
     target = layout.chunk_file(array)
@@ -645,16 +651,64 @@ def write_partner_rows(
     index[:] = offsets.astype("<u8")
     group.attrs.update(
         {
-            "rows": len(rows),
-            "rows_per_frame": per_frame,
+            "rows": attrs["rows"],
+            "rows_per_frame": attrs["rows_per_frame"],
             "frames": len(frames),
-            "entries": sum(len(partners) for partners, _ in rows),
+            "entries": attrs["entries"],
             "frames_bytes": len(data),
             "frames_sha256": hashlib.sha256(data).hexdigest(),
             "frames_idx_sha256": hashlib.sha256(offsets.astype("<u8").tobytes()).hexdigest(),
             "zstd_level": 3,
         }
     )
+
+
+def write_partner_rows(
+    store: Path, chrom: str, rows: list[tuple[np.ndarray, np.ndarray]], per_frame: int
+) -> None:
+    """Write `chrom`'s Partner Rows from `rows`, re-encoding every frame and recording the group's
+    attributes and both hashes: a store only a test makes, which the other rules still pass."""
+    frames = [
+        encode_frame(at, rows[at : at + per_frame], chrom=chrom, number=at // per_frame)
+        for at in range(0, len(rows), per_frame)
+    ]
+    write_frames(
+        store,
+        chrom,
+        frames,
+        {
+            "rows": len(rows),
+            "rows_per_frame": per_frame,
+            "entries": sum(len(partners) for partners, _ in rows),
+        },
+    )
+
+
+def raw_block_frame(payload: bytes) -> bytes:
+    """`payload` as one zstd frame of one raw block whose header declares no content size, and a
+    content checksum whose value is not its own: a frame no decoder can check, where a one-shot
+    compressor always writes the size (RFC 8878 §3.1.1.1.1)."""
+    header = bytes([0x04, 0x58])  # no size, not single-segment, checksum flag set, any window
+    block = (1 | (len(payload) << 3)).to_bytes(3, "little")  # last block, raw, its bytes
+    return ZSTD_MAGIC + header + block + payload + b"\x00\x00\x00\x00"
+
+
+def a_frame_without_a_checksum(store: Path) -> None:
+    """Recompresses chr22's third frame with no content checksum, restamping the offsets, the
+    length and both hashes: a frame a decoder accepts and never verifies (partner-rows §5.2)."""
+    frames, attrs = frame_bytes(store, "22")
+    payload = bytes(numcodecs.Zstd(level=3, checksum=True).decode(frames[2]))
+    frames[2] = bytes(numcodecs.Zstd(level=3, checksum=False).encode(payload))
+    write_frames(store, "22", frames, attrs)
+
+
+def a_frame_without_a_content_size(store: Path) -> None:
+    """Recompresses chr22's third frame as one raw block whose header declares no content size,
+    restamping everything else (partner-rows §5.2)."""
+    frames, attrs = frame_bytes(store, "22")
+    payload = bytes(numcodecs.Zstd(level=3, checksum=True).decode(frames[2]))
+    frames[2] = raw_block_frame(payload)
+    write_frames(store, "22", frames, attrs)
 
 
 def edit_partner_row(
@@ -916,8 +970,8 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     "far.index": drop_a_far_pair,
     # leaves a crashed writer's temporary group under partners/, and 26 bytes past the frames
     "partners.files": a_group_recording_another_row_count,
-    # flips a byte inside chr22's third frame, so its checksum fails
-    "partners.frames": flip_a_byte_in_a_frame,
+    # recompresses chr22's third frame with no checksum in its header
+    "partners.frames": a_frame_without_a_checksum,
     # records one entry more than chr22's frames hold
     "partners.rows": a_group_recording_another_entry_count,
     # writes -32768 into a chr22 Partner Rows row

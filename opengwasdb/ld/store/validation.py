@@ -52,9 +52,9 @@ from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
-from ogld.store.frames import Frame, decode_frame, frame_bytes, range_bytes, read_range
+from ogld.store.frames import FrameCache, FramePayload, PartnerFrames, open_partner_frames
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
-from ogld.store.location import open_group
+from ogld.store.location import frame_source, open_group
 
 #: Elements of a Near Band or a Proxy Index a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
@@ -1075,66 +1075,54 @@ _PARTS: Final = {"band": ("near", "r")} | {
 }
 
 
-@dataclass(frozen=True)
 class _Frames:
-    """One chromosome's Partner Rows as the pass reads them: the group's attributes, its
-    offsets and its `frames` array (partner-rows §5.1, §5.3). `of` refuses a group a rule cannot
-    read frames from, naming what it needed; `partners.files` judges the group itself."""
+    """One chromosome's Partner Rows as the pass reads them: the group's sizes, and `PartnerFrames`,
+    the reader that turns a frame's number into one read and one decompress (partner-rows §7).
 
-    chrom: str
-    array: zarr.Array[Any]
-    offsets: npt.NDArray[np.int64]
-    rows: int
-    rows_per_frame: int
-    entries: int | None
+    No frame is kept: validation reads each frame once, in passing, so the reader's cache holds
+    nothing and a frame is not decoded twice for want of it. `of` refuses a group a rule cannot
+    read frames from, naming what it needed; `partners.files` judges the group itself.
+    """
 
-    def due(self, number: int) -> tuple[int, int]:
-        """The rows frame `number` is due: its first, and how many it holds (§5.2)."""
-        first = number * self.rows_per_frame
-        return first, min(self.rows_per_frame, self.rows - first)
+    def __init__(
+        self,
+        chrom: str,
+        reader: PartnerFrames,
+        rows: int,
+        rows_per_frame: int,
+        entries: int | None,
+    ) -> None:
+        self.chrom, self.reader = chrom, reader
+        self.rows, self.rows_per_frame, self.entries = rows, rows_per_frame, entries
 
-    def decode(self, number: int) -> Frame:
-        """Frame `number`, decoded through `frames.py`'s own decoder (§5.2)."""
-        first, rows = self.due(number)
-        return decode_frame(
-            frame_bytes(self.array, self.offsets, number),
-            chrom=self.chrom,
-            number=number,
-            first=first,
-            rows=rows,
-        )
+    def decode(self, number: int) -> FramePayload:
+        """Frame `number`: one read through `location`'s frame source — `os.pread` on a local chunk
+        file's kept descriptor — and one decompress (partner-rows §7)."""
+        return self.reader.frame(number)
+
+    def close(self) -> None:
+        """Release the source the frames were read through, a local file's descriptor included."""
+        self.reader.close()
 
     @classmethod
     def of(cls, store: _Store, chrom: str, rows: int) -> _Frames:
         """The group of `chrom`, whose Variant Set has `rows` rows, or `_Unchecked` naming what a
-        reader of its frames needs and cannot find."""
+        reader of its frames needs and cannot find. The group's own checks are `PartnerFrames`',
+        so a group that cannot be read is refused with the reason it gives."""
         path = layout.partners_path(chrom)
         group = store.node(path)
         if not isinstance(group, zarr.Group):
             raise _Unchecked(path, f"{path} is missing (spec §5.1; partners.files)")
+        try:
+            reader = open_partner_frames(store.root, chrom, FrameCache(0))
+        except ValueError as unreadable:
+            raise _Unchecked(path, str(unreadable)) from unreadable
         attrs = dict(group.attrs)
         per_frame = attrs.get("rows_per_frame")
-        if not _is_int(per_frame) or per_frame < 1:
-            raise _Unchecked(
-                path, f"{path} records rows_per_frame {per_frame!r}, not rows of a frame (§5.3)"
-            )
-        offsets = store.read(f"{path}/{layout.FRAMES_INDEX}").astype(np.int64)
-        expected = -(-rows // per_frame) + 1
-        if len(offsets) != expected or offsets[0] != 0 or (np.diff(offsets) <= 0).any():
-            raise _Unchecked(
-                f"{path}/{layout.FRAMES_INDEX}",
-                f"does not hold {expected} ascending offsets from 0 (spec §5.2, §5.3)",
-            )
-        array = store.array(f"{path}/{layout.FRAMES}")
         entries = attrs.get("entries")
-        return cls(
-            chrom,
-            array,
-            offsets,
-            rows,
-            int(per_frame),
-            int(entries) if _is_int(entries) else None,
-        )
+        assert _is_int(per_frame), "PartnerFrames refuses a group without rows_per_frame"
+        assert per_frame >= 1, "PartnerFrames refuses a frame that holds no rows"
+        return cls(chrom, reader, rows, int(per_frame), int(entries) if _is_int(entries) else None)
 
 
 def _frames(store: _Store, chrom: str, rows: int) -> tuple[_Frames | None, _Unchecked | None]:
@@ -1206,13 +1194,12 @@ def _chromosome(
 
 @dataclass
 class _Decoded:
-    """One frame of a block: decoded, or why it cannot be (partner-rows §5.4). Its payload is
-    released once its entries are copied into the block's span, so a block holds its entries
-    once and not twice while the span is built."""
+    """One frame of a block: read and decompressed once, or why it cannot be (partner-rows §5.4).
+    Its payload is released once its entries are copied into the block's span, so a block holds
+    its entries once and not twice while the span is built."""
 
     first: int
-    rows: int
-    frame: Frame | None
+    frame: FramePayload | None
     untold: _Unreadable | None
 
     @property
@@ -1237,20 +1224,16 @@ class _Span:
 
 
 def _decode(c: _Chromosome, number: int) -> _Decoded:
-    """Frame `number` of `c`, decoded, or why it cannot be: one decompress, refused naming the
-    chromosome and the frame (partner-rows §5.4)."""
+    """Frame `number` of `c`, read and decompressed once, or why it cannot be. Its refusal names
+    the chromosome and the frame already, from `frames.py`'s own parse (partner-rows §5.4, §7)."""
     frames = c.frames
     assert frames is not None
-    first, due = frames.due(number)
+    first = number * frames.rows_per_frame
     try:
-        return _Decoded(first, due, frames.decode(number), None)
-    except _READ_ERRORS as error:
-        named = f"frame {number} of chromosome {c.name}"
-        why = str(error)
-        if named not in why:
-            why = f"{named}: {why}"
+        return _Decoded(first, frames.decode(number), None)
+    except ValueError as unreadable:
         where = f"{layout.partners_path(c.name)}/{layout.FRAMES}"
-        return _Decoded(first, due, None, _Unreadable(where, why))
+        return _Decoded(first, None, _Unreadable(where, str(unreadable)))
 
 
 def _decoded(c: _Chromosome, rows: tuple[int, int]) -> list[_Decoded]:
@@ -1335,14 +1318,15 @@ def _entries(frames: list[_Decoded], per_frame: int) -> _Span:
     row = np.empty(len(partner), np.int64)
     at = 0
     for one in frames:
-        frame = one.frame
-        if frame is None:
+        payload = one.frame
+        if payload is None:
             continue
+        frame = payload.decode()
         stop = at + frame.entries
         partner[at:stop] = frame.partners
         code[at:stop] = frame.codes
         lengths = np.diff(frame.indptr)
-        row[at:stop] = owners(lengths, np.arange(one.first, one.first + one.rows, dtype=np.int64))
+        row[at:stop] = owners(lengths, np.arange(one.first, one.first + frame.rows, dtype=np.int64))
         one.frame = None
         at = stop
     return _Span(partner, code, row, per_frame)
@@ -1508,9 +1492,28 @@ def _scan(store: _Store, names: list[str]) -> dict[str, list[Finding]]:
     live = list(names)
     wants = any(getattr(_SCANNED[name], "partners", False) for name in names)
     for name, start, stop in ranges:
-        ended = _pass(store, _chromosome(store, name, start, stop, wants), live, found)
+        ended = _chromosome_pass(store, name, start, stop, live, found, wants)
         live = [rule for rule in live if rule in ended]
     return found
+
+
+def _chromosome_pass(
+    store: _Store,
+    name: str,
+    start: int,
+    stop: int,
+    live: list[str],
+    found: dict[str, list[Finding]],
+    wants: bool,
+) -> set[str]:
+    """One chromosome's pass, with the source its frames were read through released after it:
+    the descriptor a local store keeps open is not left to a later chromosome."""
+    c = _chromosome(store, name, start, stop, wants)
+    try:
+        return _pass(store, c, live, found)
+    finally:
+        if c.frames is not None:
+            c.frames.close()
 
 
 def _pass(
@@ -2173,10 +2176,13 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
                 ),
             )
         return
+    source = frame_source(array)
     try:
-        beyond = read_range(array, expected, expected + 1)
-    except _READ_ERRORS as unread:
-        raise _Unreadable(where, f"{type(unread).__name__}: {unread}") from unread
+        beyond = source.read(expected, expected + 1)
+    except ValueError as unread:
+        raise _Unreadable(where, str(unread)) from unread
+    finally:
+        source.close()
     if beyond:
         yield (
             where,
@@ -2280,23 +2286,36 @@ def _offsets_judged(where: str, offsets: npt.NDArray[np.int64], length: object) 
 def _frames_file_judged(
     path: str, frames: zarr.Array[Any], length: int, recorded: object
 ) -> _Problems:
-    """The `frames` chunk file is the bytes its recorded hash names, read in bounded windows."""
+    """The `frames` chunk file is the bytes its recorded hash names, streamed in `_WINDOW`-byte
+    reads through the frame source — `os.pread` on a local file's kept descriptor — and ending
+    exactly where they do."""
+    where = f"{path}/{layout.FRAMES}"
+    source = frame_source(frames)
     digest = hashlib.sha256()
     at = 0
     try:
         while at < length:
             hi = min(length, at + _WINDOW)
-            digest.update(range_bytes(frames, at, hi))
+            raw = source.read(at, hi)
+            if len(raw) != hi - at:
+                yield (
+                    where,
+                    (
+                        f"holds {at + len(raw):,} bytes, fewer than the {length:,} its metadata "
+                        "and hash name (spec §5.1, §5.3)"
+                    ),
+                )
+                return
+            digest.update(raw)
             at = hi
-    except _READ_ERRORS as unread:
-        yield f"{path}/{layout.FRAMES}", f"cannot be read: {type(unread).__name__}: {unread}"
+    except ValueError as unread:
+        yield where, f"cannot be read: {unread}"
         return
+    finally:
+        source.close()
     found = digest.hexdigest()
     if found != recorded:
-        yield (
-            f"{path}/{layout.FRAMES}",
-            f"hashes to {found}, not the recorded {recorded!r} (spec §5.3)",
-        )
+        yield where, f"hashes to {found}, not the recorded {recorded!r} (spec §5.3)"
 
 
 class _PartnerRule(_Scanned):
