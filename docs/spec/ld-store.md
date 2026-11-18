@@ -1369,14 +1369,19 @@ one of them says so and moves on. A 0.2.0 store has the component, so a missing
 that it cannot be checked — neither passes it.
 
 A 0.1.0 store that carries a `partners/` anyway is **unclaimed**, and these ten judge nothing in
-it. The component is not the store's until its provenance says so: `format_version` 0.2.0 and
-`t_partner` are the claim, and a derivation writes them in one metadata write, after the rules
-pass (partner-rows §6.2; ogld#69). So the residue of a run killed after `partners/` became a node
-and before that write is a store that has no Partner Rows — one that validates as the 0.1.0 one it
-was, and one a reader refuses, since a reader keys on the recorded `t_partner` and never on a
-group being there (§10, §13). Judging the residue instead would fail a store no one can read, for
-keys it has no use for; `ogld derive-partners` completes it (the rules accept it) or removes it and
-derives it again (they do not).
+it. The component is not the store's until its provenance says so: the recorded `format_version`
+is 0.2.0 and `t_partner` is recorded, and a derivation writes both in one metadata write, after
+the rules pass (partner-rows §6.2; ogld#69). So the residue of a run killed after `partners/`
+became a node and before that write is a store that has no Partner Rows — one that validates as
+the 0.1.0 one it was, and one a reader refuses, since a reader asks the recorded **version** and
+never the presence of a key or a group (§10, §13). Judging the residue instead would fail a store
+no one can read, for keys it has no use for; `ogld derive-partners` completes it (the rules accept
+it) or removes it and derives it again (they do not).
+
+A 0.2.0 store has the component, and `partners/` is a **node of its one hierarchy**, not a
+directory beside it (§1, §5.1): a store whose root does not list it is a finding of
+`partners.files` even when each chromosome's group still resolves by its own path, because nothing
+that lists the store would show its component.
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.

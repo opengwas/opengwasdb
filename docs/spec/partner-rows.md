@@ -266,9 +266,15 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   residue, and one they accept is claimed while one they refuse is removed and derived again —
   never trusted, and never derived again for nothing.
 - Writes only inside the store, and never through a symbolic link: before anything is written, a
-  run refuses a path it owns — the root `zarr.json`, `partners/`, or any entry of `partners/` —
-  that resolves outside the store's own directory, naming both. A store's read-only components
-  may be links, which is how the scratch stores #71 and #73 read are laid out.
+  run refuses a link at any path it owns — the root `zarr.json`, `partners/`, or any entry of
+  `partners/` — even one that stays inside the store, because a claim, a cleanup or a publication
+  would then write or delete in the directory the link names. A store's read-only components may
+  be links, which is how the scratch stores #71 and #73 read are laid out. It refuses a
+  `zarr.*.partial` the store already holds, in the root or in `partners/`, once before it writes
+  and again immediately before the claim: zarr writes a metadata document through that name and
+  follows a link there. The check is not a lock — a concurrent writer to the same store could still
+  plant one between the check and the write — and this derivation does not support one: a store
+  has one writer, as §6.1's carry and §5.1's rename already assume.
 - `--chromosomes` names the ones to derive — all the store lacks by default — and one the store
   does not have is refused; one it already has is skipped.
 - Drops `index/` afterwards, as its own step and only on request (`--drop-index`), so a derived
