@@ -26,6 +26,7 @@ Reference Completion uses (ADR 0023), reached through the same
 | `spill/` | the Pass 2 spill directory itself, retained rather than removed |
 | `plates.json` | the spill plates the phases still to run read, with their sizes |
 | `info_counts.json` | each Analysis's declared-score dispositions (stores #175). Since checkpoint format 3 (ADR 0072) these are the parts of the build's Admission record, beside the Store, and the checkpoint records that record's path instead |
+| `se_out_of_range.json` | each Analysis's count of associations left out for an SE above 65,504 (issue #338, ADR 0068), written since checkpoint format 5; a resume reads it |
 | `fold/` | a completion file per folded column |
 | `axis.npz`, `axis_*.txt`, `provenance_*.tsv` | the post-Pass-2 axis, frozen: key table, `old_to_new`, the ALID lists, the Dense-row map and the provenance maps |
 | `orientation.json`, `plan.json`, `dense_hits.npz` | the report, the encoding plan and the Dense band write's top-hit harvest |

@@ -10,6 +10,11 @@ writes into its source's encoding), [ADR 0077](0077-one-module-owns-how-an-assoc
 (completion keeps its source's SE model). Format `0.2.3` (spec §21). Amends ADR 0057's
 statement of the current version and ADR 0077's "Where issue #338's rule goes".
 
+The range is judged on the SE as stored, after SD standardisation
+([ADR 0084](0084-storable-standardises-every-builders-se.md)): a source SE of 40,000
+under an SD of 0.5 is stored as 80,000 and left out, and one of 100,000 under an SD
+of 2.0 is stored as 50,000 and kept.
+
 ## Context
 
 A source can report an SE above 65,504, `float16`'s largest finite value. The
@@ -130,7 +135,7 @@ upgrade warning and is not judged by this build's stamp rule.
   cannot reach it either: a build measures after the gate, and an Analysis with
   fewer than two SEs sends the whole plane to `float16`, as it always has.
 
-  *Note, 18 Nov 2026:* accepted. The spec review of this change confirmed that no
+  *Note, 18 Nov 2026:* accepted. No
   completion path refits an SE model from stored cells under ADR 0078 (Ragged
   completion takes its source's coefficients; the builders keep the `float16`
   eligibility fallback), so the owner's 18 Nov refusal has nothing to guard and
