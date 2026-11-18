@@ -230,7 +230,9 @@ def test_the_measurement_is_a_hand_checkable_literal_on_a_tiny_source(tmp_path: 
         [*_BASE, "beta", "standard_error", "p_value"],
         {"beta": ["0.2"] * 3, "standard_error": ["0.1"] * 3, "p_value": ["0.00455"] * 3},
     )
-    policy = EffectConsistencyPolicy(max_median_abs_delta=5.0, min_compared_rows=1)
+    policy = EffectConsistencyPolicy(
+        max_median_abs_delta=5.0, max_median_delta=5.0, min_compared_rows=1
+    )
 
     measured = _resolve(path, panel, policy=policy).diagnostics.effect_consistency
 
@@ -480,7 +482,7 @@ def test_the_record_carries_the_measurement_the_skip_and_the_refusal(tmp_path: P
     assert measured["median_abs_delta"] < 1e-5
     assert set(measured) == {
         "n_rows_considered", "n_rows_compared", "sampled", "median_abs_delta",
-        "median_delta", "skip_reason", "refused",
+        "median_delta", "skip_reason", "refused", "refused_by",
     }
 
     refused = records["BAD"]
@@ -504,14 +506,14 @@ def test_the_threshold_is_bound_into_the_fingerprint(tmp_path: Path):
     )["X"]["fingerprints"]
 
     assert default["resolution_config"]["effect_consistency"] == {
-        "max_median_abs_delta": 1.0, "min_compared_rows": 50,
+        "max_median_abs_delta": 1.0, "max_median_delta": 0.1, "min_compared_rows": 50,
     }
     assert looser["resolution_config"]["effect_consistency"]["max_median_abs_delta"] == 3.0
     assert default["fingerprint_digest"] != looser["fingerprint_digest"]
 
 
-def test_a_record_with_the_measurement_resumes_under_its_policy_and_not_another(tmp_path: Path):
-    path = _beta_file(tmp_path)
+def _resuming_runner(tmp_path: Path, path: Path):
+    """`run(policy)`: resolve one source `X` with `--resume` under that policy."""
     reference, groups, _ = _write_manifest_panel(tmp_path / "reference")
     manifest = _manifest(tmp_path, {"X": path})
 
@@ -521,6 +523,13 @@ def test_a_record_with_the_measurement_resumes_under_its_policy_and_not_another(
             ancestry_groups=groups, reference_build="GRCh38", n_workers=1,
             resume=True, effect_consistency_policy=policy,
         )
+
+    return run
+
+
+def test_a_record_with_the_measurement_resumes_under_its_policy_and_not_another(tmp_path: Path):
+    path = _beta_file(tmp_path)
+    run = _resuming_runner(tmp_path, path)
 
     first = run(EffectConsistencyPolicy())
     stored = json.loads((first.records_dir / "X.json").read_text())
@@ -548,3 +557,176 @@ def test_an_unscanned_source_has_no_measurement_not_a_skip(tmp_path: Path, panel
     assert result.error.startswith("FileNotFoundError")
     assert result.diagnostics.rows_read == 0
     assert result.diagnostics.effect_consistency is None
+
+
+# --- the second refusal: a stored z deflated against the source p (#370) -----
+
+#: Source p-values uniform on (0, 1): a null-dominated Analysis. Their median
+#: -log10 p is log10(2) = 0.301, the deflated-z fixture's signed median.
+_N_NULL = 400
+_NULL_Z = stats.norm.ppf(1.0 - (np.arange(_N_NULL) + 0.5) / (2.0 * _N_NULL))
+
+
+def _deflated_file(tmp_path: Path) -> Path:
+    """SPACox's defect (GCST90275159-66): beta 9.0 and se 1000 on every row.
+
+    The stored z is 0.009 on every row, carrying no signal, while the file's p
+    carries the true signal of a null-dominated study.
+    """
+    return _write(
+        tmp_path / "deflated.tsv",
+        [*_BASE, "beta", "standard_error", "p_value", "effect_allele_frequency"],
+        {
+            "beta": ["9.0"] * _N_NULL,
+            "standard_error": ["1000"] * _N_NULL,
+            "p_value": [f"{v:.8g}" for v in _two_sided_p(_NULL_Z)],
+        },
+    )
+
+
+def _clean_null_file(tmp_path: Path) -> Path:
+    z = np.where(np.arange(_N_NULL) % 2 == 0, _NULL_Z, -_NULL_Z)
+    return _write(
+        tmp_path / "clean_null.tsv",
+        [*_BASE, "beta", "standard_error", "p_value", "effect_allele_frequency"],
+        {
+            "beta": [f"{v:.10g}" for v in z * _SE],
+            "standard_error": [f"{_SE:.10g}"] * _N_NULL,
+            "p_value": [f"{v:.8g}" for v in _two_sided_p(z)],
+        },
+    )
+
+
+def _signed_and_absolute_medians(path: Path) -> tuple[float, float]:
+    from opengwasdb.build.effect_consistency import log10_two_sided_p
+
+    columns = _projected(path)
+    z = columns["beta"] / columns["se"]
+    delta = log10_two_sided_p(z) - np.log10(columns["p_value"])
+    return float(np.median(delta)), float(np.median(np.abs(delta)))
+
+
+def test_a_deflated_z_is_refused_by_the_signed_rule_though_its_abs_median_is_under_one(
+    tmp_path: Path, panel
+):
+    path = _deflated_file(tmp_path)
+    signed, absolute = _signed_and_absolute_medians(path)
+    # The fixture reaches the second rule only: the |Δ| rule cannot fire on it.
+    assert 0.25 < signed < 0.35
+    assert absolute < 1.0
+
+    result = _resolve(path, panel)
+
+    assert result.error, "a z carrying no signal beside a p that does must be refused"
+    measured = result.diagnostics.effect_consistency
+    assert measured is not None and measured.refused
+    assert measured.refused_by == "median_delta"
+    assert measured.median_delta is not None and 0.25 < measured.median_delta < 0.35
+    assert "median signed" in result.error and "above the threshold 0.1" in result.error
+    assert f"{measured.median_delta:.3g}" in result.error
+
+
+def test_a_clean_null_source_is_accepted_with_both_medians_recorded(tmp_path: Path, panel):
+    path = _clean_null_file(tmp_path)
+    signed, absolute = _signed_and_absolute_medians(path)
+    assert abs(signed) < 1e-5 and absolute < 1e-5
+
+    result = _resolve(path, panel)
+
+    assert result.error == ""
+    measured = result.diagnostics.effect_consistency
+    assert measured is not None and not measured.refused and measured.refused_by is None
+    assert measured.median_delta is not None and abs(measured.median_delta) < 1e-5
+    assert measured.median_abs_delta is not None and measured.median_abs_delta < 1e-5
+
+
+def test_the_absolute_rule_is_named_when_it_is_the_one_that_fires(tmp_path: Path, panel):
+    result = _resolve(_beta_file(tmp_path, beta_holds="odds_ratio"), panel)
+
+    measured = result.diagnostics.effect_consistency
+    assert measured is not None and measured.refused_by == "median_abs_delta"
+    assert "|log10 p implied" in result.error and "above the threshold 1" in result.error
+
+
+def _finngen_with_halved_complement_p(tmp_path: Path) -> Path:
+    """GCST90446466's defect: `p_value` holds 1 - p/2; beta and se are sound."""
+    lines = ["#chrom\tpos\tref\talt\trsids\tnearest_genes\tpval\tmlogp\tbeta\tsebeta\taf_alt"]
+    p = 1.0 - _two_sided_p(_Z) / 2.0
+    for index in range(N_ROWS):
+        lines.append(
+            f"1\t{1000 + index}\tC\tA\t\tG\t{p[index]:.8g}\t0\t{_Z[index] * _SE:.10g}\t{_SE}\t0.3"
+        )
+    path = tmp_path / "mislabelled_p.tsv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _map_without_p_value(tmp_path: Path):
+    text = (
+        Path(__file__).parents[1] / "opengwasdb/readers/column_maps/finngen-r13.toml"
+    ).read_text(encoding="utf-8")
+    assert 'p_value = "pval"' in text and 'p_value_form = "p"' in text
+    declared = text.replace('p_value = "pval"\n', "").replace('p_value_form = "p"\n', "")
+    assert "pval" not in declared.replace("`pval`", "")
+    path = tmp_path / "no-p.toml"
+    path.write_text(declared.replace('name = "finngen-r13"', 'name = "no-p"'), encoding="utf-8")
+    return as_column_map(path)
+
+
+def test_a_source_whose_map_omits_p_value_is_skipped_not_refused(tmp_path: Path, panel):
+    path = _finngen_with_halved_complement_p(tmp_path)
+    request = AnalysisRequest(
+        "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD
+    )
+
+    def resolve_through(column_map):
+        reader = resolve_reader(
+            COLUMN_MAP_CAPABILITY, path, StoredEffectScale.SD, column_map=column_map
+        )
+        return resolve_analysis(request, reader=reader, reference=panel, gates=_GATES)
+
+    # Read through a map that declares `pval`, the mislabelled column is refused...
+    declared = resolve_through(as_column_map("finngen-r13"))
+    assert declared.error
+    # ...and through one that does not, the sound beta and se resolve, the check skipped.
+    omitted = resolve_through(_map_without_p_value(tmp_path))
+    assert omitted.error == ""
+    measured = omitted.diagnostics.effect_consistency
+    assert measured is not None and not measured.refused
+    assert measured.skip_reason is ConsistencySkip.NO_SOURCE_P_VALUE
+
+
+def test_the_signed_threshold_is_validated_and_in_the_fingerprint():
+    default = EffectConsistencyPolicy()
+    assert default.max_median_delta == 0.1
+    assert default.as_fingerprint() == {
+        "max_median_abs_delta": 1.0, "max_median_delta": 0.1, "min_compared_rows": 50,
+    }
+    changed = EffectConsistencyPolicy(max_median_delta=0.2)
+    assert changed.as_fingerprint() != default.as_fingerprint()
+    for bad in (0.0, -0.1, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="max_median_delta"):
+            EffectConsistencyPolicy(max_median_delta=bad)
+
+
+def test_the_signed_threshold_is_bound_into_the_record_and_resume(tmp_path: Path):
+    path = _clean_null_file(tmp_path)
+    run = _resuming_runner(tmp_path, path)
+
+    first = run(EffectConsistencyPolicy())
+    stored = json.loads((first.records_dir / "X.json").read_text())
+    assert stored["fingerprints"]["resolution_config"]["effect_consistency"] == {
+        "max_median_abs_delta": 1.0, "max_median_delta": 0.1, "min_compared_rows": 50,
+    }
+    assert stored["diagnostics"]["effect_consistency"]["refused_by"] is None
+    assert run(EffectConsistencyPolicy()).n_resumed == 1
+    assert run(EffectConsistencyPolicy(max_median_delta=0.2)).n_resumed == 0
+
+
+def test_a_deflated_record_names_the_rule_that_refused_it(tmp_path: Path):
+    records = _records(tmp_path, {"DEFLATED": _deflated_file(tmp_path)})
+
+    record = records["DEFLATED"]
+    assert record["status"] == "controlled_failure"
+    measured = record["diagnostics"]["effect_consistency"]
+    assert measured["refused"] is True and measured["refused_by"] == "median_delta"
