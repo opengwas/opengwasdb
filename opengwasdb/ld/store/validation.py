@@ -52,7 +52,7 @@ from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
-from ogld.store.frames import FrameCache, FramePayload, PartnerFrames, open_partner_frames
+from ogld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import frame_source, open_group
 
@@ -1053,15 +1053,23 @@ def _near_rows(store: _Store) -> _Problems:
 
 def _in_order[T, R](work: Callable[[T], R], items: Iterable[T], threads: int) -> Iterator[R]:
     """`work` of each item, in the items' order, on `threads` threads. At most `threads` items
-    are begun and not yet taken, so a pass holds at most that many blocks at once."""
+    are begun and not yet taken: a full queue is drained before the next item is asked for, so a
+    pass holds that many blocks at once and no more — the planner's own item included, which is
+    why the item is taken only where there is room for it (spec §12)."""
     if threads == 1:
         yield from map(work, items)
         return
     with ThreadPoolExecutor(threads, thread_name_prefix="ogld-validate") as pool:
         pending: deque[Future[R]] = deque()
-        for item in items:
+        source = iter(items)
+        while True:
             if len(pending) == threads:
                 yield pending.popleft().result()
+                continue
+            try:
+                item = next(source)
+            except StopIteration:
+                break
             pending.append(pool.submit(work, item))
         while pending:
             yield pending.popleft().result()
@@ -1095,10 +1103,12 @@ class _Frames:
         self.chrom, self.reader = chrom, reader
         self.rows, self.rows_per_frame, self.entries = rows, rows_per_frame, entries
 
-    def decode(self, number: int) -> FramePayload:
+    def decode(self, number: int) -> Frame:
         """Frame `number`: one read through `location`'s frame source — `os.pread` on a local chunk
-        file's kept descriptor — and one decompress (partner-rows §7)."""
-        return self.reader.frame(number)
+        file's kept descriptor — one decompress, and one unshuffle of each plane (partner-rows
+        §5.2, §7). Its deltas are decoded here too, so a frame whose rows decode to something no
+        row holds is `partners.frames`' finding rather than a fault of the rule that read it."""
+        return self.reader.frame(number).decode()
 
     def close(self) -> None:
         """Release the source the frames were read through, a local file's descriptor included."""
@@ -1199,7 +1209,7 @@ class _Decoded:
     its entries once and not twice while the span is built."""
 
     first: int
-    frame: FramePayload | None
+    frame: Frame | None
     untold: _Unreadable | None
 
     @property
@@ -1232,8 +1242,12 @@ def _decode(c: _Chromosome, number: int) -> _Decoded:
     try:
         return _Decoded(first, frames.decode(number), None)
     except ValueError as unreadable:
+        named = f"frame {number} of chromosome {c.name}"
+        why = str(unreadable)
+        if named not in why:
+            why = f"{named}: {why}"
         where = f"{layout.partners_path(c.name)}/{layout.FRAMES}"
-        return _Decoded(first, None, _Unreadable(where, str(unreadable)))
+        return _Decoded(first, None, _Unreadable(where, why))
 
 
 def _decoded(c: _Chromosome, rows: tuple[int, int]) -> list[_Decoded]:
@@ -1318,10 +1332,9 @@ def _entries(frames: list[_Decoded], per_frame: int) -> _Span:
     row = np.empty(len(partner), np.int64)
     at = 0
     for one in frames:
-        payload = one.frame
-        if payload is None:
+        frame = one.frame
+        if frame is None:
             continue
-        frame = payload.decode()
         stop = at + frame.entries
         partner[at:stop] = frame.partners
         code[at:stop] = frame.codes

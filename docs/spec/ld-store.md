@@ -1390,7 +1390,10 @@ block's Far Pairs with that block's index entries beyond `near_bp` in their earl
 `partners.far` compares the Partner Rows' entries beyond `near_bp` with those same Far Pairs, so
 neither carries anything from one block to the next. A caller may give the pass t threads
 (`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
-and checked at once, and no more are held. A block the Partner Rows join is not bounded by its
+and checked at once, and no more are held: the pass asks for the next block's plan only once a
+finished block has been handed back, so the block being planned is one of the t. The planner keeps
+one frame beside them — the first frame of the block it plans next, held whole when the entries'
+budget cut the block before it short. A block the Partner Rows join is not bounded by its
 rows: a later row holds an entry for every earlier partner within `far_bp`, so a few thousand
 adjacent rows near a chromosome's end carry every pair before them, and the block's own band
 codes say nothing about that. Such a block is planned by decoding its frames, and it ends where

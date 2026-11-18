@@ -177,6 +177,14 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
             stop = int(stop_text) if stop_text else len(data) - 1
         else:
             start, stop = len(data) - int(stop_text), len(data) - 1
+        if start >= len(data):
+            # A range that begins past the file's end is unsatisfiable: 206 with an empty body is
+            # what a lenient server sends, and a real one answers 416 (RFC 9110 §15.5.17).
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{len(data)}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
         body = data[start : stop + 1]
         self.send_response(206)
         self.send_header("Content-Range", f"bytes {start}-{start + len(body) - 1}/{len(data)}")

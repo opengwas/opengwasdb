@@ -202,6 +202,11 @@ class RangeSource:
         except ValueError:
             raise
         except Exception as failed:
+            if _unsatisfiable(failed):
+                # A range that begins past the file's end is unsatisfiable, and the file ends
+                # there: the read's bytes are none, as a local `pread` past the end answers. A
+                # probe past the last byte is how a store's chunk file is measured (spec §5.1).
+                return b""
             raise ValueError(
                 f"{self._key} could not be read as bytes [{start}, {stop}): "
                 f"{type(failed).__name__}: {failed}"
@@ -215,6 +220,17 @@ class RangeSource:
 
     def close(self) -> None:
         """Nothing is held: each read is the store's own."""
+
+
+def _unsatisfiable(error: BaseException) -> bool:
+    """Whether a store refused a range that begins past its file's end: HTTP answers one with 416
+    (RFC 9110 §15.5.17), and an empty body may answer it too, which reads as no bytes already."""
+    seen: BaseException | None = error
+    while seen is not None:
+        if getattr(seen, "status", None) == 416:
+            return True
+        seen = seen.__cause__
+    return False
 
 
 def frame_source(array: zarr.Array[Any]) -> FrameSource:

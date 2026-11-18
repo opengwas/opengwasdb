@@ -27,7 +27,7 @@ import ogld
 from ogld import cli
 from ogld.format import VALIDATION_RULES, RefusalReason, REncoding, t_far
 from ogld.store import StoreWriter, layout
-from ogld.store.frames import ZSTD_MAGIC, decode_frame, encode_frame
+from ogld.store.frames import decode_frame, encode_frame
 
 
 def two(store: ogld.LDStore, i: int, j: int) -> tuple[float, str]:
@@ -684,13 +684,31 @@ def write_partner_rows(
     )
 
 
-def raw_block_frame(payload: bytes) -> bytes:
-    """`payload` as one zstd frame of one raw block whose header declares no content size, and a
-    content checksum whose value is not its own: a frame no decoder can check, where a one-shot
-    compressor always writes the size (RFC 8878 §3.1.1.1.1)."""
-    header = bytes([0x04, 0x58])  # no size, not single-segment, checksum flag set, any window
-    block = (1 | (len(payload) << 3)).to_bytes(3, "little")  # last block, raw, its bytes
-    return ZSTD_MAGIC + header + block + payload + b"\x00\x00\x00\x00"
+def window_descriptor(size: int) -> int:
+    """A Window_Descriptor byte whose window holds at least `size` bytes (RFC 8878 §3.1.1.1.2)."""
+    for descriptor in range(256):
+        log = 10 + (descriptor >> 3)
+        if (1 << log) + ((1 << log) >> 3) * (descriptor & 0b111) >= size:
+            return descriptor
+    raise ValueError(f"no zstd window holds {size} bytes")
+
+
+def frame_without_content_size(frame: bytes) -> bytes:
+    """`frame` with its header's content-size field removed and its flag cleared, the blocks and
+    the content checksum untouched: the checksum still verifies, so only a rule that requires the
+    size in the header can refuse it (RFC 8878 §3.1.1.1.1)."""
+    descriptor = frame[4]
+    flag, single = descriptor >> 6, bool(descriptor & 0b0010_0000)
+    sizes = ({0: 1, 1: 2, 2: 4, 3: 8} if single else {0: 0, 1: 2, 2: 4, 3: 8})[flag]
+    field = 5 if single else 6  # a frame that is not single-segment carries a window descriptor
+    if single:
+        # A single-segment frame's size field is its window, so one cleared of the size needs a
+        # window of its own: the smallest that holds the payload the field named.
+        size = int.from_bytes(frame[field : field + sizes], "little")
+        head = frame[:4] + bytes([descriptor & 0b0001_1111, window_descriptor(size)])
+    else:
+        head = frame[:4] + bytes([descriptor & 0b0011_1111]) + frame[5:field]
+    return head + frame[field + sizes :]
 
 
 def a_frame_without_a_checksum(store: Path) -> None:
@@ -703,11 +721,24 @@ def a_frame_without_a_checksum(store: Path) -> None:
 
 
 def a_frame_without_a_content_size(store: Path) -> None:
-    """Recompresses chr22's third frame as one raw block whose header declares no content size,
-    restamping everything else (partner-rows §5.2)."""
+    """Drops chr22's third frame's content-size field, keeping its content checksum: a frame whose
+    checksum still verifies, which only a header that requires the size refuses (§5.2)."""
     frames, attrs = frame_bytes(store, "22")
-    payload = bytes(numcodecs.Zstd(level=3, checksum=True).decode(frames[2]))
-    frames[2] = raw_block_frame(payload)
+    frames[2] = frame_without_content_size(frames[2])
+    write_frames(store, "22", frames, attrs)
+
+
+def a_frame_with_a_delta_below_row_0(store: Path) -> None:
+    """Recompresses chr22's third frame with its first delta one row short, so the frame's first
+    partner decodes to −1: a checksummed frame only decoding can refuse (§5.2)."""
+    frames, attrs = frame_bytes(store, "22")
+    payload = bytearray(numcodecs.Zstd(level=3, checksum=True).decode(frames[2]))
+    rows = int(np.frombuffer(bytes(payload[:4]), "<u4")[0])
+    lengths = np.frombuffer(bytes(payload[4 : 4 + 4 * rows]), "<u4")
+    entries = int(lengths.sum())
+    for plane, byte in enumerate((-33).to_bytes(4, "little", signed=True)):
+        payload[4 + 4 * rows + plane * entries] = byte
+    frames[2] = bytes(numcodecs.Zstd(level=3, checksum=True).encode(bytes(payload)))
     write_frames(store, "22", frames, attrs)
 
 

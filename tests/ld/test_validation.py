@@ -22,6 +22,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
+import numcodecs
 import numpy as np
 import pytest
 import zarr
@@ -802,6 +803,28 @@ def test_threads_read_blocks_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sum(1 for key in read if key.startswith("thread")) > 1
 
 
+def test_a_block_is_planned_only_once_a_finished_one_is_handed_back() -> None:
+    # Spec §12: a pass holds its threads' blocks at once, and no more. `_plans` decodes a block
+    # before it is submitted, so the next plan must not be made while the queue is full: what the
+    # pass holds then is its threads' blocks, plus the one frame the planner keeps for the next.
+    produced = 0
+    taken = 0
+    peak = 0
+
+    def blocks() -> Iterator[int]:
+        nonlocal produced, peak
+        for number in range(50):
+            produced += 1
+            peak = max(peak, produced - taken)
+            yield number
+
+    for value in validation._in_order(lambda n: n, blocks(), 4):
+        assert value == taken, (value, taken)  # the items' order, whatever the threads
+        taken += 1
+    assert taken == 50
+    assert peak <= 4, f"{peak} blocks were held at once on 4 threads"
+
+
 def test_at_most_threads_blocks_are_held_at_once() -> None:
     # Each block read ahead is held until the rules take it, so `threads` bounds the memory.
     held, most, lock = 0, 0, threading.Lock()
@@ -1059,12 +1082,36 @@ DAMAGE: dict[str, tuple[Callable[[Path], None], int]] = {
         lambda store: contract().a_frame_without_a_content_size(store),
         2,
     ),
+    "a frame whose first delta decodes below row 0": (
+        lambda store: contract().a_frame_with_a_delta_below_row_0(store),
+        2,
+    ),
     "a payload of the wrong length": (
         lambda store: replace_frame(store, 3, repayload(store, extra=2)),
         3,
     ),
     "a wrong k": (lambda store: replace_frame(store, 3, repayload(store, k_shift=-1)), 3),
 }
+
+
+def test_a_frame_without_a_content_size_keeps_a_valid_checksum(tmp_path: Path) -> None:
+    # Spec §12's row has two clauses, and a frame whose checksum is also wrong would let either
+    # catch it: this frame's payload still passes its checksum, so only the header guard refuses
+    # it, and the finding says which requirement is missing.
+    copy = copy_store(tmp_path / "store")
+    contract().a_frame_without_a_content_size(copy)
+    found = findings(copy, ["partners.frames"])["partners.frames"]
+    assert [f.message for f in found] == [
+        "frame 2 of chromosome 22 declares no content size: a frame's header carries one, or its "
+        "payload cannot be checked against it (partner-rows §5.2)"
+    ], found
+    held, _ = contract().frame_bytes(copy, "22")
+    original, _ = contract().frame_bytes(TEST_STORE, "22")
+    payload = bytes(numcodecs.Zstd(level=3, checksum=True).decode(original[2]))
+    # A frame that declares no size cannot tell a decoder how much to write, so its output size
+    # is given here: it decodes to the payload, which is what makes its checksum valid.
+    room = np.empty(len(payload), dtype="u1")
+    assert bytes(numcodecs.Zstd().decode(held[2], out=room)) == payload
 
 
 @pytest.mark.parametrize("damage", list(DAMAGE))
