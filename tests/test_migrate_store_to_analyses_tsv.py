@@ -179,8 +179,9 @@ def test_migrate_translates_legacy_sd_units_to_current_vocabulary(dense_store_pa
     assert rows["a1"]["stored_effect_scale"] == "sd"
     assert rows["a2"]["stored_effect_scale"] == "log_or"  # untouched -- already current vocabulary
 
+    # a1 is now `sd` over the migration's `unavailable` method, which the SD rule fails.
     result = validate_store(dense_store_path)
-    assert result.ok, result.errors
+    assert result.failed() == {"analyses.sd_scale_standardised"}, result.errors
 
 
 def test_migrate_writes_unavailable_sd_provenance_not_a_guess(dense_store_path):
@@ -199,8 +200,11 @@ def test_migrated_store_passes_validation(dense_store_path):
     _revert_to_old_layout(dense_store_path, ancestry={"a1": "EUR"})
     migrate_module.migrate_store(dense_store_path)
 
+    # Everything but the SD rule: the migration writes `unavailable` as the method
+    # (not a guess), so a legacy `sd_units` Analysis becomes `sd` over a method no
+    # standardisation backs, and `validate` says so (spec §7, issue #366).
     result = validate_store(dense_store_path)
-    assert result.ok, result.errors
+    assert result.failed() == {"analyses.sd_scale_standardised"}, result.errors
 
 
 def test_migrate_raises_when_already_migrated(dense_store_path):

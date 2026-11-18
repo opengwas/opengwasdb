@@ -195,6 +195,32 @@ def original_sd_recorded(target: Target) -> Iterator[str]:
             )
 
 
+def sd_scale_standardised(target: Target) -> Iterator[str]:
+    """An Analysis labelled SD Units was standardised: its `original_sd_method` is a
+    rescaling method or `declared_standardised` (spec §7, ADR 0084).
+
+    `stored_effect_scale=sd` over any other method, or none, is an Analysis whose
+    SEs were stored undivided under an SD Units label, which nothing else in the
+    Store shows. A scale that is not `sd` claims no SD Units, and a blank scale
+    with a blank method is "not standardised, scale unknown", so neither fails.
+    """
+    standardised = {method.value for method in SD_RESCALING_METHODS}
+    standardised.add(OriginalSdMethod.DECLARED_STANDARDISED.value)
+    for row in target.analyses.rows:
+        if row.get("stored_effect_scale", "") != StoredEffectScale.SD.value:
+            continue
+        method = row.get("original_sd_method", "")
+        if method and method not in {m.value for m in OriginalSdMethod}:
+            continue  # an unknown spelling is `analyses.vocabularies`'s to report
+        if method not in standardised:
+            yield (
+                f"analysis {row.get('analysis_id', '')!r} has stored_effect_scale='sd' but "
+                f"original_sd_method={method!r}: SD Units need a rescaling method or "
+                "declared_standardised, else its standard errors may be a source's own "
+                "(spec §7, ADR 0084)"
+            )
+
+
 def top_hit_count_columns(target: Target) -> Iterator[str]:
     """The Top-Hit Count columns (ADR 0032) are present and hold non-negative integers.
 
@@ -486,6 +512,7 @@ TABLE_RULES: tuple[Rule, ...] = (
     _table_rule("analyses.completion_declared", completion_declared),
     _table_rule("analyses.vocabularies", vocabularies),
     _table_rule("analyses.original_sd_recorded", original_sd_recorded),
+    _table_rule("analyses.sd_scale_standardised", sd_scale_standardised),
     _table_rule("analyses.top_hit_count_columns", top_hit_count_columns),
     Check(
         name="analyses.se_out_of_range_count", kinds=Kind.RELEASE, when=_with_analyses,
