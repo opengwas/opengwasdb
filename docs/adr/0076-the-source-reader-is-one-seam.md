@@ -175,6 +175,19 @@ them.**
     `row_statistics`; FinnGen's and BESD's `beta/se`;
   - the SE is the one reported, or recovered where the format recovers one.
 
+  **A missing declared capability is not a missing row** (added 2026-11-18,
+  issue #363). A GWAS-VCF whose header declares no FORMAT tag from which any
+  record's z can be formed -- neither `EZ`, nor `ES` with `SE` -- is refused by
+  the projections that form an association or a metric block, naming the file
+  and the tags it found. Read as a file with no rows, it was an Analysis stored
+  with 0 associations and nothing to say why. The refusal is on the *header*:
+  a declared tag whose record holds `.` is unchanged, because that record's
+  association is missing rather than the file broken. Site extraction
+  (`extract_at_sites`, ADR 0044's AF+SE ancestry rule) and the identity-only
+  variant scan are not subject to the check, and need not be: neither reads an
+  effect, and a file whose records report no AF or SE leaves the ancestry rule
+  nothing to read, which is a fact about the records rather than the header.
+
   Association Admission judges everything else. A reader declares, once per
   format, whether its rows name the genome's reference allele, and spells
   each indel's ALID by that declaration as it reads the row (ADR 0079). No
@@ -217,9 +230,14 @@ The owner's rulings on the unifications, issue #56:
   site extraction come with it.
 - GWAS-VCF reads its records with one header-probed, exit-checked query. A
   VCF with other than one sample column is refused by every projection, and
-  a failing query raises instead of ending the stream. A record with an
+  a failing query raises instead of ending the stream; both failures name the
+  file they were reading, and a header declaring neither `EZ` nor both `ES`
+  and `SE` is refused before a record is read (issue #363). A record with an
   unparseable position or one allele spelt twice is left out, as every
-  reader leaves it out. `build.vcf_source` is removed.
+  reader leaves it out. All 2,514 GWAS-VCF sources under
+  `/data/opengwasdb/raw/gwas-vcf/` declare `EZ` with `ES` and `SE`, each
+  header read, so no published Store's source is refused.
+  `build.vcf_source` is removed.
 - The resolver reads FinnGen. Ancestry assignment restricts a tabular
   reader's extraction to the region it asks for, where before it silently
   read every chromosome.

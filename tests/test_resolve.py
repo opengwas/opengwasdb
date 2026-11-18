@@ -1015,7 +1015,9 @@ def test_gwas_vcf_nonzero_query_is_controlled_not_false_eof(tmp_path, panel, mon
     monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", _FailedQuery)
     resolution = _resolve_vcf(path, panel)
 
-    assert resolution.error.startswith("OSError: bcftools record query failed (7)")
+    # The failure names the file it was reading (issue #363).
+    assert "bcftools record query failed (7)" in resolution.error
+    assert str(path) in resolution.error
     assert resolution.diagnostics.rows_read == 0
     assert resolution.ancestry is None
 
@@ -1052,7 +1054,8 @@ def test_gwas_vcf_early_close_preserves_already_failed_query(tmp_path, panel, mo
         path, panel, scan_limit=ScanLimit(max_rows=1), chunk_rows=1
     )
 
-    assert resolution.error.startswith("OSError: bcftools record query failed (17)")
+    assert "bcftools record query failed (17)" in resolution.error
+    assert str(path) in resolution.error
     assert resolution.ancestry is None
 
 
@@ -1134,7 +1137,7 @@ def test_finish_query_cancels_real_writer_before_closing_pipe():
                 proc.wait(timeout=2.0)
 
         proc.stdout = cast(TextIO, _CloseThenScheduleChild())
-        _finish_query(proc, errors, completed=False)
+        _finish_query(proc, errors, completed=False, path=Path("synthetic.vcf"))
 
     assert proc.returncode == -signal.SIGTERM
 
@@ -1163,7 +1166,7 @@ def test_finish_query_accepts_term_winning_kill_escalation_race():
 
     proc = cast(subprocess.Popen[str], _TermExitsAfterKill())
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
-        _finish_query(proc, errors, completed=False)
+        _finish_query(proc, errors, completed=False, path=Path("synthetic.vcf"))
 
     assert cast(_TermExitsAfterKill, proc).killed is True
 
@@ -1186,7 +1189,7 @@ def test_finish_query_does_not_hide_unexpected_signal():
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
         with pytest.raises(OSError, match=r"query failed \(-11\)"):
             proc = cast(subprocess.Popen[str], _CrashesWhileBeingCancelled())
-            _finish_query(proc, errors, completed=False)
+            _finish_query(proc, errors, completed=False, path=Path("synthetic.vcf"))
 
 
 def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):
