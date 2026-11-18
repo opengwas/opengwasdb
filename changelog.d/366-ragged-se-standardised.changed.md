@@ -38,9 +38,7 @@
 
 - **Every builder refuses a row labelled `stored_effect_scale=sd` whose
   `original_sd_method` is neither a rescaling method nor
-  `declared_standardised`, and names the Analysis.** `build-ragged-ssf` used to
-  default the scale to `sd` and read an omitted method as "divide by 1", so a
-  row with no method built as SD Units, undivided. It no longer has a
-  `--stored-effect-scale` option: the scale is each manifest row's, and a row
-  declaring none is refused. A blank method with a blank scale (`build-ragged-besd`)
-  still builds, as "not standardised, scale unknown" (ADR 0084).
+  `declared_standardised`, and names the Analysis.** A missing-value spelling
+  (`NA`, `.`, white space) reads as no method on the Ragged builders. A blank
+  method with a blank scale (`build-ragged-besd`) still builds, as "not
+  standardised, scale unknown" (ADR 0084).

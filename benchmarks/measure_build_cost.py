@@ -146,8 +146,6 @@ def _ragged_ssf_argv(out: Path) -> list[str]:
         "OGS-00007",
         "--release-id",
         "OGS-00007",
-        "--stored-effect-scale",
-        "sd",
     ]
 
 

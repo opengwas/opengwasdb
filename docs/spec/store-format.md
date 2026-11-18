@@ -985,6 +985,10 @@ log_hazard
 
 There is no `other`, `unknown`, or original-units Stored Effect Scale in v0.1. Unsupported stored scales MUST fail ingestion until the vocabulary is deliberately extended.
 
+An Analysis whose Stored Effect Scale is `sd` MUST have an `original_sd_method` that is a rescaling method (below) or `declared_standardised`: SD Units are claimed only for statistics that were divided by a phenotype SD or arrived already standardised. A builder refuses a manifest row that says otherwise, naming the Analysis, and `validate` fails a Store that holds one (`analyses.sd_scale_standardised`, §20.0), at every `format_version`. A blank `original_sd_method` beside a blank Stored Effect Scale is not a scale and not the vocabulary's missing value: it is an absent declaration, "not standardised, scale unknown" (ADR 0084), and no reader may treat it as SD Units. OGS-00001 and OGS-00002 hold it. A builder does not write it from a manifest that names a scale; `build-ragged-besd` reads a blank cell as absent and builds it, and `build-ragged-ssf` refuses a row with no scale.
+
+`build-ragged-ssf` records `provenance.stored_effect_scale` in `manifest.json` as the scale its rows declare: the one value when they agree, else the distinct values sorted and comma-joined (`log_or,sd`). The per-Analysis scale is `analyses.tsv`'s.
+
 Original Effect Scale MAY be recorded as free-text provenance. For continuous traits, builders SHOULD store effects in SD Units when phenotype standard deviation is available or can be derived with acceptable provenance, by rescaling the source statistics with a per-study phenotype SD rather than reconstructing them from Z, N, and allele frequency (ADR 0029). The method used to obtain that SD (`original_sd_method`) and a dispersion diagnostic over its supporting evidence MUST be recorded as Analytical Metadata (§7a).
 
 Every builder that reads a build manifest applies that rescaling, and applies it
@@ -2351,6 +2355,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
 | `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
 | `analyses.original_sd_recorded` | release | check | an Analysis whose `original_sd_method` rescales records a finite, positive `original_sd`, at every `format_version` (§7a) |
+| `analyses.sd_scale_standardised` | release | check | an Analysis with `stored_effect_scale=sd` has a rescaling `original_sd_method` or `declared_standardised`, at every `format_version` (§7) |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
 | `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
 | `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a) |
