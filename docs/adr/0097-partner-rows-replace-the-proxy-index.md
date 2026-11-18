@@ -3,10 +3,20 @@
 Part of epic [#64](https://github.com/opengwas/ogld/issues/64). The design is `docs/spec/partner-rows.md`. It supersedes, for
 `clump` and `proxies`, decision 1 of epic [#45](https://github.com/opengwas/ogld/issues/45)
 ("keep the upper triangle and Zarr v3; no symmetric duplication and no independent row-frame
-format"). The terms are in `CONTEXT.md` once the epic adds them.
+format"). The terms are in `CONTEXT.md`.
+
+> **Decision 5's "plain files, not Zarr" is refined by the clarification of 18 November 2026**
+> (see "Clarification, 18 November 2026" at the end). `partners/<chrom>/` is a Zarr group in the
+> store's one hierarchy, not a directory of plain files, because the plain files make zarr's
+> `members()` warn. Everything else in decision 5 stands: G rows to a zstd frame, one positional
+> read or Range request per frame, and a failed check a refusal naming the chromosome and the
+> frame. The consequence below that `partners/` has no `zarr.json` and zarr does not see it is
+> superseded, and so is the one that §11's sizes are projections: the clarification records the
+> measured ones.
 
 **Who decided.** The owner, 18 November 2026, on the measurements of 17–18 November 2026
-(`proto/partner-rows`), taking decisions D1–D6 of `docs/spec/partner-rows.md` §1.
+(`proto/partner-rows`), taking decisions D1–D6 of `docs/spec/partner-rows.md` §1; refined the same
+day by the clarification at the end, on #65's measurements.
 
 ## Context
 
@@ -43,7 +53,8 @@ sampling alone, so about 90% of the passing pairs are noise.
 4. **t_partner is set per reference dataset and recorded in provenance** (D3), as t_far is. It
    is a required build input with no default, and never above t_far: 0.01 for HGDP+1kGP and
    0.001 for UK Biobank EUR.
-5. **Plain files, not Zarr** (D4). G rows to a zstd frame, with checksum and content size,
+5. **Plain files, not Zarr** (D4; refined by the clarification at the end: a Zarr group holding
+   one chunk). G rows to a zstd frame, with checksum and content size,
    concatenated in `frames.bin`, located by `frames.idx`, described by `manifest.json`. A frame
    is one positional read or HTTP Range request, then one decompress. Any failed check is a
    refusal naming the chromosome and the frame.
@@ -68,4 +79,44 @@ sampling alone, so about 90% of the passing pairs are noise.
 - ALID resolution (`rows_of`, 3.18 s on GCST90476460) becomes most of a clump's time. It is
   #45's mmap ALID work (#47, #471), not this decision.
 - The spec's §11 sizes are projections from chr22 with a simpler encoding. The epic measures
-  the real bytes, and a result that undermines a decision goes back to the owner.
+  the real bytes, and a result that undermines a decision goes back to the owner. On 18 November
+  2026 they were measured for EUR, and one decision was refined: see below.
+
+## Clarification, 18 November 2026
+
+The owner refined decision 5, and #65's measurements fixed the size and the two numbers the
+decisions left open (`proto/partner-rows@912a9fa:prototypes/partner-rows/`, recorded in
+`docs/spec/partner-rows.md` §11). They refine the decisions above; none is reversed.
+
+**The physical form is a Zarr group, not plain files** (owner, refining D4). Each
+`partners/<chrom>/` is a Zarr v3 group in the store's one hierarchy:
+
+- `frames` is a `uint8` array of shape (B,), one chunk of shape (B,), with the `bytes` codec and
+  **no compressor**. Its chunk file is the raw concatenated zstd frames, so a lead is still one
+  positional read or Range request. A reader resolves that file's path from the array's metadata
+  and never assumes one.
+- `frames_idx` is a `uint64` array of the F + 1 byte offsets, little-endian, one chunk.
+- The manifest's keys are the group's attributes.
+
+The reason is the compatibility check, not a measurement of speed. `zarr.open_group` and
+`ogld.open` on a store with a plain-file `partners/` are clean, and `ogld.validate` passes all 27
+rules, none of which looks at the new component. But zarr-python 3.4.2's `members()` emits
+`ZarrUserWarning: Object at partners is not recognized as a component of a Zarr hierarchy.` A node
+in the hierarchy removes the warning, and the single-chunk form was tested to list without it.
+Decision 5's one-read rule survives because one chunk has no shard index to resolve first.
+
+**The measured size is larger than the projection, and the owner accepted it.** EUR's Partner Rows
+are **14.765 GB at G = 16** and **11.821 GB at G = 64**, against decision 5's and §11's 9.0 GB
+projection, because the genome keeps **7.27%** of Near Band pairs where chr22 keeps 5.03%: the
+projected chromosome was unrepresentative. Net of EUR's 9.382 GB Proxy Index the store grows by
+**5.383 GB at G = 16** and 2.439 GB at G = 64, and the owner's same scaling puts the five panels
+at roughly **+53 GB net at G = 64**. Decisions 1, 2 and 6 stand; §11's table is the measurements
+now, and #73 measures the other four panels.
+
+**G = 16, and component workers capped at 4** (orchestrator, on that evidence;
+`docs/spec/partner-rows.md` §1, §5.2, §9.2). EUR genome bytes are 18.506 GB at G = 4, 16.677 GB at
+G = 8, 14.765 GB at G = 16 and 11.821 GB at G = 64. With the row-local unshuffle, cold LD on the
+whole of GCST90476460 is 1.169 s at G = 4 with two workers and 1.051 / 1.067 s at G = 8 / 16 with
+four, and 5.753 / 5.109 s with eight at G = 8 / 16: eight workers regress. G = 16 is the smallest
+of the configurations that are equally fast. **The under-1 s LD target moves to #71** (the
+owner's rule for this round): the best cold time is 1.051 s, so nothing here claims it.
