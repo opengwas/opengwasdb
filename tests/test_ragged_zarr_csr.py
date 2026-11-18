@@ -11,6 +11,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.store.arrays import ArrayRole, open_group, shard_layout
 
@@ -36,7 +37,7 @@ def _make_writer(n_analyses: int, seed: int = 42) -> tuple[RaggedCSRWriter, list
         vi = np.sort(rng.integers(0, 10_000_000, size=count)).astype(np.int32)
         z = rng.standard_normal(count).astype(np.float32)
         se = np.abs(rng.standard_normal(count)).astype(np.float16)
-        writer.add_analysis(vi, z, se)
+        writer.add_analysis(vi, z, se, phenotype_sd=PhenotypeSd.APPLIED)
         expected.append((vi, z, se))
     return writer, expected
 
@@ -78,16 +79,19 @@ def test_empty_analysis(tmp_path):
         np.array([1, 2, 3], dtype=np.int32),
         np.array([1.0, -2.0, 0.5], dtype=np.float32),
         np.array([0.1, 0.2, 0.3], dtype=np.float16),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     writer.add_analysis(
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float16),
         np.empty(0, dtype=np.float16),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     writer.add_analysis(
         np.array([100], dtype=np.int32),
         np.array([3.0], dtype=np.float16),
         np.array([0.5], dtype=np.float16),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     writer.flush(tmp_path, ENCODING)
 
@@ -111,6 +115,7 @@ def test_all_empty_analyses(tmp_path):
             np.empty(0, dtype=np.int32),
             np.empty(0, dtype=np.float16),
             np.empty(0, dtype=np.float16),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     writer.flush(tmp_path, ENCODING)
 
@@ -128,11 +133,13 @@ def test_n_associations_counter(tmp_path):
         np.array([1, 2], dtype=np.int32),
         np.array([1.0, 2.0], dtype=np.float16),
         np.array([0.1, 0.2], dtype=np.float16),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     writer.add_analysis(
         np.array([3, 4, 5], dtype=np.int32),
         np.array([3.0, 4.0, 5.0], dtype=np.float16),
         np.array([0.3, 0.4, 0.5], dtype=np.float16),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     assert writer.n_associations == 5
     writer.flush(tmp_path, ENCODING)
@@ -159,6 +166,7 @@ def _add(writer: RaggedCSRWriter, arrays: dict[str, np.ndarray]) -> None:
         arrays["se"],
         arrays["eaf"],
         arrays["n"],
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
 
 
@@ -195,6 +203,7 @@ def test_the_reproduced_length_one_se_is_refused_before_it_broadcasts():
             np.array([1, 2, 3], dtype=np.int32),
             np.array([1.0, 2.0, 3.0], dtype=np.float32),
             np.array([0.1], dtype=np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     assert writer.n_associations == 0
     assert writer.n_analyses == 0
@@ -218,7 +227,10 @@ def test_a_marker_other_than_the_canonical_nan_is_refused_before_it_is_narrowed(
     writer = RaggedCSRWriter(_N_VARIANTS)
 
     with pytest.raises(NotAdmitted, match="a missing marker other than the canonical NaN: 1"):
-        writer.add_analysis(np.array([1, 2, 3], dtype=np.int32), z, se, where="build-x")
+        writer.add_analysis(
+            np.array([1, 2, 3], dtype=np.int32), z, se, where="build-x",
+            phenotype_sd=PhenotypeSd.APPLIED,
+        )
     assert writer.n_associations == 0
 
 
@@ -250,6 +262,7 @@ def test_the_ragged_eaf_baseline_takes_the_ragged_shard_policy(tmp_path):
         np.array([1.0, 2.0, 3.0], dtype=np.float32),
         np.array([0.1, 0.2, 0.3], dtype=np.float32),
         eaf=np.array([0.2, 0.3, 0.4], dtype=np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     writer.flush(
         tmp_path,

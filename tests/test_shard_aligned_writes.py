@@ -33,6 +33,7 @@ import numpy as np
 import pytest
 import zarr
 
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.se import _row_block_of
 from opengwasdb.layouts.dense.build_vcf import _eaf_row_band, _flush_band, _shard_columns
 from opengwasdb.layouts.dense.complete import _completion_band_rows
@@ -591,6 +592,7 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
             rng.standard_normal(700_000).astype(np.float32),
             np.abs(rng.standard_normal(700_000)).astype(np.float32),
             rng.random(700_000).astype(np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,
         )
     expected_shards = 3  # 2,100,000 cells / 800,000
     assert len(list(writer._flat_regions(writer.n_associations, 200_000))) > 1

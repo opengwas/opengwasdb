@@ -61,12 +61,12 @@ from opengwasdb.encoding.codec import (
     require_parallel,
 )
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
-    apply_se_divisor,
     column_map_provenance,
     manifest_row_to_analysis,
     read_manifest,
@@ -582,9 +582,11 @@ def _route_and_spill(
         gate.unplaced_off_axis(
             routed.unmatched.keys, _unmatched_off_primary(routed.unmatched.keys, row, context)
         )
-        se = apply_se_divisor(placed.se, row.se_divisor)
         where = f"build-dense-vcf, Analysis {row.trait_id}"
-        kept = storable(CellValues(placed.z, se, placed.eaf), 0, 1, where=where)
+        kept = storable(
+            CellValues(placed.z, placed.se, placed.eaf), 0, 1, where=where,
+            phenotype_sd=PhenotypeSd.dividing_by(row.se_divisor),
+        )
         log_se_out_of_range(kept.se_out_of_range, where=where)
         _spill_stored(context.spill_dir, col_idx, placed.index, kept)
     return col_idx, int(kept.se_out_of_range.sum())

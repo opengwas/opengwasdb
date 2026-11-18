@@ -43,6 +43,7 @@ import opengwasdb.layouts.ragged.complete as complete_module
 import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
 import opengwasdb.store.arrays as store_arrays
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store, resume_ragged_completion
@@ -355,7 +356,8 @@ def test_a_flush_of_regions_refuses_a_residual_plan_with_no_model(tmp_path: Path
     its own needs the whole frequency plane first, which `flush` writes."""
     writer = RaggedCSRWriter(4)
     writer.add_analysis(
-        np.arange(4), np.ones(4), np.full(4, 0.1), eaf=np.full(4, 0.3, np.float32)
+        np.arange(4), np.ones(4), np.full(4, 0.1), eaf=np.full(4, 0.3, np.float32),
+        phenotype_sd=PhenotypeSd.APPLIED,
     )
     plan = StoreEncoding(
         z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")

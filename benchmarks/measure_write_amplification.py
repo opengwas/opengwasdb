@@ -51,6 +51,7 @@ from typing import Any
 import numpy as np
 
 from benchmarks._artifact import commit
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -113,6 +114,7 @@ def _synthetic_writer(
             z.astype(np.float32),
             se.astype(np.float32),
             eaf.astype(np.float32),
+            phenotype_sd=PhenotypeSd.APPLIED,  # synthetic SEs, already in SD Units
         )
     return writer
 

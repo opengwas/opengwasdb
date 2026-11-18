@@ -70,8 +70,8 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
-from opengwasdb.layouts import build_manifest
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -158,6 +158,7 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_component_path,
     dense_to_shared_path,
 )
+from opengwasdb.layouts.hybrid.overflow_spills import assemble_overflow_csr
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
@@ -253,9 +254,7 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 _Component = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-def _off_reference_spill(
-    unmatched: Unmatched, se_divisor: float, gate: Gate
-) -> _OffReferenceSpill:
+def _off_reference_spill(unmatched: Unmatched, gate: Gate) -> _OffReferenceSpill:
     """The associations the route table does not hold, one uint64 key per raw
     coordinate, their duplicates on that key resolved as an axis's are
     (`collapse_duplicates`): a conflicting key's rows are dropped and logged
@@ -286,7 +285,6 @@ def _off_reference_spill(
     lookup = encoded.hashed_lookup()
     hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
     hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
-    se = build_manifest.apply_se_divisor(se, se_divisor)
     return keys, z, se, eaf, hashed_index, hashed_raw
 
 
@@ -305,9 +303,8 @@ def _resolve_column_hybrid(
     each ``(index/key, z f32, se f32, eaf f32)`` with its duplicates resolved
     (`collapse_duplicates`); ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
-    The row's ``se_divisor`` divides every returned ``se``, dense and overflow
-    alike (continuous-trait phenotype-SD standardisation, issue #18): a study's
-    SD rescaling applies whichever component an association routes to. The
+    Every ``se`` is the source's: `_stored_parts` standardises all three parts
+    by the row's phenotype SD, through `storable` (issue #18, ADR 0084). The
     Analysis's imputation-score declaration reaches the reader, and ``gate``
     judges each batch before it is matched. The study is read as its reader's
     association batches where it offers them, else one association at a time
@@ -332,12 +329,10 @@ def _resolve_column_hybrid(
         # unmatched row onto it later: it is dropped here, and logged.
         gate.unplaced_off_axis(unmatched.keys, off_primary)
         unmatched = Unmatched.none()
-    divisor = row.se_divisor
-    overflow_se = build_manifest.apply_se_divisor(overflow.se, divisor)
     return (
-        (dense.index, dense.z, build_manifest.apply_se_divisor(dense.se, divisor), dense.eaf),
-        (overflow.index, overflow.z, overflow_se, overflow.eaf),
-        _off_reference_spill(unmatched, divisor, gate),
+        (dense.index, dense.z, dense.se, dense.eaf),
+        (overflow.index, overflow.z, overflow.se, overflow.eaf),
+        _off_reference_spill(unmatched, gate),
     )
 
 
@@ -454,17 +449,29 @@ def _route_column(
         dense, overflow, off_reference = _resolve_column_hybrid(
             context.table, row, gate, context.axes, context.folds, context.off_primary
         )
-        parts, left_out = _stored_parts(row.trait_id, dense, overflow, off_reference)
+        parts, left_out = _stored_parts(
+            row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
+        )
         _spill_hybrid_column(context.spill_dir, col_idx, *parts)
     return col_idx, left_out[0], left_out[1]
 
 
 def _stored_parts(
-    trait_id: str, dense: _Component, overflow: _Overflow, off_reference: _OffReferenceSpill
+    trait_id: str,
+    phenotype_sd: PhenotypeSd,
+    dense: _Component,
+    overflow: _Overflow,
+    off_reference: _OffReferenceSpill,
 ) -> tuple[tuple[_Component, _Overflow, _OffReferenceSpill], tuple[int, int]]:
     """Each part of one column as `storable` returns it: the rows it stores,
     with their values. A spill holds rows, so a row not stored is left out, and
     its frequency with it.
+
+    The parts hold the source's SEs, and `storable` divides all three by the
+    Analysis's ``phenotype_sd``, whichever component an association routes to
+    (issue #18, ADR 0084). What is spilled is therefore standardised, and the
+    Overflow assembly that reads the spill back (`overflow_spills`) hands it
+    on as already standardised.
 
     Also how many associations each component lost for an SE above `float16`'s
     range (issue #338), logged here: the Dense part's, and the Overflow's with
@@ -473,7 +480,7 @@ def _stored_parts(
 
     def judged(name: str, z: np.ndarray, se: np.ndarray, eaf: np.ndarray) -> Storable:
         where = f"build-hybrid {trait_id} {name}"
-        kept = storable(CellValues(z, se, eaf), 0, 1, where=where)
+        kept = storable(CellValues(z, se, eaf), 0, 1, where=where, phenotype_sd=phenotype_sd)
         log_se_out_of_range(kept.se_out_of_range, where=where)
         return kept
 
@@ -501,94 +508,6 @@ def _stored_parts(
     return (stored_dense, stored_overflow, stored_off_reference), (
         dense_left_out, overflow_left_out
     )
-
-
-@dataclass(frozen=True)
-class _OverflowColumn:
-    """One Analysis's overflow spill, read, sorted and ready for the CSR.
-
-    `eaf` is ``None`` when the column carries no finite frequency, which is
-    what the writer turns into an all-NaN row (ADR 0036).
-    """
-
-    variant_index: np.ndarray
-    z: np.ndarray
-    se: np.ndarray
-    eaf: np.ndarray | None
-
-
-def _assemble_overflow_column(task: tuple[int, str]) -> _OverflowColumn | None:
-    """Load and sort one ``.ovf.npz`` column. Runs in a forked worker.
-
-    Returns `None` for a column with no spill file. The spill is *not* deleted
-    here: the parent deletes it once the column has been added to the CSR, so a
-    failure partway through combination cannot lose a spill that was never
-    used.
-    """
-    col, spill_dir = task
-    path = Path(spill_dir) / f"{col}.ovf.npz"
-    if not path.exists():
-        return None
-    with np.load(path) as data:
-        vi = data["variant_index"].astype(np.int32)
-        z = data["z"].astype(np.float32)
-        se = data["se"].astype(np.float32)
-        eaf = data["eaf"].astype(np.float32)
-    # Sort by variant_index for consistent within-analysis ordering (matches
-    # the ragged BESD builder and lets top-hit CSR cross-validation searchsort).
-    order = np.argsort(vi, kind="stable")
-    has_eaf = bool(np.isfinite(eaf).any())
-    return _OverflowColumn(
-        variant_index=vi[order],
-        z=z[order],
-        se=se[order],
-        eaf=eaf[order] if has_eaf else None,
-    )
-
-
-def _assemble_overflow_csr(
-    spill_dir: Path,
-    n_analyses: int,
-    n_variants: int,
-    n_workers: int = 1,
-    *,
-    consume_spills: bool = True,
-) -> tuple[RaggedCSRWriter, np.ndarray]:
-    """Assemble the overflow CSR from per-column ``.ovf.npz`` spills, in analysis
-    order (so CSR offsets align with analysis_index).
-
-    Also returns a per-column bool array saying which Analyses carried an EAF
-    into the *overflow* component. An Analysis can have EAF off-panel and none
-    on it, so `eaf_scope` is the union of this and the Dense Component's own
-    answer, never either alone (ADR 0036).
-
-    The columns are independent, so `n_workers` > 1 loads and sorts them through
-    `ordered_map`, which keeps only a bounded number of results in flight, and
-    the parent adds them to the CSR in analysis order. `n_workers <= 1` is the
-    serial path.
-
-    ``consume_spills=False`` keeps each plate after it has been added (issue
-    #227): the build tail that a checkpoint re-runs wholesale re-assembles the
-    CSR, and the assembled writer lives only in memory, so the plates are its
-    only durable input. The plates are read and combined identically either
-    way -- the two differ in what is left on disk, not in what is written.
-    """
-    csr = RaggedCSRWriter(n_variants)
-    column_has_eaf = np.zeros(n_analyses, dtype=bool)
-    tasks = ((col, str(spill_dir)) for col in range(n_analyses))
-    for col, result in enumerate(ordered_map(_assemble_overflow_column, tasks, n_workers)):
-        if result is None:
-            csr.add_analysis(
-                np.empty(0, dtype=np.int32),
-                np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float32),
-            )
-            continue
-        column_has_eaf[col] = result.eaf is not None
-        csr.add_analysis(result.variant_index, result.z, result.se, eaf=result.eaf)
-        if consume_spills:
-            (spill_dir / f"{col}.ovf.npz").unlink()
-    return csr, column_has_eaf
 
 
 # ── Deep-phase helpers for the build entry point (issue #130) ────────────────
@@ -2258,7 +2177,7 @@ def _assemble_overflow(
     """Phase - assemble the Ragged Overflow CSR from the per-column overflow
     spills, in analysis order so CSR offsets align with analysis_index."""
     log.info("Assembling Ragged Overflow CSR from %d columns", prepared.n_analyses)
-    csr, overflow_has_eaf = _assemble_overflow_csr(
+    csr, overflow_has_eaf = assemble_overflow_csr(
         prepared.spill_dir,
         prepared.n_analyses,
         prepared.partition.n_shared,

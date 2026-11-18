@@ -896,6 +896,69 @@ def test_validator_accepts_valid_original_sd_method(dense_store_path):
     assert result.ok, result.errors
 
 
+def _shaped_like_ogs_00006(store: Path, original_sd: str) -> str:
+    """Give the store's first Analysis OGS-00006's published SD columns: a
+    rescaling method, with `original_sd` as given (blank there). Returns its id."""
+    analyses_path = store / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    row = table.rows[0]
+    row.update(
+        original_effect_scale="sd",
+        original_sd_method="estimated_from_source_maf",
+        original_sd=original_sd,
+    )
+    write_analyses(analyses_path, table)
+    return str(row["analysis_id"])
+
+
+_ORIGINAL_SD_RECORDED = "analyses.original_sd_recorded"
+
+
+def _names_it(result, analysis: str, original_sd: str) -> bool:
+    return any(
+        f"analysis {analysis!r} declares original_sd_method='estimated_from_source_maf'" in e
+        and f"original_sd {original_sd!r}" in e
+        for e in result.errors
+    )
+
+
+def test_a_release_shaped_like_ogs_00006_fails_only_for_its_blank_original_sd(
+    ragged_store_path,
+):
+    """Issue #366: OGS-00006, -00024, -00025 and -00026 record
+    `estimated_from_source_maf` with a blank `original_sd`, and hold their
+    sources' SEs undivided. Nothing else in a Store shows it."""
+    assert validate_store(ragged_store_path).ok, "the fixture must validate before it is edited"
+    analysis = _shaped_like_ogs_00006(ragged_store_path, "")
+
+    result = validate_store(ragged_store_path)
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, ""), result.errors
+
+
+@pytest.mark.parametrize("original_sd", ["inf", "nan", "0", "-0.984008520611909", "sd"])
+def test_a_rescaling_method_without_a_finite_positive_original_sd_fails_naming_the_analysis(
+    ragged_store_path, original_sd
+):
+    """The rule alone (and what it runs after), so each value costs one table read."""
+    assert validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED}).ok
+    analysis = _shaped_like_ogs_00006(ragged_store_path, original_sd)
+
+    result = validate_store(ragged_store_path, rules={_ORIGINAL_SD_RECORDED})
+
+    assert result.failed() == {_ORIGINAL_SD_RECORDED}
+    assert _names_it(result, analysis, original_sd), result.errors
+
+
+def test_a_rescaling_method_with_the_sd_it_divided_by_validates(ragged_store_path):
+    _shaped_like_ogs_00006(ragged_store_path, "0.984008520611909")
+
+    result = validate_store(ragged_store_path)
+
+    assert result.ok, result.errors
+
+
 def test_validator_rejects_invalid_ancestry_assignment_method(dense_store_path):
     analyses_path = dense_store_path / "analyses.tsv"
     table = read_analyses(analyses_path)

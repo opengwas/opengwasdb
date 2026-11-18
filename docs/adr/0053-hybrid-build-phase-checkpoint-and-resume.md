@@ -39,7 +39,7 @@ is idempotent over what a failed attempt left there: `write_eaf_plane` recreates
 the ragged group with `mode="w"`, zarr chunk writes and top-hit tiers are
 replaced rather than appended, and the manifest, `analyses.tsv`, variant table
 and index are rewritten. So the Overflow `.ovf` plates are not consumed under
-`--checkpoint` (`_assemble_overflow_csr(consume_spills=False)`), because the CSR
+`--checkpoint` (`overflow_spills.assemble_overflow_csr(consume_spills=False)`), because the CSR
 itself lives only in memory and the plates are its only durable input.
 
 **The measured states are frozen, and only the plan's own phase may measure
@@ -143,7 +143,7 @@ nothing, so a plain build with nothing to resume is exactly the build it was.
   neither fails nor is abandoned pays for writing the small records and for
   keeping the plates until the tail has read them.
 - The retained plates make the pipeline's spill-consumption policy conditional:
-  `_assemble_overflow_csr` takes `consume_spills`, and `_write_dense_bands`
+  `assemble_overflow_csr` (now in `layouts/hybrid/overflow_spills.py`) takes `consume_spills`, and `_write_dense_bands`
   (dense, unchanged) still unlinks. A future reader of the spill directory has to
   know which of those applies.
 - `checkpoint_dir_for` and `require_fresh_destination` are imported from

@@ -34,6 +34,7 @@ from test_check_observed_view import HEADER, ROWS
 import opengwasdb.completion.block as block_module
 from opengwasdb.encoding import association_codec, codec, se
 from opengwasdb.encoding.association_codec import CellValues, Storable
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.dense import build_vcf
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build
@@ -64,13 +65,17 @@ def _as_before_0_2_3(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     the bound narrowed by the plan, and nothing counted."""
     real = association_codec.storable
 
-    def kept_whole(cells: CellValues, analyses, n_analyses: int, *, where: str) -> Storable:
-        se_values = np.asarray(cells.se)
+    def kept_whole(
+        cells: CellValues, analyses, n_analyses: int, *, where: str, phenotype_sd: PhenotypeSd
+    ) -> Storable:
+        owner = np.broadcast_to(np.asarray(analyses, dtype=np.int64), np.shape(cells.z))
+        se_values = phenotype_sd.standardised(np.asarray(cells.se), owner, n_analyses)
+        cells = CellValues(cells.z, se_values, cells.eaf, cells.imputed)
         with np.errstate(invalid="ignore"):
             stand_in = np.where(se_values > 65504.0, np.float32(1.0), se_values)
         judged = real(  # Admission's other rules still hold of every cell
             CellValues(cells.z, stand_in, cells.eaf, cells.imputed), analyses, n_analyses,
-            where=where,
+            where=where, phenotype_sd=PhenotypeSd.APPLIED,
         )
         none = np.zeros(n_analyses, dtype=np.int64)
         return Storable(cells, np.ones(np.shape(cells.z), dtype=bool) & judged.stored, none, none)
@@ -321,9 +326,11 @@ def test_the_fill_merge_holds_what_storable_returns(monkeypatch) -> None:
     real = association_codec.storable
     judged: list[str] = []
 
-    def gate(cells: CellValues, analyses, n_analyses: int, *, where: str) -> Storable:
+    def gate(
+        cells: CellValues, analyses, n_analyses: int, *, where: str, phenotype_sd: PhenotypeSd
+    ) -> Storable:
         judged.append(where)
-        kept = real(cells, analyses, n_analyses, where=where)
+        kept = real(cells, analyses, n_analyses, where=where, phenotype_sd=phenotype_sd)
         also = np.asarray(cells.se) == np.float32(0.5)
         owners = np.broadcast_to(np.asarray(analyses), also.shape)[also]
         extra = np.bincount(owners, minlength=n_analyses).astype(np.int64)

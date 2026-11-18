@@ -21,6 +21,7 @@ import numpy as np
 from test_overflow_cell_streaming import _model_writer, _residual_se_encoding, _stored
 
 from opengwasdb.encoding import StoreEncoding
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.layouts.ragged import zarr_csr
 
 #: The plane `test_overflow_cell_streaming`'s fixtures use: enough cells per
@@ -123,7 +124,7 @@ def test_an_analysis_added_after_a_derivation_drops_the_baseline() -> None:
         np.ones(1, dtype=np.float32),
         np.array([0.99], dtype=np.float32),
     )
-    writer.add_analysis(*extra)
+    writer.add_analysis(*extra, phenotype_sd=PhenotypeSd.APPLIED)
     after = writer._eaf_baseline(encoding)
 
     assert after is not before, "a new cell must invalidate the held baseline"
@@ -132,7 +133,7 @@ def test_an_analysis_added_after_a_derivation_drops_the_baseline() -> None:
 
     # And what it recomputes is what a writer never asked before derives.
     scratch = _model_writer(_SIZES)
-    scratch.add_analysis(*extra)
+    scratch.add_analysis(*extra, phenotype_sd=PhenotypeSd.APPLIED)
     np.testing.assert_array_equal(scratch._eaf_baseline(encoding), after)
 
 

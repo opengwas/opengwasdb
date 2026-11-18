@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from sd_scaling import require_rescaling
 from stored_rows import stored_rows
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -61,6 +62,8 @@ _MANIFEST_HEADER = [
     "mhc",
     "filtered_file",
     "source_genome_build",
+    "original_sd_method",
+    "original_sd",
 ]
 
 
@@ -296,6 +299,56 @@ def test_ssf_build_queries_and_validates_residual_se(tmp_path):
         result = query.analysis("trait")
     np.testing.assert_allclose(result["se"], expected, rtol=0.01)
     assert validate_store(out).ok
+
+
+def test_ssf_se_is_standardised_by_the_manifests_original_sd(tmp_path):
+    """Issue #366: Ragged SSF standardises SEs by a rescaling `original_sd`
+    exactly as BESD, Dense, Dense-from-VCF and Hybrid do, stores `z` unchanged,
+    and records the SD it divided by in analyses.tsv (a Store that standardised
+    by an unrecorded number would be unreadable in original units).
+
+    The values are the fixture's own: the one source association holds
+    beta=1.0 and se=0.5, so it stores z=2.0 and se=0.25 (0.5 / 2.0).
+    """
+    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.model.enums import OriginalSdMethod
+
+    require_rescaling(OriginalSdMethod.SOURCE_PROVIDED)
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_one_association(filtered_dir)
+    manifest = tmp_path / "manifest.tsv"
+    _write_manifest(
+        manifest,
+        [
+            {
+                "analysis_index": 0,
+                "analysis_id": "trait_a",
+                "analysis_label": "Trait A",
+                "n": 1000,
+                "mhc": "FALSE",
+                "filtered_file": "trait_a.tsv.gz",
+                "source_genome_build": "GRCh38",
+                "original_sd_method": "source_provided",
+                "original_sd": "2.0",
+            }
+        ],
+    )
+    out = tmp_path / "out_sd.opengwasdb"
+
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+
+    recorded = read_analyses(out / "analyses.tsv").rows[0]
+    assert (recorded["original_sd_method"], recorded["original_sd"]) == (
+        "source_provided", "2.0"
+    ), "a standardised Analysis must record the SD it was standardised by"
+    stored = stored_rows(out, 0)
+    assert len(stored.variant_index) == 1, "the fixture must place one association"
+    assert float(stored.se[0]) == pytest.approx(0.25, rel=5e-3)  # source 0.5 / 2.0
+    assert float(stored.z[0]) == pytest.approx(2.0, rel=5e-3)  # beta 1.0 / se 0.5
 
 
 def test_manifest_fields(tmp_path):

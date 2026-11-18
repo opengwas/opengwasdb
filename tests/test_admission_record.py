@@ -532,7 +532,7 @@ def test_the_hybrid_off_reference_spill_resolves_its_duplicates():
         alt=["G", "G", "T", "T", "C"],
     )
     gate = counting_gate(AnalysisRules("A"))
-    keys, z, *_ = _off_reference_spill(unmatched, 1.0, gate)
+    keys, z, *_ = _off_reference_spill(unmatched, gate)
 
     assert z.tolist() == [1.0, 3.0]
     assert len(keys) == 2

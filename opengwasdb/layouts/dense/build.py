@@ -24,9 +24,9 @@ from opengwasdb.encoding.association_codec import (
     Placement,
     log_se_out_of_range,
 )
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.index import initialise_schema, set_metadata
-from opengwasdb.layouts.build_manifest import apply_se_divisor
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
@@ -163,7 +163,7 @@ def build_dense_observed_store(
         records, rsid_by_alid = _admitted_records(sources, directory)
         variants = _collect_variants(records)
         analyses = _collect_analyses(records, sources)
-        z, se, eaf, left_out = _stored_grid(records, variants, analyses)
+        z, se, eaf, left_out = _stored_grid(records, variants, analyses, sources)
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
@@ -194,17 +194,22 @@ def _stored_grid(
     records: list[NormalisedAssociation],
     variants: list[CanonicalVariant],
     analyses: list[Analysis],
+    sources: Sequence[AnalysisSource],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """The records' grid as the Store will hold it (`storable`), and per Analysis
     how many associations it leaves out for an SE above `float16`'s range (#338).
 
-    Judged before the plan is measured, so the plan is fitted to the cells the
-    Store holds and not to one it leaves out (ADR 0068).
+    The records hold their sources' SEs; `storable` standardises each column by
+    its Analysis's phenotype SD (#18, ADR 0084). Judged before the plan is
+    measured, so the plan is fitted to the cells the Store holds and not to one
+    it leaves out (ADR 0068).
     """
     z, se, eaf = _scatter_records(records, variants, analyses)
     n_analyses = len(analyses)
+    divisor = {source.analysis.analysis_id: source.se_divisor for source in sources}
     kept = association_codec.storable(
-        CellValues(z, se, eaf), np.arange(n_analyses)[None, :], n_analyses, where="build-dense"
+        CellValues(z, se, eaf), np.arange(n_analyses)[None, :], n_analyses, where="build-dense",
+        phenotype_sd=PhenotypeSd.of_analyses(divisor[a.analysis_id] for a in analyses),
     )
     log_se_out_of_range(
         kept.se_out_of_range, [a.analysis_id for a in analyses], where="build-dense"
@@ -252,9 +257,10 @@ def _records_of(source: AnalysisSource) -> list[NormalisedAssociation]:
 def _admitted_records(
     sources: Sequence[AnalysisSource], directory: Path
 ) -> tuple[list[NormalisedAssociation], dict[str, str]]:
-    """The records each Analysis's Admission gate keeps, in source order, with
-    each Analysis's standard errors standardised (#18), and the names those
-    records give their variants (`_harvested_names`).
+    """The records each Analysis's Admission gate keeps, in source order, as
+    their sources give them, and the names those records give their variants
+    (`_harvested_names`). Their SEs are standardised where the grid is judged
+    (`_stored_grid`).
 
     Analyses are judged in the order of ``sources``, which is the order the
     Store's columns take (`_collect_analyses`), each under the filters its
@@ -275,7 +281,7 @@ def _admitted_records(
     record_.finish()
     kept_at = np.flatnonzero(keep).tolist()
     names = _harvested_names(sources, records, kept_at)
-    return _standardised([records[i] for i in kept_at], sources), names
+    return [records[i] for i in kept_at], names
 
 
 def _harvested_names(
@@ -327,25 +333,6 @@ def _gathered(
         positions.append(list(range(len(records), len(records) + len(own))))
         records.extend(own)
     return records, positions
-
-
-def _standardised(
-    records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
-) -> list[NormalisedAssociation]:
-    """``records`` with each Analysis's standard errors divided by its phenotype SD (#18)."""
-    divisor = {s.analysis.analysis_id: s.se_divisor for s in sources}
-    return [
-        record if divisor[record.analysis_id] == 1.0
-        else replace(
-            record,
-            se=float(
-                apply_se_divisor(
-                    np.array([record.se], dtype=np.float32), divisor[record.analysis_id]
-                )[0]
-            ),
-        )
-        for record in records
-    ]
 
 
 def _admitted(

@@ -79,6 +79,7 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
+from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -1231,9 +1232,9 @@ def _assemble_completed_csr(
     for expected, (ai, completed) in enumerate(outcomes):
         if ai != expected:
             raise RuntimeError(f"Analysis {ai} arrived where Analysis {expected} belongs")
-        writer.add_analysis(
-            completed.vi, completed.z, completed.se, eaf=completed.eaf,
-            imputed=completed.imp, where=f"complete-ragged, Analysis {analysis_ids[ai]}",
+        writer.add_analysis(  # its source Store's cells and its fills: never standardised
+            completed.vi, completed.z, completed.se, eaf=completed.eaf, imputed=completed.imp,
+            where=f"complete-ragged, Analysis {analysis_ids[ai]}", phenotype_sd=PhenotypeSd.APPLIED,
         )
         total_imputed += completed.n_imputed
         total_missing += completed.n_missing

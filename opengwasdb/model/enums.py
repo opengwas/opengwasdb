@@ -136,6 +136,20 @@ class OriginalSdMethod(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+#: The `original_sd_method` tiers that carry a phenotype-SD magnitude, which an
+#: Analysis's SEs are divided by (ADR 0029 methods 2-5). `declared_standardised`
+#: implies sd=1 and records none; `binary_trait` is not SD-scale at all. A
+#: Store records the magnitude for exactly these (ADR 0084).
+SD_RESCALING_METHODS = frozenset(
+    {
+        OriginalSdMethod.SOURCE_PROVIDED,
+        OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+        OriginalSdMethod.ESTIMATED_FROM_REFERENCE_MAF,
+        OriginalSdMethod.ESTIMATED_FROM_BETA_DISTRIBUTION,
+    }
+)
+
+
 class EafScope(StrEnum):
     ABSENT = "absent"
     VARIANT = "variant"
