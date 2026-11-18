@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tracemalloc
 import weakref
 from concurrent.futures import Future
@@ -107,7 +108,12 @@ def test_empty_unsupported_and_key_limited_prefetch(
     assert cache._bytes == 0
 
 
-def test_unused_proxy_indptr_is_loaded_only_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_proxies_read_the_partner_rows_and_no_near_band_or_index_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`rows_of` answers from the ALID index, and from 0.2.0 a variant's proxies are its Partner
+    Rows row: no `index/` array and, beyond its `indptr`, no `near/` array is read
+    (partner-rows §8.3, §8.4). The frames are the one chunk file it does read."""
     names = ogld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
     read = LocalStore.get_sync
     keys: list[str] = []
@@ -116,12 +122,26 @@ def test_unused_proxy_indptr_is_loaded_only_when_asked(monkeypatch: pytest.Monke
         keys.append(key)
         return read(self, key, **kwargs)
 
+    preads: list[int] = []
+    original = os.pread
+
+    def recording_pread(fd: int, length: int, offset: int) -> bytes:
+        preads.append(length)
+        return original(fd, length, offset)
+
     monkeypatch.setattr(LocalStore, "get_sync", recording)
+    monkeypatch.setattr(os, "pread", recording_pread)
     store = ogld.open(TEST_STORE)
     assert (store._reader.rows_of(names) >= 0).all()
-    assert not any(key.startswith("index/22/indptr/c/") for key in keys)
+    assert not any(key.startswith("index/") for key in keys)
     store.proxies(names, r2=0.8, kb=3000)
-    assert any(key.startswith("index/22/indptr/c/") for key in keys)
+    assert preads, "a local frame is one pread of the chunk file (partner-rows §7)"
+    assert not any(key.startswith("index/") and "/c/" in key for key in keys), (
+        "no Proxy Index entry is read, though a chromosome's arrays are opened on first touch"
+    )
+    assert not any(key.startswith("near/") and key.endswith("/r/c/") for key in keys), (
+        "no Near Band code is"
+    )
 
 
 def test_completed_worker_does_not_retain_released_buffers(monkeypatch: pytest.MonkeyPatch) -> None:

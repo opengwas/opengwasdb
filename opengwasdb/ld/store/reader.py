@@ -77,6 +77,11 @@ _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
+#: The most component threads one request runs (partner-rows §9.2). Four is where the prototype was
+#: fastest (#65: 1.051 s at G = 8 and 1.067 s at G = 16); eight is slower, 5.753 s and 5.109 s,
+#: because a component's per-lead Python work holds the GIL while only the reads and the decode
+#: release it. The pool's size is the reader's, so no query signature carries it.
+COMPONENT_WORKERS_MAX: Final = 4
 #: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
 #: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
 #: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
@@ -89,6 +94,19 @@ def _index_pays(count: int, entries: int) -> bool:
     """Whether `count` keys are worth reading the whole index of `entries` (spec §10; ADR 0010):
     a list naming a `_INDEX_SHARE`th of them or more, and never fewer than one."""
     return count >= max(1, entries // _INDEX_SHARE)
+
+
+def _workers(query_workers: int | None) -> int:
+    """The component threads a reader runs, `COMPONENT_WORKERS_MAX` unless its caller asks for
+    fewer: a count of threads, so a whole number of at least one (partner-rows §9.2)."""
+    if query_workers is None:
+        return COMPONENT_WORKERS_MAX
+    if isinstance(query_workers, bool) or not isinstance(query_workers, int) or query_workers < 1:
+        raise InputError(
+            "query_workers counts component threads, a whole number of at least 1: "
+            f"{query_workers!r}"
+        )
+    return min(query_workers, COMPONENT_WORKERS_MAX)
 
 
 @dataclass(frozen=True)
@@ -164,6 +182,7 @@ class StoreReader:
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
     _partner_lock: threading.Lock
+    _query_workers: int
     _closed: bool
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
@@ -175,15 +194,17 @@ class StoreReader:
         encoding: REncoding,
         cache: ChunkCache,
         frames: FrameCache,
+        workers: int,
     ) -> None:
         """Keep the provenance, the encoding and the chromosome ranges of an opened, checked
         store, and the two caches its reads go through: decoded Near Band chunks, and decoded
-        Partner Rows frames (partner-rows §7)."""
+        Partner Rows frames (partner-rows §7), and the component threads it may run (§9.2)."""
         self._root = root
         self._provenance = provenance
         self._encoding = encoding
         self._cache = cache
         self._frame_cache = frames
+        self._query_workers = workers
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
         self._ranges = {name: (start, stop) for name, start, stop in listed}
         self._names = list(self._ranges)
@@ -207,13 +228,20 @@ class StoreReader:
         *,
         cache_bytes: int | None = None,
         frame_cache_bytes: int | None = None,
+        query_workers: int | None = None,
     ) -> StoreReader:
         """Open the LD Store at a local path or an HTTP(S) URL (ogld#4), keeping at most
         `cache_bytes` of its Near Band chunks (spec §10; the default if None, ogld#32) and
         `frame_cache_bytes` of its decoded Partner Rows frames (partner-rows §7; its own default
-        if None). The two are separate budgets, because the two reads serve different queries."""
+        if None). The two are separate budgets, because the two reads serve different queries.
+
+        `query_workers` counts the threads a `clump` may run its components on (partner-rows §9.2),
+        `COMPONENT_WORKERS_MAX` if None. It is the reader's budget, so a caller asking for more gets
+        the cap: a request's answer never depends on it.
+        """
         cache = ChunkCache(cache_bytes)
         frame_cache = FrameCache(frame_cache_bytes)
+        workers = _workers(query_workers)
         root = open_group(location, cache=cache)
         recorded = root.attrs.get("ld_store")
         if root.metadata.zarr_format != 3:
@@ -235,7 +263,7 @@ class StoreReader:
         except InputError as unimplemented:
             raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(root, cast(Provenance, recorded), encoding, cache, frame_cache)
+        reader._attach(root, cast(Provenance, recorded), encoding, cache, frame_cache, workers)
         return reader
 
     @property
@@ -247,6 +275,12 @@ class StoreReader:
     def frame_cache_bytes(self) -> int:
         """The bytes of decoded Partner Rows frames this reader keeps at most (partner-rows §7)."""
         return self._frame_cache.budget
+
+    @property
+    def query_workers(self) -> int:
+        """The threads a `clump` runs its components on (partner-rows §9.2), at most
+        `COMPONENT_WORKERS_MAX`."""
+        return self._query_workers
 
     def close(self) -> None:
         """Close the reader: after it returns no Partner Rows read is answered, and every chunk file
@@ -429,6 +463,21 @@ class StoreReader:
         c = self._chromosome(chrom)
         lo, hi = position_rows(c.position, start, stop)
         return global_rows(np.arange(int(lo), int(hi), dtype=np.int64), c.start)
+
+    def chromosome_range(self, chrom: str) -> tuple[int, int]:
+        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (spec §2).
+
+        It is what turns a Partner Rows row's chromosome-local partner into a Variant Set row
+        (partner-rows §7), so a component split and a greedy can work in the store's own rows. A
+        label the store does not hold is refused naming it, as `partner_row` refuses it.
+        """
+        try:
+            return self._ranges[chrom]
+        except KeyError:
+            raise ValueError(
+                f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
+                f"{', '.join(self._names)} (spec §2)"
+            ) from None
 
     def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
         """The ALID of each of `rows`, in the order given (spec §2): the one string column a
@@ -671,6 +720,23 @@ class StoreReader:
 
     # ------------------------------------------------------------ partner rows
 
+    def require_partner_rows(self) -> float:
+        """The Partner Threshold this store recorded (spec §7; partner-rows §3).
+
+        From format 0.2.0 `clump` and `proxies` read the Partner Rows and nothing else, so a
+        store that holds none — every 0.1.0 store — is refused here, naming the missing component
+        and the way to derive it, before any read. It is never answered from the Near Band: that
+        is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
+        """
+        if "t_partner" not in self._provenance:
+            raise InputError(
+                f"this LD Store is format {self._provenance['format_version']}, which has no "
+                f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
+                "naming the missing component; a store built before 0.2.0 derives them with "
+                "`ogld derive-partners` (spec §13; partner-rows §5.1)"
+            )
+        return float(self._provenance["t_partner"])
+
     def partner_row(self, chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         """One variant's Partner Rows row: every partner within far_bp at its distance's floor,
         each with its code, chromosome-local and ascending (partner-rows §7).
@@ -719,12 +785,7 @@ class StoreReader:
             )
         # A 0.1.0 store records none of the Partner Rows' keys, because it holds no Partner Rows
         # (spec §13): the read is refused naming the component, never answered from another one.
-        if "t_partner" not in self._provenance:
-            raise InputError(
-                f"this LD Store is format {self._provenance['format_version']}, which has no "
-                f"Partner Rows ({layout.PARTNERS}/): partner_row reads them, and a store without "
-                "them is refused naming the missing component (spec §13; partner-rows §5.1)"
-            )
+        self.require_partner_rows()
         with self._partner_lock:
             if self._closed:
                 raise ValueError(

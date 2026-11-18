@@ -264,9 +264,9 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         (StoreReader, "rows_of", "rows_of"),
         (StoreReader, "variants", "variants"),
         (StoreReader, "loci_of", "loci_of"),
-        (StoreReader, "partners", "partners"),
+        (StoreReader, "partner_row", "partner_row"),
         (ChunkCache, "prefetch", "prefetch"),
-        (clumping, "_greedy", "greedy"),
+        (clumping, "_component", "greedy"),
         (location, "_counted", "counted"),
     ):
         _wrap(owner, name, lambda original, label=label: _timing(original, label), patch)

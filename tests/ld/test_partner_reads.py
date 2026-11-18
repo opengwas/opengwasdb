@@ -97,26 +97,32 @@ def reference_greedy(
 #: read at aa5d4d7 resolved 1,489,250 pairs at r² 0.1 and took 1,587,155 Stored r (68 times
 #: as many). At × 32767 (f0e90de) the leads needed 23,327 and 7,246.
 NEEDED = {0.1: 23_228, 0.01: 7_311}
-#: What the reader takes (spec §10): at r² 0.1 ≥ t_far the 438 leads' Proxy Index rows, and
-#: below t_far exactly the pairs the leads need. An exact count, so a counter that saw nothing
-#: fails the test rather than passing under its bound. At × 32767 they were 3,119 and 7,246.
-RESOLVED = {0.1: 3_122, 0.01: 7_311}
-
-
 @pytest.mark.parametrize("r2", sorted(NEEDED))
-def test_clump_resolves_at_most_twice_the_pairs_it_needs(r2: float) -> None:
+def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
+    r2: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From 0.2.0 a lead's partners are its Partner Rows row, one frame read and one row's
+    # unshuffle (partner-rows §7, §8.2): no element of `near/` or `index/` is read at any r2, and
+    # no hit another lead took is read, so the reads are one a lead.
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
-    lead, needed, indexed = reference_greedy(z, r2, 3000)
+    lead, needed, _ = reference_greedy(z, r2, 3000)
     assert needed == NEEDED[r2], "the leads' candidates, as the tip counted them"
     assert len(np.unique(lead)) > 200, "many leads, each reading its own pairs"
-    taken = indexed if r2 >= support.T_FAR else needed
-    assert taken == RESOLVED[r2], "the leads' index rows above t_far, their pairs below it"
     reader, cache = counted(support.TEST_STORE)
+    read = reader.partner_row
+    asked: list[tuple[str, int]] = []
+
+    def counted_row(chrom: str, local_row: int) -> Any:
+        asked.append((chrom, local_row))
+        return read(chrom, local_row)
+
+    monkeypatch.setattr(reader, "partner_row", counted_row)
     ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
     assert list(ours.lead) == alids(rows[lead])
-    assert cache.resolved() == taken, f"resolved {cache.resolved()} for {needed} needed"
-    assert cache.resolved() <= 2 * needed
+    assert len(asked) == len(np.unique(lead)), "one Partner Rows row per lead, and no other"
+    assert len(set(asked)) == len(asked), "no row is read twice"
+    assert cache.resolved() == 0, "no Near Band or Proxy Index code is read at any r2"
 
 
 #: The Variant Set's string columns (spec §2).

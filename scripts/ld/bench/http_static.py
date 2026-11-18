@@ -39,7 +39,7 @@ _PASSED = ("Content-Range", "Content-Type", "Accept-Ranges", "Last-Modified", "E
 
 def array_of(path: str) -> str:
     """The array a request is for, as `kind/name` (`near/r`, `index/partner`, `far/r`,
-    `variants/alid`), or `metadata` for a `zarr.json` document and for the Zarr v2 documents
+    `partners/frames`, `variants/alid`), or `metadata` for a `zarr.json` document and for the Zarr v2 documents
     (`.zgroup`, `.zattrs`, `.zmetadata`) zarr probes for when it opens a URL. A chunk's path is
     the array's, then `/c/...`."""
     last = path.rsplit("/", 1)[-1]
@@ -48,7 +48,7 @@ def array_of(path: str) -> str:
     head = path.split("/c/", 1)[0].strip("/").split("/")
     # A store's own path under the served root comes first: keep the last component of the
     # group (`near`, `index`, `far`, `variants`), drop a chromosome, keep the array's name.
-    if len(head) >= 3 and head[-3] in {"near", "index", "far"}:
+    if len(head) >= 3 and head[-3] in {"near", "index", "far", "partners"}:
         return f"{head[-3]}/{head[-1]}"
     return "/".join(head[-2:])
 

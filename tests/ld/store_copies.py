@@ -72,6 +72,11 @@ def resharded(to: Path, inner: int, per_shard: int) -> Path:
     source = zarr.open_group(TEST_STORE, mode="r")
     target = zarr.open_group(to, mode="r+")
     for path, array in arrays(source):
+        if path.startswith("partners/"):
+            # A Partner Rows group's `frames` is one chunk of its whole file and `frames_idx`
+            # one chunk of its offsets (partner-rows §5.1): how a frame is one byte range. The
+            # layout this rewrites is the Near Band's, so these are copied as they are.
+            continue
         data = np.asarray(array[:])
         group, name = path.rsplit("/", 1)
         shutil.rmtree(to / path)
