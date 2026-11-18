@@ -12,7 +12,7 @@ cd "$(dirname "$0")/../.."
 
 PREFLIGHT=(
   "tests/realdata/test_build_panel.py"
-  "tests/realdata/test_derive_partners.py"
+  "tests/realdata/test_derive_partners_workers.py"
   "tests/realdata/test_query_panel.py"
 )
 

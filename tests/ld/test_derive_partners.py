@@ -98,7 +98,7 @@ def test_the_bytes_do_not_depend_on_the_workers(
 ) -> None:
     """Compressor threads and chromosome processes are bounds on time, never on output
     (partner-rows §6.3, §9.1). Eight workers, whose spawn cost the default tier cannot pay for,
-    are held by `tests/realdata/test_derive_partners.py`."""
+    are held by `tests/realdata/test_derive_partners_workers.py`."""
     store = unpartnered(tmp_path / "store")
     derive_partners(store, t_partner=T_PARTNER, threads=threads, processes=processes)
     assert_the_builds_bytes(store)
