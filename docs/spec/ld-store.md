@@ -1051,26 +1051,22 @@ one chunk can be read even when its buffers exceed the allowance. No second deco
 is queued. Each range submits at most seven decode jobs. A failed piece cancels sibling
 fetches and drains running decode jobs before returning. A cancelled shard-index waiter also
 drains the shielded shared index fetch without cancelling another reader's request.
-Compressed ranges, codec workspace and small index/job bookkeeping are additional to the
-decoded-byte bound;
+Codec workspace and small index/job bookkeeping are additional to the decoded-byte bound;
 the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
 not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
 
-**The warming clump used to need** (ogld#40 round 2; ADR 0009; removed by #72). Before a
-chromosome's greedy pass, the reader warmed the union of Near Band chunks its candidate hit pairs
-could need — only when the buffers and shard indexes fit the cache budget and at most 65,536 chunk
-keys were needed — and a chromosome that did not fit used a sliding positional warm range of W
-around a lead, halved until it fits. Planning was O(hits + 65,536), not O(hit pairs), and sparse
-reads stream bounded chunk groups, so an oversized warm range never became a whole-chromosome
-decoded pin. `StoreReader.clump_warmer` went with the Near Band partner reads it served (#72):
-`clump` reads Partner Rows frames and its own frame cache, which the Near Band cache does not
-hold, so the warm ranges warmed nothing it reads. The machinery it drove stays in the chunk cache
-for `matrix` and `region`, and its prefetch credit below is unchanged.
+**The warming clump used to need, and its prefetch, are gone** (ogld#40 round 2; ADR 0009;
+removed by #72). Before a chromosome's greedy pass the reader warmed the union of Near Band chunks
+its candidate hit pairs could need, and a chromosome that did not fit used a sliding positional
+warm range of W around a lead, halved until it fits; warming had its own 256 MiB credit limit for
+compressed ranges, separate from the decoded flight allowance. `StoreReader.clump_warmer` went
+with the Near Band partner reads it served (#72), and `ChunkCache.prefetch` and everything only it
+reached — the plan, the compressed-range credit and its coroutines, `NumericDecoder.ranges` — went
+with it, because nothing had called it: `clump` reads Partner Rows frames and its own frame cache,
+which the Near Band cache does not hold. What stays for `matrix`, `region` and `pair_r` is the
+cache's ordinary path: whole inner chunks fetched in bounded runs, each read's runs cut where a
+shard ends and bounded by `_FETCH_BYTES` in flight, and the shard-index single flight below.
 
-Prefetch uses a separate 256 MiB credit limit for compressed ranges, held until decode
-finishes, in addition to the decoded flight allowance. It coalesces at most 512 KiB gaps
-into at most 16 MiB ranges and decodes only requested chunks. A single oversized chunk is
-the exception to either allowance. Actual store requests remain bounded by async.concurrency.
 The async store wrapper bridges exact LocalStore reads through its public get_sync method
 on the same pool as decoding; subclasses and HTTP retain async get. No global zarr setting
 changes. Known-size zstd frames are checked against RFC 8878 before decoding into a fixed
@@ -1336,15 +1332,17 @@ chunk each by construction (§5.1), which a reader's one range request per frame
 genotypes, and ogld#5's tests check it against an independent reference on the Test Panel. Each rule has a store that breaks it, in
 `tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 30.
 
-**A leftover `index/`.** A 0.2.0 store derived before #72, without `--drop-index`, still holds the
-component: the derivation removed nothing it was not asked to. Validation **ignores** it rather
-than reporting it, because it is not an array §1 names: `envelope.arrays` checks the arrays in
-§1's tree, `envelope.fill` walks those arrays, and no rule of the other 30 reads a path under
-`index/`. So such a store validates exactly as one without it, and a reader answers exactly as it
-does (`tests/test_far_pairs.py`, `tests/test_proxy_index_removed.py`). It is not silent damage:
-the component is redundant, and `ogld derive-partners --drop-index` removes it and its
-`counts.index_entries` (§7). A **0.1.0** store's `index/` is its own — its format describes it,
-and a 0.1.0 store is judged by 0.1.0's rules — so nothing about this paragraph touches it.
+**An `index/`, of either version, is neither read nor validated.** No rule names it: it is not an
+array §1 lists, `envelope.arrays` checks the arrays in §1's tree, `envelope.fill` walks those
+arrays, and not one of the 30 reads a path under `index/`. It holds for a **0.2.0** store that
+derived its Partner Rows before #72 without `--drop-index` — the derivation removes nothing it is
+not asked to — and for a **0.1.0** store, whose format describes the component but whose rules went
+with it in #72. Such a store validates exactly as one without it, and a reader answers exactly as
+it does (`tests/test_far_pairs.py`, `tests/test_proxy_index_removed.py`); a 0.1.0 store with every
+index chunk lost still passes all 30 and still answers `matrix` and `region`. This is not silent
+damage: no code this package ships reads an index, so there is nothing to get wrong, and
+`ogld derive-partners --drop-index` removes a 0.2.0 store's leftover with its `counts.index_entries`
+(§7).
 
 **The Partner Rows' rules (format 0.2.0).** The ten rows after `far.threshold` are the component's,
 and `docs/spec/partner-rows.md` §10 is their reasons. They read the frames of
@@ -1493,13 +1491,15 @@ the store already holds, plus the four provenance keys that describe them and `s
   ignores it (§12); `ogld derive-partners --drop-index` removes it.
 
 A 0.1.0 reader reading a 0.2.0 store sees groups it does not know and ignores them (§1), answering
-from the Near Band, the Proxy Index and the Far Pairs if they are there. That is why the version
+from the Near Band, the Proxy Index and the Far Pairs if they are there — a reader of that vintage,
+not this one, which reads no index at either version (§12). That is why the version
 is recorded: the refusal table and the component set changed, and a reader that took a 0.2.0 store
 for a 0.1.0 one would answer a request 0.2.0 refuses.
 
 **Version `0.1.0`** is an unreleased draft: no LD Store in it has been published, so the owner's
-decisions of 7 November 2026, the Proxy Index among them (a 0.1.0 store has one, and this package
-refuses its `clump` and `proxies` rather than answer from it), of 10 November 2026, the per-store
+decisions of 7 November 2026, the Proxy Index among them (a 0.1.0 store holds one; no rule
+validates it and no read here opens it, and this package refuses its `clump` and `proxies` rather
+than answer from it, §12), of 10 November 2026, the per-store
 encoding (ADR 0004), of 12 November 2026, the Far Pairs beside the index (ADR 0007), and of
 15 November 2026, the ALID index beside the variant table (ADR 0010), are part of `0.1.0` rather
 than a new version. The Partner Rows are the first change big enough to be its own version (§5,

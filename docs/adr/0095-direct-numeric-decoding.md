@@ -3,7 +3,10 @@
 > **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
-> entry it held, and `clump` and `proxies` read them. Everything else here stands.
+> entry it held, and `clump` and `proxies` read them. **Round 2's chromosome prefetch went with
+> it** (#72): `ChunkCache.prefetch`, its plan and its compressed-range credit served `clump`'s
+> warm windows, and nothing calls them now. The round's measurements and its direct-decoding,
+> shared-pool and single-flight decisions stand, and those are what serve `matrix` and `region`.
 
 Issue [#40](https://github.com/opengwas/ogld/issues/40), part of epic
 [#1](https://github.com/opengwas/ogld/issues/1). Spec §6 defines the bytes; §10 defines reads.

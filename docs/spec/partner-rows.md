@@ -187,8 +187,9 @@ The `partners/<chrom>/` group's attributes:
 
 The root provenance (`ld-store.md` §7) gains `t_partner` (float), `partner_code_floor` (int),
 `counts.partner_entries` (int, every chromosome's `entries`) and `software.zstd` (the library
-version, because frame bytes depend on it). `counts.index_entries` goes with the Proxy Index, in
-#72 (D1); until then both components are written and both counts are recorded.
+version, because frame bytes depend on it). `counts.index_entries` went with the Proxy Index in
+#72 (D1): a build writes no index and records no such count, and one that still carries the key is
+not failed for it (ld-store §7, §12).
 
 ### 5.4 Why this form
 
@@ -214,8 +215,8 @@ version, because frame bytes depend on it). `counts.index_entries` goes with the
 ### 6.1 One row emitter, two producers
 
 The Partner Rows are a function of the Near Band and the Far Pairs (§3). One emitter makes them
-from codes arriving in row order, block of rows by block of rows, as the Proxy Index writer does
-today (`ld-store.md` §6, "How a store is written"):
+from codes arriving in row order, block of rows by block of rows, as the Proxy Index's writer did
+before #72 removed it (`ld-store.md` §6, "How a store is written"):
 
 1. For each block, keep each pair (l, m > l) with |code| at the floor its distance calls for.
 2. Each kept pair goes to row l immediately, and to a carry for row m.
