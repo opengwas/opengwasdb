@@ -76,6 +76,9 @@ from ogld.store import frames, layout
 DERIVE_ENTRIES: Final = 1 << 23
 #: Variant Set rows `derive_alid_index` reads at once: 1,048,576 ALIDs, whose keys are 32 MiB.
 ALID_ROWS: Final = 1 << 20
+#: The bytes one carried pair holds: its earlier row, its later row and its code — the row's two
+#: 4-byte integers and its code's 2 — the destination being its bucket (partner-rows §6.1).
+PAIR_BYTES: Final = 10
 #: The rows of one bucket of the Proxy Index's carried pairs. Pairs are carried by the bucket
 #: their later row falls in, so a bucket is freed once its rows are written. Only the pairs of
 #: one partly written bucket are held beyond those spanning the row being written.
@@ -445,6 +448,13 @@ class RowCarry:
         self._counts = np.full(rows, -1, dtype=np.int64)
         self._next = 0
         self._carried: dict[int, list[_Pairs]] = {}
+        self._peak = 0
+
+    @property
+    def peak(self) -> tuple[int, int]:
+        """The most pairs the carry held at once, and their bytes: what bounds a chromosome's
+        memory however long it is (partner-rows §6.1)."""
+        return self._peak, self._peak * PAIR_BYTES
 
     @property
     def next_row(self) -> int:
@@ -469,6 +479,9 @@ class RowCarry:
         counts = np.bincount(owner - a, minlength=rows)
         self._counts[a:b] = counts
         self._next = b
+        self._peak = max(
+            self._peak, sum(len(piece[0]) for held in self._carried.values() for piece in held)
+        )
         return Rows(
             a,
             counts,
@@ -582,6 +595,16 @@ class PartnerRowsStream:
         self._rows = RowCarry(len(lengths))
         self._group = frames.FramesGroup(root, chrom, len(lengths), workers=workers)
         self._pending: list[tuple[_Rows, Codes]] = []
+
+    @property
+    def chrom(self) -> str:
+        """The chromosome these rows belong to."""
+        return self._chrom
+
+    @property
+    def peak_carry(self) -> tuple[int, int]:
+        """The most pairs the emitter's carry held at once, and their bytes (partner-rows §6.1)."""
+        return self._rows.peak
 
     def add(self, rows: int, near: Codes, lo: _Rows, hi: _Rows, codes: Codes) -> None:
         """Write the next `rows` rows, keeping the block's Near Band codes `near` (row after row)

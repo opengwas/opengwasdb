@@ -211,6 +211,21 @@ def test_a_pgen_without_info_refuses_an_info_floor(tmp_path: Path) -> None:
         ogld.build(inputs(10, info_min=0.8), tmp_path / "store")
 
 
+def test_a_build_whose_partner_threshold_is_above_t_far_is_refused_naming_both(
+    tmp_path: Path,
+) -> None:
+    # t_partner is never above t_far (partner-rows §3): with a larger one, a pair between the two
+    # within near_bp would be in neither component, so the build refuses before writing a store.
+    above = 0.5
+    assert above > support.T_FAR, "the fixture must be above the panel's t_far to mean anything"
+    out = tmp_path / "store"
+    with pytest.raises(ogld.InputError) as refused:
+        ogld.build(inputs(support.K, t_partner=above), out)
+    assert str(above) in str(refused.value), refused.value
+    assert str(support.T_FAR) in str(refused.value), refused.value
+    assert not out.exists(), "nothing is written before the refusal"
+
+
 def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     out = tmp_path / "store"
     argv = ["build", str(out), "--pgen", str(PANEL.pgen), "--keep", str(PANEL.keep)]

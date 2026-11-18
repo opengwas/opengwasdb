@@ -95,6 +95,49 @@ def test_every_required_key_has_a_type_to_check() -> None:
     assert not set(validation._RULES) & set(validation._SCANNED)
 
 
+#: The keys the Partner Rows cost: 0.2.0 requires them, and 0.1.0 has no Partner Rows at all
+#: (spec §7, §13; partner-rows §5.3).
+PARTNER_KEYS = ("t_partner", "partner_code_floor", "counts.partner_entries", "software.zstd")
+
+
+def drop(provenance: dict[str, Any], key: str) -> None:
+    """Remove the dotted `key` from `provenance`, in place."""
+    *outer, leaf = key.split(".")
+    target = provenance
+    for name in outer:
+        target = target[name]
+    del target[leaf]
+
+
+def rewritten(store: Path, edit: Callable[[dict[str, Any]], None]) -> Path:
+    """`store` with its recorded provenance edited, as a store whose build said something else."""
+    meta = store / "zarr.json"
+    doc = json.loads(meta.read_text())
+    edit(doc["attributes"]["ld_store"])
+    meta.write_text(json.dumps(doc))
+    return store
+
+
+def test_the_partner_rows_keys_are_required_from_0_2_0_only(tmp_path: Path) -> None:
+    # A 0.1.0 store has no Partner Rows, so it cannot have their keys: requiring them
+    # unconditionally would refuse every store published before them (spec §7, §13).
+    earlier = copy_store(tmp_path / "earlier")
+
+    def as_0_1_0(provenance: dict[str, Any]) -> None:
+        provenance["format_version"] = "0.1.0"
+        for key in PARTNER_KEYS:
+            drop(provenance, key)
+
+    rewritten(earlier, as_0_1_0)
+    rules = ["provenance.complete", "provenance.encoding"]
+    assert not any(findings(earlier, rules).values()), findings(earlier, rules)
+    for key in PARTNER_KEYS:
+        later = copy_store(tmp_path / key.replace(".", "-"))
+        rewritten(later, lambda provenance, key=key: drop(provenance, key))
+        found = findings(later, ["provenance.complete"])["provenance.complete"]
+        assert [finding.where for finding in found] == [key], (key, found)
+
+
 @pytest.mark.usefixtures("small_windows")
 def test_the_test_store_passes_every_windowed_rule_in_small_windows() -> None:
     near = zarr.open_array(TEST_STORE / "near" / "22" / "r", mode="r").shape[0]

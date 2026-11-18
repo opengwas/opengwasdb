@@ -66,6 +66,7 @@ class StoreWriter:
         self._next = 0
         self._open: Chromosome | None = None
         self._tally = Tally()
+        self._failure: tuple[str, BaseException] | None = None
 
     @classmethod
     def create(
@@ -167,7 +168,13 @@ class StoreWriter:
         The Proxy Index is written row by row, both directions: a row is complete once its own
         cut arrives (spec §5). The counts are added up. When the chromosome's last row arrives,
         what is carried is written and the chromosome is complete.
+
+        A write that fails — a frame that will not compress, a stream that will not close —
+        poisons the writer: the rows are counted as written only after the chromosome closed, and
+        every later `write` or `finish` raises naming this first failure. So a half-written
+        chromosome is never finished over, and no provenance is ever written for it (issue #67).
         """
+        self._live()
         if cut.by is not self._cutter:
             raise ValueError(
                 "a cut is written only by the writer that cut it, not by another writer"
@@ -177,16 +184,34 @@ class StoreWriter:
                 f"cuts are written in row order: expected row {self._next}, got {cut.first}"
             )
         name, _, stop = self._cutter.chromosome(cut.first)
+        try:
+            self._write(cut, name, stop)
+        except BaseException as failed:
+            self._failure = (name, failed)
+            raise
+
+    def _write(self, cut: Cut, name: str, stop: int) -> None:
+        """Write one cut's rows, and close the chromosome when it is its last."""
         if self._open is None:
             self._open = Chromosome(
                 self._root, self._cutter, name, compress_workers=self._compress_workers
             )
         self._open.add(cut)
         self._tally.add(cut)
-        self._next += cut.rows
-        if self._next == stop:
+        ends = self._next + cut.rows
+        if ends == stop:
             self._tally.partner_entries += self._open.close()
             self._open = None
+        self._next = ends
+
+    def _live(self) -> None:
+        """Refuse a writer that already failed, naming the chromosome and the first failure."""
+        if self._failure is not None:
+            name, failed = self._failure
+            raise ValueError(
+                f"chromosome {name} could not be written, so this writer is never finished: "
+                f"{failed!r}"
+            ) from failed
 
     def finish(self, sourced: Sourced, *, threads: int = 1) -> Provenance:
         """Assemble the provenance, validate the store and write it; return it as written
@@ -200,6 +225,7 @@ class StoreWriter:
         of spec §12 on `threads` workers and raises `ValidationFailed` if any fails, before the
         provenance is written: a store without one is never read.
         """
+        self._live()
         if self._next != self._rows:
             unwritten = [name for name, (_, stop) in self._ranges.items() if stop > self._next]
             raise ValueError(

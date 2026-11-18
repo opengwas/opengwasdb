@@ -29,7 +29,9 @@ from __future__ import annotations
 import hashlib
 import importlib
 import os
+import shutil
 import struct
+import tempfile
 from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -151,16 +153,33 @@ def _unshuffled(raw: bytes, dtype: np.dtype[Any]) -> npt.NDArray[Any]:
     return planes.T.copy().ravel().view(dtype)
 
 
-def _lengths(rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]) -> npt.NDArray[np.uint32]:
-    return np.array([len(np.asarray(partners)) for partners, _ in rows], dtype=_LITTLE_ROW)
+def _lengths(
+    rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]], first: int, where: str
+) -> npt.NDArray[np.uint32]:
+    """Each row's entry count, refused unless its codes are exactly as many as its partners.
+
+    A code is its pair's, so a row of one count and a row of another cannot be a frame, and a
+    compensating pair of rows would attach one row's code to another's partner: each row is judged
+    on its own, before anything is concatenated or narrowed, and the refusal names the row (§5.2).
+    """
+    counts = []
+    for at, (partners, codes) in enumerate(rows):
+        held, coded = len(np.asarray(partners)), len(np.asarray(codes))
+        if held != coded:
+            raise ValueError(
+                f"{where}, row {first + at}: {held} partner(s) and {coded} code(s), and a row's "
+                "codes are its pairs' (spec §5.2)"
+            )
+        counts.append(held)
+    return np.array(counts, dtype=_LITTLE_ROW)
 
 
 def _stacked(
-    rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]],
+    lengths: npt.NDArray[np.uint32], rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]
 ) -> tuple[npt.NDArray[np.int64], Codes]:
     """The frame's partners and codes, row after row, as the payload holds them: the partners as
     int64 so their deltas cannot wrap, the codes in the encoding's container."""
-    if not sum(len(np.asarray(partners)) for partners, _ in rows):
+    if not int(lengths.sum()):
         return np.empty(0, np.int64), np.empty(0, REncoding.dtype)
     partners = np.concatenate([np.asarray(row, dtype=np.int64) for row, _ in rows])
     codes = np.concatenate([np.asarray(codes).astype(_LITTLE_CODES) for _, codes in rows])
@@ -171,15 +190,17 @@ def _checked(first: int, lengths: npt.NDArray[np.uint32], partners: npt.NDArray[
     """Refuse partners that are not strictly ascending within their row, that are negative, or
     that name their own row: a row a reader could not binary-search, or that holds its diagonal."""
     starts = np.cumsum(lengths)[lengths > 0] - lengths[lengths > 0]
-    if starts.size and (partners < 0).any():
-        raise ValueError("a Partner Rows row holds a negative partner (spec §5.2)")
     row = owners(lengths) + first
-    if (partners == row).any():
-        raise ValueError("a Partner Rows row holds its own row, which no row may (spec §3)")
     after_first = np.ones(len(partners), dtype=bool)
     after_first[starts] = False
-    if (after_first[1:] & ~(np.diff(partners) > 0)).any():
-        raise ValueError("a Partner Rows row's partners are not strictly ascending (spec §3)")
+    out_of_order = after_first[1:] & ~(np.diff(partners) > 0)
+    for found, what in (
+        (partners < 0, "a negative partner"),
+        (partners == row, "its own row"),
+        (np.concatenate([[False], out_of_order]), "partners that do not ascend"),
+    ):
+        if found.any():
+            raise ValueError(f"row {int(row[found.ravel()[0]])} holds {what} (spec §3, §5.2)")
 
 
 def _deltas(
@@ -200,21 +221,31 @@ def _deltas(
     return deltas.astype(_LITTLE_DELTA)
 
 
-def encode_frame(first: int, rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]) -> bytes:
-    """One frame's bytes: `rows` rows, the first of them chromosome-local row `first` (§5.2).
+def encode_frame(
+    first: int,
+    rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]],
+    *,
+    chrom: str,
+    number: int,
+) -> bytes:
+    """One frame's bytes: `rows`, the first of them chromosome-local row `first` (§5.2).
 
     `rows` holds one (partners, codes) pair per row, its partners ascending and chromosome-local,
     and each code the pair's Stored r. The payload is k, the lengths, the byte-shuffled int32
     deltas and the byte-shuffled codes, compressed as one zstd frame at level 3 with the content
-    checksum and the content size in its header, so a frame is checked on the way back in.
+    checksum and the content size in its header, so a frame is checked on the way back in. A row
+    whose codes are not as many as its partners, or whose partners are not ascending from its own
+    row, is refused naming the chromosome, the frame and the row.
     """
+    where = _where(chrom, number)
     if not rows:
-        raise ValueError("a frame holds at least one row (spec §5.2)")
-    lengths = _lengths(rows)
-    partners, codes = _stacked(rows)
-    if len(codes) != len(partners):
-        raise ValueError("a Partner Rows row holds a different number of codes and partners")
-    _checked(first, lengths, partners)
+        raise ValueError(f"{where} holds no rows: a frame holds at least one (spec §5.2)")
+    lengths = _lengths(rows, first, where)
+    partners, codes = _stacked(lengths, rows)
+    try:
+        _checked(first, lengths, partners)
+    except ValueError as refused:
+        raise ValueError(f"{where}: {refused}") from refused
     payload = (
         struct.pack("<I", len(lengths))
         + lengths.astype(_LITTLE_ROW).tobytes()
@@ -307,10 +338,18 @@ class FramesGroup:
     bytes, in frame order, to the group's chunk file. Frames are appended strictly in order, so a
     chromosome's bytes are the same at any number of workers and however its rows were blocked.
 
-    The `frames` array's length is the whole file's, which is not known until the last row: until
-    `close` the bytes are a file beside the group, and `close` creates both arrays' metadata at
-    their final shape, puts the file where that metadata's chunk key names, and checks that zarr
-    reads it back and that its bytes are the frames appended.
+    The `frames` array's length is the whole file's, which is not known until the last row, so the
+    group is built in a temporary directory beside the store's other chromosomes — a dot-prefixed
+    name, which `close` renames into `partners/<chrom>/` in one step — and until then nothing of
+    it is a node of the store's hierarchy. `close` creates both arrays' metadata at their final
+    shape, puts the file where that metadata's chunk key names, checks that zarr reads it back as
+    the frames appended, sets the group's attributes and only then publishes it, so a chromosome
+    is either whole or not there at all (issue #67).
+
+    A group that fails — a frame that will not compress, a row count short, a chunk file zarr
+    cannot read back — is poisoned: it removes its temporary directory, shuts its pool down, and
+    every later `add` or `close` raises, naming the first failure. A component that is not whole
+    is never finished and never published.
     """
 
     def __init__(self, root: zarr.Group, chrom: str, rows: int, *, workers: int = 1) -> None:
@@ -324,8 +363,20 @@ class FramesGroup:
             )
         self._chrom = chrom
         self._rows = rows
-        self._group = root.require_group(layout.partners_path(chrom))
-        self._directory = layout.local_directory(self._group.store_path)
+        self._root = root
+        # `partners/` is a node of the store's own hierarchy (spec §1): its metadata is what keeps
+        # zarr's `members()` from warning that the component is not one.
+        partner_rows = root.require_group(layout.PARTNERS)
+        beside = layout.local_directory(partner_rows.store_path)
+        self._final = beside / chrom
+        if self._final.exists():
+            raise FileExistsError(
+                f"{layout.partners_path(chrom)} exists: a chromosome's Partner Rows are written "
+                "once"
+            )
+        self._directory = Path(tempfile.mkdtemp(prefix=f".{chrom}.tmp-", dir=beside))
+        # `mkdtemp` made the directory, so `w` only fills it; no other writer can see it.
+        self._group = zarr.open_group(str(self._directory), mode="w", zarr_format=3)
         self._building = self._directory / layout.FRAMES_BUILDING
         self._file = self._building.open("wb")
         self._sha = hashlib.sha256()
@@ -336,6 +387,8 @@ class FramesGroup:
         self._ahead = 2 * workers
         self._pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
         self._pending: list[Future[bytes]] = []
+        self._failure: BaseException | None = None
+        self._published = False
         self._closed = False
 
     @property
@@ -348,8 +401,14 @@ class FramesGroup:
 
         A frame holds `ROWS_PER_FRAME` rows, except a chromosome's last, which holds those left.
         """
-        if self._closed:
-            raise ValueError(f"chromosome {self._chrom}'s Partner Rows are already closed")
+        self._live()
+        try:
+            self._add(rows)
+        except BaseException as failed:
+            self._poison(failed)
+            raise
+
+    def _add(self, rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]) -> None:
         if rows and self._added % ROWS_PER_FRAME:
             raise ValueError(
                 f"frame {len(self._offsets) - 1} of chromosome {self._chrom} is still open: a "
@@ -371,31 +430,44 @@ class FramesGroup:
         self, first: int, rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]
     ) -> Future[bytes]:
         """The frame's bytes, being compressed on the pool or made here when there is none."""
+        number = len(self._offsets) - 1
         if self._pool is not None:
-            return self._pool.submit(encode_frame, first, rows)
+            return self._pool.submit(encode_frame, first, rows, chrom=self._chrom, number=number)
         done: Future[bytes] = Future()
-        done.set_result(encode_frame(first, rows))
+        done.set_result(encode_frame(first, rows, chrom=self._chrom, number=number))
         return done
 
     def _append(self) -> None:
-        """Append the oldest frame's bytes, waiting for its compression if it is still running."""
-        future = self._pending.pop(0)
-        raw = future.result()
+        """Append the frames' oldest bytes, waiting for its compression if it is still running.
+
+        The future is taken before it is dropped: a frame that failed stays in the queue, so the
+        group cannot go on as if it had been written.
+        """
+        raw = self._pending[0].result()
+        self._pending.pop(0)
         self._file.write(raw)
         self._sha.update(raw)
         self._bytes += len(raw)
         self._offsets.append(self._bytes)
 
     def close(self) -> int:
-        """Finish the group: its two arrays, its attributes and its chunk file, and return the
-        entries it holds (§5.1, §5.3).
+        """Finish the group: its two arrays, its attributes and its chunk file, publishes it, and
+        returns the entries it holds (§5.1, §5.3).
 
         Refuses a chromosome whose rows are not all written, and refuses a chunk file zarr cannot
-        read back as the frames appended, before any attribute is set: a component that is not
+        read back as the frames appended, before anything is published: a component that is not
         whole is one no provenance claims.
         """
-        if self._closed:
-            raise ValueError(f"chromosome {self._chrom}'s Partner Rows are already closed")
+        self._live()
+        try:
+            self._close()
+        except BaseException as failed:
+            self._poison(failed)
+            raise
+        self._closed = True
+        return self._entries
+
+    def _close(self) -> None:
         if self._added != self._rows:
             raise ValueError(
                 f"chromosome {self._chrom}'s Partner Rows hold {self._added} of {self._rows} "
@@ -407,7 +479,7 @@ class FramesGroup:
         if self._pool is not None:
             self._pool.shutdown()
         offsets = self._offsets_array()
-        frames_array = self._written(offsets)
+        frames_array = self._written()
         index = layout.new_frames_index(self._group, len(offsets))
         index[:] = offsets
         self._read_back(frames_array, offsets)
@@ -423,8 +495,39 @@ class FramesGroup:
                 "zstd_level": ZSTD_LEVEL,
             }
         )
-        self._closed = True
-        return self._entries
+        self._publish()
+
+    def _live(self) -> None:
+        """Refuse a group that already failed, naming its first failure, or one already closed."""
+        if self._failure is not None:
+            raise ValueError(
+                f"chromosome {self._chrom}'s Partner Rows failed and are never finished: "
+                f"{self._failure!r}"
+            ) from self._failure
+        if self._closed:
+            raise ValueError(f"chromosome {self._chrom}'s Partner Rows are already closed")
+
+    def _poison(self, failed: BaseException) -> None:
+        """Keep the first failure, and leave nothing of a component that cannot be whole."""
+        self._failure = failed
+        self._file.close()
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+        shutil.rmtree(self._final if self._published else self._directory, ignore_errors=True)
+
+    def _publish(self) -> None:
+        """Make the whole group `partners/<chrom>/` in one rename, and refuse a store zarr cannot
+        read it back from."""
+        os.rename(self._directory, self._final)
+        self._published = True
+        published = zarr.open_group(str(self._final), mode="r")
+        held = published["frames"]
+        assert isinstance(held, zarr.Array)
+        if held.shape != (self._bytes,) or published.attrs.get("frames_bytes") != self._bytes:
+            raise ValueError(
+                f"the published {layout.partners_path(self._chrom)} does not hold its frames: a "
+                "store assembly fault"
+            )
 
     def _offsets_array(self) -> npt.NDArray[np.uint64]:
         """The frames' byte offsets, F + 1 of them, refused unless they start at 0, ascend
@@ -437,7 +540,7 @@ class FramesGroup:
             )
         return offsets
 
-    def _written(self, offsets: npt.NDArray[np.uint64]) -> zarr.Array[Any]:
+    def _written(self) -> zarr.Array[Any]:
         """Create the `frames` array at the file's length and move the appended bytes to where its
         chunk key says they are, never assuming the name (§5.1)."""
         array = layout.new_frames_array(self._group, self._bytes)

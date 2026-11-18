@@ -307,6 +307,7 @@ NAMED_ON_PURPOSE = {
         "r_scale: int = 32767",
     ),
     "scripts/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),
+    "scripts/bench/partner_carry.py": ("T_PARTNER, SCALE = 0.01, 511",),
     "scripts/make_test_store.py": (
         "quantised at × 511, HGDP+1kGP EUR's encoding",
         "the committed Test Store is × 511, and tests write",

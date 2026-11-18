@@ -11,6 +11,7 @@ correlation matrix, so far more pairs reach the floor than in the Test Panel's o
 
 from __future__ import annotations
 
+import itertools
 import json
 import shutil
 import tracemalloc
@@ -557,12 +558,38 @@ def frames_of(tmp_path: Path, rows: int, blocks_of: int, workers: int) -> dict[s
 
 def test_the_partner_rows_do_not_depend_on_the_blocking_or_the_compressors(tmp_path: Path) -> None:
     # Rows complete in row order whatever the block, and frames are appended in frame order
-    # whatever the pool's size, so a chromosome's bytes are one answer (partner-rows §6.3).
-    one = frames_of(tmp_path, 200, blocks_of=1, workers=1)
-    for blocks_of, workers in ((7, 1), (200, 8)):
-        other = frames_of(tmp_path, 200, blocks_of, workers)
+    # whatever the pool's size, so a chromosome's bytes are one answer (partner-rows §6.3): every
+    # blocking against every pool size, blocks of one row to the whole chromosome.
+    rows = 80
+    one = frames_of(tmp_path, rows, blocks_of=1, workers=1)
+    for blocks_of, workers in itertools.product((1, 7, rows), (1, 8)):
+        if (blocks_of, workers) == (1, 1):
+            continue
+        other = frames_of(tmp_path, rows, blocks_of, workers)
         for name, held in one.items():
             assert other[name] == held, (blocks_of, workers, name)
+
+
+def test_a_writer_whose_chromosome_failed_never_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A frame that will not compress is a chromosome that is not whole: the writer is poisoned, so
+    # `finish` refuses naming the failure instead of publishing 0.2.0 provenance over a component
+    # the store does not have (issue #67's acceptance: a truncated component never looks complete).
+    def failing(*args: Any, **kwargs: Any) -> bytes:
+        raise RuntimeError("the compressor died")
+
+    writer = create(tmp_path / "s")
+    monkeypatch.setattr(frames, "encode_frame", failing)
+    with pytest.raises(RuntimeError, match="the compressor died"):
+        write_all(writer, 100_000)
+    with pytest.raises(ValueError, match="compressor died") as refused:
+        writer.finish(sourced())
+    assert "never finished" in str(refused.value), refused.value
+    with pytest.raises(ValueError, match="compressor died"):
+        writer.write(writer.cut(*first_block("21", 10)))
+    assert "ld_store" not in zarr.open_group(tmp_path / "s", mode="r").attrs
+    assert not (tmp_path / "s" / "partners" / "22").exists()
 
 
 # ------------------------------------------------------------------ the streams' own guards

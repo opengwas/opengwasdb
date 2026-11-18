@@ -257,6 +257,7 @@ REQUIRED_KEYS: Final = (
     "counts.index_entries",
     "counts.alids_left_out",
     "software",
+    "software.zstd",
     "build.created_at",
     "build.wall_seconds",
     "build.peak_memory_bytes",

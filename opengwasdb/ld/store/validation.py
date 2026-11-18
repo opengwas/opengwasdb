@@ -508,10 +508,21 @@ _SCHEMA: Final = {
     "software.ogld": "str",
     "software.numpy": "str",
     "software.zarr": "str",
+    "software.zstd": "str",
     "build.created_at": "str",
     "build.wall_seconds": "number",
     "build.peak_memory_bytes": "int",
     "build.threads": "int",
+}
+
+#: The keys a format version adds, and the version that added them: required from it on, and
+#: checked whenever they are there. A 0.1.0 store has no Partner Rows, so it has none of their
+#: keys, and an older one that carries one anyway is still held to its type (spec §7, §13).
+_VERSIONED: Final = {
+    "t_partner": "0.2.0",
+    "partner_code_floor": "0.2.0",
+    "counts.partner_entries": "0.2.0",
+    "software.zstd": "0.2.0",
 }
 
 #: Each entry of the PC Check's `scan`, one per PC of the PC File (spec §7).
@@ -603,6 +614,26 @@ def _quantile_problems(provenance: dict[str, Any]) -> _Problems:
             yield f"pc_diagnostic.near_100kb_change[{q}]", problem
 
 
+def _release(version: object) -> tuple[int, ...] | None:
+    """A `MAJOR.MINOR.PATCH` version as numbers, or None for one that is not that."""
+    if not isinstance(version, str):
+        return None
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
+def _added_later(key: str, version: object) -> bool:
+    """Whether `key` joined §7 after the recorded `version`, so a store of that version has none.
+
+    A version this package cannot read is not excused a key: the keys are all required, and
+    `provenance.encoding` reports the version itself (spec §13).
+    """
+    added, told = _VERSIONED.get(key), _release(version)
+    return added is not None and told is not None and told < (_release(added) or told)
+
+
 @_rule("provenance.complete")
 def _provenance_complete(store: _Store) -> _Problems:
     provenance = store.provenance
@@ -612,7 +643,10 @@ def _provenance_complete(store: _Store) -> _Problems:
     context = _Context(
         _lookup(provenance, "source.kind"), _lookup(provenance, "pc_diagnostic.pairs.n_pairs")
     )
+    version = _lookup(provenance, "format_version")
     for key, kind in _SCHEMA.items():
+        if _lookup(provenance, key) is _MISSING and _added_later(key, version):
+            continue
         if not _within_null(provenance, key):
             problem = _key_problem(kind, _lookup(provenance, key), context)
             if problem is not None:
