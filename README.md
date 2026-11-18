@@ -35,10 +35,9 @@ version**, noted by its `changelog.d/` fragments.
 
 ## Getting started
 
-Use [docs/getting-started.md](./docs/getting-started.md) for a first run:
-install with Pixi, build an in-repository tiny Dense Store Release, validate it,
-and run PheWAS, exact-lookup, and top-hit queries. The example needs no external
-production data.
+`pip install opengwasdb` installs the library and CLI on Linux; see
+[docs/install.md](./docs/install.md). [docs/getting-started.md](./docs/getting-started.md)
+builds, validates and queries a tiny Store Release.
 
 ## Development
 

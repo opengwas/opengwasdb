@@ -88,6 +88,9 @@ partial upload, and `-f tag=vX.Y.Z` limits a run to one tag. A Release left
 holding one of the two archives is the one case to fix by hand: delete that
 asset, then re-run. A TestPyPI rehearsal is
 `gh workflow run publish.yml -f index=testpypi -f tag=vX.Y.Z`.
+The PyPI project is owned by `explodecomputer`; `t0mrg` is invited as its
+second maintainer once the first upload has created it. On TestPyPI,
+`explodecomputer` alone.
 
 **A pull request adds a changelog fragment instead of editing
 `CHANGELOG.md`.** `changelog.d/<slug>.<type>.md` holds what a user would

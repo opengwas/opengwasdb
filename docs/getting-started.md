@@ -4,7 +4,10 @@ This page takes a fresh checkout to a local Store Release, validates it, and run
 
 ## Install the development environment
 
-Install [Pixi](https://pixi.sh), then run commands through the Pixi environments declared in `pyproject.toml`:
+To use the package without a checkout, `pip install opengwasdb` is enough;
+[Installing OpenGWASDB](install.md) covers that, and this page's commands work
+with it once `pixi run -e dev` is dropped. For a checkout, install
+[Pixi](https://pixi.sh), then run commands through the Pixi environments declared in `pyproject.toml`:
 
 ```bash
 pixi run -e dev test        # pytest

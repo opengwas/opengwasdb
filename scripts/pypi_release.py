@@ -13,9 +13,9 @@ run, a failed upload and a partial upload all look the same to the next run:
 files missing from the index.
 
 **A boundary, not history.** Only tags at or after `PYPI_FIRST_RELEASE` are
-ever eligible for PyPI. While it is `None`, nothing is published to PyPI
-automatically: #440 sets it to the tag rehearsed on TestPyPI, after the
-rehearsal. TestPyPI is never published automatically; a run names its tag.
+ever eligible for PyPI: `v0.11.1`, the tag rehearsed on TestPyPI (#440).
+Set to `None`, it would stop automatic publication to PyPI. TestPyPI is never
+published automatically; a run names its tag.
 
 **One set of bytes per version.** The verified archives are attached to the
 tag's GitHub Release before anything is uploaded, and a retry downloads them
@@ -57,10 +57,10 @@ from release import (
     remote_tags,
 )
 
-#: The first tag published to PyPI; no older tag ever is. `None` keeps PyPI
-#: publication off until the TestPyPI rehearsal (#440) names the tag it
-#: rehearsed, which becomes the first PyPI release.
-PYPI_FIRST_RELEASE: str | None = None
+#: The first tag published to PyPI; no older tag ever is. It is the tag
+#: rehearsed on TestPyPI (#440, 18 Nov 2026), so the first PyPI upload is the
+#: same bytes the rehearsal installed. `None` would turn PyPI publication off.
+PYPI_FIRST_RELEASE: str | None = "v0.11.1"
 
 PROJECT = "opengwasdb"
 INDEXES = {"pypi": "https://pypi.org", "testpypi": "https://test.pypi.org"}
