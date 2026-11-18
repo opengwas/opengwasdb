@@ -1101,6 +1101,16 @@ human-readable name is already `analysis_label`, it instead names the
 identifying vocabulary (`"Ensembl"`) rather than repeating the gene name.
 `analysis_id` MUST be unique within a Store Release.
 
+An Analysis whose `original_sd_method` carries an SD magnitude (§7) MUST record
+that magnitude in `original_sd`, finite and positive: it is the SD its standard
+errors were divided by, and the one value that reads them back in the source's
+units. `validate` fails a row that gives such a method with an `original_sd`
+that is blank, non-finite or not positive (`analyses.original_sd_recorded`,
+§20.0), at every `format_version`. `build-ragged-ssf` before issue #366 wrote
+exactly that row, while storing its source's standard errors undivided; OGS-00006,
+OGS-00024, OGS-00025 and OGS-00026 (4,443 Analyses) are such Releases, and
+`validate` fails them until they are rebuilt or repaired.
+
 For CORE build-input manifests (stores #175), optional `info_score_threshold`,
 `imputation_score_column`, `imputation_score_kind`, and
 `imputation_score_provenance` are per-Analysis shared-core policy inputs. They
@@ -1806,8 +1816,8 @@ the same place, as every other builder (§7, ADR 0084): `build-ragged-besd` and
 association is encoded, record that `original_sd`, and store `z` as the source
 gave it. A Ragged SSF Release built before issue #366 corrected this records the
 manifest's rescaling `original_sd_method` with a blank `original_sd` while
-holding the source's own standard errors; it is rebuilt or repaired rather than
-read as SD Units.
+holding the source's own standard errors; `validate` fails it (§7a), and it is
+rebuilt or repaired rather than read as SD Units.
 
 ### 11.1 The variant-centric index (`ragged/by_variant/`)
 
@@ -2253,6 +2263,7 @@ Validators MUST check at least:
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
 - from `format_version` 0.2.2, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
+- an Analysis whose `original_sd_method` carries an SD magnitude records it in `original_sd`, finite and positive (§7a, ADR 0084, issue #366): a blank one is what a Ragged SSF build that stored its source's standard errors undivided wrote, and nothing else in a Store shows it;
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows, the association scan's (§20.0, within one 1 GiB decoded budget), carries the preceding cell across a window boundary and resets at each Analysis boundary, so peak memory is the window and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
@@ -2336,6 +2347,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.analysis_id` | release | check | no `analysis_id` names two rows |
 | `analyses.completion_declared` | release | check | every `completion_n_imputed_total` is an integer, and an Analysis completed against no ancestry declares no imputed cells |
 | `analyses.vocabularies` | release | check | each controlled column holds only its vocabulary's values |
+| `analyses.original_sd_recorded` | release | check | an Analysis whose `original_sd_method` rescales records a finite, positive `original_sd`, at every `format_version` (§7a) |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
 | `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
 | `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a) |

@@ -17,6 +17,7 @@ so a built store leaves them honestly blank.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
@@ -30,6 +31,7 @@ from opengwasdb.model.analyses import (
     read_analyses,
 )
 from opengwasdb.model.enums import (
+    SD_RESCALING_METHODS,
     AncestryAssignmentMethod,
     EafOrientationOutcome,
     EafScope,
@@ -160,6 +162,37 @@ def vocabularies(target: Target) -> Iterator[str]:
                     f"analyses.tsv analysis {row.get('analysis_id')!r} has invalid "
                     f"{column} {value!r}"
                 )
+
+
+def original_sd_recorded(target: Target) -> Iterator[str]:
+    """An Analysis whose `original_sd_method` rescales records the SD it was
+    divided by: finite and positive (ADR 0029 methods 2-5, ADR 0084).
+
+    A builder divides such an Analysis's SEs by `original_sd` and records it.
+    A blank one is what a Ragged SSF build before issue #366 wrote while storing
+    its source's SEs undivided -- OGS-00006, -00024, -00025 and -00026, 4,443
+    Analyses -- and nothing else in the Store says so: z is scale-free, and the
+    SEs look like SEs. A Store whose SEs were standardised by an SD it does not
+    record cannot be read back in the source's units either.
+    """
+    rescaling = {method.value for method in SD_RESCALING_METHODS}
+    for row in target.analyses.rows:
+        method = row.get("original_sd_method", "")
+        if method not in rescaling:
+            continue
+        raw = row.get("original_sd", "")
+        try:
+            value = float(raw)
+        except ValueError:
+            value = math.nan
+        if not (math.isfinite(value) and value > 0):
+            yield (
+                f"analysis {row.get('analysis_id', '')!r} declares original_sd_method="
+                f"{method!r}, which divides its standard errors by a phenotype SD, but "
+                f"records original_sd {raw!r}: a Release that does not record a finite, "
+                "positive SD cannot show its SEs were standardised, and one built by "
+                "build-ragged-ssf before issue #366 holds its source's SEs (spec §7a)"
+            )
 
 
 def top_hit_count_columns(target: Target) -> Iterator[str]:
@@ -452,6 +485,7 @@ TABLE_RULES: tuple[Rule, ...] = (
     _table_rule("analyses.analysis_id", analysis_id),
     _table_rule("analyses.completion_declared", completion_declared),
     _table_rule("analyses.vocabularies", vocabularies),
+    _table_rule("analyses.original_sd_recorded", original_sd_recorded),
     _table_rule("analyses.top_hit_count_columns", top_hit_count_columns),
     Check(
         name="analyses.se_out_of_range_count", kinds=Kind.RELEASE, when=_with_analyses,

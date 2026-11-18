@@ -55,7 +55,7 @@ owner rejected that shape on 18 Nov 2026.
   for Ragged's optional columns). It refuses an SD that is missing, non-finite
   or not positive, naming the Analysis. `PhenotypeSd.dividing_by` refuses one
   too, for a caller that skipped the parser. The rescaling tiers are
-  `model.enums.SD_RESCALING_METHODS`.
+  `model.enums.SD_RESCALING_METHODS`, shared by the parser and `validate`.
 - The divide is `float32` by `float32`: `se / np.float32(sd)`, the arithmetic
   `apply_se_divisor` used. It returns `se` itself, not a copy, when every SD
   is 1.0. `apply_se_divisor` is deleted.
@@ -76,6 +76,18 @@ Analysis's SD. Every later call that sees the same value is one of the
 reads a Store, never a source, so its SEs are always in SD Units. Even if a
 completion wanted the SD, it has no way to learn it: `original_sd` lives in
 `analyses.tsv`, and no completion reads that column.
+
+### `validate` checks what the builders now record
+
+`analyses.original_sd_recorded` fails a Release whose `analyses.tsv` gives a
+rescaling `original_sd_method` with an `original_sd` that is blank, non-finite or
+not positive, naming the Analysis (spec §7a, §20.0). That is the record each of
+the four Releases left. Every Release fails the rule, whatever its
+`format_version`, and no older version is let off with a warning, unlike #337's
+infinite SE. That SE was a value its Store faithfully held. These Releases
+hold SEs that are wrong by their own metadata. No format version marks the
+fix, because none changed. A warning would also let a Release that is wrong
+validate clean.
 
 ## Considered options
 
@@ -100,4 +112,5 @@ completion wanted the SD, it has no way to learn it: `original_sd` lives in
 - `storable` is no longer idempotent for a builder's SD: calling it twice with
   the same `dividing_by` divides twice. A writer that re-judges cells passes
   `APPLIED`. ADR 0077's "pure and idempotent" now holds for `APPLIED` only.
-- Repairing the four Releases is an opengwasdb-stores ticket.
+- Repairing the four Releases is an opengwasdb-stores ticket. Until they are
+  repaired, `validate` fails them.
