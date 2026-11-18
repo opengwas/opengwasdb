@@ -1,6 +1,6 @@
 # Partner Rows replace the Proxy Index for clumping and proxies
 
-Part of the Partner Rows epic. The design is `docs/spec/partner-rows.md`. It supersedes, for
+Part of epic [#64](https://github.com/opengwas/ogld/issues/64). The design is `docs/spec/partner-rows.md`. It supersedes, for
 `clump` and `proxies`, decision 1 of epic [#45](https://github.com/opengwas/ogld/issues/45)
 ("keep the upper triangle and Zarr v3; no symmetric duplication and no independent row-frame
 format"). The terms are in `CONTEXT.md` once the epic adds them.

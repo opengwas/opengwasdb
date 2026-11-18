@@ -1,7 +1,7 @@
 # Partner Rows: a clump-and-proxy component for the LD Store
 
 Status: **accepted design**, owner's decisions of 18 November 2026 (§1; ADR 0011). It becomes
-normative as `docs/spec/ld-store.md` takes the sections it amends, in the epic that builds it.
+normative as `docs/spec/ld-store.md` takes the sections it amends, in epic #64.
 Format version described: `0.2.0` (decision D5).
 
 This document specifies a new LD Store component, the **Partner Rows**. For each variant it
