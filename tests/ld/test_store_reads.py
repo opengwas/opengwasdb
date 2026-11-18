@@ -32,6 +32,7 @@ from contract.support import RangeHandler
 from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 from zarr.abc.store import SuffixByteRequest
+from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import FsspecStore, LocalStore
 
 import ogld
@@ -535,6 +536,13 @@ def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path:
     assert ogld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, "chr21 is intact"
 
 
+async def reached(event: threading.Event) -> None:
+    """Wait until `event` is set, or fail: the test's own worker has to be in flight."""
+    async with asyncio.timeout(2):
+        while not event.is_set():
+            await asyncio.sleep(0.001)
+
+
 class Sent(list[tuple[str, int]]):
     """The path and body length of every response a server sent, and each response's status.
 
@@ -754,20 +762,6 @@ def test_a_read_has_at_most_its_bounds_in_flight(
     assert client.peak == (1 if bound == "bytes" else 2)
     assert held.earlier == [0] * batches, "no earlier batch survives into the next fetch"
     assert max(held.batches) * 2 <= budget
-
-
-def test_prefetch_limits_actual_http_requests(
-    small_chunks: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    client = client_flight(monkeypatch)
-    flight = InFlight(together=3, patience=0.05)
-    with zarr.config.set({"async.concurrency": 2}), holding(small_chunks, flight) as url:
-        cache = location.ChunkCache(1 << 20)
-        array = location.open_group(url, cache=cache)["near/22/r"]
-        assert isinstance(array, zarr.Array)
-        assert cache.prefetch(array, np.array(APART) * INNER, np.full(len(APART), INNER))
-    assert client.peak == 2
-    assert cache._bytes <= cache.budget
 
 
 def test_a_read_of_strings_holds_at_most_the_bytes_in_flight(
@@ -995,3 +989,85 @@ def test_a_fill_of_zero_is_the_caller_s_and_fills_only_the_unstored_cells() -> N
     assert (zero.r[unstored] == 0).all()
     np.testing.assert_array_equal(zero.r[~unstored], plain.r[~unstored])
     assert zero.fill == 0
+
+
+def test_oversized_sparse_read_streams_without_pinning_a_chromosome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bound, size = 1 << 19, 65536
+    array = zarr.create_array(
+        store=tmp_path / "a", shape=(32 * size,), dtype="int32", chunks=(size,), shards=(8 * size,)
+    )
+    array[:] = np.arange(32 * size, dtype=np.int32)
+    monkeypatch.setattr(location, "_FETCH_BYTES", bound)
+    coords = np.arange(32) * size + 17
+    cache = location.ChunkCache(0)
+    tracemalloc.start()
+    try:
+        got = cache.take(array, coords)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    np.testing.assert_array_equal(got, coords)
+    assert peak < 4 * bound, f"{peak} bytes pinned for {got.nbytes} requested bytes"
+    assert cache._bytes == 0
+
+
+def test_a_cache_budget_does_not_change_the_answer(tmp_path: Path) -> None:
+    root = resharded(tmp_path / "store", 512, 4)
+    store = ogld.open(root)
+    rows = np.r_[np.arange(0, 50, 5), np.arange(500, 550, 5)]
+    names = store._reader.alids_of(rows).tolist()
+    score = np.random.default_rng(40).random(len(rows))
+    expected = store.clump(names, score, r2=0.01, kb=3000)
+    assert (expected.lead != expected.alid).any(), "the fixture must have joined members"
+    for budget in [0, 4096]:
+        got = ogld.open(root, cache_bytes=budget).clump(names, score, r2=0.01, kb=3000)
+        for name, column in expected.columns().items():
+            np.testing.assert_array_equal(got.columns()[name], column)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_cancelled_index_waiter_does_not_cancel_another_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    root = resharded(tmp_path / "store", 512, 4)
+    store = location._KeptIndexes(LocalStore(root, read_only=True), location.ChunkCache())
+    started, release = threading.Event(), threading.Event()
+    getter, calls = LocalStore.get_sync, []
+
+    def held(self: Any, key: str, **kwargs: Any) -> Any:
+        calls.append(key)
+        started.set()
+        assert release.wait(2), "the test must release its own suffix worker"
+        if fails:
+            raise OSError("shared suffix failed")
+        return getter(self, key, **kwargs)
+
+    monkeypatch.setattr(LocalStore, "get_sync", held)
+
+    async def run() -> None:
+        request = ("near/22/r/c/0", default_buffer_prototype(), SuffixByteRequest(68))
+        first = asyncio.create_task(store.get(*request))
+        second = asyncio.create_task(store.get(*request))
+        try:
+            await reached(started)
+            first.cancel()
+            await asyncio.sleep(0.01)
+            first.cancel()  # Repeated cancellation must not reach the shared fetch either.
+            await asyncio.sleep(0.01)
+            assert not first.done(), "the cancelled waiter must drain, not abandon, shared I/O"
+            assert not second.done()
+        finally:
+            release.set()
+            a, b = await asyncio.gather(first, second, return_exceptions=True)
+            await asyncio.gather(*store._pending.values(), return_exceptions=True)
+        assert isinstance(a, asyncio.CancelledError)
+        if fails:
+            assert isinstance(b, OSError)
+        else:
+            assert b.to_bytes() == (root / request[0]).read_bytes()[-68:]
+        assert calls == [request[0]], "both readers must share exactly one suffix request"
+        assert not store._pending
+
+    asyncio.run(run())

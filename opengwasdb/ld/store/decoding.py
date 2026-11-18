@@ -2,7 +2,7 @@
 
 This module owns codec recognition, shard/frame parsing, decoded-buffer ownership and the
 single executor shared by local range I/O and decoding. Location owns transport wrapping,
-cache accounting, prefetch planning and byte credits; this backend never chooses those limits.
+cache accounting and the bound on bytes in flight; this backend never chooses those limits.
 """
 
 from __future__ import annotations
@@ -110,12 +110,6 @@ class NumericDecoder:
                 if fetched is not None:
                     await self.decode(fetched.to_bytes(), lo, chunks, out)
         return [self.owned(array, first + k, chunk) for k, chunk in enumerate(out)]
-
-    def ranges(
-        self, index: bytes, keys: npt.NDArray[np.int64], *, gap: int
-    ) -> Iterator[tuple[int, int, _ChunkRanges]]:
-        """Validate an index and locate selected chunks; the caller chooses coalescing policy."""
-        return _byte_runs(self._index(index)[keys], gap=gap)
 
     def owned(
         self, array: zarr.Array[Any], k: int, chunk: npt.NDArray[Any] | None

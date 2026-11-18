@@ -87,7 +87,7 @@ ALID_ROWS: Final = 1 << 20
 #: The bytes one carried pair holds: its earlier row, its later row and its code — the row's two
 #: 4-byte integers and its code's 2 — the destination being its bucket (partner-rows §6.1).
 PAIR_BYTES: Final = 10
-#: The rows of one bucket of the Proxy Index's carried pairs. Pairs are carried by the bucket
+#: The rows of one bucket of the Partner Rows' carried pairs. Pairs are carried by the bucket
 #: their later row falls in, so a bucket is freed once its rows are written. Only the pairs of
 #: one partly written bucket are held beyond those spanning the row being written.
 CARRY_ROWS: Final = 256
@@ -472,11 +472,6 @@ class RowCarry:
         """The first row not yet completed."""
         return self._next
 
-    @property
-    def counts(self) -> npt.NDArray[np.int64]:
-        """Each row's entries, −1 for a row not yet written."""
-        return self._counts
-
     def complete(self, rows: int, lo: _Rows, hi: _Rows, codes: Codes) -> Rows:
         """Complete the next `rows` rows from the pairs (lo, hi) of their own blocks, and carry
         the pairs whose later row is still to come."""
@@ -723,10 +718,11 @@ def derive_far_pairs(
     index element no store holds, which is what a lost chunk reads as, is refused, naming its
     array, rather than read as a row without Far Pairs.
 
-    This is the one place left in `ogld/` that reads the Proxy Index (#72): it migrates a store
-    built before ADR 0007, which is the only store that can hold an index and lack `far/`. No
-    store this package writes, or reads, is in that state, and no other code path names the
-    component's arrays (`tests/test_proxy_index_removed.py`).
+    This is the one place left in `ogld/` that reads the Proxy Index (#72), and it has a live
+    caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
+    holds an index and no `far/`, and #73 derives its Far Pairs before its Partner Rows. A store
+    this package writes never needs it, and no other code path names the component's arrays
+    (`tests/test_proxy_index_removed.py`).
     """
     indptr = _whole(index, "indptr")
     stream = FarPairsStream(far, len(indptr) - 1, encoding)
@@ -1282,7 +1278,7 @@ def _integer(recorded: dict[str, Any], key: str, store: Path) -> int:
 
 
 def _incomplete(plan: _Plan) -> str:
-    """Why a store's Proxy Index is not removed: its Partner Rows are not all there."""
+    """Why a Proxy Index a store holds is not removed: its Partner Rows are not all there."""
     absent = [chrom for chrom in plan.ranges if not plan.present(chrom)]
     return (
         f"{plan.store} is missing the Partner Rows of {len(absent)} chromosome(s), "

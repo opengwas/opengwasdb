@@ -422,11 +422,6 @@ def move_a_far_pair_to_its_later_row(store: Path) -> None:
     write_far22(store, owner, partner, codes)
 
 
-def drop_a_far_pair(store: Path) -> None:
-    owner, partner, codes = far22(store)
-    write_far22(store, owner[1:], partner[1:], codes[1:])
-
-
 def shorten_a_near_row(store: Path) -> None:
     indptr = np.asarray(zarr.open_array(store / "near/22/indptr", mode="r")[:])
     row = int(np.flatnonzero(np.diff(indptr) > 0)[0])

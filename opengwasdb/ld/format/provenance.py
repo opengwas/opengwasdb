@@ -13,8 +13,9 @@ from typing import Final, Literal, TypedDict
 FORMAT_VERSION: Final = "0.2.0"
 
 #: The format versions this package reads: `0.1.0`, the stores built before the Partner Rows (no
-#: `partners/`, and `clump` and `proxies` read the Proxy Index), and `0.2.0`, which adds them
-#: (spec §13). A store records one, and a reader refuses any other.
+#: `partners/`; its `clump` and `proxies` read a Proxy Index, which #72 removed and nothing here
+#: reads now), and `0.2.0`, which adds them (spec §13). A store records one, and a reader refuses
+#: any other.
 READABLE_FORMATS: Final = ("0.1.0", FORMAT_VERSION)
 
 

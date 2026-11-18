@@ -133,7 +133,7 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
     share ≤ 0.05. The covariates are the first up to k PCs kept; with fewer than k, those
     that survive; with fewer than k_min, a refusal naming the dropped PCs. At k = 0 no PC
     Check runs. It regresses the covariates out of the standardised dosages, writes the
-    Near Band exactly and the Proxy Index at t_far, and finishes through
+    Near Band exactly and the Far Pairs and Partner Rows at their floors, and finishes through
     `StoreWriter.finish`, which validates the store. Provenance records the scan, the
     dropped PCs and the null the scan was judged against.
 

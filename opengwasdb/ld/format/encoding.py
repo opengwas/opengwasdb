@@ -172,8 +172,8 @@ class REncoding:
     def far_code_floor(self, t_far: float) -> int:
         """The smallest code c ≥ 0 with (c / scale)² ≥ t_far, in float64 (spec §3).
 
-        A pair more than `near_bp` apart is in the Proxy Index exactly when |code| reaches
-        it, which is the same as r̂² ≥ t_far. Computed from an estimate and then stepped to
+        A pair more than `near_bp` apart is a Far Pair exactly when |code| reaches it, which is
+        the same as r̂² ≥ t_far. Computed from an estimate and then stepped to
         the exact boundary, because the float64 comparison, not the real-number one, is the
         rule.
         """

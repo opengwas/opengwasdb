@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from store_copies import FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store
+from store_copies import FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store, store_reads
 
 import ogld
 from ogld.format import VALIDATION_RULES, InputError, Refusal, REncoding
@@ -109,22 +109,13 @@ def index_paths(source: Path) -> list[tuple[int, str]]:
 
 
 def test_the_only_source_that_names_the_component_s_directory_is_its_removal() -> None:
-    # `ogld/store/assembly.py` is where `--drop-index` removes it. Nothing reads a path under it:
-    # the two migration helpers take the group as an argument (ADR 0007's `derive_far_pairs`).
+    # A spelling guard, not a proof: the transport test below is what shows no read happens.
+    # `ogld/store/assembly.py` is where `--drop-index` removes the directory; the migration
+    # helper (`derive_far_pairs`) takes the group as an argument and names no path.
     found = {
         str(path.relative_to(PACKAGE)): index_paths(path) for path in sources() if index_paths(path)
     }
     assert list(found) == ["store/assembly.py"], found
-    lines = {number for number, _ in found["store/assembly.py"]}
-    text = (PACKAGE / "store" / "assembly.py").read_text().splitlines()
-    for number in lines:
-        assert text[number - 1].strip() in {
-            '_removed(store / "index")',
-            'counts.pop("index_entries", None)',
-        }, (
-            number,
-            text[number - 1],
-        )
 
 
 def small_store(out: Path) -> Path:
@@ -218,6 +209,38 @@ def test_a_leftover_index_answers_exactly_as_a_store_without_one(tmp_path: Path)
         np.testing.assert_array_equal(leftover[name], answer, err_msg=name)
 
 
+def every_query(store_path: Path) -> None:
+    """Every read the package makes of a store: one of each query family, and the pair reads
+    behind them. A read under `index/` anywhere here is a read of the component."""
+    store = ogld.open(store_path)
+    reader = StoreReader.open(store_path)
+    rows = np.arange(reader.provenance["n_variants"])
+    names = list(reader.variants(rows).alid)
+    small = names[:40]
+    store.matrix(small)
+    store.region("22", 30_000_000, 4_000_000)
+    reader.region_r(468, 1056)
+    reader.pair_r(rows[::7])
+    reader.r_of_pairs(rows[::13], np.minimum(rows[::13] + 1, len(rows) - 1))
+    scores = np.linspace(5.0, 1.0, len(small))
+    store.clump(small, scores, r2=0.01, kb=3000)
+    store.proxies(small, r2=0.5, kb=3000)
+
+
+def test_no_query_reads_a_key_of_a_leftover_index(tmp_path: Path) -> None:
+    # The real isolation check (#71's method): on a 0.2.0 copy that still holds the component, a
+    # read of any array of it — or of its own `zarr.json` — would be a store key here.
+    copy = copy_store(tmp_path / "store")
+    write_a_leftover_index(copy)
+    held = [str(path) for path in copy.rglob("index/*/*/zarr.json")]
+    assert held, "the copy must hold the component's metadata for this to mean anything"
+    with store_reads() as keys:
+        every_query(copy)
+    offending = sorted({key for key in keys if key.startswith("index/")})
+    assert offending == [], f"a query read the component: {offending}"
+    assert [key for key in keys if key.endswith("zarr.json")], "metadata reads are recorded"
+
+
 def test_validation_ignores_a_leftover_index(tmp_path: Path) -> None:
     copy = copy_store(tmp_path / "store")
     write_a_leftover_index(copy)
@@ -239,8 +262,10 @@ def test_a_leftover_index_whose_entries_are_lost_is_still_not_read(tmp_path: Pat
 
 
 def a_0_1_0_store(to: Path) -> Path:
-    """The Test Store as a 0.1.0 store records itself: no Partner Rows claimed, no t_partner."""
+    """The Test Store as a 0.1.0 store records itself: no Partner Rows claimed, no `t_partner`,
+    and the Proxy Index a 0.1.0 store holds with its `counts.index_entries`."""
     copy = copy_store(to)
+    write_a_leftover_index(copy)
     root = zarr.open_group(str(copy), mode="r+")
     recorded = dict(root.attrs["ld_store"])
     recorded["format_version"] = "0.1.0"
@@ -249,6 +274,7 @@ def a_0_1_0_store(to: Path) -> Path:
     recorded["counts"] = {
         key: value for key, value in recorded["counts"].items() if key != "partner_entries"
     }
+    recorded["counts"]["index_entries"] = 2 * len(np.arange(1056))
     recorded["software"] = {
         key: value for key, value in recorded["software"].items() if key != "zstd"
     }
@@ -265,6 +291,25 @@ def _clump_or_proxies(query: str, store: Path, names: list[str], scores: np.ndar
 
 def test_a_0_1_0_store_opens_and_answers_matrix_and_region(tmp_path: Path) -> None:
     copy = a_0_1_0_store(tmp_path / "store")
+    plain, older = answers(TEST_STORE), answers(copy)
+    for name, answer in plain.items():
+        np.testing.assert_array_equal(older[name], answer, err_msg=name)
+
+
+def test_a_0_1_0_store_with_every_index_chunk_lost_still_validates_and_answers(
+    tmp_path: Path,
+) -> None:
+    # No rule validates an index of either version since #72 (#71/#72 read nothing of it), so a
+    # 0.1.0 store whose index is gone is still a valid 0.1.0 store, and still answers.
+    copy = a_0_1_0_store(tmp_path / "store")
+    chunks = sorted(copy.glob("index/*/*/c/*"))
+    assert len(chunks) >= 4, "both chromosomes' three arrays must have a chunk to lose"
+    for chunk in chunks:
+        chunk.unlink()
+    root = zarr.open_group(str(copy), mode="r")
+    found = validate_group(root, root.attrs["ld_store"])
+    assert {rule: value for rule, value in found.items() if value} == {}, "every rule passes"
+    assert set(found) == set(VALIDATION_RULES)
     plain, older = answers(TEST_STORE), answers(copy)
     for name, answer in plain.items():
         np.testing.assert_array_equal(older[name], answer, err_msg=name)

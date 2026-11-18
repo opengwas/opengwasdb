@@ -71,7 +71,8 @@ def global_rows(local: npt.ArrayLike, start: int) -> npt.NDArray[np.int64]:
 
 def stop_within(position: npt.ArrayLike, distance: int) -> npt.NDArray[np.int64]:
     """For each row, the index just past the last variant with p_m − p_l ≤ distance: pass
-    `near_bp` for the Near Band's stop (spec §4) and `far_bp` for the Proxy Index's (spec §5).
+    `near_bp` for the Near Band's stop (spec §4) and `far_bp` for the pairs a store measured
+    (spec §5).
     Exactly `distance` away is within; one more is not. It counts the row itself, and
     any variant at the same position."""
     at = np.asarray(position, dtype=np.int64)

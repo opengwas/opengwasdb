@@ -91,7 +91,7 @@ Query = Callable[[Any], dict[str, Any]]
 @dataclass
 class Tally:
     """What the client read during one timing: zarr store reads, chunk-cache reads, and the
-    seconds spent loading chromosomes and scattering the Proxy Index into a matrix."""
+    seconds spent loading chromosomes and scattering the Far Pairs into a matrix."""
 
     gets: Counter[str] = field(default_factory=Counter)
     get_bytes: Counter[str] = field(default_factory=Counter)
@@ -265,7 +265,6 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         (StoreReader, "variants", "variants"),
         (StoreReader, "loci_of", "loci_of"),
         (StoreReader, "partner_row", "partner_row"),
-        (ChunkCache, "prefetch", "prefetch"),
         (clumping, "_component", "greedy"),
         (location, "_counted", "counted"),
     ):

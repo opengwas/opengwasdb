@@ -221,14 +221,6 @@ def write_array(path: str, at: slice, value: Any) -> Callable[[Path], None]:
     return change
 
 
-def negate(path: str, at: int) -> Callable[[Path], None]:
-    def change(store: Path) -> None:
-        array = zarr.open_array(store / path, mode="r+")
-        array[at] = -array[at]
-
-    return change
-
-
 def a_far_pair_exactly_near_bp_apart(store: Path) -> None:
     """Adds chr22's one pair exactly 3,000,000 bp apart to its Far Pairs, at the floor: the edge
     a Far Pair lies beyond (review of #31)."""
