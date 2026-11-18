@@ -325,6 +325,10 @@ def test_the_plan_command_writes_the_owed_tags(
     assert "v0.12.1" in capsys.readouterr().out
 
 
-def test_the_shipped_boundary_keeps_pypi_off_until_the_rehearsal() -> None:
-    # #440 moves this to the rehearsed tag; until then a merge uploads nothing.
-    assert pypi.PYPI_FIRST_RELEASE is None
+def test_pypi_starts_at_the_tag_rehearsed_on_testpypi() -> None:
+    # v0.11.1 was rehearsed on TestPyPI (#440); every tag before it -- including
+    # those from before #438 gave a tag its packaging checks -- stays off PyPI.
+    assert pypi.PYPI_FIRST_RELEASE == "v0.11.1"
+    tags = {tag: "0" * 40 for tag in ("v0.10.0", "v0.11.0", "v0.11.1", "v0.12.0")}
+    eligible = pypi.eligible_tags(tags, index="pypi", first=pypi.PYPI_FIRST_RELEASE)
+    assert eligible == ["v0.11.1", "v0.12.0"]
