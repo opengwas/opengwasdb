@@ -71,6 +71,13 @@ _ROWS: Final = 1 << 20
 #: rows look like. The band's and the index's limits bind first on a chromosome whose rows are
 #: dense.
 _FRAMES_PER_BLOCK: Final = 256
+#: Partner Rows entries a block holds at most. A later row holds an entry for every earlier
+#: partner within far_bp, so the entries a block carries are not bounded by its own band codes:
+#: a few thousand rows at the end of a chromosome whose pairs are all in LD carry every pair
+#: before them (spec §12). A frame is the component's unit of reading, so a block holds one frame
+#: at least. 524,288 entries cost the ten rules about 42 MB at their worst (measured), which keeps
+#: a block's working arrays near the 150 MiB the band's and the index's own limits are sized for.
+_PARTNER_ENTRIES: Final = 1 << 19
 #: Offending elements a finding names; it counts the rest.
 _NAMED: Final = 5
 
@@ -1164,41 +1171,13 @@ class _Chromosome:
     def indptr(self, part: str) -> npt.NDArray[np.int64] | None:
         return {"near": self.band, "index": self.index, "far": self.far}[_PARTS[part][0]]
 
-    def blocks(self, partners: bool = False) -> list[tuple[int, int]]:
+    def blocks(self) -> list[tuple[int, int]]:
         """The rows in blocks of at most `_WINDOW` band codes and an eighth as many entries of
-        the index and of the Far Pairs; with `partners`, whole frames, at most
-        `_FRAMES_PER_BLOCK` of them, so each block's Partner Rows are read whole."""
+        the index and of the Far Pairs."""
         entries = _WINDOW >> _ENTRY_SHIFT
         limits = [(self.band, _WINDOW), (self.index, entries), (self.far, entries)]
         delimiting = [(indptr, most) for indptr, most in limits if indptr is not None]
-        rows = list(blocks(*delimiting)) if delimiting else []
-        if not partners:
-            return rows
-        assert self.frames is not None, "a block's frames are read only where they are resolved"
-        return _frame_blocks(rows, self.size, self.frames.rows_per_frame)
-
-
-def _frame_blocks(rows: list[tuple[int, int]], size: int, per_frame: int) -> list[tuple[int, int]]:
-    """`rows` cut into whole frames: each block starts and ends on a frame's edge — the
-    chromosome's last frame may hold fewer rows — and holds at most `_FRAMES_PER_BLOCK` of
-    them. Rounding an `indptr`-delimited block up to its frame's end costs fewer than G rows,
-    which the limits already allow (spec §12)."""
-    out: list[tuple[int, int]] = []
-    a = 0
-
-    def cut(until: int) -> None:
-        nonlocal a
-        until = min(until, size)
-        while a < until:
-            stop = min(until, a + _FRAMES_PER_BLOCK * per_frame)
-            out.append((a, stop))
-            a = stop
-
-    for _, b in rows or [(0, size)]:
-        edge = -(-b // per_frame) * per_frame
-        cut(size if edge >= size else edge)
-    cut(size)
-    return out
+        return list(blocks(*delimiting)) if delimiting else []
 
 
 def _chromosome(
@@ -1225,14 +1204,21 @@ def _chromosome(
     )
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Decoded:
-    """One frame of a block: decoded, or why it cannot be (partner-rows §5.4)."""
+    """One frame of a block: decoded, or why it cannot be (partner-rows §5.4). Its payload is
+    released once its entries are copied into the block's span, so a block holds its entries
+    once and not twice while the span is built."""
 
     first: int
     rows: int
     frame: Frame | None
     untold: _Unreadable | None
+
+    @property
+    def entries(self) -> int:
+        """The entries it holds, E; 0 for a frame that could not be read."""
+        return self.frame.entries if self.frame is not None else 0
 
 
 @dataclass(frozen=True)
@@ -1250,25 +1236,85 @@ class _Span:
         return len(self.partner)
 
 
-def _decoded(store: _Store, c: _Chromosome, rows: tuple[int, int]) -> list[_Decoded]:
-    """The frames covering rows [a, b), each decoded once: this runs on the pass's threads."""
+def _decode(c: _Chromosome, number: int) -> _Decoded:
+    """Frame `number` of `c`, decoded, or why it cannot be: one decompress, refused naming the
+    chromosome and the frame (partner-rows §5.4)."""
+    frames = c.frames
+    assert frames is not None
+    first, due = frames.due(number)
+    try:
+        return _Decoded(first, due, frames.decode(number), None)
+    except _READ_ERRORS as error:
+        named = f"frame {number} of chromosome {c.name}"
+        why = str(error)
+        if named not in why:
+            why = f"{named}: {why}"
+        where = f"{layout.partners_path(c.name)}/{layout.FRAMES}"
+        return _Decoded(first, due, None, _Unreadable(where, why))
+
+
+def _decoded(c: _Chromosome, rows: tuple[int, int]) -> list[_Decoded]:
+    """The frames covering rows [a, b), each decoded once."""
     frames = c.frames
     assert frames is not None
     a, b = rows
     per_frame = frames.rows_per_frame
-    where = f"{layout.partners_path(c.name)}/{layout.FRAMES}"
-    out = []
-    for number in range(a // per_frame, -(-b // per_frame)):
-        first, due = frames.due(number)
-        try:
-            out.append(_Decoded(first, due, frames.decode(number), None))
-        except _READ_ERRORS as error:
-            named = f"frame {number} of chromosome {c.name}"
-            why = str(error)
-            if named not in why:
-                why = f"{named}: {why}"
-            out.append(_Decoded(first, due, None, _Unreadable(where, why)))
-    return out
+    return [_decode(c, number) for number in range(a // per_frame, -(-b // per_frame))]
+
+
+def _plans(
+    c: _Chromosome, partners: bool
+) -> Iterator[tuple[tuple[int, int], list[_Decoded] | None]]:
+    """The pass's blocks: rows, and the frames each holds when `partners`.
+
+    Without the Partner Rows a block is a range of `c.blocks()`. With them a block is planned by
+    decoding its frames, because what bounds it is its entries and not its rows: a later row
+    holds an entry for every earlier partner within far_bp, so a few thousand rows near a
+    chromosome's end carry every pair before them, which the block's own band codes say nothing
+    about (spec §12). Frames are decoded here, once, on the pass's own thread and handed to the
+    rules, so none is decompressed twice; a block holds `_PARTNER_ENTRIES` at most — one frame
+    where a frame alone holds more — and ends at the first frame it cannot read.
+    """
+    if not partners:
+        for rows in c.blocks():
+            yield rows, None
+        return
+    frames = c.frames
+    assert frames is not None
+    per_frame = frames.rows_per_frame
+    a: int = 0
+    pending: _Decoded | None = None
+    for _, stop in c.blocks() or [(0, c.size)]:
+        edge = min(c.size, -(-stop // per_frame) * per_frame)
+        while a < edge:
+            rows, decoded, pending = _frame_block(c, a, edge, pending)
+            yield rows, decoded
+            a = rows[1]
+
+
+def _frame_block(
+    c: _Chromosome, start: int, edge: int, pending: _Decoded | None
+) -> tuple[tuple[int, int], list[_Decoded], _Decoded | None]:
+    """One block of whole frames from row `start` (a frame's edge) up to `edge`: it ends at
+    `_PARTNER_ENTRIES` entries, at `_FRAMES_PER_BLOCK` frames, or at the first frame it cannot
+    read. The frame it stopped before is returned, not dropped, so the next block decodes it
+    once."""
+    frames = c.frames
+    assert frames is not None
+    per_frame = frames.rows_per_frame
+    a, entries = start, 0
+    decoded: list[_Decoded] = []
+    while a < edge and len(decoded) < _FRAMES_PER_BLOCK:
+        one = pending if pending is not None else _decode(c, a // per_frame)
+        pending = None
+        if decoded and entries + one.entries > _PARTNER_ENTRIES:
+            return (start, a), decoded, one
+        decoded.append(one)
+        entries += one.entries
+        a = min(c.size, a + per_frame)
+        if one.untold is not None:
+            break
+    return (start, a), decoded, None
 
 
 def _span(frames: list[_Decoded], per_frame: int) -> _Span | _Unchecked:
@@ -1281,22 +1327,25 @@ def _span(frames: list[_Decoded], per_frame: int) -> _Span | _Unchecked:
 
 
 def _entries(frames: list[_Decoded], per_frame: int) -> _Span:
-    """The decoded frames' entries, one frame after another."""
-    decoded = [one.frame for one in frames if one.frame is not None]
-    if not decoded:
-        return _Span(
-            np.empty(0, np.int32), np.empty(0, REncoding.dtype), np.empty(0, np.int64), per_frame
-        )
-    rows = []
-    for one in decoded:
-        lengths = np.diff(one.indptr)
-        rows.append(owners(lengths, np.arange(one.first, one.first + one.rows, dtype=np.int64)))
-    return _Span(
-        np.concatenate([frame.partners for frame in decoded]),
-        np.concatenate([frame.codes for frame in decoded]),
-        np.concatenate(rows),
-        per_frame,
-    )
+    """The frames' entries, one frame after another: each frame's arrays are copied into the span
+    and the frame released, so a block holds its entries once, not once as frames beside their
+    span — at 20 bytes an entry while it is built rather than 34."""
+    partner = np.empty(sum(one.entries for one in frames), np.int32)
+    code = np.empty(len(partner), REncoding.dtype)
+    row = np.empty(len(partner), np.int64)
+    at = 0
+    for one in frames:
+        frame = one.frame
+        if frame is None:
+            continue
+        stop = at + frame.entries
+        partner[at:stop] = frame.partners
+        code[at:stop] = frame.codes
+        lengths = np.diff(frame.indptr)
+        row[at:stop] = owners(lengths, np.arange(one.first, one.first + one.rows, dtype=np.int64))
+        one.frame = None
+        at = stop
+    return _Span(partner, code, row, per_frame)
 
 
 @dataclass(frozen=True)
@@ -1349,9 +1398,25 @@ def _read_block(
     parts: frozenset[str],
     rows: tuple[int, int],
     partners: bool = False,
+    decoded: list[_Decoded] | None = None,
 ) -> _Block:
-    """Rows [a, b) of `c`, each of `parts` read once, and the block's Partner Rows frames
-    decoded once when `partners`; this runs on the pass's threads."""
+    """Rows [a, b) of `c`, each of `parts` read once, and the block's Partner Rows frames —
+    `decoded` when the pass planned them, and decoded here otherwise — when `partners`; this
+    runs on the pass's threads."""
+    a, b = rows
+    at, held = _parts_read(store, c, parts, rows)
+    if not partners:
+        return _Block(a, b, at, held)
+    frames = _decoded(c, rows) if decoded is None else decoded
+    assert c.frames is not None
+    return _Block(a, b, at, held, frames, _span(frames, c.frames.rows_per_frame))
+
+
+def _parts_read(
+    store: _Store, c: _Chromosome, parts: frozenset[str], rows: tuple[int, int]
+) -> tuple[dict[str, int], dict[str, npt.NDArray[Any] | _Unchecked]]:
+    """Each of `parts` of rows [a, b) read once, from the offset its `indptr` gives, with the row
+    that holds each of a component's entries."""
     a, b = rows
     at: dict[str, int] = {}
     held: dict[str, npt.NDArray[Any] | _Unchecked] = {}
@@ -1365,11 +1430,7 @@ def _read_block(
         indptr = c.indptr(k.partner)
         if entries and indptr is not None:
             held[k.owner] = _owners(entries, indptr, a, b)
-    if not partners:
-        return _Block(a, b, at, held)
-    frames = _decoded(store, c, rows)
-    assert c.frames is not None
-    return _Block(a, b, at, held, frames, _span(frames, c.frames.rows_per_frame))
+    return at, held
 
 
 def _owners(
@@ -1500,8 +1561,7 @@ def _feed(
             store.find(c.path(part))
 
     work = partial(_blocked, store, c, parts, partners, fed, stopped)
-    blocks = c.blocks(partners) if fed else []
-    for outcomes in _in_order(work, blocks, store.threads):
+    for outcomes in _in_order(work, _plans(c, partners) if fed else (), store.threads):
         stopped |= _recorded(outcomes, found, stopped)
     return stopped
 
@@ -1524,11 +1584,12 @@ def _blocked(
     partners: bool,
     fed: dict[str, _Scanned],
     stopped: set[str],
-    rows: tuple[int, int],
+    plan: tuple[tuple[int, int], list[_Decoded] | None],
 ) -> dict[str, _Outcome]:
     """One block of rows read once and checked by every rule that is still live; on the pass's
     threads, on several blocks at once."""
-    b = _read_block(store, c, parts, rows, partners)
+    rows, decoded = plan
+    b = _read_block(store, c, parts, rows, partners, decoded)
     live = [(name, rule) for name, rule in fed.items() if name not in stopped]
     return {name: _outcome(partial(rule.block, b)) for name, rule in live}
 
@@ -1757,6 +1818,22 @@ def _mixed(keys: npt.NDArray[np.int64]) -> npt.NDArray[np.uint64]:
     z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
     z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
     return z ^ (z >> np.uint64(31))
+
+
+class _Counted:
+    """Per row, how many Partner Rows entries name it as their partner, added to from several
+    threads: a row of the Near Band at the Partner Floor has that many entries when the component
+    is whole, one in each later row (partner-rows §3)."""
+
+    def __init__(self, rows: int) -> None:
+        # A count of none is a count, not an absence: every row has an entry count, and it is 0
+        # until an entry names it (spec §8's NaN is for an unstored pair's r, which this is not).
+        self.counts = np.full(rows, 0, dtype=np.int64)
+        self.lock = threading.Lock()
+
+    def add(self, named: npt.NDArray[np.int64]) -> None:
+        with self.lock:
+            np.add.at(self.counts, named, 1)
 
 
 class _Sums:
@@ -2032,9 +2109,9 @@ async def _children(store: Any, prefix: str) -> list[str]:
 def _temporary_entries(path: str, group: zarr.Group) -> _Problems:
     """No entry of `partners/` begins with a dot. A chromosome's group is built under one and
     renamed into place in one step (partner-rows §5.1; `FramesGroup`), so a dot-prefixed entry is
-    a group a writer that crashed left behind: half a component, beside which no store may be
-    read as whole. The entries are the store's own listing, metadata or not: a directory zarr
-    never wrote is not a node, but it is still there."""
+    a group a writer that crashed left behind: half a component, which no store may be read as
+    whole beside. The entries are listed by the store, metadata or not: a directory zarr never
+    wrote is not a node, but it is still there."""
     try:
         names = sync(_children(group.store_path.store, group.store_path.path))
     except _READ_ERRORS as unread:
@@ -2083,7 +2160,10 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
     hash right; the file's own size says otherwise, and a store that cannot be measured is asked
     for one byte past the end (spec §5.1, §5.3)."""
     if isinstance(array.store_path.store, LocalStore):
-        size = layout.chunk_file(array).stat().st_size
+        try:
+            size = layout.chunk_file(array).stat().st_size
+        except OSError as lost:
+            raise _Unreadable(where, f"{type(lost).__name__}: {lost}") from lost
         if size != expected:
             yield (
                 where,
@@ -2445,10 +2525,14 @@ class _PartnerNear(_PartnerRule):
         self.floor = store.integer("partner_code_floor")
         self.band = store.indptr(f"near/{c.name}/indptr", c.size)
         self.sums, self.named = _Sums(c.size), _Named(c.size)
+        #: The blocks the pass feeds, which the end re-reads: they are the pass's own, so a
+        #: re-read holds the entries a block holds and no more.
+        self.seen: list[tuple[int, int]] = []
 
     def block(self, b: _Block) -> _Problems:
         if not self.judged:
             return
+        self.seen.append((b.first, b.last))
         lo, hi, code = _band_at_floor(b, self.band, self.floor)
         span = b.span()
         size = self.c.size
@@ -2478,31 +2562,59 @@ class _PartnerNear(_PartnerRule):
         differ = self.sums.differ()
         if not differ.any():
             return
+        counted = _Counted(self.c.size)
 
         def recheck(block: tuple[int, int]) -> list[tuple[str, str]]:
             b = _read_block(self.store, self.c, frozenset(), block, partners=True)
-            return list(self._recheck(differ, b))
+            return list(self._recheck(differ, b, counted))
 
         for problems in _in_order(
-            recheck, self.named.blocks(differ, self.c.blocks(True)), self.store.threads
+            recheck, self.named.blocks(differ, sorted(self.seen)), self.store.threads
         ):
             yield from problems
+        yield from self._lacking(differ, counted)
 
-    def _recheck(self, rows: npt.NDArray[np.bool_], b: _Block) -> _Problems:
+    def _recheck(self, rows: npt.NDArray[np.bool_], b: _Block, counted: _Counted) -> _Problems:
         """The block's entries in a pair's later row whose earlier row is one of `rows`, each
-        against the band's code for its pair."""
+        against the band's code for its pair, and counted for that earlier row."""
         span = b.span()
         _, in_later = _near_halves(
             self.pos, self.near_bp, span.row, span.partner.astype(np.int64), self.c.size
         )
         in_later[in_later] = rows[span.partner[in_later].astype(np.int64)]
         up, down = span.partner[in_later].astype(np.int64), span.row[in_later]
+        counted.add(up)
         code = span.code[in_later].astype(np.int64)
         band = self.store.pick(f"near/{self.c.name}/r", near_address(self.band, up, down))
         differ = band.astype(np.int64) != code
         odd = _keys(up[differ], down[differ], code[differ], self.c.size)
         what = "entries whose code is not the Near Band's"
         yield from _odd_pairs(self.c.name, odd, self.c.size, what, _PARTNERS)
+
+    def _lacking(self, differ: npt.NDArray[np.bool_], counted: _Counted) -> _Problems:
+        """Each differing row's Near Band pairs at the Partner Floor against the entries its later
+        rows hold: a row with fewer entries than pairs is a pair the component lacks, which the
+        sums alone cannot name (partner-rows §3, §10)."""
+        lacking = []
+        for row in np.flatnonzero(differ).tolist():
+            codes = self.store.read(
+                f"near/{self.c.name}/r", int(self.band[row]), int(self.band[row + 1])
+            )
+            pairs = int((np.abs(codes) >= self.floor).sum())
+            if counted.counts[row] != pairs:
+                lacking.append((row, pairs, int(counted.counts[row])))
+        if not lacking:
+            return
+        named = ", ".join(
+            f"row {row}: {pairs:,} pair(s) at the Partner Floor, {entries:,} entry(ies)"
+            for row, pairs, entries in lacking[:_NAMED]
+        )
+        more = f" and {len(lacking) - _NAMED:,} more" if len(lacking) > _NAMED else ""
+        yield (
+            f"partners/{self.c.name}",
+            f"a row whose later rows do not hold its Near Band pairs at the Partner Floor: "
+            f"{named}{more}",
+        )
 
 
 @_scanned("partners.far")

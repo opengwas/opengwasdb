@@ -1381,13 +1381,16 @@ block's Far Pairs with that block's index entries beyond `near_bp` in their earl
 `partners.far` compares the Partner Rows' entries beyond `near_bp` with those same Far Pairs, so
 neither carries anything from one block to the next. A caller may give the pass t threads
 (`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
-and checked at once, and no more are held. A block the Partner Rows join holds whole frames, at
-most 256 of them — 4,096 rows at G = 16 — so its frames are one decompress each, the component's
-unit of reading (§5), and the band's and the index's limits above bind first on a dense
-chromosome. Every band pair at the Partner Floor is two partner entries, so a block's entries are
-at most twice its band codes, at 14 bytes each — an int32 partner, an int16 code and the int64
-row that holds them: 12–37 MB at the 5–16% of band pairs the panels keep, and 235 MB in a store
-where every one of the band's 8,388,608 codes reached the Partner Floor. `near.codes`, `index.codes` and `far.codes` read their `r` array in windows of their
+and checked at once, and no more are held. A block the Partner Rows join is not bounded by its
+rows: a later row holds an entry for every earlier partner within `far_bp`, so a few thousand
+adjacent rows near a chromosome's end carry every pair before them, and the block's own band
+codes say nothing about that. Such a block is planned by decoding its frames, and it ends where
+its entries reach 524,288; a frame that alone holds more is a block to itself, because a frame is
+the component's unit of reading (§5.4). At that budget the ten rules' working arrays measure
+**42 MB** on a store of 1,500 variants all within one 3 Mb window with every band code at the
+Partner Floor — a store where one unbounded block would hold 2,248,500 entries — so the
+component's share of a block stays within the 150 MiB the band's and the index's limits are sized
+for. `near.codes`, `index.codes` and `far.codes` read their `r` array in windows of their
 own instead when its `indptr` cannot delimit the rows or does not end at `r`'s length, as when it
 ends short of `r`: windows of 8,388,608 elements, codes or entries alike, t of them at once.
 

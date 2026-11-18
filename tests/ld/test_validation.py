@@ -26,7 +26,15 @@ import numpy as np
 import pytest
 import zarr
 from numcodecs import Zstd
-from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, TEST_STORE, arrays, copy_store
+from store_copies import (
+    FLOOR,
+    PARTNER_FLOOR,
+    R_SCALE,
+    T_PARTNER,
+    TEST_STORE,
+    arrays,
+    copy_store,
+)
 
 import ogld
 from ogld import cli
@@ -453,6 +461,16 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         "partners.files",
         lambda store: contract().bytes_appended_to_the_frames_file(store),
         "its chunk file holds 44,682 bytes, not the 44,656",
+    ),
+    "a frames chunk file the store lost": (
+        "partners.files",
+        lambda store: (store / "partners" / "22" / "frames" / "c" / "0").unlink(),
+        "cannot be read: FileNotFoundError",
+    ),
+    "a pair whose later row lost its entry": (
+        "partners.near",
+        lambda store: contract().a_later_row_missing_its_entry(store),
+        "a row whose later rows do not hold its Near Band pairs at the Partner Floor",
     ),
     "a group recording another entry count": (
         "partners.rows",
@@ -1024,30 +1042,90 @@ def test_damaged_frames_are_named_with_the_chromosome_and_the_frame(
 # ------------------------------------------------------------------ the scales and the versions
 
 
-def test_the_partner_rows_rules_hold_a_block_of_frames_not_the_chromosome(
+def entries_held(monkeypatch: pytest.MonkeyPatch, budget: int) -> list[int]:
+    """The entries of every block the pass builds, with the Partner Rows' budget at `budget`."""
+    monkeypatch.setattr(validation, "_PARTNER_ENTRIES", budget)
+    monkeypatch.setattr(validation, "_FRAMES_PER_BLOCK", 1 << 16)
+    held: list[int] = []
+    build = validation._entries
+
+    def counting(frames: list[validation._Decoded], per_frame: int) -> validation._Span:
+        span = build(frames, per_frame)
+        held.append(len(span))
+        return span
+
+    monkeypatch.setattr(validation, "_entries", counting)
+    return held
+
+
+def test_a_block_the_partner_rows_join_holds_a_budget_of_entries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A block the Partner Rows join holds whole frames: at two frames a block, chr22's 588 rows
-    # are 19 blocks and a block holds a nineteenth of its 24,020 entries. Two partner rules that
-    # read nothing else, so the peak is theirs: the whole component's entries cost 14 bytes each
-    # (int32 partner, int16 code, int64 row), and the pass holds a block's, not its sum.
+    # Spec §12: a block the Partner Rows join is bounded by its entries, not its rows, because a
+    # later row holds an entry for every earlier partner within far_bp. chr22's 24,020 entries at
+    # 4,096 a block are several blocks, and no block holds more than the budget.
+    held = entries_held(monkeypatch, 4096)
     group = zarr.open_group(TEST_STORE, mode="r")
-    rules = ["partners.codes", "partners.rows"]
-    peaks: dict[int, int] = {}
-    for frames in (2, 256):
-        monkeypatch.setattr(validation, "_FRAMES_PER_BLOCK", frames)
-        validate_group(group, group.attrs["ld_store"], rules)  # warm: the catalogues are read
-        tracemalloc.start()
-        try:
-            found = validate_group(group, group.attrs["ld_store"], rules)
-            peaks[frames] = tracemalloc.get_traced_memory()[1]
-        finally:
-            tracemalloc.stop()
-        assert not any(found.values())
-    entries = int(dict(zarr.open_group(TEST_STORE / "partners" / "22", mode="r").attrs)["entries"])
-    whole = entries * 14
-    assert peaks[2] < whole, f"a block {peaks[2]:,} bytes against the chromosome's {whole:,}"
-    assert peaks[2] < peaks[256] / 2, peaks
+    found = validate_group(group, group.attrs["ld_store"], PARTNER_FRAME_RULES)
+    assert not any(found.values()), found
+    assert len(held) > 3, f"the budget must split the chromosome: {held}"
+    assert max(held) <= 4096, held
+
+
+def adverse_store(path: Path, n: int = 1500) -> Path:
+    """An adverse Partner Rows store: `n` variants within one 3 Mb window, every pair's Stored r
+    at the Partner Floor and below the far code floor, so the Near Band is dense and the Proxy
+    Index empty. Every band pair is two Partner Rows entries, and each row names every earlier
+    row: a single unbounded block would hold two million entries."""
+    position = np.arange(n, dtype=np.int64) * 1_000 + 16_000_000
+    alid = np.array([f"21:{p}:A:C" for p in position])
+    variants = Variants(
+        np.array(["21"] * n),
+        position,
+        alid,
+        np.array(["A"] * n),
+        np.array(["C"] * n),
+        np.full(n, 0.3, dtype=np.float32),
+    )
+    r = np.full((n, n), PARTNER_FLOOR / R_SCALE)
+    np.fill_diagonal(r, 1.0)
+    writer = StoreWriter.create(
+        path,
+        variants=variants,
+        encoding=REncoding(R_SCALE),
+        near_bp=3_000_000,
+        far_bp=10_000_000,
+        n=771,
+        k=10,
+        t_partner=T_PARTNER,
+        compress_workers=4,
+    )
+    writer.write(writer.cut(0, r))
+    writer.finish(sourced(), threads=8)
+    return path
+
+
+def test_the_ten_partner_rows_rules_hold_a_budget_of_entries_on_an_adverse_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The acceptance: a block's working arrays stay near the 150 MiB the band's and the index's
+    # own limits are sized for, however many partners its rows hold. Measured on this store at
+    # the budget, the ten rules peak at 42 MB.
+    store = adverse_store(tmp_path / "adverse")
+    group = zarr.open_group(store, mode="r")
+    held = entries_held(monkeypatch, validation._PARTNER_ENTRIES)
+    tracemalloc.start()
+    try:
+        found = validate_group(group, group.attrs["ld_store"], PARTNER_RULES, threads=1)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert not any(found.values()), found
+    assert len(held) > 3, f"the budget must split the store: {len(held)} block(s)"
+    assert max(held) <= validation._PARTNER_ENTRIES, (max(held), len(held))
+    entries = int(dict(zarr.open_group(store / "partners" / "21", mode="r").attrs)["entries"])
+    assert entries > 3 * validation._PARTNER_ENTRIES, entries
+    assert peak < 64 << 20, f"{peak:,} bytes a block for {entries:,} entries"
 
 
 def test_a_crash_s_temporary_group_is_named_and_refused(tmp_path: Path) -> None:

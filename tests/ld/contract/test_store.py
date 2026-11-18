@@ -809,6 +809,21 @@ def a_group_recording_another_row_count(store: Path) -> None:
     group.attrs.update(rows=587)
 
 
+def a_later_row_missing_its_entry(store: Path) -> None:
+    """Drops the entry a pair's later row holds for its earlier row, keeping the earlier row's
+    own: a pair within near_bp whose band code is in one row only (partner-rows §3)."""
+    rows, per_frame = partner_rows(store, "22")
+    _, pos = chr22(store)
+    for at, (partners, codes) in enumerate(rows):
+        close = (partners < at) & (np.abs(pos[partners] - pos[at]) <= 3_000_000)
+        if not close.any():
+            continue
+        into = int(np.flatnonzero(close)[0])
+        rows[at] = (np.delete(partners, into), np.delete(codes, into))
+        break
+    write_partner_rows(store, "22", rows, per_frame)
+
+
 def a_temporary_group_a_crash_left(store: Path) -> None:
     """A temporary Partner Rows group under a dot-prefixed name, as a writer that crashed before
     its one rename leaves behind, with the file it was building (partner-rows §5.1)."""
@@ -899,7 +914,7 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     ),
     # drops a Far Pair the index holds
     "far.index": drop_a_far_pair,
-    # records 587 rows for chr22's 588
+    # leaves a crashed writer's temporary group under partners/, and 26 bytes past the frames
     "partners.files": a_group_recording_another_row_count,
     # flips a byte inside chr22's third frame, so its checksum fails
     "partners.frames": flip_a_byte_in_a_frame,
