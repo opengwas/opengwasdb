@@ -958,9 +958,10 @@ one per present query variant; neither reads a Near Band element or a Proxy Inde
 resolves a square among the hits (§9). `tests/test_partner_reads.py` holds the one row a lead, and
 `proxies` reading no string column but the ALIDs it returns. Neither query reads any array under
 `near/` or `index/`: their positions and ALIDs come from `variants/`, their LD from
-`partners/<chrom>/`, and the chromosome ranges from the store's record (#71). `matrix` and `region`
-still read a chromosome's `near/<c>/indptr` when a request first touches it, as below; the Proxy
-Index's and Far Pairs' `indptr` are read by nothing a query calls, until #72 removes them.
+`partners/<chrom>/`, and the chromosome ranges from the store's record (#71). `matrix`, `region`
+and `pair_r` still read a chromosome's `near/<c>/indptr`, and its Far Pairs' `indptr` when their
+pairs reach beyond `near_bp`, as below; the Proxy Index's `indptr` is read by nothing a query calls,
+until #72 removes it.
 
 What the reads hold, measured with tracemalloc and held by `tests/test_partner_reads.py`:
 
@@ -1030,9 +1031,11 @@ string chunks where the index reads the whole of itself. An ALID wider than the 
 index does not hold, is found by that same scan at its position, which reads the
 chromosome's positions and the ALID strings there, as every ALID was found before the index. So a
 search can only be faster than it was. A chromosome's `position`
-range and its Near Band's `indptr` are read the first time a request touches that chromosome,
-through the numeric cache, and kept. Its Proxy Index's `indptr` is read only when used;
-its Far Pairs' `indptr` the first time a request needs its pairs
+range is read the first time anything touches that chromosome, through the numeric cache, and
+kept — by `loci_of`, the ALID exact scan, and every read of stored pairs alike, and from 0.2.0 once
+however many threads are cold on it (#71). Its Near Band's `indptr` is read the first time a request
+needs a stored pair there, which `clump` and `proxies` never do from 0.2.0. Its Proxy Index's
+`indptr` is read only when used; its Far Pairs' `indptr` the first time a request needs its pairs
 beyond `near_bp`, so `proxies` and `clump`, which never do, read no more than they did before
 the Far Pairs (ADR 0007). From 0.2.0 a chromosome's `partners/<chrom>/` adds its group's attributes
 and the `frames_idx` chunk, read the first time a request asks for one of its rows, and a frame

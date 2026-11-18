@@ -45,6 +45,57 @@ from ogld.store.validation import validate_group
 INNER, PER_SHARD = 512, 4
 
 
+def test_one_chromosomes_positions_are_loaded_once_however_many_cold_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chromosome's positions are read once, and both caches hold that one array (#71).
+
+    Four cold callers meet at a barrier around the position read: `loci_of` and `pair_r`, the two
+    paths that reach a chromosome. The first to arrive holds the reader's lock and the rest wait,
+    so one load is made and `_loaded[c].position is _located[c].position`; a reader that checks and
+    publishes without a lock makes four loads and keeps two different arrays.
+    """
+    reader = StoreReader.open(TEST_STORE)
+    gate = threading.Barrier(4, timeout=0.5)
+    loads: list[int] = []
+    runs = reader._runs
+
+    def gated(array: zarr.Array[Any], first: Any, length: Any) -> Any:
+        if array.path == "variants/position":
+            loads.append(1)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                gate.wait()
+        return runs(array, first, length)
+
+    monkeypatch.setattr(reader, "_runs", gated)
+    rows = np.array([468, 470, 480, 1055], dtype=np.int64)
+    answers: list[Any] = [None] * 4
+
+    def loci(at: int) -> None:
+        answers[at] = reader.loci_of(rows)
+
+    def pairs(at: int) -> None:
+        answers[at] = reader.pair_r(rows)
+
+    callers = [
+        threading.Thread(target=loci, args=(0,)),
+        threading.Thread(target=pairs, args=(1,)),
+        threading.Thread(target=loci, args=(2,)),
+        threading.Thread(target=pairs, args=(3,)),
+    ]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(10)
+    assert not any(caller.is_alive() for caller in callers), "a cold caller hung"
+    assert len(loads) == 1, f"{len(loads)} whole-chromosome position loads, not one"
+    np.testing.assert_array_equal(answers[0][1], answers[2][1])
+    np.testing.assert_array_equal(answers[1], answers[3])
+    assert reader._loaded["22"].position is reader._located["22"].position, (
+        "the two caches kept different position arrays"
+    )
+
+
 @pytest.fixture(scope="module")
 def small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return resharded(tmp_path_factory.mktemp("resharded") / "store", INNER, PER_SHARD)
