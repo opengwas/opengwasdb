@@ -904,7 +904,7 @@ and the reads map onto the arrays as follows.
 | partners at r2 ≥ t_far | `partners` | `proxies`; `clump` | each variant's Proxy Index row: both sides, up to `far_bp`, in one piece. No chunk of `near/<c>/r` |
 | partners below t_far, W ≤ `near_bp` | `partners` | `proxies` | each variant's Near Band row up to W, and its column within W: one element in each row of the preceding W (§11) |
 | partners below t_far among a list, W ≤ `near_bp` | `partners`, `among` | `clump` | one element of `near/<c>/r` per pair of a variant and a listed variant within W, and nothing else |
-| a variant's Partner Rows row | `partner_row` | `proxies`; `clump` from #71 | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. No `near/` or `index/` array and no shard index. Format 0.2.0, #70 |
+| a variant's Partner Rows row, or many at once | `partner_row`, `partner_rows` | `proxies`; `clump` from #71 | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. Many rows are read together only where their frames are physically adjacent. No `near/` or `index/` array and no shard index. Format 0.2.0, #70 |
 
 So the stored part a query reads depends on its threshold, and the reader chooses it; no query
 compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
@@ -918,9 +918,12 @@ compares r2 with t_far itself, nor, from 0.2.0, with t_partner:
 **From 0.2.0** (#70, #71), a variant's partners at every answered threshold are one frame read.
 `partner_row` finds frame ⌊l / G⌋, reads its byte range from the chromosome's `frames` chunk file,
 verifies the zstd checksum, checks k and the payload length, decodes it and keeps it in a
-byte-bounded LRU of decoded frames. That cache is per reader and separate from the Near Band chunk
+byte-bounded LRU of decoded frames: 256 MiB unless the caller sets another budget, the least
+recently used frame dropped first. That cache is per reader and separate from the Near Band chunk
 cache, which keeps serving `matrix` and `region`: neighbouring leads often share a frame, and
-repeated Analyses on one reader hit it. Measured on GCST90476460 (#65), whose 3,869 leads fall in
+repeated Analyses on one reader hit it. A store of format 0.1.0, which holds no Partner Rows, is
+refused naming the missing component rather than answered from another one (§13), and a damaged
+frame is refused naming its chromosome and frame, never read as a short row. Measured on GCST90476460 (#65), whose 3,869 leads fall in
 95 components: G = 16 with four component workers read 3,854 frames and 101,810,367 bytes cold,
 with 15 cache hits, and did 1.067 s of LD work cold and 1.058 s warm. The Proxy Index row read,
 the Near Band's row and column reads and clump's use of the chunk cache, single-flight and

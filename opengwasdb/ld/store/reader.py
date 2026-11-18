@@ -16,6 +16,12 @@ HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches 
 A chunk the store lost reads as its array's fill value, and spec §6 chose each fill value
 as one a valid LD Store never holds. So every read refuses that value, naming the array,
 rather than decode it: a lost Near Band chunk is a refusal, never a run of r = 0.
+
+From format 0.2.0 a variant's Partner Rows row is a read of its own (`partner_row`; partner-rows
+§7): one frame's byte range out of `partners/<chrom>/frames`, one decode, and the row's slice of
+the decoded frame, which the reader's frame cache keeps. It reads no Near Band chunk, no Proxy
+Index entry and no shard index, and a store that holds no Partner Rows is refused naming the
+component.
 """
 
 from __future__ import annotations
@@ -31,7 +37,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import READABLE_FORMATS, InputError, Provenance, REncoding, judge_window
+from ogld.format import READABLE_FORMATS, Codes, InputError, Provenance, REncoding, judge_window
 from ogld.format.geometry import (
     blocks,
     chromosome_index,
@@ -50,6 +56,7 @@ from ogld.format.geometry import (
 )
 from ogld.identity import alid_locus
 from ogld.store import layout
+from ogld.store.frames import FrameCache, PartnerFrames, open_partner_frames
 from ogld.store.layout import chromosomes_listed, never_data, refused_if_lost, shown_fill
 from ogld.store.location import ChunkCache, open_group
 from ogld.store.tables import Partners, Variants
@@ -149,24 +156,34 @@ class StoreReader:
     _loaded: dict[str, _Chromosome]
     _far: dict[str, _Sparse]
     _cache: ChunkCache
+    _frame_cache: FrameCache
+    _partner_frames: dict[str, PartnerFrames]
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
 
     def _attach(
-        self, root: zarr.Group, provenance: Provenance, encoding: REncoding, cache: ChunkCache
+        self,
+        root: zarr.Group,
+        provenance: Provenance,
+        encoding: REncoding,
+        cache: ChunkCache,
+        frames: FrameCache,
     ) -> None:
         """Keep the provenance, the encoding and the chromosome ranges of an opened, checked
-        store, and the chunk cache its reads go through."""
+        store, and the two caches its reads go through: decoded Near Band chunks, and decoded
+        Partner Rows frames (partner-rows §7)."""
         self._root = root
         self._provenance = provenance
         self._encoding = encoding
+        self._cache = cache
+        self._frame_cache = frames
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
         self._ranges = {name: (start, stop) for name, start, stop in listed}
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._loaded = {}
         self._far = {}
-        self._cache = cache
+        self._partner_frames = {}
         # Each handle is opened once: opening one reads its metadata document, which over
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
@@ -174,11 +191,18 @@ class StoreReader:
 
     @classmethod
     def open(
-        cls, location: str | os.PathLike[str], *, cache_bytes: int | None = None
+        cls,
+        location: str | os.PathLike[str],
+        *,
+        cache_bytes: int | None = None,
+        frame_cache_bytes: int | None = None,
     ) -> StoreReader:
         """Open the LD Store at a local path or an HTTP(S) URL (ogld#4), keeping at most
-        `cache_bytes` of its chunks (spec §10; the default if None, ogld#32)."""
+        `cache_bytes` of its Near Band chunks (spec §10; the default if None, ogld#32) and
+        `frame_cache_bytes` of its decoded Partner Rows frames (partner-rows §7; its own default
+        if None). The two are separate budgets, because the two reads serve different queries."""
         cache = ChunkCache(cache_bytes)
+        frame_cache = FrameCache(frame_cache_bytes)
         root = open_group(location, cache=cache)
         recorded = root.attrs.get("ld_store")
         if root.metadata.zarr_format != 3:
@@ -200,13 +224,18 @@ class StoreReader:
         except InputError as unimplemented:
             raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(root, cast(Provenance, recorded), encoding, cache)
+        reader._attach(root, cast(Provenance, recorded), encoding, cache, frame_cache)
         return reader
 
     @property
     def cache_bytes(self) -> int:
         """The bytes of chunks and shard indexes this reader keeps at most (spec §10)."""
         return self._cache.budget
+
+    @property
+    def frame_cache_bytes(self) -> int:
+        """The bytes of decoded Partner Rows frames this reader keeps at most (partner-rows §7)."""
+        return self._frame_cache.budget
 
     @property
     def provenance(self) -> Provenance:
@@ -603,6 +632,61 @@ class StoreReader:
         near_bp = self._provenance["near_bp"]
         part = (partial(self._band_entries, reach=near_bp), partial(_window_rows, reach=near_bp))
         return self._gather(rows, part)
+
+    # ------------------------------------------------------------ partner rows
+
+    def partner_row(self, chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
+        """One variant's Partner Rows row: every partner within far_bp at its distance's floor,
+        each with its code, chromosome-local and ascending (partner-rows §7).
+
+        This is the read `clump` and `proxies` make from #71: one frame's byte range, one decode,
+        and the row's slice of the decoded frame, which the reader's frame cache keeps, so a row of
+        a frame fetched before costs no read (§7 steps 2–3). The partners are chromosome-local rows,
+        as the frame holds them; a code is the stored pair's, judged by the query's threshold and
+        never turned into a number here (§4).
+
+        A store that holds no Partner Rows — every 0.1.0 store — is refused naming the component,
+        and so is a frame that fails its checksum, its k or its payload length, naming the
+        chromosome and the frame. A row is never answered from a damaged frame, nor a short one.
+        """
+        return self._frames(chrom).row(local_row)
+
+    def partner_rows(
+        self, chrom: str, local_rows: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int32], Codes]:
+        """Each of `local_rows`' Partner Rows rows, in the order asked, as (indptr, partners,
+        codes) (partner-rows §7): row i's entries are `partners[indptr[i]:indptr[i + 1]]`.
+
+        A request for several rows coalesces only frames that are physically adjacent, one
+        byte-range read for the run, and never merges frames with bytes between them (§9.2). Rows a
+        frame already served cost no read, and a row asked for twice is answered twice.
+        """
+        return self._frames(chrom).rows_of(local_rows)
+
+    def _frames(self, chrom: str) -> PartnerFrames:
+        """One chromosome's Partner Rows, opened on first use (spec §10; partner-rows §7).
+
+        Opening one reads its group's attributes, its `frames_idx` chunk and its `frames` metadata:
+        a request that never asks for a Partner Rows row — `matrix`, `region` — reads none of them.
+        """
+        if chrom not in self._partner_frames:
+            if chrom not in self._ranges:
+                raise ValueError(
+                    f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
+                    f"{', '.join(self._names)} (spec §2)"
+                )
+            # A 0.1.0 store records none of the Partner Rows' keys, because it holds no Partner
+            # Rows (spec §13): the read is refused naming the component, never answered from
+            # another one.
+            if "t_partner" not in self._provenance:
+                raise InputError(
+                    f"this LD Store is format {self._provenance['format_version']}, which has no "
+                    f"Partner Rows ({layout.PARTNERS}/): partner_row reads them, and a store "
+                    "without them is refused naming the missing component (spec §13; "
+                    "partner-rows §5.1)"
+                )
+            self._partner_frames[chrom] = open_partner_frames(self._root, chrom, self._frame_cache)
+        return self._partner_frames[chrom]
 
     # ------------------------------------------------------------ resolving pairs
 

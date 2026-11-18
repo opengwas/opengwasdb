@@ -270,6 +270,7 @@ partner reads:
 
 ```text
 partner_row(chrom, l) -> (partners: int32[E_l], codes: int16[E_l])
+partner_rows(chrom, l…) -> (indptr, partners, codes)
 ```
 
 1. On the chromosome's first use, read the group's attributes and the `frames_idx` chunk whole,
@@ -280,13 +281,22 @@ partner_row(chrom, l) -> (partners: int32[E_l], codes: int16[E_l])
    and cache the decoded frame.
 3. Return row l's slice of the decoded frame.
 
-- **The frame cache** is a byte-bounded LRU of decoded frames, per reader. Neighbouring leads
+- **The frame cache** is a byte-bounded LRU of decoded frames, per reader: 256 MiB unless its
+  caller sets another budget, which drops the least recently used frame first. Neighbouring leads
   often share a frame, and repeated Analyses on one reader hit it. It is separate from the Near
   Band chunk cache, which keeps serving `matrix` and `region`.
-- **Local stores** read with `os.pread` on a kept file descriptor, or slice an mmap. Both go
-  through the OS page cache. A cold read is one random read of a frame, typically 4–64 KiB.
-- **HTTP stores** read one Range request per frame. A request for several frames at once
-  (§9.2, option E) coalesces only physically adjacent frames.
+- **One byte-range read, whatever serves the store.** A frame's bytes are fetched by the `frames`
+  array's own store path and chunk key, so a local file is a positional read of the chunk file and
+  an HTTP store is one Range request through the same call. A cold read is one random read of a
+  frame, typically 4–64 KiB, which the operating system's page cache serves warm. The chunk file's
+  name is never assumed: the array's metadata says where it is (§5.1).
+- **Many rows at once** is `partner_rows`, which returns the rows' entries back to back as CSR, in
+  the order asked, and coalesces only physically adjacent frames into one read (§9.2): frames with
+  bytes between them are read one at a time, because the bytes between them would be read for
+  nothing.
+- **A store with no Partner Rows is refused, naming the missing component**, and so is a frame
+  that fails its checksum, its k or its payload length, naming the chromosome and the frame. A row
+  is never answered from a damaged frame, nor as a short one.
 
 ## 8. Queries
 
