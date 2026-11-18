@@ -599,13 +599,50 @@ def _offsets(index: zarr.Array[Any], frames: int, size: int, chrom: str) -> npt.
             f"and the group's frames_bytes is {size}: the offsets must start at 0, ascend and end "
             "at the file's length (partner-rows §5.2)"
         )
+    # A group holds at least one frame, so the offsets have at least one step.
     steps = np.diff(offsets.astype(np.int64))
-    if len(steps) and (steps <= 0).any():
+    if (steps <= 0).any():
         raise ValueError(
             f"chromosome {chrom}'s frames_idx does not ascend at offset "
             f"{int(np.flatnonzero(steps <= 0)[0])}: every frame holds bytes (partner-rows §5.2)"
         )
     return offsets
+
+
+def _counts(group: zarr.Group, path: str) -> tuple[int, int, int, int]:
+    """A Partner Rows group's rows, rows a frame, frames and chunk-file bytes (§5.3), refused when
+    they cannot describe one: a group holds at least one row in a frame of at least one, and
+    ⌈rows / rows_per_frame⌉ frames for them.
+    """
+    attributes = group.attrs
+    rows = _attribute(attributes, "rows", path)
+    per_frame = _attribute(attributes, "rows_per_frame", path)
+    frames = _attribute(attributes, "frames", path)
+    size = _attribute(attributes, "frames_bytes", path)
+    if rows < 1 or per_frame < 1:
+        raise ValueError(
+            f"{path} holds {rows} rows in frames of {per_frame}: a Partner Rows group holds at "
+            "least one row, in a frame of at least one (partner-rows §5.2)"
+        )
+    due = -(-rows // per_frame)
+    if frames != due:
+        raise ValueError(
+            f"{path} records {frames} frames for {rows} rows in frames of {per_frame}: it holds "
+            f"{due} (partner-rows §5.2)"
+        )
+    return rows, per_frame, frames, size
+
+
+def _one_chunk(array: zarr.Array[Any], size: int, path: str) -> zarr.Array[Any]:
+    """The `frames` array, refused unless it is one chunk of the `size` bytes the group records:
+    a frame's byte range is an offset into that one file (§5.1)."""
+    if array.shape != (size,) or array.chunks != array.shape or array.dtype != np.uint8:
+        raise ValueError(
+            f"{path}/{layout.FRAMES} is shape {array.shape}, chunks {array.chunks} and "
+            f"{array.dtype}, not one chunk of the {size} bytes of frames the group records "
+            "(partner-rows §5.1)"
+        )
+    return array
 
 
 class PartnerFrames:
@@ -630,41 +667,12 @@ class PartnerFrames:
 
     def __init__(self, group: zarr.Group, chrom: str, cache: FrameCache) -> None:
         path = layout.partners_path(chrom)
-        attributes = group.attrs
         self._chrom = chrom
         self._cache = cache
-        self._rows = _attribute(attributes, "rows", path)
-        self._per_frame = _attribute(attributes, "rows_per_frame", path)
-        frames = _attribute(attributes, "frames", path)
-        size = _attribute(attributes, "frames_bytes", path)
-        due = -(-self._rows // self._per_frame) if self._per_frame > 0 else -1
-        if self._rows < 1 or self._per_frame < 1:
-            raise ValueError(
-                f"{path} holds {self._rows} rows in frames of {self._per_frame}: a Partner Rows "
-                "group holds at least one row, in a frame of at least one (partner-rows §5.2)"
-            )
-        if frames != due:
-            raise ValueError(
-                f"{path} records {frames} frames for {self._rows} rows in frames of "
-                f"{self._per_frame}: it holds {due} (partner-rows §5.2)"
-            )
-        self._frames = frames
-        self._offsets = _offsets(_member(group, layout.FRAMES_INDEX), frames, size, chrom)
-        self._array = _member(group, layout.FRAMES)
-        if (
-            self._array.shape != (size,)
-            or self._array.chunks != self._array.shape
-            or self._array.dtype != np.uint8
-        ):
-            raise ValueError(
-                f"{path}/{layout.FRAMES} is shape {self._array.shape}, chunks "
-                f"{self._array.chunks} and {self._array.dtype}, not one chunk of the {size} bytes "
-                "of frames the group records (partner-rows §5.1)"
-            )
-        try:
-            self._source: FrameSource = frame_source(self._array)
-        except ValueError as unreadable:
-            raise ValueError(f"{path}: {unreadable}") from unreadable
+        self._rows, self._per_frame, self._frames, size = _counts(group, path)
+        self._offsets = _offsets(_member(group, layout.FRAMES_INDEX), self._frames, size, chrom)
+        self._array = _one_chunk(_member(group, layout.FRAMES), size, path)
+        self._source: FrameSource = frame_source(self._array)
 
     @property
     def rows(self) -> int:

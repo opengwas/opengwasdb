@@ -683,6 +683,89 @@ def test_a_frames_chunk_file_that_is_missing_is_refused_naming_the_frame(
         StoreReader.open(location_under_test).partner_row("22", 5 * 16 + 1)
 
 
+def offsets_metadata(store_root: Path, chrom: str, *, shape: int, chunk: int) -> None:
+    """The group's `frames_idx` array declared with `shape` offsets in chunks of `chunk`: a store
+    whose offsets array is not the one chunk of F + 1 the group's other attributes describe."""
+    path = store_root / "partners" / chrom / "frames_idx" / "zarr.json"
+    meta = json.loads(path.read_text())
+    meta["shape"] = [shape]
+    meta["chunk_grid"]["configuration"]["chunk_shape"] = [chunk]
+    path.write_text(json.dumps(meta))
+
+
+@pytest.mark.parametrize(("shape", "chunk"), [(36, 36), (38, 36)])
+def test_a_frames_idx_that_is_not_one_chunk_of_the_offsets_is_refused(
+    test_store: Served, shape: int, chunk: int
+) -> None:
+    """The offsets are one chunk of `frames` + 1 of them (§5.1): an array of another shape, or of
+    more than one chunk, is refused naming `frames_idx` rather than read as offsets."""
+    location, copied = test_store
+    offsets_metadata(copied, "22", shape=shape, chunk=chunk)
+    with pytest.raises(ValueError, match=r"partners/22/frames_idx has shape"):
+        StoreReader.open(location).partner_row("22", 0)
+
+
+def test_a_frames_idx_that_does_not_ascend_is_refused(test_store: Served) -> None:
+    """Every frame holds bytes (§5.2), so the offsets ascend strictly: a repeated one is refused,
+    naming the offset it fails at."""
+    location, copied = test_store
+    path = copied / "partners" / "22" / "frames_idx" / "c" / "0"
+    offsets = np.fromfile(path, dtype="<u8")
+    offsets[1] = offsets[0]
+    path.write_bytes(offsets.tobytes())
+    with pytest.raises(ValueError, match=r"chromosome 22's frames_idx does not ascend at offset 0"):
+        StoreReader.open(location).partner_row("22", 0)
+
+
+def set_attribute(store_root: Path, chrom: str, name: str, value: object) -> None:
+    """The group's `name` attribute set to `value`: a store whose own record of itself is wrong."""
+    path = store_root / "partners" / chrom / "zarr.json"
+    meta = json.loads(path.read_text())
+    meta["attributes"][name] = value
+    path.write_text(json.dumps(meta))
+
+
+def test_a_group_that_records_no_frames_bytes_is_refused(test_store: Served) -> None:
+    """Every count in the group's attributes is an integer (§5.3): one that is not is refused,
+    naming the group and the key rather than read as a count."""
+    location, copied = test_store
+    set_attribute(copied, "22", "frames_bytes", "44656")
+    with pytest.raises(ValueError, match=r"partners/22 records no frames_bytes"):
+        StoreReader.open(location).partner_row("22", 0)
+
+
+def test_a_group_that_records_no_rows_is_refused(test_store: Served) -> None:
+    """A group holds at least one row in a frame of at least one (§5.2): one that records none is
+    refused, naming the group and its two counts."""
+    location, copied = test_store
+    set_attribute(copied, "22", "rows", 0)
+    with pytest.raises(ValueError, match=r"partners/22 holds 0 rows in frames of 16"):
+        StoreReader.open(location).partner_row("22", 0)
+
+
+def test_a_group_whose_frames_count_is_not_the_rows_over_g_is_refused(test_store: Served) -> None:
+    """Frames are ⌈rows / G⌉ (§5.2): a group recording another count is refused, naming both."""
+    location, copied = test_store
+    set_attribute(copied, "22", "frames", 36)
+    with pytest.raises(ValueError, match=r"partners/22 records 36 frames for 588 rows"):
+        StoreReader.open(location).partner_row("22", 0)
+
+
+def test_a_frames_array_that_is_not_one_chunk_of_the_recorded_bytes_is_refused(
+    test_store: Served,
+) -> None:
+    """The `frames` array is one chunk of `frames_bytes` (§5.1): another shape is refused, naming
+    the array and the bytes the group records."""
+    location, copied = test_store
+    path = copied / "partners" / "22" / "frames" / "zarr.json"
+    meta = json.loads(path.read_text())
+    meta["shape"] = [44_000]
+    meta["chunk_grid"]["configuration"]["chunk_shape"] = [44_000]
+    path.write_text(json.dumps(meta))
+    with pytest.raises(ValueError, match=r"partners/22/frames is shape .*not one chunk"):
+        StoreReader.open(location).partner_row("22", 0)
+
+
 def test_a_store_whose_partner_rows_group_is_missing_is_refused(test_store: Served) -> None:
     location, copied = test_store
     shutil.rmtree(copied / "partners" / "22")
