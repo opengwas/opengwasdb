@@ -8,7 +8,8 @@ CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
 
 - build chr22:20–32 Mb of the v2 EUR panel at k = 0 and × 511, the encoding of every HGDP+1kGP
   store (ADR 0004), on the 665 unrelated samples (`test_build_panel.v2_slice`, once);
-- clump each of the 37 Analyses' hits on it that the store holds, at both r², and run
+- clump each of the 37 Analyses' hits on it that the store holds, at r² 0.01 — the build's
+  Partner Threshold, below which a 0.2.0 store refuses within 3 Mb (#71) — and run
   `plink2 --clump` on the same hits and the same genotypes;
 - where the leads differ, `scripts/realdata/clump_rule.py` finds every pair the store and plink2
   judge on opposite sides of r2 (plink2's unphased r² against the store's r̂²), requires each to
@@ -95,7 +96,9 @@ def explained(
     return len(got.flipped)
 
 
-@pytest.mark.parametrize("r2", [0.01, 0.001])
+#: A 0.2.0 store answers r² 0.01, its Partner Threshold, and refuses 0.001 within 3 Mb (§9,
+#: #71): the tier compares at 0.01 only, and the refusal is the contract tests' to hold.
+@pytest.mark.parametrize("r2", [0.01])
 def test_leads_equal_plink2_s_on_403_s_37_analyses_on_chr22(
     r2: float, chr22: tuple[ogld.LDStore, Path], tmp_path: Path
 ) -> None:

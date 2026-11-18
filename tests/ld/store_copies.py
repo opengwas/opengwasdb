@@ -5,15 +5,18 @@ No test writes into `tests/data/`; each works on a copy under its own `tmp_path`
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 from zarr.codecs import ZstdCodec
+from zarr.storage import LocalStore
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 #: The Test Store's encoding, r̂ = code / R_SCALE, as a literal: every test that needs the Test
@@ -49,6 +52,36 @@ def stored_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.float64]
     return codes_at(r, scale) / scale
 
 
+@contextlib.contextmanager
+def store_reads() -> Iterator[list[str]]:
+    """Every key a reader fetches from a local store while the block runs (#71).
+
+    That is each array's chunks and shard indexes, and every `zarr.json` metadata document, by the
+    store's own key: `/c/` is followed by coordinates, so a predicate on the key's ending matches
+    nothing. A test holds that `clump` and `proxies` read none of `near/` or `index/` with it.
+    """
+    keys: list[str] = []
+    get, get_sync = LocalStore.get, LocalStore.get_sync
+
+    async def recording_get(
+        self: Any, key: str, prototype: Any = None, byte_range: Any = None
+    ) -> Any:
+        keys.append(key)
+        return await get(self, key, prototype=prototype, byte_range=byte_range)
+
+    def recording_get_sync(
+        self: Any, key: str, prototype: Any = None, byte_range: Any = None
+    ) -> Any:
+        keys.append(key)
+        return get_sync(self, key, prototype=prototype, byte_range=byte_range)
+
+    with (
+        patch.object(LocalStore, "get", recording_get),
+        patch.object(LocalStore, "get_sync", recording_get_sync),
+    ):
+        yield keys
+
+
 def copy_store(to: Path) -> Path:
     """A plain copy of the committed Test Store at `to`."""
     shutil.copytree(TEST_STORE, to)
@@ -72,6 +105,11 @@ def resharded(to: Path, inner: int, per_shard: int) -> Path:
     source = zarr.open_group(TEST_STORE, mode="r")
     target = zarr.open_group(to, mode="r+")
     for path, array in arrays(source):
+        if path.startswith("partners/"):
+            # A Partner Rows group's `frames` is one chunk of its whole file and `frames_idx`
+            # one chunk of its offsets (partner-rows §5.1): how a frame is one byte range. The
+            # layout this rewrites is the Near Band's, so these are copied as they are.
+            continue
         data = np.asarray(array[:])
         group, name = path.rsplit("/", 1)
         shutil.rmtree(to / path)

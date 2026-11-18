@@ -112,6 +112,9 @@ class RefusalReason(StrEnum):
     THRESHOLD_BELOW_T_FAR = "threshold_below_t_far"
     """A window past near_bp with r2 < t_far: the store holds only the Bound there."""
 
+    THRESHOLD_BELOW_T_PARTNER = "threshold_below_t_partner"
+    """A window within near_bp with r2 < t_partner: the Partner Rows hold only the pairs at or
+    above the Partner Floor, so a row's absence decides nothing below it (0.2.0)."""
     REGION_OVER_FAR = "region_over_far"
     """A region wider than far_bp (owner, 7 November 2026: radius ≤ 5 Mb)."""
 
@@ -169,12 +172,10 @@ def judge_request(*, r2: float, kb: float, t_far: float, near_bp: int, far_bp: i
     distances and t_far are the store's recorded ones.
     """
     if not (math.isfinite(kb) and kb >= 0):
-        return Decision(
-            RefusalReason.INVALID,
-            f"r2 must be in [0, 1] and kb finite and ≥ 0: r2={r2}, kb={kb}",
-            math.nan,
-        )
-    return judge_window(r2=r2, window_bp=kb * 1000, t_far=t_far, near_bp=near_bp, far_bp=far_bp)
+        return _invalid(r2, kb)
+    return _judged_window(
+        r2=r2, window=kb * 1000, t_far=t_far, near_bp=near_bp, far_bp=far_bp, t_partner=None
+    )
 
 
 def judge_window(
@@ -185,7 +186,49 @@ def judge_window(
     The reader asks this before it reads a variant's partners (ogld#14), so a window it is
     handed is answered or refused exactly as the request that made it was, never re-decided
     at another edge."""
-    window = window_bp
+    return _judged_window(
+        r2=r2, window=window_bp, t_far=t_far, near_bp=near_bp, far_bp=far_bp, t_partner=None
+    )
+
+
+def judge_partner_request(
+    *, r2: float, kb: float, t_far: float, near_bp: int, far_bp: int, t_partner: float
+) -> Decision:
+    """Answered or refused, for `clump` and `proxies`, which read the Partner Rows (spec §9).
+
+    It is `judge_request`'s rule and one more row: from format 0.2.0 a request within `near_bp`
+    whose r2 is below the store's recorded `t_partner` is refused with
+    `threshold_below_t_partner`, because the Partner Rows hold only the pairs at or above the
+    Partner Floor and a row's absence decides nothing below it (partner-rows §8.1). Above
+    `near_bp` nothing changes: the Far Pairs' floor is t_far. r2 = t_partner exactly is answered.
+    A store that records no `t_partner` never reaches this: the queries refuse it first, naming
+    the missing component.
+    """
+    if not (math.isfinite(kb) and kb >= 0):
+        return _invalid(r2, kb)
+    return _judged_window(
+        r2=r2,
+        window=kb * 1000,
+        t_far=t_far,
+        near_bp=near_bp,
+        far_bp=far_bp,
+        t_partner=t_partner,
+    )
+
+
+def _invalid(r2: float, kb: float) -> Decision:
+    """The refusal a window that is not a distance, or an r2 outside [0, 1], is given."""
+    return Decision(
+        RefusalReason.INVALID,
+        f"r2 must be in [0, 1] and kb finite and ≥ 0: r2={r2}, kb={kb}",
+        math.nan,
+    )
+
+
+def _judged_window(
+    *, r2: float, window: float, t_far: float, near_bp: int, far_bp: int, t_partner: float | None
+) -> Decision:
+    """The one copy of the rule: the window in bp, and the thresholds it is judged against."""
     if not (math.isfinite(r2) and 0.0 <= r2 <= 1.0 and math.isfinite(window) and window >= 0):
         return Decision(
             RefusalReason.INVALID,
@@ -197,12 +240,26 @@ def judge_window(
             f"a {window:,.0f} bp window reaches past {far_bp:,} bp, where pairs are Not Measured"
         )
         return Decision(RefusalReason.WINDOW_OVER_FAR, detail, window)
+    return _threshold(r2=r2, window=window, t_far=t_far, near_bp=near_bp, t_partner=t_partner)
+
+
+def _threshold(
+    *, r2: float, window: float, t_far: float, near_bp: int, t_partner: float | None
+) -> Decision:
+    """The two thresholds' refusals: below t_far past `near_bp`, and below t_partner within it."""
     if window > near_bp and r2 < t_far:
         detail = (
             f"r2={r2} is below t_far={t_far}: beyond {near_bp:,} bp the store holds only the Bound "
             f"r² < t_far for unstored pairs, which does not decide r̂² ≥ r2"
         )
         return Decision(RefusalReason.THRESHOLD_BELOW_T_FAR, detail, window)
+    if t_partner is not None and window <= near_bp and r2 < t_partner:
+        detail = (
+            f"r2={r2} is below t_partner={t_partner} within {near_bp:,} bp: the Partner Rows hold "
+            "only the pairs at or above the Partner Floor, and a row's absence there decides "
+            "nothing below it"
+        )
+        return Decision(RefusalReason.THRESHOLD_BELOW_T_PARTNER, detail, window)
     return Decision(None, "answered", window)
 
 
