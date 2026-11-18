@@ -89,3 +89,25 @@ def resharded(to: Path, inner: int, per_shard: int) -> Path:
         made[:] = data
     assert dict(target.attrs) == dict(source.attrs)
     return to
+
+
+def unpartnered(to: Path) -> Path:
+    """A copy of the committed Test Store as it was before its Partner Rows: `partners/` removed
+    and the four keys that describe them dropped, format 0.1.0 (partner-rows §6.2, §13).
+
+    It is what `ogld derive-partners` derives into, so a test holds the derived component against
+    the committed one — the build's — byte for byte.
+    """
+    copy_store(to)
+    shutil.rmtree(to / "partners")
+    root = zarr.open_group(to, mode="r+")
+    recorded = dict(root.attrs["ld_store"])
+    counts = dict(recorded["counts"])
+    software = dict(recorded["software"])
+    counts.pop("partner_entries", None)
+    software.pop("zstd", None)
+    recorded.update({"format_version": "0.1.0", "counts": counts, "software": software})
+    for key in ("t_partner", "partner_code_floor"):
+        recorded.pop(key, None)
+    root.attrs.update({"ld_store": recorded})
+    return to
