@@ -444,6 +444,16 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         lambda store: contract().a_group_recording_another_row_count(store),
         "records 587 rows, but the chromosome has 588",
     ),
+    "a temporary group a crash left behind": (
+        "partners.files",
+        lambda store: contract().a_temporary_group_a_crash_left(store),
+        "is a temporary group a writer left behind",
+    ),
+    "bytes appended past a chunk file's frames": (
+        "partners.files",
+        lambda store: contract().bytes_appended_to_the_frames_file(store),
+        "its chunk file holds 44,682 bytes, not the 44,656",
+    ),
     "a group recording another entry count": (
         "partners.rows",
         lambda store: contract().a_group_recording_another_entry_count(store),
@@ -1038,6 +1048,17 @@ def test_the_partner_rows_rules_hold_a_block_of_frames_not_the_chromosome(
     whole = entries * 14
     assert peaks[2] < whole, f"a block {peaks[2]:,} bytes against the chromosome's {whole:,}"
     assert peaks[2] < peaks[256] / 2, peaks
+
+
+def test_a_crash_s_temporary_group_is_named_and_refused(tmp_path: Path) -> None:
+    # A writer builds a chromosome's group under `partners/.<chrom>.tmp-*` and publishes it with
+    # one rename (partner-rows §5.1), so a dot-prefixed entry is a group a crash left behind: it
+    # is named, and the store is refused rather than read as whole beside it.
+    copy = copy_store(tmp_path / "store")
+    contract().a_temporary_group_a_crash_left(copy)
+    (found,) = findings(copy, ["partners.files"])["partners.files"]
+    assert found.where == "partners/.22.tmp-crashed", found
+    assert "left behind" in found.message
 
 
 def test_a_0_1_0_store_with_no_partner_rows_passes_its_ten_rules(tmp_path: Path) -> None:

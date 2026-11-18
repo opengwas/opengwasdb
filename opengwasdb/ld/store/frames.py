@@ -636,8 +636,17 @@ class FramesGroup:
             )
 
 
+def read_range(array: zarr.Array[Any], lo: int, hi: int) -> bytes:
+    """Bytes [lo, hi) of a one-chunk array's chunk file, as many as the file holds.
+
+    Fewer than `hi - lo` when the file ends inside the range: that is what a probe past a file's
+    declared end reads, and `range_bytes` refuses it.
+    """
+    return _ranged(array, slice(lo, hi)) if hi > lo else b""
+
+
 def range_bytes(array: zarr.Array[Any], lo: int, hi: int) -> bytes:
-    """Bytes [lo, hi) of a one-chunk array's chunk file, one range request (partner-rows §5.1, §7).
+    """Bytes [lo, hi) of a one-chunk array's chunk file, all of them (partner-rows §5.1, §7).
 
     A `frames` array's single chunk is the whole file, so a slice read would fetch and decode
     every frame of the chromosome: a reader asks for the byte range of the frame it wants, and
@@ -645,9 +654,7 @@ def range_bytes(array: zarr.Array[Any], lo: int, hi: int) -> bytes:
     array's shape claims — a truncated `frames` chunk — is refused naming the array, never read
     as a short frame.
     """
-    if hi <= lo:
-        return b""
-    raw = _ranged(array, slice(lo, hi))
+    raw = read_range(array, lo, hi)
     if len(raw) != hi - lo:
         raise ValueError(
             f"{array.path} holds {lo + len(raw):,} bytes, fewer than its {array.shape[0]:,}: a "

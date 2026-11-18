@@ -35,6 +35,8 @@ from typing import Any, Final, TypeGuard
 import numpy as np
 import numpy.typing as npt
 import zarr
+from zarr.core.sync import sync
+from zarr.storage import LocalStore
 
 from ogld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, Codes, REncoding, t_far
 from ogld.format.geometry import (
@@ -50,7 +52,7 @@ from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
-from ogld.store.frames import Frame, decode_frame, frame_bytes, range_bytes
+from ogld.store.frames import Frame, decode_frame, frame_bytes, range_bytes, read_range
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import open_group
 
@@ -2016,8 +2018,34 @@ def _partners_files(store: _Store) -> _Problems:
     §10). A store whose version has no Partner Rows has nothing to judge (spec §13)."""
     if not store.partners_judged():
         return
+    group = store.node(layout.PARTNERS)
+    if isinstance(group, zarr.Group):
+        yield from _temporary_entries(layout.PARTNERS, group)
     for chrom, start, stop in store.chromosomes():
         yield from _partner_files(store, chrom, stop - start)
+
+
+async def _children(store: Any, prefix: str) -> list[str]:
+    return [name async for name in store.list_dir(prefix)]
+
+
+def _temporary_entries(path: str, group: zarr.Group) -> _Problems:
+    """No entry of `partners/` begins with a dot. A chromosome's group is built under one and
+    renamed into place in one step (partner-rows §5.1; `FramesGroup`), so a dot-prefixed entry is
+    a group a writer that crashed left behind: half a component, beside which no store may be
+    read as whole. The entries are the store's own listing, metadata or not: a directory zarr
+    never wrote is not a node, but it is still there."""
+    try:
+        names = sync(_children(group.store_path.store, group.store_path.path))
+    except _READ_ERRORS as unread:
+        raise _Unreadable(path, f"{type(unread).__name__}: {unread}") from unread
+    for name in sorted(names):
+        if name.startswith("."):
+            yield (
+                f"{path}/{name}",
+                "is a temporary group a writer left behind, not part of the component: a "
+                "chromosome's Partner Rows are published by one rename (partner-rows §5.1)",
+            )
 
 
 def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
@@ -2039,11 +2067,41 @@ def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
     if index is None:
         yield f"{path}/{layout.FRAMES_INDEX}", "missing (spec §5.1)"
     elif (yield from _frames_index(path, index, attrs.get("frames"))):
-        offsets = store.read(f"{path}/{layout.FRAMES_INDEX}").astype(np.int64)
-        yield from _offsets_judged(f"{path}/{layout.FRAMES_INDEX}", offsets, length)
+        where = f"{path}/{layout.FRAMES_INDEX}"
+        yield from _chunk_ends(where, index, index.dtype.itemsize * index.shape[0])
+        offsets = store.read(where).astype(np.int64)
+        yield from _offsets_judged(where, offsets, length)
         yield from _frames_index_hash(path, offsets, attrs.get("frames_idx_sha256"))
     if frames is not None and _is_int(length):
+        yield from _chunk_ends(f"{path}/{layout.FRAMES}", frames, length)
         yield from _frames_file_judged(path, frames, length, attrs.get("frames_sha256"))
+
+
+def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
+    """The chunk file `array` addresses holds exactly `expected` bytes. The hash checks read the
+    declared prefix, so a store that appended bytes to a chunk keeps both its metadata and its
+    hash right; the file's own size says otherwise, and a store that cannot be measured is asked
+    for one byte past the end (spec §5.1, §5.3)."""
+    if isinstance(array.store_path.store, LocalStore):
+        size = layout.chunk_file(array).stat().st_size
+        if size != expected:
+            yield (
+                where,
+                (
+                    f"its chunk file holds {size:,} bytes, not the {expected:,} its metadata and "
+                    "hash name (spec §5.1, §5.3)"
+                ),
+            )
+        return
+    try:
+        beyond = read_range(array, expected, expected + 1)
+    except _READ_ERRORS as unread:
+        raise _Unreadable(where, f"{type(unread).__name__}: {unread}") from unread
+    if beyond:
+        yield (
+            where,
+            (f"holds bytes past the {expected:,} its metadata and hash name (spec §5.1, §5.3)"),
+        )
 
 
 def _partner_attrs(path: str, attrs: dict[str, Any]) -> _Problems:

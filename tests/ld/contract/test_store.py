@@ -809,6 +809,24 @@ def a_group_recording_another_row_count(store: Path) -> None:
     group.attrs.update(rows=587)
 
 
+def a_temporary_group_a_crash_left(store: Path) -> None:
+    """A temporary Partner Rows group under a dot-prefixed name, as a writer that crashed before
+    its one rename leaves behind, with the file it was building (partner-rows §5.1)."""
+    stale = store / "partners" / ".22.tmp-crashed"
+    stale.mkdir()
+    (stale / "zarr.json").write_text('{"zarr_format": 3, "node_type": "group"}')
+    (stale / "frames.bin").write_bytes(b"\x00" * 16)
+
+
+def bytes_appended_to_the_frames_file(store: Path) -> None:
+    """Twenty-six bytes appended to chr22's frames chunk file: the metadata and both hashes still
+    name the frames a writer wrote, and the file holds more than them (spec §5.3)."""
+    group = zarr.open_group(store / "partners" / "22", mode="r")
+    file = layout.chunk_file(group["frames"])
+    with file.open("ab") as stream:
+        stream.write(bytes(range(26)))
+
+
 def a_group_recording_another_entry_count(store: Path) -> None:
     """Records one entry more than chr22's frames hold."""
     group = zarr.open_group(store / "partners" / "22", mode="r+")
