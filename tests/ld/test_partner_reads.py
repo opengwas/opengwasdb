@@ -97,6 +97,8 @@ def reference_greedy(
 #: read at aa5d4d7 resolved 1,489,250 pairs at r² 0.1 and took 1,587,155 Stored r (68 times
 #: as many). At × 32767 (f0e90de) the leads needed 23,327 and 7,246.
 NEEDED = {0.1: 23_228, 0.01: 7_311}
+
+
 @pytest.mark.parametrize("r2", sorted(NEEDED))
 def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
     r2: float, monkeypatch: pytest.MonkeyPatch
