@@ -956,9 +956,11 @@ or allele frequencies it never returns.
 `clump` reads one Partner Rows row per lead — 3,869 for GCST90476460's whole input — and `proxies`
 one per present query variant; neither reads a Near Band element or a Proxy Index entry, and neither
 resolves a square among the hits (§9). `tests/test_partner_reads.py` holds the one row a lead, and
-`proxies` reading no string column but the ALIDs it returns. A chromosome's position range and its
-`near/<c>/indptr` are still read when a request first touches it, as below, at any threshold; the
-Proxy Index's and Far Pairs' `indptr` are not, until #72 removes them.
+`proxies` reading no string column but the ALIDs it returns. Neither query reads any array under
+`near/` or `index/`: their positions and ALIDs come from `variants/`, their LD from
+`partners/<chrom>/`, and the chromosome ranges from the store's record (#71). `matrix` and `region`
+still read a chromosome's `near/<c>/indptr` when a request first touches it, as below; the Proxy
+Index's and Far Pairs' `indptr` are read by nothing a query calls, until #72 removes them.
 
 What the reads hold, measured with tracemalloc and held by `tests/test_partner_reads.py`:
 
