@@ -81,6 +81,24 @@ _PARTNER_ENTRIES: Final = 1 << 19
 #: Offending elements a finding names; it counts the rest.
 _NAMED: Final = 5
 
+#: The rules a store's Partner Rows must pass before its provenance claims them (partner-rows
+#: §10, §6.2): the nine `partners.*` rules and the threshold they are judged at. `ogld
+#: derive-partners` runs these alone, because the band, the index and the Far Pairs of a store it
+#: derives from were judged when it was built and re-reading them would cost a whole validation
+#: per run (ogld#69).
+PARTNER_RULES: Final = (
+    "partners.files",
+    "partners.frames",
+    "partners.rows",
+    "partners.codes",
+    "partners.distance",
+    "partners.threshold",
+    "partners.symmetric",
+    "partners.near",
+    "partners.far",
+    "provenance.partner_threshold",
+)
+
 
 @dataclass(frozen=True)
 class Finding:

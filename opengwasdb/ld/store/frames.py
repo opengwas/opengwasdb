@@ -867,11 +867,25 @@ class FramesGroup:
     One writer per store: concurrent writers are not supported, and the temporary group and the
     rename assume it. A temporary group another run left behind — a crash — is removed when its
     chromosome is written again.
+
+    `container` is the directory the group is built in and published into; left out, it is the
+    store's `partners/` group, which this then creates. `ogld derive-partners` gives a plain
+    directory that is not yet a node of the store's hierarchy, so a derivation killed part-way
+    leaves the store it was: a `partners/` node is one validation judges and a reader trusts
+    (partner-rows §5.1, §6.2; issue #69).
     """
 
-    def __init__(self, root: zarr.Group, chrom: str, rows: int, *, workers: int = 1) -> None:
+    def __init__(
+        self,
+        root: zarr.Group,
+        chrom: str,
+        rows: int,
+        *,
+        workers: int = 1,
+        container: Path | None = None,
+    ) -> None:
         """The group of chromosome `chrom`, whose Variant Set has `rows` rows, written on
-        `workers` compressor threads."""
+        `workers` compressor threads, into `container` when one is given."""
         if rows < 1:
             raise ValueError(f"chromosome {chrom} has no rows, so it has no Partner Rows")
         if workers < 1:
@@ -882,9 +896,12 @@ class FramesGroup:
         self._rows = rows
         self._root = root
         # `partners/` is a node of the store's own hierarchy (spec §1): its metadata is what keeps
-        # zarr's `members()` from warning that the component is not one.
-        partner_rows = root.require_group(layout.PARTNERS)
-        beside = layout.local_directory(partner_rows.store_path)
+        # zarr's `members()` from warning that the component is not one. A derivation supplies the
+        # directory alone, and makes it a node only once every chromosome is in place (#69).
+        if container is None:
+            beside = layout.local_directory(root.require_group(layout.PARTNERS).store_path)
+        else:
+            beside = container
         self._final = beside / chrom
         if self._final.exists():
             raise FileExistsError(
