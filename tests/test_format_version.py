@@ -102,23 +102,36 @@ def test_the_version_this_build_writes_is_one_it_can_read():
 
 def test_the_readable_formats_are_the_two_the_epic_carries():
     """Two series: 0.1 (Zarr v2) and 0.2 (Zarr v3 with sharding, since #245). The 0.2
-    series reads to 0.2.2: 0.2.1 adds a Ragged release's optional `regions.tsv` (#430),
-    and 0.2.2 spells an indel's ALID reference first (#381, ADR 0079). Another entry
-    is a decision, not an accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (2,)}
+    series reads to 0.2.3: 0.2.1 adds a Ragged release's optional `regions.tsv` (#430),
+    0.2.2 spells an indel's ALID reference first (#381, ADR 0079), and 0.2.3 records
+    `n_missing_se_out_of_range` (#338, ADR 0068). Another entry is a decision, not an
+    accident."""
+    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (3,)}
 
 
 def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
     """The owner's decision of 2026-11-11 (spec §21.3, ADR 0038 §3): 0.2.1 differs from
     0.2.0 only by an optional, manifest-declared `regions.tsv`, and 0.2.2 from 0.2.1
     only by an indel's ALID spelt reference first, the region table still optional. A
-    release is stamped the lowest of the three whose features it uses."""
+    release is stamped the lowest of the three whose features it uses. 0.2.3 is 0.2.2
+    whose `analyses.tsv` records `n_missing_se_out_of_range` (issue #338), so a release
+    whose indels are sorted is stamped by them, whatever it counts."""
     stamp = store_open.format_version_for
-    assert stamp(carries_regions=False, reference_first_indels=False) == "0.2.0"
-    assert stamp(carries_regions=True, reference_first_indels=False) == "0.2.1"
-    assert stamp(carries_regions=False, reference_first_indels=True) == "0.2.2"
-    assert stamp(carries_regions=True, reference_first_indels=True) == "0.2.2"
-    assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2")
+    for counts in (False, True):
+        assert stamp(
+            carries_regions=False, reference_first_indels=False, records_se_out_of_range=counts
+        ) == "0.2.0"
+        assert stamp(
+            carries_regions=True, reference_first_indels=False, records_se_out_of_range=counts
+        ) == "0.2.1"
+    for regions in (False, True):
+        assert stamp(
+            carries_regions=regions, reference_first_indels=True, records_se_out_of_range=False
+        ) == "0.2.2"
+        assert stamp(
+            carries_regions=regions, reference_first_indels=True, records_se_out_of_range=True
+        ) == "0.2.3"
+    assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
 
 
 def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature():
@@ -129,7 +142,7 @@ def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature
     assert CURRENT_FORMAT_VERSION == store_open.format_version_for(
         carries_regions=False, reference_first_indels=True
     )
-    assert CURRENT_FORMAT_VERSION == "0.2.2"
+    assert CURRENT_FORMAT_VERSION == "0.2.3"
 
 
 def test_each_readable_series_has_one_zarr_on_disk_format():
@@ -198,10 +211,11 @@ def test_validation_reports_a_pre_reset_release_as_an_error_not_a_crash(dense_st
 
 
 def test_the_version_this_build_completes_is_writable():
-    """0.2.0, 0.2.1 and 0.2.2 are encoded identically, but only a 0.2.2 release spells
-    its indels as this build's panel does, so it is the one a completion writes into, in
-    its own format (ADR 0038 §4, ADR 0079)."""
+    """0.2.0 to 0.2.3 are encoded identically, but only a 0.2.2 or 0.2.3 release spells
+    its indels as this build's panel does, so those are the ones a completion writes
+    into (ADR 0038 §4, ADR 0079); either completes to 0.2.3 (issue #338)."""
     assert store_open.check_writable_format_version("0.2.2") == "0.2.2"
+    assert store_open.check_writable_format_version("0.2.3") == "0.2.3"
 
 
 def test_the_converter_stamps_by_the_builders_rule_and_keeps_sorted_indels():
@@ -244,21 +258,21 @@ def test_a_store_that_sorts_its_indels_is_readable_but_not_writable(version):
 
 def test_a_readable_but_unwritable_version_is_refused():
     """A newer remainder of a known series is read, with a warning (§21.2), but not
-    written: 0.2.3 spells its indels as 0.2.2 does and is still refused, since this
+    written: 0.2.4 spells its indels as 0.2.3 does and is still refused, since this
     build does not know what else it adds."""
-    store_open.check_format_version("0.2.3")  # still readable, logged as newer
+    store_open.check_format_version("0.2.4")  # still readable, logged as newer
     with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
-        store_open.check_writable_format_version("0.2.3", source="source release X")
+        store_open.check_writable_format_version("0.2.4", source="source release X")
 
 
 @pytest.mark.parametrize("carries_regions", [False, True])
 def test_a_newer_stamp_is_not_judged_by_this_builds_rule(carries_regions):
-    """A 0.2.3 release is a later package's format (#338's would be): which stamp its
-    features give is that package's rule. This build says to upgrade, never that the
-    stamp is wrong, since re-stamping it 0.2.2 would let this build complete a format
-    it does not know -- as package 0.9.0 tells a 0.2.2 Store it "is 0.2.1"."""
+    """A 0.2.4 release is a later package's format: which stamp its features give is
+    that package's rule. This build says to upgrade, never that the stamp is wrong,
+    since re-stamping it 0.2.3 would let this build complete a format it does not
+    know -- as package 0.9.0 tells a 0.2.2 Store it "is 0.2.1"."""
     with pytest.raises(store_open.UnsupportedFormatVersion) as refused:
-        store_open.check_format_version_stamp("0.2.3", carries_regions=carries_regions)
+        store_open.check_format_version_stamp("0.2.4", carries_regions=carries_regions)
     message = str(refused.value)
     assert "Upgrade opengwasdb" in message and "do not re-stamp" in message, message
     assert "but a release carrying" not in message, message

@@ -326,7 +326,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     }
     assert info_data["store_id"] == "cf"
     assert info_data["release_id"] == "ov1"
-    assert info_data["format_version"] == "0.2.2"
+    assert info_data["format_version"] == "0.2.3"
     assert info_data["primary_layout"] == "dense"
     assert info_data["association_coverage"] == "gwas"
     assert info_data["completion_state"] == "observed_only"
@@ -460,6 +460,12 @@ def test_validate_format_json_reports_ok_errors_and_warnings_as_before(
     open_store(failing).arrays(mode="a")["se"][0, 0] = np.float16(-0.1)
     warning = tmp_path / "warning.opengwasdb"
     shutil.copytree(dense_store_path, warning)
+    # A `+inf` SE is a warning in a release before format 0.2.3, which held one as a
+    # value; from 0.2.3 it is an error (issue #338).
+    manifest = json.loads((warning / "manifest.json").read_text(encoding="utf-8"))
+    (warning / "manifest.json").write_text(
+        json.dumps({**manifest, "format_version": "0.2.2"}), encoding="utf-8"
+    )
     open_store(warning).arrays(mode="a")["se"][0, 0] = float("inf")
 
     def before_378(store_path) -> dict:

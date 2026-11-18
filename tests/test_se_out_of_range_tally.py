@@ -1,9 +1,9 @@
 """Every writer judges an Analysis's associations whole, and logs an SE above 65,504.
 
-An SE above `float16`'s largest value is stored as `+inf` in a `float16` plane
-and stays an association (spec §15, issue #337). Until issue #338 records the
-count in each Store, a build logs it per Analysis, once per writer that stores
-the cells (#350).
+An association whose SE is above `float16`'s largest value is not stored, and
+each Store counts it (issue #338). A build also logs it per Analysis, once, where
+the writer leaves it out (#350). A completion of a release built so has nothing
+more to log for it.
 """
 
 from __future__ import annotations
@@ -22,8 +22,10 @@ from opengwasdb.admission import NotAdmitted
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.model.analyses import read_analysis_records
 
-_TALLY = "SE value(s) above 65,504, more than a float16 plane holds"
+_TALLY = "association(s) not stored: an SE above 65,504, more than a float16 plane holds"
+_WHY = "(spec §15, issue #338)"
 
 
 def _tally_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -52,9 +54,7 @@ def test_the_ragged_writer_logs_each_analysis_s_out_of_range_ses(caplog) -> None
             writer.add_analysis(
                 np.array([0, 2]), np.array([1.0, 2.0], np.float32), np.array(se, np.float32)
             )
-    assert _tally_lines(caplog) == [
-        f"the Ragged writer, analysis_index 1: 1 {_TALLY} (spec §15)"
-    ]
+    assert _tally_lines(caplog) == [f"the Ragged writer, analysis_index 1: 1 {_TALLY} {_WHY}"]
 
 
 def test_a_dense_vcf_build_logs_the_analysis_whose_se_is_out_of_range(tmp_path, caplog) -> None:
@@ -74,7 +74,7 @@ def test_a_dense_vcf_build_logs_the_analysis_whose_se_is_out_of_range(tmp_path, 
         build_dense_from_vcf_manifest(
             manifest, tmp_path / "dense.opengwasdb", store_id="s", release_id="r"
         )
-    assert _tally_lines(caplog) == [f"build-dense-vcf, Analysis trait_a: 1 {_TALLY} (spec §15)"]
+    assert _tally_lines(caplog) == [f"build-dense-vcf, Analysis trait_a: 1 {_TALLY} {_WHY}"]
 
 
 def test_a_hybrid_build_logs_each_component_s_out_of_range_ses(tmp_path: Path, caplog) -> None:
@@ -101,9 +101,10 @@ def test_a_hybrid_build_logs_each_component_s_out_of_range_ses(tmp_path: Path, c
             release_id="r",
             n_workers=1,
         )
+    # Both are left out at the spill, before the Ragged writer sees the Overflow's.
     assert sorted(_tally_lines(caplog)) == [
-        f"build-hybrid trait_a Dense: 1 {_TALLY} (spec §15)",
-        f"the Ragged writer, analysis_index 0: 1 {_TALLY} (spec §15)",
+        f"build-hybrid trait_a Dense: 1 {_TALLY} {_WHY}",
+        f"build-hybrid trait_a Overflow: 1 {_TALLY} {_WHY}",
     ]
 
 
@@ -111,9 +112,9 @@ def _completion_lines(caplog: pytest.LogCaptureFixture, writer: str) -> list[str
     return [line for line in _tally_lines(caplog) if line.startswith(writer)]
 
 
-def test_ragged_completion_logs_each_analysis_s_out_of_range_ses_once(tmp_path, caplog) -> None:
-    """Counted once, by the write: the SE fit's round trip and the encode judge the
-    same rows again, and log nothing."""
+def test_ragged_completion_logs_nothing_its_build_left_out(tmp_path, caplog) -> None:
+    """Logged once, by the build that left it out: the completion never holds the
+    row, so it logs nothing for it and carries the count instead (issue #338)."""
     fixture = tmp_path / "fixture"
     fixture.mkdir()
     trc._write_esi(
@@ -137,37 +138,47 @@ def test_ragged_completion_logs_each_analysis_s_out_of_range_ses_once(tmp_path, 
         [[(0, 0.1, 0.02), (1, -0.2, 70_000.0)], [(1, 0.5, 0.05), (2, -0.15, 0.025)]],
     )
     observed = tmp_path / "obs.opengwasdb"
-    trc.build_ragged_from_besd(
-        fixture / "test", observed, store_id="t", release_id="obs", tissue="Blood",
-        association_coverage="cis",
-    )
+    with caplog.at_level(logging.WARNING):
+        trc.build_ragged_from_besd(
+            fixture / "test", observed, store_id="t", release_id="obs", tissue="Blood",
+            association_coverage="cis",
+        )
+    assert len(_tally_lines(caplog)) == 1, "the build logs the one it left out"
+    caplog.clear()
     with caplog.at_level(logging.WARNING):
         trc.complete_ragged_store(
             observed, tmp_path / "comp.opengwasdb",
             trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
             ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
         )
-    assert _completion_lines(caplog, "complete-ragged") == [
-        f"complete-ragged: 1 {_TALLY} (spec §15): ENSG00000000001::Blood: 1"
-    ]
+    assert _completion_lines(caplog, "complete-ragged") == []
+    assert [
+        a.n_missing_se_out_of_range
+        for a in read_analysis_records(tmp_path / "comp.opengwasdb" / "analyses.tsv")
+    ] == ["1", "0"]
 
 
-def test_the_crossover_fold_logs_its_out_of_range_se(tmp_path, caplog) -> None:
-    """trait_a's off-panel association at 1:2068561 becomes a crossover once the LD
-    panel extends the Dense axis. Only the fold holds it: Dense completion ran
-    before it was folded in, and the rebuilt Overflow leaves it out."""
-    src = thc.build_two_trait_source(
-        tmp_path,
-        {
-            "trait_a": [(100_000, "2.0:0.5"), (1_000_000, "1.5:0.3"), (2_000_000, "1.2:70000")],
-            "trait_c": [(100_000, "2.2:0.5"), (1_000_000, "1.6:0.3")],
-        },
-    )
+def test_a_would_be_crossover_left_out_by_its_build_is_not_logged_again(
+    tmp_path, caplog
+) -> None:
+    """trait_a's off-panel association at 1:2068561 would become a crossover once the
+    LD panel extends the Dense axis, but its build left it out of the Overflow, so
+    the completion holds no such crossover and logs nothing for it."""
+    with caplog.at_level(logging.WARNING):
+        src = thc.build_two_trait_source(
+            tmp_path,
+            {
+                "trait_a": [
+                    (100_000, "2.0:0.5"), (1_000_000, "1.5:0.3"), (2_000_000, "1.2:70000"),
+                ],
+                "trait_c": [(100_000, "2.2:0.5"), (1_000_000, "1.6:0.3")],
+            },
+        )
+    assert len(_tally_lines(caplog)) == 1, "the build logs the one it left out"
+    caplog.clear()
     with caplog.at_level(logging.WARNING):
         thc.complete_hybrid_store(
             src, tmp_path / "dst.opengwasdb", thc._make_ld_panel_with_crossover(tmp_path),
             min_cor=0.0, thresh=0.9,
         )
-    assert _completion_lines(caplog, "complete-hybrid") == [
-        f"complete-hybrid, the crossover fold: 1 {_TALLY} (spec §15): trait_a: 1"
-    ]
+    assert _completion_lines(caplog, "complete-hybrid") == []

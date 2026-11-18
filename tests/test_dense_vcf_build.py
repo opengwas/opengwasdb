@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 from cli_output import normalize_cli_output
 from extraction_fixtures import write_hg38_artifact
 from liftover_fixtures import (
@@ -35,10 +36,10 @@ from residual_fixtures import (
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
-from opengwasdb.encoding.plan import SE_EXCEPTION
+from opengwasdb.encoding.plan import SE_EXCEPTION, SE_MISSING
 from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.analyses import read_analyses, read_analysis_records
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -1697,8 +1698,8 @@ def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(
 _UNREPRESENTABLE_SE_TEXT = "1.0001"
 _UNREPRESENTABLE_SE = np.float32(1.0001)
 #: An SE `float16` cannot hold in the other direction: above 65,504 its rounding
-#: is `+inf`, so a residual plan's exact exception is the only way a Store holds
-#: this number at all (issue #355).
+#: is `+inf`. A residual plan could hold it as an exact exception (issue #355), but
+#: from format 0.2.3 no plan holds it: the association is not stored (issue #338).
 _LARGE_SE_TEXT = "100000.0"
 _LARGE_SE = np.float32(100000.0)
 #: The row the odd SE sits on. 451st variant, and |z| = 8, so the exception is
@@ -1816,14 +1817,14 @@ def test_residual_se_exception_is_the_source_se_float16_cannot_hold(
     assert validate_store(store).ok, validate_store(store).errors
 
 
-def test_an_se_above_float16s_range_is_an_exact_exception_not_a_failed_build(
+def test_an_se_above_float16s_range_is_not_stored_under_a_residual_plan(
     large_se_store: tuple[Path, Path],
 ) -> None:
-    """Issue #355: an SE of 100,000 is held exactly, not turned into `+inf`.
+    """Issue #338: an SE of 100,000 is left out, z and SE together, under a residual
+    plan as under a `float16` one; the build neither fails (#355) nor holds it.
 
-    `float16` rounds it to `+inf`, and the pre-fix build could not store an
-    infinite SE at all: the scratch plane held `+inf` and the SE encoding
-    refused it with "cannot store negative or non-finite standard errors".
+    A residual plan could hold it as an exact exception, but whether an association
+    is kept must not depend on the plan the build measured (ADR 0068).
     """
     store, _manifest = large_se_store
     with np.errstate(over="ignore"):
@@ -1831,23 +1832,21 @@ def test_an_se_above_float16s_range_is_an_exact_exception_not_a_failed_build(
             "the fixture must carry an SE float16 turns into +inf, or this proves nothing"
         )
     assert StoreManifest.load(store).encoding.se.is_residual
-    row, alid = _exception_cell(store)
-    stored = _stored_exception(store, row)
-    assert np.isfinite(stored)
-    assert stored == float(_LARGE_SE)
-    assert decoded_se(store, alid, "t0") == float(_LARGE_SE)
+    row, _alid = _exception_cell(store)
+    group = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert int(np.asarray(group["se"][row, 0])) == SE_MISSING
+    assert row * int(group["se"].shape[1]) not in np.asarray(group["se_exception_index"][:])
+    assert [a.n_missing_se_out_of_range for a in read_analysis_records(store / "analyses.tsv")] == [
+        "1", "0"
+    ]
     assert validate_store(store).ok, validate_store(store).errors
 
 
-def test_source_fidelity_accepts_the_source_se_float16_cannot_hold(
+def test_source_fidelity_accepts_a_release_that_left_out_an_se_above_the_bound(
     large_se_store: tuple[Path, Path],
 ) -> None:
-    """`fidelity.source` compares an exact exception with the source's `float32`.
-
-    Its reference used to be the codec's `float16` rounding, which for an SE
-    above 65,504 is `+inf`: a correct release would have failed its own source
-    check. The fixture's SE is one of those, so the two references cannot agree
-    by accident.
+    """`fidelity.source` does not fail a release for leaving out a source association
+    whose SE is above 65,504 (issue #338): a missing store cell is not compared.
     """
     store, manifest = large_se_store
     with np.errstate(over="ignore"):

@@ -10,7 +10,8 @@ package release may move neither, one, or both numbers.
 | 0.2.0 | 0.1 | 0.1 |
 | 0.3.0 to 0.8.0 (every merge to `main` is a version) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
 | the release #430 merges as (0.9.0, from 0.8.0 and a `breaking` fragment) | each release the lowest version its features use: 0.2.1 for a Ragged release carrying `regions.tsv`, 0.2.0 for every other, the converter's output included | 0.1.0, 0.2.0, 0.2.1 |
-| the release #307's integration branch merges as (after 0.9.0) | 0.2.2 from every builder and from completion, with or without `regions.tsv`, since every build spells an indel reference first (#381); 0.2.0 from the converter | 0.1.0, 0.2.0, 0.2.1, 0.2.2 |
+| the release #307's integration branch merges as (0.10.0), to 0.12.0 | 0.2.2 from every builder and from completion, with or without `regions.tsv`, since every build spells an indel reference first (#381); 0.2.0 from the converter | 0.1.0, 0.2.0, 0.2.1, 0.2.2 |
+| the release epic #347's second run merges as (after 0.12.0, a `changed` fragment) | 0.2.3 from every builder and from completion, a 0.2.2 source's completion included, since each records `n_missing_se_out_of_range` (#338, ADR 0068); 0.2.0 from the converter, which refuses a source holding an SE above 65,504 | 0.1.0, 0.2.0, 0.2.1, 0.2.2, 0.2.3 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -65,7 +66,7 @@ rather than an error. This package refuses to
 complete it (rebuild it, then complete), and spells a source's indels sorted
 when it checks source fidelity against it. The converter writes 0.2.0 from a
 0.1.0 Store, whose indels it cannot re-spell. #338's reference branch also used
-0.2.1; if it lands after #381 it takes 0.2.3. A Reference-Completed 0.2.2
+0.2.1; it landed after #381 and took 0.2.3 (below). A Reference-Completed 0.2.2
 release also records, in `provenance.completion.panel_indels`, how its panel's
 indels took their reference; a package that does not know the key reads it as
 any other provenance.
@@ -125,6 +126,27 @@ Stamped 0.2.0, the same Store was completed by both: 0.7.4 by the old rule, whol
 LD blocks (101,308 imputed cells where the regions give 18,352), and 0.8.0 inside
 the same regions when given `--regions`, each writing neither the file nor the
 entry. The patch move is what stops that.
+
+**#338 moves `format_version` to 0.2.3 (ADR 0068).** An association whose SE is
+above 65,504, the largest a `float16` plane holds, is no longer stored as `+inf`
+(or, below 65,520, as a finite 65,504) beside a finite z: every builder and every
+completion leaves it out, z and SE together, under every plan, and `analyses.tsv`
+counts it per Analysis in the new store-only column `n_missing_se_out_of_range`,
+required on every row from 0.2.3 and optional below it, where absent or blank means
+unknown, never 0. A Hybrid root counts both components and its Dense Component its
+own. 0.2.3 is 0.2.2 with the count, so every build and every completion writes it --
+a completion of a 0.2.2 source is stamped 0.2.3, carrying its source's features and
+adding the count, and records what it left out in
+`provenance.completion.se_out_of_range`. The converter still writes 0.2.0 and
+carries no count; it refuses a 0.1.0 source holding such an SE, naming each
+Analysis, rather than copy it. A 0.2.2 Store reads and completes without a warning.
+A package that knows only 0.2.2 (0.12.0 and earlier) reads a 0.2.3 Store's data as
+written, ignores the column and warns that the Store is newer; its completion
+refuses it. Package 0.9.0's `validate` fails a 0.2.3 Store on its stamp rule, as it
+fails a 0.2.2 one, and 0.10.0 to 0.12.0 warn that the package must be upgraded: the
+fix is again to upgrade, not to re-stamp. This package's `validate` keeps #337's
+warning for a Store before 0.2.3 holding `+inf` -- OGS-00011 holds 8 such cells
+until opengwasdb-stores#403 -- and fails a 0.2.3 Store holding any SE above 65,504.
 
 ## Keeping this page true
 

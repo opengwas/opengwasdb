@@ -51,7 +51,7 @@ from test_ragged_residual_completion import _FREQS, RaggedResidualScenario, _sou
 from opengwasdb import StoreManifest, open_store
 from opengwasdb.completion.impute import scalar_n_se
 from opengwasdb.encoding import SE_EXCEPTION, SE_EXCEPTION_BUDGET, SE_MISSING
-from opengwasdb.encoding.codec import StoreCodec, se_residual_codes
+from opengwasdb.encoding.codec import StoreCodec, se_from_log, se_residual_codes
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
@@ -224,12 +224,15 @@ def off_grid(completions: _Completions, tmp_path_factory: pytest.TempPathFactory
         np.array([ai], np.int64),
         group["se_coefficients"][:],
     )
-    value = codec._se_from_codes(prediction, np.array([_OFF_GRID_STEPS]), encoding.se.step)[0]
+    value = se_from_log(prediction + _OFF_GRID_STEPS * encoding.se.step)[0]
     residual = np.log(np.float64(value)) - prediction
     steps = float(residual[0]) / encoding.se.step
     assert abs(steps - _OFF_GRID_STEPS) < 0.1, f"fixture: {steps} is not half a step off grid"
     assert abs(steps) < 127, f"fixture: {steps} must be inside the residual range"
-    _, exceptional = se_residual_codes(np.array([value]), residual, encoding.se.step)
+    _, exceptional = se_residual_codes(
+        np.array([value]), np.asarray(row.eaf[k : k + 1], dtype=np.float32),
+        np.array([ai], np.int64), group["se_coefficients"][:], encoding.se.step,
+    )
     assert not exceptional[0], "fixture: in range, so only the carry can hold this cell"
 
     # Re-key the plane and its table the way the store keeps them: sorted by index.

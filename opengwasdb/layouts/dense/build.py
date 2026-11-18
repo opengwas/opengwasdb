@@ -13,6 +13,7 @@ from opengwasdb.admission.rules import AnalysisRules
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
+    association_codec,
     eaf_baseline_from_grid,
     fit_se_grid,
     measure_eaf_grid,
@@ -35,7 +36,12 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
+from opengwasdb.model.analyses import (
+    Analysis,
+    analyses_table_from_records,
+    with_se_out_of_range,
+    write_analyses,
+)
 from opengwasdb.model.enums import (
     AssociationCoverage,
     EafOrientationOutcome,
@@ -157,7 +163,7 @@ def build_dense_observed_store(
         records, rsid_by_alid = _admitted_records(sources, directory)
         variants = _collect_variants(records)
         analyses = _collect_analyses(records, sources)
-        z, se, eaf = _scatter_records(records, variants, analyses)
+        z, se, eaf, left_out = _stored_grid(records, variants, analyses)
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
@@ -176,10 +182,38 @@ def build_dense_observed_store(
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
-        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding, analyses)
+        _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
-        write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
+        write_analyses_tsv(
+            staged.path, with_se_out_of_range(add_hit_counts(staged.path, analyses), left_out)
+        )
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _stored_grid(
+    records: list[NormalisedAssociation],
+    variants: list[CanonicalVariant],
+    analyses: list[Analysis],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The records' grid as the Store will hold it (`storable`), and per Analysis
+    how many associations it leaves out for an SE above `float16`'s range (#338).
+
+    Judged before the plan is measured, so the plan is fitted to the cells the
+    Store holds and not to one it leaves out (ADR 0068).
+    """
+    z, se, eaf = _scatter_records(records, variants, analyses)
+    n_analyses = len(analyses)
+    kept = association_codec.storable(
+        CellValues(z, se, eaf), np.arange(n_analyses)[None, :], n_analyses, where="build-dense"
+    )
+    log_se_out_of_range(
+        kept.se_out_of_range, [a.analysis_id for a in analyses], where="build-dense"
+    )
+    cells = kept.cells
+    assert cells.eaf is not None  # the grid always carries an EAF plane, NaN where absent
+    return (
+        np.asarray(cells.z), np.asarray(cells.se), np.asarray(cells.eaf), kept.se_out_of_range
+    )
 
 
 def _refuse_unbuildable(sources: Sequence[AnalysisSource]) -> None:
@@ -561,10 +595,9 @@ def _write_zarr(
     se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
     encoding: StoreEncoding,
-    analyses: list[Analysis],
 ) -> None:
-    """Encode the `(z, se, eaf)` grid once, write each plane with its side
-    arrays, and log each Analysis's SEs above `float16`'s range."""
+    """Encode the `(z, se, eaf)` grid once and write each plane with its side
+    arrays. The grid is already what the Store holds (`_stored_grid`)."""
     z, se, eaf = grids
     root = staged.arrays(mode="w")
     baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
@@ -588,8 +621,3 @@ def _write_zarr(
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))
-    log_se_out_of_range(
-        encoded.storable.se_out_of_range,
-        [analysis.analysis_id for analysis in analyses],
-        where="build-dense",
-    )

@@ -19,6 +19,16 @@ Two parts, as the ADR specifies:
   source-observed cell has identical decoded Z, SE and EAF and is not marked
   imputed; no source-missing cell is observed; no inserted panel row carries an
   observed cell.
+* **Exact accounting of what completion left out (issue #338).** A source
+  release before format 0.2.3 may hold an SE above 65,504, which completion
+  does not carry: the cell is missing and unflagged in the completed Store, and
+  set aside here rather than counted as a lost observation. Each Analysis's
+  completed `n_missing_se_out_of_range` must equal the two parts the completion
+  records in `provenance.completion.se_out_of_range` -- source cells it left out,
+  and fills it left missing -- plus its source's count where that is known (0.2.3
+  or later, never read as 0 where it is not). A sample finds only some
+  of the first part, so the cells it finds bound it from below, and equal it
+  where the sample covered every source cell.
 
 The verdict records the seed, so a check is reproducible from its record, and
 the counts, so a pass is a measured zero and not an absence of output. A tally for a
@@ -40,11 +50,13 @@ from typing import Any, NamedTuple, assert_never
 import numpy as np
 
 from opengwasdb.associations import Cells, DenseGridReader, State, Tally, present
+from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
+from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
-from opengwasdb.model.analyses import read_analysis_records
+from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import inner_chunk_of
-from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
 from opengwasdb.variants import (
     VariantAxis,
     is_indexable_alid,
@@ -75,12 +87,18 @@ FAILING_COUNTERS = (
     "imputed_mask_invalid",
     "z_se_missingness_mismatch",
     "non_canonical_marker",
+    "se_out_of_range_miscounted",
+    "se_out_of_range_unaccounted",
 )
+#: The accounting's failing counters, which every layout's check decides per
+#: Analysis over its whole sample (issue #338, `se_out_of_range_accounting`).
+SE_OUT_OF_RANGE_FAILING = ("se_out_of_range_miscounted", "se_out_of_range_unaccounted")
 _INFORMATIONAL_COUNTERS = (
     "missing_now_imputed",
     "inserted_rows",
     "parent_rows_without_finite",
     "infinite_cells",
+    "se_out_of_range_left_out",
 )
 _TOTAL_KEYS = ("cells_compared", "parent_observed", *FAILING_COUNTERS, *_INFORMATIONAL_COUNTERS)
 _DIFF_PLANES = ("z", "se", "eaf")
@@ -275,15 +293,22 @@ def _check_dense(
     record = _header_record(pair, seed, n_random, analyses, axis, (chunk_rows, band_rows))
     axis_seconds = time.time() - started
     if axis.ok and analyses["identical"]:
-        record.update(
-            _sample_and_compare(
-                axis, pair.parent, pair.child, (chunk_rows, band_rows), seed, n_random
-            )
+        sampled, found = _sample_and_compare(
+            axis, pair.parent, pair.child, (chunk_rows, band_rows), seed, n_random,
+            leaves_out=leaves_out(pair.source, pair.target),
         )
+        exact = sampled["bands_checked"] == record["geometry"]["n_parent_chunk_rows"]
+        counters, accounting = se_out_of_range_accounting(
+            pair.source, pair.target, found, np.full(len(found), exact)
+        )
+        sampled["totals"].update(counters)
+        record.update(sampled)
+        record["se_out_of_range"] = accounting
     else:
         # Rows that do not line up would only be compared against the wrong
         # rows, so sampling is skipped and the verdict says why it failed.
         record.update(_unsampled_record())
+        record["se_out_of_range"] = None
     record["failures"] = _failures(record, axis)
     record["passed"] = not record["failures"]
     record["seconds"] = {
@@ -602,7 +627,12 @@ def _sample_and_compare(
     geometry: tuple[int, int],
     seed: int,
     n_random: int,
-) -> dict[str, Any]:
+    *,
+    leaves_out: bool,
+) -> tuple[dict[str, Any], np.ndarray]:
+    """The sampled chunk-rows' record, and per Analysis the source cells they found
+    that completion left out for an SE above 65,504 (issue #338). The accounting's
+    two counters are 0 here: the caller decides them from the whole sample."""
     chunk_rows, band_rows = geometry
     bands = _choose_bands(
         axis, chunk_rows=chunk_rows, band_rows=band_rows, n_target=child.n_rows,
@@ -612,10 +642,14 @@ def _sample_and_compare(
     max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
     listing: list[dict[str, Any]] = []
     dirty: list[int] = []
+    found = np.zeros(parent.n_analyses, dtype=np.int64)
     for band in sorted(bands):
         r0, r1 = band * chunk_rows, min((band + 1) * chunk_rows, parent.n_rows)
         span = _child_span(axis.source_to_target, r0, r1, child.n_rows)
-        counts, diffs = _check_band(axis.source_to_target[r0:r1], (r0, r1), span, parent, child)
+        counts, diffs, left_out = _check_band(
+            axis.source_to_target[r0:r1], (r0, r1), span, parent, child, leaves_out
+        )
+        found += left_out
         for key in totals:
             totals[key] += counts[key]
         for plane in _DIFF_PLANES:
@@ -632,7 +666,118 @@ def _sample_and_compare(
         "bands_with_mismatch": dirty,
         "totals": totals,
         "max_abs_diff": max_diff,
-    }
+    }, found
+
+
+def se_out_of_range_accounting(
+    source: OpenGWASDBStore,
+    target: OpenGWASDBStore,
+    found: np.ndarray,
+    exact: np.ndarray,
+) -> tuple[dict[str, int], dict[str, Any]]:
+    """Whether the completed Store's `n_missing_se_out_of_range` is exactly what
+    its completion left out, plus its source's count where that is known (issue
+    #338, ADR 0068).
+
+    `found` is, per Analysis, the source cells the check found left out for an SE
+    above 65,504; `exact` marks the Analyses whose every source cell it compared.
+    Returns the two failing counters and the record that explains them:
+
+    * `se_out_of_range_miscounted` -- Analyses whose completed count is not both
+      recorded parts plus its source's where that is known (`counted`), or is
+      blank, or whose parts are not recorded. A count is never read as 0 where it
+      is unknown.
+    * `se_out_of_range_unaccounted` -- source cells found left out beyond the
+      recorded `observed` part, and, where `exact`, cells of that part not found.
+
+    A target before format 0.2.3 records no count and left nothing out: every
+    cell found is unaccounted.
+    """
+    n = len(found)
+    if not records_se_out_of_range(target.manifest.format_version):
+        return (
+            {"se_out_of_range_miscounted": 0, "se_out_of_range_unaccounted": int(found.sum())},
+            {"recorded": False, "found": _named(target, found)},
+        )
+    parts, carried, problems = _recorded_parts(source, target, n)
+    recorded = _recorded_counts(_analyses_of(target))
+    expected = counted(carried, parts.total).tolist()
+    wrong = np.ones(n, dtype=bool)
+    if not problems and len(recorded) == n:
+        wrong = np.array([got != want for got, want in zip(recorded, expected, strict=True)])
+    over = np.maximum(found - parts.observed, 0)
+    under = np.where(exact, np.maximum(parts.observed - found, 0), 0)
+    return (
+        {
+            "se_out_of_range_miscounted": int(wrong.sum()),
+            "se_out_of_range_unaccounted": int(over.sum() + under.sum()),
+        },
+        {
+            "recorded": True,
+            "source_counts": None if carried is None else carried.tolist(),
+            "problems": problems,
+            "found": _named(target, found),
+            "every_source_cell_compared": bool(np.all(exact)),
+            "miscounted": sorted(_named(target, wrong.astype(np.int64))),
+        },
+    )
+
+
+def _recorded_parts(
+    source: OpenGWASDBStore, target: OpenGWASDBStore, n: int
+) -> tuple[LeftOut, np.ndarray | None, list[str]]:
+    """The target's recorded parts and its source's carried count (`None` where it
+    is unknown, `carried_counts`), and why either could not be read (an empty list
+    when both were)."""
+    problems: list[str] = []
+    parts = LeftOut.none(n)
+    try:
+        parts = LeftOut.from_provenance(target.manifest.provenance.get("completion", {}), n)
+    except ValueError as exc:
+        problems.append(str(exc))
+    carried: np.ndarray | None = None
+    try:
+        carried = carried_counts(
+            _analyses_of(source), source.manifest.format_version, source=f"source {source.path}"
+        )
+    except ValueError as exc:
+        problems.append(str(exc))
+    return parts, carried, problems
+
+
+def _analyses_of(store: OpenGWASDBStore) -> list[Analysis]:
+    return read_analysis_records(store.path / "analyses.tsv")
+
+
+def _recorded_counts(analyses: list[Analysis]) -> list[int | None]:
+    """Each Analysis's recorded count, None where it is blank: unknown, never 0."""
+    return [
+        int(a.n_missing_se_out_of_range) if a.n_missing_se_out_of_range.isdigit() else None
+        for a in analyses
+    ]
+
+
+def _named(store: OpenGWASDBStore, counts: np.ndarray) -> dict[str, int]:
+    """The non-zero entries of a per-Analysis count, by `analysis_id`."""
+    ids = [a.analysis_id for a in _analyses_of(store)]
+    return {ids[i]: int(counts[i]) for i in np.flatnonzero(counts).tolist() if i < len(ids)}
+
+
+def leaves_out(source: OpenGWASDBStore, target: OpenGWASDBStore) -> bool:
+    """Whether completing `source` into `target` left out each association whose SE
+    is above 65,504: a source before format 0.2.3, which may hold one, completed by
+    a package that writes 0.2.3 (issue #338). A later source holds none -- one that
+    does is invalid, and a check reads its cell as any other -- and an earlier
+    target was written by a completion that carried every cell."""
+    return not records_se_out_of_range(source.manifest.format_version) and (
+        records_se_out_of_range(target.manifest.format_version)
+    )
+
+
+def above_the_bound(cells: _Cells) -> np.ndarray:
+    """Cells holding an SE above 65,504, `+inf` included: what a release before
+    format 0.2.3 may hold and its completion leaves out (issue #338)."""
+    return se_above_bound(cells.se)
 
 
 def _unsampled_record() -> dict[str, Any]:
@@ -674,28 +819,35 @@ def _check_band(
     span: tuple[int, int],
     parent: _Planes,
     child: _Planes,
-) -> tuple[dict[str, int], dict[str, float]]:
+    leaves_out: bool,
+) -> tuple[dict[str, int], dict[str, float], np.ndarray]:
     """Compare one source chunk-row with the completed span it owns (see `_child_span`)."""
     (r0, r1), (c0, c1) = source_rows, span
     found = child.read(c0, c1)
     assert found.flags is not None  # checked before sampling began
-    return _compare(parent.read(r0, r1), found, found.flags, rows - c0)
+    return _compare(parent.read(r0, r1), found, found.flags, rows - c0, leaves_out)
 
 
 def _compare(
-    parent: _Cells, child: _Cells, raw_imputed: np.ndarray, local: np.ndarray
-) -> tuple[dict[str, int], dict[str, float]]:
+    parent: _Cells,
+    child: _Cells,
+    raw_imputed: np.ndarray,
+    local: np.ndarray,
+    leaves_out: bool = False,
+) -> tuple[dict[str, int], dict[str, float], np.ndarray]:
     """The cell checks. `local` maps each source row to its row within the span.
 
     Missingness and the imputed mask's domain are checked *before* cells are
     classified, so a cell that is neither observed nor missing, or neither imputed
     nor not, is a counted failure rather than being read as the nearest category.
+    A cell completion `leaves_out` (`_left_out`) is set aside and returned per Analysis.
     """
     imputed = raw_imputed.astype(np.uint8)
     mapped = _Cells(child.z[local], child.se[local], child.eaf[local])
     mapped_imputed = imputed[local]
-    observed = _observed(parent)
     child_observed = _observed(mapped)
+    left_out = _left_out(parent, child_observed, mapped_imputed, leaves_out)
+    observed = _observed(parent) & ~left_out
     inserted = np.ones(len(imputed), dtype=bool)
     inserted[local] = False
     on_inserted = _observed(_Cells(child.z[inserted], child.se[inserted], child.eaf[inserted]))
@@ -719,13 +871,31 @@ def _compare(
         "inserted_rows": int(inserted.sum()),
         "inserted_observed_cells": int((on_inserted & (imputed[inserted] == 0)).sum()),
         "parent_rows_without_finite": int((~observed.any(axis=1)).sum()),
+        "se_out_of_range_left_out": int(left_out.sum()),
+        # Decided per Analysis over the whole sample (`se_out_of_range_accounting`).
+        "se_out_of_range_miscounted": 0,
+        "se_out_of_range_unaccounted": 0,
     }
     diffs: dict[str, float] = {}
     for plane in _DIFF_PLANES:
         counts[f"{plane}_mismatch"], diffs[plane] = _plane_difference(
             getattr(parent, plane)[observed], getattr(mapped, plane)[observed]
         )
-    return counts, diffs
+    return counts, diffs, left_out.sum(axis=0).astype(np.int64)
+
+
+def _left_out(
+    parent: _Cells, child_observed: np.ndarray, child_imputed: np.ndarray, leaves_out: bool
+) -> np.ndarray:
+    """Source cells whose SE is above 65,504 that the completed Store holds missing and
+    unflagged: the ones a completion that `leaves_out` did not carry (issue #338). One
+    the completed Store holds otherwise is compared as any observed cell is."""
+    if not leaves_out:
+        return np.zeros(np.shape(parent.z), dtype=bool)
+    left: np.ndarray = (
+        _observed(parent) & above_the_bound(parent) & ~child_observed & (child_imputed == 0)
+    )
+    return left
 
 
 def _observed(cells: _Cells) -> np.ndarray:

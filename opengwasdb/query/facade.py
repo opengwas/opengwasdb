@@ -31,7 +31,10 @@ Presence (ADR 0070, superseding ADR 0033 §7) -- every read goes through
 `opengwasdb.associations`, so one rule decides presence on every layout and
 every method, `top_hits()` included: an association is present exactly when
 neither its Z nor its SE carries its plane's missing marker (spec §15). An
-infinite SE is a value, returned with its Status. What a read returns follows
+infinite SE is a value, returned with its Status: only a release before format
+0.2.3 holds one, as a build since issue #338 leaves out an association whose SE is
+above 65,504 and counts it (`n_missing_se_out_of_range`, ADR 0068), so a query
+reads that association as any other missing one. What a read returns follows
 what each layout stores: a Dense grid stores no association at a missing cell,
 so Dense results omit them (ADR 0020); a CSR stores a row for every attempted
 pair, so Ragged and Ragged Overflow results return such a row labelled

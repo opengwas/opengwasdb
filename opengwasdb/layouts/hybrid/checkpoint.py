@@ -107,7 +107,13 @@ __all__ = [
 #: ``lift_off_primary``. A format-3 checkpoint's axis may hold such a lift's
 #: alt-contig ALIDs with no record of them, so it is refused and the build
 #: starts again.
-CHECKPOINT_FORMAT_VERSION = 4
+#:
+#: **5** (opengwasdb#338): Pass 2 records, per Analysis and component, the
+#: associations it left out for an SE above ``float16``'s range, which
+#: ``analyses.tsv`` counts and nothing else can recover once the spills are
+#: written. A format-4 checkpoint has no such record, so it is refused and the
+#: build starts again.
+CHECKPOINT_FORMAT_VERSION = 5
 
 #: The function a refusal tells an operator to call.
 RESUME_FUNCTION = "resume_hybrid_build"
@@ -122,6 +128,7 @@ PHASES: tuple[str, ...] = ("pass2", "fold", "orientation", "plan", "dense_bands"
 BUILD_PARAMS = "build_params.json"
 PLATES = "plates.json"
 ORIENTATION = "orientation.json"
+SE_OUT_OF_RANGE = "se_out_of_range.json"
 PLAN = "plan.json"
 HITS = "dense_hits.npz"
 AXIS = "axis.npz"

@@ -158,32 +158,26 @@ def solve_log_se(
 
 def _fit_log_se(
     s: np.ndarray, f: np.ndarray, ai: np.ndarray, n_analyses: int, finite: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, bool]:
-    """Fit every Analysis in one pass, and keep each fitted cell's residual.
+) -> tuple[np.ndarray, bool]:
+    """Fit every Analysis in one pass.
 
     One pass of `np.bincount` rather than a mask per Analysis: the Ragged
     builders hold the whole store in memory already, and a loop over Analyses
-    would make the fit quadratic in a dimension that grows.
+    would make the fit quadratic in a dimension that grows. The codes and
+    exceptions each candidate range gives are `se_residual_codes`'s, the
+    encoder's own rule.
     """
-    residual = np.full(s.shape, np.nan, dtype=np.float64)
     use = finite & (s > 0) & (f > 0) & (f < 1)
     selected = ai[use]
     x = np.log(2 * f[use] * (1 - f[use]))
     y = np.log(s[use])
-    coefficients, eligible = solve_log_se(
+    return solve_log_se(
         np.bincount(selected, minlength=n_analyses).astype(np.float64),
         np.bincount(selected, weights=x, minlength=n_analyses),
         np.bincount(selected, weights=y, minlength=n_analyses),
         np.bincount(selected, weights=x * x, minlength=n_analyses),
         np.bincount(selected, weights=x * y, minlength=n_analyses),
     )
-    if not eligible:
-        return coefficients, residual, False
-    residual[use] = y - (
-        coefficients[selected, 0].astype(np.float64)
-        + coefficients[selected, 1].astype(np.float64) * x
-    )
-    return coefficients, residual, True
 
 
 #: zarr pads an edge chunk's out-of-extent cells with the array's declared
@@ -260,9 +254,8 @@ def fit_se(
     finite = np.isfinite(s)
     eligible = bool(np.all(np.isfinite(f[finite])))
     coef = np.full((n_analyses, 2), np.nan, dtype=np.float32)
-    residual = np.full(s.shape, np.nan, dtype=np.float64)
     if eligible:
-        coef, residual, eligible = _fit_log_se(s, f, ai, n_analyses, finite)
+        coef, eligible = _fit_log_se(s, f, ai, n_analyses, finite)
 
     # Per Analysis, not pooled: issue #118 reverts the plane when *any*
     # Analysis fits badly, and a pooled share lets one bad Analysis hide
@@ -274,7 +267,8 @@ def fit_se(
     sizes: dict[float, int] = {}
     for candidate in SE_RANGE_CANDIDATES:
         step = candidate / 127.0
-        stored, exceptions = se_residual_codes(s, residual, step)
+        # The frequency as given: a float32 one is what a reader predicts from.
+        stored, exceptions = se_residual_codes(s, np.asarray(eaf).ravel(), ai, coef, step)
         per_analysis = np.bincount(ai[exceptions], minlength=n_analyses)
         fractions[candidate] = (
             float(np.max(per_analysis[carrying] / finite_per_analysis[carrying]))

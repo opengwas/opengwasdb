@@ -555,8 +555,9 @@ def test_the_build_writes_the_table_into_the_store_as_regions_tsv(tabled, tmp_pa
 
 def test_a_build_given_a_table_differs_from_one_without_only_by_regions_tsv(tmp_path):
     """The table changes nothing else a build writes: the file, and the manifest entry
-    that declares it, are the whole difference. Both are 0.2.2, the table or not, since
-    every build spells an indel reference first (spec §21.3)."""
+    that declares it, are the whole difference. Both are 0.2.3, the table or not, since
+    every build spells an indel reference first and counts what it left out for an SE
+    above 65,504 (spec §21.3)."""
     from store_digest import store_digest
 
     table = write_region_table(tmp_path / "t.tsv", TABLE)
@@ -566,7 +567,7 @@ def test_a_build_given_a_table_differs_from_one_without_only_by_regions_tsv(tmp_
     assert tabled["files"] == sorted([*bare["files"], "regions.tsv"])
     assert "regions" not in bare["manifest.json"]
     assert (bare["manifest.json"]["format_version"], tabled["manifest.json"]["format_version"]) == (
-        "0.2.2", "0.2.2"
+        "0.2.3", "0.2.3"
     )
     assert {
         k: v for k, v in tabled["manifest.json"].items() if k != "regions"
@@ -595,17 +596,18 @@ def _format_version(store: Path) -> str:
 
 
 def test_a_build_is_stamped_the_lowest_format_version_its_features_use(tabled, cis_only):
-    """0.2.1 adds only the optional `regions.tsv`, and 0.2.2 an indel spelt reference
-    first, which every build of this package does (spec §21.3, ADR 0079): a build is
-    0.2.2 whether or not it carries the table."""
-    assert _format_version(tabled[0]) == "0.2.2"
-    assert _format_version(cis_only[0]) == "0.2.2"
+    """0.2.1 adds only the optional `regions.tsv`, 0.2.2 an indel spelt reference first,
+    and 0.2.3 the count of associations left out for an SE above 65,504, each of which
+    every build of this package does (spec §21.3, ADR 0079, ADR 0068): a build is 0.2.3
+    whether or not it carries the table."""
+    assert _format_version(tabled[0]) == "0.2.3"
+    assert _format_version(cis_only[0]) == "0.2.3"
 
 
 def test_a_completion_keeps_its_sources_format_version(tabled, cis_only):
     """It carries the source's `regions.tsv`, or carries none, and so its version."""
-    assert _format_version(tabled[1]) == "0.2.2"
-    assert _format_version(cis_only[1]) == "0.2.2"
+    assert _format_version(tabled[1]) == "0.2.3"
+    assert _format_version(cis_only[1]) == "0.2.3"
 
 
 def _as_0_9_0_wrote_it(store: Path, tmp_path: Path) -> Path:
@@ -626,9 +628,9 @@ def _as_0_9_0_wrote_it(store: Path, tmp_path: Path) -> Path:
 
 
 def test_validate_accepts_this_builds_stores_and_0_9_0s(tmp_path, tabled, cis_only):
-    """This build's 0.2.2 Stores, with the table and without, and the same Stores as
+    """This build's 0.2.3 Stores, with the table and without, and the same Stores as
     package 0.9.0 stamps them, 0.2.1 and 0.2.0, all validate: the rules this branch
-    gates at 0.2.2 do not touch a 0.9.0 Store (spec §21.3)."""
+    gates at 0.2.2 and 0.2.3 do not touch a 0.9.0 Store (spec §21.3)."""
     from opengwasdb.validation.validate import validate_store
 
     stores = [*tabled, *cis_only]
@@ -637,7 +639,7 @@ def test_validate_accepts_this_builds_stores_and_0_9_0s(tmp_path, tabled, cis_on
         result = validate_store(store)
         assert result.ok, (store, result.errors)
     assert sorted(_format_version(store) for store in stores) == [
-        "0.2.0", "0.2.1", "0.2.2", "0.2.2", "0.2.2", "0.2.2"
+        "0.2.0", "0.2.1", "0.2.3", "0.2.3", "0.2.3", "0.2.3"
     ]
 
 

@@ -55,6 +55,7 @@ from opengwasdb.encoding.codec import (
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
+from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
@@ -233,8 +234,11 @@ class RaggedCSRWriter:
         #: lazily, like `n`, so a build -- whose every cell is observed -- pays
         #: nothing for the plane only a Reference Completion writes (issue #424).
         self._imputed: list[np.ndarray | None] = []
-        #: Per Analysis, how many of its SEs exceed `float16`'s range.
+        #: Per Analysis, how many of its associations `storable` left out for
+        #: an SE above `float16`'s range (issue #338), and how many of those
+        #: were a completion's imputed cells.
         self._se_out_of_range: list[int] = []
+        self._imputed_out_of_range: list[int] = []
         self._offsets: list[int] = [0]
         #: The baseline this writer has already derived, or `None` before the
         #: first ask. `None` can only mean "not derived": a derivation under a
@@ -304,9 +308,25 @@ class RaggedCSRWriter:
             CellValues(np.asarray(z), np.asarray(se), eaf, imputed=imputed), 0, 1, where=where
         )
         self._se_out_of_range.append(int(np.sum(kept.se_out_of_range)))
+        self._imputed_out_of_range.append(int(np.sum(kept.imputed_out_of_range)))
         if self._completion is None:
             log_se_out_of_range(kept.se_out_of_range, where=where)
         self._hold(vi, kept, n, flagged=imputed is not None)
+
+    @property
+    def se_out_of_range(self) -> np.ndarray:
+        """Per Analysis added, the associations left out for an SE above `float16`'s
+        range: what `analyses.tsv` records as `n_missing_se_out_of_range` (issue #338)."""
+        return np.asarray(self._se_out_of_range, dtype=np.int64)
+
+    def counted(self, analyses: list[Analysis]) -> list[Analysis]:
+        """`analyses`, one per Analysis added, with the count this writer left out."""
+        return with_se_out_of_range(analyses, self.se_out_of_range)
+
+    @property
+    def imputed_out_of_range(self) -> np.ndarray:
+        """Per Analysis added, how many of `se_out_of_range` were flagged imputed."""
+        return np.asarray(self._imputed_out_of_range, dtype=np.int64)
 
     def _hold(
         self, vi: np.ndarray, kept: Storable, n: np.ndarray | None, *, flagged: bool

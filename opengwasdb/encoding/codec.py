@@ -107,6 +107,52 @@ def _positions_for(mask: np.ndarray, positions: PositionSource, *, what: str) ->
     return np.asarray(resolved[mask], dtype=np.int64)
 
 
+#: The largest SE a `float16` plane holds (65,504). An association whose SE is
+#: above it is not stored, in z and SE together, whatever the plan (spec §15,
+#: issue #338, ADR 0068): `storable` leaves it out before any plane is written.
+SE_FLOAT16_MAX: float = float(np.finfo(np.float16).max)
+
+
+def se_above_bound(values: Any) -> np.ndarray:
+    """Which of `values` are SEs above `SE_FLOAT16_MAX`, `+inf` included; a missing
+    one is not. The one comparison with the bound (issue #338): `storable` leaves
+    out what it marks, the encoders refuse it, and every reader that asks whether a
+    stored or source cell is above the bound asks it here.
+    """
+    with np.errstate(invalid="ignore"):
+        over: np.ndarray = np.asarray(values) > SE_FLOAT16_MAX
+    return over
+
+
+class SeOutOfRange(ValueError):
+    """An SE above `SE_FLOAT16_MAX` reached an encoder (issue #338).
+
+    `storable` leaves such an association out, so one here was handed to an
+    encoder by a path that did not ask `storable` first. A `float16` plane would
+    hold it as 65,504 or `+inf` beside a finite z, and a residual plane as an
+    exact exception no Store of this format may hold.
+    """
+
+
+def require_se_in_range(values: np.ndarray, *, where: str) -> None:
+    """Refuse an SE above `SE_FLOAT16_MAX`, naming `where`, the count and the first.
+
+    The encoders' guard: what makes a path that forgot `storable` fail loudly
+    instead of writing `+inf`, where numpy's overflow warning was the only signal.
+    """
+    v = np.asarray(values)
+    over = se_above_bound(v)
+    if not over.any():
+        return
+    first = tuple(int(axis[0]) for axis in np.nonzero(over))
+    raise SeOutOfRange(
+        f"{where}: {int(over.sum()):,} standard error(s) above {SE_FLOAT16_MAX:,.0f}, the "
+        f"largest a float16 plane holds (first {float(v[first])!r} at {first}). Such an "
+        "association is not stored (spec §15, issue #338): the writer must hold what "
+        "`storable` returns, never the cells it was handed"
+    )
+
+
 def se_float16(values: np.ndarray) -> np.ndarray:
     """SEs as a `float16` SE plane holds them: the one rounding rule for an SE.
 
@@ -123,35 +169,93 @@ def se_float16(values: np.ndarray) -> np.ndarray:
     return narrowed
 
 
+def se_log_prediction(
+    eaf: np.ndarray, analysis_index: np.ndarray, coefficients: np.ndarray
+) -> np.ndarray:
+    """`log(se)` as an Analysis' model predicts it from each cell's frequency.
+
+    Unchecked: a model or index that cannot predict a cell yields a non-finite
+    prediction, which `se_residual_codes` makes an exception. `decode_se` checks
+    its inputs and then predicts through here, so both share the expression.
+    """
+    f = np.asarray(eaf, dtype=np.float64)
+    ai = np.asarray(analysis_index, dtype=np.int64)
+    coef = np.asarray(coefficients)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        x = np.log(2.0 * f * (1.0 - f))
+        return np.asarray(
+            coef[ai, 0].astype(np.float64) + coef[ai, 1].astype(np.float64) * x,
+            dtype=np.float64,
+        )
+
+
+def se_from_log(log_se: np.ndarray) -> np.ndarray:
+    """The SE a decoded `log(se)` is read as: the one expression `decode_se` and
+    `se_residual_codes` share, so the encoder judges the value a reader gets."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        decoded: np.ndarray = np.exp(np.asarray(log_se, dtype=np.float64)).astype(np.float32)
+    return decoded
+
+
+#: Below this decoded `log(se)` no code can read above `SE_FLOAT16_MAX`: `exp` is
+#: monotone, and the margin is far wider than its rounding or the float32 one.
+_LOG_SE_BOUND_FLOOR = float(np.log(SE_FLOAT16_MAX)) - 1e-6
+
+
 def se_residual_codes(
-    values: np.ndarray, residual: np.ndarray, step: float
+    values: np.ndarray,
+    eaf: np.ndarray,
+    analysis_index: np.ndarray,
+    coefficients: np.ndarray,
+    step: float,
+    *,
+    exact: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Quantise `log(se)` residuals into the int8 plane. The only site that does.
+    """Code SEs into the int8 residual plane: the one exception decision.
 
-    `residual` is `log(se) - prediction`; a non-finite one means the model
-    could not predict that cell, which makes it an exception rather than a
-    clip. Encoding, the candidate-range measurement and the Ragged fitter all
-    come through here, so a store cannot be *measured* under one rounding rule
-    and *written* under another.
+    Encoding, the candidate-range measurement, the Dense rewrite's exception
+    count and the Ragged fitter all come through here, so a Store cannot be
+    *measured* or *allocated* under one rule and *written* under another. A
+    present SE is an exact exception when:
 
-    Returns the raw codes and the mask of cells whose exact value must go in
-    the side table.
+    * its residual from the model is not finite or falls outside the int8 range
+      (a zero SE, an unpredictable cell, a residual beyond the range);
+    * it is `exact` -- carried decoded from another Store, so it must decode to
+      itself (issue #301) -- and its code would not;
+    * its code decodes above `SE_FLOAT16_MAX` (issue #338). A code is the nearest
+      step, so 65,504 can read half a step above itself; and a reader predicts
+      from the frequency narrowed to `float32`, which under a steep model moves
+      the prediction by whole units, so a far smaller SE can read above it too.
+
+    The codes are measured from the prediction for the frequency as given, so no
+    build's bytes move; the last two rules judge the value a reader decodes, from
+    the `float32` frequency, every kept cell of it. Returns the raw codes and the
+    mask of cells whose exact value goes in the side table.
     """
     v = np.asarray(values, dtype=np.float64)
+    f = np.broadcast_to(np.asarray(eaf), v.shape)
+    ai = np.broadcast_to(np.asarray(analysis_index, dtype=np.int64), v.shape)
+    prediction = se_log_prediction(f, ai, coefficients)
     present = np.isfinite(v)
     with np.errstate(divide="ignore", invalid="ignore"):
-        codes = np.rint(np.asarray(residual, dtype=np.float64) / step)
-    ordinary = (
-        present
-        & (v > 0)
-        & np.isfinite(codes)
-        & (codes >= SE_CODE_MIN)
-        & (codes <= SE_CODE_MAX)
+        codes = np.rint((np.log(v) - prediction) / step)
+    held = present & (v > 0) & np.isfinite(codes) & (codes >= SE_CODE_MIN) & (codes <= SE_CODE_MAX)
+    read = (  # what `decode_se` predicts from: the frequency narrowed to float32
+        prediction
+        if f.dtype == np.float32
+        else se_log_prediction(f.astype(np.float32), ai, coefficients)
     )
-    exceptional = present & ~ordinary
+    with np.errstate(invalid="ignore"):
+        decoded_log = read + codes * step
+    if exact is not None:
+        judged = held & np.broadcast_to(np.asarray(exact, dtype=bool), v.shape)
+        held[judged] = se_from_log(decoded_log[judged]) == v[judged].astype(np.float32)
+    near = held & (decoded_log > _LOG_SE_BOUND_FLOOR)
+    held[near] = ~se_above_bound(se_from_log(decoded_log[near]))
+    exceptional = present & ~held
     raw = np.full(v.shape, SE_MISSING, dtype=np.int8)
     raw[exceptional] = SE_EXCEPTION
-    raw[ordinary] = codes[ordinary].astype(np.int8)
+    raw[held] = codes[held].astype(np.int8)
     return raw, exceptional
 
 
@@ -1031,41 +1135,45 @@ class StoreCodec:
     def _se_prediction(
         eaf: np.ndarray, analysis_index: np.ndarray, coefficients: np.ndarray
     ) -> np.ndarray:
-        f = np.asarray(eaf, dtype=np.float64)
+        StoreCodec._require_se_model(eaf, analysis_index, coefficients)
+        return se_log_prediction(eaf, analysis_index, coefficients)
+
+    @staticmethod
+    def _require_se_model(
+        eaf: np.ndarray, analysis_index: np.ndarray, coefficients: np.ndarray
+    ) -> None:
+        """Refuse a model or an index that cannot predict these cells."""
+        f_shape = np.shape(eaf)
         ai = np.asarray(analysis_index, dtype=np.int64)
         coef = np.asarray(coefficients)
         if coef.ndim != 2 or coef.shape[1] != 2:
             raise ValueError(f"se_coefficients shape {coef.shape} must be (n_analyses, 2)")
         if not np.all(np.isfinite(coef)):
             raise ValueError("se_coefficients must contain only finite values")
-        if ai.shape != f.shape:
-            raise ValueError(f"analysis_index shape {ai.shape} does not match EAF shape {f.shape}")
+        if ai.shape != f_shape:
+            raise ValueError(f"analysis_index shape {ai.shape} does not match EAF shape {f_shape}")
         if np.any(ai < 0) or np.any(ai >= len(coef)):
             raise ValueError("analysis_index is outside se_coefficients")
-        with np.errstate(divide="ignore", invalid="ignore"):
-            x = np.log(2.0 * f * (1.0 - f))
-            return np.asarray(
-                coef[ai, 0].astype(np.float64) + coef[ai, 1].astype(np.float64) * x,
-                dtype=np.float64,
-            )
 
     @staticmethod
-    def _se_from_codes(prediction: np.ndarray, codes: np.ndarray, step: float) -> np.ndarray:
-        """The SE an ordinary residual code decodes to: the one expression the
-        decode and the exact rule in `encode_se` share, so the two agree bit for bit."""
-        with np.errstate(over="ignore", invalid="ignore"):
-            return np.exp(prediction + codes.astype(np.float64) * step).astype(np.float32)
-
-    def _not_exact(
-        self, v: np.ndarray, codes: np.ndarray, exceptional: np.ndarray,
-        prediction: np.ndarray, exact: np.ndarray,
-    ) -> np.ndarray:
-        """Cells that must decode to exactly their value and whose code would not."""
-        held = np.broadcast_to(np.asarray(exact, dtype=bool), v.shape) & ~exceptional & ~np.isnan(v)
-        drifts = np.zeros(v.shape, dtype=bool)
-        reread = self._se_from_codes(prediction[held], codes[held], self.encoding.se.step)
-        drifts[held] = reread != v[held].astype(np.float32)
-        return drifts
+    def _require_residual_inputs(v: np.ndarray, eaf: np.ndarray) -> None:
+        """Refuse SEs a residual plane cannot code: negative or non-finite, or
+        present where the frequency is not."""
+        missing = np.isnan(v)
+        invalid = ~missing & (~np.isfinite(v) | (v < 0))
+        if np.any(invalid):
+            raise ValueError("cannot store negative or non-finite standard errors")
+        # A residual plane is defined over a complete-EAF store (#118,
+        # #138-#140). A finite `se` whose cell has no frequency used to become
+        # an exact exception, which stored the value but put the plane outside
+        # that contract -- and a decode-time refusal would then reject data this
+        # method had just written. It fails here instead, where the caller still
+        # has the source value and can fall back to `float16` (issue #159).
+        if np.any(~missing & ~np.isfinite(np.asarray(eaf, dtype=np.float64))):
+            raise ValueError(
+                "residual SE needs a finite EAF for every cell carrying a standard error; "
+                "a store with frequencies missing where `se` is present must use float16"
+            )
 
     def encode_se(
         self,
@@ -1084,42 +1192,20 @@ class StoreCodec:
         decoded from another Store and carried into this one (issue #301). Under
         a residual plan such a cell whose code would decode to anything else is
         an exact exception; a cell already on a code's value keeps the code.
+        An SE above `SE_FLOAT16_MAX` raises `SeOutOfRange` under every plan; under
+        a residual one the exceptions are `se_residual_codes`'s (#338).
         """
         v = np.asarray(values, dtype=np.float64)
+        require_se_in_range(v, where=f"encode_se ({self.encoding.se.kind})")
         if not self.encoding.se.is_residual:
             return se_float16(v)
-        prediction = self._se_prediction(eaf, analysis_index, coefficients)
-        if prediction.shape != v.shape:
-            raise ValueError(f"EAF shape {prediction.shape} does not match se shape {v.shape}")
-        missing = np.isnan(v)
-        invalid = ~missing & (~np.isfinite(v) | (v < 0))
-        if np.any(invalid):
-            raise ValueError("cannot store negative or non-finite standard errors")
-        # A residual plane is defined over a complete-EAF store (#118,
-        # #138-#140). A finite `se` whose cell has no frequency used to become
-        # an exact exception, which stored the value but put the plane outside
-        # that contract -- and a decode-time refusal would then reject data this
-        # method had just written. It fails here instead, where the caller still
-        # has the source value and can fall back to `float16` (issue #159).
-        if np.any(~missing & ~np.isfinite(np.asarray(eaf, dtype=np.float64))):
-            raise ValueError(
-                "residual SE needs a finite EAF for every cell carrying a standard error; "
-                "a store with frequencies missing where `se` is present must use float16"
-            )
-        with np.errstate(divide="ignore", invalid="ignore"):
-            residual = np.log(v) - prediction
-        out, exceptional = se_residual_codes(v, residual, self.encoding.se.step)
-        if exact is not None:
-            # `decode_se` narrows the frequency to `float32` before predicting, so
-            # the exact rule predicts from the value it will read (issue #301).
-            # Prediction from the EAF as given would call a cell drifted that the
-            # reader decodes exactly, holding a needless exception. The codes above
-            # keep the prediction from the EAF as given, so no build's bytes move.
-            readable = self._se_prediction(
-                np.asarray(eaf, dtype=np.float32), analysis_index, coefficients
-            )
-            exceptional |= self._not_exact(v, out, exceptional, readable, exact)
-            out[exceptional] = SE_EXCEPTION
+        self._require_se_model(eaf, analysis_index, coefficients)
+        if np.shape(eaf) != v.shape:
+            raise ValueError(f"EAF shape {np.shape(eaf)} does not match se shape {v.shape}")
+        self._require_residual_inputs(v, eaf)
+        out, exceptional = se_residual_codes(
+            v, eaf, analysis_index, coefficients, self.encoding.se.step, exact=exact
+        )
         if np.any(exceptional):
             if exceptions is None:
                 raise ValueError("se exceptions need a SeExceptionBuilder")
@@ -1166,7 +1252,7 @@ class StoreCodec:
             )
         predicted = present & ~exceptional
         prediction = self._se_prediction(f, analysis_index, coefficients)
-        out = self._se_from_codes(prediction, codes, self.encoding.se.step)
+        out = se_from_log(prediction + codes.astype(np.float64) * self.encoding.se.step)
         out[codes == SE_MISSING] = np.nan
         if np.any(exceptional):
             if self.se_exceptions is None:

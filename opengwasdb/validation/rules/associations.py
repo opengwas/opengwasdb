@@ -20,8 +20,10 @@ import numpy as np
 
 from opengwasdb.associations import State, Tally
 from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
+from opengwasdb.encoding.codec import SE_FLOAT16_MAX, se_above_bound
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import array_length
+from opengwasdb.store.open import records_se_out_of_range
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, OBSERVED_ONLY, prefix
 from opengwasdb.validation.rules.encoding import PLAN, plane_label
@@ -182,6 +184,38 @@ def _judge_infinite_se(target: Target, per_analysis: np.ndarray) -> Iterator[str
         yield message
 
 
+def _out_of_range_se(_target: Target, block: Block) -> np.ndarray:
+    # Every plan's decoded SE: `+inf` in a `float16` plane, an exact exception in a
+    # residual one. Neither is a value a release at 0.2.3 or later may hold.
+    return block.per_analysis(se_above_bound(block.se))
+
+
+def _judge_out_of_range_se(target: Target, per_analysis: np.ndarray) -> Iterator[str]:
+    counts = np.asarray(per_analysis)
+    total = int(counts.sum())
+    if not total:
+        return
+    message = (
+        f"{total} cell(s) of {_infinite_se_label(target)} hold an SE above "
+        f"{SE_FLOAT16_MAX:,.0f}, which a release at format_version "
+        f"{target.store.manifest.format_version} stores as missing and counts in "
+        "n_missing_se_out_of_range (spec §15, issue #338)"
+    )
+    named = _first_holding(counts, target.store.analyses_path)
+    if named:
+        message += f". The first Analyses holding one: {', '.join(map(repr, named))}"
+    yield message
+
+
+def _counts_se_out_of_range(target: Target) -> bool:
+    """A release at format 0.2.3 or later, which holds no SE above 65,504 (ADR 0068)."""
+    return records_se_out_of_range(target.store.manifest.format_version)
+
+
+def _before_counting(target: Target) -> bool:
+    return not _counts_se_out_of_range(target)
+
+
 def _negative_se(_target: Target, block: Block) -> int:
     return int(np.count_nonzero(np.isfinite(block.se) & (block.se < 0)))
 
@@ -296,12 +330,23 @@ def _always(_target: Target) -> bool:
 #: The read every value rule shares, and the presence rules.
 PRESENCE_RULES: tuple[Rule, ...] = (
     value_fold(DECODABLE, 0, _decoded, _judge_decoded),
+    # Before format 0.2.3 a `float16` plane held an SE above its range as `+inf`, a
+    # value (issue #337): reported, never failed, as OGS-00011's eight cells are.
     value_fold(
         "associations.se_infinite",
         np.zeros((), dtype=np.int64),
         _infinite_se,
         _judge_infinite_se,
         severity=Severity.WARNING,
+        when=_before_counting,
+    ),
+    # From 0.2.3 such an association is not stored at all (issue #338, ADR 0068).
+    value_fold(
+        "associations.se_out_of_range",
+        np.zeros((), dtype=np.int64),
+        _out_of_range_se,
+        _judge_out_of_range_se,
+        when=_counts_se_out_of_range,
     ),
     # Admission drops a row whose SE is not finite and positive.
     value_fold(

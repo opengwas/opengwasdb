@@ -60,6 +60,12 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.encoding.codec import (
+    SE_EXCEPTION_INDEX,
+    SE_EXCEPTION_VALUE,
+    SE_FLOAT16_MAX,
+    se_above_bound,
+)
 from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import normalise_coverage
@@ -242,6 +248,127 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
             "converting half of one would be refused one directory down (spec §16)."
         )
     return _components(layout)
+
+
+#: Values read at a time when scanning a source's SE for one above `float16`'s range.
+_SCAN_VALUES = 1 << 26
+
+
+def _refuse_se_out_of_range(source: Path, components: list[_Component]) -> None:
+    """Refuse a source holding an SE above 65,504, naming each Analysis and array,
+    before anything is written (issue #338).
+
+    A 0.1.0 release written before #338 holds such an SE as `+inf` in a `float16`
+    plane, or as an exact residual exception. This build stores no such
+    association -- a build or a completion leaves it out and counts it (ADR 0068)
+    -- but the converter copies stored codes bit for bit, and cannot drop an
+    association without rewriting z, the exception tables, the Top-Hit Index and
+    a Ragged release's offsets. A converted copy would hold what no release this
+    package writes holds, so it is refused; such a release is rebuilt.
+    """
+    by_array: dict[str, int] = {}
+    by_analysis: dict[str, int] = {}
+    for component in components:
+        root = open_group(source / component.zarr_rel, "r")
+        names = _analysis_ids(source / component.zarr_rel)
+        for path in _float_se_paths(root):
+            found = _analyses_over(root, path, root[path])
+            if found:
+                by_array[f"{component.zarr_rel}/{path}"] = sum(found.values())
+            if _names_associations(path):
+                _add_named(by_analysis, found, names)
+    if by_array:
+        analyses_text = ", ".join(f"{name}: {n:,}" for name, n in sorted(by_analysis.items()))
+        arrays_text = ", ".join(f"{path}: {n:,}" for path, n in sorted(by_array.items()))
+        raise ConversionError(
+            f"{source}: standard error(s) above {SE_FLOAT16_MAX:,.0f}, the largest a float16 "
+            f"plane holds, in Analyses {analyses_text} (arrays {arrays_text}). This package "
+            "stores no such association: a build or a completion leaves it out and counts "
+            "it (issue #338, ADR 0068), and this converter copies stored codes and cannot "
+            "leave one out. Rebuild the release from its sources; nothing was written."
+        )
+
+
+def _add_named(by_analysis: dict[str, int], found: dict[int, int], names: list[str]) -> None:
+    """Add `found`'s counts by Analysis index to `by_analysis`, by `analysis_id`."""
+    for index, n in found.items():
+        name = names[index] if 0 <= index < len(names) else f"analysis_index {index}"
+        by_analysis[name] = by_analysis.get(name, 0) + n
+
+
+def _float_se_paths(root: Any) -> Iterator[str]:
+    """Every floating-point SE plane or SE exception table under `root`."""
+    for path in _array_paths(root):
+        if path.rsplit("/", 1)[-1] in ("se", SE_EXCEPTION_VALUE):
+            if np.dtype(root[path].dtype).kind == "f":
+                yield path
+
+
+def _names_associations(path: str) -> bool:
+    """An association plane or its exception table, not a copy of their cells (a
+    Top-Hit tier, the variant-centric index), so each association counts once."""
+    return path in ("se", SE_EXCEPTION_VALUE, "ragged/se", f"ragged/{SE_EXCEPTION_VALUE}")
+
+
+def _analysis_ids(zarr_dir: Path) -> list[str]:
+    path = zarr_dir.parent / "analyses.tsv"
+    if not path.exists():
+        return []
+    return [row.get("analysis_id", "") for row in read_analyses(path).rows]
+
+
+def _analyses_over(root: Any, path: str, array: Any) -> dict[int, int]:
+    """Per Analysis index, the values of `array` above 65,504, scanned in slabs.
+
+    A 2-D plane's column is its Analysis; a 1-D one's is read from its group's
+    `offsets` (a CSR) or `analysis_index` (a copy keyed by Analysis), and an
+    exception table's from its positions against the plane beside it. Where none
+    says, the count is kept under index -1.
+    """
+    group_path, _, leaf = path.rpartition("/")
+    group = root[group_path] if group_path else root
+    owner = _owner(group, leaf, array)
+    counts: dict[int, int] = {}
+    n = int(array.shape[0]) if array.ndim else 0
+    width = max(1, int(np.prod(array.shape[1:], dtype=np.int64))) if array.ndim > 1 else 1
+    step = max(1, _SCAN_VALUES // width)
+    for lo in range(0, n, step):
+        over = se_above_bound(array[lo : lo + step])
+        if not over.any():
+            continue
+        cells = np.argwhere(over)
+        for index in owner(lo, cells).tolist():
+            counts[int(index)] = counts.get(int(index), 0) + 1
+    return counts
+
+
+def _owner(group: Any, leaf: str, array: Any) -> Any:
+    """How a cell of `array` names its Analysis index (see `_analyses_over`)."""
+    if array.ndim == 2:
+        return lambda lo, cells: cells[:, 1]
+    if leaf == SE_EXCEPTION_VALUE and SE_EXCEPTION_INDEX in group and "se" in group:
+        return _exception_owner(group)
+    if "offsets" in group:
+        offsets = np.asarray(group["offsets"][:], dtype=np.int64)
+        return lambda lo, cells: np.searchsorted(offsets, lo + cells[:, 0], side="right") - 1
+    if "analysis_index" in group:
+        analysis = group["analysis_index"]
+        return lambda lo, cells: np.asarray(analysis[lo + cells[:, 0]])
+    return lambda lo, cells: np.full(len(cells), -1)
+
+
+def _exception_owner(group: Any) -> Any:
+    """An exception table's cells, named through their positions in the plane beside it."""
+    index, plane = group[SE_EXCEPTION_INDEX], group["se"]
+    if plane.ndim == 2:
+        width = int(plane.shape[1])
+        return lambda lo, cells: np.asarray(index[lo + cells[:, 0]]) % width
+    if "offsets" not in group:
+        return lambda lo, cells: np.full(len(cells), -1)
+    offsets = np.asarray(group["offsets"][:], dtype=np.int64)
+    return lambda lo, cells: (
+        np.searchsorted(offsets, np.asarray(index[lo + cells[:, 0]]), side="right") - 1
+    )
 
 
 def _array_paths(root: Any, prefix: str = "") -> Iterator[str]:
@@ -1077,6 +1204,7 @@ def convert_release(
         raise ConversionError("--top-hit-shard-chunks must be at least 1")
     dense_shard = (int(dense_shard[0]), int(dense_shard[1]))
     components = _refuse_unconvertible(source)
+    _refuse_se_out_of_range(source, components)
     _stage_and_convert(
         source,
         destination,

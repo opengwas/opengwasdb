@@ -165,8 +165,8 @@ def test_reference_first_releases_keep_insertion_and_deletion_as_distinct_varian
     ]
     left = _release(tmp_path / "left", [*common, (4, "AT", "A", (1.5, -2.5), 0.25)])
     right = _release(tmp_path / "right", [*common, (4, "A", "AT", (-1.5, 2.5), 0.75)])
-    assert StoreManifest.load(left).format_version == "0.2.2"
-    assert StoreManifest.load(right).format_version == "0.2.2"
+    assert StoreManifest.load(left).format_version == "0.2.3"
+    assert StoreManifest.load(right).format_version == "0.2.3"
     assert {"1:3:AT:A", "1:3:A:AT"} <= set(_alids(left)) & set(_alids(right))
     assert set(_alids(left)) - set(_alids(right)) == {"1:4:AT:A"}
     assert set(_alids(right)) - set(_alids(left)) == {"1:4:A:AT"}

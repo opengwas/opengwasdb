@@ -106,28 +106,30 @@ def _write_dense(
 
 def _write_csr(path: Path, table: tuple[Cell, ...], encoding: StoreEncoding = ENCODING) -> Path:
     """The table as an association sequence. The writer refuses a cell with one
-    of z and SE missing, so such a cell is written with a stand-in SE and its
-    SE planted as missing afterwards."""
+    of z and SE missing, and leaves out one whose SE is above float16's range
+    (issue #338), so each is written with a stand-in SE and its SE planted
+    afterwards: the `+inf` a release before format 0.2.3 holds, which a reader
+    still reads as present."""
     writer = RaggedCSRWriter(N_VARIANTS)
     flags: list[int] = []
-    unpaired: list[int] = []
+    planted: list[tuple[int, float]] = []
     for analysis in range(N_ANALYSES):
         rows = sorted((c for c in table if c.analysis == analysis), key=lambda c: c.variant)
         se = np.array([c.se for c in rows], np.float32)
         z = np.array([c.z for c in rows], np.float32)
-        half = np.isnan(se) & ~np.isnan(z)
-        unpaired.extend((np.flatnonzero(half) + len(flags)).tolist())
+        stand_in = (np.isnan(se) & ~np.isnan(z)) | np.isinf(se)
+        planted.extend((len(flags) + int(i), float(se[i])) for i in np.flatnonzero(stand_in))
         writer.add_analysis(
             np.array([c.variant for c in rows], np.int32),
             z,
-            np.where(half, np.float32(1.0), se),
+            np.where(stand_in, np.float32(1.0), se),
             eaf=np.array([c.eaf for c in rows], np.float32),
         )
         flags.extend(c.flag for c in rows)
     writer.flush(path, encoding)
     ragged = zarr.open_group(path / RAGGED_ZARR_PATH, mode="a")
-    for position in unpaired:
-        ragged["se"][position] = np.float16(np.nan)
+    for position, value in planted:
+        ragged["se"][position] = np.float16(value)
     ragged.create_array("imputed", data=np.array(flags, np.uint8))
     build_variant_index(path, n_axis=N_VARIANTS)
     return path

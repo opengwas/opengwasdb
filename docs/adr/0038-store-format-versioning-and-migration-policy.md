@@ -20,6 +20,15 @@
 > one that sorts its indels would gain the panel's reference-first ones beside its
 > own (§4, ADR 0079).
 >
+> **§4 amended by [ADR 0068](0068-an-se-beyond-float16-is-missing.md), 2026-11-18
+> (issue #338):** a completion of a `0.2.2` source is stamped **`0.2.3`**, not its
+> source's version. 0.2.3 is 0.2.2 with `analyses.tsv`'s `n_missing_se_out_of_range`
+> and no SE above 65,504 stored, both of which a completion of this package
+> produces as it writes, and 0.2.0 to 0.2.3 are written by the same encoders, so
+> the completed release keeps every feature its source's stamp declares and adds
+> the count. The stamp is `completed_format_version`'s; the rest of §4 holds, and
+> a source this build cannot write is still refused.
+>
 > **Amended by [ADR 0064](0064-association-coverage-is-a-build-input.md)
 > (issue #298, spec §21.0):** before `format_version` 1.0, a change confined to
 > a manifest vocabulary or to required metadata does **not** move the version.
