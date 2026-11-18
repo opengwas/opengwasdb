@@ -11,11 +11,12 @@ from __future__ import annotations
 import importlib
 import json
 import shutil
+import struct
 import sys
 import threading
 import tracemalloc
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from functools import cache
 from pathlib import Path
 from types import ModuleType
@@ -24,22 +25,38 @@ from typing import Any, cast
 import numpy as np
 import pytest
 import zarr
-from store_copies import FLOOR, R_SCALE, TEST_STORE, arrays, copy_store
+from numcodecs import Zstd
+from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, TEST_STORE, arrays, copy_store
 
 import ogld
 from ogld import cli
 from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding, Sourced
-from ogld.store import StoreReader, StoreWriter, Variants, validation
+from ogld.store import StoreReader, StoreWriter, Variants, layout, validation
 from ogld.store.validation import ValidationFailed, validate_group
 
-#: The rules that read the Near Band, the Proxy Index or the variant columns in windows.
+#: The Partner Rows' ten rules (spec §12; partner-rows §10): the component's, and the provenance
+#: key that describes its threshold.
+PARTNER_RULES = [
+    rule
+    for rule in VALIDATION_RULES
+    if rule.startswith("partners.") or rule == "provenance.partner_threshold"
+]
+#: The eight of them that read frames (the other two read none).
+PARTNER_FRAME_RULES = [
+    rule for rule in PARTNER_RULES if rule.startswith("partners.") and rule != "partners.files"
+]
+
+#: The rules that read the Near Band, the Proxy Index, the Far Pairs, the Partner Rows or the
+#: variant columns in windows.
 WINDOWED = [
-    rule for rule in VALIDATION_RULES if rule.split(".")[0] in {"variants", "near", "index", "far"}
+    rule
+    for rule in VALIDATION_RULES
+    if rule.split(".")[0] in {"variants", "near", "index", "far", "partners"}
 ]
 WINDOWED.remove("variants.chromosomes")
 #: The windowed rules that carry state from one block to the next: the contract breaks each
 #: of the others in one window, and breaking it in several asks nothing more of them.
-ACROSS_BLOCKS = ["index.symmetric", "index.near"]
+ACROSS_BLOCKS = ["index.symmetric", "index.near", "partners.symmetric", "partners.near"]
 
 
 RESERVED = -32768
@@ -58,6 +75,14 @@ SCANNED = [
     "far.distance",
     "far.threshold",
     "far.index",
+    "partners.frames",
+    "partners.rows",
+    "partners.codes",
+    "partners.distance",
+    "partners.threshold",
+    "partners.symmetric",
+    "partners.near",
+    "partners.far",
 ]
 
 
@@ -79,9 +104,11 @@ def breakers() -> dict[str, Callable[[Path], None]]:
 @pytest.fixture
 def small_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     # chr22's Near Band is 17 windows of 4,096 codes and its index 5; chr22's variants are 6
-    # windows of 100 rows. The index.symmetric window reaches back 10 Mb across blocks.
+    # windows of 100 rows. The index.symmetric window reaches back 10 Mb across blocks. Four
+    # frames a block, so chr22's 37 frames are ten blocks of the Partner Rows.
     monkeypatch.setattr(validation, "_WINDOW", 4096)
     monkeypatch.setattr(validation, "_ROWS", 100)
+    monkeypatch.setattr(validation, "_FRAMES_PER_BLOCK", 4)
 
 
 def findings(store: Path, rules: list[str], threads: int = 1) -> dict[str, list[ogld.Finding]]:
@@ -412,6 +439,62 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
         negate("far/22/r", 0),
         "not the Proxy Index's pairs beyond near_bp: (375, 559)",
     ),
+    "a group recording another row count": (
+        "partners.files",
+        lambda store: contract().a_group_recording_another_row_count(store),
+        "records 587 rows, but the chromosome has 588",
+    ),
+    "a group recording another entry count": (
+        "partners.rows",
+        lambda store: contract().a_group_recording_another_entry_count(store),
+        "records 24,021 entries, but its frames hold 24,020",
+    ),
+    "a partner past the chromosome's last row": (
+        "partners.rows",
+        lambda store: contract().a_partner_past_the_chromosome(store),
+        "a partner outside [0, n_c) or the row at row ",
+    ),
+    "a reserved code in a Partner Rows frame": (
+        "partners.codes",
+        lambda store: contract().a_reserved_partner_code(store),
+        f"the reserved code {RESERVED} at row ",
+    ),
+    "a partner beyond far_bp": (
+        "partners.distance",
+        lambda store: contract().a_partner_beyond_far_bp(store),
+        "a partner beyond 10,000,000 bp at row ",
+    ),
+    "a partner below the floor its distance has": (
+        "partners.threshold",
+        lambda store: contract().a_partner_below_its_floor(store),
+        f"|code| below the floor its distance has: {PARTNER_FLOOR} within 3,000,000 bp, {FLOOR} "
+        "beyond it at row ",
+    ),
+    "a pair held with two codes": (
+        "partners.symmetric",
+        lambda store: contract().a_pair_held_with_two_codes(store),
+        "the earlier row of a pair held one way only, or with two codes at ",
+    ),
+    "a Partner Rows entry in a pair's later row whose code is not the band's": (
+        "partners.near",
+        lambda store: contract().a_later_row_code_unlike_the_band(store),
+        "entries whose code is not the Near Band's: (",
+    ),
+    "a pair beyond near_bp the Far Pairs lack": (
+        "partners.far",
+        lambda store: contract().a_missing_far_entry(store),
+        "not the Far Pairs for the pairs beyond near_bp: (",
+    ),
+    "a Partner Threshold above t_far": (
+        "provenance.partner_threshold",
+        edit_ld_store(lambda p: p.update(t_partner=p["t_far"] + 0.001)),
+        "is above t_far",
+    ),
+    "a Partner Floor one too high": (
+        "provenance.partner_threshold",
+        edit_ld_store(lambda p: p.update(partner_code_floor=PARTNER_FLOOR + 1)),
+        f"{PARTNER_FLOOR + 1}, but t_partner 0.01 at × {R_SCALE} gives {PARTNER_FLOOR}",
+    ),
 }
 
 
@@ -586,6 +669,19 @@ def faults_in_every_block(store: Path) -> None:
     far_code = zarr.open_array(store / "far/22/r", mode="r+")
     far_code[0:2] = np.array([RESERVED, 1], dtype=np.int16)
     zarr.open_array(store / "far/22/partner", mode="r+")[2] = owner[2]
+    frame_faults(store)
+
+
+def frame_faults(store: Path) -> None:
+    """A byte flipped inside every frame of chr22's Partner Rows, so each block's frames fail
+    their checksum and every rule that reads them says it cannot read them."""
+    group = zarr.open_group(store / "partners" / "22", mode="r")
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    chunk = layout.chunk_file(group["frames"])
+    data = bytearray(chunk.read_bytes())
+    for number in range(len(offsets) - 1):
+        data[int(offsets[number]) + 8] ^= 0xFF
+    chunk.write_bytes(bytes(data))
 
 
 #: The rules whose findings come one per block they fault; index.symmetric and index.near report
@@ -813,6 +909,23 @@ def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path
     np.testing.assert_array_equal(first.r[0, 1:], np.array([10, -20, 30]) / R_SCALE)
 
 
+def test_finish_runs_the_partner_rows_rules_before_it_writes_provenance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `StoreWriter.finish` judges the store it wrote with the whole spec §12, the Partner Rows'
+    # rules among them: one that fails leaves the store with no provenance, so a reader refuses
+    # it rather than read a component no rule has checked (ogld#68).
+    def fails(store: validation._Store) -> Iterator[tuple[str, str]]:
+        yield "partners/21", "a Partner Rows rule the writer had to run"
+
+    monkeypatch.setitem(validation._RULES, "partners.files", fails)
+    with pytest.raises(ValidationFailed, match=r"partners\.files") as failed:
+        four_rows(tmp_path, "bad").finish(sourced())
+    assert [rule for rule, found in failed.value.findings.items() if found] == ["partners.files"]
+    with pytest.raises(InputError, match="provenance"):
+        StoreReader.open(tmp_path / "bad")
+
+
 def test_finish_refuses_a_store_that_breaks_a_rule_and_leaves_it_unreadable(
     tmp_path: Path,
 ) -> None:
@@ -833,3 +946,128 @@ def test_finish_refuses_a_provenance_json_cannot_hold(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="plain JSON"):
         writer.finish(sourced(variants_dropped=dropped))
     assert "ld_store" not in zarr.open_group(tmp_path / "numpy", mode="r").attrs
+
+
+# ------------------------------------------------------------------ the Partner Rows' damage
+
+
+def replace_frame(store: Path, number: int, raw: bytes) -> None:
+    """Put `raw` in place of chr22's frame `number`, leaving the offsets as they were."""
+    group = zarr.open_group(store / "partners" / "22", mode="r")
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    chunk = layout.chunk_file(group["frames"])
+    data = bytearray(chunk.read_bytes())
+    data[int(offsets[number]) : int(offsets[number + 1])] = raw
+    chunk.write_bytes(bytes(data))
+
+
+def repayload(store: Path, *, number: int = 3, k_shift: int = 0, extra: int = 0) -> bytes:
+    """Frame `number` as a zstd frame whose payload is not §5.2's: its k is `k_shift` rows off,
+    or its payload is `extra` bytes long — with a valid container and checksum, so only the
+    frame's own checks catch it."""
+    group = zarr.open_group(store / "partners" / "22", mode="r")
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    raw = layout.chunk_file(group["frames"]).read_bytes()[offsets[number] : offsets[number + 1]]
+    zstd = Zstd(level=3, checksum=True)
+    payload = bytes(zstd.decode(raw))
+    k = int(np.frombuffer(payload[:4], "<u4")[0]) + k_shift
+    return bytes(zstd.encode(struct.pack("<I", k) + payload[4:] + b"\x00" * extra))
+
+
+def truncate_frames(store: Path) -> None:
+    """Cut chr22's frames chunk file after frame 3: the frames after it cannot be read."""
+    group = zarr.open_group(store / "partners" / "22", mode="r")
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    chunk = layout.chunk_file(group["frames"])
+    chunk.write_bytes(chunk.read_bytes()[: int(offsets[4])])
+
+
+#: Each way a frame's bytes are damaged, and the frame a finding must name.
+DAMAGE: dict[str, tuple[Callable[[Path], None], int]] = {
+    # the file ends after frame 3, so the first frame a read cannot give whole is the fourth
+    "a truncated chunk file": (truncate_frames, 4),
+    "a flipped byte inside a frame": (lambda store: contract().flip_a_byte_in_a_frame(store), 2),
+    "a payload of the wrong length": (
+        lambda store: replace_frame(store, 3, repayload(store, extra=2)),
+        3,
+    ),
+    "a wrong k": (lambda store: replace_frame(store, 3, repayload(store, k_shift=-1)), 3),
+}
+
+
+@pytest.mark.parametrize("damage", list(DAMAGE))
+def test_damaged_frames_are_named_with_the_chromosome_and_the_frame(
+    damage: str, tmp_path: Path
+) -> None:
+    # partner-rows §5.4: a frame is never read as a short row, and a finding names the chromosome
+    # and the frame, so a reader knows which byte range to fetch again or refuse.
+    assert not findings(TEST_STORE, ["partners.frames"])["partners.frames"]
+    edit, number = DAMAGE[damage]
+    copy = copy_store(tmp_path / "store")
+    edit(copy)
+    found = findings(copy, ["partners.frames"])["partners.frames"]
+    assert found, damage
+    assert any(f"frame {number} of chromosome 22" in f.message for f in found), (damage, found)
+    assert all(f.where == "partners/22/frames" for f in found), found
+
+
+# ------------------------------------------------------------------ the scales and the versions
+
+
+def test_the_partner_rows_rules_hold_a_block_of_frames_not_the_chromosome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A block the Partner Rows join holds whole frames: at two frames a block, chr22's 588 rows
+    # are 19 blocks and a block holds a nineteenth of its 24,020 entries. Two partner rules that
+    # read nothing else, so the peak is theirs: the whole component's entries cost 14 bytes each
+    # (int32 partner, int16 code, int64 row), and the pass holds a block's, not its sum.
+    group = zarr.open_group(TEST_STORE, mode="r")
+    rules = ["partners.codes", "partners.rows"]
+    peaks: dict[int, int] = {}
+    for frames in (2, 256):
+        monkeypatch.setattr(validation, "_FRAMES_PER_BLOCK", frames)
+        validate_group(group, group.attrs["ld_store"], rules)  # warm: the catalogues are read
+        tracemalloc.start()
+        try:
+            found = validate_group(group, group.attrs["ld_store"], rules)
+            peaks[frames] = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert not any(found.values())
+    entries = int(dict(zarr.open_group(TEST_STORE / "partners" / "22", mode="r").attrs)["entries"])
+    whole = entries * 14
+    assert peaks[2] < whole, f"a block {peaks[2]:,} bytes against the chromosome's {whole:,}"
+    assert peaks[2] < peaks[256] / 2, peaks
+
+
+def test_a_0_1_0_store_with_no_partner_rows_passes_its_ten_rules(tmp_path: Path) -> None:
+    # Spec §12, §13: a store has one format version, 0.1.0 has no Partner Rows, and a 0.1.0 store
+    # has none — so there is nothing for the ten rules to judge, and they pass.
+    earlier = copy_store(tmp_path / "earlier")
+    shutil.rmtree(earlier / "partners")
+
+    def as_0_1_0(provenance: dict[str, Any]) -> None:
+        provenance["format_version"] = "0.1.0"
+        for key in PARTNER_KEYS:
+            drop(provenance, key)
+
+    rewritten(earlier, as_0_1_0)
+    found = findings(earlier, VALIDATION_RULES)
+    assert not any(found.values()), {name: f for name, f in found.items() if f}
+
+
+def test_a_0_2_0_store_with_no_partner_rows_fails_its_ten_rules(tmp_path: Path) -> None:
+    # Spec §13: a 0.2.0 store without the component is not one, so `partners.files` names the
+    # missing group and every rule that needs a frame says it cannot be checked.
+    later = copy_store(tmp_path / "later")
+    shutil.rmtree(later / "partners")
+    found = findings(later, VALIDATION_RULES)
+    assert [f.where for f in found["partners.files"]] == ["partners/21", "partners/22"]
+    assert all(
+        f.message == "missing: every chromosome of the Variant Set has one (spec §5.1)"
+        for f in found["partners.files"]
+    )
+    for rule in PARTNER_FRAME_RULES:
+        assert found[rule], rule
+        assert all(f.message.startswith("cannot be checked") for f in found[rule]), rule
+    assert not found["provenance.partner_threshold"], "its keys are still there"

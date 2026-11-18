@@ -1,7 +1,7 @@
 """The spec's validation rules, by name, on write and on demand (spec §12; ogld#4).
 
 Each rule yields where and how one opened hierarchy and its provenance break it. `validate`
-runs all 27, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
+runs all 37, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
 on the store it wrote, before the provenance that makes it readable goes in. A rule never
 trusts what it does not check: when what it needs is missing or malformed it reports that it
 cannot be checked, and when an array will not decode it reports that it cannot be read, each
@@ -10,19 +10,22 @@ as a finding, rather than pass or stop.
 Every rule reads in bounded windows, through Zarr directly: a chromosome's positions and
 `indptr` arrays whole, as a reader keeps them (spec §10); a Near Band `_WINDOW` codes, a Proxy
 Index and the Far Pairs an eighth as many entries, and the variant columns `_ROWS` rows at a
-time. Eleven rules are generators over the whole store. The twelve that read the band, the
-index and the Far Pairs element by element (`_SCANNED`) share one pass over each chromosome
-instead: each block of rows is read once, on the threads the caller gives, and handed to all
-twelve.
+time. Seventeen rules are generators over the whole store. The twenty that read the band, the
+index, the Far Pairs and the Partner Rows element by element (`_SCANNED`) share one pass over
+each chromosome instead: each block of rows is read once, on the threads the caller gives, and
+handed to all twenty. The Partner Rows are frames, not `indptr`-delimited arrays, so a block
+they join is whole frames — at most `_FRAMES_PER_BLOCK` of them — and its entries are one
+`decode_frame` of each (partner-rows §5.2, §7).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
@@ -33,7 +36,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, REncoding, t_far
+from ogld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, Codes, REncoding, t_far
 from ogld.format.geometry import (
     blocks,
     near_address,
@@ -47,6 +50,7 @@ from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
+from ogld.store.frames import Frame, decode_frame, frame_bytes, range_bytes
 from ogld.store.layout import chromosomes_listed, never_data, shown_fill
 from ogld.store.location import open_group
 
@@ -59,6 +63,12 @@ _WINDOW: Final = 1 << 23
 _ENTRY_SHIFT: Final = 3
 #: Rows of the variant columns a rule reads at once.
 _ROWS: Final = 1 << 20
+#: Frames of one chromosome's Partner Rows a block holds at most: 4,096 rows at G = 16. A frame
+#: is the component's unit of reading — one range request and one decompress (partner-rows §5.4)
+#: — so a block's Partner Rows payload is bounded by the frames it holds, whatever the store's
+#: rows look like. The band's and the index's limits bind first on a chromosome whose rows are
+#: dense.
+_FRAMES_PER_BLOCK: Final = 256
 #: Offending elements a finding names; it counts the rest.
 _NAMED: Final = 5
 
@@ -194,6 +204,7 @@ class _Store:
         self.provenance = json.loads(json.dumps(provenance)) if provenance is not None else None
         self._kept: dict[str, npt.NDArray[np.int64]] = {}
         self._arrays: dict[str, zarr.Array[Any] | None] = {}
+        self._nodes: dict[str, zarr.Array[Any] | zarr.Group | None] = {}
 
     def value(self, key: str) -> Any:
         """The provenance value at dotted `key`, or `_Unchecked`."""
@@ -220,14 +231,18 @@ class _Store:
         return int(value)
 
     def node(self, path: str) -> zarr.Array[Any] | zarr.Group | None:
-        """The node at `path`, or None; one whose metadata will not parse is `_Unreadable`."""
-        try:
-            return self.root.get(path)
-        except _READ_ERRORS as error:
-            raise _Unreadable(path, f"{type(error).__name__}: {error}") from error
+        """The node at `path`, or None; one whose metadata will not parse is `_Unreadable`.
+        Each is opened once: a lookup is a metadata read, and the rules ask for most of them
+        more than once."""
+        if path not in self._nodes:
+            try:
+                self._nodes[path] = self.root.get(path)
+            except _READ_ERRORS as error:
+                raise _Unreadable(path, f"{type(error).__name__}: {error}") from error
+        return self._nodes[path]
 
     def find(self, path: str) -> zarr.Array[Any] | None:
-        """The array at `path`, or None; each is opened once, as opening reads its metadata."""
+        """The array at `path`, or None."""
         if path not in self._arrays:
             member = self.node(path)
             self._arrays[path] = member if isinstance(member, zarr.Array) else None
@@ -270,6 +285,15 @@ class _Store:
                 "variants", "the chromosomes ranges are malformed (variants.chromosomes)"
             )
         return entries
+
+    def partners_judged(self) -> bool:
+        """Whether this store's Partner Rows are judged: a 0.2.0 store has them (spec §13), and a
+        0.1.0 store, which need not, is held to them anyway when it carries the component — a
+        group a store writes is one a reader trusts."""
+        version = _release(_lookup(self.provenance, "format_version"))
+        if version is not None and version >= (0, 2, 0):
+            return True
+        return self.node(layout.PARTNERS) is not None
 
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """One chromosome's positions, kept as a reader keeps them (spec §10)."""
@@ -330,6 +354,10 @@ _INDEX: Final = _Component("index", "partner", "code", "owner")
 _FAR: Final = _Component("far", "far_partner", "far_code", "far_owner")
 #: The Proxy Index and the Far Pairs, in the order §1 lists them.
 _COMPONENTS: Final = (_INDEX, _FAR)
+#: The Partner Rows, named for the findings that compare their entries with the Near Band's and
+#: the Far Pairs' (partner-rows §10). Their entries are frames, not `indptr`-delimited arrays, so
+#: they are no part of `_COMPONENTS`.
+_PARTNERS: Final = _Component("partners", "partner", "code", "row")
 
 _VARIANT_DTYPES: Final = {
     "position": "int32",
@@ -758,6 +786,40 @@ def _provenance_threshold(store: _Store) -> _Problems:
     yield from _t_far_records(store)
 
 
+@_rule("provenance.partner_threshold")
+def _provenance_partner_threshold(store: _Store) -> _Problems:
+    """t_partner is never above t_far, and `partner_code_floor` is its floor at the recorded
+    scale (partner-rows §5.3, §10; spec §3, §7). A store of a version without Partner Rows has
+    no such keys, and nothing to judge (spec §13)."""
+    if not store.partners_judged():
+        return
+    t_partner, far = store.value("t_partner"), store.value("t_far")
+    if not _is_number(t_partner):
+        raise _Unchecked("t_partner", f"provenance t_partner is {t_partner!r}, not a number")
+    if not _is_number(far):
+        raise _Unchecked("t_far", f"provenance t_far is {far!r}, not a number")
+    encoding = store.encoding()
+    if not 0.0 <= t_partner <= 1.0:
+        yield "t_partner", f"{t_partner!r} is not an r² in [0, 1] (partner-rows §3)"
+        return
+    if t_partner > far:
+        yield (
+            "t_partner",
+            (
+                f"{t_partner!r} is above t_far {far!r}: the Partner Threshold is never above the "
+                "Far Threshold, or a pair between the two within near_bp is in neither component "
+                "(spec §3; partner-rows §3)"
+            ),
+        )
+    floor = store.integer("partner_code_floor")
+    expected = encoding.far_code_floor(t_partner)
+    if floor != expected:
+        yield (
+            "partner_code_floor",
+            f"{floor}, but t_partner {t_partner!r} at × {encoding.scale} gives {expected}",
+        )
+
+
 # ------------------------------------------------------------------ variants
 
 
@@ -1005,10 +1067,80 @@ _PARTS: Final = {"band": ("near", "r")} | {
 
 
 @dataclass(frozen=True)
+class _Frames:
+    """One chromosome's Partner Rows as the pass reads them: the group's attributes, its
+    offsets and its `frames` array (partner-rows §5.1, §5.3). `of` refuses a group a rule cannot
+    read frames from, naming what it needed; `partners.files` judges the group itself."""
+
+    chrom: str
+    array: zarr.Array[Any]
+    offsets: npt.NDArray[np.int64]
+    rows: int
+    rows_per_frame: int
+    entries: int | None
+
+    def due(self, number: int) -> tuple[int, int]:
+        """The rows frame `number` is due: its first, and how many it holds (§5.2)."""
+        first = number * self.rows_per_frame
+        return first, min(self.rows_per_frame, self.rows - first)
+
+    def decode(self, number: int) -> Frame:
+        """Frame `number`, decoded through `frames.py`'s own decoder (§5.2)."""
+        first, rows = self.due(number)
+        return decode_frame(
+            frame_bytes(self.array, self.offsets, number),
+            chrom=self.chrom,
+            number=number,
+            first=first,
+            rows=rows,
+        )
+
+    @classmethod
+    def of(cls, store: _Store, chrom: str, rows: int) -> _Frames:
+        """The group of `chrom`, whose Variant Set has `rows` rows, or `_Unchecked` naming what a
+        reader of its frames needs and cannot find."""
+        path = layout.partners_path(chrom)
+        group = store.node(path)
+        if not isinstance(group, zarr.Group):
+            raise _Unchecked(path, f"{path} is missing (spec §5.1; partners.files)")
+        attrs = dict(group.attrs)
+        per_frame = attrs.get("rows_per_frame")
+        if not _is_int(per_frame) or per_frame < 1:
+            raise _Unchecked(
+                path, f"{path} records rows_per_frame {per_frame!r}, not rows of a frame (§5.3)"
+            )
+        offsets = store.read(f"{path}/{layout.FRAMES_INDEX}").astype(np.int64)
+        expected = -(-rows // per_frame) + 1
+        if len(offsets) != expected or offsets[0] != 0 or (np.diff(offsets) <= 0).any():
+            raise _Unchecked(
+                f"{path}/{layout.FRAMES_INDEX}",
+                f"does not hold {expected} ascending offsets from 0 (spec §5.2, §5.3)",
+            )
+        array = store.array(f"{path}/{layout.FRAMES}")
+        entries = attrs.get("entries")
+        return cls(
+            chrom,
+            array,
+            offsets,
+            rows,
+            int(per_frame),
+            int(entries) if _is_int(entries) else None,
+        )
+
+
+def _frames(store: _Store, chrom: str, rows: int) -> tuple[_Frames | None, _Unchecked | None]:
+    """The chromosome's Partner Rows, or None and why a rule cannot read frames from them."""
+    try:
+        return _Frames.of(store, chrom, rows), None
+    except _Unchecked as untold:
+        return None, untold
+
+
+@dataclass(frozen=True)
 class _Chromosome:
     """One chromosome's rows [start, stop), with the Near Band's, the Proxy Index's and the Far
     Pairs' `indptr` where each delimits them, and None where it cannot: a rule that needs it
-    says why."""
+    says why. `frames` is its Partner Rows, or None with `untold` saying why."""
 
     name: str
     start: int
@@ -1016,6 +1148,8 @@ class _Chromosome:
     band: npt.NDArray[np.int64] | None
     index: npt.NDArray[np.int64] | None
     far: npt.NDArray[np.int64] | None
+    frames: _Frames | None = None
+    untold: _Unchecked | None = None
 
     @property
     def size(self) -> int:
@@ -1028,24 +1162,138 @@ class _Chromosome:
     def indptr(self, part: str) -> npt.NDArray[np.int64] | None:
         return {"near": self.band, "index": self.index, "far": self.far}[_PARTS[part][0]]
 
-    def blocks(self) -> list[tuple[int, int]]:
+    def blocks(self, partners: bool = False) -> list[tuple[int, int]]:
         """The rows in blocks of at most `_WINDOW` band codes and an eighth as many entries of
-        the index and of the Far Pairs."""
+        the index and of the Far Pairs; with `partners`, whole frames, at most
+        `_FRAMES_PER_BLOCK` of them, so each block's Partner Rows are read whole."""
         entries = _WINDOW >> _ENTRY_SHIFT
         limits = [(self.band, _WINDOW), (self.index, entries), (self.far, entries)]
         delimiting = [(indptr, most) for indptr, most in limits if indptr is not None]
-        return list(blocks(*delimiting)) if delimiting else []
+        rows = list(blocks(*delimiting)) if delimiting else []
+        if not partners:
+            return rows
+        assert self.frames is not None, "a block's frames are read only where they are resolved"
+        return _frame_blocks(rows, self.size, self.frames.rows_per_frame)
 
 
-def _chromosome(store: _Store, name: str, start: int, stop: int) -> _Chromosome:
+def _frame_blocks(rows: list[tuple[int, int]], size: int, per_frame: int) -> list[tuple[int, int]]:
+    """`rows` cut into whole frames: each block starts and ends on a frame's edge — the
+    chromosome's last frame may hold fewer rows — and holds at most `_FRAMES_PER_BLOCK` of
+    them. Rounding an `indptr`-delimited block up to its frame's end costs fewer than G rows,
+    which the limits already allow (spec §12)."""
+    out: list[tuple[int, int]] = []
+    a = 0
+
+    def cut(until: int) -> None:
+        nonlocal a
+        until = min(until, size)
+        while a < until:
+            stop = min(until, a + _FRAMES_PER_BLOCK * per_frame)
+            out.append((a, stop))
+            a = stop
+
+    for _, b in rows or [(0, size)]:
+        edge = -(-b // per_frame) * per_frame
+        cut(size if edge >= size else edge)
+    cut(size)
+    return out
+
+
+def _chromosome(
+    store: _Store, name: str, start: int, stop: int, partners: bool = False
+) -> _Chromosome:
     def delimiting(kind: str) -> npt.NDArray[np.int64] | None:
         try:
             return store.indptr(f"{kind}/{name}/indptr", stop - start)
         except _Unchecked:
             return None
 
+    frames, untold = (
+        _frames(store, name, stop - start) if partners and store.partners_judged() else (None, None)
+    )
     return _Chromosome(
-        name, start, stop, delimiting("near"), delimiting("index"), delimiting("far")
+        name,
+        start,
+        stop,
+        delimiting("near"),
+        delimiting("index"),
+        delimiting("far"),
+        frames,
+        untold,
+    )
+
+
+@dataclass(frozen=True)
+class _Decoded:
+    """One frame of a block: decoded, or why it cannot be (partner-rows §5.4)."""
+
+    first: int
+    rows: int
+    frame: Frame | None
+    untold: _Unreadable | None
+
+
+@dataclass(frozen=True)
+class _Span:
+    """The Partner Rows entries a block holds, one frame after another: each entry's partner, its
+    code, the chromosome-local row that holds it, and how many rows a frame holds — an entry's
+    frame is its row's, so no frame is kept for each of them (§5.2)."""
+
+    partner: npt.NDArray[np.int32]
+    code: Codes
+    row: npt.NDArray[np.int64]
+    per_frame: int
+
+    def __len__(self) -> int:
+        return len(self.partner)
+
+
+def _decoded(store: _Store, c: _Chromosome, rows: tuple[int, int]) -> list[_Decoded]:
+    """The frames covering rows [a, b), each decoded once: this runs on the pass's threads."""
+    frames = c.frames
+    assert frames is not None
+    a, b = rows
+    per_frame = frames.rows_per_frame
+    where = f"{layout.partners_path(c.name)}/{layout.FRAMES}"
+    out = []
+    for number in range(a // per_frame, -(-b // per_frame)):
+        first, due = frames.due(number)
+        try:
+            out.append(_Decoded(first, due, frames.decode(number), None))
+        except _READ_ERRORS as error:
+            named = f"frame {number} of chromosome {c.name}"
+            why = str(error)
+            if named not in why:
+                why = f"{named}: {why}"
+            out.append(_Decoded(first, due, None, _Unreadable(where, why)))
+    return out
+
+
+def _span(frames: list[_Decoded], per_frame: int) -> _Span | _Unchecked:
+    """The entries of `frames` back to back, or why the block's frames cannot be read: a rule
+    that needs the entries says it cannot be checked rather than read a block short."""
+    unread = [one.untold for one in frames if one.untold is not None]
+    if unread:
+        return unread[0]
+    return _entries(frames, per_frame)
+
+
+def _entries(frames: list[_Decoded], per_frame: int) -> _Span:
+    """The decoded frames' entries, one frame after another."""
+    decoded = [one.frame for one in frames if one.frame is not None]
+    if not decoded:
+        return _Span(
+            np.empty(0, np.int32), np.empty(0, REncoding.dtype), np.empty(0, np.int64), per_frame
+        )
+    rows = []
+    for one in decoded:
+        lengths = np.diff(one.indptr)
+        rows.append(owners(lengths, np.arange(one.first, one.first + one.rows, dtype=np.int64)))
+    return _Span(
+        np.concatenate([frame.partners for frame in decoded]),
+        np.concatenate([frame.codes for frame in decoded]),
+        np.concatenate(rows),
+        per_frame,
     )
 
 
@@ -1053,15 +1301,27 @@ def _chromosome(store: _Store, name: str, start: int, stop: int) -> _Chromosome:
 class _Block:
     """Rows [first, last) of one chromosome as the pass read them: each part's elements, from
     offset `at[part]`, or why they cannot be read; with the index's, "owner", the row that holds
-    each entry, and with the Far Pairs', "far_owner"."""
+    each entry, and with the Far Pairs', "far_owner". `frames` is the block's Partner Rows
+    frames as decoded (the rule that judges frames takes them), and `entries` the whole span's
+    entries, or why they cannot be read."""
 
     first: int
     last: int
     at: dict[str, int]
     held: dict[str, npt.NDArray[Any] | _Unchecked]
+    frames: list[_Decoded] | None = None
+    entries: _Span | _Unchecked | None = None
 
     def get(self, part: str) -> npt.NDArray[Any]:
         found = self.held[part]
+        if isinstance(found, _Unchecked):
+            raise found
+        return found
+
+    def span(self) -> _Span:
+        """The block's Partner Rows entries, or why they cannot be read."""
+        found = self.entries
+        assert found is not None, "a rule takes the Partner Rows only where the block holds them"
         if isinstance(found, _Unchecked):
             raise found
         return found
@@ -1082,9 +1342,14 @@ def _part(store: _Store, path: str, lo: int, hi: int) -> npt.NDArray[Any] | _Unc
 
 
 def _read_block(
-    store: _Store, c: _Chromosome, parts: frozenset[str], rows: tuple[int, int]
+    store: _Store,
+    c: _Chromosome,
+    parts: frozenset[str],
+    rows: tuple[int, int],
+    partners: bool = False,
 ) -> _Block:
-    """Rows [a, b) of `c`, each of `parts` read once; this runs on the pass's threads."""
+    """Rows [a, b) of `c`, each of `parts` read once, and the block's Partner Rows frames
+    decoded once when `partners`; this runs on the pass's threads."""
     a, b = rows
     at: dict[str, int] = {}
     held: dict[str, npt.NDArray[Any] | _Unchecked] = {}
@@ -1098,7 +1363,11 @@ def _read_block(
         indptr = c.indptr(k.partner)
         if entries and indptr is not None:
             held[k.owner] = _owners(entries, indptr, a, b)
-    return _Block(a, b, at, held)
+    if not partners:
+        return _Block(a, b, at, held)
+    frames = _decoded(store, c, rows)
+    assert c.frames is not None
+    return _Block(a, b, at, held, frames, _span(frames, c.frames.rows_per_frame))
 
 
 def _owners(
@@ -1116,9 +1385,12 @@ def _owners(
 class _Scanned:
     """A rule the pass feeds, built for one chromosome. Building it reads what it needs before
     any block, and may raise `_Unchecked`. `parts` names what it takes from each block, none
-    when it takes no block; `block` runs on the pass's threads, on several blocks at once."""
+    when it takes no block; `block` runs on the pass's threads, on several blocks at once.
+    `partners` says it takes the block's Partner Rows: its frames always, and its entries
+    through `_Block.span`."""
 
     parts: frozenset[str] = frozenset()
+    partners: bool = False
 
     def begin(self) -> _Problems:
         yield from ()
@@ -1171,8 +1443,9 @@ def _scan(store: _Store, names: list[str]) -> dict[str, list[Finding]]:
         return {name: [_finding(name, unchecked)] for name in names}
     found: dict[str, list[Finding]] = {name: [] for name in names}
     live = list(names)
+    wants = any(getattr(_SCANNED[name], "partners", False) for name in names)
     for name, start, stop in ranges:
-        ended = _pass(store, _chromosome(store, name, start, stop), live, found)
+        ended = _pass(store, _chromosome(store, name, start, stop, wants), live, found)
         live = [rule for rule in live if rule in ended]
     return found
 
@@ -1183,7 +1456,8 @@ def _pass(
     """One chromosome's pass: each rule built and begun, fed every block, and ended. Returns
     the rules that ended; the others stopped, and are fed nothing more."""
     begun = _begun(store, c, names, found)
-    stopped = _feed(store, c, {name: rule for name, rule in begun.items() if rule.parts}, found)
+    fed = {name: rule for name, rule in begun.items() if rule.parts or rule.partners}
+    stopped = _feed(store, c, fed, found)
     live = [(name, rule) for name, rule in begun.items() if name not in stopped]
     return {name for name, rule in live if _record(found, name, _outcome(rule.end))}
 
@@ -1191,9 +1465,16 @@ def _pass(
 def _begun(
     store: _Store, c: _Chromosome, names: list[str], found: dict[str, list[Finding]]
 ) -> dict[str, _Scanned]:
-    """Each rule of `names` built for `c` and begun; a rule that cannot be is recorded."""
+    """Each rule of `names` built for `c` and begun; a rule that cannot be is recorded. A rule
+    that reads the Partner Rows' frames is not built for a chromosome whose frames cannot be
+    read: it says why it cannot be checked, as one whose prerequisite is missing does."""
     begun: dict[str, _Scanned] = {}
     for name in names:
+        reads_frames = getattr(_SCANNED[name], "partners", False)
+        if reads_frames and store.partners_judged() and c.frames is None:
+            assert c.untold is not None
+            found[name].append(_finding(name, c.untold))
+            continue
         try:
             rule = _SCANNED[name](store, c)
         except _Unchecked as unchecked:
@@ -1211,23 +1492,46 @@ def _feed(
     Returns the rules that stopped."""
     stopped: set[str] = set()
     parts = frozenset().union(*(rule.parts for rule in fed.values()))
+    partners = any(rule.partners for rule in fed.values())
     for part in parts:  # opened here, once, rather than by each thread
         with suppress(_Unchecked):
             store.find(c.path(part))
 
-    def check(rows: tuple[int, int]) -> dict[str, _Outcome]:
-        b = _read_block(store, c, parts, rows)
-        live = [(name, rule) for name, rule in fed.items() if name not in stopped]
-        return {name: _outcome(partial(rule.block, b)) for name, rule in live}
-
-    for outcomes in _in_order(check, c.blocks() if fed else [], store.threads):
-        for name, outcome in outcomes.items():
-            if name not in stopped and not _record(found, name, outcome):
-                stopped.add(name)
+    work = partial(_blocked, store, c, parts, partners, fed, stopped)
+    blocks = c.blocks(partners) if fed else []
+    for outcomes in _in_order(work, blocks, store.threads):
+        stopped |= _recorded(outcomes, found, stopped)
     return stopped
 
 
-def _valid(partner: npt.NDArray[np.int64], size: int) -> npt.NDArray[np.bool_]:
+def _recorded(
+    outcomes: dict[str, _Outcome], found: dict[str, list[Finding]], stopped: set[str]
+) -> set[str]:
+    """Records each rule's outcome, and returns the rules that stopped over it."""
+    halted: set[str] = set()
+    for name, outcome in outcomes.items():
+        if name not in stopped and not _record(found, name, outcome):
+            halted.add(name)
+    return halted
+
+
+def _blocked(
+    store: _Store,
+    c: _Chromosome,
+    parts: frozenset[str],
+    partners: bool,
+    fed: dict[str, _Scanned],
+    stopped: set[str],
+    rows: tuple[int, int],
+) -> dict[str, _Outcome]:
+    """One block of rows read once and checked by every rule that is still live; on the pass's
+    threads, on several blocks at once."""
+    b = _read_block(store, c, parts, rows, partners)
+    live = [(name, rule) for name, rule in fed.items() if name not in stopped]
+    return {name: _outcome(partial(rule.block, b)) for name, rule in live}
+
+
+def _valid(partner: npt.NDArray[Any], size: int) -> npt.NDArray[np.bool_]:
     """Entries whose partner is a row of the chromosome: the others are index.rows'."""
     return (partner >= 0) & (partner < size)
 
@@ -1535,6 +1839,31 @@ class _IndexSymmetric(_Scanned):
         yield from _flag(f"index/{self.c.name}", self.sums.differ(), 0, what)
 
 
+def _near_halves(
+    pos: npt.NDArray[np.int64],
+    near_bp: int,
+    owner: npt.NDArray[np.int64],
+    partner: npt.NDArray[np.int64],
+    size: int,
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
+    """The entries within near_bp held in a pair's earlier row, and in its later row."""
+    ok = _valid(partner, size)
+    apart = pos[np.where(ok, partner, owner)] - pos[owner]
+    close = ok & within(apart, near_bp)
+    return close & (partner > owner), close & (partner < owner)
+
+
+def _band_at_floor(
+    b: _Block, band: npt.NDArray[np.int64], floor: int
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """The block's Near Band pairs with |code| ≥ `floor`: earlier row, later row, code."""
+    codes = b.get("band")
+    at = np.flatnonzero((codes >= floor) | (codes <= -floor))
+    rows = np.arange(b.first, b.last, dtype=np.int64)
+    row, later = near_pair_of(band[b.first : b.last + 1], at + b.at["band"])
+    return rows[row], later + b.first, codes[at].astype(np.int64)
+
+
 @_scanned("index.near")
 class _IndexNear(_Scanned):
     """The index's near half is the band, thresholded (spec §5). Each block's entries in a
@@ -1559,18 +1888,11 @@ class _IndexNear(_Scanned):
         self, owner: npt.NDArray[np.int64], partner: npt.NDArray[np.int64]
     ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
         """The entries within near_bp held in a pair's earlier row, and in its later row."""
-        ok = _valid(partner, self.c.size)
-        apart = self.pos[np.where(ok, partner, owner)] - self.pos[owner]
-        close = ok & within(apart, self.near_bp)
-        return close & (partner > owner), close & (partner < owner)
+        return _near_halves(self.pos, self.near_bp, owner, partner, self.c.size)
 
     def _kept(self, b: _Block) -> tuple[npt.NDArray[np.int64], ...]:
         """The block's Near Band pairs with |code| ≥ the floor: earlier row, later row, code."""
-        codes = b.get("band")
-        at = np.flatnonzero((codes >= self.floor) | (codes <= -self.floor))
-        rows = np.arange(b.first, b.last, dtype=np.int64)
-        row, later = near_pair_of(self.band[b.first : b.last + 1], at + b.at["band"])
-        return rows[row], later + b.first, codes[at].astype(np.int64)
+        return _band_at_floor(b, self.band, self.floor)
 
     def block(self, b: _Block) -> _Problems:
         lo, hi, code = self._kept(b)
@@ -1646,3 +1968,514 @@ class _FarIndex(_Scanned):
             odd = np.setxor1d(entries, held)
             what = "not the Proxy Index's pairs beyond near_bp"
             yield from _odd_pairs(self.c.name, odd, size, what, _FAR)
+
+
+# ------------------------------------------------------------------ the Partner Rows
+#
+# The Partner Rows are frames, not `indptr`-delimited arrays (partner-rows §5.1): the pass decodes
+# whole frames per block, and every rule here reads the block's entries — each entry's partner, its
+# code, the row that holds it and its frame — through `_Block.span`. A finding names the row and
+# the frame, because an entry has no address of its own in an array a reader could look up.
+
+
+def _flagged(
+    where: str,
+    bad: npt.NDArray[np.bool_],
+    rows: npt.NDArray[np.int64],
+    per_frame: int,
+    what: str,
+) -> _Problems:
+    """One finding naming the rows and frames of the entries `bad` marks, if there is any."""
+    at = np.flatnonzero(bad)
+    if len(at):
+        named = ", ".join(
+            f"row {row} of frame {row // per_frame}" for row in rows[at[:_NAMED]].tolist()
+        )
+        more = f" and {len(at) - _NAMED:,} more" if len(at) > _NAMED else ""
+        yield where, f"{what} at {named}{more}"
+
+
+#: The Partner Rows group's attributes, and the type each is recorded as (partner-rows §5.3).
+_PARTNER_ATTRS: Final = {
+    "rows": "int",
+    "rows_per_frame": "int",
+    "frames": "int",
+    "entries": "int",
+    "frames_bytes": "int",
+    "frames_sha256": "str",
+    "frames_idx_sha256": "str",
+    "zstd_level": "int",
+}
+
+
+@_rule("partners.files")
+def _partners_files(store: _Store) -> _Problems:
+    """Every chromosome of the Variant Set has a `partners/<c>/` group with both arrays, its
+    attributes are the sizes §5.3 names, its `frames_idx` is F + 1 ascending offsets from 0 to
+    `frames_bytes`, and both chunk files are the ones its hashes name (partner-rows §5.1, §5.3,
+    §10). A store whose version has no Partner Rows has nothing to judge (spec §13)."""
+    if not store.partners_judged():
+        return
+    for chrom, start, stop in store.chromosomes():
+        yield from _partner_files(store, chrom, stop - start)
+
+
+def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
+    path = layout.partners_path(chrom)
+    node = store.node(path)
+    if not isinstance(node, zarr.Group):
+        missing = "missing: every chromosome of the Variant Set has one (spec §5.1)"
+        yield path, "is not a group (spec §5.1)" if node is not None else missing
+        return
+    attrs = dict(node.attrs)
+    yield from _partner_attrs(path, attrs)
+    yield from _partner_sizes(path, attrs, rows)
+    frames, index = (
+        store.find(f"{path}/{layout.FRAMES}"),
+        store.find(f"{path}/{layout.FRAMES_INDEX}"),
+    )
+    length = attrs.get("frames_bytes")
+    yield from _frames_array(path, frames, length)
+    if index is None:
+        yield f"{path}/{layout.FRAMES_INDEX}", "missing (spec §5.1)"
+    elif (yield from _frames_index(path, index, attrs.get("frames"))):
+        offsets = store.read(f"{path}/{layout.FRAMES_INDEX}").astype(np.int64)
+        yield from _offsets_judged(f"{path}/{layout.FRAMES_INDEX}", offsets, length)
+        yield from _frames_index_hash(path, offsets, attrs.get("frames_idx_sha256"))
+    if frames is not None and _is_int(length):
+        yield from _frames_file_judged(path, frames, length, attrs.get("frames_sha256"))
+
+
+def _partner_attrs(path: str, attrs: dict[str, Any]) -> _Problems:
+    """The group records each of §5.3's attributes, of its type."""
+    for name, kind in _PARTNER_ATTRS.items():
+        if name not in attrs:
+            yield path, f"records no {name} (spec §5.3)"
+        elif not _TYPES[kind](attrs[name]):
+            yield path, f"records {name} as {attrs[name]!r}, not of type {kind} (spec §5.3)"
+
+
+def _partner_sizes(path: str, attrs: dict[str, Any], rows: int) -> _Problems:
+    """`rows` is n_c and `frames` is ⌈n_c / G⌉, G being `rows_per_frame` (§5.2, §5.3)."""
+    if attrs.get("rows") != rows:
+        yield path, f"records {attrs.get('rows')!r} rows, but the chromosome has {rows:,} (§5.3)"
+    per_frame = attrs.get("rows_per_frame")
+    if not (_is_int(per_frame) and per_frame >= 1):
+        yield path, f"records rows_per_frame {per_frame!r}, not whole rows of a frame (§5.2)"
+        return
+    due = -(-rows // per_frame)
+    if attrs.get("frames") != due:
+        yield (
+            path,
+            f"records {attrs.get('frames')!r} frames, but {rows:,} rows at {per_frame} a frame "
+            f"are {due:,} (spec §5.2)",
+        )
+
+
+def _frames_array(path: str, frames: zarr.Array[Any] | None, length: object) -> _Problems:
+    """The `frames` array is uint8, one chunk of `frames_bytes` bytes (§5.1, §5.3)."""
+    where = f"{path}/{layout.FRAMES}"
+    if frames is None:
+        yield where, "missing (spec §5.1)"
+        return
+    found = frames.metadata.to_dict()["data_type"]
+    if found != "uint8":
+        yield where, f"its dtype is {found}, not uint8 (spec §5.1)"
+    if not _is_int(length):
+        yield where, "has no frames_bytes to be as long as (spec §5.3)"
+    elif frames.shape != (length,):
+        yield (
+            where,
+            f"its shape is {frames.shape}, not ({length:,},), the frames' bytes (§5.1, §5.3)",
+        )
+    elif frames.chunks != frames.shape:
+        yield (
+            where,
+            f"its chunks are {frames.chunks}, not one chunk of every byte: a frame is one "
+            "positional read of the chunk file (spec §5.1)",
+        )
+
+
+def _frames_index(
+    path: str, index: zarr.Array[Any], count: object
+) -> Generator[tuple[str, str], None, bool]:
+    """The `frames_idx` array is uint64, one chunk of the F + 1 offsets (§5.1, §5.3), and it
+    holds the offsets' own length: whether the rest of the rule can judge them."""
+    where = f"{path}/{layout.FRAMES_INDEX}"
+    found = index.metadata.to_dict()["data_type"]
+    if found != "uint64":
+        yield where, f"its dtype is {found}, not uint64 (spec §5.1)"
+    if not _is_int(count):
+        return False
+    if index.shape != (count + 1,):
+        yield where, f"its shape is {index.shape}, not ({count + 1:,},), F + 1 offsets (§5.3)"
+        return False
+    if index.chunks != index.shape:
+        yield where, f"its chunks are {index.chunks}, not one of its whole offsets (§5.1)"
+        return False
+    return True
+
+
+def _frames_index_hash(path: str, offsets: npt.NDArray[np.int64], recorded: object) -> _Problems:
+    """The `frames_idx` chunk is the little-endian offsets' bytes, as its hash records them."""
+    digest = hashlib.sha256(offsets.astype("<u8").tobytes()).hexdigest()
+    if digest != recorded:
+        yield (
+            f"{path}/{layout.FRAMES_INDEX}",
+            f"hashes to {digest}, not the recorded {recorded!r} (spec §5.3)",
+        )
+
+
+def _offsets_judged(where: str, offsets: npt.NDArray[np.int64], length: object) -> _Problems:
+    """`offsets` start at 0, ascend strictly and end at the frames' `length` bytes (§5.2, §5.3)."""
+    if offsets[0] != 0:
+        yield where, f"starts at {offsets[0]:,}, not 0 (spec §5.2)"
+    descending = np.flatnonzero(np.diff(offsets) <= 0)
+    if len(descending):
+        more = f" and {len(descending) - _NAMED:,} more" if len(descending) > _NAMED else ""
+        named = ", ".join(str(int(at) + 1) for at in descending[:_NAMED])
+        yield where, f"does not ascend strictly at offset(s) {named}{more} (spec §5.2)"
+    if _is_int(length) and offsets[-1] != length:
+        yield where, f"ends at {offsets[-1]:,}, but frames_bytes is {length:,} (spec §5.3)"
+
+
+def _frames_file_judged(
+    path: str, frames: zarr.Array[Any], length: int, recorded: object
+) -> _Problems:
+    """The `frames` chunk file is the bytes its recorded hash names, read in bounded windows."""
+    digest = hashlib.sha256()
+    at = 0
+    try:
+        while at < length:
+            hi = min(length, at + _WINDOW)
+            digest.update(range_bytes(frames, at, hi))
+            at = hi
+    except _READ_ERRORS as unread:
+        yield f"{path}/{layout.FRAMES}", f"cannot be read: {type(unread).__name__}: {unread}"
+        return
+    found = digest.hexdigest()
+    if found != recorded:
+        yield (
+            f"{path}/{layout.FRAMES}",
+            f"hashes to {found}, not the recorded {recorded!r} (spec §5.3)",
+        )
+
+
+class _PartnerRule(_Scanned):
+    """A rule that reads a chromosome's Partner Rows. A store of a version that has none — a
+    0.1.0 store without the component — passes it with nothing to judge (spec §13), and takes no
+    part of any block; a store that has them is fed the block's frames, and says which one it
+    could not read."""
+
+    partners = True
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        self.store, self.c = store, c
+        self.judged = store.partners_judged()
+        if not self.judged:
+            self.partners = False
+
+    @property
+    def where(self) -> str:
+        """The group a finding about one of its entries names."""
+        return layout.partners_path(self.c.name)
+
+
+@_scanned("partners.frames")
+class _PartnerFrames(_PartnerRule):
+    """Every frame decompresses with a valid checksum, its k is the rows it is due and its
+    payload is exactly 4 + 4k + 6E bytes (partner-rows §5.2, §10). A frame that fails is one
+    finding, naming the chromosome and the frame; the other rules that would read it say they
+    cannot be read rather than read it short."""
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        for one in b.frames or ():
+            if one.untold is not None:
+                yield one.untold.where, one.untold.why
+
+
+@_scanned("partners.rows")
+class _PartnerRows(_PartnerRule):
+    """Within a row partners ascend strictly, lie in [0, n_c) and are never the row; and the
+    frames hold the group's recorded `entries` (partner-rows §5.3, §10)."""
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        self.seen = 0
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        span = b.span()
+        self.seen += len(span)
+        partner = span.partner.astype(np.int64)
+        misplaced = ~_valid(span.partner, self.c.size) | (partner == span.row)
+        yield from _flagged(
+            self.where,
+            misplaced,
+            span.row,
+            span.per_frame,
+            "a partner outside [0, n_c) or the row",
+        )
+        ascending = (span.row[1:] == span.row[:-1]) & ~(partner[1:] > partner[:-1])
+        yield from _flagged(
+            self.where,
+            ascending,
+            span.row[1:],
+            span.per_frame,
+            "a partner not above the one before it in its row",
+        )
+
+    def end(self) -> _Problems:
+        if not self.judged:
+            return
+        frames = self.c.frames
+        assert frames is not None
+        if frames.entries is None:
+            raise _Unchecked(f"{self.where}", "records no entries (spec §5.3)")
+        if frames.entries != self.seen:
+            yield (
+                self.where,
+                f"records {frames.entries:,} entries, but its frames hold {self.seen:,} "
+                "(spec §5.3, §10)",
+            )
+
+
+@_scanned("partners.codes")
+class _PartnerCodes(_PartnerRule):
+    """Every code is one of the store's encoding: none is the reserved code, and |code| ≤
+    r_scale, so a dequantised r̂ never leaves [−1, 1] (spec §12; partner-rows §10)."""
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        if self.judged:
+            self.encoding = store.encoding()
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        span = b.span()
+        reserved, scale = self.encoding.reserved_code, self.encoding.scale
+        yield from _flagged(
+            self.where,
+            span.code == reserved,
+            span.row,
+            span.per_frame,
+            f"the reserved code {reserved}",
+        )
+        past = ~self.encoding.holds(span.code) & (span.code != reserved)
+        yield from _flagged(
+            self.where, past, span.row, span.per_frame, f"a code past the scale, |code| > {scale}"
+        )
+
+
+def _split_by_distance(
+    span: _Span, pos: npt.NDArray[np.int64], size: int, distance: int
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_]]:
+    """Each entry whose partner is a row of the chromosome, split into those within `distance`
+    bp of their row's own position and those beyond it. An entry whose partner is not a row is
+    in neither: that is `partners.rows`' finding."""
+    partner = span.partner.astype(np.int64)
+    valid = _valid(span.partner, size)
+    gap = pos[np.where(valid, partner, span.row)] - pos[span.row]
+    close = valid & within(gap, distance)
+    return close, valid & ~close
+
+
+@_scanned("partners.distance")
+class _PartnerDistance(_PartnerRule):
+    """Every entry's partner lies within far_bp of its row's position (partner-rows §10)."""
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        if not self.judged:
+            return
+        self.far_bp = store.integer("far_bp")
+        self.pos = store.positions(c.name, c.start, c.stop)
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        span = b.span()
+        _, beyond = _split_by_distance(span, self.pos, self.c.size, self.far_bp)
+        yield from _flagged(
+            self.where, beyond, span.row, span.per_frame, f"a partner beyond {self.far_bp:,} bp"
+        )
+
+
+@_scanned("partners.threshold")
+class _PartnerThreshold(_PartnerRule):
+    """Every entry reaches the floor its distance has: |code| ≥ partner_code_floor within
+    near_bp and ≥ far_code_floor beyond it (partner-rows §3, §10)."""
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        if not self.judged:
+            return
+        self.near_bp = store.integer("near_bp")
+        self.partner_floor, self.far_floor = (
+            store.integer("partner_code_floor"),
+            store.integer("far_code_floor"),
+        )
+        self.pos = store.positions(c.name, c.start, c.stop)
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        span = b.span()
+        close, _ = _split_by_distance(span, self.pos, self.c.size, self.near_bp)
+        floor = np.where(close, self.partner_floor, self.far_floor)
+        below = _valid(span.partner, self.c.size) & (np.abs(span.code.astype(np.int64)) < floor)
+        what = (
+            f"|code| below the floor its distance has: {self.partner_floor} within "
+            f"{self.near_bp:,} bp, {self.far_floor} beyond it"
+        )
+        yield from _flagged(self.where, below, span.row, span.per_frame, what)
+
+
+@_scanned("partners.symmetric")
+class _PartnerSymmetric(_PartnerRule):
+    """(l, m, c) is an entry exactly when (m, l, c) is: the 64-bit hash-sum method of
+    index.symmetric, every entry adding its pair's hash to the earlier row's sum for its own
+    side, and a row whose two sums differ the earlier row of a pair held one way only or with
+    two codes (spec §12; partner-rows §10)."""
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        self.sums = _Sums(c.size) if self.judged else None
+
+    def block(self, b: _Block) -> _Problems:
+        if self.sums is None:
+            return
+        span = b.span()
+        partner = span.partner.astype(np.int64)
+        ok = _valid(span.partner, self.c.size) & (partner != span.row)
+        lo = np.minimum(span.row, partner)[ok]
+        hi = np.maximum(span.row, partner)[ok]
+        later = (span.row > partner)[ok]
+        keys = _keys(lo, hi, span.code[ok].astype(np.int64), self.c.size)
+        self.sums.add(0, lo[~later], keys[~later])
+        self.sums.add(1, lo[later], keys[later])
+        yield from ()
+
+    def end(self) -> _Problems:
+        if self.sums is None:
+            return
+        what = "the earlier row of a pair held one way only, or with two codes"
+        yield from _flag(self.where, self.sums.differ(), 0, what)
+
+
+@_scanned("partners.near")
+class _PartnerNear(_PartnerRule):
+    """The Partner Rows' near half is the Near Band at the Partner Floor, both ways: every entry
+    within near_bp carries the band's code, and every band code at the Partner Floor is an
+    entry — index.near's method at the Partner Threshold's floor (spec §12; partner-rows §10).
+    The recheck at the chromosome's end reads again only the blocks holding an entry that names
+    a row whose sums differ, each against the band's code for its pair."""
+
+    parts = frozenset({"band"})
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        if not self.judged:
+            self.parts = frozenset()
+            return
+        self.pos = store.positions(c.name, c.start, c.stop)
+        self.near_bp = store.integer("near_bp")
+        self.floor = store.integer("partner_code_floor")
+        self.band = store.indptr(f"near/{c.name}/indptr", c.size)
+        self.sums, self.named = _Sums(c.size), _Named(c.size)
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        lo, hi, code = _band_at_floor(b, self.band, self.floor)
+        span = b.span()
+        size = self.c.size
+        in_earlier, in_later = _near_halves(
+            self.pos, self.near_bp, span.row, span.partner.astype(np.int64), size
+        )
+        band = _keys(lo, hi, code, size)
+        entries = _keys(
+            span.row[in_earlier],
+            span.partner[in_earlier].astype(np.int64),
+            span.code[in_earlier].astype(np.int64),
+            size,
+        )
+        if not np.array_equal(band, entries):  # both ascend in a store that passes
+            odd = np.setxor1d(band, entries)
+            what = "not the Near Band's pairs at the partner code floor"
+            yield from _odd_pairs(self.c.name, odd, size, what, _PARTNERS)
+        self.sums.add(0, lo, band)
+        up, down = span.partner[in_later].astype(np.int64), span.row[in_later]
+        held = span.code[in_later].astype(np.int64)
+        self.sums.add(1, up, _keys(up, down, held, size))
+        self.named.add(up, down)
+
+    def end(self) -> _Problems:
+        if not self.judged:
+            return
+        differ = self.sums.differ()
+        if not differ.any():
+            return
+
+        def recheck(block: tuple[int, int]) -> list[tuple[str, str]]:
+            b = _read_block(self.store, self.c, frozenset(), block, partners=True)
+            return list(self._recheck(differ, b))
+
+        for problems in _in_order(
+            recheck, self.named.blocks(differ, self.c.blocks(True)), self.store.threads
+        ):
+            yield from problems
+
+    def _recheck(self, rows: npt.NDArray[np.bool_], b: _Block) -> _Problems:
+        """The block's entries in a pair's later row whose earlier row is one of `rows`, each
+        against the band's code for its pair."""
+        span = b.span()
+        _, in_later = _near_halves(
+            self.pos, self.near_bp, span.row, span.partner.astype(np.int64), self.c.size
+        )
+        in_later[in_later] = rows[span.partner[in_later].astype(np.int64)]
+        up, down = span.partner[in_later].astype(np.int64), span.row[in_later]
+        code = span.code[in_later].astype(np.int64)
+        band = self.store.pick(f"near/{self.c.name}/r", near_address(self.band, up, down))
+        differ = band.astype(np.int64) != code
+        odd = _keys(up[differ], down[differ], code[differ], self.c.size)
+        what = "entries whose code is not the Near Band's"
+        yield from _odd_pairs(self.c.name, odd, self.c.size, what, _PARTNERS)
+
+
+@_scanned("partners.far")
+class _PartnerFar(_PartnerRule):
+    """The entries beyond near_bp, in each pair's earlier row, are exactly the Far Pairs, pair
+    for pair and code for code: far.index's comparison read against the Partner Rows (spec §12;
+    partner-rows §10). Both are read by the same block of rows, so nothing is carried; that an
+    entry beyond near_bp is in its later row too is partners.symmetric's to say."""
+
+    parts = frozenset({_FAR.partner, _FAR.code})
+
+    def __init__(self, store: _Store, c: _Chromosome) -> None:
+        super().__init__(store, c)
+        if not self.judged:
+            self.parts = frozenset()
+            return
+        self.near_bp = store.integer("near_bp")
+        _sparse_indptr(store, c, _FAR)
+        self.pos = store.positions(c.name, c.start, c.stop)
+
+    def block(self, b: _Block) -> _Problems:
+        if not self.judged:
+            return
+        span = b.span()
+        size = self.c.size
+        partner = span.partner.astype(np.int64)
+        _, beyond = _split_by_distance(span, self.pos, size, self.near_bp)
+        beyond &= partner > span.row
+        entries = _keys(span.row[beyond], partner[beyond], span.code[beyond].astype(np.int64), size)
+        held = _keys(b.get(_FAR.owner), b.get(_FAR.partner), b.get(_FAR.code), size)
+        if not np.array_equal(entries, held):  # both ascend in a store that passes
+            odd = np.setxor1d(entries, held)
+            what = "not the Far Pairs for the pairs beyond near_bp"
+            yield from _odd_pairs(self.c.name, odd, size, what, _PARTNERS)

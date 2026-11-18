@@ -1312,28 +1312,44 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `far.distance` | every Far Pair lies more than `near_bp` and at most `far_bp` apart |
 | `far.threshold` | every Far Pair's \|code\| ≥ `far_code_floor` |
 | `far.index` | the Far Pairs are exactly the Proxy Index's entries beyond `near_bp` in each pair's earlier row, with the same codes: every such entry is a Far Pair and every Far Pair is such an entry. With `index.symmetric`, they are the index's far pairs, once each |
+| `partners.files` | every chromosome of the Variant Set has a `partners/<c>/` group with both of its arrays, each one chunk of its whole length (§5); its `rows` attribute is n_c, `frames` is ⌈n_c / G⌉, `frames_idx` holds F + 1 strictly ascending offsets from 0 to `frames_bytes`, and the `frames` chunk file and the `frames_idx` chunk are the ones their two recorded SHA-256s name |
+| `partners.frames` | every frame decompresses with a valid content checksum, its k is the rows it is due — G, or the chromosome's last frame's fewer — and its payload is exactly 4 + 4k + 6E bytes; a frame that fails is a finding naming the chromosome and the frame (partner-rows §5.2, §5.4) |
+| `partners.rows` | within a row, partners are strictly ascending, in [0, n_c), and never the row itself; and the frames hold the group's recorded `entries` |
+| `partners.codes` | every code is one of the store's encoding, as for `near.codes` |
+| `partners.distance` | every entry's partner lies within `far_bp` of its row's position, either side |
+| `partners.threshold` | every entry's \|code\| ≥ `partner_code_floor` within `near_bp` and ≥ `far_code_floor` beyond it |
+| `partners.symmetric` | (l, m, c) is an entry exactly when (m, l, c) is, by `index.symmetric`'s 64-bit hash sums |
+| `partners.near` | every entry within `near_bp` carries the Near Band's code, and every Near Band code at the Partner Floor is an entry: the near half is the band at that floor, both ways. `index.near`'s method and recheck, at the Partner Floor |
+| `partners.far` | the entries beyond `near_bp`, in each pair's earlier row, are exactly the Far Pairs, with the same codes: `far.index`'s comparison, read against the Partner Rows |
+| `provenance.partner_threshold` | `t_partner` is no larger than `t_far`, and `partner_code_floor` recomputes from `t_partner` at the recorded scale (§3) |
 
-No rule checks chunk shapes, shards or codecs (§6). No rule can
-check that every Far Pair was found: that needs the genotypes, and ogld#5's tests check it against
-an independent reference on the Test Panel. Each rule has a store that breaks it, in
-`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 27.
+No rule checks the chunk shapes, shards or codecs of §6's arrays; the Partner Rows' two are one
+chunk each by construction (§5.1), which a reader's one range request per frame depends on, and
+`partners.files` holds them to it. No rule can check that every Far Pair was found: that needs the
+genotypes, and ogld#5's tests check it against an independent reference on the Test Panel. Each rule has a store that breaks it, in
+`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 37.
 
-**The Partner Rows' rules (format 0.2.0).** Ten rules join these in #68, beside the `index.*` rules
-and `far.index`, and replace them in #72:
-`partners.files`, `partners.frames`, `partners.rows`, `partners.codes`, `partners.distance`,
-`partners.threshold`, `partners.symmetric`, `partners.near`, `partners.far` and
-`provenance.partner_threshold`. `docs/spec/partner-rows.md` §10 specifies each. They read the
-frames of `partners/<chrom>/` in bounded blocks, never a whole chromosome, sharing this section's
-one pass per chromosome and its thread option; `partners.symmetric` and `partners.near` reuse
-`index.symmetric`'s and `index.near`'s 64-bit hash sums, at the Partner Floor; and
-`partners.near` with `partners.far` hold every entry equal to the Near Band's code within
-`near_bp` or the Far Pairs' beyond it.
+**The Partner Rows' rules (format 0.2.0).** The ten rows after `far.index` are the component's,
+and `docs/spec/partner-rows.md` §10 is their reasons. They read the frames of
+`partners/<chrom>/` in bounded blocks — whole frames, never a whole chromosome — sharing this
+section's one pass per chromosome and its thread option. `partners.files` streams a chromosome's
+`frames` chunk file in windows to check its hash, and reads its `frames_idx` whole; the other nine
+read the blocks. `partners.near` with `partners.far` hold every entry equal to the Near Band's
+code within `near_bp` or the Far Pairs' beyond it, so with `partners.symmetric` the component
+holds every pair it should and no other.
+
+**What a 0.1.0 store is judged by.** A store has one `format_version` (§13), and 0.1.0 has no
+Partner Rows, so a 0.1.0 store with no `partners/` passes these ten with nothing to judge: every
+one of them says so and moves on. A 0.2.0 store has the component, so a missing
+`partners/<chrom>/` is a finding of `partners.files`, and a rule that needs its frames reports
+that it cannot be checked — neither passes it. A 0.1.0 store that carries a `partners/` anyway is
+judged by them, as an older store that carries a later key is held to its type (§7).
 
 **On write and on demand** (ogld#4). `ogld.validate(location)` runs the rules on a store on disk
 or over HTTP and returns every rule's findings, an empty list for a rule the store passes.
 `StoreWriter.finish` runs them on the store it wrote, on the threads the builder gives it, judged
 with the provenance it assembled (§7) as JSON will hold it, and writes that provenance only when
-all 27 pass. Otherwise it raises
+all 37 pass. Otherwise it raises
 `ValidationFailed`, naming each failing rule and where, and the store keeps no provenance, so a
 reader refuses it (§13) rather than read it as a short one.
 
@@ -1343,9 +1359,10 @@ a finding that it cannot be checked, naming what it needed. An array that will n
 metadata declares is a finding that it cannot be read. Neither passes the rule, and neither stops
 the other rules. So one fault can fail several rules; the breakers' tests assert only that each
 fails its own, and that a breaker fails the same rules on a × 511 and a × 2047 store. The rules
-that judge a code against the scale, `near.codes`, `index.codes`, `far.codes` and
-`provenance.threshold`'s far code floor, need the store's encoding: with one this package does not implement they cannot be
-checked, as `provenance.encoding` fails.
+that judge a code against the scale, `near.codes`, `index.codes`, `far.codes`, `partners.codes`,
+`provenance.threshold`'s far code floor and `provenance.partner_threshold`'s partner code floor,
+need the store's encoding: with one this package does not implement they cannot be checked, as
+`provenance.encoding` fails.
 
 **How the rules read.** The rules read through Zarr directly. A chromosome's positions and
 `indptr` arrays are read whole, as a reader keeps them (§10). Near Band codes and Proxy Index
@@ -1356,16 +1373,23 @@ bytes of arrays, and on each code through about 6: a block's working arrays stay
 however dense the index is. A block holds at most as many Far Pairs as entries, a bound that binds
 only in a store that fails `far.index`: a valid row holds fewer Far Pairs than index entries.
 
-The twelve rules that read codes and entries one by one, `near.codes`, the six `index.*` rules and
-the five `far.*` rules, share one pass over each chromosome: each block of rows is read once and
-handed to all twelve, so each code, entry and Far Pair of a store that passes is decoded once per
-validation. `far.index` compares each block's Far Pairs with that block's index entries beyond
-`near_bp` in their earlier rows, so it carries nothing from one block to the next. A caller may give the pass t
-threads (`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are
-then read and checked at once, and no more are held. `near.codes`, `index.codes` and `far.codes` read their
-`r` array in windows of their own instead when its `indptr` cannot delimit the rows or does not end
-at `r`'s length, as when it ends short of `r`: windows of 8,388,608 elements, codes or entries
-alike, t of them at once.
+The twenty rules that read codes and entries one by one, `near.codes`, the six `index.*` rules,
+the five `far.*` rules and the eight `partners.*` rules that read frames, share one pass over each
+chromosome: each block of rows is read once and handed to all twenty, so each code, entry, Far Pair
+and partner entry of a store that passes is decoded once per validation. `far.index` compares each
+block's Far Pairs with that block's index entries beyond `near_bp` in their earlier rows, and
+`partners.far` compares the Partner Rows' entries beyond `near_bp` with those same Far Pairs, so
+neither carries anything from one block to the next. A caller may give the pass t threads
+(`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
+and checked at once, and no more are held. A block the Partner Rows join holds whole frames, at
+most 256 of them — 4,096 rows at G = 16 — so its frames are one decompress each, the component's
+unit of reading (§5), and the band's and the index's limits above bind first on a dense
+chromosome. Every band pair at the Partner Floor is two partner entries, so a block's entries are
+at most twice its band codes, at 14 bytes each — an int32 partner, an int16 code and the int64
+row that holds them: 12–37 MB at the 5–16% of band pairs the panels keep, and 235 MB in a store
+where every one of the band's 8,388,608 codes reached the Partner Floor. `near.codes`, `index.codes` and `far.codes` read their `r` array in windows of their
+own instead when its `indptr` cannot delimit the rows or does not end at `r`'s length, as when it
+ends short of `r`: windows of 8,388,608 elements, codes or entries alike, t of them at once.
 
 `alid_index.keys` and `alid_index.rows` read the ALID index's two arrays whole — 275 MB of keys and
 34 MB of rows on HGDP+1kGP EUR's 8.59 M — and walk the variant table in blocks beside them, so each
@@ -1373,8 +1397,10 @@ entry is judged against the row it names without a scattered read of the table. 
 reads the keys in blocks, and `alid_index.count` counts the wide ALIDs from the table's own column.
 
 A chunk that will not decode, such as a corrupt zstd frame, is a "cannot be read" finding of each
-rule that reads it. An `indptr` that ends past its array is a "cannot be checked" finding of each
-rule that reads by it. A rule that stops so reports the faults its pass had finished checking,
+rule that reads it; a Partner Rows frame that will not decompress, or whose k or payload length is
+not what §5.2 says, is `partners.frames`' finding naming the chromosome and the frame, and a
+"cannot be read" one of each other rule that needs that block's entries. An `indptr` that ends
+past its array is a "cannot be checked" finding of each rule that reads by it. A rule that stops so reports the faults its pass had finished checking,
 then that it cannot be read or checked, and fails either way. `index.near` finishes its check of
 later-row entries only at a chromosome's end, so a stop inside a chromosome drops that check's
 findings there, though never the failure.

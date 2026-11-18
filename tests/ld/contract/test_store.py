@@ -7,6 +7,7 @@ test calls ogld first; the whole-store matrices are read once per worker and cac
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -24,7 +25,8 @@ from support import alids, panel_data, passing_rows, reference, reference_matrix
 import ogld
 from ogld import cli
 from ogld.format import VALIDATION_RULES, RefusalReason, REncoding, t_far
-from ogld.store import StoreWriter
+from ogld.store import StoreWriter, layout
+from ogld.store.frames import decode_frame, encode_frame
 
 
 def two(store: ogld.LDStore, i: int, j: int) -> tuple[float, str]:
@@ -596,6 +598,223 @@ def set_element(path: str, at: int, value: float) -> Callable[[Path], None]:
     return breaker
 
 
+def partner_rows(store: Path, chrom: str) -> tuple[list[tuple[np.ndarray, np.ndarray]], int]:
+    """One chromosome's Partner Rows as rows: each row's partners and codes, and the group's G.
+
+    Read through the store's own frame decoder, never by parsing a payload here.
+    """
+    group = zarr.open_group(store / "partners" / chrom, mode="r")
+    attrs = dict(group.attrs)
+    per_frame = int(attrs["rows_per_frame"])
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    raw = np.asarray(group["frames"][:]).tobytes()
+    rows: list[tuple[np.ndarray, np.ndarray]] = []
+    for number in range(int(attrs["frames"])):
+        first = number * per_frame
+        due = min(per_frame, int(attrs["rows"]) - first)
+        frame = decode_frame(
+            raw[offsets[number] : offsets[number + 1]],
+            chrom=chrom,
+            number=number,
+            first=first,
+            rows=due,
+        )
+        rows.extend(frame.row(first + at) for at in range(due))
+    return rows, per_frame
+
+
+def write_partner_rows(
+    store: Path, chrom: str, rows: list[tuple[np.ndarray, np.ndarray]], per_frame: int
+) -> None:
+    """Write `chrom`'s Partner Rows from `rows`, re-encoding every frame and recording the group's
+    attributes and both hashes: a store only a test makes, which the other rules still pass."""
+    path = store / "partners" / chrom
+    shutil.rmtree(path)
+    group = zarr.open_group(path, mode="w", zarr_format=3)
+    frames = [
+        encode_frame(at, rows[at : at + per_frame], chrom=chrom, number=at // per_frame)
+        for at in range(0, len(rows), per_frame)
+    ]
+    data = b"".join(frames)
+    array = layout.new_frames_array(group, len(data))
+    target = layout.chunk_file(array)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    offsets = np.concatenate([[0], np.cumsum([len(frame) for frame in frames])])
+    index = layout.new_frames_index(group, len(offsets))
+    index[:] = offsets.astype("<u8")
+    group.attrs.update(
+        {
+            "rows": len(rows),
+            "rows_per_frame": per_frame,
+            "frames": len(frames),
+            "entries": sum(len(partners) for partners, _ in rows),
+            "frames_bytes": len(data),
+            "frames_sha256": hashlib.sha256(data).hexdigest(),
+            "frames_idx_sha256": hashlib.sha256(offsets.astype("<u8").tobytes()).hexdigest(),
+            "zstd_level": 3,
+        }
+    )
+
+
+def edit_partner_row(
+    store: Path, change: Callable[[np.ndarray, np.ndarray, int], tuple[np.ndarray, np.ndarray]]
+) -> None:
+    """`change` applied to the first chr22 row that has a partner, written back as frames."""
+    rows, per_frame = partner_rows(store, "22")
+    at = next(at for at, (partners, _) in enumerate(rows) if len(partners))
+    rows[at] = change(*rows[at], at)
+    write_partner_rows(store, "22", rows, per_frame)
+
+
+def a_partner_past_the_chromosome(store: Path) -> None:
+    """Names a partner past the chromosome's last row: a partner §5.2 never holds."""
+
+    def change(partners: np.ndarray, codes: np.ndarray, at: int) -> tuple[np.ndarray, np.ndarray]:
+        moved = partners.astype(np.int64).copy()
+        moved[-1] = len(partner_rows(store, "22")[0]) + 5
+        return moved, codes
+
+    edit_partner_row(store, change)
+
+
+def a_reserved_partner_code(store: Path) -> None:
+    """Writes the reserved code into a Partner Rows row."""
+
+    def change(partners: np.ndarray, codes: np.ndarray, at: int) -> tuple[np.ndarray, np.ndarray]:
+        changed = codes.copy()
+        changed[0] = -32768
+        return partners, changed
+
+    edit_partner_row(store, change)
+
+
+def a_partner_beyond_far_bp(store: Path) -> None:
+    """Moves one entry's partner to a row more than far_bp away, keeping the row ascending."""
+    rows, per_frame = partner_rows(store, "22")
+    _, pos = chr22(store)
+    far_bp = 10_000_000
+    for at, (partners, codes) in enumerate(rows):
+        moved = partners.astype(np.int64).copy()
+        far = np.flatnonzero(np.abs(pos - pos[at]) > far_bp)[::-1]
+        chosen = next((int(j) for j in far if len(moved) == 1 or int(j) > moved[-2]), None)
+        if chosen is None:
+            continue
+        moved[-1] = chosen
+        rows[at] = (moved, codes)
+        break
+    else:
+        raise AssertionError("no chr22 row holds a partner more than far_bp away")
+    write_partner_rows(store, "22", rows, per_frame)
+
+
+def a_partner_below_its_floor(store: Path) -> None:
+    """Writes one within-near_bp pair's codes below the Partner Floor, both ways."""
+    rows, per_frame = partner_rows(store, "22")
+    _, pos = chr22(store)
+    floor = json.loads((store / "zarr.json").read_text())["attributes"]["ld_store"][
+        "partner_code_floor"
+    ]
+    for at, (partners, codes) in enumerate(rows):
+        close = np.abs(pos[partners] - pos[at]) <= 3_000_000
+        if not close.any():
+            continue
+        into = int(np.flatnonzero(close)[0])
+        partner = int(partners[into])
+        below = (floor - 1) if codes[into] >= 0 else -(floor - 1)
+        codes = codes.copy()
+        codes[into] = below
+        rows[at] = (partners, codes)
+        back = np.flatnonzero(rows[partner][0] == at)
+        assert len(back) == 1, "a pair is in both its rows"
+        other = rows[partner][1].copy()
+        other[int(back[0])] = below
+        rows[partner] = (rows[partner][0], other)
+        break
+    write_partner_rows(store, "22", rows, per_frame)
+
+
+def a_pair_held_with_two_codes(store: Path) -> None:
+    """Gives one pair's two entries different codes, both above the floor."""
+
+    def change(partners: np.ndarray, codes: np.ndarray, at: int) -> tuple[np.ndarray, np.ndarray]:
+        changed = codes.copy()
+        changed[0] = -changed[0] if abs(int(changed[0])) < 32767 else changed[0] - 1
+        return partners, changed
+
+    edit_partner_row(store, change)
+
+
+def a_missing_within_near_bp_entry(store: Path) -> None:
+    """Drops one direction of a pair within near_bp whose band code reaches the Partner Floor,
+    so the near half is no longer the band's."""
+    rows, per_frame = partner_rows(store, "22")
+    _, pos = chr22(store)
+    for at, (partners, codes) in enumerate(rows):
+        close = np.abs(pos[partners] - pos[at]) <= 3_000_000
+        if not close.any():
+            continue
+        into = int(np.flatnonzero(close)[0])
+        rows[at] = (np.delete(partners, into), np.delete(codes, into))
+        break
+    write_partner_rows(store, "22", rows, per_frame)
+
+
+def a_later_row_code_unlike_the_band(store: Path) -> None:
+    """Gives the entry in a pair's later row a code the Near Band does not hold there, the
+    earlier row's entry staying as the band holds it."""
+    rows, per_frame = partner_rows(store, "22")
+    _, pos = chr22(store)
+    for at, (partners, codes) in enumerate(rows):
+        close = (partners < at) & (np.abs(pos[partners] - pos[at]) <= 3_000_000)
+        if not close.any():
+            continue
+        into = int(np.flatnonzero(close)[0])
+        changed = codes.copy()
+        changed[into] = -changed[into]
+        rows[at] = (partners, changed)
+        write_partner_rows(store, "22", rows, per_frame)
+        return
+    raise AssertionError("no chr22 entry is in a pair's later row within near_bp")
+
+
+def a_missing_far_entry(store: Path) -> None:
+    """Drops one direction of a pair beyond near_bp, so the far half is not the Far Pairs'."""
+    rows, per_frame = partner_rows(store, "22")
+    _, pos = chr22(store)
+    for at, (partners, codes) in enumerate(rows):
+        beyond = np.abs(pos[partners] - pos[at]) > 3_000_000
+        if not beyond.any():
+            continue
+        into = int(np.flatnonzero(beyond)[0])
+        rows[at] = (np.delete(partners, into), np.delete(codes, into))
+        break
+    write_partner_rows(store, "22", rows, per_frame)
+
+
+def flip_a_byte_in_a_frame(store: Path) -> None:
+    """Flips a byte inside chr22's third frame: its content checksum then fails."""
+    group = zarr.open_group(store / "partners" / "22", mode="r")
+    offsets = np.asarray(group["frames_idx"][:]).astype(np.int64)
+    chunk = layout.chunk_file(group["frames"])
+    data = bytearray(chunk.read_bytes())
+    at = int(offsets[2]) + 12
+    data[at] ^= 0xFF
+    chunk.write_bytes(bytes(data))
+
+
+def a_group_recording_another_row_count(store: Path) -> None:
+    """Records 587 rows for chr22, which has 588."""
+    group = zarr.open_group(store / "partners" / "22", mode="r+")
+    group.attrs.update(rows=587)
+
+
+def a_group_recording_another_entry_count(store: Path) -> None:
+    """Records one entry more than chr22's frames hold."""
+    group = zarr.open_group(store / "partners" / "22", mode="r+")
+    group.attrs.update(entries=int(group.attrs["entries"]) + 1)
+
+
 #: One way to break each rule, applied to a copy of the Test Store. ogld#4 writes each.
 BREAKERS: dict[str, Callable[[Path], None]] = {
     # lacks index/22/partner
@@ -662,6 +881,28 @@ BREAKERS: dict[str, Callable[[Path], None]] = {
     ),
     # drops a Far Pair the index holds
     "far.index": drop_a_far_pair,
+    # records 587 rows for chr22's 588
+    "partners.files": a_group_recording_another_row_count,
+    # flips a byte inside chr22's third frame, so its checksum fails
+    "partners.frames": flip_a_byte_in_a_frame,
+    # records one entry more than chr22's frames hold
+    "partners.rows": a_group_recording_another_entry_count,
+    # writes -32768 into a chr22 Partner Rows row
+    "partners.codes": a_reserved_partner_code,
+    # moves one entry's partner more than far_bp away
+    "partners.distance": a_partner_beyond_far_bp,
+    # writes a within-near_bp pair's codes below the Partner Floor, both ways
+    "partners.threshold": a_partner_below_its_floor,
+    # gives one pair's two entries different codes
+    "partners.symmetric": a_pair_held_with_two_codes,
+    # drops one direction of a pair within 3 Mb the band reaches
+    "partners.near": a_missing_within_near_bp_entry,
+    # drops one direction of a pair beyond 3 Mb
+    "partners.far": a_missing_far_entry,
+    # records a Partner Threshold above the store's t_far
+    "provenance.partner_threshold": edit_provenance(
+        lambda p: p.update(t_partner=p["t_far"] + 0.001)
+    ),
 }
 
 
