@@ -352,6 +352,78 @@ def test_a_row_of_partners_and_codes_of_other_counts_is_refused_naming_it(
     assert "row 0" in str(refused.value) or "row 1" in str(refused.value), refused.value
 
 
+def test_a_target_that_appeared_before_the_rename_is_refused_not_replaced(tmp_path: Path) -> None:
+    # One writer per store, and a chromosome's group is written once: a target that is there when
+    # the group is published, empty or not, is refused rather than replaced (issue #67).
+    group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=16)
+    group.add(FORTY[:16])
+    target = tmp_path / "store" / "partners" / "22"
+    target.mkdir()
+    with pytest.raises(FileExistsError, match="partners/22 exists"):
+        group.close()
+    assert target.is_dir(), "the target is still the caller's"
+    assert not list(target.iterdir()), "and nothing replaced it"
+    assert not [path for path in target.parent.iterdir() if path.name.startswith(".")], (
+        "nor left a temporary group behind"
+    )
+
+
+def test_a_stale_temporary_group_of_the_same_chromosome_is_removed(tmp_path: Path) -> None:
+    # A writer that crashed leaves `partners/.<chrom>.tmp-*`, which zarr's `members()` warns about:
+    # it is removed when that chromosome is written again, and no other chromosome's is touched.
+    partners = tmp_path / "store" / "partners"
+    open_store(tmp_path / "store")
+    partners.mkdir()
+    crashed = partners / ".22.tmp-crashed"
+    crashed.mkdir()
+    (crashed / "frames.bin").write_bytes(b"a frame a crashed writer left")
+    elsewhere = partners / ".21.tmp-live"
+    elsewhere.mkdir()
+    group = frames.FramesGroup(zarr.open_group(str(tmp_path / "store"), mode="r+"), "22", rows=16)
+    assert not crashed.exists(), "a crash's leftover is removed before the chromosome is written"
+    assert elsewhere.exists(), "and another chromosome's temp group is left alone"
+    group.add(FORTY[:16])
+    group.close()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        members = zarr.open_group(str(tmp_path / "store"), mode="r").members(max_depth=None)
+    assert [str(path) for path, _ in members if "partners/22" in str(path)], "the group is there"
+    assert "Object at .21.tmp-live" in str([str(w.message) for w in caught]), (
+        "the other chromosome's leftover still warns, which is why a store holding one is refused"
+    )
+
+
+def test_a_refusal_from_a_pending_frame_names_its_own_number(tmp_path: Path) -> None:
+    # With eight compressors three frames are pending at once; a row of the second must be named
+    # frame 1, not the frame the appended offsets have reached (issue #67's review, round 2).
+    rows = frame_rows(48, [*PAIRS, (21, 24), (21, 30)])
+    partners, codes = rows[21]
+    rows[21] = (partners, codes[:-1])
+    group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=48, workers=8)
+    for first in range(0, 48, 16):
+        group.add(rows[first : first + 16])
+    with pytest.raises(ValueError, match="frame 1 of chromosome 22, row 21") as refused:
+        group.close()
+    assert "2 partner(s) and 1 code(s)" in str(refused.value), refused.value
+
+
+@pytest.mark.parametrize(
+    ("partners", "what"),
+    [([9, 7], "partners that do not ascend"), ([7, 7], "partners that do not ascend")],
+)
+def test_partners_that_do_not_ascend_are_refused_naming_the_row(
+    partners: list[int], what: str
+) -> None:
+    # Strictly ascending, never the row: refused with the chromosome, the frame and the row, so a
+    # malformed emitter names where it went wrong rather than raising a bare TypeError.
+    rows = frame_rows(48, [*PAIRS, (5, 7), (5, 9)])
+    rows[5] = (np.array(partners, np.int32), np.array([1, 2], dtype=REncoding.dtype))
+    with pytest.raises(ValueError, match=what) as refused:
+        encoded(0, rows[:16], 0)
+    assert "frame 0 of chromosome 22" in str(refused.value), refused.value
+    assert f"row 5 holds {what}" in str(refused.value), refused.value
+
+
 def test_a_group_closed_with_rows_missing_is_refused(tmp_path: Path) -> None:
     group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=20)
     group.add(TWO_FRAMES[:16])

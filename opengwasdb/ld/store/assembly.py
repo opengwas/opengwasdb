@@ -448,6 +448,9 @@ class RowCarry:
         self._counts = np.full(rows, -1, dtype=np.int64)
         self._next = 0
         self._carried: dict[int, list[_Pairs]] = {}
+        #: The pairs carried now, and the most ever: counted as they are kept and released, never
+        #: by walking the pieces, so a block costs what it carries and nothing per live piece.
+        self._held = 0
         self._peak = 0
 
     @property
@@ -495,6 +498,7 @@ class RowCarry:
         if not len(hi):
             return
         lo, hi, codes = _by_later_row([(lo, hi, codes)])
+        self._held += len(hi)
         bucket = hi // CARRY_ROWS
         edges = np.flatnonzero(np.diff(bucket)) + 1
         for part in np.split(np.arange(len(hi)), edges):
@@ -511,15 +515,23 @@ class RowCarry:
             pieces = self._carried.pop(key)
             if (key + 1) * CARRY_ROWS <= b:
                 taken += pieces
+                self._held -= sum(len(piece[1]) for piece in pieces)
                 continue
-            kept = []
-            for lo, hi, codes in pieces:
-                at = int(np.searchsorted(hi, b))
-                taken.append((lo[:at], hi[:at], codes[:at]))
-                if at < len(hi):
-                    kept.append((lo[at:], hi[at:], codes[at:]))
-            if kept:
-                self._carried[key] = kept
+            taken += self._split(key, pieces, b)
+        return taken
+
+    def _split(self, key: int, pieces: list[_Pairs], b: int) -> list[_Pairs]:
+        """The part of a bucket only partly taken, releasing it; the rest stays carried."""
+        taken: list[_Pairs] = []
+        kept: list[_Pairs] = []
+        for lo, hi, codes in pieces:
+            at = int(np.searchsorted(hi, b))
+            taken.append((lo[:at], hi[:at], codes[:at]))
+            self._held -= at
+            if at < len(hi):
+                kept.append((lo[at:], hi[at:], codes[at:]))
+        if kept:
+            self._carried[key] = kept
         return taken
 
     def close(self) -> None:

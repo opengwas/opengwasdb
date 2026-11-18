@@ -199,8 +199,9 @@ def _checked(first: int, lengths: npt.NDArray[np.uint32], partners: npt.NDArray[
         (partners == row, "its own row"),
         (np.concatenate([[False], out_of_order]), "partners that do not ascend"),
     ):
-        if found.any():
-            raise ValueError(f"row {int(row[found.ravel()[0]])} holds {what} (spec §3, §5.2)")
+        at = np.flatnonzero(found)
+        if at.size:
+            raise ValueError(f"row {int(row[at[0]])} holds {what} (spec §3, §5.2)")
 
 
 def _deltas(
@@ -350,6 +351,10 @@ class FramesGroup:
     cannot read back — is poisoned: it removes its temporary directory, shuts its pool down, and
     every later `add` or `close` raises, naming the first failure. A component that is not whole
     is never finished and never published.
+
+    One writer per store: concurrent writers are not supported, and the temporary group and the
+    rename assume it. A temporary group another run left behind — a crash — is removed when its
+    chromosome is written again.
     """
 
     def __init__(self, root: zarr.Group, chrom: str, rows: int, *, workers: int = 1) -> None:
@@ -374,6 +379,11 @@ class FramesGroup:
                 f"{layout.partners_path(chrom)} exists: a chromosome's Partner Rows are written "
                 "once"
             )
+        # A writer that crashed left a group of this chromosome at `.<chrom>.tmp-*`, which a
+        # zarr listing warns about: none can be live, because a store has one writer (see below).
+        for stale in beside.iterdir():
+            if stale.name.startswith(f".{chrom}.tmp-"):
+                shutil.rmtree(stale, ignore_errors=True)
         self._directory = Path(tempfile.mkdtemp(prefix=f".{chrom}.tmp-", dir=beside))
         # `mkdtemp` made the directory, so `w` only fills it; no other writer can see it.
         self._group = zarr.open_group(str(self._directory), mode="w", zarr_format=3)
@@ -384,6 +394,7 @@ class FramesGroup:
         self._bytes = 0
         self._entries = 0
         self._added = 0
+        self._submitted = 0
         self._ahead = 2 * workers
         self._pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
         self._pending: list[Future[bytes]] = []
@@ -411,14 +422,14 @@ class FramesGroup:
     def _add(self, rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]) -> None:
         if rows and self._added % ROWS_PER_FRAME:
             raise ValueError(
-                f"frame {len(self._offsets) - 1} of chromosome {self._chrom} is still open: a "
-                f"frame holds {ROWS_PER_FRAME} rows (spec §5.2)"
+                f"frame {self._submitted - 1} of chromosome {self._chrom} is still open: a frame "
+                f"holds {ROWS_PER_FRAME} rows (spec §5.2)"
             )
         due = min(ROWS_PER_FRAME, self._rows - self._added)
         if len(rows) != due:
             raise ValueError(
-                f"frame {len(self._offsets) - 1} of chromosome {self._chrom} holds {due} rows, "
-                f"not {len(rows)} (spec §5.2)"
+                f"frame {self._submitted} of chromosome {self._chrom} holds {due} rows, not "
+                f"{len(rows)} (spec §5.2)"
             )
         self._entries += sum(len(np.asarray(partners)) for partners, _ in rows)
         self._pending.append(self._start(self._added, rows))
@@ -429,8 +440,13 @@ class FramesGroup:
     def _start(
         self, first: int, rows: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]
     ) -> Future[bytes]:
-        """The frame's bytes, being compressed on the pool or made here when there is none."""
-        number = len(self._offsets) - 1
+        """The frame's bytes, being compressed on the pool or made here when there is none.
+
+        The frame is numbered where it is submitted: with a pool several are pending at once, and
+        a refusal from one of them must name its own frame, not the one the offsets have reached.
+        """
+        number = self._submitted
+        self._submitted += 1
         if self._pool is not None:
             return self._pool.submit(encode_frame, first, rows, chrom=self._chrom, number=number)
         done: Future[bytes] = Future()
@@ -517,7 +533,17 @@ class FramesGroup:
 
     def _publish(self) -> None:
         """Make the whole group `partners/<chrom>/` in one rename, and refuse a store zarr cannot
-        read it back from."""
+        read it back from.
+
+        A target that is there now, empty or not, is refused rather than replaced: `os.rename`
+        would silently move this group over an empty directory. The check is as late as it can be,
+        but a store is written by one writer at a time, so nothing else makes one meanwhile.
+        """
+        if self._final.exists():
+            raise FileExistsError(
+                f"{layout.partners_path(self._chrom)} exists: a chromosome's Partner Rows are "
+                "written once, by one writer"
+            )
         os.rename(self._directory, self._final)
         self._published = True
         published = zarr.open_group(str(self._final), mode="r")
