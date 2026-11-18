@@ -30,6 +30,10 @@ record gains `se_out_of_range`, its two parts all 0; the Dense pin's
 `overview.html` renders the new column. Re-derived with every array, `index.sqlite`
 and other file unchanged, and each `analyses.tsv` without the new column hashing
 to the pin it had.
+
+Since #366 the five Ragged SSF pins' `analyses.tsv` also records `declared_standardised`:
+an SSF manifest row states its scale and method, and the fixtures' sources are already
+in SD Units (`tests/ssf_builds.py`). Re-derived with every other pinned entry unchanged.
 """
 
 from __future__ import annotations

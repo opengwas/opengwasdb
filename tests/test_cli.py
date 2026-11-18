@@ -350,7 +350,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     # 3. validate --format json on store with warnings
     warn_filtered_dir = tmp_path / "warn_filtered"
     warn_filtered_dir.mkdir()
-    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+    from tests.ssf_builds import build_ragged_from_ssf
 
     with gzip.open(warn_filtered_dir / "trait_warn.tsv.gz", "wt", encoding="utf-8") as fh:
         fh.write("chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\tstandard_error\teffect_allele_frequency\n")

@@ -43,12 +43,12 @@ import opengwasdb.layouts.ragged.complete as complete_module
 import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
 import opengwasdb.store.arrays as store_arrays
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store, resume_ragged_completion
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
+from tests.ssf_builds import build_ragged_from_ssf
 
 N_WORKERS = 3
 

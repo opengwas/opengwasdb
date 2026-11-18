@@ -23,8 +23,8 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import SeOutOfRange, StoreCodec
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model import analyses as model
 from opengwasdb.model.analyses import (
     N_MISSING_SE_OUT_OF_RANGE,
@@ -177,7 +177,7 @@ def _decoded_extremes(seed: int) -> tuple[float, int]:
     largest decoded SE, and how many cells' prediction moves by a whole unit when
     the frequency is narrowed to float32, as a reader narrows it.
 
-    Half the Analyses are steep, built as the review's case was: a float32 slope
+    Half the Analyses are steep, built to defeat the narrowing (issue #338): a float32 slope
     of 1e8 to 1e9 and an intercept, and frequencies within 1e-13 of the one at
     which the float64 prediction is the Analysis' typical SE, so their codes are
     ordinary while narrowing moves the prediction by whole units."""
@@ -227,8 +227,8 @@ def _decoded_extremes(seed: int) -> tuple[float, int]:
 
 def test_no_stored_cell_decodes_above_the_bound_under_any_model() -> None:
     """A property over random coefficients (slopes up to 1e9, where narrowing the
-    frequency to float32 moves a prediction by whole units, as in the review's
-    SE of 10,000 decoding to 11,806,119) and every candidate range."""
+    frequency to float32 moves a prediction by whole units, as when an
+    SE of 10,000 decoded to 11,806,119) and every candidate range."""
     moved = 0
     for seed in range(40):
         largest, shifted = _decoded_extremes(seed)
@@ -259,7 +259,7 @@ def test_the_reviewed_far_below_the_bound_cell_is_held_exactly() -> None:
 def test_the_streamed_dense_rewrite_counts_a_crossing_as_its_encode_does(tmp_path) -> None:
     """The edge cell's ordinary code decodes to 65,520 under this model; the
     codes-only count and the rewrite's encode must call it one exception alike,
-    or the rewrite refuses its own table (spec review r2)."""
+    or the rewrite refuses its own table (issue #338, ADR 0068)."""
     import zarr
 
     from opengwasdb.encoding import se as se_module

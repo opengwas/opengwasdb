@@ -34,7 +34,7 @@ from opengwasdb.encoding import (
     association_codec,
 )
 from opengwasdb.encoding.association_codec import CellValues, Storable
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense import build_vcf
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build

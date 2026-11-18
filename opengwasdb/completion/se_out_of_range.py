@@ -13,7 +13,7 @@ before it the count is unknown, never 0), in two parts recorded apart in
 
 The parts are what make the count checkable exactly: the Observed-View Check
 samples cells, so it can find only some of the `observed` part, never the whole
-of it, and none of the `imputed` one (ADR 0068, defect 2 of the 2 Nov review).
+of it, and none of the `imputed` one (ADR 0068, defect 2 in its list).
 """
 
 from __future__ import annotations

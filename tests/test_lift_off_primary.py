@@ -142,7 +142,7 @@ def _ssf_row(chrom: str, pos: int, ref: str, alt: str, rsid: str) -> dict[str, o
 
 
 def _ssf_build(tmp_path: Path, analyses: list[tuple[str, str, list[dict]]], **options) -> Path:
-    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+    from tests.ssf_builds import build_ragged_from_ssf
 
     source_dir = tmp_path / "ssf"
     source_dir.mkdir()

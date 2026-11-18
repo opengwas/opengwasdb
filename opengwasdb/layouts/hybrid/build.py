@@ -70,7 +70,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,

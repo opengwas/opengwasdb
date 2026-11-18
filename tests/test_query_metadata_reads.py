@@ -29,9 +29,9 @@ from test_ragged_build_ssf import _make_fixture
 from zarr.storage import LocalStore
 
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.query import query_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 #: Store keys that hold Zarr metadata rather than chunk bytes, v2 and v3.
 _METADATA_KEYS = (".zarray", ".zgroup", ".zattrs", ".zmetadata", "zarr.json")

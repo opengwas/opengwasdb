@@ -193,6 +193,34 @@ def _parse_original_sd(
     return se_divisor
 
 
+def require_sd_scale_standardised(
+    scale: str, method: str, analysis_id: str, manifest_path: str | Path
+) -> None:
+    """Refuse an Analysis labelled SD Units that no SD standardised (issue #366, ADR 0084).
+
+    ``stored_effect_scale=sd`` says the stored z and SE are in SD Units, which
+    holds only when the SEs were divided by a phenotype SD
+    (`SD_RESCALING_METHODS`) or the source declared them already standardised
+    (``declared_standardised``). Any other method, or none, would build an
+    undivided Analysis under an SD Units label. A scale that is not ``sd``
+    claims no SD Units, so it is not this rule's. Every builder applies it
+    through its own manifest parser.
+    """
+    if scale != StoredEffectScale.SD.value:
+        return
+    standardised = {m.value for m in SD_RESCALING_METHODS}
+    standardised.add(OriginalSdMethod.DECLARED_STANDARDISED.value)
+    if method and method not in {m.value for m in OriginalSdMethod}:
+        return  # an unknown spelling is the method parser's to refuse, by name
+    if method not in standardised:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {analysis_id!r} has "
+            f"stored_effect_scale='sd' but original_sd_method={method!r}: SD Units "
+            "need a rescaling method or declared_standardised, else the Store would "
+            "label an unstandardised Analysis as SD Units (issue #366, ADR 0084)"
+        )
+
+
 def original_sd_divisor(
     row: Mapping[str, str], analysis_id: str, manifest_path: str | Path
 ) -> float:
@@ -216,7 +244,7 @@ def original_sd_divisor(
     """
     # The method is judged as spelt, as Dense's parser judges it: the Store records
     # it verbatim (`PassthroughMetadata`), so a spelling that passed here only once
-    # stripped would build and then fail `analyses.vocabularies` (#366 review).
+    # stripped would build and then fail `analyses.vocabularies` (issue #366).
     method = row.get("original_sd_method") or ""
     original_sd = (row.get("original_sd") or "").strip()
     if not method:
@@ -229,6 +257,18 @@ def original_sd_divisor(
         return 1.0
     return _parse_original_sd(
         {"original_sd_method": method, "original_sd": original_sd},
+        analysis_id,
+        manifest_path,
+    )
+
+
+def check_ragged_sd_scale(
+    row: Mapping[str, str], analysis_id: str, manifest_path: str | Path
+) -> None:
+    """Apply `require_sd_scale_standardised` to one Ragged manifest row."""
+    require_sd_scale_standardised(
+        (row.get("stored_effect_scale") or "").strip(),
+        row.get("original_sd_method") or "",
         analysis_id,
         manifest_path,
     )
@@ -254,6 +294,7 @@ def _parse_manifest_row(
     assembly = _parse_source_assembly(row, fallback_assembly, trait_id, manifest_path)
     capability = _parse_reader_capability(row, fallback_capability, trait_id, manifest_path)
     se_divisor = _parse_original_sd(row, trait_id, manifest_path)
+    require_sd_scale_standardised(scale, row["original_sd_method"], trait_id, manifest_path)
     return ManifestRow(
         trait_id=trait_id,
         file_path=row[cols.source_file],

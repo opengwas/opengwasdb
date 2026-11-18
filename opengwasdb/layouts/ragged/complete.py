@@ -79,8 +79,8 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (

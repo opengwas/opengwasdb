@@ -37,7 +37,6 @@ from opengwasdb.encoding import (
     ZEncoding,
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.stats import log10_p_two_sided
 from opengwasdb.store.open import (
@@ -45,6 +44,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.validation import validate_store
+from tests.ssf_builds import build_ragged_from_ssf
 
 # The FADS1/FADS2 pilot hit, the largest |z| in `ukb-b`, one just inside the
 # representable range, and one ordinary value.

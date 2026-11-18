@@ -33,7 +33,7 @@ from opengwasdb.completion.checkpoint import ALID_DTYPE, is_long
 from opengwasdb.encoding import association_codec
 from opengwasdb.encoding.association_codec import CellValues
 from opengwasdb.encoding.memory import pool_workers
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.variants.routing import collapse_duplicates
 
 log = logging.getLogger(__name__)

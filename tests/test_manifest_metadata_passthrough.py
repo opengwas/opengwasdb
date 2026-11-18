@@ -15,8 +15,8 @@ import pytest
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses
+from tests.ssf_builds import build_ragged_from_ssf
 
 
 def _source_vcf(tmp_path: Path) -> Path:
@@ -112,12 +112,12 @@ def _ragged_manifest(tmp_path: Path) -> Path:
         "\tassigned_ancestry\tancestry_assignment_method\tsample_size_kind"
         "\tsample_size_scope\tn_cases\tn_controls\toriginal_effect_scale"
         "\toriginal_sd_method\tlicense\tpublication_doi\tpublication_pmid"
-        "\tconsortium\tfirst_author\tancestry_prop_EUR\tsource_genome_build\n"
+        "\tconsortium\tfirst_author\tancestry_prop_EUR\tsource_genome_build\tstored_effect_scale\n"
         "0\tbinary\tBinary trait\ttrait_a.tsv.gz\t10000"
         "\tEUR\tsource_trusted_no_af\tcase_control"
         "\tanalysis_level\t1000\t9000\tlog_or"
         "\tbinary_trait\tCC-BY-4.0\t10.1000/xyz\t12345678"
-        "\tGIANT\tSmith\t0.98\tGRCh38\n",
+        "\tGIANT\tSmith\t0.98\tGRCh38\tlog_or\n",
         encoding="utf-8",
     )
     return path
@@ -172,8 +172,10 @@ def test_ragged_manifest_without_optional_columns_leaves_them_blank(tmp_path: Pa
     row = read_analyses(store / "analyses.tsv").rows[0]
     blank = (
         "ancestry_assignment_method", "sample_size_kind", "sample_size_scope",
-        "n_cases", "n_controls", "original_effect_scale", "original_sd_method",
+        "n_cases", "n_controls", "original_effect_scale",
         "license", "publication_doi", "publication_pmid", "consortium", "first_author",
     )
     assert all(row[column] == "" for column in blank)
+    # The scale and method are the builder's to require, so the fixture helper states them
+    # (`tests/ssf_builds.py`); nothing else is invented.
     assert row["sample_size"] == "10000"

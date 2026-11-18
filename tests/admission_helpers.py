@@ -19,8 +19,8 @@ from opengwasdb.admission import AnalysisRules, SourceRows, admission_record_for
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged import RaggedBuildResult
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.readers.interface import ReaderAssociation
+from tests.ssf_builds import build_ragged_from_ssf
 
 
 def admitted(associations: Iterable[ReaderAssociation]) -> list[ReaderAssociation]:

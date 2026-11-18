@@ -43,9 +43,9 @@ from stored_rows import stored_rows
 from test_ragged_completion import _write_ssf_manifest
 
 from opengwasdb.completion.impute import min_observed_points
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.variants.axis import VariantAxis
+from tests.ssf_builds import build_ragged_from_ssf
 
 OBSERVED = {
     "1": (900_000, 1_000_000, 1_100_000, 1_150_000, 1_200_000),

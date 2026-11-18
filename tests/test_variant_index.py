@@ -40,7 +40,6 @@ from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.layouts.ragged import by_variant
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.by_variant import (
     BY_VARIANT_GROUP,
     ByVariantReader,
@@ -53,6 +52,7 @@ from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import by_variant as by_variant_rules
+from tests.ssf_builds import build_ragged_from_ssf
 
 #: The arrays a `by_variant` group always carries beside its offsets.
 _CORE_LEAVES = ("analysis_index", "z", "se")

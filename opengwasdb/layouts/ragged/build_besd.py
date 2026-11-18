@@ -42,8 +42,8 @@ from opengwasdb.build.liftover import (
     require_lifted_alleles_match_reference,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
-from opengwasdb.layouts.build_manifest import original_sd_divisor
+from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_eaf import per_probe_report, verify_esi_orientation
@@ -925,13 +925,14 @@ def _overlay_sd(
     statistics it describes; the Analysis's SEs are divided by it before they are
     encoded, exactly as in Dense, Dense-from-VCF and Hybrid.
     """
+    manifest = manifest_path if manifest_path is not None else "<analyses>"
     sd_method = _opt(r.get("original_sd_method"))
     sd_val = _opt(r.get("original_sd"))
     if sd_method is None and sd_val is None:
+        check_ragged_sd_scale(r, analysis_id, manifest)
         return "", "", 1.0
-    divisor = original_sd_divisor(
-        r, analysis_id, manifest_path if manifest_path is not None else "<analyses>"
-    )
+    divisor = original_sd_divisor(r, analysis_id, manifest)
+    check_ragged_sd_scale(r, analysis_id, manifest)
     return sd_method or "", sd_val or "", divisor
 
 

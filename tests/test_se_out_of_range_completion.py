@@ -34,7 +34,7 @@ from test_check_observed_view import HEADER, ROWS
 import opengwasdb.completion.block as block_module
 from opengwasdb.encoding import association_codec, codec, se
 from opengwasdb.encoding.association_codec import CellValues, Storable
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense import build_vcf
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid import build as hybrid_build
@@ -525,8 +525,8 @@ def test_a_hybrid_completion_counts_what_each_component_left_out(tmp_path, monke
     its 1,200,000 one that stays off the panel; a 0.2.2 source holds both with SE
     100,000. Neither is carried: the crossover is not folded, so its Dense cell is
     Dense completion's, and the Overflow row is dropped. The Dense Component counts
-    the crossover, which would have been its cell; the root counts both (defect 1 of
-    the 2 Nov review)."""
+    the crossover, which would have been its cell; the root counts both (issue #338,
+    ADR 0068 defect 1)."""
     with _as_before_0_2_3(monkeypatch):
         src = thc.build_two_trait_source(
             tmp_path,

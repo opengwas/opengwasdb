@@ -23,7 +23,6 @@ from liftover_fixtures import write_collision_chain, write_two_strand_chain
 from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.query import query_store
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
@@ -31,6 +30,7 @@ from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 from opengwasdb.variants.normalise import identity_allele, identity_alleles, identity_base
 from opengwasdb.variants.reference import read_variant_reference
+from tests.ssf_builds import build_ragged_from_ssf
 
 #: The one variant every fixture names, in the case-insensitive spelling.
 SITE = ("1", 100_000)

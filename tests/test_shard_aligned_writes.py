@@ -33,7 +33,7 @@ import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import _row_block_of
 from opengwasdb.layouts.dense.build_vcf import _eaf_row_band, _flush_band, _shard_columns
 from opengwasdb.layouts.dense.complete import _completion_band_rows

@@ -61,7 +61,7 @@ from opengwasdb.encoding.codec import (
     require_parallel,
 )
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
 from opengwasdb.index import initialise_schema, set_metadata

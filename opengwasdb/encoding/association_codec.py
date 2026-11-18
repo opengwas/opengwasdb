@@ -43,8 +43,8 @@ from opengwasdb.encoding.codec import (
     require_parallel,
     se_above_bound,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.plan import StoreEncoding
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.store.arrays import SE_COEFFICIENTS
 
 log = logging.getLogger(__name__)

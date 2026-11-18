@@ -24,8 +24,8 @@ from opengwasdb.encoding.association_codec import (
     Placement,
     log_se_out_of_range,
 )
-from opengwasdb.encoding.phenotype_sd import PhenotypeSd
 from opengwasdb.encoding.planes import write_encoded_planes
+from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
