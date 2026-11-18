@@ -616,11 +616,16 @@ class PartnerFrames:
     and `frames_bytes` before any frame is read, and the `frames` array's metadata, which names the
     one chunk file the frames are byte ranges of.
 
-    A frame is one byte-range read (`location.chunk_range`) and one `FramePayload.parse`, the
-    store's one frame decoder, so a frame that fails its checksum, its k or its payload length is
-    refused naming the chromosome and the frame, and never read as a short row (§5.4). Each frame
-    parsed is kept in the reader's `FrameCache`, so a row of a frame another row already fetched
-    costs no read, and a row costs only its own gather from the payload's planes (§7).
+    A frame is one read through `location`'s frame source — `os.pread` on a local file's kept
+    descriptor, one Range request for a store that is not on this disk — and one
+    `FramePayload.parse`, the store's one frame decoder, so a frame that fails its header, its
+    checksum, its k or its payload length is refused naming the chromosome and the frame, and never
+    read as a short row (§5.4). Each frame parsed is kept in the reader's `FrameCache`, so a row of
+    a frame another row already fetched costs no read, and a row costs only its own gather from the
+    payload's planes (§7).
+
+    A source is not fork-safe and is not inherited across `fork` (its lock and descriptor are not):
+    a process worker opens its own reader, and so its own sources (partner-rows §9; ogld#71).
     """
 
     def __init__(self, group: zarr.Group, chrom: str, cache: FrameCache) -> None:

@@ -146,6 +146,10 @@ class StoreReader:
     `format_version` or `encoding` this package does not implement (spec §13), naming
     it, before anything is decoded. Every code is decoded with the store's own encoding, so
     one process reads stores of different scales side by side.
+
+    A reader is not fork-safe and is not inherited across `fork`: it holds locks and, once a
+    chromosome's Partner Rows are read, a chunk file's descriptor. A process worker opens its own
+    reader (partner-rows §9; ogld#71).
     """
 
     _root: zarr.Group
@@ -160,6 +164,7 @@ class StoreReader:
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
     _partner_lock: threading.Lock
+    _closed: bool
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
 
@@ -189,6 +194,7 @@ class StoreReader:
         # A chromosome's first use is one load, however many threads make it (§7): the offsets chunk
         # is read once and one chunk-file descriptor is opened.
         self._partner_lock = threading.Lock()
+        self._closed = False
         # Each handle is opened once: opening one reads its metadata document, which over
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
@@ -243,14 +249,23 @@ class StoreReader:
         return self._frame_cache.budget
 
     def close(self) -> None:
-        """Release what this reader holds open: a local store's chunk file, one descriptor for each
-        chromosome whose Partner Rows it read (partner-rows §7).
+        """Close the reader: after it returns no Partner Rows read is answered, and every chunk file
+        it kept open is closed (partner-rows §7).
 
-        A reader is usable until it is closed, and closing twice is closing once. A store read over
-        HTTP holds nothing, so closing it is nothing to do.
+        A first use that is racing `close` cannot publish a source that outlives it: it holds the
+        chromosome lock `close` waits on and re-checks the closed state under it, so either the
+        close closes what was published, or the first use finds the reader closed and refuses. A
+        read already in flight finishes on the file it opened, because a source closes only after
+        its reads have finished (`PreadSource.close`). Closing twice is closing once.
         """
-        for frames in self._partner_frames.values():
-            frames.close()
+        with self._partner_lock:
+            # Marked closed and emptied under the same lock a first use takes, so no first use can
+            # publish a source between the two: one that runs after this sees the closed reader and
+            # refuses, and one that ran before is in the list closed below.
+            self._closed = True
+            frames, self._partner_frames = list(self._partner_frames.values()), {}
+        for partner in frames:
+            partner.close()
 
     def __enter__(self) -> StoreReader:
         return self
@@ -690,6 +705,10 @@ class StoreReader:
         Opening one reads its group's attributes, its `frames_idx` chunk and its `frames` metadata:
         a request that never asks for a Partner Rows row — `matrix`, `region` — reads none of them.
         """
+        if self._closed:
+            raise ValueError(
+                "this reader is closed: its Partner Rows reads are over (partner-rows §7)"
+            )
         frames = self._partner_frames.get(chrom)
         if frames is not None:
             return frames
@@ -707,6 +726,10 @@ class StoreReader:
                 "them is refused naming the missing component (spec §13; partner-rows §5.1)"
             )
         with self._partner_lock:
+            if self._closed:
+                raise ValueError(
+                    "this reader is closed: its Partner Rows reads are over (partner-rows §7)"
+                )
             frames = self._partner_frames.get(chrom)
             if frames is None:
                 frames = open_partner_frames(self._root, chrom, self._frame_cache)

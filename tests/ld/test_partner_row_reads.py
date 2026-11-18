@@ -36,7 +36,7 @@ from store_copies import PARTNER_FLOOR, TEST_STORE
 from zarr.abc.store import RangeByteRequest
 
 from ogld.format import InputError
-from ogld.store import frames
+from ogld.store import frames, location
 from ogld.store.reader import StoreReader
 
 #: The Test Store's distances (spec §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
@@ -397,6 +397,108 @@ def test_a_reader_closes_the_chunk_file_it_kept_open(
     assert len(closed) == 2, "closing a closed reader closes nothing"
 
 
+def test_a_closed_reader_refuses_every_partner_rows_read() -> None:
+    """Closing a reader ends its Partner Rows reads (§7): a row the cache holds, a chromosome it
+    never read, and a bulk read all refuse, rather than be answered from a closed store."""
+    reader = StoreReader.open(TEST_STORE)
+    reader.partner_row("22", 100)
+    reader.partner_rows("22", np.array([0, 16]))
+    reader.close()
+    for read in (
+        lambda: reader.partner_row("22", 100),
+        lambda: reader.partner_row("21", 0),
+        lambda: reader.partner_rows("22", np.array([0, 16])),
+    ):
+        with pytest.raises(ValueError, match=r"closed"):
+            read()
+
+
+def test_a_first_use_racing_close_publishes_nothing_the_reader_keeps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first use that races `close()` cannot outlive it (§7): once close returns, nothing the
+    first use published is kept or left open, and every Partner Rows read refuses."""
+    opened, resume = threading.Event(), threading.Event()
+    original = frames.open_partner_frames
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        opened.set()
+        assert resume.wait(5), "the test never let the first use finish"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("ogld.store.reader.open_partner_frames", slow)
+    closed: list[int] = []
+    original_close = os.close
+    monkeypatch.setattr(os, "close", lambda fd: closed.append(fd) or original_close(fd))
+    reader = StoreReader.open(TEST_STORE)
+    outcome: dict[str, object] = {}
+
+    def read() -> None:
+        try:
+            outcome["row"] = reader.partner_row("22", 100)
+        except ValueError as refused:  # a read in flight may finish or refuse, never hang
+            outcome["refused"] = refused
+
+    reading = threading.Thread(target=read)
+    reading.start()
+    assert opened.wait(5), "the first use never started"
+    closing = threading.Thread(target=reader.close)
+    closing.start()
+    resume.set()
+    reading.join(5)
+    closing.join(5)
+    assert not reading.is_alive(), "a close raced a read and hung the read"
+    assert not closing.is_alive(), "a close raced a read and hung the close"
+    assert outcome, "the read neither answered nor refused"
+    assert reader._partner_frames == {}, "a first use published a source the close did not take"
+    assert closed, "the source the first use published was not closed"
+    with pytest.raises(ValueError, match=r"closed"):
+        reader.partner_row("22", 100)
+
+
+def test_a_close_waits_for_a_read_in_flight_and_gives_its_own_file_s_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A read in flight when the source closes finishes on the file it started on (§7): close waits
+    for it, so its descriptor is not closed — and so not reused for another file — underneath."""
+    held = tmp_path / "frames.bin"
+    held.write_bytes(b"A" * 4_096)
+    other = tmp_path / "other.bin"
+    other.write_bytes(b"B" * 4_096)
+    source = location.PreadSource(held)
+    entered, resume = threading.Event(), threading.Event()
+    original = os.pread
+
+    def paused(fd: int, length: int, offset: int) -> bytes:
+        entered.set()
+        assert resume.wait(5), "the test never resumed the read"
+        return original(fd, length, offset)
+
+    monkeypatch.setattr(os, "pread", paused)
+    read: dict[str, bytes] = {}
+
+    def reader() -> None:
+        read["bytes"] = source.read(0, 16)
+
+    reading = threading.Thread(target=reader)
+    reading.start()
+    assert entered.wait(5), "the read never reached its pread"
+    closing = threading.Thread(target=source.close)
+    closing.start()
+    closing.join(0.05)
+    assert closing.is_alive(), "close did not wait for the read in flight"
+    reused = os.open(other, os.O_RDONLY)
+    try:
+        resume.set()
+        reading.join(5)
+        closing.join(5)
+    finally:
+        os.close(reused)
+    assert read["bytes"] == b"A" * 16, "the read gave another file's bytes"
+    with pytest.raises(ValueError, match=r"closed"):
+        source.read(0, 16)
+
+
 def test_four_threads_reading_one_frame_get_equal_rows() -> None:
     reader = StoreReader.open(TEST_STORE)
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -567,6 +669,18 @@ def test_a_frames_idx_that_does_not_end_at_frames_bytes_is_refused(test_store: S
     (directory / "zarr.json").write_text(json.dumps(group))
     with pytest.raises(ValueError, match=r"chromosome 22.*frames_idx.*frames_bytes"):
         StoreReader.open(location).partner_row("22", 0)
+
+
+def test_a_frames_chunk_file_that_is_missing_is_refused_naming_the_frame(
+    test_store: Served,
+) -> None:
+    """A chunk file the store lost is refused naming the chromosome and the frame on both
+    transports (§5.4): the local descriptor is opened by the read that needs it, not by the
+    chromosome's first use, so the refusal keeps the frame's own context."""
+    location_under_test, copied = test_store
+    (copied / "partners" / "22" / "frames" / "c" / "0").unlink()
+    with pytest.raises(ValueError, match=r"frame 5 of chromosome 22"):
+        StoreReader.open(location_under_test).partner_row("22", 5 * 16 + 1)
 
 
 def test_a_store_whose_partner_rows_group_is_missing_is_refused(test_store: Served) -> None:
