@@ -214,7 +214,10 @@ def original_sd_divisor(
     magnitude is no divisor -- is the shared parser's, so Dense, Dense-from-VCF,
     Hybrid and both Ragged builders refuse the same manifests (issue #366).
     """
-    method = (row.get("original_sd_method") or "").strip()
+    # The method is judged as spelt, as Dense's parser judges it: the Store records
+    # it verbatim (`PassthroughMetadata`), so a spelling that passed here only once
+    # stripped would build and then fail `analyses.vocabularies` (#366 review).
+    method = row.get("original_sd_method") or ""
     original_sd = (row.get("original_sd") or "").strip()
     if not method:
         if original_sd:

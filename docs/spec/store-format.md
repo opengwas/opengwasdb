@@ -999,7 +999,10 @@ Component, its Overflow and its off-reference associations),
 a writer judges what a Store holds (`storable`, ADR 0084): a builder hands each
 Analysis's SD with its source's SEs, and a writer handing SEs a Store already
 holds — a Reference Completion, an encode — hands none: an SE MUST be divided
-exactly once. `z` is scale-free and MUST be stored as the source gave it, so
+exactly once. A builder judges `original_sd_method` as the manifest spells it,
+and refuses a spelling outside the vocabulary — a padded `' source_provided '`
+included — in every builder alike, rather than build a Release that records it
+and then fails validation. `z` is scale-free and MUST be stored as the source gave it, so
 dividing the SE never moves it. In every one of them a magnitude that is
 missing, non-finite or not positive refuses the build, naming the Analysis: an
 `inf` SD would store every SE as `0`, and `0` or a negative SD is no divisor. A

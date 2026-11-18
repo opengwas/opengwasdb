@@ -364,3 +364,20 @@ def test_a_route_that_hands_its_source_ses_over_as_already_standardised_fails_th
 
     with pytest.raises(AssertionError, match="stored SE 0.5"):
         _assert_standardised(built)
+
+
+#: The routes whose manifest's `original_sd_method` is an optional column.
+RAGGED = {"ragged-besd": _ragged_besd, "ragged-ssf": _ragged_ssf}
+
+
+@pytest.mark.parametrize("route", [*RAGGED.values(), _dense], ids=[*RAGGED, "dense"])
+def test_a_padded_method_is_refused_as_dense_refuses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route
+) -> None:
+    """Ragged validated the method stripped but stored it as spelt, so a padded
+    one built and then failed `analyses.vocabularies` (#366 review, P2). Every
+    builder refuses it, naming the Analysis and the spelling."""
+    padded = Declared(OriginalSdMethod.SOURCE_PROVIDED, ORIGINAL_SD, " source_provided ")
+
+    with pytest.raises(ValueError, match="invalid original_sd_method ' source_provided '"):
+        route(tmp_path, padded, monkeypatch)

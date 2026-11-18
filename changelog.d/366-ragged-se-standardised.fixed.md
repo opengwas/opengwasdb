@@ -28,3 +28,9 @@
   instead of being divided by. `build-dense`, `build-dense-vcf` and
   `build-hybrid` already refused a non-positive `original_sd`, but they
   accepted `inf`, which stores every standard error as 0.
+
+- **`build-ragged-besd` and `build-ragged-ssf` refuse a padded
+  `original_sd_method`, as the Dense builders do.** They validated the method
+  with its whitespace stripped but recorded it as spelt, so
+  `' source_provided '` built a Release that then failed
+  `analyses.vocabularies`.
