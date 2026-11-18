@@ -686,6 +686,7 @@ def _effect_consistency_to_dict(m: EffectConsistency | None) -> dict[str, Any] |
         "median_delta": _optional_float(m.median_delta),
         "skip_reason": m.skip_reason.value if m.skip_reason is not None else None,
         "refused": m.refused,
+        "refused_by": m.refused_by,
     }
 
 

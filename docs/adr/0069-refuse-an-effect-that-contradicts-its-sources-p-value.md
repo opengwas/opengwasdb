@@ -189,6 +189,76 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
   `TabularMetricsRow.p_value` carry the finite source value or `NaN`/`None`, with
   no range rule, and the row-wise and blocked projections agree field for field.
 
+## Addendum, 18 Nov 2026: a second refusal on the median signed Δ (#370)
+
+**The gap.** A stored z that carries no signal gives p_implied ≈ 1, so Δ ≈
+−log10 p_source, whose median over a null-dominated Analysis is log10 2 = 0.30.
+The median |Δ| rule at 1.0 can never refuse it, and the measurement behind #370
+(#357 D9) found eleven such sources in OGS-00011: `GCST90275159`–`66` (SPACox,
+`beta` 9.0 and `se` 1000 on every row, stored z 0.009), `GCST90572740`/`41`
+(`standard_error` holds exp(SE); both are in the built Store) and
+`GCST90446466`. The signed median separates them because every clean source's
+sits near 0.
+
+**Decision.** `EffectConsistencyPolicy` gains `max_median_delta` (default
+**0.1**). An Analysis is refused when the median |Δ| exceeds
+`max_median_abs_delta` *or* the median signed Δ exceeds `max_median_delta`. The
+|Δ| rule is tested first. Only the positive side is refused: a negative signed
+median (an inflated z) is what the |Δ| rule already catches when it is large,
+and the clean sources' negative tail reaches −0.34. The refusal message names
+the statistic that fired and its value; the record's
+`diagnostics.effect_consistency.refused_by` is `median_abs_delta` or
+`median_delta`. Both numbers are in the fingerprint, so every record is
+recomputed by `--resume`, as when the first rule landed.
+
+**Calibration.** The real resolver (`opengwasdb resolve-analyses`,
+`--evidence-sample 20000 --max-rows 1000000`, `--source-build GRCh38`) over all
+4,783 OGS-00011 sources: each source's scan stops at 1,000,000 rows and the check
+is drawn from the bottom-20,000 `site_hash` sample of those rows: the
+resolver's bounded sample, but of each source's first 1,000,000 rows, not of the
+whole file. (A whole-file run of all 4,783 sources would take about 80 hours; it
+managed 34 sources in 35 minutes.) The prefix is confirmed on whole files below.
+3,767 sources were compared; 962 had
+`no_source_p_value`, 53 `all_se_from_p_value`, one failed on a duplicate `beta`
+header. Records and table: `scratch/370/records/`, `scratch/370/calibration.json`.
+
+| | n | median signed Δ |
+|---|---|---|
+| compared, not refused by either rule | 3,752 | max **+0.0146** (`GCST90128518`), p99 +0.0057, median ≈ 0 |
+| refused by the signed rule: GCST90275159–66, GCST90572740/41 (the ten data-broken) | 10 | min **+0.2819** (`GCST90572741`), max +0.3324 |
+| refused by the signed rule: `GCST90446466` | 1 | +0.2394 (see below) |
+| refused by the \|Δ\| rule (unchanged) | 4 | \|Δ\| 12.0, 239.6, 793.7, 1,724 (signed −12.0 … −1,724) |
+
+Threshold **0.1** is 6.8× above the largest clean median (0.0146), 2.4× below the
+smallest flagged (0.2394) and 2.8× below the smallest of the ten data-broken
+sources. No source that passed the |Δ| rule is newly refused except these eleven.
+The whole-row figures in #357 (clean maximum +0.0144, flagged +0.243 to +0.336)
+agree to within sampling noise.
+
+**Whole-file confirmation (18 Nov 2026).** The 11 flagged sources and the 50 clean
+sources with the highest prefix median were resolved over their whole files
+(`--evidence-sample 20000`, no `--max-rows`; 0.8 to 10.4 million comparable rows
+each, sampled to 20,000). Whole-file signed medians: the 50 clean sources' maximum
+is **+0.0148** (`GCST90025960`; prefix +0.0092; the prefix maximum was +0.0146),
+the 11 flagged sources' minimum is **+0.2522** (`GCST90446466`; prefix +0.2394)
+and the ten data-broken sources lie in +0.2750 to +0.3413. No clean source is
+refused and every flagged one is. The prefix and whole-file medians differ by at
+most 0.0055 (clean) and 0.0128 (flagged). Evidence:
+`scratch/370/whole-file-check/whole_vs_prefix.json`. The other 3,700 clean
+sources were not read whole: their prefix medians are at most +0.0146 against the
+threshold 0.1, a margin the observed prefix-to-whole change (0.0055) does not
+approach.
+The clean sources' median |Δ| is unchanged: the |Δ| rule's four refusals are the
+same four.
+
+**`GCST90446466` is refused by the signed rule and is not exempted.** Its stored
+statistics are right; its `p_value` column holds 1 − p/2 (owner decision, 2 Nov
+2026). The fault is the p column, so the remedy is to read the source through a
+Column Map that does not declare `p_value`: the check then records
+`no_source_p_value` and skips. Resolved so on the real file, it succeeds with
+`skip_reason = no_source_p_value`. The change belongs to the Source Collection's
+manifest and Column Map in `opengwasdb-stores`; the resolver names no Analysis.
+
 ## Rejected
 
 - **Flag, do not refuse.** The first design, and the pattern ADR 0044 describes.

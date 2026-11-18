@@ -1072,10 +1072,20 @@ def _consistency_refusal(measured: EffectConsistency | None, request: AnalysisRe
     if measured is None or not measured.refused:
         return ""
     policy = request.effect_consistency_policy
+    n = measured.n_rows_compared
+    if measured.refused_by == "median_delta":
+        return (
+            "stored z is deflated against the source's own p-value: the median signed "
+            f"(log10 p implied by beta/se - log10 p reported) is {measured.median_delta:.3g} "
+            f"over {n} rows, above the threshold {policy.max_median_delta:g} "
+            f"(median |delta| {measured.median_abs_delta:.3g}). beta/se carries less "
+            "signal than the reported p-value: the standard error is probably not this "
+            "effect's, or is on another scale."
+        )
     return (
         "effect contradicts the source's own p-value: the median "
         f"|log10 p implied by beta/se - log10 p reported| is {measured.median_abs_delta:.3g} "
-        f"(median signed {measured.median_delta:.3g}) over {measured.n_rows_compared} "
+        f"(median signed {measured.median_delta:.3g}) over {n} "
         f"rows, above the threshold {policy.max_median_abs_delta:g}. The source's effect "
         "column is probably on another scale (an odds ratio in `beta`, or log-odds "
         "in `odds_ratio`) or its standard error is not this effect's."
