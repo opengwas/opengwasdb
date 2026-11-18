@@ -553,15 +553,31 @@ def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path:
     assert ogld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, "chr21 is intact"
 
 
-Served = tuple[str, list[tuple[str, int]]]
+class Sent(list[tuple[str, int]]):
+    """The path and body length of every response a server sent, and each response's status.
+
+    A list of the pairs the tests already read, so a server that answers a range past a file's end
+    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (spec §5.1).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.statuses: list[int] = []
+
+
+Served = tuple[str, Sent]
 
 
 @contextlib.contextmanager
 def serving(directory: Path) -> Iterator[Served]:
-    """`directory` over HTTP, with the path and body length of every response it sends."""
-    sent: list[tuple[str, int]] = []
+    """`directory` over HTTP, with the path, body length and status of every response it sends."""
+    sent = Sent()
 
     class Counting(RangeHandler):
+        def send_response(self, code: int, message: str | None = None) -> None:
+            sent.statuses.append(code)
+            super().send_response(code, message)
+
         def send_header(self, keyword: str, value: str) -> None:
             if keyword == "Content-Length":
                 sent.append((self.path, int(value)))
@@ -951,9 +967,14 @@ def test_at_every_answered_r2_the_partner_rows_are_read_and_no_near_band_or_inde
 
 
 def test_the_test_store_passes_every_rule_over_http() -> None:
+    # The chunk files' ends are probed one byte past their length, which a server answers with 416
+    # (RFC 9110 §15.5.17): an unsatisfiable range says the file ends there, and a store must not be
+    # refused for it (spec §5.1, §5.3). This store passed only when the probe read an empty 206.
     with serving(TEST_STORE) as (url, sent):
-        assert not any(ogld.validate(url).values())
+        found = ogld.validate(url)
+    assert not any(found.values()), {rule: f for rule, f in found.items() if f}
     assert any(path.startswith("/index/22/partner/c/") for path, _ in sent), "read over HTTP"
+    assert 416 in sent.statuses, sorted(set(sent.statuses))
 
 
 def test_a_url_with_no_store_is_an_input_error(
