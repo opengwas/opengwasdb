@@ -45,8 +45,8 @@ store at any other scale could be neither written nor read.
    and half-to-even rounding. So the dtype, the reserved code and the fill value never change;
    r = ±1 stays exact; negating a code never overflows; and a lost chunk still reads as a code
    that is never a correlation. A code past the scale, which the container can hold, is no
-   correlation either: the reader and the writer refuse it, and `near.codes` and `index.codes`
-   fail it.
+   correlation either: the reader and the writer refuse it, and `near.codes` and `partners.codes`
+   fail it (`index.codes` failed it too, until #72 removed that rule with the Proxy Index).
 4. **A build takes its scale as an input** (`BuildInputs.r_scale`, `ogld build --r-scale`) and
    records it. There is no default a build could fall back on silently.
 

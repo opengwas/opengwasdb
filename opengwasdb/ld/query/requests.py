@@ -25,6 +25,7 @@ def window_of(reader: StoreReader, *, r2: float, kb: float) -> float:
         near_bp=p["near_bp"],
         far_bp=p["far_bp"],
         t_partner=t_partner,
+        store=reader.location,
     )
     decision.raise_if_refused()
     return decision.window_bp

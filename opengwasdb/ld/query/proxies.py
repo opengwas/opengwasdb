@@ -17,8 +17,10 @@ from ogld.store import StoreReader
 def proxies(reader: StoreReader, alids: Sequence[str], *, r2: float, kb: float) -> Proxies:
     """Every partner of each present ALID within kb × 1,000 bp with r̂² ≥ r2 (ogld#6).
 
-    Judged by `ogld.format.judge_request` first, which refuses a threshold below t_partner within
-    `near_bp` and a store that holds no Partner Rows before any frame is read. Each present ALID's
+    Judged by `ogld.query.requests.window_of` first, which asks
+    `ogld.format.judge_partner_request`: it refuses a store that holds no Partner Rows and a
+    threshold below the store's own t_partner within `near_bp`, naming the store and both numbers,
+    before any frame is read. Each present ALID's
     proxies are its Partner Rows row — one frame read, both sides, every distance — filtered to
     r̂² ≥ r2 and d ≤ W here, because the edges are the query's, not the reader's (partner-rows
     §8.3). A row asked for twice is answered twice, and the reader filters on the positions it

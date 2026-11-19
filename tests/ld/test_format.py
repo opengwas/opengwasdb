@@ -573,6 +573,7 @@ def judge(
             near_bp=fmt.NEAR_BP,
             far_bp=far_bp,
             t_partner=t_partner,
+            store="a store",
         )
     return fmt.judge_request(r2=r2, kb=kb, t_far=tf, near_bp=fmt.NEAR_BP, far_bp=far_bp)
 

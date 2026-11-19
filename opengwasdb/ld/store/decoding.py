@@ -266,7 +266,9 @@ def _byte_runs(
     run: _ChunkRanges = []
     lo, hi = 0, 0
     for k, start, length in chunks:
-        if run and _split_range(hi, start):
+        # A run is neighbouring chunks only: a chunk that starts past the run's end is a run of
+        # its own, so the bytes between the two are never read to join them.
+        if run and start > hi:
             yield lo, hi, run
             run = []
         if not run:
@@ -275,9 +277,3 @@ def _byte_runs(
         run.append((k, start, length))
     if run:
         yield lo, hi, run
-
-
-def _split_range(hi: int, start: int) -> bool:
-    """Whether a run ending at `hi` must be cut before a chunk at `start`: a run is neighbouring
-    chunks only, so bytes between two of them are not read to join them."""
-    return start > hi

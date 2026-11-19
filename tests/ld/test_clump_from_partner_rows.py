@@ -281,6 +281,24 @@ def test_a_threshold_one_code_step_below_the_partner_floor_is_refused() -> None:
             assert "t_partner" in str(caught.value)
 
 
+def test_the_t_partner_refusal_names_the_store_both_thresholds_and_the_way_out() -> None:
+    """A refusal is actionable: it names the request's r2, the t_partner the store records and
+    the store it is, and what to do — ask at or above the store's t_partner, or read a store
+    derived at a lower one (spec §9; partner-rows §8.1; ogld#64)."""
+    store = ogld.open(TEST_STORE)
+    names, score = _subset("small", store)
+    asked = 0.001
+    with pytest.raises(Refusal) as caught:
+        store.clump(names, score, r2=asked, kb=3000)
+    said = str(caught.value)
+    assert caught.value.reason is RefusalReason.THRESHOLD_BELOW_T_PARTNER, "the reason is kept"
+    assert f"r2={asked}" in said, f"the requested threshold is not named: {said}"
+    assert f"t_partner={T_PARTNER}" in said, f"the store's t_partner is not named: {said}"
+    assert str(TEST_STORE) in said, f"the store is not named: {said}"
+    assert f"r2 ≥ {T_PARTNER}" in said, f"the supported threshold is not offered: {said}"
+    assert "Lower" in said or "lower" in said, f"no lower-threshold store is offered: {said}"
+
+
 def _nothing_read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Every read a store or a frame makes, refused or not, as it is made."""
     seen: list[str] = []
@@ -333,7 +351,8 @@ def _without_partner_rows(tmp_path: Path) -> Path:
 def test_a_store_without_partner_rows_is_refused_naming_the_component_and_the_way_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    old = ogld.open(_without_partner_rows(tmp_path))
+    where = _without_partner_rows(tmp_path)
+    old = ogld.open(where)
     names, score = _subset("small", old)
     seen = _nothing_read(monkeypatch)
     for query in ("clump", "proxies"):
@@ -341,6 +360,7 @@ def test_a_store_without_partner_rows_is_refused_naming_the_component_and_the_wa
             _ask(old, query, names, score, r2=0.01, kb=3000)
         assert "Partner Rows" in str(refused.value)
         assert "ogld derive-partners" in str(refused.value)
+        assert str(where) in str(refused.value), "the store it refused is named"
     assert seen == [], f"a store without Partner Rows fell back to {seen}"
 
 

@@ -65,7 +65,6 @@ ZSTD_LEVEL: Final = 3
 _LITTLE_ROW: Final = np.dtype("<u4")
 _LITTLE_DELTA: Final = np.dtype("<i4")
 _LITTLE_CODES: Final = REncoding.dtype.newbyteorder("<")
-_LITTLE_OFFSET: Final = np.dtype("<u8")
 
 # numcodecs is a runtime dependency without type stubs, as in decoding and build.inputs.
 _NUMCODECS = importlib.import_module("numcodecs")
@@ -481,11 +480,6 @@ _Row = tuple[npt.NDArray[np.int32], Codes]
 FRAME_CACHE_BYTES: Final = 1 << 28
 
 
-def _frame_bytes(frame: FramePayload) -> int:
-    """What keeping a frame holds: its decompressed payload and the rows' lengths (§7)."""
-    return frame.bytes
-
-
 class FrameCache:
     """Decoded frames kept by one reader, byte-bounded, the least recently used dropped first
     (partner-rows §7).
@@ -539,7 +533,7 @@ class FrameCache:
         larger than the whole budget included: a cache keeps no more than it says it does.
         """
         key = (frame.chrom, frame.number)
-        counted = _frame_bytes(frame)
+        counted = frame.bytes
         with self._lock:
             kept = self._kept.get(key)
             if kept is not None:
@@ -1097,7 +1091,7 @@ class FramesGroup:
     def _offsets_array(self) -> npt.NDArray[np.uint64]:
         """The frames' byte offsets, F + 1 of them, refused unless they start at 0, ascend
         strictly and end at the file's length (§5.2, §5.3)."""
-        offsets = np.array(self._offsets, dtype=_LITTLE_OFFSET)
+        offsets = np.array(self._offsets, dtype=layout.FRAMES_INDEX_DTYPE)
         if offsets[0] != 0 or (np.diff(offsets) <= 0).any() or int(offsets[-1]) != self._bytes:
             raise ValueError(
                 f"chromosome {self._chrom}'s frames do not tile its {self._bytes} bytes: a store "
@@ -1182,7 +1176,7 @@ def _ranged(array: zarr.Array[Any], span: slice) -> bytes:
     has no synchronous read of its own — is read through zarr's async API, one Range request.
     """
     store = array.store_path.store
-    key = array.store_path.path + "/" + array.metadata.encode_chunk_key((0,))
+    key = layout.chunk_key(array)
     request = RangeByteRequest(span.start, span.stop)
     prototype = default_buffer_prototype()
     if isinstance(store, LocalStore):
