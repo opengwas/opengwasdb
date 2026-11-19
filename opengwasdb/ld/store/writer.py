@@ -43,7 +43,15 @@ import zarr
 from ogld.format import Provenance, REncoding, Sourced
 from ogld.format.geometry import chromosome_ranges
 from ogld.store import layout
-from ogld.store.assembly import Chromosome, Cut, Cutter, Tally, derive_alid_index, provenance
+from ogld.store.assembly import (
+    Chromosome,
+    Cut,
+    Cutter,
+    Tally,
+    derive_alid_index,
+    derive_alid_mmap,
+    provenance,
+)
 from ogld.store.tables import Variants
 from ogld.store.validation import ValidationFailed, validate_group
 
@@ -245,6 +253,9 @@ class StoreWriter:
         if any(findings.values()):
             raise ValidationFailed(findings)
         self._root.attrs.update({"ld_store": recorded})
+        path = layout.local_path(self._root)
+        assert path is not None
+        derive_alid_mmap(path)
         return cast(Provenance, recorded)
 
 

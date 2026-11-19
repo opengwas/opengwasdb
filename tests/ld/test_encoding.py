@@ -253,6 +253,13 @@ def test_a_breaker_fails_the_same_rules_at_another_scale(
     breaker = contract("test_store").BREAKERS[rule]
     here = shutil.copytree(TEST_STORE, tmp_path / "committed")
     there = shutil.copytree(store_at(2047, tmp_path_factory), tmp_path / "x2047")
+    # Compare canonical Stores in the same representation state. A fresh build also has
+    # ADR 0012 companions, whose intentional staleness is tested separately in test_alid_mmap.
+    for store in (here, there):
+        root = zarr.open_group(store, mode="r+")
+        if "alid_mmap" in root.attrs:
+            del root.attrs["alid_mmap"]
+        assert "alid_mmap" not in root.attrs
     breaker(here)
     breaker(there)
     broken = failing(here)

@@ -1039,6 +1039,32 @@ def _alid_index_count(store: _Store) -> _Problems:
             f"records {recorded:,} left out, but {wide:,} of the {size:,} ALIDs are wider than "
             "the slot: the count is the table's (spec §7)",
         )
+    yield from _alid_mmap(store)
+
+
+def _alid_mmap(store: _Store) -> _Problems:
+    """Optional local bytes must exactly reproduce the canonical arrays (ADR 0012)."""
+    try:
+        companion = layout.alid_companion(store.root)
+    except InputError as invalid:
+        yield layout.ALID_MMAP, str(invalid)
+        return
+    if companion is None:
+        return
+    entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
+    if companion.count != entries:
+        yield layout.ALID_MMAP, "entry count differs from canonical index"
+        return
+    for name, source, width, dtype in (
+        (layout.ALID_MMAP_KEYS, layout.ALID_INDEX_ALID, layout.ALID_INDEX_WIDTH, np.dtype("u1")),
+        (layout.ALID_MMAP_ROWS, layout.ALID_INDEX_ROW, 1, np.dtype(layout.ALID_MMAP_ROW_DTYPE)),
+    ):
+        with (companion.path / name).open("rb") as stream:
+            for lo, hi in windows(0, entries, _ROWS):
+                canonical = store.read(source, lo * width, hi * width).astype(dtype, copy=False)
+                if stream.read(canonical.nbytes) != canonical.tobytes():
+                    yield layout.ALID_MMAP, f"{name}: differs from canonical index at entry {lo}"
+                    break
 
 
 # ------------------------------------------------------------------ the Near Band

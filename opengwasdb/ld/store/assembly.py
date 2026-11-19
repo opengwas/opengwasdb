@@ -38,6 +38,9 @@ What is held:
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
+import json
 import multiprocessing
 import os
 import shutil
@@ -1502,3 +1505,97 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     made["counts"] = counts
     root.attrs.update({"ld_store": made})
     return cast(Provenance, made)
+
+
+def derive_alid_mmap(path: Path) -> int:
+    """Publish an optional local companion from validated canonical arrays (ADR 0012).
+
+    Serialize cooperating derivations. A private partial is fsynced before its immutable
+    generation rename; replacing root metadata publishes the pointer last. A retry cleans a
+    partial or validates/reuses a complete generation, never overwrites a published one.
+    """
+    directory = path / layout.ALID_MMAP
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _derive_alid_mmap(path, directory)
+
+
+def _derive_alid_mmap(path: Path, directory: Path) -> int:
+    root = zarr.open_group(path, mode="r")
+    rules = ("alid_index.count", "alid_index.rows", "alid_index.order", "alid_index.keys")
+    findings = validate_group(root, root.attrs.get("ld_store"), rules=rules)
+    if any(findings.values()):
+        raise ValidationFailed(findings)
+    existing = layout.alid_companion(root)
+    if existing is not None:
+        return existing.count
+    sources = layout.alid_mmap_sources(path)
+    partial = directory / ".partial"
+    if partial.exists():
+        shutil.rmtree(partial)
+    partial.mkdir()
+    count = _write_alid_payloads(root, partial)
+    payloads = {
+        name: layout.file_sha256(partial / name)
+        for name in (layout.ALID_MMAP_KEYS, layout.ALID_MMAP_ROWS)
+    }
+    raw = layout.json_bytes(layout.alid_mmap_manifest(count, sources, payloads))
+    _durable_bytes(partial / layout.ALID_MMAP_MANIFEST, raw)
+    _sync_directory(partial)
+    generation = hashlib.sha256(raw).hexdigest()
+    destination = directory / generation
+    _install_alid_generation(partial, destination, payloads)
+    _sync_directory(directory)
+    if layout.alid_mmap_sources(path) != sources:
+        raise InputError("canonical metadata changed during companion derivation")
+    document = json.loads((path / "zarr.json").read_bytes())
+    document["attributes"][layout.ALID_MMAP_ATTR] = {"generation": generation}
+    temporary = path / ".alid-mmap-root.partial"
+    _durable_bytes(temporary, layout.json_bytes(document))
+    os.replace(temporary, path / "zarr.json")
+    _sync_directory(path)
+    return count
+
+
+def _install_alid_generation(partial: Path, destination: Path, payloads: dict[str, str]) -> None:
+    if destination.exists():
+        for name in (*payloads, layout.ALID_MMAP_MANIFEST):
+            if layout.file_sha256(destination / name) != layout.file_sha256(partial / name):
+                raise InputError(f"{destination}: existing unpublished companion differs")
+        shutil.rmtree(partial)
+    else:
+        partial.rename(destination)
+
+
+def _write_alid_payloads(root: zarr.Group, partial: Path) -> int:
+    keys, rows = root[layout.ALID_INDEX_ALID], root[layout.ALID_INDEX_ROW]
+    assert isinstance(keys, zarr.Array)
+    assert isinstance(rows, zarr.Array)
+    count = int(rows.shape[0])
+    for name, array, width, dtype in (
+        (layout.ALID_MMAP_KEYS, keys, layout.ALID_INDEX_WIDTH, np.dtype("u1")),
+        (layout.ALID_MMAP_ROWS, rows, 1, np.dtype(layout.ALID_MMAP_ROW_DTYPE)),
+    ):
+        with (partial / name).open("wb") as stream:
+            for lo, hi in windows(0, count, ALID_ROWS):
+                values = layout.refused_if_lost(array, np.asarray(array[lo * width : hi * width]))
+                stream.write(values.astype(dtype, copy=False).tobytes())
+            stream.flush()
+            os.fsync(stream.fileno())
+    return count
+
+
+def _durable_bytes(path: Path, raw: bytes) -> None:
+    with path.open("wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

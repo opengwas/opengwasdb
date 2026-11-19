@@ -28,6 +28,7 @@ still carries a leftover `index/` answers exactly as one without it does (spec �
 
 from __future__ import annotations
 
+import mmap
 import os
 import threading
 from collections.abc import Iterator, Sequence
@@ -154,6 +155,91 @@ class _AlidIndex:
     row: zarr.Array[Any]
 
 
+class _MappedAlids:
+    """One immutable companion bundle, owned by its reader (ADR 0012).
+
+    Lookup returns independent row arrays; release serializes
+    with lookup so no borrowed numpy view survives a mapping. No pool or global cache here.
+    """
+
+    def __init__(self, companion: layout.AlidCompanion) -> None:
+        self.identity = (str(companion.path), companion.identity)
+        self._lock = threading.Lock()
+        self._maps: list[mmap.mmap] = []
+        self._closed = False
+        self._keys = self._rows = np.empty(0)
+        try:
+            self._keys = self._map(
+                companion, layout.ALID_MMAP_KEYS, np.dtype(f"|S{layout.ALID_INDEX_WIDTH}")
+            )
+            self._rows = self._map(
+                companion, layout.ALID_MMAP_ROWS, np.dtype(layout.ALID_MMAP_ROW_DTYPE)
+            )
+        except BaseException:
+            # Tracebacks can retain this half-built bundle; cleanup cannot wait for collection.
+            self.release()
+            raise
+
+    def _map(
+        self, companion: layout.AlidCompanion, name: str, dtype: np.dtype[Any]
+    ) -> npt.NDArray[Any]:
+        with (companion.path / name).open("rb") as stream:
+            actual = layout.file_identity(os.fstat(stream.fileno()))
+            if actual != dict(companion.identity)[name]:
+                raise InputError(f"{layout.ALID_MMAP}/{name}: changed before mapping")
+            if not companion.count:
+                return np.empty(0, dtype=dtype)
+            mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+        self._maps.append(mapped)
+        return np.frombuffer(mapped, dtype=dtype)
+
+    def lookup(self, keys: npt.NDArray[Any]) -> npt.NDArray[np.int64]:
+        with self._lock:
+            if self._closed:
+                raise InputError("ALID companion has been released")
+            found = np.full(len(keys), -1, dtype=np.int64)
+            if len(self._keys):
+                at = np.minimum(np.searchsorted(self._keys, keys), len(self._keys) - 1)
+                same = self._keys[at] == keys
+                found[same] = self._rows[at[same]]
+            return found
+
+    def release(self) -> None:
+        """Discard views before closing mappings, serialized with lookup (ADR 0012)."""
+        with self._lock:
+            self._closed = True
+            self._keys = self._rows = np.empty(0)
+            for mapped in self._maps:
+                mapped.close()
+            self._maps.clear()
+
+
+def _mapped_keys(
+    alids: Sequence[str],
+) -> tuple[npt.NDArray[Any], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """Encode query bytes without parsing ALIDs or truncating a name into another (ADR 0012)."""
+    encoded: list[bytes] = []
+    fitting: list[int] = []
+    wide: list[int] = []
+    for i, alid in enumerate(alids):
+        try:
+            key = alid.encode("utf-8")
+        except UnicodeEncodeError:
+            continue
+        if b"\0" in key:
+            continue
+        if len(key) > layout.ALID_INDEX_WIDTH:
+            wide.append(i)
+        else:
+            encoded.append(key)
+            fitting.append(i)
+    return (
+        np.array(encoded, dtype=f"|S{layout.ALID_INDEX_WIDTH}"),
+        np.array(fitting, dtype=np.int64),
+        np.array(wide, dtype=np.int64),
+    )
+
+
 @dataclass(frozen=True)
 class _Placed:
     """Ascending, distinct local rows of one chromosome, the row and column of each in a
@@ -196,6 +282,7 @@ class StoreReader:
     _closed: bool
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
+    _alid_mmap: _MappedAlids | None
 
     def _attach(
         self,
@@ -234,6 +321,8 @@ class StoreReader:
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
         self._index_arrays = None
+        companion = layout.alid_companion(root)
+        self._alid_mmap = None if companion is None else _MappedAlids(companion)
 
     @classmethod
     def open(
@@ -315,6 +404,8 @@ class StoreReader:
             frames, self._partner_frames = list(self._partner_frames.values()), {}
         for partner in frames:
             partner.close()
+        if self._alid_mmap is not None:
+            self._alid_mmap.release()
 
     def __enter__(self) -> StoreReader:
         return self
@@ -344,14 +435,22 @@ class StoreReader:
         A malformed ALID is Absent too: it names no variant in the store. A long list is searched
         for in the store's ALID index (ADR 0010), which holds every ALID of the table that fits its
         32-byte slot, sorted, so one search answers it without reading the variant table at all.
-        Every ALID the index does not hold — absent, too wide for the slot, or one a broken build
-        left out — takes the exact scan at its own position, which is what found it before the
-        index, and a list too short for the index to pay for takes it for every ALID. So the index
+        A validated local companion instead answers fitting hits and misses by mmap without
+        parsing loci or reading columns (ADR 0012); only wider names take the exact scan.
+        Without that companion, every ALID the index does not hold — absent, too wide for the
+        slot, or one a broken build left out — takes the exact scan at its own position. A list
+        too short for the index to pay for takes that scan for every ALID. So the index
         can only make this read faster, never change its answer; and a store whose index could
         answer falsely is one validation fails, as it fails a store with any other broken array.
         """
         found = np.full(len(alids), -1, dtype=np.int64)
         if not len(alids):
+            return found
+        if self._alid_mmap is not None:
+            keys, fitting, wide = _mapped_keys(alids)
+            found[fitting] = self._alid_mmap.lookup(keys)
+            if len(wide):
+                found[wide] = self._scanned(alids, wide)
             return found
         loci = _loci(alids, self._ranges)
         if not loci:
@@ -381,6 +480,8 @@ class StoreReader:
         asked = [i for which, _ in loci.values() for i in which.tolist()]
         keys, fitting = layout.alid_keys([alids[i] for i in asked])
         if not len(keys) or not _index_pays(len(keys), self._entries()):
+            return
+        if self._root.get(layout.ALID_INDEX) is None:
             return
         hits = self._searched(keys)
         where = hits >= 0

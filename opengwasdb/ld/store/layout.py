@@ -10,6 +10,11 @@ values it promises.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from os import stat_result
 from pathlib import Path
 from typing import Any, Final
 
@@ -19,7 +24,7 @@ import zarr
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore, StorePath, WrapperStore
 
-from ogld.format import REncoding
+from ogld.format import InputError, REncoding
 
 #: (inner chunk, shard) in elements, for every array but the Near Band's `r`.
 SIDE: Final = (16_384, 1_048_576)
@@ -385,3 +390,132 @@ def new_r_array(
         compressors=[ZstdCodec(level=3)],
         fill_value=encoding.reserved_code,
     )
+
+
+# ADR 0012: an optional local representation of the canonical index, never another ordering.
+ALID_MMAP: Final = "variants/alid_mmap"
+ALID_MMAP_ATTR: Final = "alid_mmap"
+ALID_MMAP_SCHEMA: Final = 1
+ALID_MMAP_KEYS: Final = "keys.bin"
+ALID_MMAP_ROWS: Final = "rows.i32le"
+ALID_MMAP_MANIFEST: Final = "manifest.json"
+ALID_MMAP_ROW_DTYPE: Final = "<i4"
+
+
+def local_path(root: zarr.Group) -> Path | None:
+    """The local hierarchy behind wrappers, or None for HTTP (ADR 0012)."""
+    store = root.store
+    while isinstance(store, WrapperStore):
+        store = store._store
+    return Path(store.root) / root.path if isinstance(store, LocalStore) else None
+
+
+def json_bytes(document: object) -> bytes:
+    """Deterministic companion JSON; source metadata is normalized the same way (ADR 0012)."""
+    return json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def alid_mmap_sources(path: Path) -> dict[str, str]:
+    """Root/index metadata content pins, excluding only our publication pointer (ADR 0012).
+
+    Canonical payload hashes live in the manifest too. Validation compares those bytes exactly;
+    open checks metadata without rereading canonical payloads. Derivation and reading require
+    quiescent, immutable canonical files (ADR 0012); unannounced shard mutation is not detected.
+    """
+    root = json.loads((path / "zarr.json").read_bytes())
+    root["attributes"].pop(ALID_MMAP_ATTR, None)
+    sources = {"zarr.json": hashlib.sha256(json_bytes(root)).hexdigest()}
+    for name in (ALID_INDEX_ALID, ALID_INDEX_ROW):
+        meta = f"{name}/zarr.json"
+        sources[meta] = file_sha256(path / meta)
+    return sources
+
+
+@dataclass(frozen=True)
+class AlidCompanion:
+    """Validated representation descriptor; the reader owns mapping and release (ADR 0012)."""
+
+    path: Path
+    count: int
+    identity: tuple[tuple[str, tuple[int, ...]], ...]
+
+
+def alid_companion(root: zarr.Group) -> AlidCompanion | None:
+    """Check a published local companion's pins, schema, lengths and hashes, or refuse.
+
+    Absence and HTTP retain ADR 0010. A present pointer is a commitment: never silently fall
+    back from corrupt data. Exact canonical correspondence is also checked by validation.
+    """
+    path = local_path(root)
+    pointer = root.attrs.get(ALID_MMAP_ATTR)
+    if path is None or ALID_MMAP_ATTR not in root.attrs:
+        return None
+    try:
+        return _alid_companion(path, pointer)
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise InputError(f"{ALID_MMAP}: invalid companion: {error}") from error
+
+
+def _companion_generation(pointer: Any) -> str:
+    if not isinstance(pointer, dict) or set(pointer) != {"generation"}:
+        raise ValueError("publication pointer must name one generation")
+    generation = pointer["generation"]
+    if not isinstance(generation, str) or re.fullmatch("[0-9a-f]{64}", generation) is None:
+        raise ValueError("generation must be a SHA-256 digest")
+    return generation
+
+
+def _companion_manifest(path: Path, pointer: Any) -> tuple[Path, dict[str, Any], int]:
+    generation = _companion_generation(pointer)
+    directory = path / ALID_MMAP / generation
+    raw = (directory / ALID_MMAP_MANIFEST).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != generation:
+        raise ValueError("manifest digest differs from published generation")
+    manifest = json.loads(raw)
+    count = manifest["count"]
+    if type(count) is not int or count < 0:
+        raise ValueError("count must be a nonnegative integer")
+    expected = alid_mmap_manifest(count, alid_mmap_sources(path), manifest["payloads"])
+    if type(manifest["schema"]) is not int or manifest != expected:
+        raise ValueError("schema, representation or canonical metadata pins differ")
+    return directory, manifest, count
+
+
+def _alid_companion(path: Path, pointer: Any) -> AlidCompanion:
+    directory, manifest, count = _companion_manifest(path, pointer)
+    sizes = {ALID_MMAP_KEYS: count * ALID_INDEX_WIDTH, ALID_MMAP_ROWS: count * 4}
+    identities = []
+    for name, size in sizes.items():
+        payload = directory / name
+        stat = payload.stat()
+        if stat.st_size != size or file_sha256(payload) != manifest["payloads"][name]:
+            raise ValueError(f"{name}: length or content hash differs")
+        identities.append((name, file_identity(stat)))
+    identities.append((ALID_MMAP_MANIFEST, file_identity((directory / ALID_MMAP_MANIFEST).stat())))
+    return AlidCompanion(directory, count, tuple(identities))
+
+
+def file_identity(stat: stat_result) -> tuple[int, ...]:
+    """The local companion file identity, including opened-descriptor checks (ADR 0012)."""
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def alid_mmap_manifest(
+    count: int, sources: dict[str, str], payloads: dict[str, str]
+) -> dict[str, Any]:
+    """The one schema for a canonical index's deterministic companion (ADR 0012)."""
+    if set(payloads) != {ALID_MMAP_KEYS, ALID_MMAP_ROWS}:
+        raise ValueError("manifest must hash both payloads")
+    return {
+        "schema": ALID_MMAP_SCHEMA,
+        "count": count,
+        "key_dtype": _BYTES,
+        "row_dtype": ALID_MMAP_ROW_DTYPE,
+        "sources": sources,
+        "payloads": payloads,
+    }

@@ -118,6 +118,9 @@ identifiers, no per-sample values of any kind. A reader ignores any array or gro
 - `a1_frequency` is A1's frequency in the Source Panel's samples, after the variant filters,
   `float32`.
 
+A local Store may also carry the validated mmap companion in §14 (ADR 0012); it copies
+this index, which remains canonical, and changes no row or Pair Answer.
+
 **The ALID search index** (`variants/alid_index/`, owner, 15 November 2026; ADR 0010). It holds
 the Variant Set's ALIDs again, as fixed-width keys a binary search can run over:
 `alid` is one 32-byte key an entry — the ALID's UTF-8 bytes, NUL right-padded — and `row` the
@@ -1011,6 +1014,11 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 - The Proxy Index row that replaced the column read is in §11's table, and the frame that
   replaced both is §10's.
 
+**Local ALID companion** (ADR 0012). When present, opening additionally validates and maps
+§14's companion; fitting names use it for both hits and misses without column reads. The
+canonical-index/exact-scan description below applies without it, including on HTTP. Wider
+names retain the exact scan on either path.
+
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A search for ALIDs reads the
 ALID index's two arrays, and only when they pay for themselves (ogld#42, ADR 0010). A list naming
@@ -1317,7 +1325,7 @@ lists the names in this order, and `ogld.validate` returns findings keyed by the
 | `alid_index.rows` | one entry a variant: `variants/alid_index/row` holds a row of the Variant Set for each entry, none of them twice, and every ALID whose UTF-8 form fits the slot has exactly one entry — so a search that finds no key means the ALID is not in the table (§2, §8) |
 | `alid_index.order` | the entries' keys ascend bytewise, strictly: the order every search over them depends on (§2) |
 | `alid_index.keys` | each entry's key is the full ALID of the row it names, NUL padded — so that row's ALID fits the slot, no key was truncated into it, and no key is one no variant has (§2; opengwasdb issue #127) |
-| `alid_index.count` | `variants/alid_index/alid` holds 32 bytes an entry, and `counts.alids_left_out` is the table's own count of ALIDs wider than the slot (§2, §6, §7) |
+| `alid_index.count` | `variants/alid_index/alid` holds 32 bytes an entry, and `counts.alids_left_out` is the table's own count of ALIDs wider than the slot (§2, §6, §7); a published local companion passes integrity and exact canonical correspondence (§14) |
 | `near.rows` | `indptr` starts at 0 and has n_c + 1 entries; each row's length equals the count of later variants within `near_bp` from `position`. So rows are contiguous and stay within `near_bp` |
 | `near.codes` | every code is one of the store's encoding: none is −32768 and none is past the scale, \|code\| ≤ `r_scale`, so \|r̂\| ≤ 1 holds after dequantisation |
 | `far.rows` | `indptr` starts at 0, has n_c + 1 entries and ends at the length of `partner` and `r`; within a row partners are strictly ascending, in [0, n_c), and each above the row: each Far Pair is in its earlier variant's row |
@@ -1516,3 +1524,36 @@ encoding (ADR 0004), of 12 November 2026, the Far Pairs beside the index (ADR 00
 15 November 2026, the ALID index beside the variant table (ADR 0010), are part of `0.1.0` rather
 than a new version. The Partner Rows are the first change big enough to be its own version (§5,
 ADR 0011).
+
+## 14. Optional local ALID companion (ADR 0012)
+
+The canonical Zarr index of §2 remains authoritative. Local Stores may additionally publish
+`variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and `manifest.json`. Keys copy the
+canonical bytes without another sort; rows copy its rows as signed little-endian int32.
+The exact deterministic manifest schema and source/content pins are defined in ADR 0012
+and owned by `ogld.store.layout`. An absent root `alid_mmap` attribute means no companion.
+A present attribute is exactly `{"generation":"<manifest SHA-256>"}` and names complete,
+immutable files. Publication fsyncs a private partial, renames its generation directory,
+then atomically replaces root metadata last. An abandoned partial is unpublished and a
+retry replaces it; a complete generation is validated and reused, never overwritten.
+`StoreWriter.finish` and `scripts/derive_alid_mmap.py` use the same assembly helper from the
+Store's validated canonical index. Derivation requires an isolated or quiescent local Store.
+No existing array or public signature changes, and HTTP readers retain the canonical path.
+
+`alid_index.count` additionally checks a published local companion: schema, generation and
+metadata pins, exact lengths and payload hashes, then byte-for-byte equality with canonical
+keys and rows in bounded windows. The canonical rows/order/keys rules remain the authority
+for range, uniqueness, completeness and key meaning. Self-consistent companion checksums
+cannot substitute for this correspondence check. Missing companions and HTTP are compatible.
+
+Local attachment checks companion integrity and maps read-only fixed-width keys and rows.
+Opened lookup encodes queries and vectorizes binary search/exact equality; it preserves order
+and duplicate requests. Fitting hits and misses read no loci, positions or string column.
+Embedded NUL and unencodable names are absent; over-width names use the exact scan. A fitting
+miss is final only on this validated, complete representation. Its integrity checks and mapping
+cost belong to opening, separately from lookup. The reader owns and releases its mapping
+bundle; this does not establish process-wide sharing or aggregate admission.
+
+The exact ALID scan needs only chromosome positions and the full ALID strings at candidate
+positions. It uses main's shared chromosome-loci cache, without initializing Near Band or
+Far Pairs metadata. LD queries retain their lazy initialization and missing-data refusal.

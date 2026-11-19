@@ -209,14 +209,22 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
     assert provenance["counts"]["alids_left_out"] == 2, "both ALIDs wider than the slot"
 
 
+def without_companion(store: Path) -> None:
+    """Exercise ADR 0010's canonical fallback independently of ADR 0012's companion."""
+    root = zarr.open_group(store, mode="r+")
+    if layout.ALID_MMAP_ATTR in root.attrs:
+        del root.attrs[layout.ALID_MMAP_ATTR]
+    shutil.rmtree(store / layout.ALID_MMAP, ignore_errors=True)
+
+
 def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
     # The rule is the table's, not the producer's (ADR 0005): the store reads back its own ALID
     # column and indexes it, so a store written before the index gets the same one.
     store = written(tmp_path / "store")
+    without_companion(store)
     shutil.rmtree(store / layout.ALID_INDEX)
     reader = StoreReader.open(store)
-    with pytest.raises(ValueError, match="alid_index"):
-        reader.rows_of(["22:200:A:C"])
+    assert reader.rows_of(["22:200:A:C"]).tolist() == [2], "older Stores retain the exact scan"
     written_from = zarr.open_group(store, mode="r+")
     left_out = assembly.derive_alid_index(
         written_from["variants"], written_from["variants"].create_group("alid_index")
@@ -229,6 +237,7 @@ def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
 
 def test_a_lost_chunk_of_the_index_is_refused(tmp_path: Path) -> None:
     store = written(tmp_path / "store")
+    without_companion(store)
     alid = store / layout.ALID_INDEX / "alid"
     for chunk in alid.rglob("c/*"):
         chunk.unlink()
@@ -275,6 +284,7 @@ class Crafted:
 
 def crafted(tmp_path: Path) -> Crafted:
     store = written(tmp_path / "store")
+    without_companion(store)
     root = zarr.open_group(store, mode="r")
     alids = [str(alid) for alid in np.asarray(root["variants/alid"][:]).tolist()]
     assert len(alids[0].encode()) == layout.ALID_INDEX_WIDTH, alids[0]
@@ -328,6 +338,7 @@ def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path)
     # under a group a reader ignores, and it takes the real name only when the count matches.
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")
+    without_companion(store)
     shutil.rmtree(store / layout.ALID_INDEX)
     # A store written before ADR 0010 records no count of what its index leaves out; the
     # derivation adds it (spec §7).
@@ -349,6 +360,7 @@ def test_a_recorded_count_that_is_not_the_table_s_refuses_the_derivation(
     # the record is not this store's, and nothing is written.
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")
+    without_companion(store)
     shutil.rmtree(store / layout.ALID_INDEX)
     meta = store / "zarr.json"
     document = json.loads(meta.read_text())
@@ -367,6 +379,7 @@ def test_a_derivation_that_fails_after_its_rename_is_finished_by_another_run(
     # store validation refuses and a second run finishes it (ogld#42's fix round 1).
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")
+    without_companion(store)
     shutil.rmtree(store / layout.ALID_INDEX)
     meta = store / "zarr.json"
     document = json.loads(meta.read_text())
