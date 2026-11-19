@@ -27,7 +27,7 @@ index arrays: metadata and every chunk/shard file. Payloads pin both binary file
 Generation is the manifest bytes' SHA-256. Layout owns the digest/pointer and one payload
 descriptor table for assembly and validation; row widths follow the recorded dtype.
 
-**Schema 2 ruling (#81 fix round 1, 19 November 2026):** schema 1 pinned only canonical
+**Schema 2 (decided in #81's review, 19 November 2026):** schema 1 pinned only canonical
 metadata, so a companion copied from a Store with identical metadata but different keys could
 change answers. Before any mapped byte is trusted, schema 2 verifies canonical content pins
 and payload hashes. Schema 1 refuses naming the Store and manifest, with an instruction to
@@ -59,7 +59,7 @@ immutable while a reader uses its checked mappings. Exact validation
 also compares companion payloads to canonical arrays; payload hashes alone do not prove
 correspondence.
 
-**Trusted-publication ruling (#81 fix round 2):** the supported input contract is a generation
+**Trusted publication (decided in #81's review, 19 November 2026):** the supported input contract is a generation
 published only by ogld, after exact canonical correspondence. At use, the reader verifies
 integrity and content binding (every canonical index file's pin), not correspondence and not
 producer authenticity. A hand-forged generation whose payloads, manifest and pointer were all
@@ -74,7 +74,7 @@ so an unchanged Store copy derives identical bytes. Payload descriptors retain d
 size, mtime and ctime only for the opened-file comparison before mapping. The already-digested
 manifest needs no runtime stat identity, and the bundle has no unused sharing identity.
 
-**First-use ruling (#81 fix round 1):** opening does not verify or map the companion. The
+**Verify on first use (decided in #81's review, 19 November 2026):** opening does not verify or map the companion. The
 first fitting lookup checks the manifest, all canonical source pins and payload hashes, then
 maps read-only keys and rows, once under a reader-local lock. A failure is sticky: that lookup
 and every later lookup refuse with the same diagnostic, even if files are subsequently repaired.

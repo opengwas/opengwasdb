@@ -16,7 +16,7 @@ hashes, manifest and pointer is outside reader detection (as with other forged d
 the immutability assumption. This read-only publication check changes no published bytes;
 the measurements below are retained, with no new re-timing or scratch re-derivation.
 
-## Shared protocol and round-0 artifacts
+## Shared protocol and artifacts
 
 All artifacts are under `/data/opengwasdb/work/orchestrate/ogld-81/results/`:
 
@@ -51,7 +51,7 @@ per-file residency and the real Store keys read, affinity, `uptime` and post-run
 point-in-time Linux page-cache observations, not hardware-cache guarantees. All 36 results
 match the complete baseline fingerprint, not just lead count.
 
-## Schema 2, verify on first use — fix round 1
+## Timings — schema 2, verify on first use
 
 The review reproduced a foreign companion changing rows despite identical root/index metadata.
 Schema 2 now hashes every canonical index file before trusting companion bytes. Each EUR
@@ -69,7 +69,7 @@ and `validation-times.log`. `benchmark.py` extends the original harness, separat
 `_mapped_alids` inside the first `rows_of`; it does not pre-verify or warm a timed lookup.
 Cold/warm preparation, flock, affinity, input and full-result oracle are the shared protocol
 above. All 15 fresh-process answers match baseline. The companion-less k10 reference was
-repeated in the same alternating session, not borrowed from round 0. All rows use two workers.
+repeated in the same alternating session, not borrowed from the schema-1 session. All rows use two workers.
 
 Seconds: median [minimum–maximum]. **Verify is included in ALID→rows, not added again.**
 
@@ -94,7 +94,7 @@ Both schema-1 root/manifests were archived before removal. Realpath checks prece
 writes and old-generation deletion, all under their own `scratch/64/81-*`. New derivation takes
 54.44 / 56.97 s. Canonical Variant Set hashes are unchanged; neither `69-*` nor any published
 Store/input was modified. With/without-companion lookup matches all 260,821 target rows and
-119,632 chr22 rows on each Store; all 28 full fingerprints per Store match round-0 baseline.
+119,632 chr22 rows on each Store; all 28 full fingerprints per Store match the companion-less baseline.
 The final inventory walk retains identical generations/source pins, rechecks exact rows and
 fingerprints, and complete `ogld validate --threads 8` passes 30/30 on both again
 (25:58 k10 / 25:52 k0). The earlier schema-2 implementation's receipts are preserved in
@@ -147,7 +147,7 @@ adds .436 s cold. Open+clump improves from 5.330 to 2.954 s cold and 3.164 to 2.
 #40's ≤10 s cold whole-clump target is met. #81's <1 s cold LD target is **not**: best k10
 median is 1.499 s at two workers, with a best individual run of 1.258 s.
 
-## PLINK2 — round 0 (not re-timed in fix round 1)
+## PLINK2 (timed once, with schema 1)
 
 PLINK v2.0.0-a.6.9LM, same prepared read-only `realdata/EUR-k0.plink2/chr<N>` genotypes.
 The recipe's 22 reports were regenerated with its own `minus_log10_p` and verified
@@ -171,7 +171,7 @@ as `81-eur-k0`; neither side has an extra lead. No acceptance-snapshot exception
 PLINK is faster than k0 ogld open+clump (3.591 s cold, 2.207 s warm) in these runs, but ran
 under lower shared-host load. Neither benchmark includes genotype conversion or Store derivation.
 
-## Correctness and checks — round 0
+## Correctness and checks (schema 1)
 
 Each scratch companion holds 8,546,809 entries (307,685,124 payload bytes). Derivation took
 57.22 s k10 / 55.95 s k0. Resolved write targets, generation payloads and root pointer are
