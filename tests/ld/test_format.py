@@ -556,7 +556,25 @@ def test_a_far_cell_below_t_far_is_refused_not_called_the_bound() -> None:
 # ------------------------------------------------------------------ §9 refusals
 
 
-def judge(r2: float, kb: float, tf: float = EUR_K10, far_bp: int = fmt.FAR_BP) -> fmt.Decision:
+def judge(
+    r2: float,
+    kb: float,
+    tf: float = EUR_K10,
+    far_bp: int = fmt.FAR_BP,
+    t_partner: float | None = None,
+) -> fmt.Decision:
+    """The judgement `clump` and `proxies` make: with a store's t_partner it is
+    `judge_partner_request`, and without one `judge_request`, which is a 0.1.0 store's table."""
+    if t_partner is not None:
+        return fmt.judge_partner_request(
+            r2=r2,
+            kb=kb,
+            t_far=tf,
+            near_bp=fmt.NEAR_BP,
+            far_bp=far_bp,
+            t_partner=t_partner,
+            store="a store",
+        )
     return fmt.judge_request(r2=r2, kb=kb, t_far=tf, near_bp=fmt.NEAR_BP, far_bp=far_bp)
 
 
@@ -581,7 +599,8 @@ UKB = fmt.t_far(49766, 10)
         (0.05, 5_000, AMR_K10, fmt.RefusalReason.THRESHOLD_BELOW_T_FAR),
         (0.05, 5_000, EUR_K10, None),
         (0.05, 3_000, AMR_K10, None),
-        # §9: W ≤ 3 Mb is answered from the Near Band at any r2
+        # §9: a store that records no t_partner — every 0.1.0 store — answers W ≤ 3 Mb at any r2;
+        # the queries pass t_partner from 0.2.0, which the test below covers
         (0.0, 3_000, EUR_K10, None),
         (0.0, 3_000.001, EUR_K10, fmt.RefusalReason.THRESHOLD_BELOW_T_FAR),
         (1.0, 0, EUR_K10, None),
@@ -600,6 +619,42 @@ def test_the_refusal_table(
     decision = judge(r2, kb, tf)
     assert decision.refusal is refusal
     assert decision.answered is (refusal is None)
+
+
+@pytest.mark.parametrize(
+    ("r2", "kb", "t_partner", "refusal"),
+    [
+        # r² equal to t_partner is answered: the Partner Rows keep r̂² ≥ t_partner (spec §9)
+        (0.01, 3_000, 0.01, None),
+        # One code step below the Partner Floor, at × 511: code 52 is the floor at t_partner
+        # 0.01, and code 51's r̂² 0.00996 is below it (spec §3; partner-rows §3)
+        ((51 / 511) ** 2, 3_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
+        (math.nextafter(0.01, 0.0), 3_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
+        (0.0, 3_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
+        (0.0, 0, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
+        # A store whose t_partner is 0.001, as UK Biobank EUR's is, answers r² 0.001 within 3 Mb,
+        # and beyond it only above t_far (spec §9)
+        (0.001, 3_000, 0.001, None),
+        (0.001, 5_000, 0.001, fmt.RefusalReason.THRESHOLD_BELOW_T_FAR),
+        # Above near_bp the table is unchanged by t_partner
+        (0.1, 10_000, 0.01, None),
+        (0.01, 10_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_FAR),
+    ],
+)
+def test_the_partner_threshold_splits_the_table_within_near_bp(
+    r2: float, kb: float, t_partner: float, refusal: fmt.RefusalReason | None
+) -> None:
+    decision = judge(r2, kb, t_partner=t_partner)
+    assert decision.refusal is refusal
+
+
+def test_a_threshold_below_the_partner_floor_names_it() -> None:
+    decision = judge(0.001, 3_000, t_partner=0.01)
+    with pytest.raises(fmt.Refusal) as caught:
+        decision.raise_if_refused()
+    assert caught.value.reason is fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER
+    assert "t_partner" in str(caught.value)
+    assert "Partner Floor" in str(caught.value)
 
 
 def test_windows_are_compared_with_the_distance_the_store_measured() -> None:

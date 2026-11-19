@@ -2,12 +2,13 @@
 
 Each test counts at the reader's chunk cache: a `Counting` cache is put on one reader instance,
 so no reader is subclassed and no module global is patched. "Resolved" is the Stored r the
-reader takes, the elements of every `near/<c>/r` and `index/<c>/r` it asks the cache for.
-What a query needs comes from an independent greedy over the Test Panel's reference r.
+reader takes, the elements of every `near/<c>/r` it asks the cache for. What a query needs comes
+from an independent greedy over the Test Panel's reference r.
 """
 
 from __future__ import annotations
 
+import os
 import tracemalloc
 from collections import Counter
 from typing import Any
@@ -18,7 +19,9 @@ import pytest
 import zarr
 from contract import support
 from contract.support import alids, panel_data, passing_rows
+from store_copies import TEST_STORE, store_reads
 
+import ogld
 from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, location
@@ -50,7 +53,7 @@ class Counting(location.ChunkCache):
         return got
 
     def resolved(self) -> int:
-        """The Stored r taken: elements of every Near Band and Proxy Index `r` array."""
+        """The Stored r taken: elements of every Near Band `r` array."""
         return sum(n for path, n in self.taken.items() if path.endswith("/r"))
 
 
@@ -67,8 +70,8 @@ def reference_greedy(
 ) -> tuple[npt.NDArray[np.int64], int, int]:
     """plink2's greedy over the Test Store's variants from the reference r, quantised: each
     variant's lead; the pairs the leads need, each lead with every hit still open within W
-    on its chromosome; and the entries of the leads' Proxy Index rows, every partner within
-    far_bp whose code reaches the floor (spec §5). Ties go to the row, the engine's order."""
+    on its chromosome; and every partner within far_bp whose code reaches the floor, which is
+    the rows' entries at the far code floor (spec §5). Ties go to the row, the engine's order."""
     rows = passing_rows()
     pos = panel_data().variants().pos.astype(np.int64)[rows]
     chrom = np.asarray(panel_data().variants().chrom)[rows]
@@ -97,26 +100,37 @@ def reference_greedy(
 #: read at aa5d4d7 resolved 1,489,250 pairs at r² 0.1 and took 1,587,155 Stored r (68 times
 #: as many). At × 32767 (f0e90de) the leads needed 23,327 and 7,246.
 NEEDED = {0.1: 23_228, 0.01: 7_311}
-#: What the reader takes (spec §10): at r² 0.1 ≥ t_far the 438 leads' Proxy Index rows, and
-#: below t_far exactly the pairs the leads need. An exact count, so a counter that saw nothing
-#: fails the test rather than passing under its bound. At × 32767 they were 3,119 and 7,246.
-RESOLVED = {0.1: 3_122, 0.01: 7_311}
 
 
 @pytest.mark.parametrize("r2", sorted(NEEDED))
-def test_clump_resolves_at_most_twice_the_pairs_it_needs(r2: float) -> None:
+def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
+    r2: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # From 0.2.0 a lead's partners are its Partner Rows row, one frame read and one row's
+    # unshuffle (partner-rows §7, §8.2): no element of `near/` is read at any r2, and
+    # no hit another lead took is read, so the reads are one a lead.
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
-    lead, needed, indexed = reference_greedy(z, r2, 3000)
+    lead, needed, _ = reference_greedy(z, r2, 3000)
     assert needed == NEEDED[r2], "the leads' candidates, as the tip counted them"
     assert len(np.unique(lead)) > 200, "many leads, each reading its own pairs"
-    taken = indexed if r2 >= support.T_FAR else needed
-    assert taken == RESOLVED[r2], "the leads' index rows above t_far, their pairs below it"
     reader, cache = counted(support.TEST_STORE)
-    ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
+    read = reader.partner_row
+    asked: list[tuple[str, int]] = []
+
+    def counted_row(chrom: str, local_row: int) -> Any:
+        asked.append((chrom, local_row))
+        return read(chrom, local_row)
+
+    monkeypatch.setattr(reader, "partner_row", counted_row)
+    with store_reads() as keys:
+        ours = clumping.clump(reader, alids(rows), z, r2=r2, kb=3000)
     assert list(ours.lead) == alids(rows[lead])
-    assert cache.resolved() == taken, f"resolved {cache.resolved()} for {needed} needed"
-    assert cache.resolved() <= 2 * needed
+    assert len(asked) == len(np.unique(lead)), "one Partner Rows row per lead, and no other"
+    assert len(set(asked)) == len(asked), "no row is read twice"
+    assert cache.resolved() == 0, "no Near Band or Proxy Index code is read at any r2"
+    offending = [key for key in keys if key.startswith("near/")]
+    assert offending == [], f"clump read {offending[:5]}"
 
 
 #: The Variant Set's string columns (spec §2).
@@ -198,34 +212,6 @@ def test_a_matrix_query_holds_one_float64_copy_of_its_result(
     assert peak < 2 * r.nbytes, f"peak {peak:,} bytes for a {r.nbytes:,}-byte result"
 
 
-@pytest.mark.parametrize("among", [False, True])
-def test_partners_holds_what_its_docstring_states(
-    among: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # partners() states 48 bytes per kept entry, once as read and once in the result, beside
-    # one block of at most _PAIRS_PER_STEP entries, 72 bytes each, and some 600 bytes of
-    # bookkeeping a block (ogld#14). A block holds a row at least, so at a step of 997 the
-    # block terms are under a kilobyte a row.
-    monkeypatch.setattr(reader_module, "_PAIRS_PER_STEP", 997)
-    reader = StoreReader.open(str(support.TEST_STORE))
-    rows = np.arange(1056)
-    listed = np.arange(0, 1056, 2) if among else None
-
-    def run() -> Any:
-        return reader.partners(rows, r2=0.0, window_bp=3_000_000, among=listed)
-
-    run()  # warm: the chunks are read and kept before anything is measured
-    tracemalloc.start()
-    try:
-        kept = len(run().partner)
-        peak = tracemalloc.get_traced_memory()[1]
-    finally:
-        tracemalloc.stop()
-    assert kept > 90_000, "many kept entries, so the per-entry term is what is measured"
-    bound = 48 * kept + 1024 * len(rows) + 64 * 1024
-    assert peak <= bound, f"peak {peak:,} bytes for {kept:,} kept entries, bound {bound:,}"
-
-
 @pytest.mark.parametrize("one_against_many", [False, True])
 def test_r_of_pairs_holds_what_its_docstring_states(
     one_against_many: bool, monkeypatch: pytest.MonkeyPatch
@@ -245,3 +231,27 @@ def test_r_of_pairs_holds_what_its_docstring_states(
     finally:
         tracemalloc.stop()
     assert peak <= 1.25 * r.nbytes + 64 * 1024, f"peak {peak:,} for a {r.nbytes:,}-byte result"
+
+
+def test_proxies_read_the_partner_rows_and_nothing_of_near_or_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`rows_of` answers from the ALID index, and from 0.2.0 a variant's proxies are its Partner
+    Rows row: no `near/` array of any kind, and none of its metadata (partner-rows §8.3, §8.4;
+    ld-store §10). The frames are the one chunk file it reads."""
+    names = ogld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
+    preads: list[int] = []
+    original = os.pread
+
+    def recording_pread(fd: int, length: int, offset: int) -> bytes:
+        preads.append(length)
+        return original(fd, length, offset)
+
+    monkeypatch.setattr(os, "pread", recording_pread)
+    store = ogld.open(TEST_STORE)
+    with store_reads() as keys:
+        assert (store._reader.rows_of(names) >= 0).all()
+        store.proxies(names, r2=0.8, kb=3000)
+    assert preads, "a local frame is one pread of the chunk file (partner-rows §7)"
+    offending = [key for key in keys if key.startswith("near/")]
+    assert offending == [], f"proxies read {offending}"

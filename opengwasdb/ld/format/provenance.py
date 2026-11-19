@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypedDict
 
-FORMAT_VERSION: Final = "0.1.0"
+FORMAT_VERSION: Final = "0.2.0"
+
+#: The format versions this package reads: `0.1.0`, the stores built before the Partner Rows (no
+#: `partners/`; its `clump` and `proxies` read a Proxy Index, which #72 removed and nothing here
+#: reads now), and `0.2.0`, which adds them (spec §13). A store records one, and a reader refuses
+#: any other.
+READABLE_FORMATS: Final = ("0.1.0", FORMAT_VERSION)
 
 
 class Encoding(TypedDict):
@@ -154,7 +160,7 @@ class Counts(TypedDict):
     near_pairs: int
     far_candidates: int
     far_pairs: int
-    index_entries: int
+    partner_entries: int
     alids_left_out: int
 
 
@@ -182,6 +188,8 @@ class Provenance(TypedDict):
     t_far: float
     t_far_q: float
     far_code_floor: int
+    t_partner: float
+    partner_code_floor: int
     pc_diagnostic: PcDiagnostic | None
     counts: Counts
     software: dict[str, str]
@@ -194,7 +202,9 @@ class Sourced(TypedDict):
 
     A producer hands this to `StoreWriter.finish`, which adds what the store derives from itself:
     `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`,
-    `far_code_floor` and `counts`. Together they are `Provenance`, key for key.
+    `far_code_floor`, `t_partner`, `partner_code_floor` and `counts`. Together they are
+    `Provenance`, key for key. `software` is the producer's list of versions, to which the store
+    adds `zstd`, the library that compressed its Partner Rows' frames.
     """
 
     source: Source
@@ -206,6 +216,46 @@ class Sourced(TypedDict):
     pc_diagnostic: PcDiagnostic | None
     software: dict[str, str]
     build: Build
+
+
+def release_of(version: object) -> tuple[int, ...] | None:
+    """`MAJOR.MINOR.PATCH` as numbers, or None for one that is not that.
+
+    Spec §13 makes `format_version` the one thing that says which components a store has, so a
+    reader, a validation rule and the derivation all ask it the same way (ogld#69). A version this
+    package cannot parse is None here; whoever needs it refuses the store by name (§13,
+    `provenance.encoding`).
+    """
+    if not isinstance(version, str):
+        return None
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
+#: The format version that added the Partner Rows: a store of it, or of a later one, records the
+#: `t_partner` their provenance claims, and a store below it has no Partner Rows at all (§13).
+PARTNER_ROWS_SINCE: Final = (0, 2, 0)
+
+
+def claims_partner_rows(recorded: object) -> bool:
+    """Whether a store's provenance claims the Partner Rows: the recorded **format version** is
+    0.2.0 or later **and** the Partner Threshold is recorded (spec §7, §13; partner-rows §6.2).
+
+    Both halves are needed, and the version comes first: a 0.1.0 store that carries `t_partner`,
+    or a whole `partners/`, holds a residue nothing has claimed — a derivation killed between
+    publishing the component and writing the provenance leaves one — so nothing reads those
+    frames and nothing counts them as the store's (ogld#69). The three callers are one rule here:
+    the reader (`StoreReader.has_partner_rows`), validation (`partners_judged`) and the derivation
+    (`derive_partners`, which settles an unclaimed residue rather than refusing it as nothing to
+    derive). A provenance that is not an object, or a version that is not `MAJOR.MINOR.PATCH`,
+    claims nothing.
+    """
+    if not isinstance(recorded, dict):
+        return False
+    version = release_of(recorded.get("format_version"))
+    return version is not None and version >= PARTNER_ROWS_SINCE and "t_partner" in recorded
 
 
 #: Every key spec §7 requires, dotted where it is nested. `provenance.complete` checks them.
@@ -237,13 +287,16 @@ REQUIRED_KEYS: Final = (
     "t_far",
     "t_far_q",
     "far_code_floor",
+    "t_partner",
+    "partner_code_floor",
     "pc_diagnostic",
     "counts.near_pairs",
     "counts.far_candidates",
     "counts.far_pairs",
-    "counts.index_entries",
+    "counts.partner_entries",
     "counts.alids_left_out",
     "software",
+    "software.zstd",
     "build.created_at",
     "build.wall_seconds",
     "build.peak_memory_bytes",
@@ -269,15 +322,18 @@ VALIDATION_RULES: Final = (
     "alid_index.count",
     "near.rows",
     "near.codes",
-    "index.rows",
-    "index.codes",
-    "index.distance",
-    "index.threshold",
-    "index.symmetric",
-    "index.near",
     "far.rows",
     "far.codes",
     "far.distance",
     "far.threshold",
-    "far.index",
+    "partners.files",
+    "partners.frames",
+    "partners.rows",
+    "partners.codes",
+    "partners.distance",
+    "partners.threshold",
+    "partners.symmetric",
+    "partners.near",
+    "partners.far",
+    "provenance.partner_threshold",
 )

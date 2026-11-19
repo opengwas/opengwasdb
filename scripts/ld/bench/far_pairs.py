@@ -17,6 +17,11 @@ row.
     pixi run -e dev python scripts/bench/far_pairs.py [--out far_pairs.json] [--chrom 6 11]
 
 It reads every chromosome's `index/<c>/partner` once, a block of rows at a time.
+
+**It refuses on this checkout.** The Proxy Index is gone (#72), so this reader can no longer
+produce its counts; the recorded results stay in `docs/benchmarks/results/far_pairs.json`, and
+only a checkout that could still read an index makes them again. `main` refuses up front, naming
+that checkout, rather than raising an `AttributeError` from the middle of a chromosome.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import latency
 import numpy as np
@@ -35,6 +40,24 @@ from ogld.store.layout import SIDE
 
 #: Index entries read at a time.
 _BLOCK = 1 << 25
+#: The checkout whose reader still reads a Proxy Index, and so can make the recorded results
+#: again: `docs/benchmarks/far-pairs.md` ran its "before" side from it.
+INDEX_READER: Final = "orch/1-ld-stores@1cb5c6e"
+
+
+def refuse_on_this_checkout(store: Path) -> None:
+    """Stop before reading anything, naming the checkout to run instead.
+
+    This script counts a chromosome's Far Pairs from its Proxy Index arrays, which the reader has
+    not opened since #72 removed the component. The counts it recorded were made from a reader
+    that could, and that is the only place they can be made again.
+    """
+    raise SystemExit(
+        f"scripts/bench/far_pairs.py reads a Proxy Index, which this checkout's reader no longer "
+        f"opens (#72): {store} may still hold index/, but no code here reads it. Its recorded "
+        f"results, docs/benchmarks/results/far_pairs.json, are made again from a checkout of "
+        f"{INDEX_READER}, with PYTHONPATH naming it, as docs/benchmarks/far-pairs.md ran them"
+    )
 
 
 def far_lengths(c: Any, near_bp: int) -> np.ndarray:
@@ -105,8 +128,9 @@ def main() -> None:
     parser.add_argument("--chrom", nargs="+", help="the chromosomes to count; all if omitted")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    latency.instrument(6, "ogld", None)
     store = latency.published()
+    refuse_on_this_checkout(store)
+    latency.instrument(6, "ogld", None)
     sample = latency.Sample(store)
     reader = latency.opened(store)._reader
     near_bp = reader.provenance["near_bp"]

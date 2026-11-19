@@ -107,6 +107,7 @@ def inputs(pgen: Path, source: str, r_scale: int, pcs: Path | None = None) -> og
         ancestry="EUR",
         genotype_source=source,
         r_scale=r_scale,
+        t_partner=0.01,
         k=10 if pcs else 0,
         info_min=None,
     )

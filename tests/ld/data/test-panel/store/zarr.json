@@ -1,7 +1,7 @@
 {
   "attributes": {
     "ld_store": {
-      "format_version": "0.1.0",
+      "format_version": "0.2.0",
       "encoding": {
         "r_dtype": "int16",
         "r_scale": 511,
@@ -282,6 +282,8 @@
       "t_far": 0.027421052631578947,
       "t_far_q": 20.84,
       "far_code_floor": 85,
+      "t_partner": 0.01,
+      "partner_code_floor": 52,
       "pc_diagnostic": {
         "pairs": {
           "source": "every chr21 \u00d7 chr22 pair of the Test Panel's variants: the Test Panel holds no other cross-chromosome pairs, so none is drawn and the seed is recorded only",
@@ -303,18 +305,19 @@
         "near_pairs": 109212,
         "far_candidates": 37381,
         "far_pairs": 7,
-        "index_entries": 36476,
+        "partner_entries": 50588,
         "alids_left_out": 8
       },
       "software": {
-        "ogld": "0.0.1.dev317+g8a8e18b23",
+        "ogld": "0.1.1.dev55+g88b12e7cf",
         "numpy": "2.4.6",
-        "zarr": "3.4.2"
+        "zarr": "3.4.2",
+        "zstd": "1.5.6"
       },
       "build": {
-        "created_at": "2026-11-15T02:17:00Z",
-        "wall_seconds": 0.39509850298054516,
-        "peak_memory_bytes": 2286096384,
+        "created_at": "2026-11-18T21:51:40Z",
+        "wall_seconds": 0.6657118278089911,
+        "peak_memory_bytes": 2287927296,
         "threads": 1
       }
     }

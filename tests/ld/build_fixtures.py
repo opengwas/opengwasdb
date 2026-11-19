@@ -29,6 +29,9 @@ HALF_STEP: Final = store_copies.HALF_STEP
 #: Two float64 computations of one r may differ by a few ulps before rounding.
 SLACK: Final = 1e-9
 PANEL_ID: Final = "test-panel-hgdp1kgp-EUR"
+#: The Partner Threshold a build of the Test Panel is given: the HGDP+1kGP panels' 0.01
+#: (partner-rows §3), which is below its t_far 0.0274.
+T_PARTNER: Final = 0.01
 
 
 def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
@@ -41,6 +44,7 @@ def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
         "ancestry": "EUR",
         "genotype_source": "the Test Panel: HGDP+1kGP phased v2 EUR, chr21 and chr22",
         "r_scale": R_SCALE,
+        "t_partner": T_PARTNER,
         "pgen": (fileset,),
         "keep": panel.keep,
         "pcs": panel.pcs if k else None,

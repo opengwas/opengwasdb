@@ -7,15 +7,18 @@ builder exists. Its variants are the rows that pass the build's filters, with th
 A1 and A2 (`ogld.identity`), reversed indels resolved by the engine's rule; its r is the
 reference r signed to A1. The script supplies that r and what only its source knows, and the
 store makes the rest (`StoreWriter`, ogld#17). That is its codes,
-quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Proxy Index
-at t_far for n = 771 and the k it was written at (spec §4, §5), and the counts. It is "import a
+quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Far Pairs at
+t_far for n = 771 and the k it was written at (spec §4, §5), the Partner Rows, and the counts. It
+holds no Proxy Index: #72 removed the component (ADR 0011). It is "import a
 precomputed r" in miniature. It is deterministic: the same inputs write the same bytes.
 
-    pixi run -e dev python scripts/make_test_store.py --r-scale 511 [--k 10] [--force] [out]
+    pixi run -e dev python scripts/make_test_store.py --r-scale=<scale> --t-partner=<r²> \
+        [--k 10] [--force] [out]
 
-`write_test_store(k, out, r_scale)` writes the store at either k the Test Panel holds a reference
-for, at any scale the format admits: the committed Test Store is × 511, and tests write × 2047 and
-× 32767 stores beside it. The scale is always given, as a build's is: there is no default.
+`write_test_store(k, out, r_scale, t_partner)` writes the store at either k the Test Panel holds a
+reference for, at any scale the format admits: the committed Test Store is × 511, and tests write
+× 32767 stores beside it. The scale and the Partner Threshold are always given, as a build's are:
+neither has a default.
 """
 
 from __future__ import annotations
@@ -327,9 +330,9 @@ def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
     }
 
 
-def write_test_store(k: int, out: str | Path, r_scale: int) -> Path:
-    """Write the Test Store at `out` from the Test Panel's reference r at `k`, at × `r_scale`;
-    return `out`."""
+def write_test_store(k: int, out: str | Path, r_scale: int, t_partner: float) -> Path:
+    """Write the Test Store at `out` from the Test Panel's reference r at `k`, at × `r_scale` and
+    with the Partner Threshold `t_partner`, as a build takes both; return `out`."""
     started = time.perf_counter()
     vs = variant_set()
     writer = StoreWriter.create(
@@ -340,6 +343,7 @@ def write_test_store(k: int, out: str | Path, r_scale: int) -> Path:
         far_bp=FAR_BP,
         n=panel_data().panel().n_samples,
         k=k,
+        t_partner=t_partner,
     )
     ranges = chromosome_ranges(vs.variants.chrom)
     for chrom, r in r_matrices(vs, k, ranges).items():
@@ -358,6 +362,13 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="the store's r scale: 511 for the committed Test Store, HGDP+1kGP EUR's (ADR 0004)",
     )
+    parser.add_argument(
+        "--t-partner",
+        type=float,
+        required=True,
+        help="the r² a pair within near_bp must reach to be in the Partner Rows: 0.01 for the "
+        "committed Test Store, the HGDP+1kGP panels'",
+    )
     parser.add_argument("--k", type=int, default=10, choices=panel_data().KS)
     parser.add_argument("--force", action="store_true", help="replace a store already at `out`")
     args = parser.parse_args(argv)
@@ -365,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.force:
             parser.error(f"{args.out} exists; pass --force to write it again")
         shutil.rmtree(args.out)
-    out = write_test_store(args.k, args.out, args.r_scale)
+    out = write_test_store(args.k, args.out, args.r_scale, args.t_partner)
     print(out)
     return 0
 

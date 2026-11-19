@@ -270,15 +270,39 @@ def test_the_window_refuses_a_block_that_does_not_start_where_the_last_ended() -
         window.reach(30, keep=0)
 
 
-@pytest.mark.parametrize(("k", "threads"), [(0, 1), (0, 4), (K, 1), (K, 4)])
+#: chr22's fileset and its store at each k, built once per worker at the build's own tile sizes:
+#: the reference a moved window must reproduce. One chromosome is enough — whether a window moves
+#: is a property of its own rows, and chr22's 593 end in a partial block of 1 at 8-row blocks —
+#: and it halves what this test builds.
+_ONE_CHROMOSOME: dict[int, tuple[Path, Path]] = {}
+
+
+def one_chromosome(tmp_path_factory: pytest.TempPathFactory, k: int) -> tuple[Path, Path]:
+    """chr22's pgen and its store at `k`, built once per worker, unmoved."""
+    if k not in _ONE_CHROMOSOME:
+        out = tmp_path_factory.mktemp(f"chr22-k{k}")
+        rows = np.flatnonzero(testdata.variants().chrom == "22").astype(np.int64)
+        pgen = fixtures.write_fileset(out / "chr22", rows)
+        ogld.build(fixtures.inputs(pgen, k), out / "store")
+        _ONE_CHROMOSOME[k] = (pgen, out / "store")
+    return _ONE_CHROMOSOME[k]
+
+
+@pytest.mark.parametrize("k", [0, K])
 def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
-    built: Built, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, k: int, threads: int
+    tmp_path_factory: pytest.TempPathFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    k: int,
 ) -> None:
-    # Review of #17 (standards a4): no Test Panel chromosome is long enough to move the window at
-    # the build's own sizes. With 16-row tiles and 40-row genotype blocks (468 and 588 rows end in
-    # a partial block of 28) it moves, and the store must be the one built without a move.
+    # Review of #17 (standards a4): no chromosome is long enough to move the window at the build's
+    # own sizes. With 4-row tiles and 8-row genotype blocks it moves more than once over chr22's
+    # 593 rows, and its arrays must be the shared panel build's, which never moved. One thread:
+    # with four, the window's reach-ahead makes its single move cover the chromosome — that
+    # threads do not change a store is `test_the_thread_count_does_not_change_the_store`'s.
     from ogld.build import tiles
 
+    pgen, reference = one_chromosome(tmp_path_factory, k)
     moves: list[int] = []
     real = tiles.Window._move
 
@@ -286,9 +310,9 @@ def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
         moves.append(keep)
         real(self, keep)
 
-    monkeypatch.setattr(tiles, "TILE_ROWS", 16)
-    monkeypatch.setattr(tiles, "UNIT_ROWS", 40)
+    monkeypatch.setattr(tiles, "TILE_ROWS", 4)
+    monkeypatch.setattr(tiles, "UNIT_ROWS", 8)
     monkeypatch.setattr(tiles.Window, "_move", spy)
-    ogld.build(fixtures.inputs(testdata.panel().pgen, k), tmp_path / "store", threads=threads)
-    assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} times"
-    fixtures.same_store(built[k], tmp_path / "store")
+    ogld.build(fixtures.inputs(pgen, k), tmp_path / "store")
+    assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} time(s)"
+    fixtures.same_store(reference, tmp_path / "store")

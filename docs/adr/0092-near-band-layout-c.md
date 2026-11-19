@@ -1,5 +1,10 @@
 # The Near Band is chunked by layout C: 262,144 codes an inner chunk, 256 to a shard
 
+> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+> Where this record speaks of it in the present tense — as a component a store holds, a stream a
+> build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
+> entry it held, and `clump` and `proxies` read them. Everything else here stands.
+
 Issue [#8](https://github.com/opengwas/ogld/issues/8), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The format is in `docs/spec/ld-store.md` (§6 for the chunk and shard shapes, §10 for the reads);
 the measurements are in `docs/benchmarks/latency.md`, rendered from the records in

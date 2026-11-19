@@ -32,10 +32,11 @@ from contract.support import RangeHandler
 from numpy.dtypes import StringDType
 from store_copies import TEST_STORE, copy_store, resharded
 from zarr.abc.store import SuffixByteRequest
+from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import FsspecStore, LocalStore
 
 import ogld
-from ogld.format import InputError, Refusal, RefusalReason, judge_request
+from ogld.format import InputError
 from ogld.query import clumping
 from ogld.query import proxies as proxies_query
 from ogld.store import StoreReader, decoding, location, reader
@@ -43,6 +44,57 @@ from ogld.store.validation import validate_group
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
 INNER, PER_SHARD = 512, 4
+
+
+def test_one_chromosomes_positions_are_loaded_once_however_many_cold_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chromosome's positions are read once, and both caches hold that one array (#71).
+
+    Four cold callers meet at a barrier around the position read: `loci_of` and `pair_r`, the two
+    paths that reach a chromosome. The first to arrive holds the reader's lock and the rest wait,
+    so one load is made and `_loaded[c].position is _located[c].position`; a reader that checks and
+    publishes without a lock makes four loads and keeps two different arrays.
+    """
+    reader = StoreReader.open(TEST_STORE)
+    gate = threading.Barrier(4, timeout=0.5)
+    loads: list[int] = []
+    runs = reader._runs
+
+    def gated(array: zarr.Array[Any], first: Any, length: Any) -> Any:
+        if array.path == "variants/position":
+            loads.append(1)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                gate.wait()
+        return runs(array, first, length)
+
+    monkeypatch.setattr(reader, "_runs", gated)
+    rows = np.array([468, 470, 480, 1055], dtype=np.int64)
+    answers: list[Any] = [None] * 4
+
+    def loci(at: int) -> None:
+        answers[at] = reader.loci_of(rows)
+
+    def pairs(at: int) -> None:
+        answers[at] = reader.pair_r(rows)
+
+    callers = [
+        threading.Thread(target=loci, args=(0,)),
+        threading.Thread(target=pairs, args=(1,)),
+        threading.Thread(target=loci, args=(2,)),
+        threading.Thread(target=pairs, args=(3,)),
+    ]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(10)
+    assert not any(caller.is_alive() for caller in callers), "a cold caller hung"
+    assert len(loads) == 1, f"{len(loads)} whole-chromosome position loads, not one"
+    np.testing.assert_array_equal(answers[0][1], answers[2][1])
+    np.testing.assert_array_equal(answers[1], answers[3])
+    assert reader._loaded["22"].position is reader._located["22"].position, (
+        "the two caches kept different position arrays"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -100,22 +152,6 @@ def test_a_matrix_read_a_few_pairs_at_a_time_is_the_reference(
     np.testing.assert_array_equal(StoreReader.open(small_chunks).pair_r(rows), expected)
 
 
-@pytest.mark.parametrize("budget", [0, 1 << 28])
-def test_index_and_band_rows_read_the_same_from_any_layout(
-    small_chunks: Path, budget: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rows = np.arange(0, 1056, 7)
-    expected = StoreReader.open(TEST_STORE)
-    monkeypatch.setattr(location, "CACHE_BYTES", budget)
-    got = StoreReader.open(small_chunks)
-    for read in ("index", "band"):
-        mine, theirs = getattr(got, read)(rows), getattr(expected, read)(rows)
-        assert len(theirs.partner) > 1000, f"{read} must return many partners"
-        np.testing.assert_array_equal(mine.indptr, theirs.indptr)
-        np.testing.assert_array_equal(mine.partner, theirs.partner)
-        np.testing.assert_array_equal(mine.r, theirs.r)
-
-
 def stored_positions() -> tuple[np.ndarray, np.ndarray]:
     """The chromosome and position of each Test Store row, from the Test Panel."""
     rows = support.passing_rows()
@@ -144,72 +180,6 @@ def test_r_of_pairs_is_the_reference_r_of_each_pair_and_of_one_row_against_many(
     reader = StoreReader.open(small_chunks)
     np.testing.assert_array_equal(reader.r_of_pairs(rows[i], rows[j]), want)
     np.testing.assert_array_equal(reader.r_of_pairs(rows[3:4], rows), expected[3])
-
-
-@pytest.mark.parametrize(
-    ("r2", "kb", "listed"),
-    [(0.05, 10_000, False), (support.T_FAR, 3000, True), (0.01, 3000, False), (0.0, 500, True)],
-)
-def test_partners_are_the_reference_pairs_at_r2_within_the_window(
-    small_chunks: Path, r2: float, kb: float, listed: bool
-) -> None:
-    every = np.arange(1056)
-    expected = reference_pairs(every)
-    chrom, pos = stored_positions()
-    rows = np.concatenate([np.arange(0, 1056, 11), [33, 33]])
-    among = np.arange(0, 1056, 3) if listed else None
-    got = StoreReader.open(small_chunks).partners(rows, r2=r2, window_bp=kb * 1000, among=among)
-    for k, row in enumerate(rows):
-        r = expected[row]
-        keep = ~np.isnan(r) & (r * r >= r2) & (np.abs(pos - pos[row]) <= kb * 1000)
-        keep &= (chrom == chrom[row]) & (every != row)
-        if among is not None:
-            keep &= np.isin(every, among)
-        part = slice(got.indptr[k], got.indptr[k + 1])
-        np.testing.assert_array_equal(got.partner[part], every[keep])
-        np.testing.assert_array_equal(got.r[part], r[keep])
-        np.testing.assert_array_equal(got.distance[part], np.abs(pos[keep] - pos[row]))
-    assert len(got.partner) > 500, "many partners in all"
-
-
-@pytest.mark.parametrize(
-    ("r2", "window_bp", "reason"),
-    [
-        (0.01, 3_000_000.9, RefusalReason.THRESHOLD_BELOW_T_FAR),
-        (0.01, 3_000_001, RefusalReason.THRESHOLD_BELOW_T_FAR),
-        (0.5, 10_000_000.5, RefusalReason.WINDOW_OVER_FAR),
-        (0.5, -1.0, RefusalReason.INVALID),
-        (1.5, 1000.0, RefusalReason.INVALID),
-    ],
-)
-def test_partners_refuses_what_judge_request_refuses(
-    r2: float, window_bp: float, reason: RefusalReason
-) -> None:
-    # One rule (spec §9): the reader asks ogld.format, so a window 0.9 bp past near_bp below
-    # t_far is refused there as it is by judge_request, not answered to ⌊W⌋ (ogld#14).
-    t_far = StoreReader.open(TEST_STORE).provenance["t_far"]
-    judged = judge_request(r2=r2, kb=window_bp / 1000, t_far=t_far, near_bp=3_000_000,
-                           far_bp=10_000_000)  # fmt: skip
-    assert judged.refusal is reason, "judge_request refuses it so"
-    with pytest.raises(Refusal) as refused:
-        StoreReader.open(TEST_STORE).partners(np.array([10, 600]), r2=r2, window_bp=window_bp)
-    assert refused.value.reason is reason
-
-
-def test_partners_answers_exactly_near_bp_below_t_far_and_far_bp_above() -> None:
-    reader = StoreReader.open(TEST_STORE)
-    rows = np.array([10, 600])
-    assert len(reader.partners(rows, r2=0.01, window_bp=3_000_000).indptr) == 3
-    assert len(reader.partners(rows, r2=0.5, window_bp=10_000_000).indptr) == 3
-
-
-def test_partners_refuses_a_list_that_is_not_ascending_distinct_rows() -> None:
-    reader = StoreReader.open(TEST_STORE)
-    rows = np.array([10, 600])
-    with pytest.raises(ValueError, match="ascending, distinct"):
-        reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([5, 5]))
-    with pytest.raises(ValueError, match="Absent ALID"):
-        reader.partners(rows, r2=0.5, window_bp=1000, among=np.array([-1, 5]))
 
 
 def test_a_region_reads_the_same_from_any_layout(small_chunks: Path) -> None:
@@ -468,8 +438,6 @@ def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
         ("far/22/partner", "-1", "matrix"),
         ("far/22/r", "-32768", "matrix"),
         ("far/22/indptr", "-1", "matrix"),
-        ("index/22/partner", "-1", "proxies"),
-        ("index/22/r", "-32768", "proxies"),
         ("near/22/indptr", "-1", "matrix"),
     ],
 )
@@ -478,7 +446,8 @@ def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
 ) -> None:
     # An ALID that read as "" would make a present variant Absent; a partner of −1 would name
     # the last variant. Each is refused, naming the array, by a query that reads it: a matrix
-    # reads the Far Pairs, and proxies at r2 ≥ t_far the Proxy Index (ADR 0007).
+    # reads the Far Pairs. From 0.2.0 no query reads the Proxy Index (partner-rows §8.4), so its
+    # arrays are not here; the Partner Rows' frames are checked by their own checksums instead.
     copy = tmp_path / "lost"
     shutil.copytree(small_chunks, copy)
     every = list(StoreReader.open(copy).variants(np.arange(1056)).alid)
@@ -503,31 +472,44 @@ def set_fill(store: Path, path: str, fill: object) -> None:
     meta.write_text(json.dumps(doc))
 
 
-def test_a_partner_whose_lost_chunk_would_read_as_row_0_is_refused(
-    small_chunks: Path, tmp_path: Path
-) -> None:
-    # The review's case: fill 0 (zarr's int32 default) and a lost shard read as partner row 0,
-    # chr22's first variant, and proxies named it 377 times in place of the true partners.
-    copy = tmp_path / "store"
-    shutil.copytree(small_chunks, copy)
-    set_fill(copy, "index/22/partner", 0)
-    shards(copy, "index/22/partner")[1].unlink()
-    names = list(StoreReader.open(TEST_STORE).variants(np.arange(468, 1056, 15)).alid)
-    with pytest.raises(
-        ValueError, match=r"index/22/partner has the fill value 0, which valid data"
-    ):
-        ogld.open(copy).matrix(names)
+def a_far_pair(chrom: str) -> tuple[int, int]:
+    """One pair on `chrom` beyond near_bp that the Test Store holds: a read of it opens the
+    chromosome's Far Pairs."""
+    rows = np.arange(1056)
+    names, position = stored_positions()
+    expected = reference_pairs(rows)
+    apart = (
+        ~np.isnan(expected)
+        & (np.abs(position[:, None] - position) > 3_000_000)
+        & (names[:, None] == chrom)
+        & (names[None, :] == chrom)
+    )
+    i, j = (int(k[0]) for k in np.nonzero(apart))
+    return i, j
+
+
+def test_a_partner_whose_lost_chunk_would_read_as_row_0_is_refused(tmp_path: Path) -> None:
+    # The review's case: fill 0 (zarr's int32 default) is a partner row a valid store holds —
+    # chr22's first variant — so a lost chunk would read as data. The read that opens the array
+    # refuses the fill rather than decode it, and validation fails it too.
+    copy = copy_store(tmp_path / "store")
+    set_fill(copy, "far/22/partner", 0)
+    lo, hi = a_far_pair("22")
+    reader = StoreReader.open(copy)
+    with pytest.raises(ValueError, match=r"far/22/partner has the fill value 0, which valid data"):
+        reader.r_of_pairs(np.array([lo]), np.array([hi]))
     assert fill_findings(copy), "validate fails what open refuses"
 
 
 def test_every_fill_is_judged_before_any_element_is_decoded(tmp_path: Path) -> None:
-    # A lost indptr chunk and a partner fill of 0: the fill is refused first, so no element of
-    # the chromosome was decoded from an array whose lost chunk could read as data.
+    # A lost chunk of the Far Pairs' codes and a partner fill of 0: the fill is refused first, so
+    # no element of the component was decoded from an array whose lost chunk could read as data.
     copy = copy_store(tmp_path / "store")
-    set_fill(copy, "index/22/partner", 0)
-    (copy / "near" / "22" / "indptr" / "c" / "0").unlink()
-    with pytest.raises(ValueError, match=r"index/22/partner has the fill value 0"):
-        ogld.open(copy).region("22", 30_000_000, 1_000_000)
+    set_fill(copy, "far/22/partner", 0)
+    (copy / "far" / "22" / "r" / "c" / "0").unlink()
+    lo, hi = a_far_pair("22")
+    with pytest.raises(ValueError, match=r"far/22/partner has the fill value 0"):
+        StoreReader.open(copy).r_of_pairs(np.array([lo]), np.array([hi]))
 
 
 @pytest.mark.parametrize(
@@ -554,15 +536,38 @@ def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path:
     assert ogld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, "chr21 is intact"
 
 
-Served = tuple[str, list[tuple[str, int]]]
+async def reached(event: threading.Event) -> None:
+    """Wait until `event` is set, or fail: the test's own worker has to be in flight."""
+    async with asyncio.timeout(2):
+        while not event.is_set():
+            await asyncio.sleep(0.001)
+
+
+class Sent(list[tuple[str, int]]):
+    """The path and body length of every response a server sent, and each response's status.
+
+    A list of the pairs the tests already read, so a server that answers a range past a file's end
+    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (spec §5.1).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.statuses: list[int] = []
+
+
+Served = tuple[str, Sent]
 
 
 @contextlib.contextmanager
 def serving(directory: Path) -> Iterator[Served]:
-    """`directory` over HTTP, with the path and body length of every response it sends."""
-    sent: list[tuple[str, int]] = []
+    """`directory` over HTTP, with the path, body length and status of every response it sends."""
+    sent = Sent()
 
     class Counting(RangeHandler):
+        def send_response(self, code: int, message: str | None = None) -> None:
+            sent.statuses.append(code)
+            super().send_response(code, message)
+
         def send_header(self, keyword: str, value: str) -> None:
             if keyword == "Content-Length":
                 sent.append((self.path, int(value)))
@@ -759,20 +764,6 @@ def test_a_read_has_at_most_its_bounds_in_flight(
     assert max(held.batches) * 2 <= budget
 
 
-def test_prefetch_limits_actual_http_requests(
-    small_chunks: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    client = client_flight(monkeypatch)
-    flight = InFlight(together=3, patience=0.05)
-    with zarr.config.set({"async.concurrency": 2}), holding(small_chunks, flight) as url:
-        cache = location.ChunkCache(1 << 20)
-        array = location.open_group(url, cache=cache)["near/22/r"]
-        assert isinstance(array, zarr.Array)
-        assert cache.prefetch(array, np.array(APART) * INNER, np.full(len(APART), INNER))
-    assert client.peak == 2
-    assert cache._bytes <= cache.budget
-
-
 def test_a_read_of_strings_holds_at_most_the_bytes_in_flight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -923,32 +914,37 @@ def test_a_store_keeps_4_gib_of_its_chunks_unless_told_otherwise() -> None:
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])
-def test_at_r2_at_or_above_t_far_no_near_band_chunk_is_fetched(query: str) -> None:
-    # At r2 ≥ t_far a variant's partners are its Proxy Index row, both sides, and the reader
-    # chooses that part for both queries (spec §10; ogld#14). r2 is t_far exactly, the edge.
-    # The committed store holds each array in one chunk, so any Near Band read fetches one.
+def test_at_every_answered_r2_the_partner_rows_are_read_and_no_near_band_or_index_r(
+    query: str,
+) -> None:
+    # From 0.2.0 both queries read the Partner Rows and nothing else: at r2 ≥ t_far, and at
+    # r2 = t_partner below it, which the Near Band used to answer one element at a time
+    # (partner-rows §8.1, §8.3, §8.4). The committed store holds each array in one chunk, so any
+    # Near Band or Proxy Index read would fetch one; the frames are one chunk a chromosome.
     rows = support.passing_rows()
     names = support.alids(rows)
-    with serving(TEST_STORE) as (url, sent):
-        reader = StoreReader.open(url)
-        if query == "clump":
-            z = np.abs(support.panel_data().gwas().z)[rows]
-            clumping.clump(reader, names, z, r2=support.T_FAR, kb=3000)
-        else:
-            proxies_query.proxies(reader, names[::5], r2=support.T_FAR, kb=10_000)
-    fetched = {key[0] for key in reader._cache._kept if kind(key) == "chunk"}
-    assert {"index/21/r", "index/22/r"} <= fetched, "the Proxy Index rows must be read"
-    assert not [path for path in fetched if path.startswith("near/") and path.endswith("/r")], (
-        "no Near Band code chunk; its indptr is still loaded on first chromosome touch"
-    )
-    chunks = ("/near/21/r/c/", "/near/22/r/c/")
-    assert not [path for path, _ in sent if path.startswith(chunks)], "nor any Near Band byte"
+    for r2, kb in ((support.T_FAR, 3000), (support.T_PARTNER, 3000)):
+        with serving(TEST_STORE) as (url, sent):
+            reader = StoreReader.open(url)
+            if query == "clump":
+                z = np.abs(support.panel_data().gwas().z)[rows]
+                clumping.clump(reader, names, z, r2=r2, kb=kb)
+            else:
+                proxies_query.proxies(reader, names[::5], r2=r2, kb=kb)
+        offending = [path for path, _ in sent if path.startswith(("/near/", "/index/"))]
+        assert offending == [], f"a Near Band or Proxy Index read: {offending[:5]}"
+        assert [path for path, _ in sent if path.startswith("/partners/")], "the frames are read"
 
 
 def test_the_test_store_passes_every_rule_over_http() -> None:
+    # The chunk files' ends are probed one byte past their length, which a server answers with 416
+    # (RFC 9110 §15.5.17): an unsatisfiable range says the file ends there, and a store must not be
+    # refused for it (spec §5.1, §5.3). This store passed only when the probe read an empty 206.
     with serving(TEST_STORE) as (url, sent):
-        assert not any(ogld.validate(url).values())
-    assert any(path.startswith("/index/22/partner/c/") for path, _ in sent), "read over HTTP"
+        found = ogld.validate(url)
+    assert not any(found.values()), {rule: f for rule, f in found.items() if f}
+    assert any(path.startswith("/far/22/partner/c/") for path, _ in sent), "read over HTTP"
+    assert 416 in sent.statuses, sorted(set(sent.statuses))
 
 
 def test_a_url_with_no_store_is_an_input_error(
@@ -993,3 +989,85 @@ def test_a_fill_of_zero_is_the_caller_s_and_fills_only_the_unstored_cells() -> N
     assert (zero.r[unstored] == 0).all()
     np.testing.assert_array_equal(zero.r[~unstored], plain.r[~unstored])
     assert zero.fill == 0
+
+
+def test_oversized_sparse_read_streams_without_pinning_a_chromosome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bound, size = 1 << 19, 65536
+    array = zarr.create_array(
+        store=tmp_path / "a", shape=(32 * size,), dtype="int32", chunks=(size,), shards=(8 * size,)
+    )
+    array[:] = np.arange(32 * size, dtype=np.int32)
+    monkeypatch.setattr(location, "_FETCH_BYTES", bound)
+    coords = np.arange(32) * size + 17
+    cache = location.ChunkCache(0)
+    tracemalloc.start()
+    try:
+        got = cache.take(array, coords)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    np.testing.assert_array_equal(got, coords)
+    assert peak < 4 * bound, f"{peak} bytes pinned for {got.nbytes} requested bytes"
+    assert cache._bytes == 0
+
+
+def test_a_cache_budget_does_not_change_the_answer(tmp_path: Path) -> None:
+    root = resharded(tmp_path / "store", 512, 4)
+    store = ogld.open(root)
+    rows = np.r_[np.arange(0, 50, 5), np.arange(500, 550, 5)]
+    names = store._reader.alids_of(rows).tolist()
+    score = np.random.default_rng(40).random(len(rows))
+    expected = store.clump(names, score, r2=0.01, kb=3000)
+    assert (expected.lead != expected.alid).any(), "the fixture must have joined members"
+    for budget in [0, 4096]:
+        got = ogld.open(root, cache_bytes=budget).clump(names, score, r2=0.01, kb=3000)
+        for name, column in expected.columns().items():
+            np.testing.assert_array_equal(got.columns()[name], column)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_cancelled_index_waiter_does_not_cancel_another_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    root = resharded(tmp_path / "store", 512, 4)
+    store = location._KeptIndexes(LocalStore(root, read_only=True), location.ChunkCache())
+    started, release = threading.Event(), threading.Event()
+    getter, calls = LocalStore.get_sync, []
+
+    def held(self: Any, key: str, **kwargs: Any) -> Any:
+        calls.append(key)
+        started.set()
+        assert release.wait(2), "the test must release its own suffix worker"
+        if fails:
+            raise OSError("shared suffix failed")
+        return getter(self, key, **kwargs)
+
+    monkeypatch.setattr(LocalStore, "get_sync", held)
+
+    async def run() -> None:
+        request = ("near/22/r/c/0", default_buffer_prototype(), SuffixByteRequest(68))
+        first = asyncio.create_task(store.get(*request))
+        second = asyncio.create_task(store.get(*request))
+        try:
+            await reached(started)
+            first.cancel()
+            await asyncio.sleep(0.01)
+            first.cancel()  # Repeated cancellation must not reach the shared fetch either.
+            await asyncio.sleep(0.01)
+            assert not first.done(), "the cancelled waiter must drain, not abandon, shared I/O"
+            assert not second.done()
+        finally:
+            release.set()
+            a, b = await asyncio.gather(first, second, return_exceptions=True)
+            await asyncio.gather(*store._pending.values(), return_exceptions=True)
+        assert isinstance(a, asyncio.CancelledError)
+        if fails:
+            assert isinstance(b, OSError)
+        else:
+            assert b.to_bytes() == (root / request[0]).read_bytes()[-68:]
+        assert calls == [request[0]], "both readers must share exactly one suffix request"
+        assert not store._pending
+
+    asyncio.run(run())

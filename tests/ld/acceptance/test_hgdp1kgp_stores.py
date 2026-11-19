@@ -92,7 +92,9 @@ def test_provenance_records_what_a_reader_needs(panel: str) -> None:
     assert [name for name, _, _ in held] == AUTOSOMES, f"{panel} holds chromosomes {held}"
     assert all(stop > start for _, start, stop in held), "a chromosome with no variants"
     assert p["counts"]["near_pairs"] > 0, "the Near Band's pair count"
-    assert p["counts"]["index_entries"] > 0, "the Proxy Index's size"
+    # These five are 0.1.0 stores, so they still record the Proxy Index they hold: #73 derives
+    # their Partner Rows and drops it, and this assertion goes with the last of them (#72).
+    assert p["counts"]["index_entries"] > 0, "a 0.1.0 store's Proxy Index, until #73 drops it"
     t_far = p["t_far"]
     assert isinstance(t_far, float), f"t_far is {t_far!r}"
     assert 0 < t_far < 1, f"t_far is {t_far!r}"

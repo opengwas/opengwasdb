@@ -1,14 +1,24 @@
-"""Greedy clumping on an LD Store, equal to `plink2 --clump` (spec §9; ogld#6)."""
+"""Greedy clumping on an LD Store, equal to `plink2 --clump` (spec §9; ogld#6).
+
+From format 0.2.0 a lead's partners are its Partner Rows row (partner-rows §7, §8.2): one frame
+read and one decode, filtered to the hits still open in its component. The hits are split into
+components first — per chromosome, cut wherever two consecutive positions are W apart or more —
+because no lead can reach a hit in another one, and so each component's greedy is independent
+(partner-rows §8.2). Components are therefore the unit of parallel work: one task each, on the
+reader's bounded pool, and the answer is the same at any number of them (§9.2).
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
 
 from ogld.format import Refusal, RefusalReason
-from ogld.format.geometry import indptr_of, spans
+from ogld.format.geometry import global_rows, local_rows
 from ogld.query.requests import window_of
 from ogld.query.results import Clumps
 from ogld.store import StoreReader
@@ -20,10 +30,12 @@ def clump(
     """Clump the present `alids` by `score`, strongest first (ogld#6).
 
     `score` is |z| or −log10 p, one per ALID, finite and ≥ 0; never raw p, which
-    underflows to 0 past |z| ≈ 38. Judged by `ogld.format.judge_request` first. Each
-    lead's joiners come from `StoreReader.partners`, among the hits still unclumped, so
-    the reader chooses the Proxy Index or the Near Band (ogld#14); a pair the store does
-    not hold within an answered window is the Bound, which cannot reach an answered r2.
+    underflows to 0 past |z| ≈ 38. Judged by `ogld.query.requests.window_of` first, which asks
+    `ogld.format.judge_partner_request`: it refuses a store that holds no Partner Rows and a
+    threshold below the store's own t_partner within `near_bp`, naming the store and both numbers,
+    before any frame is read. Each lead's joiners are its Partner Rows row among the hits still
+    open in its component (partner-rows §8.2); a pair the row does not hold is below the Partner
+    Floor or is no pair, and cannot reach an answered r2.
 
     Greedy: the strongest unclumped variant leads, and every unclumped variant within
     the window (distance < W) with r̂² > r2 of it joins it, as `plink2 --clump` does (spec
@@ -37,133 +49,158 @@ def clump(
     present = found >= 0
     absent = tuple(alid for alid, ok in zip(alids, present, strict=True) if not ok)
     rows, scores = found[present], scores[present]
-    chrom, position = reader.loci_of(rows)
     # rows_of has already compared the complete stored ALID, not only its locus.
     names = np.array([a for a, ok in zip(alids, present, strict=True) if ok], dtype=np.str_)
 
-    lead, r_lead = _chromosome_greedy(reader, rows, scores, chrom, r2=r2, window=window)
+    # Each distinct row is one hit, however many requests name it; duplicates scatter afterwards,
+    # and a row is ordered by its strongest request's score, as the greedy takes it.
+    hits, first, back = np.unique(rows, return_index=True, return_inverse=True)
+    # A hit's strength is the strongest score any request of it gives; every score is ≥ 0, so
+    # the max over none is −inf rather than a zero a score could equal.
+    strength = np.full(len(hits), -np.inf)
+    np.maximum.at(strength, back, scores)
+    chrom, position = reader.loci_of(hits)
+    lead, r_lead = _components(reader, hits, strength, chrom, position, r2=r2, window=window)
     return Clumps(
         alid=names,
-        chrom=chrom,
-        position=position,
+        chrom=chrom[back],
+        position=position[back],
         score=scores,
-        lead=names[lead],
-        r=r_lead,
+        lead=names[first[lead[back]]],
+        r=r_lead[back],
         absent=absent,
         r2=r2,
         window_bp=window,
     )
 
 
-def _chromosome_greedy(
+@dataclass(frozen=True)
+class _Component:
+    """Hits with no gap of W or more between neighbours: one unit of independent work.
+
+    `part` is the component's indices in the clump's hit array, so its results scatter back
+    without a search; `rows` are those hits' Variant Set rows, ascending, `local` the same hits as
+    their chromosome's rows, and `position` their positions. `start` is the first Variant Set row of
+    the hits' chromosome, which is what turns a Partner Rows row's chromosome-local partner into a
+    Variant Set row (partner-rows §7).
+    """
+
+    chrom: str
+    start: int
+    part: npt.NDArray[np.int64]
+    rows: npt.NDArray[np.int64]
+    local: npt.NDArray[np.int64]
+    position: npt.NDArray[np.int64]
+    score: npt.NDArray[np.float64]
+
+
+def _components(
     reader: StoreReader,
     rows: npt.NDArray[np.int64],
     scores: npt.NDArray[np.float64],
     chrom: npt.NDArray[np.str_],
+    position: npt.NDArray[np.int64],
     *,
     r2: float,
     window: float,
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
-    """A clump cannot cross chromosomes: keep each one's chunks together (ADR 0009).
+    """Each hit's lead, as an index into `rows`, and its signed r with it.
 
-    Scatter back into request order, including duplicates. Only the order of independent
-    chromosome passes changes, never strongest-first order inside one chromosome.
+    A clump cannot cross chromosomes (ADR 0009), and inside one it cannot reach across a gap of W
+    or more (partner-rows §8.2), so the hits are split there and each part clumped on its own. The
+    parts are independent, so they run serially or on the reader's bounded pool alike, and the
+    results are scattered by hit index: the answer is the same at any concurrency (§9.2). A refusal
+    was decided before the first task; a frame that fails its checks fails the whole request, with
+    no partial result.
     """
-    lead = np.empty(len(rows), dtype=np.int64)
-    r_lead = np.empty(len(rows), dtype=np.float64)
+    lead = np.full(len(rows), -1, dtype=np.int64)
+    r_lead = np.full(len(rows), np.nan)
+    tasks: list[_Component] = []
     for name in np.unique(chrom):
         members = np.flatnonzero(chrom == name)
-        local, values = _greedy(reader, rows[members], scores[members], r2=r2, window=window)
-        lead[members], r_lead[members] = members[local], values
+        start = reader.chromosome_range(str(name))[0]
+        # Hits on one chromosome ascend with their rows, and so with their positions (spec §2).
+        cuts = np.flatnonzero(np.diff(position[members]) >= window) + 1
+        tasks.extend(
+            _Component(
+                str(name),
+                start,
+                part,
+                rows[part],
+                local_rows(rows[part], start),
+                position[part],
+                scores[part],
+            )
+            for part in np.split(members, cuts)
+        )
+    workers = reader._query_workers
+    if workers == 1 or len(tasks) <= 1:
+        results = [_component(reader, task, r2=r2, window=window) for task in tasks]
+    else:
+        results = _pooled(reader, tasks, workers, r2=r2, window=window)
+    for part, local, values in results:
+        lead[part], r_lead[part] = part[local], values
     return lead, r_lead
 
 
-def _greedy(
+def _pooled(
     reader: StoreReader,
-    rows: npt.NDArray[np.int64],
-    scores: npt.NDArray[np.float64],
+    tasks: list[_Component],
+    workers: int,
     *,
     r2: float,
     window: float,
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
-    """Each variant's lead, as an index into `rows`, and its signed r with it.
+) -> list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]]:
+    """The tasks on `workers` threads, in task order (partner-rows §9.2).
 
-    Strongest first; ties by the global row, which is the engine's order (spec §2), then
-    by request order for an ALID asked twice. plink2's edges, which the owner ruled `clump`
-    follows (10 November 2026): a variant joins at r̂² **>** r2 and distance **<** W. Each
-    lead reads its own partners among the hits still open, one call each, so a lead resolves
-    only its pairs with its candidates: never a square among them (ogld#14).
+    A failed task fails the whole request: the others are cancelled, the pool drains what it is
+    already running, and the failure is raised with no result assembled from the tasks that
+    finished (§8.2).
     """
-    warm = reader.clump_warmer(rows, r2=r2, window_bp=window)
-    hits = _Hits(rows)
-    lead = np.full(len(rows), -1, dtype=np.int64)
-    r_lead = np.full(len(rows), np.nan)
-    for i in np.lexsort((rows, -scores)).tolist():
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ogld_clump") as pool:
+        futures = [pool.submit(_component, reader, task, r2=r2, window=window) for task in tasks]
+        try:
+            return [future.result() for future in futures]
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+
+
+def _component(
+    reader: StoreReader, task: _Component, *, r2: float, window: float
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+    """One component's greedy: each hit's lead, as an index into `task.rows`, and its signed r.
+
+    Strongest first; ties by the global row, which is the engine's order (spec §2). plink2's edges,
+    which the owner ruled `clump` follows (10 November 2026): a variant joins at r̂² **>** r2 and
+    distance **<** W. Each lead reads its own Partner Rows row once, one frame at most, and keeps
+    the entries that are hits of its component and still open: never a pair with a hit another lead
+    took, and never a square among the hits (ogld#14). A hit that another lead takes is never read.
+    """
+    lo, hi = int(task.rows[0]), int(task.rows[-1])
+    # A hit's slot, -1 for a row of the span that is no hit: filtering a row is array indexing.
+    slots = np.full(hi - lo + 1, -1, dtype=np.int64)
+    slots[task.rows - lo] = np.arange(len(task.rows), dtype=np.int64)
+    lead = np.full(len(task.rows), -1, dtype=np.int64)
+    r_lead = np.full(len(task.rows), np.nan)
+    for i in np.lexsort((task.rows, -task.score)).tolist():
         if lead[i] >= 0:
             continue
         lead[i], r_lead[i] = i, 1.0
-        # The same variant asked again is r = 1 at d = 0, and joins on the same edges.
-        if _joins(*_ITSELF, r2=r2, window=window).all():
-            hits.join(lead, r_lead, i, np.array([rows[i]]), np.ones(1))
-        hits.close(rows[i], lead)
-        warm(rows[i])
-        found = reader.partners(rows[i : i + 1], r2=r2, window_bp=window, among=hits.open())
-        joins = _joins(found.r, found.distance, r2=r2, window=window)
-        hits.join(lead, r_lead, i, found.partner[joins], found.r[joins])
-    return lead, r_lead
-
-
-#: A variant with itself, as a pair: r = 1 at distance 0 (spec §8).
-_ITSELF = (np.ones(1), np.array([0], dtype=np.int64))
-
-
-def _joins(
-    r: npt.NDArray[np.float64], distance: npt.NDArray[np.int64], *, r2: float, window: float
-) -> npt.NDArray[np.bool_]:
-    """plink2's edges, which `clump` keeps (spec §9): r̂² **>** r2 and d **<** W. The reader
-    hands back r̂² ≥ r2 and d ≤ W, and this is where `clump` narrows them."""
-    return np.asarray((r * r > r2) & (distance < window))
-
-
-class _Hits:
-    """The requested rows, each distinct row with every request of it, and which are open."""
-
-    def __init__(self, rows: npt.NDArray[np.int64]) -> None:
-        self.rows, self.which = np.unique(rows, return_inverse=True)
-        counts = np.bincount(self.which, minlength=len(self.rows))
-        self.starts = indptr_of(counts)
-        self.order = np.argsort(self.which, kind="stable")
-        self.open_rows = np.ones(len(self.rows), dtype=bool)
-
-    def open(self) -> npt.NDArray[np.int64]:
-        """The distinct rows some request of which no lead has taken, ascending."""
-        return self.rows[self.open_rows]
-
-    def close(self, row: np.int64, lead: npt.NDArray[np.int64]) -> None:
-        """Mark `row` taken once no request of it is still open."""
-        k = int(np.searchsorted(self.rows, row))
-        self.open_rows[k] = bool((lead[self._requests(np.array([k]))] < 0).any())
-
-    def join(
-        self,
-        lead: npt.NDArray[np.int64],
-        r_lead: npt.NDArray[np.float64],
-        i: int,
-        rows: npt.NDArray[np.int64],
-        r: npt.NDArray[np.float64],
-    ) -> None:
-        """Give every open request of `rows` the lead i, with its r."""
-        k = np.searchsorted(self.rows, rows)
-        requests = self._requests(k)
-        each = np.repeat(r, self.starts[k + 1] - self.starts[k])
-        still = lead[requests] < 0
-        lead[requests[still]] = i
-        r_lead[requests[still]] = each[still]
-        self.open_rows[k] = False
-
-    def _requests(self, k: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
-        """The request indices of the distinct rows k, back to back."""
-        return self.order[spans(self.starts[k], self.starts[k + 1] - self.starts[k])]
+        partners, codes = reader.partner_row(task.chrom, int(task.local[i]))
+        at_rows = global_rows(partners, task.start)
+        inside = (at_rows >= lo) & (at_rows <= hi)
+        at = slots[at_rows[inside] - lo]
+        r = reader.encoding.dequantise(codes[inside])
+        exists = at >= 0
+        at, r = at[exists], r[exists]
+        joins = (
+            (lead[at] < 0) & (r * r > r2) & (np.abs(task.position[at] - task.position[i]) < window)
+        )
+        at, r = at[joins], r[joins]
+        lead[at], r_lead[at] = i, r
+    return task.part, lead, r_lead
 
 
 def _checked_score(score: npt.ArrayLike, expected: int) -> npt.NDArray[np.float64]:

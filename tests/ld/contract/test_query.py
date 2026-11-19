@@ -20,8 +20,9 @@ from support import alids, panel_data, passing_rows, reference
 import ogld
 from ogld.format import RefusalReason
 
-#: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md).
-LEADS_R2_0_001 = {612, 421, 774, 353, 287, 703}
+#: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md) are
+#: held there, but a 0.2.0 store refuses r² 0.001 within 3 Mb: its t_partner is 0.01, so the
+#: comparison that used them is answered at r² 0.01 only (spec §9; the refusal is tested below).
 
 #: The band the plink2 comparison lists (spec §3; ogld#16): candidate pairs (p ≤ p1, under
 #: 3,000 kb, k = 0) whose true r², plink2's, and whose r̂² at the Test Store's × 511 lie on two
@@ -117,6 +118,7 @@ def test_proxies_list_absent_queries() -> None:
     ("r2", "kb", "reason"),
     [
         (0.01, 5_000, RefusalReason.THRESHOLD_BELOW_T_FAR),
+        (0.001, 3_000, RefusalReason.THRESHOLD_BELOW_T_PARTNER),
         (0.8, 10_001, RefusalReason.WINDOW_OVER_FAR),
         (1.5, 1_000, RefusalReason.INVALID),
         (0.5, -1, RefusalReason.INVALID),
@@ -152,13 +154,13 @@ def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
     """A k = 0 store written from reference_r(0), once per worker."""
     if not _K0:
         out = tmp_path_factory.mktemp("k0") / "store"
-        _K0.append(
-            ogld.open(load_script("make_test_store").write_test_store(0, out, support.R_SCALE))
-        )
+        script = load_script("make_test_store")
+        made = script.write_test_store(0, out, support.R_SCALE, 0.01)
+        _K0.append(ogld.open(made))
     return _K0[0]
 
 
-@pytest.mark.parametrize("r2", [0.01, 0.001])
+@pytest.mark.parametrize("r2", [0.01])
 def test_clump_leads_equal_plink2_s_at_k0(
     r2: float, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -173,10 +175,7 @@ def test_clump_leads_equal_plink2_s_at_k0(
     assert params.p1 == params.p2, "with p2 = p1, plink2's leads depend only on the p1 set"
     names, score, _ = candidates(params.p1)
     leads = set(store.clump(names, score, r2=r2, kb=params.kb).leads())
-    golden = panel_data().clump_leads(r2)
-    if r2 == 0.001:
-        assert set(golden) == LEADS_R2_0_001, "the goldens are plink2's unphased leads"
-    plink2 = set(alids(golden))
+    plink2 = set(alids(panel_data().clump_leads(r2)))
     assert plink2, "plink2 must have found leads for this to mean anything"
     assert leads == plink2, (
         f"only ours: {sorted(leads - plink2)}; only plink2's: {sorted(plink2 - leads)}"
@@ -185,6 +184,8 @@ def test_clump_leads_equal_plink2_s_at_k0(
 
 @pytest.mark.parametrize("r2", [0.01, 0.001])
 def test_the_pairs_the_store_s_step_moves_across_r2_are_listed_and_within_it(r2: float) -> None:
+    # Reference r and the store's own step, with no query: the pairs are listed at both
+    # thresholds, though a 0.2.0 store answers only the first (spec §9).
     # Every pair of the Test Panel the step moves across r2 lies within 2|r| × half a step of it;
     # among the plink2 comparison's candidates they are exactly CROSSING's.
     ogld.open(support.TEST_STORE)
@@ -201,7 +202,7 @@ def test_the_pairs_the_store_s_step_moves_across_r2_are_listed_and_within_it(r2:
     assert set(found) == CROSSING[r2]
 
 
-@pytest.mark.parametrize("r2", [0.01, 0.001])
+@pytest.mark.parametrize("r2", [0.01])
 def test_proxies_are_plink2_s_r_outside_the_band_of_the_store_s_step(
     r2: float, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -265,6 +266,7 @@ def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
     ("r2", "kb", "reason"),
     [
         (0.001, 10_000, RefusalReason.THRESHOLD_BELOW_T_FAR),
+        (0.001, 3_000, RefusalReason.THRESHOLD_BELOW_T_PARTNER),
         (0.01, 3_000.001, RefusalReason.THRESHOLD_BELOW_T_FAR),
         (0.1, 10_000.001, RefusalReason.WINDOW_OVER_FAR),
         (-0.1, 1_000, RefusalReason.INVALID),

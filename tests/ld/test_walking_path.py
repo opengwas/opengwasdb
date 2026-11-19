@@ -60,6 +60,7 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
         far_bp=FAR_BP,
         n=testdata.panel().n_samples,
         k=0,
+        t_partner=0.01,
     )
     writer.write(writer.cut(0, k0_r(script.alt_counts(rows), vs.sign[on22] > 0)))
     sub = script.VariantSet(rows, table, vs.sign[on22], 0)

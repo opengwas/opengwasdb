@@ -2,18 +2,24 @@
 
 On an unadjusted (k = 0) HGDP+1kGP EUR LD Store, `clump` gives the same lead variants as
 `plink2 --clump` for opengwas/opengwasdb#403's 37 EUR Analyses, the 5e-8 tier of each, at r²
-0.01 and 0.001 with a 3 Mb window. It reads 8.6 M variants and takes about an hour (25 minutes on
-ogld#14's partner reads), so it is an acceptance run, not part of the realdata tier:
-`pixi run -e dev acceptance-clump` (CONTRIBUTING.md, "Acceptance runs").
-Its result is recorded on the ticket.
+0.01 with a 3 Mb window. It reads 8.6 M variants and takes under an hour, so it is an acceptance
+run, not part of the realdata tier: `pixi run -e dev acceptance-clump` (CONTRIBUTING.md,
+"Acceptance runs"). Its result is recorded on the ticket.
+
+**r² 0.001 is not run** (owner, #64; partner-rows §8.1, D2): from format 0.2.0 a request within
+3 Mb whose r2 is below the store's Partner Threshold is refused with
+`threshold_below_t_partner`, and the HGDP+1kGP stores record t_partner = 0.01, so an r² 0.001
+clump on this store is a Refusal, not an answer to compare. The comparison is made at the
+threshold the store supports; a panel whose t_partner were 0.001 — UK Biobank EUR's — could
+compare at 0.001, and none of the HGDP+1kGP stores can.
 
 Two inputs, named by environment variables that `tests/acceptance/run.sh` passes on:
 
 - `OGLD_EUR_K0_STORE`: the k = 0 EUR LD Store.
 - `OGLD_403_ANALYSES`: one directory per Analysis, each holding `hits.tsv` (a header, then
-  ALID and z per row: the 5e-8 tier) and `leads_r2_0.01.txt` and `leads_r2_0.001.txt` (plink2's
-  index variants, one ALID per line, from the same genotypes at k = 0).
-  `scripts/realdata/make_403_inputs.py` makes them.
+  ALID and z per row: the 5e-8 tier) and `leads_r2_0.01.txt` (plink2's index variants, one ALID
+  per line, from the same genotypes at k = 0). `scripts/realdata/make_403_inputs.py` makes them,
+  and `prepare` then `clump` write the pins that name the store they were made from.
 
 Every lead that differs is listed in `explained_differences.json` with the pairs that explain it
 (spec §3): a pair whose stored r̂² and plink2's true r² lie on opposite sides of the threshold. The
@@ -41,6 +47,10 @@ from ogld.identity import alid_locus
 
 EXPLAINED_FILE = Path(__file__).with_name("explained_differences.json")
 KB = 3000
+#: The one threshold this store is compared at: its own t_partner, which is the lowest r2 a
+#: 0.2.0 request within 3 Mb may ask it for (partner-rows §8.1; the module docstring says why
+#: 0.001, which plink2 was also run at, is no longer a comparison here).
+R2 = 0.01
 
 
 def named(variable: str, what: str) -> Path:
@@ -93,8 +103,7 @@ def test_the_inputs_say_which_store_and_keep_file_they_were_made_from() -> None:
     assert prepared["plink2_version"] == manifest["plink2_version"]
 
 
-@pytest.mark.parametrize("r2", [0.01, 0.001])
-def test_leads_equal_plink2_s_on_403_s_37_analyses(r2: float) -> None:
+def test_leads_equal_plink2_s_on_403_s_37_analyses() -> None:
     store = ogld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
     root = named("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
@@ -109,11 +118,11 @@ def test_leads_equal_plink2_s_on_403_s_37_analyses(r2: float) -> None:
     for analysis in analyses:
         hits = np.loadtxt(analysis / "hits.tsv", dtype=str, skiprows=1, ndmin=2)
         alid, z = list(hits[:, 0]), np.abs(hits[:, 1].astype(np.float64))
-        ours = set(map(str, store.clump(alid, z, r2=r2, kb=KB).leads()))
-        theirs = set((analysis / f"leads_r2_{r2}.txt").read_text().split())
+        ours = set(map(str, store.clump(alid, z, r2=R2, kb=KB).leads()))
+        theirs = set((analysis / f"leads_r2_{R2}.txt").read_text().split())
         if ours != theirs:
             differences[analysis.name] = (sorted(ours - theirs), sorted(theirs - ours))
-    cases = {c["analysis"]: c for c in snapshot["cases"] if c["r2"] == r2}
+    cases = {c["analysis"]: c for c in snapshot["cases"] if c["r2"] == R2}
     listed = {name: (c["ogld_only"], c["plink2_only"]) for name, c in cases.items()}
     assert listed == differences, "leads differ from plink2's other than as the file lists them"
     for case in cases.values():

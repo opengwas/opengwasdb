@@ -1,19 +1,23 @@
 """How an LD Store's Zarr arrays are laid out (spec §6): the one place that creates them.
 
-Every array is Zarr v3 with `sharding_indexed`. The chunk and shard shapes, the codec chain
-and the fill value of each kind of array are the spec's table, kept here as data so the
-writer cannot create an array the table does not describe, and the reader's tests can name
-the fill values it promises.
+Every array is Zarr v3 with `sharding_indexed`, except the Partner Rows' two: those are one chunk
+each with the `bytes` codec alone, because their bytes are the frames themselves and a reader
+addresses one frame's byte range (partner-rows §5.1; ADR 0011). The chunk and shard shapes, the
+codec chain and the fill value of each kind of array are the spec's table, kept here as data so the
+writer cannot create an array the table does not describe, and the reader's tests can name the fill
+values it promises.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Final
 
 import numpy as np
 import numpy.typing as npt
 import zarr
 from zarr.codecs import ZstdCodec
+from zarr.storage import LocalStore, StorePath, WrapperStore
 
 from ogld.format import REncoding
 
@@ -55,9 +59,29 @@ PARTNER_FILL: Final = -1
 POSITION_FILL: Final = 0
 FREQUENCY_FILL: Final = float("nan")
 
+#: The Partner Rows (partner-rows §5.1): one group per chromosome, holding two arrays of one chunk
+#: each. `frames` is the chromosome's zstd frames back to back, and its codec chain is `bytes`
+#: alone with no compressor, so its chunk file is those frames: a frame is one positional read.
+#: `frames_idx` is the uint64 offsets that address them, little-endian and read whole.
+PARTNERS: Final = "partners"
+FRAMES: Final = "frames"
+FRAMES_INDEX: Final = "frames_idx"
+#: The file the frames are appended to until the group is closed, when it becomes the `frames`
+#: chunk: the array's shape is the whole file's, so it is not known until the last frame (§5.1).
+FRAMES_BUILDING: Final = "frames.bin"
+#: The frames' fill value: 0, because a frame is a zstd frame and 0 begins none (spec §3). A
+#: chunk a store lost is refused by the frame's own checksum and length, not by a fill value.
+FRAMES_FILL: Final = 0
+#: The offsets': the largest uint64, which no offset of a whole number of bytes is.
+FRAMES_INDEX_FILL: Final = int(np.iinfo(np.uint64).max)
+#: The dtype the offsets are written and hashed in: little-endian whatever this machine is,
+#: because their chunk file is the offsets' bytes (partner-rows §5.1, §5.3). The writer, the
+#: reader and the rule that hashes the chunk all take it from here.
+FRAMES_INDEX_DTYPE: Final = np.dtype("<u8")
+
 
 def never_data(path: str, values: npt.ArrayLike) -> npt.NDArray[np.bool_]:
-    """Where `values` of the array at `path`, such as `index/22/partner`, are ones no valid LD
+    """Where `values` of the array at `path`, such as `far/22/partner`, are ones no valid LD
     Store holds there (spec §2–§6). The array's kind is its name, the path's last component.
 
     Each array's fill value must be such a value, because a chunk the store lost reads as its
@@ -222,6 +246,77 @@ def clipped(length: int, inner: int, shard: int) -> tuple[int, int]:
     inner = min(inner, max(1, length))
     shard = min(shard, -(-max(1, length) // inner) * inner)
     return inner, shard
+
+
+def partners_path(chrom: str) -> str:
+    """The Partner Rows group of one chromosome (partner-rows §5.1)."""
+    return f"{PARTNERS}/{chrom}"
+
+
+def new_frames_array(group: zarr.Group, length: int) -> zarr.Array[Any]:
+    """The `frames` array: `uint8`, one chunk of its whole length, the `bytes` codec alone and no
+    compressor, because its bytes are already zstd frames (partner-rows §5.1)."""
+    if length < 1:
+        raise ValueError("a Partner Rows' frames are at least one frame's bytes, never none")
+    return group.create_array(
+        FRAMES,
+        shape=(length,),
+        dtype=np.uint8,
+        chunks=(length,),
+        compressors=[],
+        fill_value=FRAMES_FILL,
+    )
+
+
+def new_frames_index(group: zarr.Group, length: int) -> zarr.Array[Any]:
+    """The `frames_idx` array: the F + 1 uint64 byte offsets of the frames, one chunk of its
+    whole length, little-endian in a `bytes` codec alone so the file is the offsets (§5.1)."""
+    return group.create_array(
+        FRAMES_INDEX,
+        shape=(length,),
+        dtype=FRAMES_INDEX_DTYPE,
+        chunks=(length,),
+        compressors=[],
+        fill_value=FRAMES_INDEX_FILL,
+    )
+
+
+def local_root(store_path: StorePath) -> Path:
+    """The local directory a store at `store_path` is rooted at, refused for a store that is not
+    one: a one-chunk array's chunk file is a file, which a remote store has none of (partner-rows
+    §5.1).
+
+    A reader's store is wrapped by the cache (`location._KeptIndexes`), so the wrapper is seen
+    through: the file is the same one, and a local frame is read from it with `os.pread` (§7).
+    """
+    store = store_path.store
+    while isinstance(store, WrapperStore):
+        store = store._store
+    if not isinstance(store, LocalStore):
+        raise ValueError(
+            f"the Partner Rows are written to a local directory, and {type(store).__name__} is "
+            "not one (partner-rows §5.1)"
+        )
+    return Path(store.root)
+
+
+def local_directory(store_path: StorePath) -> Path:
+    """The local directory a store path names, refused for a store that is not local: the Partner
+    Rows' frames are appended to a file, which a remote store has none of (partner-rows §5.1)."""
+    return local_root(store_path) / store_path.path
+
+
+def chunk_key(array: zarr.Array[Any]) -> str:
+    """The key an array's whole chunk is stored under, resolved from the array's own metadata and
+    chunk key encoding, never assumed to be `c/0` (partner-rows §5.1): what a reader fetches a
+    frame's byte range by, and what a writer puts the file at."""
+    return f"{array.store_path.path}/{array.metadata.encode_chunk_key((0,))}"
+
+
+def chunk_file(array: zarr.Array[Any]) -> Path:
+    """The local file `array`'s whole chunk is written to, resolved from the array's own metadata
+    and its chunk key encoding, never assumed to be `c/0` (partner-rows §5.1)."""
+    return local_root(array.store_path) / chunk_key(array)
 
 
 def put_numbers(

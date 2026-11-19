@@ -61,6 +61,7 @@ def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
         "ancestry": "EUR",
         "genotype_source": "HGDP+1kGP phased v2, the Test Panel's slice",
         "r_scale": support.R_SCALE,
+        "t_partner": 0.01,
         "k": k,
         "info_min": None,
     }
@@ -153,7 +154,8 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     }
     assert provenance["n_variants"] == len(passing_rows())
     assert {"zero_variance", "duplicate_reversed_indel"} <= set(provenance["variants_dropped"])
-    assert provenance["counts"]["index_entries"] >= 2 * provenance["counts"]["far_pairs"]
+    assert provenance["counts"]["partner_entries"] >= 2 * provenance["counts"]["far_pairs"]
+    assert "index_entries" not in provenance["counts"], "no store holds a Proxy Index (#72)"
 
 
 def test_an_unadjusted_build_records_k0_and_no_minimum(
@@ -210,12 +212,27 @@ def test_a_pgen_without_info_refuses_an_info_floor(tmp_path: Path) -> None:
         ogld.build(inputs(10, info_min=0.8), tmp_path / "store")
 
 
+def test_a_build_whose_partner_threshold_is_above_t_far_is_refused_naming_both(
+    tmp_path: Path,
+) -> None:
+    # t_partner is never above t_far (partner-rows §3): with a larger one, a pair between the two
+    # within near_bp would be in neither component, so the build refuses before writing a store.
+    above = 0.5
+    assert above > support.T_FAR, "the fixture must be above the panel's t_far to mean anything"
+    out = tmp_path / "store"
+    with pytest.raises(ogld.InputError) as refused:
+        ogld.build(inputs(support.K, t_partner=above), out)
+    assert str(above) in str(refused.value), refused.value
+    assert str(support.T_FAR) in str(refused.value), refused.value
+    assert not out.exists(), "nothing is written before the refusal"
+
+
 def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     out = tmp_path / "store"
     argv = ["build", str(out), "--pgen", str(PANEL.pgen), "--keep", str(PANEL.keep)]
     argv += ["--pcs", str(PANEL.pcs), "--pc-source", "the Test Panel's PC File"]
     argv += ["--panel-id", PANEL_ID, "--ancestry", "EUR", "--genotype-source", "Test Panel"]
-    argv += ["--r-scale", str(support.R_SCALE)]
+    argv += ["--r-scale", str(support.R_SCALE), "--t-partner", "0.01"]
     assert cli.main([*argv, "--info-min", "none"]) == 0
     assert not any(ogld.validate(out).values())
 

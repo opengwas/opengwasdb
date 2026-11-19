@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import threading
 import tracemalloc
+import weakref
+from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -171,7 +173,7 @@ def test_every_test_store_array_equals_zarr() -> None:
     assert len(arrays) > 20
     for _, array in arrays:
         decoded = decoding.NumericDecoder.of(array)
-        assert (decoded is None) == (array.dtype.kind == "T"), array.path
+        assert (decoded is None) == (array.dtype.kind == "T" or array.shards is None), array.path
         coords = np.arange(array.shape[0])
         np.testing.assert_array_equal(location.ChunkCache().take(array, coords), array[:])
 
@@ -280,3 +282,70 @@ def test_corruption_raises_as_zarr_does(tmp_path: Path, damage: str) -> None:
         array[:]
     with pytest.raises((ValueError, RuntimeError)):
         location.ChunkCache().take(array, np.arange(29))
+
+
+def test_unknown_frame_size_uses_the_validating_decode() -> None:
+    import numcodecs
+
+    source = np.arange(8, dtype=np.int32)
+    codec = numcodecs.Zstd()
+    encoded = codec.encode(source)
+    assert encoded[4] == 0x20, "one-byte content size in a single-segment frame"
+    # Replace the one-byte size with a window descriptor, making a valid unknown-size frame.
+    frame = memoryview(encoded[:4] + b"\x00\x58" + encoded[6:])
+    assert decoding._frame_size(frame) is None
+    decoder = decoding.NumericDecoder(8, 1, source.dtype, np.dtype("<u8"))
+    np.testing.assert_array_equal(decoder._frame(codec, frame), source)
+    with pytest.raises(ValueError, match="expected"):
+        decoding.NumericDecoder(9, 1, source.dtype, np.dtype("<u8"))._frame(codec, frame)
+    larger = codec.encode(np.arange(100, dtype=np.int32))
+    assert decoding._frame_size(memoryview(larger)) == 400, "two-byte size includes +256"
+
+
+def test_unknown_size_native_frames_do_not_double_the_flight_buffer() -> None:
+    import numcodecs
+
+    source = np.arange(65536, dtype=np.int32)
+    codec = numcodecs.Zstd()
+    encoded = codec.encode(source)
+    assert encoded[4] & 0xE0 == 0xA0, "single segment with four-byte content size"
+    frame = memoryview(encoded[:4] + bytes([encoded[4] & 0x1F, 0x58]) + encoded[9:])
+    assert decoding._frame_size(frame) is None
+    decoder = decoding.NumericDecoder(len(source), 1, source.dtype, np.dtype("<u8"))
+    tracemalloc.start()
+    try:
+        got = decoder._frame(codec, frame)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    np.testing.assert_array_equal(got, source)
+    assert peak < source.nbytes * 1.5, "native fallback must not copy the validated raw buffer"
+
+
+def test_completed_worker_does_not_retain_released_buffers(monkeypatch: pytest.MonkeyPatch) -> None:
+    retained: list[Any] = []
+    futures: list[Future[Any]] = []
+    references: list[weakref.ReferenceType[np.ndarray]] = []
+
+    class Executor:
+        def submit(self, call: Any) -> Future[Any]:
+            retained.append(call)
+            future: Future[Any] = Future()
+            futures.append(future)
+            future.set_result(call())
+            return future
+
+    def job() -> Any:
+        data = np.empty(1024, dtype=np.uint8)
+        references.append(weakref.ref(data))
+        return lambda: data.nbytes
+
+    monkeypatch.setattr(decoding, "_DECODE_POOL", Executor())
+    asyncio.run(decoding.on_pool(job()))
+    assert len(retained) == 1, "the executor deliberately keeps its completed work item"
+    assert references[0]() is None, "completed jobs must not retain released byte credits"
+    value = asyncio.run(decoding.on_pool(lambda: np.zeros(1024)))
+    reference = weakref.ref(value)
+    del value
+    assert len(futures) == 2, "completed Futures are deliberately kept too"
+    assert reference() is None, "a completed I/O Future must not retain its returned range"

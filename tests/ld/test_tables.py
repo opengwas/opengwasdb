@@ -117,6 +117,7 @@ def build_inputs(**overrides: Any) -> ogld.BuildInputs:
         "ancestry": "EUR",
         "genotype_source": "gnomAD v3.1.2 HGDP+1kG",
         "r_scale": 511,
+        "t_partner": 0.01,
     }
     return ogld.BuildInputs(**{**fields, **overrides})
 
@@ -199,6 +200,8 @@ def test_the_cli_refuses_a_build_it_cannot_run(capsys: pytest.CaptureFixture[str
         "p",
         "--r-scale",
         "511",
+        "--t-partner",
+        "0.01",
     ]
     status = cli.main([*argv, "--ancestry", "EUR", "--genotype-source", "g"])
     assert status == 2
@@ -220,7 +223,7 @@ def test_the_cli_reports_each_rule_and_fails_on_any_finding(
 
 BUILD_ARGS = ["build", "out", "--pgen", "x.pgen", "--keep", "k", "--pcs", "p.eigenvec"]
 BUILD_ARGS += ["--pc-source", "s", "--panel-id", "p", "--ancestry", "EUR", "--genotype-source", "g"]
-BUILD_ARGS += ["--r-scale", "511"]
+BUILD_ARGS += ["--r-scale", "511", "--t-partner", "0.01"]
 
 
 def test_the_cli_s_defaults_are_build_inputs_own(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,6 +239,7 @@ def test_the_cli_s_defaults_are_build_inputs_own(monkeypatch: pytest.MonkeyPatch
         ancestry="EUR",
         genotype_source="g",
         r_scale=511,
+        t_partner=0.01,
     )
     assert seen == [expected]
 
@@ -282,6 +286,26 @@ def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
         cli.main(unscaled)
     assert refused.value.code == 2
     assert "the following arguments are required: --r-scale" in capsys.readouterr().err
+
+
+def test_a_build_with_no_partner_threshold_is_refused_naming_what_is_missing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A build input with no default (ADR 0011, D3): each Source Panel's build names its own, and
+    # the store refuses one above t_far once the panel's n and k give it (partner-rows §3).
+    field = next(f for f in dataclasses.fields(ogld.BuildInputs) if f.name == "t_partner")
+    assert field.default is dataclasses.MISSING
+    given = {f.name: getattr(build_inputs(), f.name) for f in dataclasses.fields(ogld.BuildInputs)}
+    del given["t_partner"]
+    with pytest.raises(TypeError, match="t_partner"):
+        ogld.BuildInputs(**given)
+    unset = BUILD_ARGS[: BUILD_ARGS.index("--t-partner")]
+    with pytest.raises(SystemExit) as refused:
+        cli.main(unset)
+    assert refused.value.code == 2
+    assert "the following arguments are required: --t-partner" in capsys.readouterr().err
+    with pytest.raises(ogld.InputError, match="t_partner is the r²"):
+        ogld.BuildInputs(**{**given, "t_partner": float("nan")})
 
 
 @pytest.mark.parametrize("scale", [0, -511, 32768, 511.5])

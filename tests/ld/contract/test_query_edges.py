@@ -14,14 +14,14 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+import pytest
 import support
-import zarr
 from support import alids, panel_data, passing_rows, reference
 
 import ogld
 from ogld.query import clumping
 from ogld.query.results import Clumps
-from ogld.store import StoreReader, location
+from ogld.store import StoreReader
 
 
 @cache
@@ -127,27 +127,26 @@ def test_leads_go_strongest_first_then_by_genomic_order_then_alid() -> None:
     assert list(clumps.leads()) == expected
 
 
-class Largest(location.ChunkCache):
-    """A reader's chunk cache that records the most Stored r it is asked for at once: the
-    elements of a Near Band or Proxy Index `r` array in one read (ogld#14)."""
-
-    largest = 0
-
-    def take(self, array: zarr.Array[Any], coords: npt.ArrayLike) -> npt.NDArray[Any]:
-        got = super().take(array, coords)
-        if array.path.endswith("/r"):
-            self.largest = max(self.largest, len(got))
-        return got
-
-
-def test_clump_reads_pairs_within_the_window_only_and_the_leads_are_unchanged() -> None:
+def test_clump_reads_one_lead_row_at_a_time_and_never_a_square(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lead reads its own Partner Rows row, one frame at most, and never a square among the
+    hits: a 100 kb window must not read an n × n matrix (partner-rows §8.2)."""
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
     reader = StoreReader.open(support.TEST_STORE)
-    reader._cache = spy = Largest()
+    read = reader.partner_row
+    entries: list[int] = []
+
+    def counted(chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Any]:
+        partners, codes = read(chrom, local_row)
+        entries.append(len(partners))
+        return partners, codes
+
+    monkeypatch.setattr(reader, "partner_row", counted)
     narrow = clumping.clump(reader, alids(rows), z, r2=0.01, kb=100)
-    assert spy.largest > 0, "the reads must be counted for this to mean anything"
-    assert spy.largest < len(rows) // 4, "a 100 kb window must not read an n × n matrix"
+    assert entries, "the reads must be counted for this to mean anything"
+    assert sum(entries) < len(rows) ** 2 // 4, "a 100 kb window must not read an n × n matrix"
     assert list(narrow.lead) == alids(rows[greedy(rows, z, 0.01, 100)])
 
 
