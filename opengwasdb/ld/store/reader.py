@@ -388,7 +388,8 @@ class StoreReader:
 
     def close(self) -> None:
         """Close the reader: after it returns no Partner Rows read is answered, and every chunk file
-        it kept open is closed (partner-rows §7).
+        it kept open is closed (partner-rows §7). The optional ALID mappings are released too
+        (ADR 0012), after any concurrent mapped lookup finishes.
 
         A first use that is racing `close` cannot publish a source that outlives it: it holds the
         chromosome lock `close` waits on and re-checks the closed state under it, so either the
@@ -493,7 +494,7 @@ class StoreReader:
     def _entries(self) -> int:
         """How many entries the Variant Set's index holds: its rows less the ALIDs too wide for its
         slot, which the store's provenance counts (spec §7). A store written before the index
-        records no count and has no index to read either, so a search refuses it by name."""
+        records no count; `_from_index` keeps that store on the exact-scan fallback (ADR 0012)."""
         counts = self._provenance["counts"]
         return int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
 

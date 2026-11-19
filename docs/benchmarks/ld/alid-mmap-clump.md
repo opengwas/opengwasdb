@@ -116,6 +116,6 @@ inherited #47 warning about the plain-file `alid_mmap` directory; normal opening
 validation do not. This port retains #47's representation rather than changing ADR 0011.
 
 Base default tier: 1,552 passed in 14.63 s. Final head: 1,584 passed in 28.22 s (longest call
-1.86 s); coverage run 21.29 s (longest call 1.36 s), 97% coverage. The five realdata tests pass
+1.86 s); coverage runs 21.29–23.46 s (final longest call 1.55 s), 97% coverage. The five realdata tests pass
 in 278.10 s. Lint, strict typecheck and postflight gates pass; public-API warnings are additions
 only. No baseline, quality configuration, hook or public signature was changed.
