@@ -512,7 +512,7 @@ def alid_mmap_error(path: Path, reason: object) -> InputError:
 
 @dataclass(frozen=True)
 class AlidCompanion:
-    """Validated representation descriptor; the reader owns mapping and release (ADR 0012)."""
+    """Integrity/content-bound descriptor; the reader owns mapping and release (ADR 0012)."""
 
     path: Path
     count: int

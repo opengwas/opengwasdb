@@ -18,6 +18,24 @@ from ogld.store import reader as reader_module
 from ogld.store.reader import _MappedAlids
 
 
+class ObservedLock:
+    """Notify the second caller before it blocks, making close/release races deterministic."""
+
+    def __init__(self, waiting: threading.Event) -> None:
+        self.lock = threading.Lock()
+        self.attempts = 0
+        self.waiting = waiting
+
+    def __enter__(self) -> None:
+        self.attempts += 1
+        if self.attempts == 2:
+            self.waiting.set()
+        self.lock.acquire()
+
+    def __exit__(self, *args: object) -> None:
+        self.lock.release()
+
+
 def test_open_and_row_based_reads_do_not_hash_the_companion(tmp_path: Path, monkeypatch) -> None:
     store = written(tmp_path / "store")
     hashed = []
@@ -117,20 +135,6 @@ def test_close_waits_for_first_attachment_and_releases_every_mapping(
     entered, unblock, closing = (threading.Event() for _ in range(3))
     mappings = []
 
-    class ObservedLock:
-        def __init__(self):
-            self.lock = threading.Lock()
-            self.attempts = 0
-
-        def __enter__(self):
-            self.attempts += 1
-            if self.attempts == 2:
-                closing.set()
-            self.lock.acquire()
-
-        def __exit__(self, *args):
-            self.lock.release()
-
     def checked(root):
         entered.set()
         assert unblock.wait(1)
@@ -141,7 +145,7 @@ def test_close_waits_for_first_attachment_and_releases_every_mapping(
         mappings.extend(bundle._maps)
         return bundle
 
-    monkeypatch.setattr(reader, "_alid_lock", ObservedLock())
+    monkeypatch.setattr(reader, "_alid_lock", ObservedLock(closing))
     monkeypatch.setattr(layout, "alid_companion", checked)
     monkeypatch.setattr(reader_module, "_MappedAlids", constructed)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -265,26 +269,12 @@ def test_release_waits_for_a_lookup_then_closes_its_mappings(
     entered, unblock, releasing = (threading.Event() for _ in range(3))
     search = np.searchsorted
 
-    class ObservedLock:
-        def __init__(self):
-            self.lock = threading.Lock()
-            self.attempts = 0
-
-        def __enter__(self):
-            self.attempts += 1
-            if self.attempts == 2:
-                releasing.set()
-            self.lock.acquire()
-
-        def __exit__(self, *args):
-            self.lock.release()
-
     def held_search(*args, **kwargs):
         entered.set()
         assert unblock.wait(2), "test must release the actual search"
         return search(*args, **kwargs)
 
-    monkeypatch.setattr(bundle, "_lock", ObservedLock())
+    monkeypatch.setattr(bundle, "_lock", ObservedLock(releasing))
     monkeypatch.setattr(reader_module.np, "searchsorted", held_search)
     with ThreadPoolExecutor(max_workers=2) as workers:
         lookup = workers.submit(bundle.lookup, np.array([b"22:200:A:C"], dtype="S32"))

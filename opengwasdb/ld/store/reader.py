@@ -480,25 +480,24 @@ class StoreReader:
             if self._alid_error is not None:
                 raise InputError(self._alid_error)
             if self._closed:
-                raise InputError(
-                    f"{self.location}: ALID companion "
-                    f"{self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
-                    f"{layout.ALID_MMAP_MANIFEST}: reader has been released"
-                )
+                raise self._alid_refusal("reader has been released")
             if not self._alid_checked:
                 try:
                     companion = layout.alid_companion(self._root)
                     self._alid_mmap = None if companion is None else _MappedAlids(companion)
                 except Exception as failed:
                     # Keep text, not a traceback retaining the half-built reader/mappings.
-                    self._alid_error = (
-                        f"{self.location}: ALID companion "
-                        f"{self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
-                        f"{layout.ALID_MMAP_MANIFEST}: {failed}"
-                    )
-                    raise InputError(self._alid_error) from failed
+                    refusal = self._alid_refusal(failed)
+                    self._alid_error = str(refusal)
+                    raise refusal from failed
                 self._alid_checked = True
             return self._alid_mmap
+
+    def _alid_refusal(self, reason: object) -> InputError:
+        return InputError(
+            f"{self.location}: ALID companion {self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
+            f"{layout.ALID_MMAP_MANIFEST}: {reason}"
+        )
 
     def _mapped_rows(self, alids: Sequence[str]) -> npt.NDArray[np.int64] | None:
         if not self._has_alid_mmap:
