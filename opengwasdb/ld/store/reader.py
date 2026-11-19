@@ -182,15 +182,19 @@ class _MappedAlids:
     def _map(
         self, companion: layout.AlidCompanion, name: str, dtype: np.dtype[Any]
     ) -> npt.NDArray[Any]:
-        with (companion.path / name).open("rb") as stream:
-            actual = layout.file_identity(os.fstat(stream.fileno()))
-            if actual != dict(companion.identity)[name]:
-                raise layout.alid_mmap_error(companion.path / name, "changed before mapping")
-            if not companion.count:
-                return np.empty(0, dtype=dtype)
-            mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
-        self._maps.append(mapped)
-        return np.frombuffer(mapped, dtype=dtype)
+        path = companion.path / name
+        try:
+            with path.open("rb") as stream:
+                actual = layout.file_identity(os.fstat(stream.fileno()))
+                if actual != dict(companion.identity)[name]:
+                    raise layout.alid_mmap_error(path, "changed before mapping")
+                if not companion.count:
+                    return np.empty(0, dtype=dtype)
+                mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+            self._maps.append(mapped)
+            return np.frombuffer(mapped, dtype=dtype)
+        except (OSError, ValueError) as failed:
+            raise layout.alid_mmap_error(path, failed) from failed
 
     def lookup(self, keys: npt.NDArray[Any]) -> npt.NDArray[np.int64]:
         with self._lock:
@@ -284,6 +288,10 @@ class StoreReader:
     _columns: dict[str, zarr.Array[Any]]
     _index_arrays: _AlidIndex | None
     _alid_mmap: _MappedAlids | None
+    _alid_lock: threading.Lock
+    _alid_checked: bool
+    _alid_error: str | None
+    _has_alid_mmap: bool
 
     def _attach(
         self,
@@ -322,8 +330,13 @@ class StoreReader:
         # HTTP is a request.
         self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
         self._index_arrays = None
-        companion = layout.alid_companion(root)
-        self._alid_mmap = None if companion is None else _MappedAlids(companion)
+        self._alid_lock = threading.Lock()
+        self._alid_checked = False
+        self._alid_error = None
+        self._alid_mmap = None
+        self._has_alid_mmap = (
+            layout.local_path(root) is not None and layout.ALID_MMAP_ATTR in root.attrs
+        )
 
     @classmethod
     def open(
@@ -406,8 +419,9 @@ class StoreReader:
             frames, self._partner_frames = list(self._partner_frames.values()), {}
         for partner in frames:
             partner.close()
-        if self._alid_mmap is not None:
-            self._alid_mmap.release()
+        with self._alid_lock:
+            if self._alid_mmap is not None:
+                self._alid_mmap.release()
 
     def __enter__(self) -> StoreReader:
         return self
@@ -448,12 +462,9 @@ class StoreReader:
         found = np.full(len(alids), -1, dtype=np.int64)
         if not len(alids):
             return found
-        if self._alid_mmap is not None:
-            keys, fitting, wide = _mapped_keys(alids)
-            found[fitting] = self._alid_mmap.lookup(keys)
-            if len(wide):
-                found[wide] = self._scanned(alids, wide)
-            return found
+        mapped = self._mapped_rows(alids)
+        if mapped is not None:
+            return mapped
         loci = _loci(alids, self._ranges)
         if not loci:
             return found
@@ -462,6 +473,46 @@ class StoreReader:
         rest = np.flatnonzero(scanned)
         if len(rest):
             found[rest] = self._scanned(alids, rest)
+        return found
+
+    def _mapped_alids(self) -> _MappedAlids | None:
+        """Verify/attach once, with sticky failure and close serialized on the same lock."""
+        with self._alid_lock:
+            if self._alid_error is not None:
+                raise InputError(self._alid_error)
+            if self._closed:
+                raise InputError(
+                    f"{self.location}: ALID companion "
+                    f"{self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
+                    f"{layout.ALID_MMAP_MANIFEST}: reader has been released"
+                )
+            if not self._alid_checked:
+                try:
+                    companion = layout.alid_companion(self._root)
+                    self._alid_mmap = None if companion is None else _MappedAlids(companion)
+                except Exception as failed:
+                    # Keep text, not a traceback retaining the half-built reader/mappings.
+                    self._alid_error = (
+                        f"{self.location}: ALID companion "
+                        f"{self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
+                        f"{layout.ALID_MMAP_MANIFEST}: {failed}"
+                    )
+                    raise InputError(self._alid_error) from failed
+                self._alid_checked = True
+            return self._alid_mmap
+
+    def _mapped_rows(self, alids: Sequence[str]) -> npt.NDArray[np.int64] | None:
+        if not self._has_alid_mmap:
+            return None
+        keys, fitting, wide = _mapped_keys(alids)
+        found = np.full(len(alids), -1, dtype=np.int64)
+        if len(fitting) or self._alid_error is not None or self._closed:
+            mapped = self._mapped_alids()
+            if mapped is None:
+                return None
+            found[fitting] = mapped.lookup(keys)
+        if len(wide):
+            found[wide] = self._scanned(alids, wide)
         return found
 
     def _from_index(

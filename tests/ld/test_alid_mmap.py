@@ -226,8 +226,11 @@ def test_null_publication_is_corrupt_rather_than_absent(tmp_path: Path) -> None:
     document = json.loads(path.read_bytes())
     document["attributes"]["alid_mmap"] = None
     path.write_text(json.dumps(document))
-    with pytest.raises(InputError, match="companion"):
-        StoreReader.open(store)
+    with pytest.raises(InputError, match="companion") as stopped:
+        StoreReader.open(store).rows_of(["22:200:A:C"])
+    assert str(store) in str(stopped.value)
+    assert "generation" in str(stopped.value)
+    assert "zarr.json" in str(stopped.value)
 
 
 def test_store_without_either_index_keeps_exact_scan(tmp_path: Path) -> None:
@@ -417,8 +420,9 @@ def test_schema_must_be_an_integer_version(tmp_path: Path, schema: object) -> No
     manifest = json.loads((generation(store) / "manifest.json").read_bytes())
     manifest["schema"] = schema
     republish(store, manifest)
-    with pytest.raises(InputError, match="companion"):
-        StoreReader.open(store)
+    with pytest.raises(InputError, match="companion") as stopped:
+        StoreReader.open(store).rows_of(["22:200:A:C"])
+    assert_companion_diagnostic(store, str(stopped.value), "manifest.json")
 
 
 def test_http_ignores_local_companion_even_when_corrupt(tmp_path: Path) -> None:

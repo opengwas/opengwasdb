@@ -58,8 +58,13 @@ canonical correspondence fails. Artifact bytes contain no filesystem paths or in
 so an unchanged Store copy derives identical bytes. Runtime identity additionally includes
 manifest/payload device, inode, size, mtime and ctime, detecting replacement before mapping.
 
-Local reader attachment checks the descriptor and payload integrity and maps read-only keys
-and rows. Attachment, including hashing, belongs to opening, not opened lookup. Fitting
+**First-use ruling (#81 fix round 1):** opening does not verify or map the companion. The
+first fitting lookup checks the manifest, all canonical source pins and payload hashes, then
+maps read-only keys and rows, once under a reader-local lock. A failure is sticky: that lookup
+and every later lookup refuse with the same diagnostic, even if files are subsequently repaired.
+Close shares the attachment lock, so no late attachment can outlive it; closing before lookup
+acquires no mappings. Wide-only scans need no companion. This preserves integrity while
+charging only lookups that need it, not row-based matrices/regions or unused opens. Fitting
 UTF-8 queries use vectorized binary search and equality, preserving order, misses and duplicates
 without parsing loci or reading string/position columns. Embedded NUL and unencodable names
 are Absent. Over-width names take the exact scan. Since construction/validation establish
@@ -90,13 +95,14 @@ regenerating it now produces a companion, checked byte-for-byte against canonica
 ## Consequences and rejected alternatives
 
 The raw companion adds 36 bytes per indexed variant, about 309 MB on EUR, outside decoded
-cache budgets. Opening hashes those bytes and may cost cold I/O. Zarr remains canonical and
+cache budgets. First use hashes those bytes and about 64 MB of EUR's canonical index files,
+which can cost cold I/O; this cost is reported separately from the search. Zarr remains canonical and
 interoperable; HTTP never fetches companion files.
 
 A second producer sort is rejected because it can drift from ADR 0010. Mutable fixed payload
 paths are rejected because existing mmaps could see partial replacement. Process-global mapping
 caches are rejected here because sharing/admission is separate work. Hashing canonical arrays
-by decoding on every open is rejected: construction and exact validation establish
+by decoding on every lookup is rejected: construction and exact validation establish
 correspondence, while canonical-file and companion hashes bind the checked generation to the
 Store under the quiescent immutable-files requirement. Metadata-only pins were insufficient.
 

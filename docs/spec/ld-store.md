@@ -1014,8 +1014,8 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 - The Proxy Index row that replaced the column read is in §11's table, and the frame that
   replaced both is §10's.
 
-**Local ALID companion** (ADR 0012). When present, opening additionally validates and maps
-§14's companion; fitting names use it for both hits and misses without column reads. The
+**Local ALID companion** (ADR 0012). When present, the first fitting lookup validates and maps
+§14's companion once; fitting names then use it for both hits and misses without column reads. The
 canonical-index/exact-scan description below applies without it, including on HTTP. Wider
 names retain the exact scan on either path.
 
@@ -1550,12 +1550,17 @@ keys and rows in bounded windows. The canonical rows/order/keys rules remain the
 for range, uniqueness, completeness and key meaning. Self-consistent companion checksums
 cannot substitute for this correspondence check. Missing companions and HTTP are compatible.
 
-Local attachment checks companion integrity and maps read-only fixed-width keys and rows.
-Opened lookup encodes queries and vectorizes binary search/exact equality; it preserves order
+Opening reads no companion payload. On the first fitting lookup, checked attachment verifies
+the manifest, every canonical-file content pin and both companion payload hashes, then maps
+read-only fixed-width keys and rows. This happens once under a lock shared with close; failed
+verification is cached as a refusal for that and later lookups, never retried into a fallback.
+Close before lookup attaches nothing; close racing attachment waits and releases its mappings.
+Row-based matrix/region reads and wide-only scans do not pay this lookup-specific cost.
+Lookup encodes queries and vectorizes binary search/exact equality; it preserves order
 and duplicate requests. Fitting hits and misses read no loci, positions or string column.
 Embedded NUL and unencodable names are absent; over-width names use the exact scan. A fitting
 miss is final only on this validated, complete representation. Its integrity checks and mapping
-cost belong to opening, separately from lookup. The reader owns and releases its mapping
+cost belong to first use, separately reported from search. The reader owns and releases its mapping
 bundle; this does not establish process-wide sharing or aggregate admission.
 
 The exact ALID scan needs only chromosome positions and the full ALID strings at candidate
