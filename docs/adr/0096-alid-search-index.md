@@ -1,5 +1,8 @@
 # An ALID search index in the LD Store, adopting the engine's
 
+**Extended by ADR 0012:** validated local mmap companions may answer fitting misses directly;
+the canonical Zarr-index/exact fallback described here remains in use without a companion.
+
 Issue [#42](https://github.com/opengwas/ogld/issues/42), part of epic
 [#1](https://github.com/opengwas/ogld/issues/1). Spec §2, §6, §7, §10, §12 and §13 define the
 store; ADR 0003 the identity the keys are made of, and ADR 0009 the decoder that reads them.

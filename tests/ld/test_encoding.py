@@ -27,6 +27,7 @@ from store_copies import R_SCALE, TEST_STORE
 import ogld
 from ogld import cli
 from ogld.format import RefusalReason, REncoding
+from ogld.store import layout
 
 CONTRACT = Path(__file__).resolve().parent / "contract"
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -253,6 +254,13 @@ def test_a_breaker_fails_the_same_rules_at_another_scale(
     breaker = contract("test_store").BREAKERS[rule]
     here = shutil.copytree(TEST_STORE, tmp_path / "committed")
     there = shutil.copytree(store_at(2047, tmp_path_factory), tmp_path / "x2047")
+    # Compare canonical Stores in the same representation state. A fresh build also has
+    # ADR 0012 companions, whose intentional staleness is tested separately in test_alid_mmap.
+    for store in (here, there):
+        root = zarr.open_group(store, mode="r+")
+        if layout.ALID_MMAP_ATTR in root.attrs:
+            del root.attrs[layout.ALID_MMAP_ATTR]
+        assert layout.ALID_MMAP_ATTR not in root.attrs
     breaker(here)
     breaker(there)
     broken = failing(here)
