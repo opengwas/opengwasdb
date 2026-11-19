@@ -20,10 +20,19 @@ HTTP and older Stores must retain the canonical index and exact scan.
 Store `variants/alid_mmap/<generation>/{keys.bin,rows.i32le,manifest.json}` locally.
 Keys copy the canonical uint8 bytes viewed as `|S32`; rows copy signed little-endian int32
 in exactly canonical order. The deterministic manifest uses sorted keys, compact separators,
-UTF-8 and no timestamps. Its exact fields are `schema` (integer 1), `count`, `key_dtype`
+UTF-8 and no timestamps. Its exact fields are `schema` (integer 2), `count`, `key_dtype`
 (`|S32`), `row_dtype` (`<i4`), `sources`, and `payloads`. Sources pin SHA-256 of normalized
-root metadata with only the `alid_mmap` attribute removed, and raw metadata of both canonical
-arrays. Payloads pin both binary files' SHA-256. Generation is the manifest bytes' SHA-256.
+root metadata with only the `alid_mmap` attribute removed, and every file of both canonical
+index arrays: metadata and every chunk/shard file. Payloads pin both binary files' SHA-256.
+Generation is the manifest bytes' SHA-256. Layout owns the digest/pointer and one payload
+descriptor table for assembly and validation; row widths follow the recorded dtype.
+
+**Schema 2 ruling (#81 fix round 1, 19 November 2026):** schema 1 pinned only canonical
+metadata, so a companion copied from a Store with identical metadata but different keys could
+change answers. Before any mapped byte is trusted, schema 2 verifies canonical content pins
+and payload hashes. Schema 1 refuses naming the Store and manifest, with an instruction to
+re-derive using `scripts/derive_alid_mmap.py`. Remove the old pointer/generation only on an
+isolated private Store before re-deriving; never repair a live reader's generation in place.
 
 The optional root attribute is exactly `{"generation":"<64 lowercase hex digits>"}`.
 Its replacement is the publication point. A cooperating derivation holds a file lock,
@@ -38,9 +47,11 @@ Derive only on isolated/quiescent local Stores; do not mutate canonical files du
 companion creation leaves either a valid Store without a pointer or a complete publication.
 The helper first applies the canonical index's existing four validation rules.
 
-Root/index metadata pins cheaply detect generation mismatch; they do not detect unannounced
-in-place canonical shard mutation. Exact validation compares companion payloads to canonical
-arrays. Payload hashes alone do not prove correspondence. The existing `alid_index.count`
+Canonical file pins bind the companion to the actual Store, not merely equal metadata.
+Missing, added or changed canonical files refuse, naming the Store, generation and concrete
+source file. Files remain immutable while a reader uses its checked mappings. Exact validation
+also compares companion payloads to canonical arrays; payload hashes alone do not prove
+correspondence. The existing `alid_index.count`
 rule includes integrity and bounded exact comparison; there are still 30 validation rules.
 A self-consistent row permutation is a breaker: range, uniqueness and hashes pass, but
 canonical correspondence fails. Artifact bytes contain no filesystem paths or inode identity,
@@ -85,8 +96,9 @@ interoperable; HTTP never fetches companion files.
 A second producer sort is rejected because it can drift from ADR 0010. Mutable fixed payload
 paths are rejected because existing mmaps could see partial replacement. Process-global mapping
 caches are rejected here because sharing/admission is separate work. Hashing canonical arrays
-on every open is rejected: build/validation establish correspondence, and opening checks
-metadata pins and companion integrity under the quiescent immutable-files requirement.
+by decoding on every open is rejected: construction and exact validation establish
+correspondence, while canonical-file and companion hashes bind the checked generation to the
+Store under the quiescent immutable-files requirement. Metadata-only pins were insufficient.
 
 Breakers cover truncation, missing/wrong payloads, malformed manifests and schema types,
 stale metadata, self-consistent wrong keys/rows and row permutations. Interrupted publication

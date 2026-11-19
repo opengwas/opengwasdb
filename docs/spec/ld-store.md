@@ -1531,7 +1531,11 @@ The canonical Zarr index of §2 remains authoritative. Local Stores may addition
 `variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and `manifest.json`. Keys copy the
 canonical bytes without another sort; rows copy its rows as signed little-endian int32.
 The exact deterministic manifest schema and source/content pins are defined in ADR 0012
-and owned by `ogld.store.layout`. An absent root `alid_mmap` attribute means no companion.
+and owned by `ogld.store.layout`. Schema 2 pins normalized root metadata and every canonical
+index file (array metadata and all chunk/shard files), not just array metadata. Schema 1
+refuses with the Store/generation/manifest and an instruction to re-derive using
+`scripts/derive_alid_mmap.py`. A mismatched source pin also names the concrete canonical file.
+An absent root `alid_mmap` attribute means no companion.
 A present attribute is exactly `{"generation":"<manifest SHA-256>"}` and names complete,
 immutable files. Publication fsyncs a private partial, renames its generation directory,
 then atomically replaces root metadata last. An abandoned partial is unpublished and a
@@ -1541,7 +1545,7 @@ Store's validated canonical index. Derivation requires an isolated or quiescent 
 No existing array or public signature changes, and HTTP readers retain the canonical path.
 
 `alid_index.count` additionally checks a published local companion: schema, generation and
-metadata pins, exact lengths and payload hashes, then byte-for-byte equality with canonical
+canonical-file content pins, exact lengths and payload hashes, then byte-for-byte equality with canonical
 keys and rows in bounded windows. The canonical rows/order/keys rules remain the authority
 for range, uniqueness, completeness and key meaning. Self-consistent companion checksums
 cannot substitute for this correspondence check. Missing companions and HTTP are compatible.

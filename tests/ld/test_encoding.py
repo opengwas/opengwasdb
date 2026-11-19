@@ -27,6 +27,7 @@ from store_copies import R_SCALE, TEST_STORE
 import ogld
 from ogld import cli
 from ogld.format import RefusalReason, REncoding
+from ogld.store import layout
 
 CONTRACT = Path(__file__).resolve().parent / "contract"
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -257,9 +258,9 @@ def test_a_breaker_fails_the_same_rules_at_another_scale(
     # ADR 0012 companions, whose intentional staleness is tested separately in test_alid_mmap.
     for store in (here, there):
         root = zarr.open_group(store, mode="r+")
-        if "alid_mmap" in root.attrs:
-            del root.attrs["alid_mmap"]
-        assert "alid_mmap" not in root.attrs
+        if layout.ALID_MMAP_ATTR in root.attrs:
+            del root.attrs[layout.ALID_MMAP_ATTR]
+        assert layout.ALID_MMAP_ATTR not in root.attrs
     breaker(here)
     breaker(there)
     broken = failing(here)

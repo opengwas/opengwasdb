@@ -1053,17 +1053,32 @@ def _alid_mmap(store: _Store) -> _Problems:
         return
     entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
     if companion.count != entries:
-        yield layout.ALID_MMAP, "entry count differs from canonical index"
+        yield (
+            layout.ALID_MMAP,
+            str(
+                layout.alid_mmap_error(
+                    companion.path / layout.ALID_MMAP_MANIFEST,
+                    "entry count differs from canonical index",
+                )
+            ),
+        )
         return
-    for name, source, width, dtype in (
-        (layout.ALID_MMAP_KEYS, layout.ALID_INDEX_ALID, layout.ALID_INDEX_WIDTH, np.dtype("u1")),
-        (layout.ALID_MMAP_ROWS, layout.ALID_INDEX_ROW, 1, np.dtype(layout.ALID_MMAP_ROW_DTYPE)),
-    ):
-        with (companion.path / name).open("rb") as stream:
+    for payload in layout.ALID_MMAP_PAYLOADS:
+        with (companion.path / payload.name).open("rb") as stream:
             for lo, hi in windows(0, entries, _ROWS):
-                canonical = store.read(source, lo * width, hi * width).astype(dtype, copy=False)
+                canonical = store.read(
+                    payload.source, lo * payload.width, hi * payload.width
+                ).astype(payload.dtype, copy=False)
                 if stream.read(canonical.nbytes) != canonical.tobytes():
-                    yield layout.ALID_MMAP, f"{name}: differs from canonical index at entry {lo}"
+                    yield (
+                        layout.ALID_MMAP,
+                        str(
+                            layout.alid_mmap_error(
+                                companion.path / payload.name,
+                                f"differs from canonical index at entry {lo}",
+                            )
+                        ),
+                    )
                     break
 
 

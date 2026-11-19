@@ -39,6 +39,7 @@ NEAR_R: Final = (262_144, 67_108_864)
 ALID_INDEX_WIDTH: Final = 32
 #: The dtype string of one key's bytes (numpy's own fixed-width bytes cast pads with NUL).
 _BYTES: Final = f"|S{ALID_INDEX_WIDTH}"
+ALID_KEY_DTYPE: Final = np.dtype(_BYTES)
 #: The index's group and its two arrays, by their path.
 ALID_INDEX: Final = "variants/alid_index"
 ALID_INDEX_ALID: Final = f"{ALID_INDEX}/alid"
@@ -395,11 +396,27 @@ def new_r_array(
 # ADR 0012: an optional local representation of the canonical index, never another ordering.
 ALID_MMAP: Final = "variants/alid_mmap"
 ALID_MMAP_ATTR: Final = "alid_mmap"
-ALID_MMAP_SCHEMA: Final = 1
+ALID_MMAP_SCHEMA: Final = 2
 ALID_MMAP_KEYS: Final = "keys.bin"
 ALID_MMAP_ROWS: Final = "rows.i32le"
 ALID_MMAP_MANIFEST: Final = "manifest.json"
 ALID_MMAP_ROW_DTYPE: Final = "<i4"
+
+
+@dataclass(frozen=True)
+class AlidPayload:
+    """One companion payload's canonical source and physical representation (ADR 0012)."""
+
+    name: str
+    source: str
+    dtype: np.dtype[Any]
+    width: int
+
+
+ALID_MMAP_PAYLOADS: Final = (
+    AlidPayload(ALID_MMAP_KEYS, ALID_INDEX_ALID, np.dtype("u1"), ALID_INDEX_WIDTH),
+    AlidPayload(ALID_MMAP_ROWS, ALID_INDEX_ROW, np.dtype(ALID_MMAP_ROW_DTYPE), 1),
+)
 
 
 def local_path(root: zarr.Group) -> Path | None:
@@ -421,19 +438,50 @@ def file_sha256(path: Path) -> str:
 
 
 def alid_mmap_sources(path: Path) -> dict[str, str]:
-    """Root/index metadata content pins, excluding only our publication pointer (ADR 0012).
-
-    Canonical payload hashes live in the manifest too. Validation compares those bytes exactly;
-    open checks metadata without rereading canonical payloads. Derivation and reading require
-    quiescent, immutable canonical files (ADR 0012); unannounced shard mutation is not detected.
-    """
+    """Pin canonical content, not just metadata: a foreign companion must refuse (ADR 0012)."""
     root = json.loads((path / "zarr.json").read_bytes())
     root["attributes"].pop(ALID_MMAP_ATTR, None)
     sources = {"zarr.json": hashlib.sha256(json_bytes(root)).hexdigest()}
-    for name in (ALID_INDEX_ALID, ALID_INDEX_ROW):
-        meta = f"{name}/zarr.json"
-        sources[meta] = file_sha256(path / meta)
+    for payload in ALID_MMAP_PAYLOADS:
+        # Metadata is mandatory even when a whole array directory was lost. Include every
+        # other file too, so deleting, replacing or adding a shard changes the pinned set.
+        sources[f"{payload.source}/zarr.json"] = file_sha256(path / payload.source / "zarr.json")
+        for source in sorted((path / payload.source).rglob("*")):
+            if source.is_file() and source.name != "zarr.json":
+                sources[str(source.relative_to(path))] = file_sha256(source)
     return sources
+
+
+def alid_mmap_source_change(before: dict[str, str], after: dict[str, str]) -> str | None:
+    """The concrete source file whose content or membership changed (ADR 0012)."""
+    return next(
+        (
+            name
+            for name in sorted(before.keys() | after.keys())
+            if before.get(name) != after.get(name)
+        ),
+        None,
+    )
+
+
+def alid_mmap_pointer(raw: bytes) -> dict[str, str]:
+    """The one generation digest and publication document (ADR 0012)."""
+    return {"generation": hashlib.sha256(raw).hexdigest()}
+
+
+def alid_mmap_generation(pointer: Any) -> str:
+    """Refuse an ambiguous pointer before using it as a directory name (ADR 0012)."""
+    if not isinstance(pointer, dict) or set(pointer) != {"generation"}:
+        raise ValueError("publication pointer must name one generation")
+    generation = pointer["generation"]
+    if not isinstance(generation, str) or re.fullmatch("[0-9a-f]{64}", generation) is None:
+        raise ValueError("generation must be a SHA-256 digest")
+    return generation
+
+
+def alid_mmap_error(path: Path, reason: object) -> InputError:
+    """A generation's full file path identifies the Store as well as the failed input."""
+    return InputError(f"{path}: invalid ALID companion: {reason}")
 
 
 @dataclass(frozen=True)
@@ -446,7 +494,7 @@ class AlidCompanion:
 
 
 def alid_companion(root: zarr.Group) -> AlidCompanion | None:
-    """Check a published local companion's pins, schema, lengths and hashes, or refuse.
+    """Check source content pins and payload hashes before trusting any mapped byte.
 
     Absence and HTTP retain ADR 0010. A present pointer is a commitment: never silently fall
     back from corrupt data. Exact canonical correspondence is also checked by validation.
@@ -456,46 +504,56 @@ def alid_companion(root: zarr.Group) -> AlidCompanion | None:
     if path is None or ALID_MMAP_ATTR not in root.attrs:
         return None
     try:
+        generation = alid_mmap_generation(pointer)
+    except ValueError as error:
+        raise alid_mmap_error(path / "zarr.json", f"generation {pointer!r}: {error}") from error
+    manifest_path = path / ALID_MMAP / generation / ALID_MMAP_MANIFEST
+    try:
         return _alid_companion(path, pointer)
     except (OSError, ValueError, TypeError, KeyError) as error:
-        raise InputError(f"{ALID_MMAP}: invalid companion: {error}") from error
+        raise alid_mmap_error(manifest_path, error) from error
 
 
-def _companion_generation(pointer: Any) -> str:
-    if not isinstance(pointer, dict) or set(pointer) != {"generation"}:
-        raise ValueError("publication pointer must name one generation")
-    generation = pointer["generation"]
-    if not isinstance(generation, str) or re.fullmatch("[0-9a-f]{64}", generation) is None:
-        raise ValueError("generation must be a SHA-256 digest")
-    return generation
-
-
-def _companion_manifest(path: Path, pointer: Any) -> tuple[Path, dict[str, Any], int]:
-    generation = _companion_generation(pointer)
-    directory = path / ALID_MMAP / generation
-    raw = (directory / ALID_MMAP_MANIFEST).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != generation:
+def _companion_document(raw: bytes, pointer: Any) -> dict[str, Any]:
+    if alid_mmap_pointer(raw) != pointer:
         raise ValueError("manifest digest differs from published generation")
     manifest = json.loads(raw)
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest must be an object")
+    schema = manifest["schema"]
+    if type(schema) is int and schema == 1:
+        raise ValueError("schema 1 is unsupported; re-derive with scripts/derive_alid_mmap.py")
     count = manifest["count"]
     if type(count) is not int or count < 0:
         raise ValueError("count must be a nonnegative integer")
-    expected = alid_mmap_manifest(count, alid_mmap_sources(path), manifest["payloads"])
+    if not isinstance(manifest["sources"], dict):
+        raise ValueError("sources must pin canonical files by name")
+    return manifest
+
+
+def _companion_manifest(path: Path, pointer: Any) -> tuple[Path, dict[str, Any], int]:
+    directory = path / ALID_MMAP / alid_mmap_generation(pointer)
+    manifest = _companion_document((directory / ALID_MMAP_MANIFEST).read_bytes(), pointer)
+    count = manifest["count"]
+    changed = alid_mmap_source_change(manifest["sources"], alid_mmap_sources(path))
+    if changed is not None:
+        raise ValueError(f"canonical source {path / changed}: content pin differs")
+    expected = alid_mmap_manifest(count, manifest["sources"], manifest["payloads"])
     if type(manifest["schema"]) is not int or manifest != expected:
-        raise ValueError("schema, representation or canonical metadata pins differ")
+        raise ValueError("schema or representation differs")
     return directory, manifest, count
 
 
 def _alid_companion(path: Path, pointer: Any) -> AlidCompanion:
     directory, manifest, count = _companion_manifest(path, pointer)
-    sizes = {ALID_MMAP_KEYS: count * ALID_INDEX_WIDTH, ALID_MMAP_ROWS: count * 4}
     identities = []
-    for name, size in sizes.items():
-        payload = directory / name
+    for descriptor in ALID_MMAP_PAYLOADS:
+        payload = directory / descriptor.name
         stat = payload.stat()
-        if stat.st_size != size or file_sha256(payload) != manifest["payloads"][name]:
-            raise ValueError(f"{name}: length or content hash differs")
-        identities.append((name, file_identity(stat)))
+        size = count * descriptor.width * descriptor.dtype.itemsize
+        if stat.st_size != size or file_sha256(payload) != manifest["payloads"][descriptor.name]:
+            raise ValueError(f"{payload}: length or content hash differs")
+        identities.append((descriptor.name, file_identity(stat)))
     identities.append((ALID_MMAP_MANIFEST, file_identity((directory / ALID_MMAP_MANIFEST).stat())))
     return AlidCompanion(directory, count, tuple(identities))
 

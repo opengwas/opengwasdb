@@ -39,7 +39,6 @@ What is held:
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import multiprocessing
 import os
@@ -1538,19 +1537,23 @@ def _derive_alid_mmap(path: Path, directory: Path) -> int:
     count = _write_alid_payloads(root, partial)
     payloads = {
         name: layout.file_sha256(partial / name)
-        for name in (layout.ALID_MMAP_KEYS, layout.ALID_MMAP_ROWS)
+        for name in (payload.name for payload in layout.ALID_MMAP_PAYLOADS)
     }
     raw = layout.json_bytes(layout.alid_mmap_manifest(count, sources, payloads))
     _durable_bytes(partial / layout.ALID_MMAP_MANIFEST, raw)
     _sync_directory(partial)
-    generation = hashlib.sha256(raw).hexdigest()
-    destination = directory / generation
+    pointer = layout.alid_mmap_pointer(raw)
+    destination = directory / layout.alid_mmap_generation(pointer)
     _install_alid_generation(partial, destination, payloads)
     _sync_directory(directory)
-    if layout.alid_mmap_sources(path) != sources:
-        raise InputError("canonical metadata changed during companion derivation")
+    changed = layout.alid_mmap_source_change(sources, layout.alid_mmap_sources(path))
+    if changed is not None:
+        raise layout.alid_mmap_error(
+            destination / layout.ALID_MMAP_MANIFEST,
+            f"canonical source {path / changed}: changed during companion derivation",
+        )
     document = json.loads((path / "zarr.json").read_bytes())
-    document["attributes"][layout.ALID_MMAP_ATTR] = {"generation": generation}
+    document["attributes"][layout.ALID_MMAP_ATTR] = pointer
     temporary = path / ".alid-mmap-root.partial"
     _durable_bytes(temporary, layout.json_bytes(document))
     os.replace(temporary, path / "zarr.json")
@@ -1562,25 +1565,25 @@ def _install_alid_generation(partial: Path, destination: Path, payloads: dict[st
     if destination.exists():
         for name in (*payloads, layout.ALID_MMAP_MANIFEST):
             if layout.file_sha256(destination / name) != layout.file_sha256(partial / name):
-                raise InputError(f"{destination}: existing unpublished companion differs")
+                raise layout.alid_mmap_error(destination / name, "unpublished generation differs")
         shutil.rmtree(partial)
     else:
         partial.rename(destination)
 
 
 def _write_alid_payloads(root: zarr.Group, partial: Path) -> int:
-    keys, rows = root[layout.ALID_INDEX_ALID], root[layout.ALID_INDEX_ROW]
-    assert isinstance(keys, zarr.Array)
+    rows = root[layout.ALID_INDEX_ROW]
     assert isinstance(rows, zarr.Array)
     count = int(rows.shape[0])
-    for name, array, width, dtype in (
-        (layout.ALID_MMAP_KEYS, keys, layout.ALID_INDEX_WIDTH, np.dtype("u1")),
-        (layout.ALID_MMAP_ROWS, rows, 1, np.dtype(layout.ALID_MMAP_ROW_DTYPE)),
-    ):
-        with (partial / name).open("wb") as stream:
+    for payload in layout.ALID_MMAP_PAYLOADS:
+        array = root[payload.source]
+        assert isinstance(array, zarr.Array)
+        with (partial / payload.name).open("wb") as stream:
             for lo, hi in windows(0, count, ALID_ROWS):
-                values = layout.refused_if_lost(array, np.asarray(array[lo * width : hi * width]))
-                stream.write(values.astype(dtype, copy=False).tobytes())
+                values = layout.refused_if_lost(
+                    array, np.asarray(array[lo * payload.width : hi * payload.width])
+                )
+                stream.write(values.astype(payload.dtype, copy=False).tobytes())
             stream.flush()
             os.fsync(stream.fileno())
     return count

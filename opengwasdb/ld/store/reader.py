@@ -164,14 +164,13 @@ class _MappedAlids:
 
     def __init__(self, companion: layout.AlidCompanion) -> None:
         self.identity = (str(companion.path), companion.identity)
+        self._path = companion.path
         self._lock = threading.Lock()
         self._maps: list[mmap.mmap] = []
         self._closed = False
         self._keys = self._rows = np.empty(0)
         try:
-            self._keys = self._map(
-                companion, layout.ALID_MMAP_KEYS, np.dtype(f"|S{layout.ALID_INDEX_WIDTH}")
-            )
+            self._keys = self._map(companion, layout.ALID_MMAP_KEYS, layout.ALID_KEY_DTYPE)
             self._rows = self._map(
                 companion, layout.ALID_MMAP_ROWS, np.dtype(layout.ALID_MMAP_ROW_DTYPE)
             )
@@ -186,7 +185,7 @@ class _MappedAlids:
         with (companion.path / name).open("rb") as stream:
             actual = layout.file_identity(os.fstat(stream.fileno()))
             if actual != dict(companion.identity)[name]:
-                raise InputError(f"{layout.ALID_MMAP}/{name}: changed before mapping")
+                raise layout.alid_mmap_error(companion.path / name, "changed before mapping")
             if not companion.count:
                 return np.empty(0, dtype=dtype)
             mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
@@ -196,7 +195,9 @@ class _MappedAlids:
     def lookup(self, keys: npt.NDArray[Any]) -> npt.NDArray[np.int64]:
         with self._lock:
             if self._closed:
-                raise InputError("ALID companion has been released")
+                raise layout.alid_mmap_error(
+                    self._path / layout.ALID_MMAP_KEYS, "mapping has been released"
+                )
             found = np.full(len(keys), -1, dtype=np.int64)
             if len(self._keys):
                 at = np.minimum(np.searchsorted(self._keys, keys), len(self._keys) - 1)
@@ -234,7 +235,7 @@ def _mapped_keys(
             encoded.append(key)
             fitting.append(i)
     return (
-        np.array(encoded, dtype=f"|S{layout.ALID_INDEX_WIDTH}"),
+        np.array(encoded, dtype=layout.ALID_KEY_DTYPE),
         np.array(fitting, dtype=np.int64),
         np.array(wide, dtype=np.int64),
     )
@@ -539,9 +540,9 @@ class StoreReader:
         # one of its shards at a time too. An array with no shards reads one inner chunk.
         shard = int((index.alid.shards or index.alid.chunks)[0])
         per = max(1, shard // width)
-        order = np.argsort(keys.view(f"|S{width}").ravel(), kind="stable")
-        wanted = keys[order].view(f"|S{width}").ravel()
-        chunk = np.empty(0, dtype=f"|S{width}")
+        order = np.argsort(keys.view(layout.ALID_KEY_DTYPE).ravel(), kind="stable")
+        wanted = keys[order].view(layout.ALID_KEY_DTYPE).ravel()
+        chunk = np.empty(0, dtype=layout.ALID_KEY_DTYPE)
         for first in range(0, count, per):
             # Let the shard just searched go before the next is fetched and joined: a lookup holds
             # one shard's keys, not the one before it as well (ogld#42's fix round 3).
@@ -563,7 +564,7 @@ class StoreReader:
         length = np.array([(stop - first) * width])
         run = self._runs(index.alid, np.array([first * width]), length)[0]
         keys = refused_if_lost(index.alid, run)
-        return keys.view(f"|S{width}").ravel()
+        return keys.view(layout.ALID_KEY_DTYPE).ravel()
 
     def _index(self) -> _AlidIndex:
         """The ALID index's arrays, opened on first use (spec §10): opening reads their

@@ -11,6 +11,79 @@ import zarr
 from test_alid_index import written
 
 
+def test_a_companion_copied_from_identical_metadata_cannot_change_rows(tmp_path: Path) -> None:
+    import shutil
+    from unittest.mock import patch
+
+    from test_alid_index import WIDTH_ROWS
+
+    from ogld.format import InputError
+    from ogld.store import StoreReader, layout
+
+    a = written(tmp_path / "a")
+    changed = list(WIDTH_ROWS)
+    changed[2] = ("22", 200, "A", "T")
+    b = written(tmp_path / "b", changed)
+    for array in ("alid", "row"):
+        relative = f"variants/alid_index/{array}/zarr.json"
+        assert (a / relative).read_bytes() == (b / relative).read_bytes()
+    root_a = json.loads((a / "zarr.json").read_bytes())
+    root_b = json.loads((b / "zarr.json").read_bytes())
+    pointer = root_a["attributes"].pop("alid_mmap")
+    del root_b["attributes"]["alid_mmap"]
+    assert root_a == root_b, "only canonical content and the companion differ"
+    with patch.object(layout, "alid_companion", lambda root: None):
+        canonical = StoreReader.open(b)
+        assert canonical.rows_of(["22:200:A:C", "22:200:A:T"]).tolist() == [-1, 2]
+    shutil.rmtree(b / "variants/alid_mmap")
+    shutil.copytree(a / "variants/alid_mmap", b / "variants/alid_mmap")
+    root_b["attributes"]["alid_mmap"] = pointer
+    (b / "zarr.json").write_text(json.dumps(root_b))
+    with pytest.raises(InputError) as stopped:
+        StoreReader.open(b).rows_of(["22:200:A:C", "22:200:A:T"])
+    message = str(stopped.value)
+    assert str(b) in message
+    assert pointer["generation"] in message
+    assert "variants/alid_index/alid/c/" in message
+
+
+def test_manifest_pins_every_canonical_file(tmp_path: Path) -> None:
+    import hashlib
+
+    store = written(tmp_path / "store")
+    manifest = json.loads((generation(store) / "manifest.json").read_bytes())
+    assert manifest["schema"] == 2
+    files = [
+        p
+        for array in ("alid", "row")
+        for p in (store / "variants/alid_index" / array).rglob("*")
+        if p.is_file()
+    ]
+    assert any("/c/" in str(p) for p in files), "pin real payloads, not only metadata"
+    expected = {
+        str(p.relative_to(store)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files
+    }
+    assert {k: v for k, v in manifest["sources"].items() if k != "zarr.json"} == expected
+
+
+def test_schema_one_refuses_with_a_rederivation_instruction(tmp_path: Path) -> None:
+    from ogld.format import InputError
+    from ogld.store import StoreReader
+
+    store = written(tmp_path / "store")
+    manifest = json.loads((generation(store) / "manifest.json").read_bytes())
+    manifest["schema"] = 1
+    republish(store, manifest)
+    with pytest.raises(InputError) as stopped:
+        StoreReader.open(store).rows_of(["22:200:A:C"])
+    message = str(stopped.value)
+    assert str(store) in message
+    assert generation(store).name in message
+    assert "manifest.json" in message
+    assert "schema 1" in message
+    assert "scripts/derive_alid_mmap.py" in message
+
+
 def test_writer_and_derivation_publish_identical_canonical_bytes(tmp_path: Path) -> None:
     from script_modules import load_script
 
@@ -53,6 +126,12 @@ def generation(store: Path) -> Path:
     return store / "variants/alid_mmap" / root["attributes"]["alid_mmap"]["generation"]
 
 
+def assert_companion_diagnostic(store: Path, message: str, concrete: str) -> None:
+    assert str(store) in message
+    assert generation(store).name in message
+    assert concrete in message
+
+
 def republish(store: Path, manifest: dict) -> None:
     """An independently edited self-consistent representation, bypassing the real producer."""
     import hashlib
@@ -84,6 +163,7 @@ def test_validation_rejects_self_consistent_wrong_rows(tmp_path: Path) -> None:
     republish(store, manifest)
     findings = validate(store)
     assert findings["alid_index.count"], "self-consistent hashes do not prove canonical rows"
+    assert_companion_diagnostic(store, findings["alid_index.count"][0].message, "rows.i32le")
 
 
 def test_mapped_lookup_uses_no_locus_or_column_reads(tmp_path: Path, monkeypatch) -> None:
@@ -208,9 +288,18 @@ def test_corrupt_publication_refuses_and_fails_validation(tmp_path: Path, damage
         document = json.loads(path.read_bytes())
         document["attributes"]["new-generation"] = True
         path.write_text(json.dumps(document))
-    with pytest.raises(InputError, match="companion"):
+    concrete = {
+        "manifest": "manifest.json",
+        "missing": "rows.i32le",
+        "root": str(store / "zarr.json"),
+        "index": "variants/alid_index/row/zarr.json",
+    }.get(damage, "keys.bin" if damage.startswith("keys") else "rows.i32le")
+    with pytest.raises(InputError, match="companion") as stopped:
         StoreReader.open(store).rows_of(["22:200:A:C"])
-    assert validate(store)["alid_index.count"], "corrupt publication cannot validate"
+    assert_companion_diagnostic(store, str(stopped.value), concrete)
+    findings = validate(store)["alid_index.count"]
+    assert findings, "corrupt publication cannot validate"
+    assert_companion_diagnostic(store, findings[0].message, concrete)
 
 
 @pytest.mark.parametrize("payload", ["keys.bin", "rows.i32le"])
@@ -230,7 +319,42 @@ def test_self_consistent_payload_change_fails_canonical_validation(
     manifest = json.loads((directory / "manifest.json").read_bytes())
     manifest["payloads"][payload] = hashlib.sha256(path.read_bytes()).hexdigest()
     republish(store, manifest)
-    assert validate(store)["alid_index.count"]
+    findings = validate(store)["alid_index.count"]
+    assert findings
+    assert_companion_diagnostic(store, findings[0].message, payload)
+
+
+def test_a_source_change_during_derivation_names_the_store_generation_and_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import shutil
+
+    from ogld.format import InputError
+    from ogld.store import assembly
+
+    store = written(tmp_path / "store")
+    root = zarr.open_group(store, mode="r+")
+    del root.attrs["alid_mmap"]
+    shutil.rmtree(store / "variants/alid_mmap")
+    write = assembly._write_alid_payloads
+
+    def changing(root, partial):
+        count = write(root, partial)
+        array = zarr.open_array(store / "variants/alid_index/row", mode="r+")
+        array.attrs["changed"] = True
+        return count
+
+    monkeypatch.setattr(assembly, "_write_alid_payloads", changing)
+    with pytest.raises(InputError) as stopped:
+        assembly.derive_alid_mmap(store)
+    message = str(stopped.value)
+    assert str(store) in message
+    generations = [p for p in (store / "variants/alid_mmap").iterdir() if len(p.name) == 64]
+    assert len(generations) == 1, "a complete generation exists but is not published"
+    assert generations[0].name in message
+    assert "variants/alid_index/row/zarr.json" in message
+    assert "changed during companion derivation" in message
+    assert "alid_mmap" not in zarr.open_group(store, mode="r").attrs
 
 
 @pytest.mark.parametrize(
