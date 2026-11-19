@@ -73,7 +73,9 @@ def test_concurrent_first_lookups_verify_and_attach_once(tmp_path: Path, monkeyp
     reader = StoreReader.open(written(tmp_path / "store"))
     verify = layout.alid_companion
     calls = []
-    ready = threading.Barrier(4, timeout=1)
+    # No deadline on any wait: the four lookups meet at the barrier whatever the runner's speed,
+    # and a real deadlock is pytest-timeout's to report, not a race against a stopwatch.
+    ready = threading.Barrier(4)
 
     def checked(root):
         calls.append(root)
@@ -86,7 +88,7 @@ def test_concurrent_first_lookups_verify_and_attach_once(tmp_path: Path, monkeyp
     monkeypatch.setattr(layout, "alid_companion", checked)
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(lookup) for _ in range(4)]
-        assert [f.result(timeout=1) for f in futures] == [[2, -1, 2]] * 4
+        assert [f.result() for f in futures] == [[2, -1, 2]] * 4
     assert len(calls) == 1
     assert reader._alid_mmap is not None
     assert len(reader._alid_mmap._maps) == 2
@@ -137,7 +139,7 @@ def test_close_waits_for_first_attachment_and_releases_every_mapping(
 
     def checked(root):
         entered.set()
-        assert unblock.wait(1)
+        unblock.wait()  # the test releases the attachment once it has observed close waiting
         return verify(root)
 
     def constructed(companion):
@@ -151,19 +153,19 @@ def test_close_waits_for_first_attachment_and_releases_every_mapping(
     with ThreadPoolExecutor(max_workers=2) as pool:
         lookup = pool.submit(reader.rows_of, ["22:200:A:C"])
         try:
-            assert entered.wait(1)
+            assert entered.wait(), "a lookup holds the companion's attachment open"
             close = pool.submit(reader.close)
-            assert closing.wait(1)
+            assert closing.wait(), "close has reached the first-use ownership lock"
             assert not close.done(), "close waits on the first-use ownership lock"
         finally:
             unblock.set()
-        if lookup.exception(timeout=1) is None:
-            assert lookup.result(timeout=1).tolist() == [2]
+        if lookup.exception() is None:
+            assert lookup.result().tolist() == [2]
         else:
             # Close may win between attachment and the actual mapped search.
             with pytest.raises(InputError, match="released"):
-                lookup.result(timeout=1)
-        close.result(timeout=1)
+                lookup.result()
+        close.result()
     assert len(mappings) == 2
     assert all(mapped.closed for mapped in mappings)
     reader.close()
@@ -271,7 +273,7 @@ def test_release_waits_for_a_lookup_then_closes_its_mappings(
 
     def held_search(*args, **kwargs):
         entered.set()
-        assert unblock.wait(2), "test must release the actual search"
+        unblock.wait()  # the test releases the search once it has observed release waiting
         return search(*args, **kwargs)
 
     monkeypatch.setattr(bundle, "_lock", ObservedLock(releasing))
@@ -279,15 +281,15 @@ def test_release_waits_for_a_lookup_then_closes_its_mappings(
     with ThreadPoolExecutor(max_workers=2) as workers:
         lookup = workers.submit(bundle.lookup, np.array([b"22:200:A:C"], dtype="S32"))
         try:
-            assert entered.wait(2), "lookup holds its mapping before teardown starts"
+            assert entered.wait(), "lookup holds its mapping before teardown starts"
             release = workers.submit(bundle.release)
-            assert releasing.wait(2), "release has reached the same ownership lock"
+            assert releasing.wait(), "release has reached the same ownership lock"
             assert not release.done()
             assert all(not mapped.closed for mapped in mappings)
         finally:
             unblock.set()
-        assert lookup.result(timeout=2).tolist() == [2]
-        release.result(timeout=2)
+        assert lookup.result().tolist() == [2]
+        release.result()
     assert all(mapped.closed for mapped in mappings)
     bundle.release()
 

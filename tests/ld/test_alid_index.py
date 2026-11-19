@@ -13,9 +13,11 @@ engine's writer pads each key, never from `ogld.store.layout`.
 
 from __future__ import annotations
 
+import atexit
 import csv
 import json
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -177,7 +179,10 @@ WIDTH_ROWS = [
 ABSENT_AT_THE_SLOT = f"22:200:ACGT:{LONG[:20]}"
 
 
-def written(out: Path, rows: list[tuple[str, int, str, str]] = WIDTH_ROWS) -> Path:
+_TEMPLATE: Path | None = None
+
+
+def built(out: Path, rows: list[tuple[str, int, str, str]]) -> Path:
     """A store this file writes: `rows`, at r = 1 on the diagonal and 0 elsewhere."""
     given = table(rows)
     writer = StoreWriter.create(
@@ -195,6 +200,32 @@ def written(out: Path, rows: list[tuple[str, int, str, str]] = WIDTH_ROWS) -> Pa
     return out
 
 
+def _template() -> Path:
+    """`WIDTH_ROWS`' store, built once per test process and copied by every test that reads it.
+
+    A build publishes an ALID companion (ADR 0012), which end to end — the canonical index's
+    arrays, their pins, the payloads and the exact correspondence check before the pointer —
+    costs several times what copying the finished tree does. Only a test whose subject is that
+    publication calls `built` for itself; `test_a_written_store_publishes_its_companion`
+    holds it.
+    """
+    global _TEMPLATE
+    if _TEMPLATE is None:
+        directory = Path(tempfile.mkdtemp(prefix="ogld-alid-store-"))
+        atexit.register(shutil.rmtree, directory, True)
+        _TEMPLATE = built(directory / "store", WIDTH_ROWS)
+    return _TEMPLATE
+
+
+def written(out: Path, rows: list[tuple[str, int, str, str]] | None = None) -> Path:
+    """A store like the one this file writes, at `out`: a copy of the shared one for
+    `WIDTH_ROWS`, and a real build for any other `rows`."""
+    if rows is None:
+        shutil.copytree(_template(), out)
+        return out
+    return built(out, rows)
+
+
 def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) -> None:
     store = written(tmp_path / "store")
     root = zarr.open_group(store, mode="r")
@@ -207,6 +238,38 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
     np.testing.assert_array_equal(np.asarray(root[f"{layout.ALID_INDEX}/row"][:]), rows)
     provenance = StoreReader.open(store).provenance
     assert provenance["counts"]["alids_left_out"] == 2, "both ALIDs wider than the slot"
+
+
+def test_a_written_store_publishes_its_companion(tmp_path: Path) -> None:
+    """ADR 0012's writer publication, on a build of its own (the other tests copy the result).
+
+    The pointer names one generation whose payloads are the canonical index's own bytes, the
+    manifest pins every canonical file, and the exact correspondence rule passes before anything
+    reads the companion: `alid_index.count`, the rule the correspondence is folded into.
+    """
+    store = built(tmp_path / "store", WIDTH_ROWS)
+    root = zarr.open_group(store, mode="r")
+    pointer = json.loads((store / "zarr.json").read_bytes())["attributes"][layout.ALID_MMAP_ATTR]
+    assert pointer == {"generation": pointer["generation"]}, "the pointer names one generation"
+    generation = store / layout.ALID_MMAP / pointer["generation"]
+    assert {path.name for path in generation.iterdir()} == {
+        layout.ALID_MMAP_KEYS,
+        layout.ALID_MMAP_ROWS,
+        layout.ALID_MMAP_MANIFEST,
+    }
+    keys = np.asarray(root[f"{layout.ALID_INDEX}/alid"][:], dtype="u1")
+    rows = np.asarray(root[f"{layout.ALID_INDEX}/row"][:], dtype=layout.ALID_MMAP_ROW_DTYPE)
+    assert (generation / layout.ALID_MMAP_KEYS).read_bytes() == keys.tobytes()
+    assert (generation / layout.ALID_MMAP_ROWS).read_bytes() == rows.tobytes()
+    manifest = json.loads((generation / layout.ALID_MMAP_MANIFEST).read_bytes())
+    assert manifest["count"] == len(rows) == 3
+    assert manifest["sources"] == layout.alid_mmap_sources(store), "every canonical file pinned"
+    assert manifest["payloads"] == {
+        name: layout.file_sha256(generation / name)
+        for name in (layout.ALID_MMAP_KEYS, layout.ALID_MMAP_ROWS)
+    }
+    assert not any(validate(store).values()), "correspondence passes before the pointer is read"
+    assert StoreReader.open(store).rows_of(["22:200:A:C"]).tolist() == [2]
 
 
 def without_companion(store: Path) -> None:

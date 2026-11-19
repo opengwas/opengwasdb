@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from test_alid_index import written
+from test_alid_index import WIDTH_ROWS, built, written
 
 
 @pytest.mark.parametrize("linked_keys", [False, True])
@@ -17,8 +17,6 @@ def test_a_companion_copied_from_identical_metadata_cannot_change_rows(
 ) -> None:
     import shutil
     from unittest.mock import patch
-
-    from test_alid_index import WIDTH_ROWS
 
     from ogld.format import InputError
     from ogld.store import StoreReader, layout
@@ -180,7 +178,8 @@ def test_schema_one_refuses_with_a_rederivation_instruction(tmp_path: Path) -> N
 def test_writer_and_derivation_publish_identical_canonical_bytes(tmp_path: Path) -> None:
     from script_modules import load_script
 
-    store = written(tmp_path / "store")
+    # A build of its own: what is compared is the payloads the writer published at `finish`.
+    store = built(tmp_path / "store", WIDTH_ROWS)
     companion = store / "variants/alid_mmap"
     root = json.loads((store / "zarr.json").read_text())
     pointer = root["attributes"]["alid_mmap"]
@@ -492,7 +491,11 @@ def test_a_noncanonical_builder_never_publishes_a_pointer(
         return count
 
     monkeypatch.setattr(assembly, "_write_alid_payloads", corrupted)
-    publish = load_script("derive_alid_mmap").derive if publication == "derive" else written
+    derive = load_script("derive_alid_mmap").derive
+
+    def publish(out: Path) -> object:
+        return derive(out) if publication == "derive" else built(out, WIDTH_ROWS)
+
     with pytest.raises(InputError, match="companion") as stopped:
         publish(store)
     document = json.loads((store / "zarr.json").read_bytes())
