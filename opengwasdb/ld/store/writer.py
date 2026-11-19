@@ -2,9 +2,9 @@
 
 A producer supplies r and what only its source knows; the store assembly behind this seam
 (`ogld/store/assembly.py`) does the rest (owner, 10 November 2026). That covers quantising at the
-store's encoding, the row lengths, the thresholds at the far code floor and the Partner Floor,
-both directions of the Proxy Index, the counts, the Partner Rows' frames (`ogld/store/frames.py`),
-the provenance a store derives from itself, and validation.
+store's encoding, the row lengths, the thresholds at the far code floor and the Partner Floor, the
+Far Pairs, the counts, the Partner Rows' frames (`ogld/store/frames.py`), the provenance a store
+derives from itself, and validation.
 
 How each producer calls it:
 
@@ -24,8 +24,9 @@ A store is not one until `finish` writes its provenance. A reader refuses a dire
 provenance, so a half-written store cannot be read as a short one. `finish` runs every rule of
 spec §12 on what was written and writes the provenance only when all 27 pass.
 
-What a store holds is `format_version` 0.2.0's: the Near Band, the Proxy Index (until #72 removes
-it), the Far Pairs and, from this ticket, the Partner Rows (partner-rows §5; ADR 0011).
+What a store holds is `format_version` 0.2.0's: the Near Band, the Far Pairs and the Partner Rows
+(partner-rows §5; ADR 0011). It holds no Proxy Index: #72 removed the component, and no array of it
+is written here or read by a reader.
 """
 
 from __future__ import annotations
@@ -148,8 +149,9 @@ class StoreWriter:
         hold anything, NaN included. Any floating dtype is accepted.
 
         It quantises every pair within near_bp at the store's encoding, for the Near Band, and
-        keeps every pair within far_bp whose code reaches the far code floor, for the Proxy
-        Index. It refuses a block that leaves its chromosome and an `r` of another width. It
+        keeps every pair within far_bp whose code reaches the far code floor, for the Far Pairs
+        and the Partner Rows. It refuses a block that leaves its chromosome and an `r` of another
+        width. It
         also refuses an r within a row's far_bp that is not a correlation (NaN, infinite or past
         ±1), naming the pair. So a pair the producer did not measure is refused, never stored
         and never read as a Bound.
@@ -165,9 +167,9 @@ class StoreWriter:
 
         The Near Band's codes are written in whole shards of `near/<chrom>/r`, the rest carried;
         its `indptr` comes from the positions when the chromosome's first cut arrives (spec §4).
-        The Proxy Index is written row by row, both directions: a row is complete once its own
-        cut arrives (spec §5). The counts are added up. When the chromosome's last row arrives,
-        what is carried is written and the chromosome is complete.
+        The Far Pairs are written row by row, each in its earlier row (spec §5); the Partner Rows
+        are framed as their rows complete. The counts are added up. When the chromosome's last
+        row arrives, what is carried is written and the chromosome is complete.
 
         A write that fails — a frame that will not compress, a stream that will not close —
         poisons the writer: the rows are counted as written only after the chromosome closed, and

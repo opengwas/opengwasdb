@@ -5,7 +5,7 @@ Two plans, each a list of cases timed on each target:
 
 - `step1`: the published HGDP+1kGP EUR store (k = 10, layout C). Clumping each of
   opengwas/opengwasdb#403's 37 Analyses' 5e-8 tiers at r² 0.01 and 0.001 within 3 Mb; region
-  matrices 3 Mb and 10 Mb wide, the second reading the Proxy Index rows for its pairs beyond
+  matrices 3 Mb and 10 Mb wide, the second reading the Far Pairs for its pairs beyond
   near_bp (spec §11); a matrix of 500 scattered variants, on chr22 and genome-wide; and proxies
   at r² 0.8 within 10 Mb for 1, 10 and 100 variants.
 - `step2`: EUR chr22 built in each Near Band layout of spec §6 (`build_layouts.py`). Clumping
@@ -91,7 +91,7 @@ Query = Callable[[Any], dict[str, Any]]
 @dataclass
 class Tally:
     """What the client read during one timing: zarr store reads, chunk-cache reads, and the
-    seconds spent loading chromosomes and scattering the Proxy Index into a matrix."""
+    seconds spent loading chromosomes and scattering the Far Pairs into a matrix."""
 
     gets: Counter[str] = field(default_factory=Counter)
     get_bytes: Counter[str] = field(default_factory=Counter)
@@ -265,7 +265,6 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
         (StoreReader, "variants", "variants"),
         (StoreReader, "loci_of", "loci_of"),
         (StoreReader, "partner_row", "partner_row"),
-        (ChunkCache, "prefetch", "prefetch"),
         (clumping, "_component", "greedy"),
         (location, "_counted", "counted"),
     ):

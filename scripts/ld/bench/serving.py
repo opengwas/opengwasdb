@@ -5,8 +5,8 @@ Two measurements, each written as JSON lines to `--out`, and the tables of every
 
 - `memory`: one process opens the five stores, as a worker that serves them would, and records
   its resident memory (`VmRSS` and its peak `VmHWM`, from /proc/self/status) after the opens,
-  after loading every chromosome's positions and `indptr` arrays (Near Band, Proxy Index and
-  Far Pairs: what a long-lived reader keeps, spec §10), and after filling each store's chunk
+  after loading every chromosome's positions and `indptr` arrays (Near Band and Far Pairs: what
+  a long-lived reader keeps, spec §10), and after filling each store's chunk
   cache with 3 Mb regions until it holds 95% of its budget. Each record carries every store's
   cache count beside the process's memory. A store that runs out of regions first stops the run.
 - `lag`: the main thread runs an asyncio event loop, as a web service does, and ticks every

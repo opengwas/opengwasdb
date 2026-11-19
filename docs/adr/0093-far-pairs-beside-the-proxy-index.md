@@ -1,5 +1,13 @@
 # The Far Pairs are their own component again, beside the Proxy Index
 
+> **Status: superseded in part by [ADR 0011](./0011-partner-rows-replace-the-proxy-index.md).**
+> The Proxy Index this decision puts the Far Pairs beside is gone (#72): the Partner Rows hold
+> every entry it held, and `clump` and `proxies` read them. The Far Pairs themselves, their rules
+> and their shape stand exactly as decided here; what no longer holds is decision 3's division of
+> reads (`partners` reading the index at r2 ≥ t_far), decision 5's `far.index`, which went with
+> the index, and every sentence below that speaks of the index in the present tense. This record
+> is kept as written, as the measurement of 12 November 2026 that sent the reads to the Far Pairs.
+
 Issue [#31](https://github.com/opengwas/ogld/issues/31), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 It supersedes the merge of the Far Pairs into the Proxy Index that the owner made on
 8 November 2026, recorded in [ADR 0001](./0001-near-band-and-thresholded-far-pairs.md)'s

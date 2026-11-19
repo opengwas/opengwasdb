@@ -28,6 +28,7 @@ import zarr
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
 
 from ogld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
+from ogld.format.geometry import near_row_lengths
 from ogld.identity import orient
 from ogld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
 
@@ -104,9 +105,11 @@ class Expected:
 @cache
 def expected(chrom: str) -> Expected:
     """One chromosome's arrays, row by row: each later variant's gap and code, from positions.
-    The index is every kept pair in both its rows, sorted by (row, partner); the Far Pairs are
-    the kept pairs beyond near_bp, in the earlier row, row after row; the Partner Rows are every
-    pair at its distance's floor (PARTNER_FLOOR within near_bp, FLOOR beyond it), both ways."""
+    The index is every kept pair in both its rows, sorted by (row, partner), which no store this
+    code writes holds and the migration test writes it into a store built before ADR 0007; the
+    Far Pairs are the kept pairs beyond near_bp, in the earlier row, row after row; the Partner
+    Rows are every pair at its distance's floor (PARTNER_FLOOR within near_bp, FLOOR beyond it),
+    both ways."""
     start, stop = chromosomes()[chrom]
     position = variants().position[start:stop].astype(np.int64)
     r = r_of(chrom)
@@ -282,9 +285,7 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
         e = expected(chrom)
         np.testing.assert_array_equal(root[f"near/{chrom}/indptr"][:], e.near_indptr)
         np.testing.assert_array_equal(root[f"near/{chrom}/r"][:], e.near_r)
-        np.testing.assert_array_equal(root[f"index/{chrom}/indptr"][:], e.index_indptr)
-        np.testing.assert_array_equal(root[f"index/{chrom}/partner"][:], e.partner)
-        np.testing.assert_array_equal(root[f"index/{chrom}/r"][:], e.index_r)
+        assert f"index/{chrom}" not in root, "a store this code writes holds no Proxy Index"
         np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
         np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
         np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
@@ -294,31 +295,34 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
         np.testing.assert_array_equal(written_codes, e.partner_rows_r)
         if shards is not None:
             assert root[f"near/{chrom}/r"].shards == (shards[0][1],)
-            assert root[f"index/{chrom}/partner"].shards == (shards[1][1],)
+            inner, shard = shards[1]
+            count = len(e.far_partner)
+            clipped = -(-count // inner) * inner
+            assert root[f"far/{chrom}/partner"].shards == (min(shard, clipped),)
     every = [expected(c) for c in chromosomes()]
     assert written["counts"] == {
         "near_pairs": sum(len(e.near_r) for e in every),
         "far_candidates": sum(e.far_candidates for e in every),
         "far_pairs": sum(e.far_pairs for e in every),
-        "index_entries": sum(len(e.partner) for e in every),
         "partner_entries": sum(len(e.partner_rows_r) for e in every),
         "alids_left_out": sum(len(a.encode("utf-8")) > 32 for a in variants().alid),
     }
 
 
-def test_an_index_under_one_shard_is_clipped_and_one_over_it_is_whole_shards(
+def test_a_sparse_array_under_one_shard_is_clipped_and_one_over_it_is_whole_shards(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Spec §6: an array shorter than its shard has one shard, clipped to the inner chunks that
-    # cover it; a longer one has whole shards. The index's length is known only at its end.
-    entries = {chrom: len(expected(chrom).partner) for chrom in chromosomes()}
-    shard = 1_024 * (min(entries.values()) // 1_024 + 2)
+    # cover it; a longer one has whole shards. A sparse component's length is known only at its
+    # end.
+    entries = {chrom: len(expected(chrom).far_partner) for chrom in chromosomes()}
+    shard = 1_024 * (min(entries.values()) // 1_024 + 1)
     assert min(entries.values()) < shard < max(entries.values()), "one each side of a shard"
     monkeypatch.setattr(layout, "SIDE", (1_024, shard))
     write_all(create(tmp_path / "s"), 50)
     root = zarr.open_group(tmp_path / "s", mode="r")
     for chrom, count in entries.items():
-        array = root[f"index/{chrom}/partner"]
+        array = root[f"far/{chrom}/partner"]
         want = shard if count >= shard else -(-count // 1_024) * 1_024
         assert (array.shape, array.chunks, array.shards) == ((count,), (1_024,), (want,))
 
@@ -327,7 +331,8 @@ def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Lane #4's design: zarr rewrites a shard without reading it back only when a write covers
-    # it whole, so the band and the index are written a whole shard at a time, the rest carried.
+    # it whole, so the band and the Far Pairs are written a whole shard at a time, the rest
+    # carried.
     monkeypatch.setattr(layout, "NEAR_R", (1_024, 4_096))
     monkeypatch.setattr(layout, "SIDE", (1_024, 4_096))
     writes: list[tuple[str, int, int, int, int]] = []
@@ -341,8 +346,8 @@ def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
 
     monkeypatch.setattr(zarr.Array, "__setitem__", spy)
     write_all(create(tmp_path / "s"), 5)
-    assert len({w[0] for w in writes}) == 10, "every r and partner array must be seen"
-    assert len(writes) > 40, "and many writes to each"
+    assert len({w[0] for w in writes}) == 6, "each chromosome's Near Band and Far Pairs arrays"
+    assert len(writes) > 20, "and many writes to each"
     for path, start, stop, shard, length in writes:
         assert start % shard == 0, (path, start)
         assert (stop - start) % shard == 0 or stop == length, (path, start, stop)
@@ -403,9 +408,11 @@ def test_the_writer_holds_a_window_of_the_chromosome_not_the_chromosome(
 
 
 def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path) -> None:
-    # A store written before ADR 0007 gains its Far Pairs from its own index (ogld#31). chr22
-    # holds a kept pair exactly near_bp apart: in the index, and not a Far Pair. So deriving at
-    # any other edge than the one the store writes by fails here (review of #31).
+    # A store written before ADR 0007 gains its Far Pairs from its own index (ogld#31). No store
+    # this code writes holds one (#72), so the test writes the index brute force into the store,
+    # as the old one held it. chr22 holds a kept pair exactly near_bp apart: in the index, and
+    # not a Far Pair. So deriving at any other edge than the one the store writes by fails here
+    # (review of #31).
     writer = create(tmp_path / "s")
     write_all(writer, 100_000)
     writer.finish(sourced())
@@ -416,6 +423,14 @@ def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path
     assert len(lo), "chr22 must hold a pair exactly near_bp apart for this to mean anything"
     assert (np.abs(codes_at(r_of("22")[lo, hi])) >= FLOOR).any(), "and it must reach the floor"
     shutil.rmtree(tmp_path / "s" / "far")
+    for chrom in chromosomes():
+        e = expected(chrom)
+        index = root.require_group(f"index/{chrom}")
+        layout.put_numbers(index, "indptr", e.index_indptr, layout.INT64_FILL)
+        layout.put_numbers(index, "partner", e.partner.astype(np.int32), layout.PARTNER_FILL)
+        layout.new_r_array(index, "r", len(e.index_r), layout.SIDE, REncoding(R_SCALE))[:] = (
+            e.index_r.astype(np.int16)
+        )
     for chrom, (start, stop) in chromosomes().items():
         here = variants().position[start:stop].astype(np.int64)
         index, far = root[f"index/{chrom}"], root.require_group(f"far/{chrom}")
@@ -463,17 +478,11 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
     expected = {
         "near/1/indptr": [0, 0, 0, 0],
         "near/1/r": [],
-        "index/1/indptr": [0, 2, 3, 4],
-        "index/1/partner": [1, 2, 0, 0],
-        "index/1/r": [one, three, one, three],
         "far/1/indptr": [0, 2, 2, 2],
         "far/1/partner": [1, 2],
         "far/1/r": [one, three],
         "near/2/indptr": [0, 0],
         "near/2/r": [],
-        "index/2/indptr": [0, 0],
-        "index/2/partner": [],
-        "index/2/r": [],
         "far/2/indptr": [0, 0],
         "far/2/partner": [],
         "far/2/r": [],
@@ -485,7 +494,6 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
         "far_candidates": 3,
         "far_pairs": 2,
         "partner_entries": 4,
-        "index_entries": 4,
         "alids_left_out": 0,
     }
 
@@ -607,16 +615,21 @@ def test_a_near_band_closed_short_of_its_codes_is_refused(tmp_path: Path) -> Non
         stream.close()
 
 
-def test_a_proxy_index_closed_with_rows_not_written_is_refused(tmp_path: Path) -> None:
-    from ogld.store.assembly import ProxyIndexStream
-
+def test_a_partner_rows_stream_closed_with_rows_not_written_is_refused(tmp_path: Path) -> None:
     writer = create(tmp_path / "s")
     first, r = first_block("21", 10)
     cut = writer.cut(first, r)
     assert (cut.hi >= 10).any(), "the block must carry a pair whose later row is to come"
-    group = zarr.open_group(tmp_path / "g", mode="w")
-    stream = ProxyIndexStream(group, 20, REncoding(R_SCALE))
-    stream.add(cut)
+    start, _ = chromosomes()["21"]
+    position = variants().position[start : start + 20].astype(np.int64)
+    stream = assembly.PartnerRowsStream(
+        zarr.open_group(tmp_path / "g", mode="w"),
+        "21",
+        near_row_lengths(position, NEAR_BP),
+        REncoding(R_SCALE),
+        PARTNER_FLOOR,
+    )
+    stream.add(cut.rows, cut.near, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
     with pytest.raises(ValueError, match="rows not written"):
         stream.close()
 
@@ -824,8 +837,8 @@ def test_cuts_never_change_with_the_threads_that_made_them(tmp_path: Path) -> No
     write_all(one, 5, threads=1)
     write_all(four, 5, threads=4)
     for chrom in chromosomes():
-        for name in ("near", "index"):
-            for array in ("indptr", "r"):
+        for name, arrays in (("near", ("indptr", "r")), ("far", ("indptr", "partner", "r"))):
+            for array in arrays:
                 a = zarr.open_array(tmp_path / "one" / name / chrom / array, mode="r")
                 b = zarr.open_array(tmp_path / "four" / name / chrom / array, mode="r")
                 np.testing.assert_array_equal(a[:], b[:])

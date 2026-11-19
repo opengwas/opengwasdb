@@ -1,12 +1,13 @@
 """The Far Pairs beside the Proxy Index (ogld#31; spec §5, §8, §10; ADR 0007).
 
 Each chromosome's `far/<chrom>/` holds its pairs more than near_bp and at most far_bp apart whose
-code reaches the far code floor, once each, in the earlier variant's row: exactly the Proxy
-Index's entries beyond near_bp, in their earlier rows. `matrix` and `region` read those pairs
-from the Far Pairs and never from the index, which `proxies` and `clump` keep reading.
+code reaches the far code floor, once each, in the earlier variant's row: the pairs a Proxy Index
+held beyond near_bp, in their earlier rows. `matrix` and `region` read those pairs from the Far
+Pairs alone; from #72 no store holds an index at all, and a store that still carries a leftover
+one answers the same (spec §12).
 
-Every expected value here is read from the store's own arrays with zarr, or is the answer the
-committed Test Store gives with its Proxy Index whole; never the reader's far part.
+Every expected value here is read from the store's own arrays with zarr, from the Test Panel's
+reference r, or is the answer the committed Test Store gives; never the reader's far part.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ from script_modules import load_script
 from store_copies import TEST_STORE, copy_store, resharded
 
 import ogld
-from ogld.store import StoreReader
+from ogld.format import REncoding
+from ogld.format.geometry import near_pair_of
+from ogld.store import StoreReader, layout
 
 #: Inner chunks of 512 elements, 4 to a shard, as `test_store_reads.py` re-shards the Test Store.
 INNER, PER_SHARD = 512, 4
@@ -52,31 +55,60 @@ def rows_of(store: Path, kind: str, chrom: str) -> _Pairs:
     return owner, partner, np.asarray(group["r"][:]).astype(np.int64)
 
 
-def index_far_half(store: Path, chrom: str, start: int, stop: int) -> _Pairs:
-    """The Proxy Index's entries more than near_bp apart, in each pair's earlier row."""
-    near_bp = provenance(store)["near_bp"]
-    assert isinstance(near_bp, int)
-    position = np.asarray(zarr.open_array(store / "variants" / "position", mode="r")[start:stop])
-    owner, partner, code = rows_of(store, "index", chrom)
-    gap = position[partner].astype(np.int64) - position[owner]
-    far = (partner > owner) & (np.abs(gap) > near_bp)
-    return owner[far], partner[far], code[far]
+def write_a_proxy_index(store: Path) -> None:
+    """Give `store` the Proxy Index a store written before #72 held, rebuilt from its own Near
+    Band and Far Pairs: every pair within far_bp at the far code floor, both ways, ascending by
+    (row, partner). No store this package writes has one; it is the input `derive_far_pairs`
+    migrates, which `without_far_pairs` below hands it."""
+    floor = int(str(provenance(store)["far_code_floor"]))
+    far_bp = int(str(provenance(store)["far_bp"]))
+    encoding = REncoding.of(provenance(store)["encoding"])
+    root = zarr.open_group(store, mode="r+")
+    for chrom, start, stop in chromosomes(store):
+        rows = stop - start
+        position = np.asarray(root["variants/position"][start:stop], dtype=np.int64)
+        indptr = np.asarray(root[f"near/{chrom}/indptr"][:], dtype=np.int64)
+        codes = np.asarray(root[f"near/{chrom}/r"][:])
+        at = np.flatnonzero(np.abs(codes.astype(np.int64)) >= floor)
+        lo, hi = near_pair_of(indptr, at)
+        owner = [lo.astype(np.int64)]
+        partner = [hi.astype(np.int64)]
+        keeper = [codes[at].astype(np.int64)]
+        far_owner, far_partner, far_code = rows_of(store, "far", chrom)
+        owner += [far_owner, far_partner]
+        partner += [far_partner, far_owner]
+        keeper += [far_code, far_code]
+        owner_a = np.concatenate(owner)
+        partner_a = np.concatenate(partner)
+        code_a = np.concatenate(keeper)
+        assert np.abs(position[partner_a] - position[owner_a]).max() <= far_bp, (
+            "every index entry is within far_bp"
+        )
+        order = np.lexsort((partner_a, owner_a))
+        counts = np.bincount(owner_a, minlength=rows)
+        group = root.create_group(f"index/{chrom}")
+        layout.put_numbers(group, "indptr", np.concatenate([[0], np.cumsum(counts)]), -1)
+        layout.put_numbers(group, "partner", partner_a[order].astype(np.int32), -1)
+        codes_of = code_a[order].astype(encoding.dtype)
+        layout.new_r_array(group, "r", len(order), layout.SIDE, encoding)[:] = codes_of
 
 
 # ------------------------------------------------------------------ what the store holds
 
 
-def test_the_test_store_holds_the_index_s_far_pairs_once_each() -> None:
+def test_the_test_store_holds_its_far_pairs_once_each_and_at_the_floor() -> None:
     counts = provenance(TEST_STORE)["counts"]
     assert isinstance(counts, dict)
     assert counts["far_pairs"] > 0, "the Test Store must hold Far Pairs for this to mean anything"
     held = 0
-    for chrom, start, stop in chromosomes(TEST_STORE):
+    for chrom, start, _ in chromosomes(TEST_STORE):
         owner, partner, code = rows_of(TEST_STORE, "far", chrom)
-        want = index_far_half(TEST_STORE, chrom, start, stop)
-        np.testing.assert_array_equal(owner, want[0], err_msg=chrom)
-        np.testing.assert_array_equal(partner, want[1], err_msg=chrom)
-        np.testing.assert_array_equal(code, want[2], err_msg=chrom)
+        position = np.asarray(zarr.open_array(TEST_STORE / "variants" / "position", mode="r"))
+        near_bp = int(str(provenance(TEST_STORE)["near_bp"]))
+        gap = position[start + partner].astype(np.int64) - position[start + owner]
+        assert (np.abs(gap) > near_bp).all(), "a Far Pair is beyond near_bp"
+        assert (np.abs(code) >= int(str(provenance(TEST_STORE)["far_code_floor"]))).all()
+        assert (partner > owner).all(), "each in its earlier row"
         held += len(owner)
     assert held == counts["far_pairs"], "each Far Pair once, as provenance counts them"
 
@@ -105,13 +137,15 @@ def far_stored(m: ogld.LDMatrix) -> int:
     return int(((m.kinds() == "stored") & (gap > 3_000_000)).sum()) // 2
 
 
-def test_a_matrix_and_a_region_read_far_pairs_from_the_far_pairs_alone(
+def test_a_matrix_and_a_region_answer_alike_from_a_store_holding_a_leftover_index(
     small_chunks: Path, tmp_path: Path
 ) -> None:
-    # Every Proxy Index chunk lost, so a read of any index entry is refused (spec §6): a matrix
-    # and a region still answer, exactly as the store with its index whole does.
-    copy = tmp_path / "no-index-entries"
+    # A 0.2.0 store derived before #72 still holds `index/`. Nothing reads it (spec §12), so a
+    # matrix and a region answer exactly as the store without one does — even when every entry
+    # of it is gone, which a read would have to refuse (spec §6).
+    copy = tmp_path / "leftover-index"
     shutil.copytree(small_chunks, copy)
+    write_a_proxy_index(copy)
     lost = 0
     for chrom, _, _ in chromosomes(copy):
         for name in ("partner", "r"):
@@ -129,12 +163,17 @@ def test_a_matrix_and_a_region_read_far_pairs_from_the_far_pairs_alone(
         np.testing.assert_array_equal(plain.region(chrom, centre, radius).r, region.r)
 
 
-def test_a_matrix_fetches_far_chunks_and_no_index_chunk(small_chunks: Path) -> None:
-    # Counted at the chunk cache, which keeps every chunk it fetched at its default budget.
-    reader = StoreReader.open(small_chunks)
+def test_a_matrix_fetches_far_chunks_and_no_proxy_index_chunk(small_chunks: Path) -> None:
+    # Counted at the chunk cache, which keeps every chunk it fetched at its default budget. The
+    # copy holds a leftover index, so a read of it would be seen here as a fetched chunk.
+    copy = small_chunks.parent / "with-index"
+    if not copy.exists():
+        shutil.copytree(small_chunks, copy)
+        write_a_proxy_index(copy)
+    reader = StoreReader.open(copy)
     rows = np.arange(reader.provenance["n_variants"])
     reader.pair_r(rows)
-    for _, start, stop in chromosomes(small_chunks):
+    for _, start, stop in chromosomes(copy):
         reader.region_r(start, stop)
     # The cache keeps shard indexes beside the chunks since ogld#32; only chunks name an array.
     fetched = {key[0] for key in reader._cache._kept if isinstance(key, tuple)}
@@ -159,8 +198,10 @@ def files(store: Path, under: str = "") -> dict[str, bytes]:
 
 
 def without_far_pairs(to: Path) -> Path:
-    """A copy of the Test Store as a store written before ADR 0007 holds it: no far/."""
+    """A copy of the Test Store as a store written before ADR 0007 holds it: its Proxy Index,
+    which no store this code writes has, and no far/."""
     copy = copy_store(to)
+    write_a_proxy_index(copy)
     shutil.rmtree(copy / "far")
     return copy
 

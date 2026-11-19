@@ -130,11 +130,14 @@ def resharded(to: Path, inner: int, per_shard: int) -> Path:
 
 
 def unpartnered(to: Path) -> Path:
-    """A copy of the committed Test Store as it was before its Partner Rows: `partners/` removed
-    and the four keys that describe them dropped, format 0.1.0 (partner-rows §6.2, §13).
+    """A copy of the committed Test Store as the published 0.1.0 stores are: `partners/` absent,
+    the four keys that describe it dropped, and the Proxy Index a 0.1.0 store holds with its
+    `counts.index_entries` (partner-rows §6.2, §13; ld-store §13).
 
     It is what `ogld derive-partners` derives into, so a test holds the derived component against
-    the committed one — the build's — byte for byte.
+    the committed one — the build's — byte for byte, and `--drop-index` has something to remove.
+    The index's arrays are empty placeholders: nothing reads a Proxy Index since #72, and a test
+    that reads one is testing the component this fixture stands for, not its data.
     """
     copy_store(to)
     shutil.rmtree(to / "partners")
@@ -143,9 +146,32 @@ def unpartnered(to: Path) -> Path:
     counts = dict(recorded["counts"])
     software = dict(recorded["software"])
     counts.pop("partner_entries", None)
+    counts["index_entries"] = 36_476
     software.pop("zstd", None)
     recorded.update({"format_version": "0.1.0", "counts": counts, "software": software})
     for key in ("t_partner", "partner_code_floor"):
         recorded.pop(key, None)
     root.attrs.update({"ld_store": recorded})
+    for entry in root["variants"].attrs["chromosomes"]:
+        rows = entry["row_stop"] - entry["row_start"]
+        group = root.create_group(f"index/{entry['name']}")
+        group.create_array(
+            "indptr",
+            shape=(rows + 1,),
+            dtype=np.int64,
+            chunks=(max(1, rows + 1),),
+            shards=(max(1, rows + 1),),
+            compressors=[ZstdCodec(level=3)],
+            fill_value=-1,
+        )[:] = np.zeros(rows + 1, dtype=np.int64)
+        for name, dtype, fill in (("partner", np.int32, -1), ("r", np.int16, -32768)):
+            group.create_array(
+                name,
+                shape=(0,),
+                dtype=dtype,
+                chunks=(1,),
+                shards=(1,),
+                compressors=[ZstdCodec(level=3)],
+                fill_value=fill,
+            )
     return to

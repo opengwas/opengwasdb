@@ -19,7 +19,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import zarr
-from store_copies import TEST_STORE
+from store_copies import FLOOR, TEST_STORE
 
 from ogld.store import frames
 
@@ -120,25 +120,32 @@ def test_every_row_is_the_near_band_and_the_far_pairs_at_their_floors(chrom: str
 
 
 @pytest.mark.parametrize("chrom", CHROMOSOMES)
-def test_the_partner_rows_hold_every_proxy_index_entry(chrom: str) -> None:
-    # t_partner is never above t_far, so the index is the Partner Rows thresholded at the far code
-    # floor: every index entry, with its own code, is an entry here (partner-rows §3).
+def test_the_partner_rows_hold_every_entry_a_proxy_index_held(chrom: str) -> None:
+    # t_partner is never above t_far, so every entry the Proxy Index held is an entry here: the
+    # Near Band's pairs at the far code floor, and the Far Pairs, each with its own code, both
+    # ways (partner-rows §3; ADR 0011, D1). No store holds an index since #72, so the set is
+    # built from the two components the index held (#72): a second reading of the same codes,
+    # not the emitter's selection.
     group = store()
-    index = group["index"][chrom]
-    indptr = np.asarray(index["indptr"][:], dtype=np.int64)
-    rows = np.repeat(np.arange(len(indptr) - 1, dtype=np.int64), np.diff(indptr))
+    near_lo, near_hi, near_codes = near_pairs(group, chrom)
+    far_lo, far_hi, far_codes = far_pairs(group, chrom)
+    at_floor = np.abs(near_codes.astype(np.int64)) >= FLOOR
     held = set(
         zip(
-            rows.tolist(),
-            np.asarray(index["partner"][:]).tolist(),
-            np.asarray(index["r"][:]).tolist(),
+            np.concatenate([near_lo[at_floor], near_hi[at_floor], far_lo, far_hi]).tolist(),
+            np.concatenate([near_hi[at_floor], near_lo[at_floor], far_hi, far_lo]).tolist(),
+            np.concatenate(
+                [near_codes[at_floor], near_codes[at_floor], far_codes, far_codes]
+            ).tolist(),
             strict=True,
         )
     )
-    assert len(held) > 1_000, "the Test Store must hold a Proxy Index for this to mean anything"
+    assert len(held) > 1_000, "the Test Store must hold many entries for this to mean anything"
     mine = decoded(group, chrom)
     here = set(zip(mine[0].tolist(), mine[1].tolist(), mine[2].tolist(), strict=True))
-    assert held <= here, f"{len(held - here)} index entries are not in the Partner Rows"
+    assert held <= here, (
+        f"{len(held - here)} entries a Proxy Index held are not in the Partner Rows"
+    )
 
 
 def test_the_store_says_its_partner_threshold_and_its_floor() -> None:

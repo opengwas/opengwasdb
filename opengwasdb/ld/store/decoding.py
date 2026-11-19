@@ -2,7 +2,7 @@
 
 This module owns codec recognition, shard/frame parsing, decoded-buffer ownership and the
 single executor shared by local range I/O and decoding. Location owns transport wrapping,
-cache accounting, prefetch planning and byte credits; this backend never chooses those limits.
+cache accounting and the bound on bytes in flight; this backend never chooses those limits.
 """
 
 from __future__ import annotations
@@ -110,12 +110,6 @@ class NumericDecoder:
                 if fetched is not None:
                     await self.decode(fetched.to_bytes(), lo, chunks, out)
         return [self.owned(array, first + k, chunk) for k, chunk in enumerate(out)]
-
-    def ranges(
-        self, index: bytes, keys: npt.NDArray[np.int64], *, gap: int
-    ) -> Iterator[tuple[int, int, _ChunkRanges]]:
-        """Validate an index and locate selected chunks; the caller chooses coalescing policy."""
-        return _byte_runs(self._index(index)[keys], gap=gap)
 
     def owned(
         self, array: zarr.Array[Any], k: int, chunk: npt.NDArray[Any] | None
@@ -261,10 +255,9 @@ def _endian(codec: Any) -> Literal["<", ">"]:
 
 def _byte_runs(
     entries: npt.NDArray[np.uint64],
-    *,
-    gap: int = 0,
 ) -> Iterator[tuple[int, int, _ChunkRanges]]:
-    """Coalesce physical ranges, reading intervening bytes only within the caller's gap."""
+    """Coalesce physically adjacent ranges: one range per run of neighbouring chunks, each
+    yielding the bytes between its chunks and no others."""
     absent = np.iinfo(np.uint64).max
     chunks = sorted(
         ((k, int(a), int(b)) for k, (a, b) in enumerate(entries) if (a, b) != (absent, absent)),
@@ -273,7 +266,7 @@ def _byte_runs(
     run: _ChunkRanges = []
     lo, hi = 0, 0
     for k, start, length in chunks:
-        if run and _split_range(lo, hi, start, length, gap):
+        if run and _split_range(hi, start):
             yield lo, hi, run
             run = []
         if not run:
@@ -284,5 +277,7 @@ def _byte_runs(
         yield lo, hi, run
 
 
-def _split_range(lo: int, hi: int, start: int, length: int, gap: int) -> bool:
-    return start > hi + gap or bool(gap and start + length - lo > 1 << 24)
+def _split_range(hi: int, start: int) -> bool:
+    """Whether a run ending at `hi` must be cut before a chunk at `start`: a run is neighbouring
+    chunks only, so bytes between two of them are not read to join them."""
+    return start > hi

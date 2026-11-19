@@ -39,11 +39,12 @@ def test_the_validation_rules_are_spec_section_12_s_in_order() -> None:
     assert tuple(rules) == fmt.VALIDATION_RULES
 
 
-def test_the_far_pairs_have_the_five_rules_section_11_named() -> None:
+def test_the_far_pairs_have_the_four_rules_section_11_named() -> None:
     # The Far Pairs are their own component again (ADR 0007): the four far.* rules spec §11
-    # named before the merge, and far.index, holding them equal to the index's far entries.
+    # named before the merge. `far.index` held them equal to the Proxy Index's far entries, and
+    # went with the index (#72).
     far = [rule for rule in fmt.VALIDATION_RULES if rule.startswith("far.")]
-    assert far == ["far.rows", "far.codes", "far.distance", "far.threshold", "far.index"]
+    assert far == ["far.rows", "far.codes", "far.distance", "far.threshold"]
 
 
 def test_no_key_names_pca_settings() -> None:

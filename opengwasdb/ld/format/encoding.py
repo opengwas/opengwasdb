@@ -30,8 +30,8 @@ T_FAR_Q: Final = 20.84
 T_FAR_MIN: Final = 0.001
 
 #: The builder's distances (ADR 0001): the Near Band is complete up to NEAR_BP, and the
-#: Proxy Index reaches FAR_BP. A store records the distances it measured (spec §7) and
-#: readers use those, never these.
+#: Far Pairs and Partner Rows reach FAR_BP. A store records the distances it measured (spec §7)
+#: and readers use those, never these.
 NEAR_BP: Final = 3_000_000
 FAR_BP: Final = 10_000_000
 
@@ -172,8 +172,8 @@ class REncoding:
     def far_code_floor(self, t_far: float) -> int:
         """The smallest code c ≥ 0 with (c / scale)² ≥ t_far, in float64 (spec §3).
 
-        A pair more than `near_bp` apart is in the Proxy Index exactly when |code| reaches
-        it, which is the same as r̂² ≥ t_far. Computed from an estimate and then stepped to
+        A pair more than `near_bp` apart is a Far Pair exactly when |code| reaches it, which is
+        the same as r̂² ≥ t_far. Computed from an estimate and then stepped to
         the exact boundary, because the float64 comparison, not the real-number one, is the
         rule.
         """

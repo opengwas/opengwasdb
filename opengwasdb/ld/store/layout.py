@@ -77,7 +77,7 @@ FRAMES_INDEX_FILL: Final = int(np.iinfo(np.uint64).max)
 
 
 def never_data(path: str, values: npt.ArrayLike) -> npt.NDArray[np.bool_]:
-    """Where `values` of the array at `path`, such as `index/22/partner`, are ones no valid LD
+    """Where `values` of the array at `path`, such as `far/22/partner`, are ones no valid LD
     Store holds there (spec §2–§6). The array's kind is its name, the path's last component.
 
     Each array's fill value must be such a value, because a chunk the store lost reads as its

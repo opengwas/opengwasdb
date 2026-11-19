@@ -7,9 +7,9 @@ and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
-nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch;
-its Proxy Index's `indptr` only when the index is used, and its Far Pairs' `indptr` when a
-request needs pairs beyond near_bp. Each is kept. Every other read goes through `ChunkCache`,
+nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch,
+and its Far Pairs' `indptr` when a request needs pairs beyond near_bp. Each is kept. Every
+other read goes through `ChunkCache`,
 which fetches only the inner chunks holding the elements a request needs, from disk or over
 HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
 
@@ -19,19 +19,20 @@ rather than decode it: a lost Near Band chunk is a refusal, never a run of r = 0
 
 From format 0.2.0 a variant's Partner Rows row is a read of its own (`partner_row`; partner-rows
 §7): one frame's byte range out of `partners/<chrom>/frames`, one decode, and the row's slice of
-the decoded frame, which the reader's frame cache keeps. It reads no Near Band chunk, no Proxy
-Index entry and no shard index, and a store that holds no Partner Rows is refused naming the
-component.
+the decoded frame, which the reader's frame cache keeps. It reads no Near Band chunk and no shard
+index, and a store that holds no Partner Rows is refused naming the component.
+
+No read here opens a Proxy Index: format 0.2.0 stores hold none (#72), and a 0.2.0 store that
+still carries a leftover `index/` answers exactly as one without it does (spec §12).
 """
 
 from __future__ import annotations
 
-import math
 import os
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from functools import cached_property, partial
+from functools import cached_property
 from typing import Any, Final, cast
 
 import numpy as np
@@ -44,7 +45,6 @@ from ogld.format import (
     InputError,
     Provenance,
     REncoding,
-    judge_window,
     release_of,
 )
 from ogld.format.geometry import (
@@ -68,18 +68,15 @@ from ogld.store import layout
 from ogld.store.frames import FrameCache, PartnerFrames, open_partner_frames
 from ogld.store.layout import chromosomes_listed, never_data, refused_if_lost, shown_fill
 from ogld.store.location import ChunkCache, open_group
-from ogld.store.tables import Partners, Variants
+from ogld.store.tables import Variants
 
 #: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
 #: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
 _CHROMOSOME_ARRAYS: Final = (
     ("near", "indptr"),
     ("near", "r"),
-    ("index", "indptr"),
-    ("index", "partner"),
-    ("index", "r"),
 )
-#: A sparse component's arrays, `index/<chrom>/` and `far/<chrom>/` alike (spec §5).
+#: A sparse component's arrays, as `far/<chrom>/` holds them (spec §5).
 _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 #: The variant table's columns (spec §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
@@ -106,8 +103,8 @@ def _index_pays(count: int, entries: int) -> bool:
 
 @dataclass(frozen=True)
 class _Sparse:
-    """A sparse component: handles opened and fill-checked together, indptr loaded only on
-    use. Below t_far, clumping must not pay to decode an index it never reads (ogld#40)."""
+    """A sparse component, the Far Pairs: handles opened and fill-checked together, indptr loaded
+    only on use, so a request that needs no far pair decodes nothing of it (ogld#40)."""
 
     source: zarr.Array[Any]
     cache: ChunkCache
@@ -124,10 +121,9 @@ class _Loci:
     """One chromosome's Variant Set rows and positions, and nothing of its LD components (#71).
 
     A query that reads only the Partner Rows still needs each hit's chromosome, position and ALID
-    to order it and measure distances, and must not read `near/<chrom>/indptr` or open the Proxy
-    Index's arrays to get them (partner-rows §8; ld-store §10). This is that much, from
-    `variants/position` alone; `_Chromosome` is it plus the Near Band and the Proxy Index, for the
-    reads that resolve stored pairs.
+    to order it and measure distances, and must not read `near/<chrom>/indptr` to get them
+    (partner-rows §8; ld-store §10). This is that much, from `variants/position` alone;
+    `_Chromosome` is it plus the Near Band, for the reads that resolve stored pairs.
     """
 
     name: str
@@ -147,7 +143,6 @@ class _Chromosome:
     position: npt.NDArray[np.int64]
     near_indptr: npt.NDArray[np.int64]
     near_r: zarr.Array[Any]
-    index: _Sparse
 
 
 @dataclass(frozen=True)
@@ -535,8 +530,8 @@ class StoreReader:
 
         Pairs within near_bp come from the Near Band, resolved as `r_of_pairs` resolves
         them; farther ones from the Far Pairs rows of the listed variants, each pair whose
-        partner is listed scattered into the matrix, rather than searched for pair by pair. No
-        Proxy Index entry is read (ADR 0007).
+        partner is listed scattered into the matrix, rather than searched for pair by pair
+        (ADR 0007).
         The diagonal is 1. Every pair the store does not hold, the Bound and Not Measured
         alike, is NaN. The matrix is written in place, so `matrix` holds one float64 copy of
         its result (ogld#14); a row asked for twice is copied from its first.
@@ -558,97 +553,6 @@ class StoreReader:
         out[repeat] = out[source[repeat]]
         out[:, repeat] = out[:, source[repeat]]
         return out
-
-    def clump_warmer(
-        self, rows: npt.NDArray[np.int64], *, r2: float, window_bp: float
-    ) -> Callable[[np.int64], None]:
-        """Warm candidate chunks together; oversized chromosomes use positional windows.
-
-        The reader owns candidate geometry and selection of the stored part. Warming is
-        optional: a missed chunk still goes through the ordinary bounded read (ADR 0009).
-
-        **No query calls this since #71**: `clump` reads the Partner Rows and its own frame
-        cache, so the Near Band's warm windows warm nothing a clump reads. It is kept, tested
-        and unused until #72 removes it with the Near Band partner reads it serves.
-        """
-        if r2 >= self._provenance["t_far"] or not len(rows) or self.cache_bytes == 0:
-            return lambda row: None
-        c, _ = next(self._by_chromosome(rows))
-        local = np.unique(local_rows(rows, c.start))
-        reach = math.floor(window_bp)
-        if self._prefetch_hits(c, local, reach):
-            return lambda row: None
-        return _ClumpWindows(self, c, local, reach).warm
-
-    def _prefetch_hits(self, c: _Chromosome, local: npt.NDArray[np.int64], reach: int) -> bool:
-        if len(local) < 2:
-            return True
-        stop = stop_within(c.position[local], reach)
-        at = np.flatnonzero(stop > np.arange(len(local)) + 1)
-        first = near_address(c.near_indptr, local[at], local[at + 1])
-        length = local[stop[at] - 1] - local[at + 1] + 1
-        return self._cache.prefetch(c.near_r, first, length)
-
-    def partners(
-        self,
-        rows: npt.NDArray[np.int64],
-        *,
-        r2: float,
-        window_bp: float,
-        among: npt.NDArray[np.int64] | None = None,
-    ) -> Partners:
-        """Each of `rows`' partners at r̂² ≥ r2 within `window_bp`, both sides, with their
-        Stored r and distance (spec §9, §10; ogld#14): the one read `proxies` and `clump` share.
-
-        A partner is another variant on the row's chromosome with distance d ≤ window_bp and
-        r̂² ≥ r2, judged on the Stored r in float64 (§3); never the row itself. Row i's
-        partners are `partner[indptr[i]:indptr[i + 1]]`, ascending, with `r` and `distance`
-        at the same offsets. Both edges are inclusive, as `proxies` asks; `clump` narrows them
-        to its own, r̂² > r2 and d < W, because the edges are each query's (§9), not the
-        reader's. `among`, ascending distinct global rows, keeps only the partners in it:
-        `clump` passes the hits still unclumped, so it resolves only the pairs it needs.
-
-        A request `ogld.format.judge_window` refuses is refused here, by it, with its
-        `Refusal`: a window past far_bp, or past near_bp below t_far, where a short answer would
-        read as a complete one (§9). The reader never decides that rule itself. Of an answered
-        window it chooses the stored part, so no query branches on t_far:
-
-        - r2 ≥ t_far: each row's Proxy Index row, both sides in one piece, and no Near Band
-          chunk. The index holds every pair within far_bp at r̂² ≥ t_far (§5), so it misses
-          none.
-        - r2 < t_far: the Near Band alone, which holds every pair within near_bp (§4). Without
-          `among`, each row's Near Band row up to the window and its column within it; with
-          `among`, one element of `near/<c>/r` per pair of a row and a member of `among` within
-          the window, and nothing else.
-
-        Memory: 48 bytes per kept entry, its partner, r and distance held once as read and
-        once in the result while they are put in order. Beside them, one block at a time as
-        it is read and judged: at most `_PAIRS_PER_STEP` entries (or one row's, if more) of at
-        most 72 bytes each, measured at 30 for the index and 53–70 for the Near Band, and some
-        600 bytes of bookkeeping a block. `tests/test_partner_reads.py` holds the bound.
-        """
-        p = self._provenance
-        judge_window(
-            r2=r2, window_bp=window_bp, t_far=p["t_far"], near_bp=p["near_bp"], far_bp=p["far_bp"]
-        ).raise_if_refused()
-        index = r2 >= p["t_far"]
-        # d ≤ W is d ≤ ⌊W⌋ for a whole d; the window is answered, so ⌊W⌋ is within the part.
-        reach = math.floor(window_bp)
-        listed = None if among is None else self._listed(among)
-        part = self._part(index=index, reach=reach, listed=listed)
-        return self._gather(rows, part, partial(_judged, r2=r2, reach=reach, listed=listed))
-
-    def _part(
-        self, *, index: bool, reach: int, listed: npt.NDArray[np.int64] | None
-    ) -> tuple[_Read, _Estimate]:
-        """The stored part `partners` reads, with its estimate of each row's entries: the
-        Proxy Index rows, the Near Band rows and columns, or the Near Band pairs with a list."""
-        if index:
-            return self._index_entries, _index_length
-        estimate = partial(_window_rows, reach=reach)
-        if listed is None:
-            return partial(self._band_entries, reach=reach), estimate
-        return partial(self._listed_entries, reach=reach, listed=listed), estimate
 
     def r_of_pairs(
         self, first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
@@ -721,23 +625,6 @@ class StoreReader:
                 out[i + 1 : i + 1 + len(r), i] = r
         self._scatter_far(c, _Placed(local, np.arange(len(local), dtype=np.int64), out))
         return out
-
-    def index(self, rows: npt.NDArray[np.int64]) -> Partners:
-        """Each row's Proxy Index entries: every partner within far_bp, either side, with
-        r̂² ≥ t_far, and its Stored r (spec §5). One sparse row per variant (§10). The stored
-        part as it is: no query calls it, `partners` chooses it."""
-        return self._gather(rows, (self._index_entries, _index_length))
-
-    def band(self, rows: npt.NDArray[np.int64]) -> Partners:
-        """Each row's Near Band partners on both sides, with their Stored r (spec §4, §10).
-
-        The downstream half is the row; the upstream half is a column, one element in
-        each row of the preceding near_bp. It is the slow read the Proxy Index exists to
-        avoid. The stored part as it is: no query calls it, `partners` chooses it.
-        """
-        near_bp = self._provenance["near_bp"]
-        part = (partial(self._band_entries, reach=near_bp), partial(_window_rows, reach=near_bp))
-        return self._gather(rows, part)
 
     # ------------------------------------------------------------ partner rows
 
@@ -926,98 +813,6 @@ class StoreReader:
         partner = self._read(part.partner, coords).astype(np.int64)
         return partner, self._read(part.r, coords), length
 
-    # ------------------------------------------------------------ partners
-
-    def _index_entries(self, c: _Chromosome, local: npt.NDArray[np.int64]) -> _RowEntries:
-        """Each local row's Proxy Index row: lengths, partners and Stored r (spec §5)."""
-        partner, codes, length = self._rows(c.index, local)
-        return length, partner, self._encoding.dequantise(codes)
-
-    def _band_entries(
-        self, c: _Chromosome, local: npt.NDArray[np.int64], *, reach: int
-    ) -> _RowEntries:
-        """Each local row's Near Band partners within `reach` ≤ near_bp on both sides: the
-        row up to `reach`, and the column, one element in each earlier row within it."""
-        lo, hi = _window(c, local, reach)
-        # Each row's span runs from its first upstream partner to its last downstream one,
-        # the row itself included once; dropping it leaves both halves, ascending.
-        span, owner = spans(lo, hi - lo), owners(hi - lo, local)
-        partner, owner = span[span != owner], owner[span != owner]
-        lo_pair, hi_pair = np.minimum(owner, partner), np.maximum(owner, partner)
-        codes = self._read(c.near_r, near_address(c.near_indptr, lo_pair, hi_pair))
-        return hi - lo - 1, partner, self._encoding.dequantise(codes)
-
-    def _listed_entries(
-        self,
-        c: _Chromosome,
-        local: npt.NDArray[np.int64],
-        *,
-        reach: int,
-        listed: npt.NDArray[np.int64],
-    ) -> _RowEntries:
-        """Each local row's pairs with the `listed` rows within `reach` ≤ near_bp, both sides,
-        resolved one Near Band element each: one row against many, and nothing else."""
-        lo, hi = _window(c, local, reach)
-        a = np.searchsorted(listed, global_rows(lo, c.start))
-        b = np.searchsorted(listed, global_rows(hi, c.start))
-        partner = local_rows(listed[spans(a, b - a)], c.start)
-        which = owners(b - a)
-        other = partner != local[which]
-        partner, which = partner[other], which[other]
-        length = np.bincount(which, minlength=len(local)).astype(np.int64)
-        return length, partner, self._local_r(c, local[which], partner)
-
-    def _blocks(
-        self,
-        c: _Chromosome,
-        local: npt.NDArray[np.int64],
-        part: tuple[_Read, _Estimate],
-        judge: _Judge | None,
-    ) -> Iterator[tuple[int, int, _Kept]]:
-        """The entries a part's read gives `local` rows, a block of rows [a, b) at a time, by
-        the part's estimate of each row's entries: each block's partners as global rows, with
-        Stored r and distance, and kept only where `judge` says, when one is given. So what is
-        held before it is judged stays near `_PAIRS_PER_STEP` entries, and no block is joined
-        to another."""
-        read, estimate = part
-        for a, b in blocks((indptr_of(estimate(c, local)), _PAIRS_PER_STEP)):
-            length, partner, r = read(c, local[a:b])
-            gap = c.position[partner] - c.position[owners(length, local[a:b])]
-            np.abs(gap, out=gap)
-            partner = global_rows(partner, c.start)
-            if judge is not None:
-                kept = judge(gap, partner, r)
-                length = np.bincount(owners(length)[kept], minlength=b - a).astype(np.int64)
-                partner, r, gap = partner[kept], r[kept], gap[kept]
-            yield a, b, (length, partner, r, gap)
-
-    def _gather(
-        self,
-        rows: npt.NDArray[np.int64],
-        part: tuple[_Read, _Estimate],
-        judge: _Judge | None = None,
-    ) -> Partners:
-        """The partners a part's read gives each of `rows`, in CSR form in the order asked.
-
-        Each block is held as read until every row's length is known, then put in its place
-        in the result and let go: the kept entries are held twice only while they are put in
-        order (see `partners`)."""
-        rows = self._checked(rows)
-        length = np.empty(len(rows), dtype=np.int64)
-        found: list[tuple[npt.NDArray[np.int64], _Kept]] = []
-        for c, members in self._by_chromosome(rows):
-            for a, b, kept in self._blocks(c, local_rows(rows[members], c.start), part, judge):
-                length[members[a:b]] = kept[0]
-                found.append((members[a:b], kept))
-        return _placed_in_order(length, found)
-
-    def _listed(self, among: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
-        """`among`, if it is ascending, distinct rows of the Variant Set."""
-        listed = self._checked(among)
-        if (np.diff(listed) <= 0).any():
-            raise ValueError("among must be ascending, distinct Variant Set rows")
-        return listed
-
     def _span(self, start: int, stop: int) -> _Chromosome | None:
         """The chromosome holding the rows [start, stop), or None when the span is empty."""
         size = int(self._stops[-1]) if len(self._stops) else 0
@@ -1041,7 +836,7 @@ class StoreReader:
         """One chromosome's rows and positions, read on first use and nothing else (#71).
 
         Positions are the variant table's, one slice a chromosome, so an ALID lookup, a clump and
-        a proxies query read no `near/<chrom>/indptr` and open none of the Proxy Index's arrays.
+        a proxies query read no `near/<chrom>/indptr`.
         A chromosome's positions are loaded once, however many threads are cold on it: the check is
         repeated under the lock, as a first use of the Partner Rows is (§7), so no caller publishes
         a second copy of a chromosome-sized array.
@@ -1070,7 +865,7 @@ class StoreReader:
         return loci
 
     def _chromosome(self, name: str) -> _Chromosome:
-        """One chromosome's kept arrays, read on first use (spec §10). Each of its five arrays'
+        """One chromosome's kept arrays, read on first use (spec §10). Each of its three arrays'
         fill values is judged before any element of the chromosome is decoded.
 
         It takes its positions from the published `_Loci`, and publishes it under the same lock, so
@@ -1083,7 +878,7 @@ class StoreReader:
             if name in self._loaded:
                 return self._loaded[name]
             loci = self._loaded_loci(name)
-            near_indptr, near_r, index_indptr, index_partner, index_r = (
+            near_indptr, near_r = (
                 _kept_array(self._root, f"{kind}/{name}/{array}")
                 for kind, array in _CHROMOSOME_ARRAYS
             )
@@ -1094,16 +889,15 @@ class StoreReader:
                 loci.position,
                 _indptr(near_indptr, self._cache),
                 near_r,
-                _Sparse(index_indptr, self._cache, index_partner, index_r),
             )
             self._loaded[name] = assembled
             return assembled
 
     def _far_pairs(self, c: _Chromosome) -> _Sparse:
         """One chromosome's Far Pairs, opened and their `indptr` kept the first time a request
-        needs its pairs beyond near_bp (spec §10). `proxies` and `clump` never do, so a
-        chromosome they touch reads no more than it did before the Far Pairs. Each array's fill
-        value is judged before any of its elements is decoded."""
+        needs its pairs beyond near_bp (spec §10). `proxies` and `clump` never do, because they
+        read the Partner Rows, so a chromosome they touch pays nothing for the Far Pairs. Each
+        array's fill value is judged before any of its elements is decoded."""
         if c.name not in self._far:
             indptr, partner, r = (
                 _kept_array(self._root, f"far/{c.name}/{array}") for array in _SPARSE_ARRAYS
@@ -1150,108 +944,6 @@ class StoreReader:
                 f"{size} rows: an Absent ALID is not a row (spec §8)"
             )
         return rows
-
-
-class _ClumpWindows:
-    """One sliding positional warm range, never a second cache or chromosome-sized pin."""
-
-    def __init__(
-        self, reader: StoreReader, c: _Chromosome, local: npt.NDArray[np.int64], reach: int
-    ) -> None:
-        self.reader, self.c, self.local, self.reach = reader, c, local, reach
-        self.position = c.position[local]
-        self.low, self.high = 1, 0
-
-    def warm(self, row: np.int64) -> None:
-        centre = int(self.c.position[int(row) - self.c.start])
-        if self.low <= centre <= self.high:
-            return
-        radius = self.reach
-        while True:
-            a, b = position_rows(self.position, centre - radius, centre + radius)
-            if (
-                self.reader._prefetch_hits(self.c, self.local[int(a) : int(b)], self.reach)
-                or radius == 0
-            ):
-                self.low, self.high = centre - radius, centre + radius
-                return
-            radius //= 2
-
-
-#: What a stored part's read gives some rows: row lengths, partners (local rows), Stored r.
-_RowEntries = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]
-#: A block's kept entries: row lengths, partners (global rows), Stored r and distance.
-_Kept = tuple[
-    npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64], npt.NDArray[np.int64]
-]
-#: Which of a block's entries `partners` keeps, from their distance, partner and Stored r.
-_Judge = Callable[
-    [npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]], npt.NDArray[np.bool_]
-]
-#: A stored part's read of some local rows of one chromosome, and its estimate of each row's
-#: entries before they are judged, which sizes the blocks `partners` reads.
-_Read = Callable[["_Chromosome", npt.NDArray[np.int64]], _RowEntries]
-_Estimate = Callable[["_Chromosome", npt.NDArray[np.int64]], npt.NDArray[np.int64]]
-
-
-def _index_length(c: _Chromosome, local: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
-    """Each local row's Proxy Index entries."""
-    return c.index.indptr[local + 1] - c.index.indptr[local]
-
-
-def _window(
-    c: _Chromosome, local: npt.NDArray[np.int64], reach: int
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """For each local row, the rows [lo, hi) within `reach` bp of it on both sides, itself
-    included: the window `partners` reads in the Near Band."""
-    return position_rows(c.position, c.position[local] - reach, c.position[local] + reach)
-
-
-def _window_rows(
-    c: _Chromosome, local: npt.NDArray[np.int64], *, reach: int
-) -> npt.NDArray[np.int64]:
-    """How many rows lie within `reach` of each local row, on both sides, itself included."""
-    lo, hi = _window(c, local, reach)
-    return hi - lo
-
-
-def _placed_in_order(
-    length: npt.NDArray[np.int64], found: list[tuple[npt.NDArray[np.int64], _Kept]]
-) -> Partners:
-    """The CSR result of rows of `length` entries, from blocks of rows held in `found`: each
-    block is copied to its place, then dropped, so it is not held beside the whole result."""
-    indptr = indptr_of(length)
-    partner = np.empty(int(indptr[-1]), dtype=np.int64)
-    r = np.empty(int(indptr[-1]), dtype=np.float64)
-    distance = np.empty(int(indptr[-1]), dtype=np.int64)
-    while found:
-        members, (lengths, partners, values, gaps) = found.pop()
-        where = spans(indptr[members], lengths)
-        partner[where], r[where], distance[where] = partners, values, gaps
-    return Partners(indptr, partner, r, distance)
-
-
-def _judged(
-    gap: npt.NDArray[np.int64],
-    partner: npt.NDArray[np.int64],
-    r: npt.NDArray[np.float64],
-    *,
-    r2: float,
-    reach: int,
-    listed: npt.NDArray[np.int64] | None,
-) -> npt.NDArray[np.bool_]:
-    """Which entries `partners` keeps: d ≤ reach and r̂² ≥ r2, the inclusive edges every
-    query narrows from (spec §9), and in `listed` when there is one."""
-    kept = within(gap, reach) & (r * r >= r2)
-    return kept if listed is None else kept & _member(partner, listed)
-
-
-def _member(rows: npt.NDArray[np.int64], listed: npt.NDArray[np.int64]) -> npt.NDArray[np.bool_]:
-    """Whether each of `rows` is in `listed`, which is ascending and distinct."""
-    at = np.searchsorted(listed, rows)
-    found = at < len(listed)
-    found[found] = listed[at[found]] == rows[found]
-    return found
 
 
 def _loci(

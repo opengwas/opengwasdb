@@ -7,8 +7,9 @@ builder exists. Its variants are the rows that pass the build's filters, with th
 A1 and A2 (`ogld.identity`), reversed indels resolved by the engine's rule; its r is the
 reference r signed to A1. The script supplies that r and what only its source knows, and the
 store makes the rest (`StoreWriter`, ogld#17). That is its codes,
-quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Proxy Index
-at t_far for n = 771 and the k it was written at (spec §4, §5), and the counts. It is "import a
+quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Far Pairs at
+t_far for n = 771 and the k it was written at (spec §4, §5), the Partner Rows, and the counts. It
+holds no Proxy Index: #72 removed the component (ADR 0011). It is "import a
 precomputed r" in miniature. It is deterministic: the same inputs write the same bytes.
 
     pixi run -e dev python scripts/make_test_store.py --r-scale=<scale> --t-partner=<r²> \

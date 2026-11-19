@@ -14,6 +14,14 @@ format"). The terms are in `CONTEXT.md`.
 > superseded, and so is the one that §11's sizes are projections: the clarification records the
 > measured ones.
 
+**Status: implemented.** The component, the refusals and the format version landed in #67–#71,
+and #72 removed the Proxy Index: `index/`, its writer, its arrays, its six validation rules and
+`far.index`, with `clump`'s Near Band reads, `StoreReader.clump_warmer` and `partners`'s row,
+column and `among` reads. A 0.2.0 store holds no `index/`; one that still carries a leftover is
+read and validated exactly as one without it (spec §12). Pending: #73, which derives the Partner
+Rows for the five published stores and drops each `index/`, and #81, the follow-up to the LD
+work's timing (below).
+
 **Who decided.** The owner, 18 November 2026, on the measurements of 17–18 November 2026
 (`proto/partner-rows`), taking decisions D1–D6 of `docs/spec/partner-rows.md` §1; refined the same
 day by the clarification at the end, on #65's measurements.
@@ -123,3 +131,10 @@ at G = 4 with two workers and 1.051 / 1.067 s at G = 8 / 16 with four, and 5.753
 eight at G = 8 / 16: eight workers regress. G = 16 is the smallest of the configurations that are
 equally fast. **The under-1 s LD target moves to #71** (owner, 18 November 2026): the best cold time
 is 1.051 s, so nothing here claims it.
+
+**The target was not met, and the owner accepted it** (#71's owner decision, recorded on #72). A
+quiet re-time at `cc48a58` on GCST90476460 gave cold LD medians of **2.30 / 1.55 / 2.95 s** at
+1 / 2 / 4 workers, and warm medians of **0.98 / 0.97 / 1.35 s** (EUR k = 10). The follow-up is
+**#81**, decode and gather plus ALID resolution; it owns the worker default too, which this
+decision leaves at four. `docs/spec/partner-rows.md` §9 and `docs/spec/ld-store.md` §10 carry the
+figures in place of the target.
