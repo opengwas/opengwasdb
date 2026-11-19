@@ -63,6 +63,34 @@ def test_a_companion_copied_from_identical_metadata_cannot_change_rows(
     assert "variants/alid_index/alid/c/" in message
 
 
+@pytest.mark.parametrize("kind", ["fifo", "missing"])
+def test_nonregular_mandatory_metadata_refuses_before_open(tmp_path: Path, kind: str) -> None:
+    import os
+    import signal
+
+    from ogld.format import InputError
+    from ogld.store import StoreReader
+
+    store = written(tmp_path / "store")
+    metadata = store / "variants/alid_index/alid/zarr.json"
+    metadata.unlink()
+    if kind == "fifo":
+        os.mkfifo(metadata)
+
+    def timed_out(signum, frame):
+        raise AssertionError("mandatory metadata lookup blocked on FIFO")
+
+    handler = signal.signal(signal.SIGALRM, timed_out)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0.5)
+    try:
+        with pytest.raises(InputError, match=r"missing|regular file") as stopped:
+            StoreReader.open(store).rows_of(["22:200:A:C"])
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, handler)
+    assert_companion_diagnostic(store, str(stopped.value), str(metadata))
+
+
 @pytest.mark.parametrize("damage", ["cycle", "broken-link"])
 def test_canonical_directory_cycles_and_broken_links_refuse(tmp_path: Path, damage: str) -> None:
     from ogld.format import InputError

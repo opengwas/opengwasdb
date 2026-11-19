@@ -447,6 +447,8 @@ def alid_mmap_sources(path: Path) -> dict[str, str]:
         # Metadata is mandatory even when a whole array directory was lost. Include every
         # other file too, so deleting, replacing or adding a shard changes the pinned set.
         metadata = path / payload.source / "zarr.json"
+        if not metadata.is_file():
+            raise ValueError(f"{metadata}: canonical metadata is missing or not a regular file")
         sources[str(metadata.relative_to(path))] = file_sha256(metadata)
         for source in _alid_index_files(path / payload.source):
             if source != metadata:
