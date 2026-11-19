@@ -535,10 +535,14 @@ def test_a_0_1_0_store_that_keeps_the_keys_answers_no_partner_read(tmp_path: Pat
     assert "t_partner" in provenance(store), "the fixture keeps the keys, or it proves nothing"
     assert [rule for rule, found in validate_at(store, threads=1).items() if found] == []
     alid = first_alid(store)
-    with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
-        ogld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000)
-    with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
-        ogld.open(store).proxies([alid], r2=T_PARTNER, kb=1000)
+    for refused in (
+        lambda: ogld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000),
+        lambda: ogld.open(store).proxies([alid], r2=T_PARTNER, kb=1000),
+    ):
+        with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows") as caught:
+            refused()
+        assert str(store) in str(caught.value), "the refusal names the store it is about"
+        assert "ogld derive-partners" in str(caught.value), "and the command that settles it"
 
 
 # ---- item 3: no link anywhere the derivation writes, and no planted metadata temporary --------

@@ -178,6 +178,7 @@ class StoreReader:
     """
 
     _root: zarr.Group
+    _location: str
     _provenance: Provenance
     _encoding: REncoding
     _ranges: dict[str, tuple[int, int]]
@@ -199,6 +200,7 @@ class StoreReader:
     def _attach(
         self,
         root: zarr.Group,
+        location: str,
         provenance: Provenance,
         encoding: REncoding,
         cache: ChunkCache,
@@ -208,6 +210,7 @@ class StoreReader:
         store, and the two caches its reads go through: decoded Near Band chunks, and decoded
         Partner Rows frames (partner-rows §7), and the component threads it may run (§9.2)."""
         self._root = root
+        self._location = location
         self._provenance = provenance
         self._encoding = encoding
         self._cache = cache
@@ -267,7 +270,9 @@ class StoreReader:
         except InputError as unimplemented:
             raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(root, cast(Provenance, recorded), encoding, cache, frame_cache)
+        reader._attach(
+            root, str(location), cast(Provenance, recorded), encoding, cache, frame_cache
+        )
         return reader
 
     @property
@@ -316,6 +321,12 @@ class StoreReader:
 
     def __exit__(self, kind: object, value: object, traceback: object) -> None:
         self.close()
+
+    @property
+    def location(self) -> str:
+        """Where the store was opened from, as the caller named it: what a refusal names (§9), so
+        a user with two stores knows which one declined to answer."""
+        return self._location
 
     @property
     def provenance(self) -> Provenance:
@@ -632,9 +643,9 @@ class StoreReader:
         """The Partner Threshold this store recorded (spec §7; partner-rows §3).
 
         From format 0.2.0 `clump` and `proxies` read the Partner Rows and nothing else, so a
-        store that holds none — every 0.1.0 store — is refused here, naming the missing component
-        and the way to derive it, before any read. It is never answered from the Near Band: that
-        is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
+        store that holds none — every 0.1.0 store — is refused here, naming the store, the missing
+        component and the way to derive it, before any read. It is never answered from the Near
+        Band: that is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
 
         The recorded **format version** decides, and the key alone does not: spec §7 lets a store
         hold other keys, and a 0.1.0 store's extra `t_partner` is no claim to a component whose
@@ -643,7 +654,8 @@ class StoreReader:
         """
         if not self.has_partner_rows:
             raise InputError(
-                f"this LD Store is format {self._provenance['format_version']}, which has no "
+                f"this LD Store at {self._location} is format "
+                f"{self._provenance['format_version']}, which has no "
                 f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
                 "naming the missing component; a store built before 0.2.0 derives them with "
                 "`ogld derive-partners` (spec §13; partner-rows §5.1)"
@@ -652,9 +664,11 @@ class StoreReader:
 
     @property
     def has_partner_rows(self) -> bool:
-        """Whether the store's provenance claims Partner Rows: the recorded format version is
-        0.2.0 or later **and** the Partner Threshold is recorded, which is what a derivation
-        writes in its one claim (partner-rows §6.2; spec §13).
+        """Whether the store's provenance claims Partner Rows, which is
+        `ogld.format.claims_partner_rows`: the recorded format version is 0.2.0 or later **and**
+        the Partner Threshold is recorded, which is what a derivation writes in its one claim
+        (partner-rows §6.2; spec §13). The reader, validation and the derivation ask that one
+        rule, so a store one of them calls claimed is one they all do.
 
         A version this package reads (0.1.0 or 0.2.0, refused at open otherwise) that is below
         0.2.0 has none, whatever keys or groups a store carries: they are a residue nothing has
