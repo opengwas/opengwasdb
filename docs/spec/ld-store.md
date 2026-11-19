@@ -1543,7 +1543,11 @@ immutable files. Publication fsyncs a private partial, renames its generation di
 then atomically replaces root metadata last. An abandoned partial is unpublished and a
 retry replaces it; a complete generation is validated and reused, never overwritten.
 `StoreWriter.finish` and `scripts/derive_alid_mmap.py` use the same assembly helper from the
-Store's validated canonical index. Derivation requires an isolated or quiescent local Store.
+Store's validated canonical index. Both paths MUST run the exact canonical correspondence
+check on the new generation's payloads before publishing its root pointer, including entry
+count and full payload lengths. They call the same bounded comparison as `alid_index.count`;
+a failure leaves the generation unpublished and the prior root unchanged. Derivation requires
+an isolated or quiescent local Store.
 No existing array or public signature changes, and HTTP readers retain the canonical path.
 
 `alid_index.count` additionally checks a published local companion: schema, generation and
@@ -1551,6 +1555,13 @@ canonical-file content pins, exact lengths and payload hashes, then byte-for-byt
 keys and rows in bounded windows. The canonical rows/order/keys rules remain the authority
 for range, uniqueness, completeness and key meaning. Self-consistent companion checksums
 cannot substitute for this correspondence check. Missing companions and HTTP are compatible.
+
+The trust model requires a generation published only by ogld after exact correspondence.
+The reader checks integrity and content binding at use, not correspondence or producer
+authenticity. A hand-forged, self-consistent generation with recomputed payload hashes,
+manifest and pointer is outside reader detection, as for other derived arrays such as Partner
+Rows frames with forged checksums; `ogld validate` detects the noncorrespondence. Changing a
+canonical file after attachment is outside the immutable-Store assumption.
 
 Opening reads no companion payload. On the first fitting lookup, checked attachment verifies
 the manifest, every canonical-file content pin and both companion payload hashes, then maps

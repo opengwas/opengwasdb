@@ -30,6 +30,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, Final, TypeGuard
 
 import numpy as np
@@ -1051,20 +1052,41 @@ def _alid_mmap(store: _Store) -> _Problems:
         return
     if companion is None:
         return
+    yield from _alid_mmap_contents(store, companion.path, companion.count)
+
+
+def require_alid_mmap(root: zarr.Group, directory: Path, count: int) -> None:
+    """Refuse publication unless these unpublished payloads exactly match canonical arrays.
+
+    Publication and `alid_index.count` use one check; lookup deliberately checks integrity
+    and content binding only, under the trusted-producer model (ADR 0012).
+    """
+    store = _Store(root, root.attrs.get("ld_store"))
+    try:
+        problems = list(_alid_mmap_contents(store, directory, count))
+    except _Unchecked as stopped:
+        raise layout.alid_mmap_error(
+            directory / layout.ALID_MMAP_MANIFEST, f"{stopped.where}: {stopped}"
+        ) from stopped
+    if problems:
+        raise InputError(problems[0][1])
+
+
+def _alid_mmap_contents(store: _Store, directory: Path, count: int) -> _Problems:
     entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
-    if companion.count != entries:
+    if count != entries:
         yield (
             layout.ALID_MMAP,
             str(
                 layout.alid_mmap_error(
-                    companion.path / layout.ALID_MMAP_MANIFEST,
+                    directory / layout.ALID_MMAP_MANIFEST,
                     "entry count differs from canonical index",
                 )
             ),
         )
         return
     for payload in layout.ALID_MMAP_PAYLOADS:
-        with (companion.path / payload.name).open("rb") as stream:
+        with (directory / payload.name).open("rb") as stream:
             for lo, hi in windows(0, entries, _ROWS):
                 canonical = store.read(
                     payload.source, lo * payload.width, hi * payload.width
@@ -1074,12 +1096,22 @@ def _alid_mmap(store: _Store) -> _Problems:
                         layout.ALID_MMAP,
                         str(
                             layout.alid_mmap_error(
-                                companion.path / payload.name,
+                                directory / payload.name,
                                 f"differs from canonical index at entry {lo}",
                             )
                         ),
                     )
                     break
+            else:
+                if stream.read(1):
+                    yield (
+                        layout.ALID_MMAP,
+                        str(
+                            layout.alid_mmap_error(
+                                directory / payload.name, "trailing payload bytes"
+                            )
+                        ),
+                    )
 
 
 # ------------------------------------------------------------------ the Near Band

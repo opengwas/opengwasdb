@@ -254,6 +254,11 @@ def test_validation_rejects_self_consistent_wrong_rows(tmp_path: Path) -> None:
     manifest = json.loads((directory / "manifest.json").read_bytes())
     manifest["payloads"]["rows.i32le"] = hashlib.sha256(rows.tobytes()).hexdigest()
     republish(store, manifest)
+    from ogld.store import layout
+
+    assert layout.alid_companion(zarr.open_group(store, mode="r")) is not None, (
+        "integrity/content binding do not prove correspondence for a hand-forged generation"
+    )
     findings = validate(store)
     assert findings["alid_index.count"], "self-consistent hashes do not prove canonical rows"
     assert_companion_diagnostic(store, findings["alid_index.count"][0].message, "rows.i32le")
@@ -451,6 +456,55 @@ def test_a_source_change_during_derivation_names_the_store_generation_and_file(
     assert "variants/alid_index/row/zarr.json" in message
     assert "changed during companion derivation" in message
     assert "alid_mmap" not in zarr.open_group(store, mode="r").attrs
+
+
+@pytest.mark.parametrize("publication", ["derive", "writer"])
+@pytest.mark.parametrize("damage", ["permuted-rows", "trailing-rows", "wrong-count"])
+def test_a_noncanonical_builder_never_publishes_a_pointer(
+    tmp_path: Path, monkeypatch, publication: str, damage: str
+) -> None:
+    from script_modules import load_script
+    from test_alid_index import without_companion
+
+    from ogld.format import InputError
+    from ogld.store import StoreReader, assembly
+
+    store = tmp_path / "store"
+    prior = None
+    if publication == "derive":
+        written(store)
+        without_companion(store)
+        prior = (store / "zarr.json").read_bytes()
+    build_payloads = assembly._write_alid_payloads
+
+    def corrupted(root, partial):
+        count = build_payloads(root, partial)
+        payload = partial / "rows.i32le"
+        rows = np.frombuffer(payload.read_bytes(), dtype="<i4").copy()
+        assert len(set(rows)) == 3, "permutation must exchange real, distinct canonical rows"
+        if damage == "permuted-rows":
+            rows[[0, 1]] = rows[[1, 0]]
+            payload.write_bytes(rows.tobytes())
+        elif damage == "trailing-rows":
+            payload.write_bytes(rows.tobytes() + b"x")
+        else:
+            return count - 1
+        return count
+
+    monkeypatch.setattr(assembly, "_write_alid_payloads", corrupted)
+    publish = load_script("derive_alid_mmap").derive if publication == "derive" else written
+    with pytest.raises(InputError, match="companion") as stopped:
+        publish(store)
+    document = json.loads((store / "zarr.json").read_bytes())
+    assert "alid_mmap" not in document["attributes"], "a bad generation is never published"
+    if prior is not None:
+        assert (store / "zarr.json").read_bytes() == prior, "derivation preserves prior root state"
+    assert StoreReader.open(store).rows_of(["22:200:A:C", "22:300:A:G"]).tolist() == [2, 4]
+    candidates = [p for p in (store / "variants/alid_mmap").iterdir() if len(p.name) == 64]
+    assert len(candidates) == 1, "the failed generation is complete but unpublished"
+    assert str(store) in str(stopped.value)
+    assert candidates[0].name in str(stopped.value)
+    assert ("manifest.json" if damage == "wrong-count" else "rows.i32le") in str(stopped.value)
 
 
 @pytest.mark.parametrize(

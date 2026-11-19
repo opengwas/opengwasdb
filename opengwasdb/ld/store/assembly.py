@@ -79,7 +79,12 @@ from ogld.format.geometry import (
 )
 from ogld.store import frames, layout
 from ogld.store.location import ChunkCache, open_group
-from ogld.store.validation import PARTNER_RULES, ValidationFailed, validate_group
+from ogld.store.validation import (
+    PARTNER_RULES,
+    ValidationFailed,
+    require_alid_mmap,
+    validate_group,
+)
 
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
 #: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged. That function is
@@ -1552,6 +1557,9 @@ def _derive_alid_mmap(path: Path, directory: Path) -> int:
             destination / layout.ALID_MMAP_MANIFEST,
             f"canonical source {path / changed}: changed during companion derivation",
         )
+    # Integrity hashes cannot establish correspondence. This same bounded comparison is
+    # `alid_index.count`'s, and must pass before the publication point (ADR 0012, round 2).
+    require_alid_mmap(root, destination, count)
     document = json.loads((path / "zarr.json").read_bytes())
     document["attributes"][layout.ALID_MMAP_ATTR] = pointer
     temporary = path / ".alid-mmap-root.partial"

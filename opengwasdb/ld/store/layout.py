@@ -523,7 +523,8 @@ def alid_companion(root: zarr.Group) -> AlidCompanion | None:
     """Check source content pins and payload hashes before trusting any mapped byte.
 
     Absence and HTTP retain ADR 0010. A present pointer is a commitment: never silently fall
-    back from corrupt data. Exact canonical correspondence is also checked by validation.
+    back from integrity/pin mismatches. Exact correspondence is checked at trusted publication
+    and by validation, not here; a consistently re-hashed forgery is outside reader detection.
     """
     path = local_path(root)
     pointer = root.attrs.get(ALID_MMAP_ATTR)

@@ -6,6 +6,16 @@ schema-1 measurements at `903824c` are retained below as historical evidence. AD
 defines the representation; ADR 0011's Partner Rows, frame codec, thresholds and worker
 default are unchanged. This is the mmap part of #81, not its remaining decode/gather work.
 
+**Round-2 trust-model clarification:** these answer comparisons concern trusted ogld
+publications, not forged generations. Both the writer and derivation now run the same bounded
+exact canonical correspondence check as `alid_index.count` before publishing a new pointer.
+At first use the reader checks integrity and every canonical file's content binding, not
+correspondence or producer authenticity. A hand-forged generation with recomputed payload
+hashes, manifest and pointer is outside reader detection (as with other forged derived arrays);
+`ogld validate` detects its noncorrespondence. Canonical mutation after attachment is outside
+the immutability assumption. This read-only publication check changes no published bytes;
+the measurements below are retained, with no new re-timing or scratch re-derivation.
+
 ## Shared protocol and round-0 artifacts
 
 All artifacts are under `/data/opengwasdb/work/orchestrate/ogld-81/results/`:

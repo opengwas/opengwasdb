@@ -45,7 +45,11 @@ Derive only on isolated/quiescent local Stores; do not mutate canonical files du
 `StoreWriter.finish` validates the canonical Store, records provenance, then calls
 `assembly.derive_alid_mmap`; `scripts/derive_alid_mmap.py` calls that same helper. A failed
 companion creation leaves either a valid Store without a pointer or a complete publication.
-The helper first applies the canonical index's existing four validation rules.
+The helper first applies the canonical index's existing four validation rules. Before writing
+the root pointer, both publication paths then call `validation.require_alid_mmap` on the new
+generation's payloads. It uses the same bounded exact byte-comparison as `alid_index.count`,
+including entry count and full payload lengths; a failed comparison leaves the prior root
+unchanged and the generation unpublished.
 
 Canonical file pins bind the companion to the actual Store, not merely equal metadata.
 Missing, added or changed canonical files refuse, naming the Store, generation and concrete
@@ -53,7 +57,16 @@ source file. Inventory follows shard-directory symlinks rather than silently omi
 files; cycles, repeated directories, walk errors and nonregular sources refuse. Files remain
 immutable while a reader uses its checked mappings. Exact validation
 also compares companion payloads to canonical arrays; payload hashes alone do not prove
-correspondence. The existing `alid_index.count`
+correspondence.
+
+**Trusted-publication ruling (#81 fix round 2):** the supported input contract is a generation
+published only by ogld, after exact canonical correspondence. At use, the reader verifies
+integrity and content binding (every canonical index file's pin), not correspondence and not
+producer authenticity. A hand-forged generation whose payloads, manifest and pointer were all
+rewritten consistently is outside what the reader detects, just as re-hashed forged Partner
+Rows frames are. `ogld validate` detects the noncorrespondence. A canonical file changed after
+a reader has attached is likewise outside the immutable-files assumption. No per-lookup
+correspondence pass or mandatory prevalidation is added for trusted ogld publications. The existing `alid_index.count`
 rule includes integrity and bounded exact comparison; there are still 30 validation rules.
 A self-consistent row permutation is a breaker: range, uniqueness and hashes pass, but
 canonical correspondence fails. Artifact bytes contain no filesystem paths or inode identity,
