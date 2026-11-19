@@ -480,11 +480,6 @@ _Row = tuple[npt.NDArray[np.int32], Codes]
 FRAME_CACHE_BYTES: Final = 1 << 28
 
 
-def _frame_bytes(frame: FramePayload) -> int:
-    """What keeping a frame holds: its decompressed payload and the rows' lengths (§7)."""
-    return frame.bytes
-
-
 class FrameCache:
     """Decoded frames kept by one reader, byte-bounded, the least recently used dropped first
     (partner-rows §7).
@@ -538,7 +533,7 @@ class FrameCache:
         larger than the whole budget included: a cache keeps no more than it says it does.
         """
         key = (frame.chrom, frame.number)
-        counted = _frame_bytes(frame)
+        counted = frame.bytes
         with self._lock:
             kept = self._kept.get(key)
             if kept is not None:
