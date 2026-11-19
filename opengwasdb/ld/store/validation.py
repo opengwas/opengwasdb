@@ -2350,8 +2350,8 @@ class _PartnerThreshold(_PartnerRule):
 
 @_scanned("partners.symmetric")
 class _PartnerSymmetric(_PartnerRule):
-    """(l, m, c) is an entry exactly when (m, l, c) is: the 64-bit hash-sum method of
-    index.symmetric, every entry adding its pair's hash to the earlier row's sum for its own
+    """(l, m, c) is an entry exactly when (m, l, c) is: the 64-bit hash-sum method the retired
+    index.symmetric used, every entry adding its pair's hash to the earlier row's sum for its own
     side, and a row whose two sums differ the earlier row of a pair held one way only or with
     two codes (spec §12; partner-rows §10)."""
 
@@ -2384,7 +2384,8 @@ class _PartnerSymmetric(_PartnerRule):
 class _PartnerNear(_PartnerRule):
     """The Partner Rows' near half is the Near Band at the Partner Floor, both ways: every entry
     within near_bp carries the band's code, and every band code at the Partner Floor is an
-    entry — index.near's method at the Partner Threshold's floor (spec §12; partner-rows §10).
+    entry — the retired index.near's method at the Partner Threshold's floor (spec §12;
+    partner-rows §10).
     The recheck at the chromosome's end reads again only the blocks holding an entry that names
     a row whose sums differ, each against the band's code for its pair."""
 
@@ -2495,9 +2496,10 @@ class _PartnerNear(_PartnerRule):
 @_scanned("partners.far")
 class _PartnerFar(_PartnerRule):
     """The entries beyond near_bp, in each pair's earlier row, are exactly the Far Pairs, pair
-    for pair and code for code: far.index's comparison read against the Partner Rows (spec §12;
-    partner-rows §10). Both are read by the same block of rows, so nothing is carried; that an
-    entry beyond near_bp is in its later row too is partners.symmetric's to say."""
+    for pair and code for code: the retired far.index's comparison, read against the Partner
+    Rows (spec §12; partner-rows §10). Both are read by the same block of rows, so nothing is
+    carried; that an entry beyond near_bp is in its later row too is partners.symmetric's to
+    say."""
 
     parts = frozenset({_FAR.partner, _FAR.code})
 

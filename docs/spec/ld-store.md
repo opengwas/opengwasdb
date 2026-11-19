@@ -865,10 +865,16 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   recorded beside the equality test, `tests/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
   and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
 
-`ogld.format.judge_request` and `ogld.format.judge_region` implement the table's refusals, all but
-one: a `clump` score that is not one finite, non-negative number per ALID is refused as `invalid`
-by `ogld.query.clumping._checked_score`, because it depends on the score, which the judges never
-see. `judge_request` runs first.
+`ogld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
+called through `ogld.query.requests.window_of`, and it names the store it judged: a request below
+the store's `t_partner` within `near_bp` is answered with the r2 asked for, the `t_partner`
+recorded, and the two ways out — ask at or above that `t_partner`, or read a store derived at a
+lower one. `ogld.format.judge_request` is that table without the Partner Threshold's row — the
+0.1.0 table, which a call through `ogld` no longer reaches — and `ogld.format.judge_window` is the
+same rule for a window already in bp; `ogld.format.judge_region` judges a region. All but
+one of them are the judge's: a `clump` score that is not one finite, non-negative number per ALID
+is refused as `invalid` by `ogld.query.clumping._checked_score`, because it depends on the score,
+which the judges never see. The judge runs first.
 `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` drives them and the answer
 table interactively, with walkthroughs of the edge cases: exactly 3 Mb, exactly 10 Mb, r²
 equal to t_far, rounding onto a threshold, AMR's t_far, a pair at exactly t_far, and a window over
@@ -934,7 +940,7 @@ EUR k10, and warm medians of 0.98 / 0.97 / 1.35 s. The follow-up is #81, decode 
 the cost of ALID resolution; the worker default is #81's too (`docs/spec/partner-rows.md` §9).
 
 **From 0.2.0** `clump` splits the present hits into **components** — per chromosome, cut wherever
-two consecutive positions are W apart — and runs each component's greedy strongest first inside it,
+two consecutive distinct positions are W or more apart — and runs each component's greedy strongest first inside it,
 serially or on the reader's pool of at most four threads, scattering results back into the request
 order, including duplicates (ogld#40; `docs/spec/partner-rows.md` §8.2, §9.2). A clump cannot cross
 chromosomes, and no lead can reach a hit in another component, so neither the split nor the
@@ -1242,7 +1248,7 @@ five stores' as built at k = 10 (§6) beside them:
 
 On 8 November the read costs looked to differ by kilobytes against a Near Band read of hundreds
 of megabytes (§10), so reads did not decide it. Both forms keep copies that must agree: the
-index's pairs within `near_bp` repeat Near Band codes in either form, and `index.near` holds them
+index's pairs within `near_bp` repeat Near Band codes in either form, and `index.near` held them
 equal. What merging saved was the Far Pairs' own copy of each 3–10 Mb pair, the builder output
 that writes it, and the cross-component rules for 3–10 Mb.
 
@@ -1494,11 +1500,12 @@ the store already holds, plus the four provenance keys that describe them and `s
   before #72 without `--drop-index` — opens and answers exactly as one without it, and validation
   ignores it (§12); `ogld derive-partners --drop-index` removes it.
 
-A 0.1.0 reader reading a 0.2.0 store sees groups it does not know and ignores them (§1), answering
-from the Near Band, the Proxy Index and the Far Pairs if they are there — a reader of that vintage,
-not this one, which reads no index at either version (§12). That is why the version
-is recorded: the refusal table and the component set changed, and a reader that took a 0.2.0 store
-for a 0.1.0 one would answer a request 0.2.0 refuses.
+A reader of 0.1.0's vintage **refuses** a 0.2.0 store at open: it reads one version, its own, so a
+store that records another is an `InputError` naming the version and the one this reader reads
+(§13). That is how the rollout goes, store by store: an old reader cannot be handed a 0.2.0 store
+and answer from the Near Band and the Proxy Index it still knows, which is what a reader that
+ignored the version would do, and would answer a request 0.2.0 refuses. That is why the version is
+recorded: the refusal table and the component set changed.
 
 **Version `0.1.0`** is an unreleased draft: no LD Store in it has been published, so the owner's
 decisions of 7 November 2026, the Proxy Index among them (a 0.1.0 store may hold one; no rule

@@ -132,8 +132,10 @@ hierarchy", and a reader that lists the store sees the component.
 The alternative, plain files in a directory with no group metadata, was measured on the published
 EUR store (#65, zarr-python 3.4.2): `zarr.open_group`, `ogld.open` and all 27 of `ogld.validate`'s
 rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is not recognized as a
-component of a Zarr hierarchy.` The single-chunk form below removes that warning. It was checked
-only by a small synthetic test so far: #67 measures it on a real store.
+component of a Zarr hierarchy.` The single-chunk form below removes that warning. The committed
+Test Store is that check since #67: `partners/` is a node of its hierarchy, `members()` lists it
+with no warning (`tests/test_partner_rows.py`), and the reader and the ten rules resolve each
+chunk file from the array's own metadata (`tests/test_partner_row_reads.py`).
 
 Both arrays have **one chunk each**, of the whole array, and no shard index. The `frames` array's
 codec chain is `bytes` alone, with **no compressor**, because the bytes it holds are already zstd
@@ -510,9 +512,9 @@ has a breaker in `tests/contract/test_store.py`.
 | `partners.codes` | every code is one of the store's encoding (as `near.codes`) |
 | `partners.distance` | every entry lies within `far_bp` |
 | `partners.threshold` | \|code\| ≥ `partner_code_floor` within `near_bp`, ≥ `far_code_floor` beyond it |
-| `partners.symmetric` | (l, m, c) is an entry exactly when (m, l, c) is (the 64-bit hash-sum method of today's `index.symmetric`) |
-| `partners.near` | every entry within `near_bp` carries the Near Band's code, and every Near Band code at the Partner Floor is an entry (today's `index.near` method, at the new floor) |
-| `partners.far` | the entries beyond `near_bp`, in each pair's earlier row, are exactly the Far Pairs, with the same codes (today's `far.index`, read against the Partner Rows) |
+| `partners.symmetric` | (l, m, c) is an entry exactly when (m, l, c) is (the 64-bit hash-sum method of the retired `index.symmetric`) |
+| `partners.near` | every entry within `near_bp` carries the Near Band's code, and every Near Band code at the Partner Floor is an entry (the retired `index.near`'s method, at the new floor) |
+| `partners.far` | the entries beyond `near_bp`, in each pair's earlier row, are exactly the Far Pairs, with the same codes (the retired `far.index`, read against the Partner Rows) |
 | `provenance.partner_threshold` | t_partner ≤ t_far; `partner_code_floor` recomputes from t_partner at the recorded scale |
 
 `partners.near` and `partners.far` together prove §3's "copies, by design". With

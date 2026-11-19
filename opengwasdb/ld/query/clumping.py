@@ -30,11 +30,12 @@ def clump(
     """Clump the present `alids` by `score`, strongest first (ogld#6).
 
     `score` is |z| or −log10 p, one per ALID, finite and ≥ 0; never raw p, which
-    underflows to 0 past |z| ≈ 38. Judged by `ogld.format.judge_request` first, which refuses a
-    threshold below t_partner within `near_bp` and a store that holds no Partner Rows, before any
-    frame is read. Each lead's joiners are its Partner Rows row among the hits still open in its
-    component (partner-rows §8.2); a pair the row does not hold is below the Partner Floor or is
-    no pair, and cannot reach an answered r2.
+    underflows to 0 past |z| ≈ 38. Judged by `ogld.query.requests.window_of` first, which asks
+    `ogld.format.judge_partner_request`: it refuses a store that holds no Partner Rows and a
+    threshold below the store's own t_partner within `near_bp`, naming the store and both numbers,
+    before any frame is read. Each lead's joiners are its Partner Rows row among the hits still
+    open in its component (partner-rows §8.2); a pair the row does not hold is below the Partner
+    Floor or is no pair, and cannot reach an answered r2.
 
     Greedy: the strongest unclumped variant leads, and every unclumped variant within
     the window (distance < W) with r̂² > r2 of it joins it, as `plink2 --clump` does (spec
