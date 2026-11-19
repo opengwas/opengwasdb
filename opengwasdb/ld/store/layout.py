@@ -74,6 +74,10 @@ FRAMES_BUILDING: Final = "frames.bin"
 FRAMES_FILL: Final = 0
 #: The offsets': the largest uint64, which no offset of a whole number of bytes is.
 FRAMES_INDEX_FILL: Final = int(np.iinfo(np.uint64).max)
+#: The dtype the offsets are written and hashed in: little-endian whatever this machine is,
+#: because their chunk file is the offsets' bytes (partner-rows §5.1, §5.3). The writer, the
+#: reader and the rule that hashes the chunk all take it from here.
+FRAMES_INDEX_DTYPE: Final = np.dtype("<u8")
 
 
 def never_data(path: str, values: npt.ArrayLike) -> npt.NDArray[np.bool_]:
@@ -270,7 +274,7 @@ def new_frames_index(group: zarr.Group, length: int) -> zarr.Array[Any]:
     return group.create_array(
         FRAMES_INDEX,
         shape=(length,),
-        dtype="<u8",
+        dtype=FRAMES_INDEX_DTYPE,
         chunks=(length,),
         compressors=[],
         fill_value=FRAMES_INDEX_FILL,

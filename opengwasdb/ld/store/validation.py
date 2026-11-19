@@ -2118,7 +2118,7 @@ def _frames_index(
 
 def _frames_index_hash(path: str, offsets: npt.NDArray[np.int64], recorded: object) -> _Problems:
     """The `frames_idx` chunk is the little-endian offsets' bytes, as its hash records them."""
-    digest = hashlib.sha256(offsets.astype("<u8").tobytes()).hexdigest()
+    digest = hashlib.sha256(offsets.astype(layout.FRAMES_INDEX_DTYPE).tobytes()).hexdigest()
     if digest != recorded:
         yield (
             f"{path}/{layout.FRAMES_INDEX}",
