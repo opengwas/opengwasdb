@@ -581,7 +581,6 @@ def _alid_companion(path: Path, pointer: Any) -> AlidCompanion:
         if stat.st_size != size or file_sha256(payload) != manifest["payloads"][descriptor.name]:
             raise ValueError(f"{payload}: length or content hash differs")
         identities.append((descriptor.name, file_identity(stat)))
-    identities.append((ALID_MMAP_MANIFEST, file_identity((directory / ALID_MMAP_MANIFEST).stat())))
     return AlidCompanion(directory, count, tuple(identities))
 
 

@@ -70,8 +70,9 @@ correspondence pass or mandatory prevalidation is added for trusted ogld publica
 rule includes integrity and bounded exact comparison; there are still 30 validation rules.
 A self-consistent row permutation is a breaker: range, uniqueness and hashes pass, but
 canonical correspondence fails. Artifact bytes contain no filesystem paths or inode identity,
-so an unchanged Store copy derives identical bytes. Runtime identity additionally includes
-manifest/payload device, inode, size, mtime and ctime, detecting replacement before mapping.
+so an unchanged Store copy derives identical bytes. Payload descriptors retain device, inode,
+size, mtime and ctime only for the opened-file comparison before mapping. The already-digested
+manifest needs no runtime stat identity, and the bundle has no unused sharing identity.
 
 **First-use ruling (#81 fix round 1):** opening does not verify or map the companion. The
 first fitting lookup checks the manifest, all canonical source pins and payload hashes, then
@@ -87,7 +88,7 @@ completeness, fitting misses need no scan. This extends ADR 0010's always-scan-m
 only for the validated companion. Missing pointers and HTTP retain the canonical fallback;
 a present broken publication refuses rather than silently falling back.
 
-`reader._MappedAlids` owns mappings and representation identity. Lookup returns independent
+`reader._MappedAlids` owns its mappings and their diagnostic path. Lookup returns independent
 int64 rows. Release serializes with lookup, discards views, then closes mappings, and is
 idempotent. `StoreReader.close` releases the bundle with its Partner Rows resources. Failed
 attachment immediately releases already acquired mappings, even with a retained traceback.

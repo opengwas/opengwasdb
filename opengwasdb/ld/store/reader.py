@@ -163,7 +163,6 @@ class _MappedAlids:
     """
 
     def __init__(self, companion: layout.AlidCompanion) -> None:
-        self.identity = (str(companion.path), companion.identity)
         self._path = companion.path
         self._lock = threading.Lock()
         self._maps: list[mmap.mmap] = []
