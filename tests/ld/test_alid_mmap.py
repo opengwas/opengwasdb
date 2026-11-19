@@ -66,6 +66,36 @@ def test_manifest_pins_every_canonical_file(tmp_path: Path) -> None:
     assert {k: v for k, v in manifest["sources"].items() if k != "zarr.json"} == expected
 
 
+@pytest.mark.parametrize(
+    "damage", ["nonobject", "negative-count", "float-count", "bool-count", "sources"]
+)
+def test_malformed_manifest_fields_refuse_with_a_concrete_diagnostic(
+    tmp_path: Path, damage: str
+) -> None:
+    from ogld.format import InputError
+    from ogld.store import StoreReader
+    from ogld.store.validation import validate
+
+    store = written(tmp_path / "store")
+    manifest = json.loads((generation(store) / "manifest.json").read_bytes())
+    if damage == "nonobject":
+        manifest = []
+        reason = "manifest must be an object"
+    elif damage == "sources":
+        manifest["sources"] = []
+        reason = "sources must pin canonical files"
+    else:
+        manifest["count"] = {"negative-count": -1, "float-count": 3.0, "bool-count": True}[damage]
+        reason = "count must be a nonnegative integer"
+    republish(store, manifest)
+    with pytest.raises(InputError, match=reason) as stopped:
+        StoreReader.open(store).rows_of(["22:200:A:C"])
+    assert_companion_diagnostic(store, str(stopped.value), "manifest.json")
+    findings = validate(store)["alid_index.count"]
+    assert findings
+    assert_companion_diagnostic(store, findings[0].message, "manifest.json")
+
+
 def test_schema_one_refuses_with_a_rederivation_instruction(tmp_path: Path) -> None:
     from ogld.format import InputError
     from ogld.store import StoreReader
