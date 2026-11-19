@@ -1532,7 +1532,9 @@ The canonical Zarr index of §2 remains authoritative. Local Stores may addition
 canonical bytes without another sort; rows copy its rows as signed little-endian int32.
 The exact deterministic manifest schema and source/content pins are defined in ADR 0012
 and owned by `ogld.store.layout`. Schema 2 pins normalized root metadata and every canonical
-index file (array metadata and all chunk/shard files), not just array metadata. Schema 1
+index file (array metadata and all chunk/shard files), not just array metadata. Source inventory
+follows shard-directory links and refuses cycles, repeated directories, walk errors and
+nonregular sources rather than trusting an incomplete file set. Schema 1
 refuses with the Store/generation/manifest and an instruction to re-derive using
 `scripts/derive_alid_mmap.py`. A mismatched source pin also names the concrete canonical file.
 An absent root `alid_mmap` attribute means no companion.

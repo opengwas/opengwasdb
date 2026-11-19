@@ -49,7 +49,9 @@ The helper first applies the canonical index's existing four validation rules.
 
 Canonical file pins bind the companion to the actual Store, not merely equal metadata.
 Missing, added or changed canonical files refuse, naming the Store, generation and concrete
-source file. Files remain immutable while a reader uses its checked mappings. Exact validation
+source file. Inventory follows shard-directory symlinks rather than silently omitting their
+files; cycles, repeated directories, walk errors and nonregular sources refuse. Files remain
+immutable while a reader uses its checked mappings. Exact validation
 also compares companion payloads to canonical arrays; payload hashes alone do not prove
 correspondence. The existing `alid_index.count`
 rule includes integrity and bounded exact comparison; there are still 30 validation rules.

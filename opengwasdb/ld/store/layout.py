@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from os import stat_result
 from pathlib import Path
@@ -445,11 +446,34 @@ def alid_mmap_sources(path: Path) -> dict[str, str]:
     for payload in ALID_MMAP_PAYLOADS:
         # Metadata is mandatory even when a whole array directory was lost. Include every
         # other file too, so deleting, replacing or adding a shard changes the pinned set.
-        sources[f"{payload.source}/zarr.json"] = file_sha256(path / payload.source / "zarr.json")
-        for source in sorted((path / payload.source).rglob("*")):
-            if source.is_file() and source.name != "zarr.json":
+        metadata = path / payload.source / "zarr.json"
+        sources[str(metadata.relative_to(path))] = file_sha256(metadata)
+        for source in _alid_index_files(path / payload.source):
+            if source != metadata:
                 sources[str(source.relative_to(path))] = file_sha256(source)
     return sources
+
+
+def _alid_index_files(directory: Path) -> Iterator[Path]:
+    """Follow local shard links without silently missing files or looping (ADR 0012)."""
+    seen = set()
+    for parent, directories, files in directory.walk(
+        on_error=_source_walk_error, follow_symlinks=True
+    ):
+        identity = file_identity(parent.stat())[:2]
+        if identity in seen:
+            raise ValueError(f"{parent}: repeated canonical directory (cycle or alias)")
+        seen.add(identity)
+        directories.sort()
+        for name in sorted(files):
+            source = parent / name
+            if not source.is_file():
+                raise ValueError(f"{source}: canonical source is not a regular file")
+            yield source
+
+
+def _source_walk_error(error: OSError) -> None:
+    raise error
 
 
 def alid_mmap_source_change(before: dict[str, str], after: dict[str, str]) -> str | None:

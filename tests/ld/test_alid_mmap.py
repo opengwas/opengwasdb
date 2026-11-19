@@ -11,7 +11,10 @@ import zarr
 from test_alid_index import written
 
 
-def test_a_companion_copied_from_identical_metadata_cannot_change_rows(tmp_path: Path) -> None:
+@pytest.mark.parametrize("linked_keys", [False, True])
+def test_a_companion_copied_from_identical_metadata_cannot_change_rows(
+    tmp_path: Path, linked_keys: bool
+) -> None:
     import shutil
     from unittest.mock import patch
 
@@ -24,6 +27,19 @@ def test_a_companion_copied_from_identical_metadata_cannot_change_rows(tmp_path:
     changed = list(WIDTH_ROWS)
     changed[2] = ("22", 200, "A", "T")
     b = written(tmp_path / "b", changed)
+    if linked_keys:
+        from test_alid_index import without_companion
+
+        from ogld.store.assembly import derive_alid_mmap
+
+        for store in (a, b):
+            without_companion(store)
+            chunks = store / "variants/alid_index/alid/c"
+            assert chunks.is_dir()
+            destination = store / "key-shards"
+            chunks.rename(destination)
+            chunks.symlink_to(destination, target_is_directory=True)
+            derive_alid_mmap(store)
     for array in ("alid", "row"):
         relative = f"variants/alid_index/{array}/zarr.json"
         assert (a / relative).read_bytes() == (b / relative).read_bytes()
@@ -45,6 +61,25 @@ def test_a_companion_copied_from_identical_metadata_cannot_change_rows(tmp_path:
     assert str(b) in message
     assert pointer["generation"] in message
     assert "variants/alid_index/alid/c/" in message
+
+
+@pytest.mark.parametrize("damage", ["cycle", "broken-link"])
+def test_canonical_directory_cycles_and_broken_links_refuse(tmp_path: Path, damage: str) -> None:
+    from ogld.format import InputError
+    from ogld.store import StoreReader
+    from ogld.store.validation import validate
+
+    store = written(tmp_path / "store")
+    chunks = store / "variants/alid_index/alid/c"
+    assert chunks.is_dir()
+    link = chunks / damage
+    link.symlink_to(chunks if damage == "cycle" else chunks / "missing", target_is_directory=True)
+    with pytest.raises(InputError) as stopped:
+        StoreReader.open(store).rows_of(["22:200:A:C"])
+    assert_companion_diagnostic(store, str(stopped.value), str(link))
+    findings = validate(store)["alid_index.count"]
+    assert findings
+    assert_companion_diagnostic(store, findings[0].message, str(link))
 
 
 def test_manifest_pins_every_canonical_file(tmp_path: Path) -> None:
