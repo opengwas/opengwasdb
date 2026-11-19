@@ -234,6 +234,30 @@ def release_of(version: object) -> tuple[int, ...] | None:
         return None
 
 
+#: The format version that added the Partner Rows: a store of it, or of a later one, records the
+#: `t_partner` their provenance claims, and a store below it has no Partner Rows at all (§13).
+PARTNER_ROWS_SINCE: Final = (0, 2, 0)
+
+
+def claims_partner_rows(recorded: object) -> bool:
+    """Whether a store's provenance claims the Partner Rows: the recorded **format version** is
+    0.2.0 or later **and** the Partner Threshold is recorded (spec §7, §13; partner-rows §6.2).
+
+    Both halves are needed, and the version comes first: a 0.1.0 store that carries `t_partner`,
+    or a whole `partners/`, holds a residue nothing has claimed — a derivation killed between
+    publishing the component and writing the provenance leaves one — so nothing reads those
+    frames and nothing counts them as the store's (ogld#69). The three callers are one rule here:
+    the reader (`StoreReader.has_partner_rows`), validation (`partners_judged`) and the derivation
+    (`derive_partners`, which settles an unclaimed residue rather than refusing it as nothing to
+    derive). A provenance that is not an object, or a version that is not `MAJOR.MINOR.PATCH`,
+    claims nothing.
+    """
+    if not isinstance(recorded, dict):
+        return False
+    version = release_of(recorded.get("format_version"))
+    return version is not None and version >= PARTNER_ROWS_SINCE and "t_partner" in recorded
+
+
 #: Every key spec §7 requires, dotted where it is nested. `provenance.complete` checks them.
 REQUIRED_KEYS: Final = (
     "format_version",

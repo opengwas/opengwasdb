@@ -48,7 +48,12 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.format.provenance import READABLE_FORMATS, VALIDATION_RULES, release_of
+from ogld.format.provenance import (
+    READABLE_FORMATS,
+    VALIDATION_RULES,
+    claims_partner_rows,
+    release_of,
+)
 from ogld.format.semantics import InputError
 from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from ogld.store import layout
@@ -314,8 +319,7 @@ class _Store:
         no `t_partner` — so judging them here would fail a store no one can use and complete
         nothing; the device that completes or rebuilds it is `ogld derive-partners` (ogld#69).
         """
-        version = _release(_lookup(self.provenance, "format_version"))
-        return version is not None and version >= (0, 2, 0)
+        return claims_partner_rows(self.provenance)
 
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         """One chromosome's positions, kept as a reader keeps them (spec §10)."""

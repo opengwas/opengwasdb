@@ -45,7 +45,7 @@ from ogld.format import (
     InputError,
     Provenance,
     REncoding,
-    release_of,
+    claims_partner_rows,
 )
 from ogld.format.geometry import (
     blocks,
@@ -660,8 +660,7 @@ class StoreReader:
         0.2.0 has none, whatever keys or groups a store carries: they are a residue nothing has
         claimed (ogld#69).
         """
-        recorded = release_of(self._provenance.get("format_version"))
-        return recorded is not None and recorded >= (0, 2, 0) and "t_partner" in self._provenance
+        return claims_partner_rows(self._provenance)
 
     def partner_row(self, chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         """One variant's Partner Rows row: every partner within far_bp at its distance's floor,

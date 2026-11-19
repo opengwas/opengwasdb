@@ -60,6 +60,7 @@ from ogld.format import (
     Provenance,
     REncoding,
     Sourced,
+    claims_partner_rows,
     t_far,
 )
 from ogld.format.geometry import (
@@ -1235,9 +1236,13 @@ def _named(
 
 
 def _claimed_at(recorded: dict[str, Any], t_partner: float, floor: int, store: Path) -> bool:
-    """Whether the provenance claims Partner Rows already, and at this floor. A store derived at
-    another one is refused rather than given frames at a second: a row would hold two floors."""
-    if "t_partner" not in recorded:
+    """Whether the provenance claims Partner Rows already, and at this floor (spec §13;
+    partner-rows §6.2). The claim is `ogld.format.claims_partner_rows`, one rule for the reader,
+    validation and this derivation: a store that records 0.1.0 is unclaimed whatever keys it
+    carries, so a run settles its residue instead of refusing it as nothing to derive. A store
+    that does claim them at another floor is refused rather than given frames at a second: a row
+    would hold two floors."""
+    if not claims_partner_rows(recorded):
         return False
     said, at = recorded.get("t_partner"), recorded.get("partner_code_floor")
     if said != t_partner or at != floor:

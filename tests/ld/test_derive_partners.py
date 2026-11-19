@@ -19,9 +19,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import zarr
-from store_copies import TEST_STORE, unpartnered
+from store_copies import TEST_STORE, copy_store, unpartnered
 
 import ogld
 from ogld import cli
@@ -389,6 +390,50 @@ def test_a_rerun_claims_an_unclaimed_component_once_the_rules_accept_it(unclaime
     assert made is not None
     assert made["format_version"] == "0.2.0"
     assert_the_builds_bytes(unclaimed)
+
+
+def unclaimed_keeping_keys(to: Path) -> Path:
+    """A copy of the committed Test Store that keeps its Partner Rows' keys and frames but records
+    format 0.1.0: a component no provenance claims, whatever keys a store carries beside it
+    (spec §7, §13; partner-rows §6.2).
+
+    It is the residue `_settle` exists for, and the one the final review reproduced: a 0.1.0 store
+    whose `partners/` is whole and whose `t_partner` is recorded still has no Partner Rows, so
+    `derive-partners` settles it and never answers "nothing to derive" (ogld#64).
+    """
+    store = copy_store(to)
+    recorded = json.loads((store / "zarr.json").read_text())
+    recorded["attributes"]["ld_store"]["format_version"] = "0.1.0"
+    (store / "zarr.json").write_text(json.dumps(recorded))
+    assert "t_partner" in provenance(store), "the fixture keeps the keys, or it proves nothing"
+    assert (store / "partners" / "21" / "frames" / "c" / "0").exists(), "and the frames"
+    return store
+
+
+def test_a_0_1_0_store_that_keeps_the_keys_is_settled_not_refused(tmp_path: Path) -> None:
+    """The recorded **format version** decides whether a store has Partner Rows, so a 0.1.0 store
+    that keeps the keys and the frames is unclaimed: `derive-partners` settles the residue rather
+    than claiming there is nothing to derive, and the store is the 0.2.0 one it was, byte for
+    byte, clump included (spec §7, §13; partner-rows §6.2; ogld#64)."""
+    store = unclaimed_keeping_keys(tmp_path / "store")
+    alid = first_alid(store)
+    with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
+        ogld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000)
+    made = derive_partners(store, t_partner=T_PARTNER)
+    assert made is not None, "the residue is settled and the provenance claims it"
+    assert made["format_version"] == "0.2.0"
+    assert made["t_partner"] == T_PARTNER
+    assert_the_builds_bytes(store)
+    assert failing(store) == [], "the claimed component passes the ten rules it is judged by"
+    alids = zarr.open_group(str(store), mode="r")["variants"]["alid"]
+    assert isinstance(alids, zarr.Array)
+    kept = [str(a) for a in alids[:40]]
+    score = np.linspace(1.0, 6.0, len(kept))
+    settled = ogld.open(store).clump(kept, score, r2=T_PARTNER, kb=1000)
+    built = ogld.open(TEST_STORE).clump(kept, score, r2=T_PARTNER, kb=1000)
+    assert len(settled) == len(built), "the same variants are present in both"
+    np.testing.assert_array_equal(settled.lead, built.lead)
+    np.testing.assert_array_equal(settled.r, built.r)
 
 
 def drop_claim(store: Path) -> None:
