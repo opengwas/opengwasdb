@@ -10,8 +10,10 @@ the source never published -- and the witness either sees it or it does not.
 sources. Each test here builds a small GWAS-SSF source from that circumstance's
 *mechanism* (how such a file comes to be written, never by running the check)
 and pins the verdict the document claims: refused, compared and stored, or
-skipped. A circumstance the check cannot see is pinned as stored, on purpose:
-the test then says exactly what a later refusal (#371) changes.
+skipped. Each is resolved under the p-value test its Source Collection declares
+(#371, ADR 0085): MR-MEGA is refused by that declaration, a joint test skips the
+check. A circumstance nothing sees is pinned as stored, on purpose: the test
+then says exactly what a later rule changes.
 
 Circumstances already pinned elsewhere are named in the document and not
 repeated: the wrong effect scale (#345) and a z carrying no signal (#370) in
@@ -35,7 +37,8 @@ from test_resolve import _alid, _panel_frequencies, _write_panel
 from test_resolve_effect_consistency import _BASE, _resolve, _write
 
 from opengwasdb.ancestry.reference import AncestryReference
-from opengwasdb.build.effect_consistency import log10_two_sided_p
+from opengwasdb.build.effect_consistency import ConsistencySkip, log10_two_sided_p
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 
 _DOC = Path(__file__).resolve().parents[1] / "docs" / "statistic-disagreement.md"
@@ -164,31 +167,42 @@ class Circumstance:
     """One row of docs/statistic-disagreement.md, as the resolver must judge it.
 
     The medians and hit counts are the fixture's own, taken once from the file
-    it writes; `false_hits` and `lost_hits` are what the Store gets wrong about
-    significance, which no median shows.
+    it writes; `false_hits` and `lost_hits` are what the Store would get wrong
+    about significance, which no median shows.
     """
 
     write: Callable[[Path], Path]
-    refused_by: str | None  # None: compared, and the Analysis is stored
+    declared: PValueTest
+    #: "p_value_test": refused by the declaration, unread; a rule's name: refused
+    #: by the check; None: stored (compared, or skipped for a joint test).
+    refused_by: str | None
     median_abs_delta: float
     median_delta: float
     false_hits: int  # stored |z| >= 5.45 where the source's p > 1e-4
     lost_hits: int  # stored |z| < 3.72 where the source's p <= 5e-8
 
 
+_WALD, _JOINT, _MR_MEGA = PValueTest.WALD_1DF, PValueTest.JOINT_2DF, PValueTest.MR_MEGA
+
 CIRCUMSTANCES: dict[str, Circumstance] = {
-    "mr_mega": Circumstance(_mr_mega, None, 0.2574, -0.0788, 5, 1),
-    "joint_two_df": Circumstance(_joint_two_df, None, 0.2426, -0.1351, 0, 20),
-    "p_is_one_sided": Circumstance(_p_is_one_sided, "median_delta", 0.3010, 0.3010, 31, 0),
-    "p_from_another_model": Circumstance(_p_from_another_model, None, 0.1442, -0.0462, 0, 0),
+    "mr_mega": Circumstance(_mr_mega, _MR_MEGA, "p_value_test", 0.2574, -0.0788, 5, 1),
+    "joint_two_df": Circumstance(_joint_two_df, _JOINT, None, 0.2426, -0.1351, 0, 20),
+    "p_is_one_sided": Circumstance(
+        _p_is_one_sided, _WALD, "median_delta", 0.3010, 0.3010, 31, 0
+    ),
+    "p_from_another_model": Circumstance(
+        _p_from_another_model, _WALD, None, 0.1442, -0.0462, 0, 0
+    ),
     "low_frequency_rows_inflated": Circumstance(
-        _low_frequency_rows_inflated, None, 0.0, 0.0, 25, 0
+        _low_frequency_rows_inflated, _WALD, None, 0.0, 0.0, 25, 0
     ),
     "se_printed_to_two_decimals": Circumstance(
-        _se_printed_to_two_decimals, None, 0.1216, -0.1216, 0, 0
+        _se_printed_to_two_decimals, _WALD, None, 0.1216, -0.1216, 0, 0
     ),
-    "sample_size_weighted_z": Circumstance(_sample_size_weighted_z, None, 0.0396, 0.0015, 0, 0),
-    "p_at_a_floor": Circumstance(_p_at_a_floor, None, 0.0, 0.0, 0, 0),
+    "sample_size_weighted_z": Circumstance(
+        _sample_size_weighted_z, _WALD, None, 0.0396, 0.0015, 0, 0
+    ),
+    "p_at_a_floor": Circumstance(_p_at_a_floor, _WALD, None, 0.0, 0.0, 0, 0),
 }
 
 #: How closely a recorded median must match the fixture's literal.
@@ -217,11 +231,8 @@ def _from_file(path: Path) -> dict[str, float | int]:
     }
 
 
-@pytest.mark.parametrize("name", list(CIRCUMSTANCES))
-def test_each_circumstance_reaches_the_verdict_the_document_claims(
-    tmp_path: Path, panel: AncestryReference, name: str
-) -> None:
-    case = CIRCUMSTANCES[name]
+def _written(tmp_path: Path, case: Circumstance) -> Path:
+    """The circumstance's source, asserted to be what its docstring says it is."""
     path = case.write(tmp_path)
     measured_in_file = _from_file(path)
     # The fixture reaches the check whole and is what its docstring says it is.
@@ -233,9 +244,32 @@ def test_each_circumstance_reaches_the_verdict_the_document_claims(
     assert measured_in_file["median_delta"] == pytest.approx(case.median_delta, abs=_TOLERANCE)
     assert measured_in_file["false_hits"] == case.false_hits
     assert measured_in_file["lost_hits"] == case.lost_hits
+    return path
 
-    result = _resolve(path, panel)
 
+@pytest.mark.parametrize("name", list(CIRCUMSTANCES))
+def test_each_circumstance_reaches_the_verdict_the_document_claims(
+    tmp_path: Path, panel: AncestryReference, name: str
+) -> None:
+    case = CIRCUMSTANCES[name]
+    path = _written(tmp_path, case)
+
+    result = _resolve(path, panel, p_value_test=case.declared)
+
+    if case.refused_by == "p_value_test":
+        assert result.error.startswith(f"p_value_test is {case.declared}")
+        assert result.diagnostics.rows_read == 0
+        return
+    measured = result.diagnostics.effect_consistency
+    assert measured is not None
+    if case.declared is _JOINT:
+        assert measured.skip_reason is ConsistencySkip.JOINT_TEST_P_VALUE
+        assert not result.error
+        return
+    _assert_compared(result, case)
+
+
+def _assert_compared(result, case: Circumstance) -> None:
     measured = result.diagnostics.effect_consistency
     assert measured is not None and measured.skip_reason is None
     assert measured.n_rows_compared == _N_NULL + _N_SIGNAL
@@ -243,6 +277,24 @@ def test_each_circumstance_reaches_the_verdict_the_document_claims(
     assert measured.median_delta == pytest.approx(case.median_delta, abs=_TOLERANCE)
     assert measured.refused_by == case.refused_by
     assert bool(result.error) == (case.refused_by is not None)
+
+
+@pytest.mark.parametrize("name", ["mr_mega", "joint_two_df"])
+def test_a_source_declared_a_wald_test_when_it_is_not_is_stored(
+    tmp_path: Path, panel: AncestryReference, name: str
+) -> None:
+    """The declaration is trusted, and nothing checks it: an MR-MEGA or joint-test
+    source declared `wald_1df` is compared, passes, and is stored as it was
+    before #371."""
+    case = CIRCUMSTANCES[name]
+    path = _written(tmp_path, case)
+
+    result = _resolve(path, panel, p_value_test=_WALD)
+
+    _assert_compared(result, Circumstance(
+        case.write, _WALD, None, case.median_abs_delta, case.median_delta,
+        case.false_hits, case.lost_hits,
+    ))
 
 
 def test_the_document_lists_exactly_these_circumstances() -> None:

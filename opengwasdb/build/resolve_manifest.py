@@ -82,6 +82,11 @@ from opengwasdb.model.info_score_policy import (
 )
 from opengwasdb.model.maf_policy import MAF_COLUMNS, MafPolicy, parse_maf_policy
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
+from opengwasdb.model.p_value_test import (
+    PValueTest,
+    parse_p_value_test,
+    require_p_value_test_column,
+)
 from opengwasdb.readers.assembly import assembly_plan, declared_source_build
 from opengwasdb.readers.besd import BESD_CAPABILITY
 from opengwasdb.readers.column_map import (
@@ -136,6 +141,8 @@ class ResolveManifestRow:
     stored_effect_scale: StoredEffectScale
     original_sd_method: OriginalSdMethod
     sample_size: float | None
+    #: Which test the source's p-value comes from (issue #371); no default.
+    p_value_test: PValueTest
     size_bytes: int | None = None
     checksum: str | None = None
     checksum_algorithm: str | None = None
@@ -438,6 +445,10 @@ def _parse_manifest_row(
         raise ValueError(
             f"analyses manifest {path}: analysis {analysis_id!r} has invalid MAF policy: {exc}"
         ) from exc
+    try:
+        p_value_test = parse_p_value_test(raw)
+    except ValueError as exc:
+        raise ValueError(f"analyses manifest {path}: analysis {analysis_id!r}: {exc}") from exc
 
     return ResolveManifestRow(
         manifest_index=idx,
@@ -452,6 +463,7 @@ def _parse_manifest_row(
         stored_effect_scale=scale,
         original_sd_method=method,
         sample_size=sample_size,
+        p_value_test=p_value_test,
         size_bytes=size_bytes,
         checksum=checksum,
         checksum_algorithm=algo,
@@ -501,6 +513,7 @@ def read_resolve_manifest(
         )
 
     cols = resolve_manifest_columns(fieldnames, manifest_path)
+    require_p_value_test_column(fieldnames, manifest_path)
     known = known_capabilities()
     seen_ids: set[str] = set()
     rows = [
@@ -799,6 +812,9 @@ def _build_analysis_fingerprints(
             "info_score_threshold": row.info_score_policy.info_score_threshold,
             "info_score_state": row.info_score_policy.state.value,
             "maf_threshold": row.maf_policy.maf_threshold,
+            # Issue #371: the declaration decides whether the Analysis is
+            # refused, checked or skipped, so it is bound like a threshold.
+            "p_value_test": row.p_value_test.value,
             "imputation_score_column": (
                 row.info_score_policy.imputation_score_declaration.column_name
                 if row.info_score_policy.imputation_score_declaration else None
@@ -927,6 +943,7 @@ def _analysis_request(task: dict[str, Any]) -> AnalysisRequest:
         info_score_policy=task.get("info_score_policy", InfoScorePolicy()),
         maf_policy=task.get("maf_policy", MafPolicy()),
         effect_consistency_policy=_WORKER_EFFECT_CONSISTENCY,
+        p_value_test=PValueTest(task["p_value_test"]),
     )
 
 
@@ -1234,6 +1251,7 @@ def _build_single_task(
         "stored_effect_scale": row.stored_effect_scale.value,
         "original_sd_method": row.original_sd_method.value,
         "sample_size": row.sample_size,
+        "p_value_test": row.p_value_test.value,
         "info_score_policy": row.info_score_policy,
         "maf_policy": row.maf_policy,
         "column_map": (

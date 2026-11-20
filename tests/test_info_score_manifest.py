@@ -23,6 +23,7 @@ BASE = {
     "original_effect_scale": "sd",
     "original_sd_method": "source_provided",
     "ancestry_assignment_method": "source_trusted_no_af",
+    "p_value_test": "wald_1df",
 }
 DECLARATION = {
     "imputation_score_column": "quality_metric",

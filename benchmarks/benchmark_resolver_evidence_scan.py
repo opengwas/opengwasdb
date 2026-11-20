@@ -59,6 +59,7 @@ from opengwasdb.build.resolve import (
     resolve_analysis,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS, GwasSsfReader
 from opengwasdb.readers.tabular import (
     MetricsChunk,
@@ -290,6 +291,7 @@ def _request(row: AnalysisRow) -> AnalysisRequest:
         sample_size=row.sample_size,
         original_sd_method=row.method,
         stored_effect_scale=row.scale,
+        p_value_test=PValueTest.WALD_1DF,
     )
 
 

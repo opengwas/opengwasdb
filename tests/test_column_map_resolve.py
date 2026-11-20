@@ -42,7 +42,7 @@ genome_build = "GRCh38"
 """
 
 _HEADER = "analysis_id\tsource_file\tsource_reader_capability\tstored_effect_scale\t"
-_HEADER += "original_sd_method\tsample_size\n"
+_HEADER += "original_sd_method\tsample_size\tp_value_test\n"
 
 
 def _write_provider(path: Path, freqs: Any) -> Path:
@@ -65,13 +65,13 @@ def setup(tmp_path: Path) -> dict[str, Any]:
     mapped = tmp_path / "mapped.tsv"
     mapped.write_text(
         _HEADER + f"MAPPED\t{provider}\topengwasdb.column-map\tsd\t"
-        f"estimated_from_source_maf\t{int(_STUDY_N)}\n",
+        f"estimated_from_source_maf\t{int(_STUDY_N)}\twald_1df\n",
         encoding="utf-8",
     )
     reference = tmp_path / "reference.tsv"
     reference.write_text(
         _HEADER + f"MAPPED\t{ssf}\topengwasdb.gwas-ssf\tsd\t"
-        f"estimated_from_source_maf\t{int(_STUDY_N)}\n",
+        f"estimated_from_source_maf\t{int(_STUDY_N)}\twald_1df\n",
         encoding="utf-8",
     )
     return {
@@ -158,8 +158,9 @@ def test_a_map_no_row_reads_through_is_refused(setup: dict[str, Any]) -> None:
 def test_a_row_declaring_another_build_than_its_map_is_refused(setup: dict[str, Any]) -> None:
     manifest = setup["tmp"] / "hg19.tsv"
     manifest.write_text(
-        setup["mapped"].read_text().replace("sample_size\n", "sample_size\tsource_genome_build\n")
-        .replace(f"{int(_STUDY_N)}\n", f"{int(_STUDY_N)}\tGRCh37\n"),
+        setup["mapped"].read_text()
+        .replace("p_value_test\n", "p_value_test\tsource_genome_build\n")
+        .replace("wald_1df\n", "wald_1df\tGRCh37\n"),
         encoding="utf-8",
     )
 
@@ -211,6 +212,7 @@ def test_an_unmapped_record_s_fingerprint_is_unchanged_by_column_maps() -> None:
     from opengwasdb.ancestry.mixture import Gates
     from opengwasdb.build import resolve_manifest as rm
     from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+    from opengwasdb.model.p_value_test import PValueTest
 
     row = rm.ResolveManifestRow(
         manifest_index=0, analysis_id="GCST_FIXED",
@@ -218,6 +220,7 @@ def test_an_unmapped_record_s_fingerprint_is_unchanged_by_column_maps() -> None:
         source_reader_capability="opengwasdb.gwas-ssf", source_genome_build="hg38",
         stored_effect_scale=StoredEffectScale.SD,
         original_sd_method=OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, sample_size=10000.0,
+        p_value_test=PValueTest.WALD_1DF,
         size_bytes=123, checksum="ab" * 32, checksum_algorithm="sha256",
     )
     fingerprint = rm._build_analysis_fingerprints(
@@ -233,13 +236,15 @@ def test_an_unmapped_record_s_fingerprint_is_unchanged_by_column_maps() -> None:
     )
 
     assert "column_map" not in fingerprint["resolution_config"]
-    # ADR 0069 binds the effect-consistency threshold into every fingerprint, on
-    # purpose: records resolved without the check are not resumable. Without that
-    # one key the digest is still the pre-#281 literal, which is what this guards.
+    # ADR 0069 binds the effect-consistency threshold into every fingerprint, and
+    # #371 the declared p-value test, on purpose: records resolved without them are
+    # not resumable. Without those keys the digest is still the pre-#281 literal,
+    # which is what this guards.
+    added = ("effect_consistency", "p_value_test")
     without_check = {**fingerprint, "resolution_config": {
-        k: v for k, v in fingerprint["resolution_config"].items() if k != "effect_consistency"
+        k: v for k, v in fingerprint["resolution_config"].items() if k not in added
     }}
-    assert "effect_consistency" in fingerprint["resolution_config"]
+    assert all(key in fingerprint["resolution_config"] for key in added)
     assert rm.compute_fingerprint_digest(without_check) == _PRE_281_DIGEST
     assert fingerprint["fingerprint_digest"] != _PRE_281_DIGEST
 

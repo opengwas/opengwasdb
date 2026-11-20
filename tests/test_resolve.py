@@ -51,6 +51,7 @@ from opengwasdb.build.resolve import (
     resolve_analysis,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import (
     GWAS_VCF_CAPABILITY,
@@ -263,7 +264,10 @@ def _resolve(
     chunk_rows: int = DEFAULT_CHUNK_ROWS,
 ) -> AnalysisResolution:
     return resolve_analysis(
-        AnalysisRequest("GCST000001", path, sample_size, method, stored_effect_scale),
+        AnalysisRequest(
+            "GCST000001", path, sample_size, method, stored_effect_scale,
+            p_value_test=PValueTest.WALD_1DF,
+        ),
         reader=GwasSsfReader(path, chunk_rows=chunk_rows),
         reference=panel,
         gates=_GATES,
@@ -284,7 +288,9 @@ def _resolve_vcf(
     chunk_rows: int = 50_000,
 ) -> AnalysisResolution:
     return resolve_analysis(
-        AnalysisRequest("GCST000001", path, _STUDY_N, method, scale),
+        AnalysisRequest(
+            "GCST000001", path, _STUDY_N, method, scale, p_value_test=PValueTest.WALD_1DF
+        ),
         reader=GwasVcfReader(path, scale, chunk_rows=chunk_rows),
         reference=panel,
         gates=_GATES,
@@ -370,7 +376,8 @@ def test_quantitative_analysis_resolves_both_stages_from_one_scan(tmp_path, pane
 
     resolution = resolve_analysis(
         AnalysisRequest(
-            "GCST000001", path, _STUDY_N, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF
+            "GCST000001", path, _STUDY_N, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+            p_value_test=PValueTest.WALD_1DF,
         ),
         reader=reader,
         reference=panel,
@@ -961,6 +968,7 @@ def test_gwas_vcf_reverse_liftover_aligns_alleles_af_and_beta(tmp_path, panel):
         AnalysisRequest(
             "GCST000001", path, _STUDY_N,
             OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+            p_value_test=PValueTest.WALD_1DF,
         ),
         reader=reader, reference=shifted_panel, gates=_GATES,
     )
@@ -1456,7 +1464,10 @@ def test_an_early_stop_closes_the_source_stream(tmp_path, panel):
                 closed = True
 
     resolution = resolve_analysis(
-        AnalysisRequest("GCST000001", path, _STUDY_N, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF),
+        AnalysisRequest(
+            "GCST000001", path, _STUDY_N, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+            p_value_test=PValueTest.WALD_1DF,
+        ),
         reader=_CloseTrackingReader(),
         reference=panel,
         gates=_GATES,

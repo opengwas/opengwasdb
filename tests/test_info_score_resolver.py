@@ -50,8 +50,9 @@ def _manifest(
     method: str = "source_provided",
 ) -> Path:
     names = ["analysis_id", "source_file", "source_reader_capability", "source_genome_build",
-             "stored_effect_scale", "original_sd_method", "sample_size"]
-    values = [analysis_id, str(source), "opengwasdb.gwas-ssf", "GRCh38", "sd", method, "1000"]
+             "stored_effect_scale", "original_sd_method", "sample_size", "p_value_test"]
+    values = [analysis_id, str(source), "opengwasdb.gwas-ssf", "GRCh38", "sd", method, "1000",
+              "wald_1df"]
     if policy != "legacy":
         names.append("info_score_threshold")
         values.append(policy)
@@ -226,10 +227,11 @@ def test_whole_stream_evidence_stops_the_case_control_early_scan(tmp_path: Path)
         ) + "\n"
     )
     columns = ["analysis_id", "source_file", "source_reader_capability",
-               "source_genome_build", "stored_effect_scale", "original_sd_method", "sample_size"]
+               "source_genome_build", "stored_effect_scale", "original_sd_method", "sample_size",
+               "p_value_test"]
     values = [
         "GCST_CC", str(source), "opengwasdb.gwas-ssf", "GRCh38",
-        "log_or", "binary_trait", "1000",
+        "log_or", "binary_trait", "1000", "wald_1df",
     ]
     manifest = tmp_path / "manifest.tsv"
 

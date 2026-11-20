@@ -57,6 +57,7 @@ from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.effect_consistency import (
     DEFAULT_EFFECT_CONSISTENCY_POLICY,
     ConsistencySample,
+    ConsistencySkip,
     EffectConsistency,
     EffectConsistencyPolicy,
     check_sample_bound,
@@ -73,6 +74,7 @@ from opengwasdb.build.phenotype_sd import (
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.tabular import MetricsChunk
 
@@ -246,6 +248,10 @@ class AnalysisRequest:
     #: When the stored z-score contradicts the source's own p-value badly enough
     #: to refuse the Analysis (ADR 0069). Bound into the record's fingerprint.
     effect_consistency_policy: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY
+    #: Which test the source's p-value comes from (issue #371, ADR 0085). Declared
+    #: by the Source Collection, never inferred, and with no default: it decides
+    #: whether the Analysis is refused, checked against its p-value, or not.
+    p_value_test: PValueTest = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -555,8 +561,15 @@ def _scan_diagnostics(
         ),
         build_eligible_rows_se_from_ci=scan.build_eligible_rows_se_from_ci,
         build_eligible_rows_se_from_p_value=scan.build_eligible_rows_se_from_p_value,
-        effect_consistency=scan.consistency.measure(request.effect_consistency_policy),
+        effect_consistency=_effect_consistency(request, scan),
     )
+
+
+def _effect_consistency(request: AnalysisRequest, scan: _Scan) -> EffectConsistency:
+    """The check's verdict, or its skip when the declared p cannot witness beta/se."""
+    if request.p_value_test is PValueTest.JOINT_2DF:
+        return scan.consistency.skipped(ConsistencySkip.JOINT_TEST_P_VALUE)
+    return scan.consistency.measure(request.effect_consistency_policy)
 
 
 def _scan(
@@ -1063,6 +1076,25 @@ def _ancestry(
     return assign_ancestry(scan.panel_af, reference, gates)
 
 
+def _declared_refusal(request: AnalysisRequest) -> str:
+    """The controlled failure for an Analysis whose declaration refuses it, or "".
+
+    MR-MEGA scales each SE by the residual mean square, so beta/se is a
+    t-statistic on (cohorts - 2) df, not a z, and the Store would answer with a
+    p the source never published (issue #371: GCST90833021 returns z -1054 at
+    source p 0.81). No scan can make it a z, so none is made.
+    """
+    if request.p_value_test is not PValueTest.MR_MEGA:
+        return ""
+    return (
+        "p_value_test is mr_mega: MR-MEGA divides each effect by a standard error "
+        "scaled by its residual mean square, so beta/se is a t-statistic on "
+        "(cohorts - 2) degrees of freedom, not a z-score, and its p-value is a "
+        "separate 2-df test. A Store keeps z and answers with the p of z, so the "
+        "Analysis is refused (issue #371)."
+    )
+
+
 def _consistency_refusal(measured: EffectConsistency | None, request: AnalysisRequest) -> str:
     """The controlled failure for a source that contradicts its own p-value, or "".
 
@@ -1151,6 +1183,11 @@ def resolve_analysis(
     check_sample_bound(evidence_sample, request.effect_consistency_policy)
     if scan_limit is not None:
         scan_limit.validate()
+    declared = _declared_refusal(request)
+    if declared:
+        return unresolved(
+            request.analysis_id, request.source_file, declared, source_ancestry=source_ancestry
+        )
     scan = _Scan(consistency=ConsistencySample(evidence_sample))
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel = _ancestry_panel(reference, extraction_panel, source_ancestry)
