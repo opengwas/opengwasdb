@@ -625,7 +625,10 @@ Requirements:
 - `se` is non-negative.
 - `se` is on the same Stored Effect Scale as beta.
 - beta is queryable but derived from `z * se`.
-- p-value is queryable but derived from Z.
+- p-value is queryable but derived from Z. A source's own p-value is never
+  stored; where it is not the Wald p of the source's beta/se, a query returns a
+  p the source did not publish. The known circumstances, and what the engine
+  does about each, are in [statistic-disagreement.md](../statistic-disagreement.md).
 - INFO and sample size MUST NOT be required to reconstruct beta, SE, Z, or
   p-value. EAF is not required to reconstruct beta, Z, or p-value, and is
   not required to reconstruct a legacy or floating-point `se`. A
