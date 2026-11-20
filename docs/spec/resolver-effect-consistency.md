@@ -5,6 +5,10 @@ own p-value, and **fails the Analysis** when the two contradict each other
 systematically. The decision and its calibration are ADR 0069; this is the
 contract.
 
+Which disagreements this check refuses, and which it passes and the Store then
+keeps, are listed in [statistic-disagreement.md](../statistic-disagreement.md),
+each with the test that pins it.
+
 ## What is measured
 
 On the rows the build would admit (the INFO and MAF rule of ADR 0054) that have
