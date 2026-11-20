@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -141,6 +141,12 @@ def _resolve(
         **({} if policy is None else {"effect_consistency_policy": policy}),
         p_value_test=p_value_test,
     )
+    return _resolve_request(request, path, panel, evidence_sample=evidence_sample)
+
+
+def _resolve_request(
+    request: AnalysisRequest, path: Path, panel: AncestryReference, *, evidence_sample: int = 20_000
+) -> AnalysisResolution:
     return resolve_analysis(
         request,
         reader=GwasSsfReader(path),
@@ -778,6 +784,43 @@ def test_an_mr_mega_declaration_refuses_a_source_that_would_otherwise_resolve(
     assert result.diagnostics.rows_read == 0, "a declared refusal reads nothing"
     assert result.diagnostics.effect_consistency is None
     assert result.phenotype_sd is None
+
+
+#: The constructor as a caller without the engine's types sees it: opengwasdb-stores
+#: imports it untyped and passes its manifest's cell.
+_UNTYPED_REQUEST: Callable[..., AnalysisRequest] = AnalysisRequest
+
+
+def _untyped_request(declared: object, path: Path | str = "x.tsv.gz") -> AnalysisRequest:
+    return _UNTYPED_REQUEST(
+        "GCST000001", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+        p_value_test=declared,
+    )
+
+
+def test_a_declaration_given_as_its_string_is_the_declaration(tmp_path: Path, panel):
+    """A caller holding the manifest's cell, not the enum, gets the same verdict.
+
+    The resolver compares the declaration by identity. Unconverted, the string
+    "mr_mega" would match neither the refusal nor the skip, so it would be read
+    as a Wald test, silently.
+    """
+    path = _beta_file(tmp_path, beta_holds="odds_ratio")
+    assert _resolve(path, panel).error, "the source must fail when declared a Wald test"
+
+    refused = _resolve_request(_untyped_request("mr_mega", path), path, panel)
+    assert refused.error.startswith("p_value_test is mr_mega")
+    assert refused.diagnostics.rows_read == 0
+
+    joint = _resolve_request(_untyped_request("joint_2df", path), path, panel)
+    assert not joint.error
+    assert joint.diagnostics.effect_consistency.skip_reason is ConsistencySkip.JOINT_TEST_P_VALUE
+
+
+@pytest.mark.parametrize("value", ["", "wald", "MR_MEGA", None])
+def test_a_request_with_an_unknown_declaration_is_refused_when_made(value: object):
+    with pytest.raises(ValueError, match="analysis 'GCST000001': invalid p_value_test"):
+        _untyped_request(value)
 
 
 def test_a_joint_test_declaration_skips_the_check_a_wald_declaration_fails(

@@ -253,6 +253,20 @@ class AnalysisRequest:
     #: whether the Analysis is refused, checked against its p-value, or not.
     p_value_test: PValueTest = field(kw_only=True)
 
+    def __post_init__(self) -> None:
+        # The resolver compares the declaration by identity, so a caller's string
+        # ("mr_mega") would match neither the refusal nor the skip and be read as
+        # a Wald test, silently. Convert it here, and refuse what is not one.
+        try:
+            declared = PValueTest(self.p_value_test)
+        except ValueError as exc:
+            allowed = ", ".join(test.value for test in PValueTest)
+            raise ValueError(
+                f"analysis {self.analysis_id!r}: invalid p_value_test "
+                f"{self.p_value_test!r}; expected one of {allowed}"
+            ) from exc
+        object.__setattr__(self, "p_value_test", declared)
+
 
 @dataclass(frozen=True)
 class ScanDiagnostics:
