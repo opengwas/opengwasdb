@@ -30,8 +30,9 @@ from opengwasdb.build.effect_consistency import (
     EffectConsistencyPolicy,
 )
 from opengwasdb.build.resolve import AnalysisRequest, AnalysisResolution, resolve_analysis
-from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
+from opengwasdb.build.resolve_manifest import read_resolve_manifest, resolve_analyses_manifest
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, as_column_map
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS, GwasSsfReader
@@ -132,11 +133,13 @@ def _resolve(
     *,
     policy: EffectConsistencyPolicy | None = None,
     evidence_sample: int = 20_000,
+    p_value_test: PValueTest = PValueTest.WALD_1DF,
 ) -> AnalysisResolution:
     request = AnalysisRequest(
         "GCST000001", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
         StoredEffectScale.SD,
         **({} if policy is None else {"effect_consistency_policy": policy}),
+        p_value_test=p_value_test,
     )
     return resolve_analysis(
         request,
@@ -332,7 +335,8 @@ _FINNGEN_READERS = ("finngen-r13 map", "FinnGen reader")
 
 def _resolve_finngen(path: Path, panel: AncestryReference, read_by: str) -> AnalysisResolution:
     request = AnalysisRequest(
-        "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD
+        "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD,
+        p_value_test=PValueTest.WALD_1DF,
     )
     if read_by == "FinnGen reader":
         reader = resolve_reader(FINNGEN_R13_CAPABILITY, path, StoredEffectScale.SD)
@@ -427,17 +431,21 @@ def test_too_few_comparable_rows_is_skipped_not_judged(tmp_path: Path, panel):
 # --- the Resolution Record ---------------------------------------------------
 
 
-def _manifest(tmp_path: Path, sources: dict[str, Path]) -> Path:
+def _manifest(
+    tmp_path: Path, sources: dict[str, Path], declared: dict[str, str] | None = None
+) -> Path:
+    """One row per source; `declared` gives an Analysis another p-value test."""
     columns = [
         "analysis_id", "source_file", "source_reader_capability", "source_genome_build",
-        "stored_effect_scale", "original_sd_method", "sample_size",
+        "stored_effect_scale", "original_sd_method", "sample_size", "p_value_test",
     ]
     lines = ["\t".join(columns)]
     for analysis_id, source in sources.items():
         lines.append(
             "\t".join(
                 [analysis_id, str(source), "opengwasdb.gwas-ssf", "GRCh38",
-                 "sd", "source_provided", "1000"]
+                 "sd", "source_provided", "1000",
+                 (declared or {}).get(analysis_id, "wald_1df")]
             )
         )
     path = tmp_path / "manifest.tsv"
@@ -445,10 +453,12 @@ def _manifest(tmp_path: Path, sources: dict[str, Path]) -> Path:
     return path
 
 
-def _records(tmp_path: Path, sources: dict[str, Path], **kwargs) -> dict[str, dict]:
+def _records(
+    tmp_path: Path, sources: dict[str, Path], declared: dict[str, str] | None = None, **kwargs
+) -> dict[str, dict]:
     reference, groups, _ = _write_manifest_panel(tmp_path / "reference")
     summary = resolve_analyses_manifest(
-        _manifest(tmp_path, sources),
+        _manifest(tmp_path, sources, declared),
         tmp_path / "records",
         ancestry_reference=reference,
         ancestry_groups=groups,
@@ -549,6 +559,7 @@ def test_an_unscanned_source_has_no_measurement_not_a_skip(tmp_path: Path, panel
     request = AnalysisRequest(
         "GCST000001", missing, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
         StoredEffectScale.SD,
+        p_value_test=PValueTest.WALD_1DF,
     )
     result = resolve_analysis(
         request, reader=GwasSsfReader(missing), reference=panel, gates=_GATES,
@@ -676,7 +687,8 @@ def _map_without_p_value(tmp_path: Path):
 def test_a_source_whose_map_omits_p_value_is_skipped_not_refused(tmp_path: Path, panel):
     path = _finngen_with_halved_complement_p(tmp_path)
     request = AnalysisRequest(
-        "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD
+        "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD,
+        p_value_test=PValueTest.WALD_1DF,
     )
 
     def resolve_through(column_map):
@@ -730,3 +742,96 @@ def test_a_deflated_record_names_the_rule_that_refused_it(tmp_path: Path):
     assert record["status"] == "controlled_failure"
     measured = record["diagnostics"]["effect_consistency"]
     assert measured["refused"] is True and measured["refused_by"] == "median_delta"
+
+
+# --- the declared p-value test (#371, ADR 0085) ------------------------------
+
+
+def test_a_manifest_that_declares_no_p_value_test_is_refused(tmp_path: Path):
+    path = _manifest(tmp_path, {"X": _beta_file(tmp_path)})
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[0].endswith("\tp_value_test")
+    path.write_text("".join(line.rsplit("\t", 1)[0] + "\n" for line in lines), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required column 'p_value_test'.*no default"):
+        read_resolve_manifest(path)
+
+
+@pytest.mark.parametrize("cell", ["", " ", "NaN", "wald", "WALD_1DF"])
+def test_a_blank_or_unknown_declaration_names_its_analysis(tmp_path: Path, cell: str):
+    path = _manifest(tmp_path, {"X": _beta_file(tmp_path)}, {"X": cell})
+
+    with pytest.raises(ValueError, match="analysis 'X': invalid p_value_test"):
+        read_resolve_manifest(path)
+
+
+def test_an_mr_mega_declaration_refuses_a_source_that_would_otherwise_resolve(
+    tmp_path: Path, panel
+):
+    path = _beta_file(tmp_path)
+    wald = _resolve(path, panel)
+    assert not wald.error, "the source must resolve when declared a Wald test"
+
+    result = _resolve(path, panel, p_value_test=PValueTest.MR_MEGA)
+
+    assert result.error.startswith("p_value_test is mr_mega")
+    assert result.diagnostics.rows_read == 0, "a declared refusal reads nothing"
+    assert result.diagnostics.effect_consistency is None
+    assert result.phenotype_sd is None
+
+
+def test_a_joint_test_declaration_skips_the_check_a_wald_declaration_fails(
+    tmp_path: Path, panel
+):
+    """The declaration is trusted: a joint-test Analysis is never compared, so the
+    check refuses nothing in it -- even a defect it would have refused."""
+    path = _beta_file(tmp_path, beta_holds="odds_ratio")
+    wald = _resolve(path, panel)
+    assert wald.error and wald.diagnostics.effect_consistency.refused_by == "median_abs_delta"
+
+    joint = _resolve(path, panel, p_value_test=PValueTest.JOINT_2DF)
+
+    assert not joint.error
+    measured = joint.diagnostics.effect_consistency
+    assert measured.skip_reason is ConsistencySkip.JOINT_TEST_P_VALUE
+    assert measured.n_rows_considered == N_ROWS and measured.n_rows_compared == 0
+    assert measured.median_abs_delta is None and measured.median_delta is None
+    assert measured.refused is False and measured.refused_by is None
+
+
+def test_the_records_carry_each_declaration_and_its_outcome(tmp_path: Path):
+    clean = _beta_file(tmp_path)
+
+    records = _records(
+        tmp_path, {"W": clean, "J": clean, "M": clean}, {"J": "joint_2df", "M": "mr_mega"}
+    )
+
+    configs = {key: r["fingerprints"]["resolution_config"] for key, r in records.items()}
+    assert {key: c["p_value_test"] for key, c in configs.items()} == {
+        "W": "wald_1df", "J": "joint_2df", "M": "mr_mega",
+    }
+    assert records["W"]["status"] == "success"
+    assert records["W"]["diagnostics"]["effect_consistency"]["skip_reason"] is None
+    assert records["J"]["status"] == "success"
+    assert records["J"]["diagnostics"]["effect_consistency"]["skip_reason"] == (
+        "joint_test_p_value"
+    )
+    assert records["M"]["status"] == "controlled_failure"
+    assert records["M"]["error"].startswith("p_value_test is mr_mega")
+    assert records["M"]["diagnostics"]["effect_consistency"] is None
+
+
+def test_a_changed_declaration_is_not_resumed(tmp_path: Path):
+    path = _beta_file(tmp_path)
+    reference, groups, _ = _write_manifest_panel(tmp_path / "reference")
+
+    def run(declared: str):
+        return resolve_analyses_manifest(
+            _manifest(tmp_path, {"X": path}, {"X": declared}), tmp_path / "records",
+            ancestry_reference=reference, ancestry_groups=groups, reference_build="GRCh38",
+            n_workers=1, resume=True,
+        )
+
+    assert run("wald_1df").n_resumed == 0
+    assert run("wald_1df").n_resumed == 1
+    assert run("joint_2df").n_resumed == 0

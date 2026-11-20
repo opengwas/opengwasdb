@@ -112,6 +112,10 @@ class ConsistencySkip(StrEnum):
     ALL_SE_FROM_P_VALUE = "all_se_from_p_value"
     #: Fewer comparable rows than the policy's minimum.
     TOO_FEW_ROWS = "too_few_rows"
+    #: The Analysis declares its p-value a joint 2-df test (issue #371): the
+    #: stored coefficient is valid, but that p tests more than it, so it cannot
+    #: witness beta/se.
+    JOINT_TEST_P_VALUE = "joint_test_p_value"
 
 
 @dataclass(frozen=True)
@@ -201,6 +205,10 @@ class ConsistencySample:
             refused=refused_by is not None,
             refused_by=refused_by,
         )
+
+    def skipped(self, reason: ConsistencySkip) -> EffectConsistency:
+        """A recorded skip for a reason the caller knows, over the rows the scan saw."""
+        return EffectConsistency(self._sample.offered, 0, False, None, None, reason)
 
     def _skip(
         self, considered: int, compared: int, policy: EffectConsistencyPolicy

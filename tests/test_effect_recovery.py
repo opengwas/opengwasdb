@@ -354,10 +354,11 @@ def _manifest(tmp_path: Path, source: Path, *, analysis_id: str, maf: str | None
         "stored_effect_scale",
         "original_sd_method",
         "sample_size",
+        "p_value_test",
     ]
     values = [
         analysis_id, str(source), "opengwasdb.gwas-ssf", "GRCh38",
-        "sd", "source_provided", "1000",
+        "sd", "source_provided", "1000", "wald_1df",
     ]
     if maf is not None:
         columns.append("maf_threshold")

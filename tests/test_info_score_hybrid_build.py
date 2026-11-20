@@ -32,6 +32,7 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.interface import ImputationScoreDeclaration, ImputationScoreKind
@@ -516,6 +517,7 @@ def test_builder_dispositions_agree_with_the_resolver_on_the_same_source(tmp_pat
             original_sd_method=OriginalSdMethod.DECLARED_STANDARDISED,
             stored_effect_scale=StoredEffectScale.SD,
             info_score_policy=FILTERED,
+            p_value_test=PValueTest.WALD_1DF,
         ),
         reader=GwasSsfReader(
             source, StoredEffectScale.SD, imputation_score_declaration=DECLARATION

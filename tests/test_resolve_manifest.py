@@ -174,20 +174,20 @@ def test_setup(tmp_path: Path) -> dict[str, Any]:
 
     manifest_lines = [
         "analysis_id\tsource_file\tsource_reader_capability\tstored_effect_scale\t"
-        "original_sd_method\tsample_size\tsize_bytes\n",
-        f"GCST_EUR_QUANT\t{src_eur_quant}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t{int(_STUDY_N)}\t{src_eur_quant.stat().st_size}\n",
-        f"GCST_EAS_QUANT\t{src_eas_quant}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t{int(_STUDY_N)}\t{src_eas_quant.stat().st_size}\n",
-        f"GCST_EUR_CC\t{src_eur_cc}\topengwasdb.gwas-ssf\tlog_or\tbinary_trait\t{int(_STUDY_N)}\t{src_eur_cc.stat().st_size}\n",
-        f"GCST_EUR_NON\t{src_eur_no_n}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t\t{src_eur_no_n.stat().st_size}\n",
-        f"GCST_CORRUPT\t{src_corrupt}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t{int(_STUDY_N)}\t{src_corrupt.stat().st_size}\n",
+        "original_sd_method\tsample_size\tsize_bytes\tp_value_test\n",
+        f"GCST_EUR_QUANT\t{src_eur_quant}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t{int(_STUDY_N)}\t{src_eur_quant.stat().st_size}\twald_1df\n",
+        f"GCST_EAS_QUANT\t{src_eas_quant}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t{int(_STUDY_N)}\t{src_eas_quant.stat().st_size}\twald_1df\n",
+        f"GCST_EUR_CC\t{src_eur_cc}\topengwasdb.gwas-ssf\tlog_or\tbinary_trait\t{int(_STUDY_N)}\t{src_eur_cc.stat().st_size}\twald_1df\n",
+        f"GCST_EUR_NON\t{src_eur_no_n}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t\t{src_eur_no_n.stat().st_size}\twald_1df\n",
+        f"GCST_CORRUPT\t{src_corrupt}\topengwasdb.gwas-ssf\tsd\testimated_from_source_maf\t{int(_STUDY_N)}\t{src_corrupt.stat().st_size}\twald_1df\n",
     ]
     manifest_path = tmp_path / "analyses.tsv"
     manifest_path.write_text("".join(manifest_lines), encoding="utf-8")
 
     manifest_ref_maf_lines = [
         "analysis_id\tsource_file\tsource_reader_capability\tstored_effect_scale\t"
-        "original_sd_method\tsample_size\tsize_bytes\n",
-        f"GCST_EUR_REFMAF\t{src_eur_ref_maf}\topengwasdb.gwas-ssf\tsd\testimated_from_reference_maf\t{int(_STUDY_N)}\t{src_eur_ref_maf.stat().st_size}\n",
+        "original_sd_method\tsample_size\tsize_bytes\tp_value_test\n",
+        f"GCST_EUR_REFMAF\t{src_eur_ref_maf}\topengwasdb.gwas-ssf\tsd\testimated_from_reference_maf\t{int(_STUDY_N)}\t{src_eur_ref_maf.stat().st_size}\twald_1df\n",
     ]
     manifest_ref_maf_path = tmp_path / "analyses_ref_maf.tsv"
     manifest_ref_maf_path.write_text("".join(manifest_ref_maf_lines), encoding="utf-8")
@@ -508,7 +508,8 @@ def test_systemic_errors_raise_and_return_nonzero(test_setup: dict[str, Any]) ->
     # Duplicate analysis_id.
     dup_manifest = test_setup["tmp_path"] / "dup.tsv"
     dup_manifest.write_text(
-        "analysis_id\tsource_file\nGCST1\t/file.tsv\nGCST1\t/file.tsv\n", encoding="utf-8"
+        "analysis_id\tsource_file\tp_value_test\n"
+        "GCST1\t/file.tsv\twald_1df\nGCST1\t/file.tsv\twald_1df\n", encoding="utf-8"
     )
     res_dup = _invoke_cli_resolve(runner, test_setup, dup_manifest, records_dir)
     assert res_dup.exit_code != 0
@@ -834,9 +835,9 @@ def test_manifest_vcf_resolver_records_coherent_assembly_provenance(
     manifest = setup["tmp_path"] / "vcf-analyses.tsv"
     manifest.write_text(
         "analysis_id\tsource_file\tsource_reader_capability\tsource_genome_build\t"
-        "stored_effect_scale\toriginal_sd_method\tsample_size\n"
+        "stored_effect_scale\toriginal_sd_method\tsample_size\tp_value_test\n"
         f"VCF1\t{source}\topengwasdb.gwas-vcf\tGRCh38\tsd\t"
-        f"estimated_from_source_maf\t{int(_STUDY_N)}\n",
+        f"estimated_from_source_maf\t{int(_STUDY_N)}\twald_1df\n",
         encoding="utf-8",
     )
     records = setup["tmp_path"] / "vcf-records"
@@ -863,8 +864,8 @@ def test_manifest_vcf_resolver_records_coherent_assembly_provenance(
 def test_manifest_build_is_required_and_conflicting_aliases_are_refused(tmp_path: Path) -> None:
     missing = tmp_path / "missing-build.tsv"
     missing.write_text(
-        "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\n"
-        "a\t/source.tsv.gz\tsd\testimated_from_source_maf\n",
+        "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\tp_value_test\n"
+        "a\t/source.tsv.gz\tsd\testimated_from_source_maf\twald_1df\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="source_genome_build"):
@@ -873,8 +874,8 @@ def test_manifest_build_is_required_and_conflicting_aliases_are_refused(tmp_path
     conflicting = tmp_path / "conflicting-build.tsv"
     conflicting.write_text(
         "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\t"
-        "source_genome_build\tsource_assembly\n"
-        "a\t/source.tsv.gz\tsd\testimated_from_source_maf\tGRCh37\tGRCh38\n",
+        "source_genome_build\tsource_assembly\tp_value_test\n"
+        "a\t/source.tsv.gz\tsd\testimated_from_source_maf\tGRCh37\tGRCh38\twald_1df\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="conflicting.*source_genome_build"):

@@ -49,6 +49,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
@@ -1321,7 +1322,10 @@ def test_resolver_overlap_routes_lowercase_ssf_to_dense(tmp_path, artifact_keys)
         index={"1:100000:A:G": 0, "1:100001:A:G": 1},
     )
     resolution = resolve_analysis(
-        AnalysisRequest("trait", source, 1000, OriginalSdMethod.DECLARED_STANDARDISED),
+        AnalysisRequest(
+            "trait", source, 1000, OriginalSdMethod.DECLARED_STANDARDISED,
+            p_value_test=PValueTest.WALD_1DF,
+        ),
         reader=GwasSsfReader(source, StoredEffectScale.SD), reference=reference,
         variant_reference=load_variant_reference(axis),
     )

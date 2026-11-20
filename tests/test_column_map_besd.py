@@ -25,7 +25,7 @@ from test_resolve_besd import (
 def test_a_besd_probe_and_a_mapped_row_resolve_in_one_manifest(tmp_path: Path) -> None:
     prefix = _two_probe_file(tmp_path)
     ssf = _write_ssf(tmp_path / "eur.tsv", _EUR_MIX, 1.0)
-    tabular = ("sd", "estimated_from_source_maf", "500000", "GRCh38")
+    tabular = ("sd", "estimated_from_source_maf", "500000", "GRCh38", "wald_1df")
     manifest = _write_manifest(tmp_path / "analyses.tsv", [
         _besd_row("eqtl_p1", prefix, _P1),
         ("mapped", str(ssf), "opengwasdb.column-map", "", *tabular),

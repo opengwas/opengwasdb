@@ -77,12 +77,12 @@ def _manifest(tmp_path: Path, source: Path, maf_cell: str | None) -> Path:
         "original_sd_method", "sample_size", "source_assembly", "info_score_threshold",
         "imputation_score_column", "imputation_score_kind", "imputation_score_provenance",
         "sample_size_kind", "sample_size_scope", "original_effect_scale",
-        "ancestry_assignment_method",
+        "ancestry_assignment_method", "p_value_test",
     ]
     values = [
         "GCST_MAF", str(source), "opengwasdb.gwas-ssf", "sd", "declared_standardised",
         "1000", "hg38", "0.7", "quality_metric", "imputation_info", "Provider Table 2 INFO",
-        "total", "analysis_level", "sd", "source_trusted_no_af",
+        "total", "analysis_level", "sd", "source_trusted_no_af", "wald_1df",
     ]
     if maf_cell is not None:
         columns.append("maf_threshold")

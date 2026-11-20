@@ -146,6 +146,9 @@ REGISTRY_ONLY_COLUMNS: tuple[str, ...] = (
     "analysis_group_id",
     "inclusion_reason",
     "exclude_from_build",
+    # The test a source's p-value comes from (issue #371, ADR 0085): a resolver
+    # input, required there and never stored.
+    "p_value_test",
 )
 
 # The subset of SHARED_CORE_COLUMNS that must be present -- as columns, not

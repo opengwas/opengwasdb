@@ -158,6 +158,7 @@ def _write_ssf(path: Path, mix: dict[str, float], sd: float) -> Path:
 _MANIFEST_COLUMNS = (
     "analysis_id", "source_file", "source_reader_capability", "source_probe_id",
     "stored_effect_scale", "original_sd_method", "sample_size", "source_genome_build",
+    "p_value_test",
 )
 
 
@@ -167,7 +168,7 @@ def _besd_row(
     build: str = "GRCh38",
 ) -> tuple[str, ...]:
     return (analysis_id, str(prefix), "opengwasdb.besd", probe_id, "sd", method,
-            sample_size, build)
+            sample_size, build, "wald_1df")
 
 
 def _write_manifest(path: Path, rows: list[tuple[str, ...]]) -> Path:
@@ -243,7 +244,7 @@ def test_besd_record_has_the_shape_of_a_tabular_record(tmp_path: Path) -> None:
     manifest = _write_manifest(tmp_path / "analyses.tsv", [
         _besd_row("eqtl_p1", prefix, _P1),
         ("gwas", str(ssf), "opengwasdb.gwas-ssf", "", "sd", "estimated_from_source_maf",
-         str(STUDY_N), "GRCh38"),
+         str(STUDY_N), "GRCh38", "wald_1df"),
     ])
 
     records = _resolve(tmp_path, manifest)
@@ -413,7 +414,7 @@ def test_a_probe_id_on_a_tabular_row_is_a_manifest_error(tmp_path: Path) -> None
     ssf = _write_ssf(tmp_path / "eur.h.tsv", _EUR_MIX, _P1_SD)
     manifest = _write_manifest(tmp_path / "analyses.tsv", [
         ("gwas", str(ssf), "opengwasdb.gwas-ssf", _P1, "sd", "estimated_from_source_maf",
-         str(STUDY_N), "GRCh38"),
+         str(STUDY_N), "GRCh38", "wald_1df"),
     ])
 
     with pytest.raises(ValueError, match="source_probe_id"):
@@ -492,7 +493,7 @@ def test_a_single_analysis_run_omits_shared_source_measurements(tmp_path: Path) 
     ssf = _write_ssf(tmp_path / "eur.h.tsv", _EUR_MIX, _P1_SD)
     manifest = _write_manifest(tmp_path / "analyses.tsv", [
         ("gwas", str(ssf), "opengwasdb.gwas-ssf", "", "sd",
-         "estimated_from_source_maf", str(STUDY_N), "GRCh38"),
+         "estimated_from_source_maf", str(STUDY_N), "GRCh38", "wald_1df"),
     ])
 
     records = _resolve(tmp_path, manifest)

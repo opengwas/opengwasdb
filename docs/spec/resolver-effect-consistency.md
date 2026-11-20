@@ -9,6 +9,23 @@ Which disagreements this check refuses, and which it passes and the Store then
 keeps, are listed in [statistic-disagreement.md](../statistic-disagreement.md),
 each with the test that pins it.
 
+## The declared p-value test (#371, ADR 0085)
+
+Every row of a resolver manifest declares `p_value_test`: which test the
+source's `p_value` comes from. There is no default. A manifest without the
+column is refused when it is read, and so is a row whose value is blank or not
+one of these three, naming its Analysis.
+
+| `p_value_test` | The resolver |
+|---|---|
+| `wald_1df` | runs this check |
+| `joint_2df` | reads the source and skips the check: `skip_reason = joint_test_p_value`. The p tests the stored coefficient together with a main effect, so it cannot witness beta/se |
+| `mr_mega` | refuses the Analysis before reading it: `status = controlled_failure`, `error` begins `p_value_test is mr_mega`, `diagnostics.effect_consistency` is `null` and `rows_read` is 0. MR-MEGA's beta/se is a t on (cohorts − 2) df, not a z |
+
+The declaration is trusted and is not checked against the file.
+`fingerprints.resolution_config.p_value_test` records it, so a changed
+declaration is never resumed.
+
 ## What is measured
 
 On the rows the build would admit (the INFO and MAF rule of ADR 0054) that have
@@ -37,7 +54,7 @@ the |Δ| rule cannot refuse it, and every clean source's signed median is near 0
 |---|---|
 | refused | either rule fires: median \|Δ\| `>` `max_median_abs_delta` (default **1.0**), or median signed Δ `>` `max_median_delta` (default **0.1**, #370). The \|Δ\| rule is tested first. The resolution fails, the record's `status` is `controlled_failure`, `refused_by` names the rule, and `error` names the statistic that fired, its value, the other median, the row count and the threshold. |
 | compared | otherwise; the measurement is recorded. |
-| skipped | `skip_reason` says why, and nothing is refused: `no_source_p_value` (no admitted row has a usable p-value: no column, none in `(0, 1]`, or a reader that carries none: GWAS-VCF and BESD), `all_se_from_p_value`, or `too_few_rows` (fewer than `min_compared_rows`, default **50**, rows *compared*: in the bounded sample). |
+| skipped | `skip_reason` says why, and nothing is refused: `joint_test_p_value` (the Analysis declares `p_value_test = joint_2df`; checked first), `no_source_p_value` (no admitted row has a usable p-value: no column, none in `(0, 1]`, or a reader that carries none: GWAS-VCF and BESD), `all_se_from_p_value`, or `too_few_rows` (fewer than `min_compared_rows`, default **50**, rows *compared*: in the bounded sample). |
 
 A caller overrides all three numbers with `EffectConsistencyPolicy` (`AnalysisRequest
 .effect_consistency_policy`; `resolve_analyses_manifest(effect_consistency_policy=)`).
@@ -65,7 +82,8 @@ a different fingerprint digest and are recomputed by `--resume`. Documenting the
 fields and moving the pin in `opengwasdb-stores` is opengwas/opengwasdb-stores#413.
 
 `diagnostics.effect_consistency` is `null` only for an Analysis whose scan did not
-complete (an opening or read failure, such as a missing path: `error` says which).
+complete (an opening or read failure, such as a missing path: `error` says which),
+or that its `p_value_test = mr_mega` declaration refused before any scan.
 That is *no measurement*, and is not the same as a skip: a `skip_reason` is a
 recorded fact about a source that was read (no p-value column, every standard
 error derived from the p-value, too few rows). A source never read is never
@@ -78,7 +96,7 @@ error derived from the p-value, too few rows). A source never read is never
 | `sampled` | whether the bound dropped comparable rows |
 | `median_abs_delta` | the refusal statistic; `null` for a skip |
 | `median_delta` | median signed Δ (negative: implied p smaller than reported, i.e. the stored z is too large); `null` for a skip |
-| `skip_reason` | `null` when compared, else one of the three reasons above |
+| `skip_reason` | `null` when compared, else one of the four reasons above |
 | `refused` | whether either statistic exceeded its threshold |
 | `refused_by` | `"median_abs_delta"` or `"median_delta"` when refused, else `null` |
 
