@@ -1,0 +1,1 @@
+`AnalysisRequest` converts `p_value_test` to `PValueTest` when it is made, and refuses a value that is not one. A caller that passed the string `"mr_mega"` or `"joint_2df"` had its Analysis checked as a Wald test, silently (issue #371).
