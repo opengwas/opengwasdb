@@ -61,7 +61,7 @@ file's device/inode/ctime. Only that recorded file may be deleted; a supplied
 ledger cannot grant ownership, and old receipts without ownership retain
 their parts. Supplied files are protected by file identity at invocation,
 not spelling of the directory: symlink/path aliases of the download cache
-must not turn supplied inputs into owned downloads (#93 fix round 1).
+must not turn supplied inputs into owned downloads.
 
 Provenance records source kind `ld_matrix`, source URL and producer commit,
 SHA-256 of every part, matrix metadata, TSV, chain and FASTA, all named
