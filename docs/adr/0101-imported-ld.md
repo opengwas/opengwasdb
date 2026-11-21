@@ -43,7 +43,10 @@ one ordinary single-chromosome store at a time in its exclusively locked work
 directory. These are restart checkpoints, each validated by the existing
 writer. The additive `StoreWriter.join` hard-links their immutable LD
 components, concatenates the variant half in bounded slices, derives the
-combined index/companion and validates before publishing. Work and output
+combined index/companion and validates before publishing. Joined row ranges
+come from `ogld.format.geometry.chromosome_ranges_from_counts`: closed
+chromosome counts avoid allocating a genome-wide chromosome-label array.
+Work and output
 must share a filesystem. A failed final join is rebuilt from closed inputs;
 an incomplete chromosome is rebuilt from verified parts. This avoids a
 whole-genome diagonal-parts prepass (which would defeat chromosome staging),

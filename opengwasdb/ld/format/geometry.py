@@ -14,7 +14,7 @@ variant at the same position, and a variant exactly `distance` bp away is inside
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 import numpy as np
 import numpy.typing as npt
@@ -40,6 +40,26 @@ def chromosome_ranges(chrom: npt.ArrayLike) -> dict[str, tuple[int, int]]:
         if name in ranges:
             raise ValueError(f"chromosome {name} is not contiguous in the Variant Set (spec §2)")
         ranges[name] = (int(start), int(stop))
+    return ranges
+
+
+def chromosome_ranges_from_counts(
+    chromosomes: Iterable[tuple[str, int]],
+) -> dict[str, tuple[int, int]]:
+    """Ranges of distinct, nonempty closed chromosomes in their supplied order.
+
+    Joining immutable chromosomes already knows their counts. Expanding those to
+    genome-wide labels merely to recover their edges would waste memory (ADR 0015).
+    """
+    ranges: dict[str, tuple[int, int]] = {}
+    total = 0
+    for name, count in chromosomes:
+        if name in ranges:
+            raise ValueError(f"chromosome {name} is not contiguous in the Variant Set (spec §2)")
+        if type(count) is not int or count <= 0:
+            raise ValueError(f"chromosome {name} count must be a positive integer, not {count!r}")
+        ranges[name] = (total, total + count)
+        total += count
     return ranges
 
 

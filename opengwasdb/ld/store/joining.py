@@ -12,6 +12,7 @@ import numpy as np
 import zarr
 
 from ogld.format import REncoding, Sourced
+from ogld.format.geometry import chromosome_ranges, chromosome_ranges_from_counts
 from ogld.identity import chromosome_rank
 from ogld.store import layout
 from ogld.store.assembly import Cutter, Tally
@@ -45,20 +46,19 @@ def joined(
 
     with StoreReader.open(records[0][1]) as reader:
         variants = reader.variants(np.arange(reader.provenance["n_variants"], dtype=np.int64))
-    ranges_out = {records[0][0]: (0, len(variants))}
-    out = write_variant_table(location, variants, ranges_out)
+    ranges_out = chromosome_ranges_from_counts(
+        (name, record["n_variants"]) for name, _, _, record in records
+    )
+    out = write_variant_table(location, variants, chromosome_ranges(variants.chrom))
     table = out["variants"]
     assert isinstance(table, zarr.Group)
-    total = 0
     tally = Tally()
     for name, path, root, record in records:
-        count = record["n_variants"]
-        if total:
+        start, stop = ranges_out[name]
+        if start:
             source = root["variants"]
             assert isinstance(source, zarr.Group)
-            _append(table, source, total, count)
-        ranges_out[name] = (total, total + count)
-        total += count
+            _append(table, source, start, stop - start)
         for component in ("near", "far", layout.PARTNERS):
             out.require_group(component)
             shutil.copytree(
