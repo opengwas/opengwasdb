@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 import store_copies
 import testdata
-from threadpoolctl import threadpool_limits
 
 from ogld.format import REncoding
 
@@ -65,34 +64,16 @@ def test_codes_equal_the_independently_built_test_store_for_every_stored_pair() 
 
 @pytest.mark.parametrize("k", [0, 10])
 @pytest.mark.parametrize("scale", [511, 32767])
-def test_codes_are_identical_at_one_and_eight_blas_threads(k: int, scale: int) -> None:
-    """#90's criterion: identical codes at 1 and 8 BLAS threads, and at two block sizes."""
-    from ogld.genotypes import covariates, prepare, r
+def test_codes_are_identical_at_one_and_four_blas_threads(k: int, scale: int) -> None:
+    """Identical codes at 1 and 4 BLAS threads, at two block sizes and a row at a time.
 
-    rows = np.flatnonzero(testdata.variants().passes_filters)
-    calls = made.hard_calls()[rows].astype(np.float64)
-    enc = REncoding(scale)
-    expected = None
-    for threads in (1, 8):
-        with threadpool_limits(limits=threads, user_api="blas"):
-            cov = covariates(
-                list(testdata.pcs().names[:k]), testdata.pcs().values[:, :k], calls.shape[1]
-            )
-            for size in (127, 256):
-                blocks = [
-                    prepare(calls[i : i + size], cov, made.a1_signs()[rows[i : i + size]] > 0)
-                    for i in range(0, len(rows), size)
-                ]
-                codes = np.block([[enc.quantise(r(a, b)) for b in blocks] for a in blocks])
-                assert codes.shape == (len(rows), len(rows))
-                if expected is None:
-                    expected = codes
-                np.testing.assert_array_equal(codes, expected)
-            whole = prepare(calls, cov, made.a1_signs()[rows] > 0)
-            single = np.concatenate(
-                [enc.quantise(r(whole[i : i + 1], whole)) for i in range(len(rows))]
-            )
-            np.testing.assert_array_equal(single, expected)
+    Eight threads is also #90's criterion, and it runs in the realdata tier
+    (`tests/realdata/test_genotype_threads.py`): on a CI runner, eight OpenBLAS threads in each
+    of many parallel workers oversubscribe the CPUs and spin until the test times out.
+    """
+    from genotype_codes import assert_codes_identical
+
+    assert_codes_identical((1, 4), k, scale)
 
 
 def test_pgen_int8_and_float64_paths_read_the_same_test_panel_calls() -> None:
