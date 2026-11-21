@@ -52,21 +52,25 @@ class LDStore:
 
     def matrix(self, alids: Sequence[str], *, fill: float | None = None) -> LDMatrix:
         """The signed-r matrix of `alids`, in request order; NaN where unstored unless `fill`."""
-        return matrices.matrix(self._reader, alids, fill=fill)
+        with self._reader.request():
+            return matrices.matrix(self._reader, alids, fill=fill)
 
     def region(
         self, chrom: str, centre: int, radius: int, *, fill: float | None = None
     ) -> LDMatrix:
         """The signed-r matrix within `radius` bp of `centre`; refused if radius > far_bp / 2."""
-        return matrices.region(self._reader, chrom, centre, radius, fill=fill)
+        with self._reader.request():
+            return matrices.region(self._reader, chrom, centre, radius, fill=fill)
 
     def proxies(self, alids: Sequence[str], *, r2: float = 0.8, kb: float = 10_000) -> Proxies:
         """Each ALID's proxies at r̂² ≥ r2 within kb × 1,000 bp, with signed r."""
-        return proxies_query.proxies(self._reader, alids, r2=r2, kb=kb)
+        with self._reader.request():
+            return proxies_query.proxies(self._reader, alids, r2=r2, kb=kb)
 
     def clump(self, alids: Sequence[str], score: npt.ArrayLike, *, r2: float, kb: float) -> Clumps:
         """Clump `alids` by `score`: join at r̂² > r2, within kb × 1,000 bp, as plink2 does."""
-        return clumping.clump(self._reader, alids, score, r2=r2, kb=kb)
+        with self._reader.request():
+            return clumping.clump(self._reader, alids, score, r2=r2, kb=kb)
 
 
 def open(location: str | os.PathLike[str], *, cache_bytes: int | None = None) -> LDStore:

@@ -74,7 +74,12 @@ BLAS limit/restore operations run on one process-local control thread, with an
 active-request count, because threadpoolctl's OpenBLAS controller owns a thread
 and an early request exit must not restore limits under another active request.
 A fresh-process concurrent-request test starts at two threads, observes one
-through both requests, then verifies restoration to two.
+through both requests, then verifies restoration to two. The reader's `request()`
+seam enters the guard once per public query — `matrix`, `region`, `proxies`,
+`clump` — and not per row of a partner response (fix round 1); a plain
+per-request `threadpool_limits` would restore the caller's limit while another
+request is still running, and one entered in a worker thread would restore it
+from the wrong thread, so the process-wide count stays.
 
 ## Consequences and rejected alternatives
 

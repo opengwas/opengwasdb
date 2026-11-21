@@ -126,6 +126,10 @@ class GenotypeReader:
         reader._closed = False
         return reader
 
+    def request(self) -> AbstractContextManager[object]:
+        """One public query holds the one-BLAS-thread guard for its whole duration (#91 fix 1)."""
+        return _one_blas_thread()
+
     def close(self) -> None:
         """Close the reader and release the variant table's optional ALID mappings."""
         self._closed = True
@@ -228,19 +232,18 @@ class GenotypeReader:
         rows = self._variant_table.checked_rows(rows)
         out = np.full((len(rows), len(rows)), np.nan)
         chrom, position = self.loci_of(rows)
-        with _one_blas_thread():
-            for name in np.unique(chrom):
-                at = np.flatnonzero(chrom == name)
-                block = self._data(rows[at])
-                for first in range(0, len(at), 512):
-                    stop = min(first + 512, len(at))
-                    values = self._values(
-                        r(block[first:stop], block), position[at[first:stop]], position[at]
-                    )
-                    if len(at) == len(rows):
-                        out[first:stop] = values
-                    else:
-                        out[np.ix_(at[first:stop], at)] = values
+        for name in np.unique(chrom):
+            at = np.flatnonzero(chrom == name)
+            block = self._data(rows[at])
+            for first in range(0, len(at), 512):
+                stop = min(first + 512, len(at))
+                values = self._values(
+                    r(block[first:stop], block), position[at[first:stop]], position[at]
+                )
+                if len(at) == len(rows):
+                    out[first:stop] = values
+                else:
+                    out[np.ix_(at[first:stop], at)] = values
         np.fill_diagonal(out, 1.0)
         return out
 
@@ -270,22 +273,21 @@ class GenotypeReader:
         if len(rows) and chrom[0] != chrom[-1]:
             raise InputError(f"{self.location}: a region cannot cross chromosomes")
         out = np.empty((len(rows), len(rows)), dtype=np.float64)
-        with _one_blas_thread():
-            block = self._data(rows)
-            for first in range(0, len(rows), 128):
-                last = min(first + 128, len(rows))
-                raw = r(block[first:last], block[first:])
-                # Small stripes keep quantisation's temporary arrays in cache. Compute each
-                # off-diagonal tile only once, then mirror its codes like the LD Store (#91).
-                for lo in range(first, last, 16):
-                    hi = min(lo + 16, last)
-                    out[lo:hi, first:] = self._values(
-                        raw[lo - first : hi - first], position[lo:hi], position[first:]
-                    )
-                out[first:last, :first] = out[:first, first:last].T
-                diagonal = out[first:last, first:last]
-                lower = np.tril_indices(last - first, k=-1)
-                diagonal[lower] = diagonal.T[lower]
+        block = self._data(rows)
+        for first in range(0, len(rows), 128):
+            last = min(first + 128, len(rows))
+            raw = r(block[first:last], block[first:])
+            # Small stripes keep quantisation's temporary arrays in cache. Compute each
+            # off-diagonal tile only once, then mirror its codes like the LD Store (#91).
+            for lo in range(first, last, 16):
+                hi = min(lo + 16, last)
+                out[lo:hi, first:] = self._values(
+                    raw[lo - first : hi - first], position[lo:hi], position[first:]
+                )
+            out[first:last, :first] = out[:first, first:last].T
+            diagonal = out[first:last, first:last]
+            lower = np.tril_indices(last - first, k=-1)
+            diagonal[lower] = diagonal.T[lower]
         np.fill_diagonal(out, 1.0)
         return out
 
@@ -295,8 +297,7 @@ class GenotypeReader:
         position = int(self.loci_of(np.array([lead], dtype=np.int64))[1][0])
         far = self.provenance["far_bp"]
         rows = self.rows_in(chrom, position - far, position + far)
-        with _one_blas_thread():
-            return self._partners(start, lead, rows, self._data(rows))
+        return self._partners(start, lead, rows, self._data(rows))
 
     def partner_rows(
         self, chrom: str, local_rows: npt.NDArray[np.int64]
@@ -316,17 +317,16 @@ class GenotypeReader:
         positions = self.loci_of(hits)[1]
         # This is component-local working memory, released when its greedy ends, not a call cache.
         # No non-hit is decoded and no eliminated lead's correlation row is computed.
-        with _one_blas_thread():
-            block = self._data(hits)
+        block = self._data(hits)
 
-            def partners(row: int) -> tuple[npt.NDArray[np.int32], Codes]:
-                lead = row + start
-                at = int(np.searchsorted(hits, lead))
-                lo = int(np.searchsorted(positions, positions[at] - window))
-                hi = int(np.searchsorted(positions, positions[at] + window, side="right"))
-                return self._partners(start, lead, hits[lo:hi], block[lo:hi], positions[lo:hi])
+        def partners(row: int) -> tuple[npt.NDArray[np.int32], Codes]:
+            lead = row + start
+            at = int(np.searchsorted(hits, lead))
+            lo = int(np.searchsorted(positions, positions[at] - window))
+            hi = int(np.searchsorted(positions, positions[at] + window, side="right"))
+            return self._partners(start, lead, hits[lo:hi], block[lo:hi], positions[lo:hi])
 
-            yield partners
+        yield partners
 
     def _partners(
         self,

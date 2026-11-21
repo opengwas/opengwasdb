@@ -112,3 +112,35 @@ def test_clump_computes_only_hit_rows(
     assert computed
     assert set(computed) <= hits
     assert len(computed) == len(hits), "each component decodes its hits once, not the panel window"
+
+
+def test_each_request_enters_the_blas_guard_once(
+    genotype_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import contextmanager
+
+    entries: list[int] = []
+    original = genotype_reader._one_blas_thread
+
+    @contextmanager
+    def counted():
+        entries.append(len(entries))
+        with original():
+            yield
+
+    monkeypatch.setattr(genotype_reader, "_one_blas_thread", counted)
+    names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[::9])
+    assert len(names) > 20, "the fixture must span enough leads for a per-row guard to show"
+    store = ogld.open(genotype_store)
+    scores = np.arange(len(names), dtype=float)
+    checks = [
+        ("matrix", lambda: store.matrix(names)),
+        ("region", lambda: store.region("22", 25000000, 1500000)),
+        ("proxies", lambda: store.proxies(names, r2=0.01, kb=3000)),
+        ("clump", lambda: store.clump(names, scores, r2=0.01, kb=3000)),
+    ]
+    for label, call in checks:
+        before = len(entries)
+        call()
+        entered = len(entries) - before
+        assert entered == 1, f"{label} entered the BLAS guard {entered} times"

@@ -275,6 +275,10 @@ class StoreReader:
         """The bytes of decoded Partner Rows frames this reader keeps at most (partner-rows §7)."""
         return self._frame_cache.budget
 
+    def request(self) -> AbstractContextManager[object]:
+        """Held for one public query; an LD Store has nothing to enter, its codes are stored."""
+        return nullcontext()
+
     def _set_query_workers(self, requested: int) -> None:
         """Set the threads one `clump` may run its components on (partner-rows §9.2).
 
