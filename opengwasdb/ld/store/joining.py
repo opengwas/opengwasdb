@@ -52,6 +52,29 @@ def joined(
     out = write_variant_table(location, variants, chromosome_ranges(variants.chrom))
     table = out["variants"]
     assert isinstance(table, zarr.Group)
+    tally = _link_chromosomes(out, location, table, ranges_out, records)
+    table.attrs["chromosomes"] = layout.chromosomes_record(ranges_out)
+    position = table["position"]
+    assert isinstance(position, zarr.Array)
+    cutter = Cutter(
+        np.asarray(position[:], dtype=np.int64),
+        ranges_out,
+        (first["near_bp"], first["far_bp"]),
+        REncoding.of(first["encoding"]),
+        n=first["panel"]["n"],
+        k=first["adjustment"]["k"],
+        t_partner=first["t_partner"],
+    )
+    return out, cutter, ranges_out, tally
+
+
+def _link_chromosomes(
+    out: zarr.Group,
+    location: Path,
+    table: zarr.Group,
+    ranges_out: dict[str, tuple[int, int]],
+    records: list[tuple[str, Path, zarr.Group, dict[str, Any]]],
+) -> Tally:
     tally = Tally()
     for name, path, root, record in records:
         start, stop = ranges_out[name]
@@ -66,19 +89,7 @@ def joined(
             )
         for key in ("near_pairs", "far_candidates", "far_pairs", "partner_entries"):
             setattr(tally, key, getattr(tally, key) + record["counts"][key])
-    table.attrs["chromosomes"] = layout.chromosomes_record(ranges_out)
-    position = table["position"]
-    assert isinstance(position, zarr.Array)
-    cutter = Cutter(
-        np.asarray(position[:], dtype=np.int64),
-        ranges_out,
-        (first["near_bp"], first["far_bp"]),
-        REncoding.of(first["encoding"]),
-        n=first["panel"]["n"],
-        k=first["adjustment"]["k"],
-        t_partner=first["t_partner"],
-    )
-    return out, cutter, ranges_out, tally
+    return tally
 
 
 def _source_matches(

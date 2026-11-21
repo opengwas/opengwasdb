@@ -18,7 +18,13 @@ import numpy as np
 import zarr
 
 from ogld.build.importing.download import BUCKET, Fetch, Parts, atomic_json, https, inventory
-from ogld.build.importing.lift import Lifted, far_distance, lift_variants, variant_chromosomes
+from ogld.build.importing.lift import (
+    Lifted,
+    SourceVariant,
+    far_distance,
+    lift_variants,
+    variant_chromosomes,
+)
 from ogld.build.importing.matrix import MatrixSource, correlation, diagonal_mask
 from ogld.build.record import sha256
 from ogld.format import NEAR_BP, Provenance, REncoding, Sourced
@@ -72,42 +78,65 @@ def load_lifted(path: Path) -> Lifted:
         )
 
 
-def _plan(inputs: ImportInputs, out: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+def _identity(inputs: ImportInputs, out: Path) -> dict[str, Any]:
     pins = {
         name: sha256(getattr(inputs, name)) for name in ("metadata", "variants", "chain", "fasta")
     }
-    identity = {
+    return {
         "inputs": pins,
         "ledger_sha256": sha256(inputs.ledger) if inputs.ledger else None,
         "out": str(out.resolve()),
         "schema": 1,
     }
-    plan_path = inputs.work / "plan.json"
-    if plan_path.exists():
-        plan = cast(dict[str, Any], json.loads(plan_path.read_text()))
-        if plan["identity"] != identity:
-            raise ValueError("import work directory pins different inputs/output; use a new --work")
-        return plan
+
+
+def _saved_plan(plan_path: Path, identity: dict[str, Any]) -> dict[str, Any] | None:
+    if not plan_path.exists():
+        return None
+    plan = cast(dict[str, Any], json.loads(plan_path.read_text()))
+    if plan["identity"] != identity:
+        raise ValueError("import work directory pins different inputs/output; use a new --work")
+    return plan
+
+
+def _checked_radius(name: str, table: Lifted) -> int:
+    if not len(table):
+        raise ValueError(f"chromosome {name}: no variants survive liftover")
+    radius = far_distance(table.source_position, table.variants.position)
+    if radius <= NEAR_BP:
+        raise ValueError(f"chromosome {name}: liftover leaves holes in the Near Band")
+    return radius
+
+
+def _parts_of(source: MatrixSource, rows: list[SourceVariant]) -> list[str]:
+    blocks = {row.index // source.size for row in rows}
+    return [part for (r, c), part in source.parts.items() if r in blocks and c in blocks]
+
+
+def _plan_chromosome(
+    inputs: ImportInputs, source: MatrixSource, name: str, rows: list[SourceVariant]
+) -> dict[str, Any]:
+    if any(row.index >= source.rows for row in rows):
+        raise ValueError(f"chromosome {name}: TSV index exceeds BlockMatrix")
+    table, losses = lift_variants(rows, inputs.chain, inputs.fasta)
+    radius = _checked_radius(name, table)
+    names = _parts_of(source, rows)
+    _save(inputs.work / f"{name}.lifted.npz", table)
+    return {
+        "parts": names,
+        "losses": losses,
+        "far_bp": radius,
+        "source_variants": len(rows),
+    }
+
+
+def _new_plan(
+    inputs: ImportInputs, metadata: dict[str, Any], identity: dict[str, Any]
+) -> dict[str, Any]:
     source = MatrixSource(inputs.work, metadata)
     chromosomes: dict[str, Any] = {}
     for name, rows in variant_chromosomes(inputs.variants):
-        if any(row.index >= source.rows for row in rows):
-            raise ValueError(f"chromosome {name}: TSV index exceeds BlockMatrix")
-        table, losses = lift_variants(rows, inputs.chain, inputs.fasta)
-        if not len(table):
-            raise ValueError(f"chromosome {name}: no variants survive liftover")
-        radius = far_distance(table.source_position, table.variants.position)
-        if radius <= NEAR_BP:
-            raise ValueError(f"chromosome {name}: liftover leaves holes in the Near Band")
-        blocks = {row.index // source.size for row in rows}
-        names = [part for (r, c), part in source.parts.items() if r in blocks and c in blocks]
-        _save(inputs.work / f"{name}.lifted.npz", table)
-        chromosomes[name] = {
-            "parts": names,
-            "losses": losses,
-            "far_bp": radius,
-            "source_variants": len(rows),
-        }
+        chromosomes[name] = _plan_chromosome(inputs, source, name, rows)
     if not chromosomes:
         raise ValueError("variant TSV is empty")
     plan = {
@@ -115,8 +144,16 @@ def _plan(inputs: ImportInputs, out: Path, metadata: dict[str, Any]) -> dict[str
         "chromosomes": chromosomes,
         "far_bp": min(chrom["far_bp"] for chrom in chromosomes.values()),
     }
-    atomic_json(plan_path, plan)
+    atomic_json(inputs.work / "plan.json", plan)
     return plan
+
+
+def _plan(inputs: ImportInputs, out: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    identity = _identity(inputs, out)
+    saved = _saved_plan(inputs.work / "plan.json", identity)
+    if saved is not None:
+        return saved
+    return _new_plan(inputs, metadata, identity)
 
 
 def _sourced(
@@ -257,6 +294,81 @@ def import_panukb(
         return _import(inputs, out, fetch, on_chromosome)
 
 
+def _closed_chromosome(
+    inputs: ImportInputs,
+    name: str,
+    plan: dict[str, Any],
+    metadata: dict[str, Any],
+    parts: Parts,
+    destination: Path,
+    start: float,
+) -> Provenance:
+    chromosome = plan["chromosomes"][name]
+    closed = _closed(destination)
+    if closed is None:
+        if destination.exists():
+            shutil.rmtree(destination)
+        source = MatrixSource(parts.cache, metadata)
+        source.paths = {part: parts.ensure(part) for part in chromosome["parts"]}
+        closed = _write(inputs, name, plan, source, parts, destination, start)
+        del source
+        return closed
+    parts.verify_closed(chromosome["parts"])
+    for part in chromosome["parts"]:
+        if closed["source"]["sha256"].get(part) != parts.hashes[part]:
+            raise ValueError(f"{part}: SHA-256 differs from closed chromosome")
+    return closed
+
+
+def _publish(
+    inputs: ImportInputs,
+    out: Path,
+    plan: dict[str, Any],
+    parts: Parts,
+    paths: list[Path],
+    losses: Counter[str],
+    start: float,
+) -> Provenance:
+    assembled = inputs.work / "assembled.store"
+    if assembled.exists():
+        shutil.rmtree(assembled)
+    made = StoreWriter.join(
+        assembled,
+        paths,
+        _sourced(inputs, plan, parts.hashes, dict(losses), time.monotonic() - start),
+        threads=inputs.threads,
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    assembled.rename(out)
+    return made
+
+
+def _closed_all(
+    inputs: ImportInputs,
+    plan: dict[str, Any],
+    metadata: dict[str, Any],
+    parts: Parts,
+    start: float,
+    on_chromosome: Callable[[str], None] | None,
+) -> tuple[list[Path], Counter[str], int]:
+    paths: list[Path] = []
+    losses: Counter[str] = Counter()
+    remaining = Counter(part for chrom in plan["chromosomes"].values() for part in chrom["parts"])
+    kept = 0
+    for name in sorted(plan["chromosomes"], key=chromosome_rank):
+        chromosome = plan["chromosomes"][name]
+        destination = inputs.work / f"{name}.store"
+        closed = _closed_chromosome(inputs, name, plan, metadata, parts, destination, start)
+        paths.append(destination)
+        losses.update(closed["variants_dropped"])
+        remaining.subtract(chromosome["parts"])
+        if inputs.delete_parts:
+            kept += parts.delete([part for part in chromosome["parts"] if not remaining[part]])
+        if on_chromosome is not None:
+            on_chromosome(name)
+    return paths, losses, kept
+
+
 def _import(
     inputs: ImportInputs,
     out: Path,
@@ -269,44 +381,8 @@ def _import(
     ledger = json.loads(inputs.ledger.read_text()) if inputs.ledger else inventory(fetch)
     cache = inputs.work / "parts"
     parts = Parts(cache, ledger, local=inputs.parts, fetch=fetch)
-    paths = []
-    losses: Counter[str] = Counter()
-    remaining = Counter(part for chrom in plan["chromosomes"].values() for part in chrom["parts"])
-    kept = 0
-    for name in sorted(plan["chromosomes"], key=chromosome_rank):
-        chromosome = plan["chromosomes"][name]
-        destination = inputs.work / f"{name}.store"
-        closed = _closed(destination)
-        if closed is None:
-            if destination.exists():
-                shutil.rmtree(destination)
-            source = MatrixSource(cache, metadata)
-            source.paths = {part: parts.ensure(part) for part in chromosome["parts"]}
-            closed = _write(inputs, name, plan, source, parts, destination, start)
-            del source
-        else:
-            parts.verify_closed(chromosome["parts"])
-            for part in chromosome["parts"]:
-                if closed["source"]["sha256"].get(part) != parts.hashes[part]:
-                    raise ValueError(f"{part}: SHA-256 differs from closed chromosome")
-        paths.append(destination)
-        losses.update(closed["variants_dropped"])
-        remaining.subtract(chromosome["parts"])
-        if inputs.delete_parts:
-            kept += parts.delete([part for part in chromosome["parts"] if not remaining[part]])
-        if on_chromosome is not None:
-            on_chromosome(name)
-    assembled = inputs.work / "assembled.store"
-    if assembled.exists():
-        shutil.rmtree(assembled)
-    made = StoreWriter.join(
-        assembled,
-        paths,
-        _sourced(inputs, plan, parts.hashes, dict(losses), time.monotonic() - start),
-        threads=inputs.threads,
-    )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    assembled.rename(out)
+    paths, losses, kept = _closed_all(inputs, plan, metadata, parts, start, on_chromosome)
+    made = _publish(inputs, out, plan, parts, paths, losses, start)
     if kept:
         print(f"kept {kept} unowned {'part' if kept == 1 else 'parts'}")
     return made
