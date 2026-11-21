@@ -109,11 +109,10 @@ class Cut:
 
     `first` is the block's first global row and `rows` how many it holds, all on one chromosome.
     `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are their
-    candidate pairs within far_bp that `REncoding.stored_mask` keeps at their distance, as local
-    rows lo < hi: a pair within near_bp, and a farther one whose code reaches the far code floor,
-    once, with its one code (spec §3, §5), ascending by (lo, hi). (The near half is written from
-    `near`; only the `far` ones are written as Far Pairs.) `far` marks those more than near_bp
-    apart: the block's Far Pairs (spec §5). `far_candidates`
+    Far Pairs, as local rows lo < hi: each partner hi more than near_bp and at most far_bp from
+    row lo whose code `REncoding.stored_mask` keeps, once, with its one code (spec §3, §5),
+    ascending by (lo, hi). `far` marks those more than near_bp apart — every one of them, and it
+    is kept so a reader of a Cut can name the half it reads. `far_candidates`
     counts the block's pairs more than near_bp and at most far_bp apart, all judged, and
     `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a cut is
     written only by its own store.
@@ -204,7 +203,7 @@ class Cutter:
         local = first - start
         near_stop, far_stop = self._stops_of(name, local, rows, width)
         near = self._near(first, r, near_stop)
-        lo, hi, codes = self._pairs(first, r, far_stop)
+        lo, hi, codes = self._pairs(first, r, near_stop, far_stop)
         return Cut(
             first,
             rows,
@@ -251,24 +250,31 @@ class Cutter:
         return self._quantised(values, pair)
 
     def _pairs(
-        self, first: int, r: npt.NDArray[np.floating[Any]], far_stop: npt.NDArray[np.int64]
+        self,
+        first: int,
+        r: npt.NDArray[np.floating[Any]],
+        near_stop: npt.NDArray[np.int64],
+        far_stop: npt.NDArray[np.int64],
     ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], Codes]:
-        """The block's pairs (t, c), t < c < far stop(t), that `REncoding.stored_mask` keeps at
-        their distance, as offsets from its first row, ascending by (t, c), with their codes.
-        Only those whose |r| is not below the encoding's `least_r(floor)` are quantised, which
-        keeps every pair whose code can reach a floor; NaN is never below it. The test is two
-        comparisons, not |r|, which would copy the block's r: 133 MB a worker on chr6's widest
-        tile."""
+        """The block's Far Pairs beyond near_bp: (t, c), near stop(t) ≤ c < far stop(t), that
+        `REncoding.stored_mask` keeps at their distance, as offsets from its first row, ascending
+        by (t, c), with their codes. The Near Band's own pairs are `_near`'s, so no pair inside
+        near_bp is quantised, given a distance or masked here. Only those whose |r| is not below
+        the encoding's `least_r(floor)` are quantised, which keeps every pair whose code can reach
+        the floor; NaN is never below it. The test is two comparisons, not |r|, which would copy
+        the block's r: 133 MB a worker on chr6's widest tile."""
         below = (r > -self._least) & (r < self._least)
         t, c = np.nonzero(~below)
         del below
-        inside = (c > t) & (c < far_stop[t])
+        # Only the far half: [cut.far] is all that reads lo, hi and codes, and the Near Band
+        # already holds every pair inside near_bp (fix round 2, R2-3).
+        inside = (c > t) & (c >= near_stop[t]) & (c < far_stop[t])
         t, c = t[inside], c[inside]
         codes = self._quantised(r[t, c], lambda at: (first + int(t[at]), first + int(c[at])))
         name, start, _ = self.chromosome(first)
-        position = self.positions(name)[first - start + t]
+        position = self.positions(name)
         keep = self.encoding.stored_mask(
-            position - self.positions(name)[first - start + c],
+            position[first - start + t] - position[first - start + c],
             codes,
             near_bp=self.near_bp,
             far_bp=self.far_bp,
