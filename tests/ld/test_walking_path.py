@@ -1,9 +1,9 @@
 """The whole path, once: Test Panel pgen → k = 0 r → `StoreWriter` → `ogld.open` → one pair.
 
 Nothing in it comes from `reference_r` except the expected value. The r the store is made from was
-computed from the pgen's genotypes, read by `ogld.build.genotypes`, by this file's own plain k = 0
-product (`k0_r`), not by the builder's tiles. The store makes its Near Band and Proxy Index from it
-(ogld#17); no index is built here.
+computed from the pgen's genotypes, read by `ogld.genotypes.Genotypes`, by this file's own plain
+k = 0 product (`k0_r`), not by the builder's tiles. The store makes its Near Band and Proxy
+Index from it (ogld#17); no index is built here.
 """
 
 from __future__ import annotations

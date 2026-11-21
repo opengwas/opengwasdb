@@ -221,7 +221,7 @@ def _genotype_blocks(
     """Prepared genotypes, a block at a time, in Variant Set order: after PC
     Adjustment by `chosen`, and at k > 0 also unadjusted, for the PC Diagnostic."""
     plain = covariates([], None, the_plan.samples.n) if chosen.k else None
-    for first, dosages in _blocks(the_plan, chromosome, tiles.UNIT_ROWS):
+    for first, dosages in _blocks(the_plan, chromosome, tiles.BLOCK_ROWS):
         a1_is_alt = chromosome.a1_is_alt[first : first + len(dosages)]
         adjusted = prepare(dosages, chosen, a1_is_alt)
         unadjusted = None if plain is None else prepare(dosages, plain, a1_is_alt)
