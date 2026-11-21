@@ -99,19 +99,28 @@ def _saved_plan(plan_path: Path, identity: dict[str, Any]) -> dict[str, Any] | N
     return plan
 
 
+def _checked_radius(name: str, table: Lifted) -> int:
+    if not len(table):
+        raise ValueError(f"chromosome {name}: no variants survive liftover")
+    radius = far_distance(table.source_position, table.variants.position)
+    if radius <= NEAR_BP:
+        raise ValueError(f"chromosome {name}: liftover leaves holes in the Near Band")
+    return radius
+
+
+def _parts_of(source: MatrixSource, rows: list[SourceVariant]) -> list[str]:
+    blocks = {row.index // source.size for row in rows}
+    return [part for (r, c), part in source.parts.items() if r in blocks and c in blocks]
+
+
 def _plan_chromosome(
     inputs: ImportInputs, source: MatrixSource, name: str, rows: list[SourceVariant]
 ) -> dict[str, Any]:
     if any(row.index >= source.rows for row in rows):
         raise ValueError(f"chromosome {name}: TSV index exceeds BlockMatrix")
     table, losses = lift_variants(rows, inputs.chain, inputs.fasta)
-    if not len(table):
-        raise ValueError(f"chromosome {name}: no variants survive liftover")
-    radius = far_distance(table.source_position, table.variants.position)
-    if radius <= NEAR_BP:
-        raise ValueError(f"chromosome {name}: liftover leaves holes in the Near Band")
-    blocks = {row.index // source.size for row in rows}
-    names = [part for (r, c), part in source.parts.items() if r in blocks and c in blocks]
+    radius = _checked_radius(name, table)
+    names = _parts_of(source, rows)
     _save(inputs.work / f"{name}.lifted.npz", table)
     return {
         "parts": names,
@@ -334,19 +343,15 @@ def _publish(
     return made
 
 
-def _import(
+def _closed_all(
     inputs: ImportInputs,
-    out: Path,
-    fetch: Fetch,
+    plan: dict[str, Any],
+    metadata: dict[str, Any],
+    parts: Parts,
+    start: float,
     on_chromosome: Callable[[str], None] | None,
-) -> Provenance:
-    start = time.monotonic()
-    metadata = json.loads(inputs.metadata.read_text())
-    plan = _plan(inputs, out, metadata)
-    ledger = json.loads(inputs.ledger.read_text()) if inputs.ledger else inventory(fetch)
-    cache = inputs.work / "parts"
-    parts = Parts(cache, ledger, local=inputs.parts, fetch=fetch)
-    paths = []
+) -> tuple[list[Path], Counter[str], int]:
+    paths: list[Path] = []
     losses: Counter[str] = Counter()
     remaining = Counter(part for chrom in plan["chromosomes"].values() for part in chrom["parts"])
     kept = 0
@@ -361,6 +366,22 @@ def _import(
             kept += parts.delete([part for part in chromosome["parts"] if not remaining[part]])
         if on_chromosome is not None:
             on_chromosome(name)
+    return paths, losses, kept
+
+
+def _import(
+    inputs: ImportInputs,
+    out: Path,
+    fetch: Fetch,
+    on_chromosome: Callable[[str], None] | None,
+) -> Provenance:
+    start = time.monotonic()
+    metadata = json.loads(inputs.metadata.read_text())
+    plan = _plan(inputs, out, metadata)
+    ledger = json.loads(inputs.ledger.read_text()) if inputs.ledger else inventory(fetch)
+    cache = inputs.work / "parts"
+    parts = Parts(cache, ledger, local=inputs.parts, fetch=fetch)
+    paths, losses, kept = _closed_all(inputs, plan, metadata, parts, start, on_chromosome)
     made = _publish(inputs, out, plan, parts, paths, losses, start)
     if kept:
         print(f"kept {kept} unowned {'part' if kept == 1 else 'parts'}")
