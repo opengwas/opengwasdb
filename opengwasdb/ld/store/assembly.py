@@ -1511,7 +1511,12 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     return cast(Provenance, made)
 
 
-def derive_alid_mmap(path: Path, *, provenance_key: str = "ld_store") -> int:
+def derive_alid_mmap(path: Path) -> int:
+    """Publish the LD Store's optional local companion (ADR 0012)."""
+    return derive_variant_companion(path, provenance_key="ld_store")
+
+
+def derive_variant_companion(path: Path, *, provenance_key: str) -> int:
     """Publish an optional local companion from validated canonical arrays (ADR 0012).
 
     Serialize cooperating derivations. A private partial is fsynced before its immutable

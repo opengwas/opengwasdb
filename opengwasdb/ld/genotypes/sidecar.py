@@ -16,7 +16,13 @@ from ogld.format.geometry import chromosome_ranges
 from ogld.genotypes.adjust import Block, Covariates
 from ogld.genotypes.pgen import PgenFileset
 from ogld.store import layout
-from ogld.store.assembly import Cutter, Tally, derive_alid_index, derive_alid_mmap, provenance
+from ogld.store.assembly import (
+    Cutter,
+    Tally,
+    derive_alid_index,
+    derive_variant_companion,
+    provenance,
+)
 from ogld.store.tables import Variants
 from ogld.store.writer import write_variant_table
 
@@ -196,6 +202,12 @@ class SidecarWriter:
         )
         # Counts describe materialised data only; no fictitious zero count of measured pairs.
         made["counts"] = {"alids_left_out": left}
+        from ogld.genotypes.validation import validate_sidecar
+        from ogld.store.validation import ValidationFailed
+
+        findings = validate_sidecar(self.path, self.root, made)
+        if any(findings.values()):
+            raise ValidationFailed(findings)
         self.root.attrs[KEY] = made
-        derive_alid_mmap(self.path, provenance_key=KEY)
+        derive_variant_companion(self.path, provenance_key=KEY)
         return cast(Provenance, made)

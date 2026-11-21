@@ -37,8 +37,8 @@ class GenotypeReader(StoreReader):
         cls,
         location: str | os.PathLike[str],
         *,
-        cache_bytes: int | None = None,
         frame_cache_bytes: int | None = None,
+        cache_bytes: int | None = None,
     ) -> GenotypeReader:
         path = Path(location)
         cache = ChunkCache(cache_bytes)
@@ -127,7 +127,7 @@ class GenotypeReader(StoreReader):
         pairs = [self.partner_row(chrom, int(row)) for row in local_rows]
         indptr = np.r_[0, np.cumsum([len(pair[0]) for pair in pairs])].astype(np.int64)
         if not pairs:
-            return indptr, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int16)
+            return indptr, np.empty(0, dtype=np.int32), self.encoding.quantise(np.empty(0))
         return indptr, np.concatenate([a for a, _ in pairs]), np.concatenate([b for _, b in pairs])
 
     @contextmanager

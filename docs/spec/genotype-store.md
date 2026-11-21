@@ -51,6 +51,24 @@ refusal names the file and changed field. There is no path-override API.
 `inputs` additionally pins the keep file and, at k > 0, PC File. Validation
 checks all input hashes and every adjustment array hash.
 
+## Validation and publication
+
+The shared variant/chromosome/ALID and applicable provenance rules judge the
+canonical shared data. `genotypes.provenance` checks the genotype envelope,
+`genotypes.inputs` checks every external pin including SHA-256, and
+`genotypes.arrays` checks all array descriptors/hashes, dimensions against n/k/V,
+finite projections, positive finite norms, A1 signs, basis orthonormality and
+nonnegative row/in-range fileset mappings. A missing prerequisite is a finding,
+not a passed rule. Input/array content is immutable during reading; hashes are
+integrity pins, not producer authentication.
+
+The builder runs these same checks before writing `genotype_store`. A failed
+candidate remains unreadable. Once the claim is written, the shared companion
+assembly validates correspondence and publishes its optional pointer atomically
+as in ADR 0012. Its failure can leave a complete sidecar without a companion,
+never a half-published mapping. `ogld validate` and public `ogld.validate`
+dispatch by kind; the LD Store validator's rules and behaviour are unchanged.
+
 ## Pair answers
 
 `matrix` computes in bounded row blocks using one BLAS thread, quantises only

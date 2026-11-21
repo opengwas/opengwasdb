@@ -21,9 +21,9 @@ from ogld.build import BuildInputs, build, build_genotypes
 from ogld.format import InputError, Refusal
 from ogld.identity import IdentityError
 from ogld.query import open as open_store
+from ogld.query.validation import validate_at
 from ogld.store import Finding
 from ogld.store.assembly import derive_partners
-from ogld.store.validation import validate_at
 
 
 def _optional_float(text: str) -> float | None:
