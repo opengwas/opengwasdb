@@ -1,7 +1,7 @@
 """The Genotype Store sidecar's own layout: root kind, arrays and relative input pins (#91).
 
 It sits below both the writer and validation so either may import it, and neither has to
-import the other to name the root key or an array (fix round 1, Standards: no hidden cycle).
+import the other to name the root key or an array.
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 @pytest.fixture(scope="session")
 def genotype_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The Test Panel's Genotype Store, built once for the whole session (#91 fix round 1).
+    """The Test Panel's Genotype Store, built once for the whole session (#91).
 
     Defined here, not imported between test modules: a fixture imported by name is registered
     once per module, which built four sidecars — 0.7 s of setup each — for the same store.

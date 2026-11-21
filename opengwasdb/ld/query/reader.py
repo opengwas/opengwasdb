@@ -2,8 +2,7 @@
 
 `ogld.store.StoreReader` and `ogld.genotypes.GenotypeReader` both satisfy it structurally: one
 reads materialised arrays, the other computes the same answers from pinned pgens. The queries
-depend on this seam only, so neither reader has to be the other's base class (fix round 1,
-Standards: composition, not inheritance).
+depend on this seam only, so neither reader has to be the other's base class.
 """
 
 from __future__ import annotations

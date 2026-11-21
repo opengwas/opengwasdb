@@ -43,13 +43,17 @@ PC Diagnostic is null: scanning the Near Band solely for that diagnostic would
 undo the sidecar's build-cost saving; PC selection and its complete Check remain
 recorded. This distinction is explicit in the sidecar spec.
 
-The two rules a pair's answer turns on — whether a pair at a distance is Stored, and which floor a Partner Rows row keeps it at — are `REncoding.stored_mask` and `REncoding.partner_mask`, beside the code floors. The builder's cut, the Partner Rows emitter and this reader all call them, so the Bound and Not Measured cannot drift between a materialised store and a computed one (fix round 1).
+The two rules a pair's answer turns on — whether a pair at a distance is Stored, and
+which floor a Partner Rows row keeps it at — are `REncoding.stored_mask` and
+`REncoding.partner_mask`, beside the code floors. The builder's cut, the Partner Rows
+emitter and this reader all call them, so the Bound and Not Measured cannot drift
+between a materialised store and a computed one.
 
-The reader is a composition, not a subclass: it holds its own `OpenedStore` and composes
+The reader composes rather than subclasses: it holds its own `OpenedStore` and composes
 `VariantTable` exactly as `StoreReader` does, and both satisfy `ogld.query.reader.Reader`
 structurally. So a genotype reader has no LD reader's members that mean nothing here
 (`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `ogld.open` and `ogld.validate`
-read the root once and hand the opened metadata to the kind that owns it (fix round 1).
+read the root once and hand the opened metadata to the kind that owns it.
 
 The clump seam is a request-local context manager yielding a row callable.
 For LD Stores it yields the existing partner_row, a no-op with respect to I/O
@@ -60,33 +64,33 @@ rows are computed only for surviving leads. A component's lead window is
 selected with sorted positions before calling the shared arithmetic.
 
 Pgen handles are kept for the reader's lifetime, leased one to a decoding thread at a time and
-closed by `close()`. On the whole-genome EUR sidecar the first clump built 101 handles in 1.59 s
-of its 6.07 s; it now builds 25 (one per fileset plus the parallel slices) in 0.65 s of 4.19 s.
-The idle set is bounded at eight handles: a handle keeps the pgen file pages its decode touched,
-and keeping all 22 at once took a clump's peak RSS from 1.35 GB to 2.18 GB, 1.17 GB above the LD
-Store reader's, past the ticket's bound. At eight the peak is 1.70 GB (+0.69 GB), and a repeated
-whole-genome clump still reuses what its last chromosomes left. This is a handle cache, never a
-decoded-call cache (fix round 1, item 7).
+closed by `close()`. On the whole-genome EUR sidecar a clump builds 25 handles (one per fileset
+plus the parallel slices) in 0.65 s of 4.19 s; building each decode's handle afresh builds 101 in
+1.59 s of 6.07 s. The idle set is bounded at eight handles: a handle keeps the pgen file pages
+its decode touched, and keeping all 22 at once takes a clump's peak RSS from 1.35 GB to 2.18 GB,
+1.17 GB above the LD Store reader's, past the ticket's bound. At eight the peak is 1.70 GB
+(+0.69 GB), and a repeated whole-genome clump still reuses what its last chromosomes left. This
+is a handle cache, never a decoded-call cache.
 
-Measured optimisation (#91): a first implementation spent 432 ms assembling
-one proxy window's dosage block, with 214 ms inside read/reorder, and 4.05 s
-on the 3 Mb region. Decode now writes disjoint output slices on at most four
-reader threads, with no concatenation or retained calls. Rows at tied loci
-that differ between physical pgen and ALID order are reordered in place rather
-than copying the whole block. The shared float64 dosage/r path is preserved;
-no integer-only arithmetic shortcut is introduced.
+Measured (#91): assembling one proxy window's dosage block whole costs 432 ms,
+with 214 ms inside read/reorder, and the 3 Mb region 4.05 s. Decode writes
+disjoint output slices on at most four reader threads, with no concatenation or
+retained calls. Rows at tied loci that differ between physical pgen and ALID
+order are reordered in place rather than copying the whole block. The shared
+float64 dosage/r path is preserved; no integer-only arithmetic shortcut is
+introduced.
 
 Region tiles compute only the upper triangle and mirror its codes. Quantising
-16-row stripes keeps temporary arrays cache-sized; a 512-row quantisation
-experiment was slower (5.01 s). The resulting region measured 1.79–1.88 s.
+16-row stripes keeps temporary arrays cache-sized; 512-row stripes measure
+5.01 s. The region measures 1.79–1.88 s.
 BLAS limit/restore operations run on one process-local control thread, with an
 active-request count, because threadpoolctl's OpenBLAS controller owns a thread
 and an early request exit must not restore limits under another active request.
 A fresh-process concurrent-request test starts at two threads, observes one
 through both requests, then verifies restoration to two. The reader's `request()`
 seam enters the guard once per public query — `matrix`, `region`, `proxies`,
-`clump` — and not per row of a partner response (fix round 1); a plain
-per-request `threadpool_limits` would restore the caller's limit while another
+`clump` — and not per row of a partner response; a plain per-request
+`threadpool_limits` would restore the caller's limit while another
 request is still running, and one entered in a worker thread would restore it
 from the wrong thread, so the process-wide count stays.
 

@@ -252,9 +252,9 @@ def write_variant_table(
     """Write the shared variant half, without LD components or a provenance claim (#91).
 
     The LD writer and Genotype Store builder use exactly the same columns and layout. `ranges`
-    is the chromosome record its caller already computed (`chromosome_ranges`), so the write
-    path has one source for it, not two (#91 fix round 1). Index derivation follows once the
-    producer has completed its own arrays.
+    is the chromosome record its caller computed (`chromosome_ranges`), so the write path has
+    one source for it, not two. Index derivation follows once the producer has completed its own
+    arrays.
     """
     position = _positions(variants.position)
     root = zarr.open_group(str(location), mode="w-", zarr_format=3)

@@ -2,9 +2,8 @@
 
 `ogld.open` and `ogld.validate` both come through here: the root is opened once, its kind is read
 from the attribute it records, and the opened group is handed to that kind's reader or validator.
-Before this, each dispatch opened the root and then the reader opened it again, which added a
-metadata read — an HTTP round trip for a remote store — to every LD Store open (fix round 1,
-Standards H4, Repeated Switches).
+One read is enough: opening the root again in the reader would add a metadata read — an HTTP
+round trip for a remote store — to every open.
 
 This reads the kind and nothing more: an envelope a reader refuses (a Zarr v2 hierarchy, a root
 with no provenance) is still validation's to report as findings, not this seam's to raise.

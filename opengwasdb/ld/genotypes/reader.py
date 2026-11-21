@@ -2,7 +2,7 @@
 
 `GenotypeReader` satisfies `ogld.query.reader.Reader` structurally, as `StoreReader` does: it
 composes the same `OpenedStore` and `VariantTable` and holds its own computed-LD half, rather
-than inheriting the LD Store reader's (fix round 1, Standards: composition, not inheritance).
+than inheriting the LD Store reader's.
 No decoded calls survive a request. Adjustment arrays are read-only mmaps, shared by worker
 processes through the page cache.
 """
@@ -79,13 +79,12 @@ _HANDLES_KEPT = 8
 class _PgenHandles:
     """Pgen readers leased one to a decoding thread at a time, at most `_HANDLES_KEPT` kept.
 
-    A pgen handle takes ~16 ms to build on the EUR pgens, and a whole-genome clump built 101 of
-    them; keeping the handles a request's decodes already made is a handle cache, never a decoded
-    call cache (fix round 1, item 7). At most one thread holds a handle at a time (pgenlib readers
-    are not shared). The idle list is bounded because a handle also keeps the pgen file pages its
-    decode touched: all 22 at once measurably grew a clump's peak RSS, so the least recently
-    returned handle is closed when the bound is reached. `close` closes every idle handle, and a
-    handle leased when `close` runs is closed when its lease ends.
+    A pgen handle takes ~16 ms to build on the EUR pgens; keeping the handles a request's decodes
+    already made is a handle cache, never a decoded call cache. At most one thread holds a handle
+    at a time (pgenlib readers are not shared). The idle list is bounded because a handle also
+    keeps the pgen file pages its decode touched: all 22 at once measurably grew a clump's peak
+    RSS, so the least recently returned handle is closed when the bound is reached. `close`
+    closes every idle handle, and a handle leased when `close` runs is closed when its lease ends.
     """
 
     def __init__(self, filesets: list[Fileset], *, keep: int = _HANDLES_KEPT) -> None:

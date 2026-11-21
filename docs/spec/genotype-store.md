@@ -102,8 +102,8 @@ reader threads, each leasing its pgen handle. Handles are kept for the reader's 
 thread at a time, at most eight idle, and released by `close()`. `Genotypes.rows_into` writes into
 the final float64 buffer; only physically reordered rows are permuted in place
 when possible. No hard-call substitution is made for dosage-bearing inputs.
-The builder already checks completeness, so query reads rely on the pinned,
-immutable-input contract instead of scanning every dosage again.
+The builder checks completeness, so query reads rely on the pinned, immutable-input
+contract instead of scanning every dosage.
 
 BLAS is bounded to one thread while requests are active. A process-wide active
 count and a single control thread keep threadpoolctl's controlling-thread

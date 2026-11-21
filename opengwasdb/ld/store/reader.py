@@ -220,8 +220,8 @@ class StoreReader:
     def from_opened(
         cls, opened: OpenedStore, *, frame_cache_bytes: int | None = None
     ) -> StoreReader:
-        """An LD reader over a root a dispatcher has already opened and named an LD Store (#91):
-        the root is read once, so an open costs the metadata reads it did before the kind split."""
+        """An LD reader over a root a dispatcher opened and named an LD Store (#91): the root is
+        read once, so an open costs one metadata read."""
         try:
             encoding = REncoding.of(opened.provenance.get("encoding"))
         except InputError as unimplemented:

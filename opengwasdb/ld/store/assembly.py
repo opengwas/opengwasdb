@@ -267,7 +267,7 @@ class Cutter:
         t, c = np.nonzero(~below)
         del below
         # Only the far half: [cut.far] is all that reads lo, hi and codes, and the Near Band
-        # already holds every pair inside near_bp (fix round 2, R2-3).
+        # holds every pair inside near_bp.
         inside = (c > t) & (c >= near_stop[t]) & (c < far_stop[t])
         t, c = t[inside], c[inside]
         codes = self._quantised(r[t, c], lambda at: (first + int(t[at]), first + int(c[at])))
