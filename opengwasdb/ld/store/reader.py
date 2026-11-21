@@ -6,6 +6,13 @@ records (`ogld.format.REncoding`; ADR 0004): callers pass and receive global Var
 and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
 
+The variant half is `VariantTable`'s (`ogld/store/variants.py`), which this reader composes and
+delegates to: the rows of a list of ALIDs, a region's rows, a chromosome's range, the columns at
+some rows, and the loci a query orders and measures by (#94). One class owns ALID lookup, so a
+second reader composes the same one and #87's change to `rows_of` lands once for both (owner, on
+epic #18, 21 November 2026). What is below is the LD half: pairs, matrices, regions and the
+Partner Rows.
+
 Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
 nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch,
 and its Far Pairs' `indptr` when a request needs pairs beyond near_bp. Each is kept. Every
@@ -28,7 +35,6 @@ still carries a leftover `index/` answers exactly as one without it does (spec �
 
 from __future__ import annotations
 
-import mmap
 import os
 import threading
 from collections.abc import Iterator, Sequence
@@ -51,25 +57,30 @@ from ogld.format import (
 from ogld.format.geometry import (
     blocks,
     chromosome_index,
-    global_rows,
     indptr_of,
     local_rows,
     near_address,
     near_row_lengths,
     owners,
-    position_rows,
     row_pairs,
     spans,
     stop_within,
     windows,
     within,
 )
-from ogld.identity import alid_locus
 from ogld.store import layout
 from ogld.store.frames import FrameCache, PartnerFrames, open_partner_frames
-from ogld.store.layout import chromosomes_listed, never_data, refused_if_lost, shown_fill
-from ogld.store.location import ChunkCache, open_group
+from ogld.store.location import (
+    ChunkCache,
+    OpenedStore,
+    array_indptr,
+    elements_of,
+    kept_array,
+    open_group,
+    runs_of,
+)
 from ogld.store.tables import Variants
+from ogld.store.variants import VariantTable
 
 #: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
 #: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
@@ -79,8 +90,6 @@ _CHROMOSOME_ARRAYS: Final = (
 )
 #: A sparse component's arrays, as `far/<chrom>/` holds them (spec §5).
 _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
-#: The variant table's columns (spec §2).
-_VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
 #: The most component threads one request runs (partner-rows §9.2). Four is where the prototype was
@@ -88,18 +97,6 @@ _PAIRS_PER_STEP: Final = 1 << 22
 #: because a component's per-lead Python work holds the GIL while only the reads and the decode
 #: release it. The pool's size is the reader's, so no query signature carries it.
 COMPONENT_WORKERS_MAX: Final = 4
-#: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
-#: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
-#: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
-#: index holds; `docs/benchmarks/alid-index.md` has both sides of it. A small store's list is a
-#: large share of it, so a test store's lookups read the index.
-_INDEX_SHARE: Final = 2_150
-
-
-def _index_pays(count: int, entries: int) -> bool:
-    """Whether `count` keys are worth reading the whole index of `entries` (spec §10; ADR 0010):
-    a list naming a `_INDEX_SHARE`th of them or more, and never fewer than one."""
-    return count >= max(1, entries // _INDEX_SHARE)
 
 
 @dataclass(frozen=True)
@@ -114,23 +111,7 @@ class _Sparse:
 
     @cached_property
     def indptr(self) -> npt.NDArray[np.int64]:
-        return _indptr(self.source, self.cache)
-
-
-@dataclass(frozen=True)
-class _Loci:
-    """One chromosome's Variant Set rows and positions, and nothing of its LD components (#71).
-
-    A query that reads only the Partner Rows still needs each hit's chromosome, position and ALID
-    to order it and measure distances, and must not read `near/<chrom>/indptr` to get them
-    (partner-rows §8; ld-store §10). This is that much, from `variants/position` alone;
-    `_Chromosome` is it plus the Near Band, for the reads that resolve stored pairs.
-    """
-
-    name: str
-    start: int
-    stop: int
-    position: npt.NDArray[np.int64]
+        return array_indptr(self.source, self.cache)
 
 
 @dataclass(frozen=True)
@@ -144,104 +125,6 @@ class _Chromosome:
     position: npt.NDArray[np.int64]
     near_indptr: npt.NDArray[np.int64]
     near_r: zarr.Array[Any]
-
-
-@dataclass(frozen=True)
-class _AlidIndex:
-    """The ALID search index (spec §2; ADR 0010): one NUL-padded 32-byte key an entry, sorted, and
-    the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
-
-    alid: zarr.Array[Any]
-    row: zarr.Array[Any]
-
-
-class _MappedAlids:
-    """One immutable companion bundle, owned by its reader (ADR 0012).
-
-    Lookup returns independent row arrays; release serializes
-    with lookup so no borrowed numpy view survives a mapping. No pool or global cache here.
-    """
-
-    def __init__(self, companion: layout.AlidCompanion) -> None:
-        self._path = companion.path
-        self._lock = threading.Lock()
-        self._maps: list[mmap.mmap] = []
-        self._closed = False
-        self._keys = self._rows = np.empty(0)
-        try:
-            self._keys = self._map(companion, layout.ALID_MMAP_KEYS, layout.ALID_KEY_DTYPE)
-            self._rows = self._map(
-                companion, layout.ALID_MMAP_ROWS, np.dtype(layout.ALID_MMAP_ROW_DTYPE)
-            )
-        except BaseException:
-            # Tracebacks can retain this half-built bundle; cleanup cannot wait for collection.
-            self.release()
-            raise
-
-    def _map(
-        self, companion: layout.AlidCompanion, name: str, dtype: np.dtype[Any]
-    ) -> npt.NDArray[Any]:
-        path = companion.path / name
-        try:
-            with path.open("rb") as stream:
-                actual = layout.file_identity(os.fstat(stream.fileno()))
-                if actual != dict(companion.identity)[name]:
-                    raise layout.alid_mmap_error(path, "changed before mapping")
-                if not companion.count:
-                    return np.empty(0, dtype=dtype)
-                mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
-            self._maps.append(mapped)
-            return np.frombuffer(mapped, dtype=dtype)
-        except (OSError, ValueError) as failed:
-            raise layout.alid_mmap_error(path, failed) from failed
-
-    def lookup(self, keys: npt.NDArray[Any]) -> npt.NDArray[np.int64]:
-        with self._lock:
-            if self._closed:
-                raise layout.alid_mmap_error(
-                    self._path / layout.ALID_MMAP_KEYS, "mapping has been released"
-                )
-            found = np.full(len(keys), -1, dtype=np.int64)
-            if len(self._keys):
-                at = np.minimum(np.searchsorted(self._keys, keys), len(self._keys) - 1)
-                same = self._keys[at] == keys
-                found[same] = self._rows[at[same]]
-            return found
-
-    def release(self) -> None:
-        """Discard views before closing mappings, serialized with lookup (ADR 0012)."""
-        with self._lock:
-            self._closed = True
-            self._keys = self._rows = np.empty(0)
-            for mapped in self._maps:
-                mapped.close()
-            self._maps.clear()
-
-
-def _mapped_keys(
-    alids: Sequence[str],
-) -> tuple[npt.NDArray[Any], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """Encode query bytes without parsing ALIDs or truncating a name into another (ADR 0012)."""
-    encoded: list[bytes] = []
-    fitting: list[int] = []
-    wide: list[int] = []
-    for i, alid in enumerate(alids):
-        try:
-            key = alid.encode("utf-8")
-        except UnicodeEncodeError:
-            continue
-        if b"\0" in key:
-            continue
-        if len(key) > layout.ALID_INDEX_WIDTH:
-            wide.append(i)
-        else:
-            encoded.append(key)
-            fitting.append(i)
-    return (
-        np.array(encoded, dtype=layout.ALID_KEY_DTYPE),
-        np.array(fitting, dtype=np.int64),
-        np.array(wide, dtype=np.int64),
-    )
 
 
 @dataclass(frozen=True)
@@ -262,80 +145,59 @@ class StoreReader:
     it, before anything is decoded. Every code is decoded with the store's own encoding, so
     one process reads stores of different scales side by side.
 
+    It composes a `VariantTable` for the variant half (#94) and keeps the LD half itself: the
+    Near Band, the Far Pairs, the Partner Rows and the codes it decodes. Every public variant
+    read is a delegate, so a query that names one reader is answered by one owner's code.
+
     A reader is not fork-safe and is not inherited across `fork`: it holds locks and, once a
     chromosome's Partner Rows are read, a chunk file's descriptor. A process worker opens its own
     reader (partner-rows §9; ogld#71).
     """
 
-    _root: zarr.Group
-    _location: str
-    _provenance: Provenance
+    _opened: OpenedStore
     _encoding: REncoding
+    _variant_table: VariantTable
     _ranges: dict[str, tuple[int, int]]
     _names: list[str]
     _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
-    _located: dict[str, _Loci]
     _far: dict[str, _Sparse]
-    _cache: ChunkCache
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
-    _loci_lock: threading.Lock
+    _loaded_lock: threading.Lock
     _partner_lock: threading.Lock
     _query_workers: int
     _closed: bool
-    _columns: dict[str, zarr.Array[Any]]
-    _index_arrays: _AlidIndex | None
-    _alid_mmap: _MappedAlids | None
-    _alid_lock: threading.Lock
-    _alid_checked: bool
-    _alid_error: str | None
-    _has_alid_mmap: bool
 
-    def _attach(
-        self,
-        root: zarr.Group,
-        location: str,
-        provenance: Provenance,
-        encoding: REncoding,
-        cache: ChunkCache,
-        frames: FrameCache,
-    ) -> None:
-        """Keep the provenance, the encoding and the chromosome ranges of an opened, checked
-        store, and the two caches its reads go through: decoded Near Band chunks, and decoded
-        Partner Rows frames (partner-rows §7), and the component threads it may run (§9.2)."""
-        self._root = root
-        self._location = location
-        self._provenance = provenance
+    def _attach(self, opened: OpenedStore, encoding: REncoding, frames: FrameCache) -> None:
+        """Keep the opened store, the encoding and the variant table of a checked store, and the
+        second cache its reads go through: decoded Partner Rows frames (partner-rows §7), and the
+        component threads it may run (§9.2).
+
+        The table takes the same `OpenedStore` this reader holds, so one store is opened once
+        (#94) and the group, the location a refusal names, the provenance and the one chunk cache
+        are one object's for both halves. Its chromosome record is held here too, as the same
+        objects and never a copy, because the LD reads walk it per step: a range, a label and a
+        stop.
+        """
+        self._opened = opened
         self._encoding = encoding
-        self._cache = cache
         self._frame_cache = frames
         self._query_workers = COMPONENT_WORKERS_MAX
-        listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
-        self._ranges = {name: (start, stop) for name, start, stop in listed}
-        self._names = list(self._ranges)
-        self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
+        self._variant_table = VariantTable(opened)
+        self._ranges = self._variant_table.ranges
+        self._names = self._variant_table.names
+        self._stops = self._variant_table.stops
         self._loaded = {}
-        self._located = {}
         self._far = {}
         self._partner_frames = {}
         # A chromosome's first use is one load, however many threads make it: its positions are
-        # read once and both caches hold that one array (#71), and its Partner Rows' offsets chunk
+        # loaded once, by the variant table, under the table's lock, and the Near Band's `indptr`
+        # this reader loads beside them is one load under this one; its Partner Rows' offsets chunk
         # is read once and one chunk-file descriptor is opened (partner-rows §7).
-        self._loci_lock = threading.Lock()
+        self._loaded_lock = threading.Lock()
         self._partner_lock = threading.Lock()
         self._closed = False
-        # Each handle is opened once: opening one reads its metadata document, which over
-        # HTTP is a request.
-        self._columns = {name: _kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
-        self._index_arrays = None
-        self._alid_lock = threading.Lock()
-        self._alid_checked = False
-        self._alid_error = None
-        self._alid_mmap = None
-        self._has_alid_mmap = (
-            layout.local_path(root) is not None and layout.ALID_MMAP_ATTR in root.attrs
-        )
 
     @classmethod
     def open(
@@ -349,33 +211,49 @@ class StoreReader:
         `cache_bytes` of its Near Band chunks (spec §10; the default if None, ogld#32) and
         `frame_cache_bytes` of its decoded Partner Rows frames (partner-rows §7; its own default
         if None). The two are separate budgets, because the two reads serve different queries."""
-        cache = ChunkCache(cache_bytes)
-        frame_cache = FrameCache(frame_cache_bytes)
-        root = open_group(location, cache=cache)
-        recorded = root.attrs.get("ld_store")
-        if root.metadata.zarr_format != 3:
-            raise InputError(
-                f"{location} is a Zarr v{root.metadata.zarr_format} hierarchy; an LD Store is "
-                "Zarr v3 (spec §1)"
-            )
-        if not isinstance(recorded, dict):
-            raise InputError(
-                f"{location} has no ld_store provenance: it is not a finished LD Store"
-            )
-        if recorded.get("format_version") not in READABLE_FORMATS:
-            raise InputError(
-                f"{location} is LD Store format {recorded.get('format_version')!r}; "
-                f"this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
-            )
+        opened = _opened_store(location, cache_bytes)
         try:
-            encoding = REncoding.of(recorded.get("encoding"))
+            encoding = REncoding.of(opened.provenance.get("encoding"))
         except InputError as unimplemented:
             raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(
-            root, str(location), cast(Provenance, recorded), encoding, cache, frame_cache
-        )
+        reader._attach(opened, encoding, FrameCache(frame_cache_bytes))
         return reader
+
+    # The store's facts and its chunk cache are the `OpenedStore` the variant table holds too, so
+    # these read and, for the cache, replace it for both halves (#94). The benchmark harness swaps
+    # `_cache` to measure what a read holds; a copy here would leave the variant reads behind.
+    @property
+    def _root(self) -> zarr.Group:
+        return self._opened.root
+
+    @_root.setter
+    def _root(self, root: zarr.Group) -> None:
+        self._opened.root = root
+
+    @property
+    def _location(self) -> str:
+        return self._opened.location
+
+    @_location.setter
+    def _location(self, location: str) -> None:
+        self._opened.location = location
+
+    @property
+    def _provenance(self) -> Provenance:
+        return self._opened.provenance
+
+    @_provenance.setter
+    def _provenance(self, provenance: Provenance) -> None:
+        self._opened.provenance = provenance
+
+    @property
+    def _cache(self) -> ChunkCache:
+        return self._opened.cache
+
+    @_cache.setter
+    def _cache(self, cache: ChunkCache) -> None:
+        self._opened.cache = cache
 
     @property
     def cache_bytes(self) -> int:
@@ -401,8 +279,8 @@ class StoreReader:
 
     def close(self) -> None:
         """Close the reader: after it returns no Partner Rows read is answered, and every chunk file
-        it kept open is closed (partner-rows §7). The optional ALID mappings are released too
-        (ADR 0012), after any concurrent mapped lookup finishes.
+        it kept open is closed (partner-rows §7). The variant table's optional ALID mappings are
+        released too (ADR 0012), after any concurrent mapped lookup finishes.
 
         A first use that is racing `close` cannot publish a source that outlives it: it holds the
         chromosome lock `close` waits on and re-checks the closed state under it, so either the
@@ -418,9 +296,7 @@ class StoreReader:
             frames, self._partner_frames = list(self._partner_frames.values()), {}
         for partner in frames:
             partner.close()
-        with self._alid_lock:
-            if self._alid_mmap is not None:
-                self._alid_mmap.release()
+        self._variant_table.close()
 
     def __enter__(self) -> StoreReader:
         return self
@@ -444,249 +320,53 @@ class StoreReader:
         """The encoding the store records, which every code it reads is decoded with (§3)."""
         return self._encoding
 
+    # ------------------------------------------------------- the variant table's reads
+    #
+    # These are the read interface a query names (owner, 10 November 2026), and their one owner is
+    # `ogld.store.VariantTable` (#94): the reader answers them through the table it composes, so a
+    # second reader and this one cannot drift apart on what an ALID, a region or a chromosome means.
+
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
         """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
 
-        A malformed ALID is Absent too: it names no variant in the store. A long list is searched
-        for in the store's ALID index (ADR 0010), which holds every ALID of the table that fits its
-        32-byte slot, sorted, so one search answers it without reading the variant table at all.
-        A validated local companion instead answers fitting hits and misses by mmap without
-        parsing loci or reading columns (ADR 0012); only wider names take the exact scan.
-        Without that companion, every ALID the index does not hold — absent, too wide for the
-        slot, or one a broken build left out — takes the exact scan at its own position. A list
-        too short for the index to pay for takes that scan for every ALID. So the index
-        can only make this read faster, never change its answer; and a store whose index could
-        answer falsely is one validation fails, as it fails a store with any other broken array.
+        The table's search: the ALID index (ADR 0010) for a long list, the validated local
+        companion where one is published (ADR 0012), and the exact scan for what neither answers.
+        A malformed ALID is Absent too. See `VariantTable.rows_of`.
         """
-        found = np.full(len(alids), -1, dtype=np.int64)
-        if not len(alids):
-            return found
-        mapped = self._mapped_rows(alids)
-        if mapped is not None:
-            return mapped
-        loci = _loci(alids, self._ranges)
-        if not loci:
-            return found
-        scanned = np.ones(len(alids), dtype=bool)
-        self._from_index(alids, loci, found, scanned)
-        rest = np.flatnonzero(scanned)
-        if len(rest):
-            found[rest] = self._scanned(alids, rest)
-        return found
-
-    def _mapped_alids(self) -> _MappedAlids | None:
-        """Verify/attach once, with sticky failure and close serialized on the same lock."""
-        with self._alid_lock:
-            if self._alid_error is not None:
-                raise InputError(self._alid_error)
-            if self._closed:
-                raise self._alid_refusal("reader has been released")
-            if not self._alid_checked:
-                try:
-                    companion = layout.alid_companion(self._root)
-                    self._alid_mmap = None if companion is None else _MappedAlids(companion)
-                except Exception as failed:
-                    # Keep text, not a traceback retaining the half-built reader/mappings.
-                    refusal = self._alid_refusal(failed)
-                    self._alid_error = str(refusal)
-                    raise refusal from failed
-                self._alid_checked = True
-            return self._alid_mmap
-
-    def _alid_refusal(self, reason: object) -> InputError:
-        return InputError(
-            f"{self.location}: ALID companion {self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
-            f"{layout.ALID_MMAP_MANIFEST}: {reason}"
-        )
-
-    def _mapped_rows(self, alids: Sequence[str]) -> npt.NDArray[np.int64] | None:
-        if not self._has_alid_mmap:
-            return None
-        keys, fitting, wide = _mapped_keys(alids)
-        found = np.full(len(alids), -1, dtype=np.int64)
-        if len(fitting) or self._alid_error is not None or self._closed:
-            mapped = self._mapped_alids()
-            if mapped is None:
-                return None
-            found[fitting] = mapped.lookup(keys)
-        if len(wide):
-            found[wide] = self._scanned(alids, wide)
-        return found
-
-    def _from_index(
-        self,
-        alids: Sequence[str],
-        loci: dict[str, tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]],
-        found: npt.NDArray[np.int64],
-        scanned: npt.NDArray[np.bool_],
-    ) -> None:
-        """Fill `found` from the ALID index for every ALID it can answer, and clear `scanned`
-        there; what it cannot answer stays for the exact scan (spec §2, §10; ADR 0010).
-
-        Which ALIDs the index holds a key for is `layout.alid_fits`' question, not this method's:
-        an ALID wider than the slot has no key and is scanned, and a store whose key for one row
-        is another row's — truncated into the slot, or invented — is one validation fails
-        (`alid_index.keys`). A list too short to pay for the index asks for nothing.
-        """
-        asked = [i for which, _ in loci.values() for i in which.tolist()]
-        keys, fitting = layout.alid_keys([alids[i] for i in asked])
-        if not len(keys) or not _index_pays(len(keys), self._entries()):
-            return
-        if self._root.get(layout.ALID_INDEX) is None:
-            return
-        hits = self._searched(keys)
-        where = hits >= 0
-        found[np.array(asked, dtype=np.int64)[fitting[where]]] = self._read(
-            self._index().row, hits[where]
-        )
-        scanned[np.array(asked, dtype=np.int64)[fitting[where]]] = False
-
-    def _entries(self) -> int:
-        """How many entries the Variant Set's index holds: its rows less the ALIDs too wide for its
-        slot, which the store's provenance counts (spec §7). A store written before the index
-        records no count; `_from_index` keeps that store on the exact-scan fallback (ADR 0012)."""
-        counts = self._provenance["counts"]
-        return int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
-
-    def _scanned(self, alids: Sequence[str], which: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
-        """The rows of the ALIDs at `which`, in that order: the exact scan of the variant table
-        at each one's own position (spec §2), which is how `rows_of` found every ALID before the
-        index. Only the ALID strings at those positions are read, in one read per chromosome."""
-        found = np.full(len(which), -1, dtype=np.int64)
-        chosen = [alids[int(i)] for i in which]
-        asked: list[int] = []
-        candidates: list[npt.NDArray[np.int64]] = []
-        for chrom, (at, positions) in _loci(chosen, self._ranges).items():
-            c = self._chromosome_loci(chrom)
-            lo, hi = position_rows(c.position, positions, positions)
-            asked.extend(owners(hi - lo, at).tolist())
-            candidates.append(global_rows(spans(lo, hi - lo), c.start))
-        if not asked:
-            return found
-        rows = np.concatenate(candidates)
-        names = self._strings("alid", rows)
-        query = np.array([chosen[i] for i in asked], dtype=np.str_)
-        hit = names == query
-        found[np.array(asked, dtype=np.int64)[hit]] = rows[hit]
-        return found
-
-    def _searched(self, keys: npt.NDArray[np.uint8]) -> npt.NDArray[np.int64]:
-        """Where each key's entry lies in the ALID index, or −1 where the index holds none.
-
-        The index is read one shard at a time — the unit the store itself reads and fetches — in key
-        order, and each read's keys are searched for the queries that fall within them. So the table
-        is never held whole beside the chunk cache: a lookup's transient is one shard of keys — 16
-        MiB on EUR, released before the next is fetched — and the queries' own keys, where reading
-        the array in one run holds all 273 MB of EUR's keys twice (spec §10; ogld#42's reviews).
-        """
-        index = self._index()
-        count = int(index.row.shape[0])
-        found = np.full(len(keys), -1, dtype=np.int64)
-        if not count or not len(keys):
-            return found
-        width = layout.ALID_INDEX_WIDTH
-        # One shard's keys, from the array's own shapes: a store written with other ones is read
-        # one of its shards at a time too. An array with no shards reads one inner chunk.
-        shard = int((index.alid.shards or index.alid.chunks)[0])
-        per = max(1, shard // width)
-        order = np.argsort(keys.view(layout.ALID_KEY_DTYPE).ravel(), kind="stable")
-        wanted = keys[order].view(layout.ALID_KEY_DTYPE).ravel()
-        chunk = np.empty(0, dtype=layout.ALID_KEY_DTYPE)
-        for first in range(0, count, per):
-            # Let the shard just searched go before the next is fetched and joined: a lookup holds
-            # one shard's keys, not the one before it as well (ogld#42's fix round 3).
-            del chunk
-            chunk = self._chunk(index, first, min(first + per, count))
-            a = int(np.searchsorted(wanted, chunk[0], "left"))
-            b = int(np.searchsorted(wanted, chunk[-1], "right"))
-            if b <= a:
-                continue
-            at = np.minimum(np.searchsorted(chunk, wanted[a:b]), len(chunk) - 1)
-            same = chunk[at] == wanted[a:b]
-            found[order[a:b][same]] = first + at[same]
-        return found
-
-    def _chunk(self, index: _AlidIndex, first: int, stop: int) -> npt.NDArray[Any]:
-        """The keys of the index's entries [first, stop) — one read, one shard at most — refused if
-        one of its chunks is lost."""
-        width = layout.ALID_INDEX_WIDTH
-        length = np.array([(stop - first) * width])
-        run = self._runs(index.alid, np.array([first * width]), length)[0]
-        keys = refused_if_lost(index.alid, run)
-        return keys.view(layout.ALID_KEY_DTYPE).ravel()
-
-    def _index(self) -> _AlidIndex:
-        """The ALID index's arrays, opened on first use (spec §10): opening reads their
-        metadata, and nothing reads them until a search does."""
-        if self._index_arrays is None:
-            self._index_arrays = _AlidIndex(
-                _kept_array(self._root, layout.ALID_INDEX_ALID),
-                _kept_array(self._root, layout.ALID_INDEX_ROW),
-            )
-        return self._index_arrays
+        return self._variant_table.rows_of(alids)
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
-        """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2)."""
-        if alid_locus(f"{chrom}:1:A:C") is None:
-            raise InputError(
-                f"{chrom!r} is not a canonical chromosome label (1–22, X, Y, MT; no 'chr' prefix)"
-            )
-        if chrom not in self._ranges:
-            return np.empty(0, dtype=np.int64)
-        c = self._chromosome(chrom)
-        lo, hi = position_rows(c.position, start, stop)
-        return global_rows(np.arange(int(lo), int(hi), dtype=np.int64), c.start)
+        """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2).
+
+        The rows are the variant table's answer; the chromosome is opened here first, as this has
+        always been the reader's first touch of a chromosome that `region` will read from its Near
+        Band, so each of its arrays' fill values is judged before any element is decoded (spec §6).
+        `loci_of` is the variant read that must open none of them (#71).
+        """
+        if chrom in self._ranges:
+            self._chromosome(chrom)
+        return self._variant_table.rows_in(chrom, start, stop)
 
     def chromosome_range(self, chrom: str) -> tuple[int, int]:
-        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (spec §2).
-
-        It is what turns a Partner Rows row's chromosome-local partner into a Variant Set row
-        (partner-rows §7), so a component split and a greedy can work in the store's own rows. A
-        label the store does not hold is refused naming it, as `partner_row` refuses it.
-        """
-        try:
-            return self._ranges[chrom]
-        except KeyError:
-            raise ValueError(
-                f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
-                f"{', '.join(self._names)} (spec §2)"
-            ) from None
+        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (spec §2), which is
+        what turns a Partner Rows row's local partner into a Variant Set row (partner-rows §7)."""
+        return self._variant_table.chromosome_range(chrom)
 
     def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
         """The ALID of each of `rows`, in the order given (spec §2): the one string column a
         query names its rows by, read without the others (ogld#14)."""
-        return self._strings("alid", self._checked(rows))
+        return self._variant_table.alids_of(rows)
 
     def loci_of(
         self, rows: npt.NDArray[np.int64]
     ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.int64]]:
-        """Chromosomes and positions, without allele columns clump never returns (ogld#40).
-
-        It reads the variant table's positions and nothing of the LD components: `clump` and
-        `proxies` call it, and from 0.2.0 their only LD read is the Partner Rows (#71). This is a
-        store-layer read, not a public query or a new caller setting. Geometry and chromosome label
-        dtypes stay identical to the full variant-table read.
-        """
-        rows = self._checked(rows)
-        position = np.empty(len(rows), dtype=np.int64)
-        for c, members in self._loci_by_chromosome(rows):
-            position[members] = c.position[local_rows(rows[members], c.start)]
-        names = np.array(self._names, dtype=np.str_)
-        return names[chromosome_index(self._stops, rows)], position
+        """Chromosomes and positions, without allele columns clump never returns (ogld#40): the
+        variant table's positions, and nothing of the LD components (#71)."""
+        return self._variant_table.loci_of(rows)
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
         """The Variant Set's columns at `rows`, in the order given (spec §2)."""
-        rows = self._checked(rows)
-        chrom, position = self.loci_of(rows)
-        frequency = self._read(self._columns["a1_frequency"], rows)
-        return Variants(
-            chrom=chrom,
-            position=position,
-            alid=self._strings("alid", rows),
-            a1=self._strings("a1", rows),
-            a2=self._strings("a2", rows),
-            a1_frequency=frequency.astype(np.float64),
-        )
+        return self._variant_table.variants(rows)
 
     def pair_r(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         """The square matrix of Stored r among `rows`, in the order given (spec §8, §10).
@@ -790,7 +470,6 @@ class StoreReader:
         return out
 
     # ------------------------------------------------------------ partner rows
-
     def require_partner_rows(self) -> float:
         """The Partner Threshold this store recorded (spec §7; partner-rows §3).
 
@@ -994,57 +673,27 @@ class StoreReader:
         self, array: zarr.Array[Any], first: npt.NDArray[np.int64], length: npt.NDArray[np.int64]
     ) -> list[npt.NDArray[Any]]:
         """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
-        a lost chunk refused."""
-        return [refused_if_lost(array, run) for run in self._cache.runs(array, first, length)]
-
-    def _chromosome_loci(self, name: str) -> _Loci:
-        """One chromosome's rows and positions, read on first use and nothing else (#71).
-
-        Positions are the variant table's, one slice a chromosome, so an ALID lookup, a clump and
-        a proxies query read no `near/<chrom>/indptr`.
-        A chromosome's positions are loaded once, however many threads are cold on it: the check is
-        repeated under the lock, as a first use of the Partner Rows is (§7), so no caller publishes
-        a second copy of a chromosome-sized array.
-        """
-        loci = self._located.get(name)
-        if loci is not None:
-            return loci
-        with self._loci_lock:
-            return self._loaded_loci(name)
-
-    def _loaded_loci(self, name: str) -> _Loci:
-        """`_chromosome_loci` with the lock held: the one load a chromosome's positions get."""
-        loci = self._located.get(name)
-        if loci is None:
-            start, stop = self._ranges[name]
-            position = self._columns["position"]
-            loci = _Loci(
-                name,
-                start,
-                stop,
-                self._runs(position, np.array([start]), np.array([stop - start]))[0].astype(
-                    np.int64
-                ),
-            )
-            self._located[name] = loci
-        return loci
+        a lost chunk refused. One read, which the variant table makes too (`runs_of`)."""
+        return runs_of(array, self._cache, first, length)
 
     def _chromosome(self, name: str) -> _Chromosome:
         """One chromosome's kept arrays, read on first use (spec §10). Each of its three arrays'
         fill values is judged before any element of the chromosome is decoded.
 
-        It takes its positions from the published `_Loci`, and publishes it under the same lock, so
-        `_loaded[c].position is _located[c].position` however the two paths interleave.
+        It takes its positions from the table's published `Loci`, so the LD half and the variant
+        half keep the one position array: `_loaded[c].position is table.loci(c).position` however
+        the two paths interleave, because the table publishes it under its own lock and this
+        publishes the chromosome under this reader's.
         """
         loaded = self._loaded.get(name)
         if loaded is not None:
             return loaded
-        with self._loci_lock:
+        with self._loaded_lock:
             if name in self._loaded:
                 return self._loaded[name]
-            loci = self._loaded_loci(name)
+            loci = self._variant_table.loci(name)
             near_indptr, near_r = (
-                _kept_array(self._root, f"{kind}/{name}/{array}")
+                kept_array(self._root, f"{kind}/{name}/{array}")
                 for kind, array in _CHROMOSOME_ARRAYS
             )
             assembled = _Chromosome(
@@ -1052,7 +701,7 @@ class StoreReader:
                 loci.start,
                 loci.stop,
                 loci.position,
-                _indptr(near_indptr, self._cache),
+                array_indptr(near_indptr, self._cache),
                 near_r,
             )
             self._loaded[name] = assembled
@@ -1065,7 +714,7 @@ class StoreReader:
         array's fill value is judged before any of its elements is decoded."""
         if c.name not in self._far:
             indptr, partner, r = (
-                _kept_array(self._root, f"far/{c.name}/{array}") for array in _SPARSE_ARRAYS
+                kept_array(self._root, f"far/{c.name}/{array}") for array in _SPARSE_ARRAYS
             )
             self._far[c.name] = _Sparse(indptr, self._cache, partner, r)
         return self._far[c.name]
@@ -1078,85 +727,49 @@ class StoreReader:
         for index in np.unique(which):
             yield self._chromosome(self._names[index]), np.flatnonzero(which == index)
 
-    def _loci_by_chromosome(
-        self, rows: npt.NDArray[np.int64]
-    ) -> Iterator[tuple[_Loci, npt.NDArray[np.int64]]]:
-        """`_by_chromosome` without the LD components: each chromosome `rows` touch, its rows and
-        positions, and the positions in `rows` that are on it (#71)."""
-        which = chromosome_index(self._stops, rows)
-        for index in np.unique(which):
-            yield self._chromosome_loci(self._names[index]), np.flatnonzero(which == index)
-
-    def _strings(self, name: str, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
-        """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
-        # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
-        values = np.array(self._read(self._columns[name], rows).tolist(), dtype=np.str_)
-        return values
-
     def _read(self, array: zarr.Array[Any], coords: npt.NDArray[np.int64]) -> npt.NDArray[Any]:
-        """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
-        return refused_if_lost(array, self._cache.take(array, coords))
+        """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused.
+        One read, which the variant table makes too (`elements_of`)."""
+        return elements_of(array, self._cache, coords)
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
-        """`rows`, if every one is a row of the Variant Set. An Absent ALID is −1 from `rows_of`
-        and is no row: read as an index it would be the last variant."""
-        rows = np.asarray(rows, dtype=np.int64)
-        size = int(self._stops[-1]) if len(self._stops) else 0
-        bad = (rows < 0) | (rows >= size)
-        if bad.any():
-            raise ValueError(
-                f"rows {rows[bad][:5].tolist()} are outside the Variant Set of "
-                f"{size} rows: an Absent ALID is not a row (spec §8)"
-            )
-        return rows
+        """`rows`, if every one is a row of the Variant Set: the table's guard. An Absent ALID is
+        −1 from `rows_of` and is no row (spec §8; `VariantTable.checked_rows`)."""
+        return self._variant_table.checked_rows(rows)
 
 
-def _loci(
-    alids: Sequence[str], ranges: dict[str, tuple[int, int]]
-) -> dict[str, tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]]:
-    """Per chromosome of the store, which of `alids` name a locus on it, and its position."""
-    by_chrom: dict[str, tuple[list[int], list[int]]] = {}
-    for i, alid in enumerate(alids):
-        locus = alid_locus(alid)
-        if locus is not None and locus[0] in ranges:
-            which, at = by_chrom.setdefault(locus[0], ([], []))
-            which.append(i)
-            at.append(locus[1])
-    return {
-        chrom: (np.array(which, dtype=np.int64), np.array(at, dtype=np.int64))
-        for chrom, (which, at) in by_chrom.items()
-    }
+def open_variant_table(
+    location: str | os.PathLike[str], *, cache_bytes: int | None = None
+) -> VariantTable:
+    """The variant table of the LD Store at `location`, and nothing of its LD (ogld#94).
+
+    A reader that composes a table hands it the group it opened, so `StoreReader` does not come
+    through here: this is for a caller that wants the variant table alone, which is how a test
+    holds it to `StoreReader`'s own answers. It refuses what `StoreReader.open` refuses — a Zarr
+    v3 hierarchy, a finished store, a format this package reads (spec §1, §13) — and says nothing
+    about the encoding, which no variant read decodes a code with.
+    """
+    return VariantTable(_opened_store(location, cache_bytes))
 
 
-def _group(root: zarr.Group, path: str) -> zarr.Group:
-    member = root[path]
-    assert isinstance(member, zarr.Group)
-    return member
-
-
-def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
-    """The array at `path`; one the store lacks is refused, naming it, never read as empty."""
-    try:
-        member = root[path]
-    except KeyError:
-        raise ValueError(
-            f"{path} is missing: every LD Store holds it (spec §1, envelope.arrays)"
-        ) from None
-    assert isinstance(member, zarr.Array)
-    return member
-
-
-def _kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
-    """An array, refused unless a chunk it lost would read as a value no store holds there."""
-    array = _array(root, path)
-    if not never_data(path, array.fill_value).all():
-        raise ValueError(
-            f"{path} has the fill value {shown_fill(array.fill_value)}, which valid data can hold "
-            "there: a chunk it lost would read as data (spec §6, envelope.fill)"
+def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> OpenedStore:
+    """An opened store this package can read: its group, the location naming it, its `ld_store`
+    provenance and the one chunk cache its reads go through, refused naming the store and what is
+    wrong with it (spec §1, §7, §13). It reads the root's metadata and nothing else, so it is the
+    same work whether a reader or a bare variant table follows."""
+    cache = ChunkCache(cache_bytes)
+    root = open_group(location, cache=cache)
+    if root.metadata.zarr_format != 3:
+        raise InputError(
+            f"{location} is a Zarr v{root.metadata.zarr_format} hierarchy; an LD Store is "
+            "Zarr v3 (spec §1)"
         )
-    return array
-
-
-def _indptr(array: zarr.Array[Any], cache: ChunkCache) -> npt.NDArray[np.int64]:
-    data = cache.runs(array, [0], [array.shape[0]])[0]
-    return refused_if_lost(array, data).astype(np.int64, copy=False)
+    recorded = root.attrs.get("ld_store")
+    if not isinstance(recorded, dict):
+        raise InputError(f"{location} has no ld_store provenance: it is not a finished LD Store")
+    if recorded.get("format_version") not in READABLE_FORMATS:
+        raise InputError(
+            f"{location} is LD Store format {recorded.get('format_version')!r}; "
+            f"this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
+        )
+    return OpenedStore(root, str(location), cast(Provenance, recorded), cache)
