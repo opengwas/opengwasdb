@@ -129,7 +129,21 @@ def _mapped(row: SourceVariant, lift: Any) -> tuple[int, str] | str:
     return min(a[1], b[1]), a[2]
 
 
-def _target(row: SourceVariant, lift: Any, reference: str) -> tuple[Any, ...] | str:
+@dataclass(frozen=True)
+class LiftedVariant:
+    chrom: str
+    position: int
+    alid: str
+    a1: str
+    a2: str
+    a1_frequency: float
+    source_row: int
+    source_position: int
+    sign: int
+    negative_strand: bool
+
+
+def _target(row: SourceVariant, lift: Any, reference: str) -> LiftedVariant | str:
     mapped = _mapped(row, lift)
     if isinstance(mapped, str):
         return mapped
@@ -145,17 +159,17 @@ def _target(row: SourceVariant, lift: Any, reference: str) -> tuple[Any, ...] | 
         return "allele_identity"
     if not np.isfinite(row.af) or not 0 < row.af < 1:
         return "invalid_frequency"
-    return (
-        row.chrom,
-        target + 1,
-        identity.alid,
-        identity.a1,
-        identity.a2,
-        row.af if identity.a1_is_alt else 1 - row.af,
-        row.index,
-        row.position,
-        1 if identity.a1_is_alt else -1,
-        strand == "-",
+    return LiftedVariant(
+        chrom=row.chrom,
+        position=target + 1,
+        alid=identity.alid,
+        a1=identity.a1,
+        a2=identity.a2,
+        a1_frequency=row.af if identity.a1_is_alt else 1 - row.af,
+        source_row=row.index,
+        source_position=row.position,
+        sign=1 if identity.a1_is_alt else -1,
+        negative_strand=strand == "-",
     )
 
 
@@ -171,7 +185,7 @@ def lift_variants(
         raise ValueError("liftover needs one nonempty chromosome")
     lift = optional_module("pyliftover").LiftOver(str(chain))
     reference = _reference(fasta, rows[0].chrom)
-    kept: list[tuple[Any, ...]] = []
+    kept: list[LiftedVariant] = []
     losses: Counter[str] = Counter()
     for row in rows:
         got = _target(row, lift, reference)
@@ -179,27 +193,29 @@ def lift_variants(
             losses[got] += 1
         else:
             kept.append(got)
-    multiplicity = Counter(row[2] for row in kept)
-    unique = [row for row in kept if multiplicity[row[2]] == 1]
+    multiplicity = Counter(row.alid for row in kept)
+    unique = [row for row in kept if multiplicity[row.alid] == 1]
     losses["liftover_identity_collision"] = len(kept) - len(unique)
-    unique.sort(key=lambda row: order_key(row[0], row[1], row[2]))
-    columns = list(zip(*unique, strict=True)) if unique else [() for _ in range(10)]
-    arrays = [np.array(column) for column in columns]
+    unique.sort(key=lambda row: order_key(row.chrom, row.position, row.alid))
+    return _table(unique), dict(losses)
+
+
+def _table(rows: list[LiftedVariant]) -> Lifted:
     variants = Variants(
-        arrays[0].astype(str),
-        arrays[1].astype(np.int64),
-        arrays[2].astype(str),
-        arrays[3].astype(str),
-        arrays[4].astype(str),
-        arrays[5].astype(np.float64),
+        np.array([row.chrom for row in rows], dtype=str),
+        np.array([row.position for row in rows], dtype=np.int64),
+        np.array([row.alid for row in rows], dtype=str),
+        np.array([row.a1 for row in rows], dtype=str),
+        np.array([row.a2 for row in rows], dtype=str),
+        np.array([row.a1_frequency for row in rows], dtype=np.float64),
     )
     return Lifted(
         variants,
-        arrays[6].astype(np.int64),
-        arrays[7].astype(np.int64),
-        arrays[8].astype(np.int64),
-        arrays[9].astype(bool),
-    ), dict(losses)
+        np.array([row.source_row for row in rows], dtype=np.int64),
+        np.array([row.source_position for row in rows], dtype=np.int64),
+        np.array([row.sign for row in rows], dtype=np.int64),
+        np.array([row.negative_strand for row in rows], dtype=bool),
+    )
 
 
 def _complete(source: IntArray, target: IntArray, distance: int) -> bool:

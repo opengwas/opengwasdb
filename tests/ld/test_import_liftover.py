@@ -34,6 +34,10 @@ def test_lift_allele_mismatch_unmapped_and_collision_are_counted() -> None:
     assert table.alid.tolist() == ["22:1:A:C", "22:59:A:C"]
     assert table.sign.tolist() == [-1, -1]
     assert table.negative_strand.tolist() == [False, True]
+    assert table.index.tolist() == [0, 5]
+    assert table.source_position.tolist() == [1, 102]
+    assert table.variants.position.tolist() == [1, 59]
+    assert table.variants.a1_frequency.tolist() == [0.75, 0.9]
 
 
 def test_tsv_liftover_input_streams_one_chromosome_before_later_bad_row(tmp_path) -> None:
