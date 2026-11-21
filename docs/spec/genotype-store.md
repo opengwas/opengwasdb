@@ -59,3 +59,19 @@ chromosomes or beyond far_bp are NaN; beyond near_bp, codes below the recorded
 far floor are NaN (the Bound). Diagonal entries are 1. Fills and Absent remain
 the existing query module's responsibilities. `region` uses the same vectorised
 assembly and existing region refusal.
+
+## Threshold queries and clump working set
+
+`partner_row(s)` computes only within far_bp and keeps codes at the recorded
+Partner Floor within near_bp and far floor beyond it. Existing proxies/clump
+modules retain all threshold, edge, ordering and refusal semantics of
+ld-store.md §9, including threshold_below_t_partner despite the lack of physical
+Partner Rows.
+
+The explicit reader seam `clump_rows(chrom, local_hit_rows, window)` is a
+context manager yielding a lead-row callable. An LD Store returns its existing
+partner_row with no reads or precomputation. A Genotype Store decodes only that
+component's hits once as request-local working memory, computes each surviving
+lead against hits within the window through `adjust.r`, and releases the block
+when the component ends. It never sets reader attributes to restrict a request,
+never computes an eliminated lead's row, and retains no calls between queries.

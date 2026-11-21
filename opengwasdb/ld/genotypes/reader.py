@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -107,3 +109,62 @@ class GenotypeReader(StoreReader):
 
     def region_r(self, start: int, stop: int) -> npt.NDArray[np.float64]:
         return self.pair_r(np.arange(start, stop, dtype=np.int64))
+
+    def partner_row(
+        self, chrom: str, row: int
+    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+        start, _ = self.chromosome_range(chrom)
+        lead = start + row
+        position = int(self.loci_of(np.array([lead], dtype=np.int64))[1][0])
+        far = self.provenance["far_bp"]
+        rows = self.rows_in(chrom, position - far, position + far)
+        with threadpool_limits(limits=1, user_api="blas"):
+            return self._partners(start, lead, rows, self._data(rows))
+
+    def partner_rows(
+        self, chrom: str, local_rows: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+        pairs = [self.partner_row(chrom, int(row)) for row in local_rows]
+        indptr = np.r_[0, np.cumsum([len(pair[0]) for pair in pairs])].astype(np.int64)
+        if not pairs:
+            return indptr, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int16)
+        return indptr, np.concatenate([a for a, _ in pairs]), np.concatenate([b for _, b in pairs])
+
+    @contextmanager
+    def clump_rows(
+        self, chrom: str, rows: npt.NDArray[np.int64], window: float
+    ) -> Iterator[Callable[[int], tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]]]:
+        start, _ = self.chromosome_range(chrom)
+        hits = rows + start
+        positions = self.loci_of(hits)[1]
+        # This is component-local working memory, released when its greedy ends, not a call cache.
+        # No non-hit is decoded and no eliminated lead's correlation row is computed.
+        with threadpool_limits(limits=1, user_api="blas"):
+            block = self._data(hits)
+
+            def partners(row: int) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+                lead = row + start
+                at = int(np.searchsorted(hits, lead))
+                lo = int(np.searchsorted(positions, positions[at] - window))
+                hi = int(np.searchsorted(positions, positions[at] + window, side="right"))
+                return self._partners(start, lead, hits[lo:hi], block[lo:hi], positions[lo:hi])
+
+            yield partners
+
+    def _partners(
+        self,
+        start: int,
+        lead: int,
+        rows: npt.NDArray[np.int64],
+        block: Block,
+        position: npt.NDArray[np.int64] | None = None,
+    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+        at = int(np.searchsorted(rows, lead))
+        codes = self.encoding.quantise(r(block[at : at + 1], block))[0]
+        if position is None:
+            position = self.loci_of(rows)[1]
+        distance = np.abs(position - position[at])
+        p = self.provenance
+        floor = np.where(distance <= p["near_bp"], p["partner_code_floor"], p["far_code_floor"])
+        keep = (rows != lead) & (distance <= p["far_bp"]) & (np.abs(codes) >= floor)
+        return (rows[keep] - start).astype(np.int32), codes[keep]

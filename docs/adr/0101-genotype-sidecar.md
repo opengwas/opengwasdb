@@ -43,6 +43,14 @@ PC Diagnostic is null: scanning the Near Band solely for that diagnostic would
 undo the sidecar's build-cost saving; PC selection and its complete Check remain
 recorded. This distinction is explicit in the sidecar spec.
 
+The clump seam is a request-local context manager yielding a row callable.
+For LD Stores it yields the existing partner_row, a no-op with respect to I/O
+and answers. For genotype reads it holds only a component's hit calls during
+that component, then releases them. This working set is not a cache: no calls
+survive a query. Candidate selection never decodes non-hits, and correlation
+rows are computed only for surviving leads. A component's lead window is
+selected with sorted positions before calling the shared arithmetic.
+
 ## Consequences and rejected alternatives
 
 Absolute paths were rejected by the owner's ruling: a deployment moves its input

@@ -184,22 +184,25 @@ def _component(
     slots[task.rows - lo] = np.arange(len(task.rows), dtype=np.int64)
     lead = np.full(len(task.rows), -1, dtype=np.int64)
     r_lead = np.full(len(task.rows), np.nan)
-    for i in np.lexsort((task.rows, -task.score)).tolist():
-        if lead[i] >= 0:
-            continue
-        lead[i], r_lead[i] = i, 1.0
-        partners, codes = reader.partner_row(task.chrom, int(task.local[i]))
-        at_rows = global_rows(partners, task.start)
-        inside = (at_rows >= lo) & (at_rows <= hi)
-        at = slots[at_rows[inside] - lo]
-        r = reader.encoding.dequantise(codes[inside])
-        exists = at >= 0
-        at, r = at[exists], r[exists]
-        joins = (
-            (lead[at] < 0) & (r * r > r2) & (np.abs(task.position[at] - task.position[i]) < window)
-        )
-        at, r = at[joins], r[joins]
-        lead[at], r_lead[at] = i, r
+    with reader.clump_rows(task.chrom, task.local, window) as partner_row:
+        for i in np.lexsort((task.rows, -task.score)).tolist():
+            if lead[i] >= 0:
+                continue
+            lead[i], r_lead[i] = i, 1.0
+            partners, codes = partner_row(int(task.local[i]))
+            at_rows = global_rows(partners, task.start)
+            inside = (at_rows >= lo) & (at_rows <= hi)
+            at = slots[at_rows[inside] - lo]
+            r = reader.encoding.dequantise(codes[inside])
+            exists = at >= 0
+            at, r = at[exists], r[exists]
+            joins = (
+                (lead[at] < 0)
+                & (r * r > r2)
+                & (np.abs(task.position[at] - task.position[i]) < window)
+            )
+            at, r = at[joins], r[joins]
+            lead[at], r_lead[at] = i, r
     return task.part, lead, r_lead
 
 

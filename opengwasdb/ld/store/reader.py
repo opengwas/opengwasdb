@@ -37,9 +37,10 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Any, Final, cast
 
 import numpy as np
@@ -506,6 +507,18 @@ class StoreReader:
         claimed (ogld#69).
         """
         return claims_partner_rows(self._provenance)
+
+    def clump_rows(
+        self, chrom: str, rows: npt.NDArray[np.int64], window: float
+    ) -> AbstractContextManager[
+        Callable[[int], tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]]
+    ]:
+        """A request-local row source restricted to clump hits where computation needs it (#91).
+
+        Stored Partner Rows already exist, so this is a no-op for an LD Store: no arrays
+        are read and the exact same partner_row method answers each lead.
+        """
+        return nullcontext(partial(self.partner_row, chrom))
 
     def partner_row(self, chrom: str, local_row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         """One variant's Partner Rows row: every partner within far_bp at its distance's floor,
