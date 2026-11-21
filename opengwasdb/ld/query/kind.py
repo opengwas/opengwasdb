@@ -5,18 +5,21 @@ from the attribute it records, and the opened group is handed to that kind's rea
 Before this, each dispatch opened the root and then the reader opened it again, which added a
 metadata read — an HTTP round trip for a remote store — to every LD Store open (fix round 1,
 Standards H4, Repeated Switches).
+
+This reads the kind and nothing more: an envelope a reader refuses (a Zarr v2 hierarchy, a root
+with no provenance) is still validation's to report as findings, not this seam's to raise.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
-from ogld.format import Provenance
+import zarr
+
 from ogld.genotypes.layout import KEY
-from ogld.store.location import ChunkCache, OpenedStore, open_group
-from ogld.store.reader import opened_ld
+from ogld.store.location import ChunkCache, open_group
 
 LD: Final = "ld_store"
 GENOTYPE: Final = "genotype_store"
@@ -24,24 +27,22 @@ GENOTYPE: Final = "genotype_store"
 
 @dataclass(frozen=True)
 class Kinded:
-    """The root's kind and the one `OpenedStore` both halves read it through."""
+    """The root's kind, the one opening of its metadata, and what it was opened through."""
 
     kind: Literal["ld_store", "genotype_store"]
-    opened: OpenedStore
+    root: zarr.Group
+    location: str
+    cache: ChunkCache
+
+    def record(self) -> object:
+        """The kind's recorded provenance, or None where the root records none."""
+        return self.root.attrs.get(KEY if self.kind == GENOTYPE else LD)
 
 
 def open_kind(location: str | os.PathLike[str], *, cache_bytes: int | None = None) -> Kinded:
-    """Open `location` once and say which kind it is, refusing neither kind's envelope here.
-
-    The reader or validator that follows judges the rest (format version, provenance and
-    encoding), so a wrong kind is still refused by name by its own owner. A Genotype Store root
-    whose record is not an object still dispatches to the genotype side, whose validation reports
-    it rather than claiming the root is an LD Store.
-    """
+    """Open `location` once and say which kind it is: a root with the Genotype Store key is one,
+    and every other root is read as an LD Store, whose envelope its reader or validation judges."""
     cache = ChunkCache(cache_bytes)
     root = open_group(location, cache=cache)
-    if KEY in root.attrs:
-        record = root.attrs.get(KEY)
-        provenance = cast(Provenance, record if isinstance(record, dict) else {})
-        return Kinded(GENOTYPE, OpenedStore(root, str(location), provenance, cache))
-    return Kinded(LD, opened_ld(root, str(location), cache))
+    kind: Literal["ld_store", "genotype_store"] = GENOTYPE if KEY in root.attrs else LD
+    return Kinded(kind, root, str(location), cache)
