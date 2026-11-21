@@ -480,10 +480,11 @@ reads it.
   last consuming chromosome (a source block can span a chromosome boundary).
   A receipt grants deletion only when `downloaded` is true and its recorded
   device/inode/ctime still identify the downloaded file. Supplied ledgers
-  cannot grant ownership. Files supplied at invocation remain protected by
-  file identity even if `--parts` aliases `WORK/parts` through symlinks or
-  other paths. Receipts without ownership evidence never permit deletion.
-  Without it, parts are retained. `--threads` bounds compression/validation
+  cannot grant ownership. `--parts` and `WORK/parts` must be distinct and
+  disjoint after resolving symlinks: an alias or containment in either
+  direction is refused before receipts or downloads are written. Files
+  supplied at invocation also remain protected by file identity. Receipts
+  without ownership evidence never permit deletion. Without it, parts are retained. `--threads` bounds compression/validation
   workers. Only one chromosome's source working set is live at a time.
 - Closed immutable chromosome components are joined by `StoreWriter.join`
   using hard links on the same filesystem. Variant columns are concatenated

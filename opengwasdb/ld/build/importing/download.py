@@ -85,6 +85,16 @@ class Parts:
         self.cache, self.local = cache, local
         self._supplied: set[tuple[int, int]] = set()
         if local is not None:
+            cache_resolved, local_resolved = cache.resolve(), local.resolve()
+            if (
+                cache_resolved == local_resolved
+                or cache_resolved in local_resolved.parents
+                or local_resolved in cache_resolved.parents
+            ):
+                raise ValueError(
+                    f"supplied parts directory {local} and download cache {cache} overlap; "
+                    "neither may be, contain, or resolve into the other"
+                )
             for entry in local.iterdir():
                 if entry.is_file():
                     stat = entry.stat()

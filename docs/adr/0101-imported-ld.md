@@ -52,8 +52,11 @@ an incomplete chromosome is rebuilt from verified parts. This avoids a
 whole-genome diagonal-parts prepass (which would defeat chromosome staging),
 at the cost of validating each chromosome and then the combined store.
 The work directory pins metadata, TSV, chain and FASTA hashes and output
-identity and the supplied hash ledger's SHA-256. Supplied local parts remain read-only. Initial downloads establish
-local SHA-256 receipts because S3 listings publish sizes, not SHA-256;
+identity and the supplied hash ledger's SHA-256. Supplied local parts remain
+read-only: their directory and the download cache must be distinct and
+disjoint after resolving symlinks, so receipts and downloads never enter the
+supplied directory. Initial downloads establish local SHA-256 receipts
+because S3 listings publish sizes, not SHA-256;
 subsequent reads and supplied hash ledgers enforce the pinned bytes.
 
 A download receipt records ownership (`downloaded`) and the downloaded

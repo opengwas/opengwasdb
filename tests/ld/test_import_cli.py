@@ -37,6 +37,46 @@ def import_args(out: Path, work: Path) -> list[str]:
     ]
 
 
+@pytest.mark.parametrize(
+    "alias",
+    ["direct", "supplied-symlink", "cache-symlink", "parts-inside-cache", "cache-inside-parts"],
+)
+def test_cli_refuses_parts_and_download_cache_that_overlap(
+    tmp_path, capsys, monkeypatch, alias: str
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    cache = work / "parts"
+    supplied = tmp_path / "supplied"
+    if alias == "direct":
+        cache.mkdir()
+        supplied = cache
+    elif alias == "supplied-symlink":
+        cache.mkdir()
+        supplied.symlink_to(cache, target_is_directory=True)
+    elif alias == "cache-symlink":
+        supplied.mkdir()
+        cache.symlink_to(supplied, target_is_directory=True)
+    elif alias == "parts-inside-cache":
+        supplied = cache / "supplied"
+        supplied.mkdir(parents=True)
+    else:
+        supplied = work
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda url, *, timeout: io.BytesIO((FIXTURE / url.rsplit("/", 1)[-1]).read_bytes()),
+    )
+    args = import_args(tmp_path / "import.store", work)
+    args[args.index("--parts") + 1] = str(supplied)
+    assert main(args) == 2
+    refusal = capsys.readouterr().err
+    assert str(supplied) in refusal
+    assert str(cache) in refusal
+    assert not (cache / ".sha256").exists()
+
+
 @pytest.fixture(scope="module")
 def joined_store(tmp_path_factory):
     root = tmp_path_factory.mktemp("literal-joined-import")
@@ -84,23 +124,13 @@ def test_joined_component_counts_are_literal_sums(joined_store) -> None:
         }
 
 
-@pytest.mark.parametrize("alias", ["direct", "supplied-symlink", "cache-symlink"])
 def test_cli_delete_preserves_supplied_parts_and_deletes_only_downloads(
-    tmp_path, monkeypatch, alias
+    tmp_path, monkeypatch
 ) -> None:
     work = tmp_path / "work"
-    work.mkdir()
     cache = work / "parts"
-    if alias == "cache-symlink":
-        supplied = tmp_path / "supplied"
-        supplied.mkdir()
-        cache.symlink_to(supplied, target_is_directory=True)
-    else:
-        cache.mkdir()
-        supplied = cache
-        if alias == "supplied-symlink":
-            supplied = tmp_path / "supplied-alias"
-            supplied.symlink_to(cache, target_is_directory=True)
+    supplied = tmp_path / "supplied"
+    supplied.mkdir()
     original = (FIXTURE / "part-0").read_bytes()
     (supplied / "part-0").write_bytes(original)
     fetches = []
