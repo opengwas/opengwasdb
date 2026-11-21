@@ -1,0 +1,56 @@
+# Import published covariance as adjusted-genotype correlation
+
+Issue #93, epic #88. Authority: the owner's 20 November 2026 rulings on #88,
+#89's diagonal-normalisation ruling, and #93's kickoff ruling (21 November).
+
+## Context
+
+Pan-UKB publishes UK Biobank EUR residual covariance, not Pearson r. The
+producer at `ca9a04cd4c95ebcd6eb92b2096281508b8becf86` writes Z Zᵀ/n after
+covariate projection without re-standardisation. Restricted genotypes need
+not leave their host to publish this summary data. The whole source is about
+14 TB; downloading it whole before import is not viable.
+
+## Decision
+
+An LD Store may be imported from a published LD matrix. Its contract remains
+the correlation of adjusted genotypes, signed to engine A1. Covariance is
+normalised as r_ij = C_ij / sqrt(C_ii C_jj); non-finite and non-positive
+diagonals drop variants under separate counted loss classes. Identity,
+quantisation, thresholds and assembly remain their existing owners'.
+
+The importer lives under `ogld.build.importing`. Hail is not a dependency:
+Hail 0.2.64 BlockMatrix parts are read natively. The variant table is exported
+once with Hail by a script outside the package and supplied as TSV. `lz4` and
+`pyliftover` are optional `ogld[import]` dependencies, loaded only on the import
+path with a refusal naming the extra. All Pixi test environments install them.
+
+GRCh37 coordinates are lifted to GRCh38 and REF alleles checked against FASTA,
+reverse-complementing negative-strand alleles. Unmapped/ambiguous positions,
+span/strand/chromosome failures, allele mismatch, invalid identity/frequency
+and identity collisions have named loss counts. The complete target radius
+is measured per chromosome after liftover; the store uses their minimum.
+
+One chromosome is the unit of streaming, restart and optional part deletion.
+HTTPS downloads use the public bucket, retries, listing byte counts and a
+SHA-256 ledger. A restart verifies retained inputs and skips closed
+chromosomes. Parts are deletable only after their chromosome is closed;
+shared parts must remain until their last consuming chromosome closes.
+
+Provenance records source kind `ld_matrix`, source URL and producer commit,
+SHA-256 of every part, matrix metadata, TSV, chain and FASTA, all named
+covariates, n = 420,542, k = 15, published QC (not reapplied), transformation,
+loss classes and per-chromosome complete radii. Pan-UKB EUR uses ×2047 and
+`t_partner = t_far = 0.001` (far code floor 65). It is not comparable to a
+genotype-derived k = 0 or k = 10 panel.
+
+## Consequences and rejected alternatives
+
+Hail stays an export-time tool rather than a runtime requirement. A native
+reader must refuse corrupt parts by name and never interpret an unallocated
+block as zero. A tiny worked-literal fixture pins Hail's binary format without
+committing genotypes. Using covariance unchanged was rejected because it is
+not correlation. Assuming a 10 Mb target radius was rejected because liftover
+can join unmeasured pairs. Whole-genome staging was rejected on disk cost.
+The existing `ogld validate` remains the sole validator. The matched 511/0.01
+analysis view, benchmarking and the whole-genome run belong elsewhere.

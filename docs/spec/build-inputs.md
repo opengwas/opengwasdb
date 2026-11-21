@@ -418,6 +418,14 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   variable and its SHA-256; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 
+## 12. Published LD import inputs
+
+Published covariance import follows ADR 0015. Its runtime dependencies are
+`ogld[import]`, not Hail. A native reader accepts Hail 0.2.64 dense BlockMatrix
+parts and refuses malformed/truncated data by part name; an absent part is
+never a measured zero. The variant index is supplied as a TSV exported once
+with Hail outside the package.
+
 ## 11. The Test Panel
 
 The Test Panel, `tests/data/test-panel/`, is v2 chr21 and chr22 for the 771 EUR samples, with the
