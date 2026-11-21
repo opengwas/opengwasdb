@@ -74,9 +74,3 @@ class Reader(Protocol):
     def clump_rows(
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
     ) -> AbstractContextManager[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]: ...
-
-
-#: The seam's recorded name before #91 made the reader interface a protocol. The recorded public
-#: signatures of the four query modules still spell it, and a caller annotating a reader as a
-#: `StoreReader` is still right: both readers satisfy it. New code may name `Reader` directly.
-StoreReader = Reader

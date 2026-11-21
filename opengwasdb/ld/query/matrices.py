@@ -16,11 +16,11 @@ import numpy.typing as npt
 
 from ogld.format import judge_region
 from ogld.identity import normalise_chromosome
-from ogld.query.reader import Reader as StoreReader
+from ogld.query.reader import Reader
 from ogld.query.results import LDMatrix
 
 
-def matrix(reader: StoreReader, alids: Sequence[str], *, fill: float | None) -> LDMatrix:
+def matrix(reader: Reader, alids: Sequence[str], *, fill: float | None) -> LDMatrix:
     """The signed-r matrix of the present `alids`, in request order (spec §8; ogld#4).
 
     Unstored pairs are NaN, replaced by `fill` only when the caller passed one. Never a
@@ -32,9 +32,7 @@ def matrix(reader: StoreReader, alids: Sequence[str], *, fill: float | None) -> 
     return _ld_matrix(reader, rows, reader.pair_r(rows), absent, fill)
 
 
-def region(
-    reader: StoreReader, chrom: str, centre: int, radius: int, *, fill: float | None
-) -> LDMatrix:
+def region(reader: Reader, chrom: str, centre: int, radius: int, *, fill: float | None) -> LDMatrix:
     """The signed-r matrix of every variant with |position − centre| ≤ radius on `chrom`,
     in genomic order (spec §8; ogld#4). Refused unless 2 × radius ≤ far_bp."""
     judge_region(radius=radius, far_bp=reader.provenance["far_bp"]).raise_if_refused()
@@ -45,7 +43,7 @@ def region(
 
 
 def _ld_matrix(
-    reader: StoreReader,
+    reader: Reader,
     rows: npt.NDArray[np.int64],
     r: npt.NDArray[np.float64],
     absent: tuple[str, ...],

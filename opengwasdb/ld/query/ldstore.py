@@ -16,7 +16,6 @@ from typing import cast
 import numpy.typing as npt
 
 from ogld.format import Provenance
-from ogld.genotypes.layout import KEY
 from ogld.genotypes.reader import GenotypeReader
 from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
@@ -85,7 +84,7 @@ def open(location: str | os.PathLike[str], *, cache_bytes: int | None = None) ->
     kinded = open_kind(location, cache_bytes=cache_bytes)
     reader: Reader
     if kinded.kind == GENOTYPE:
-        record = kinded.root.attrs.get(KEY)
+        record = kinded.record()
         provenance = cast(Provenance, record if isinstance(record, dict) else {})
         reader = GenotypeReader.from_opened(
             OpenedStore(kinded.root, kinded.location, provenance, kinded.cache)

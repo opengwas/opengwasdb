@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 from ogld.genotypes import validation as genotypes
-from ogld.genotypes.layout import KEY
 from ogld.query.kind import GENOTYPE, open_kind
 from ogld.store import Finding
 from ogld.store.validation import validate_group
@@ -32,7 +31,7 @@ def _validate(location: str | os.PathLike[str], *, threads: int) -> dict[str, li
     kinded = open_kind(location)
     root = kinded.root
     if kinded.kind == GENOTYPE:
-        record = root.attrs.get(KEY)
+        record = kinded.record()
         if not isinstance(record, dict):
             return {
                 "genotypes.provenance": [
@@ -40,4 +39,4 @@ def _validate(location: str | os.PathLike[str], *, threads: int) -> dict[str, li
                 ]
             }
         return genotypes.validate_sidecar(Path(location), root, record, threads=threads)
-    return validate_group(root, root.attrs.get("ld_store"), threads=threads)
+    return validate_group(root, kinded.record(), threads=threads)

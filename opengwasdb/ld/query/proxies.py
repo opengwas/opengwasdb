@@ -9,12 +9,12 @@ import numpy.typing as npt
 
 from ogld.format import Codes
 from ogld.format.geometry import global_rows, local_rows, owners
-from ogld.query.reader import Reader as StoreReader
+from ogld.query.reader import Reader
 from ogld.query.requests import window_of
 from ogld.query.results import Proxies
 
 
-def proxies(reader: StoreReader, alids: Sequence[str], *, r2: float, kb: float) -> Proxies:
+def proxies(reader: Reader, alids: Sequence[str], *, r2: float, kb: float) -> Proxies:
     """Every partner of each present ALID within kb × 1,000 bp with r̂² ≥ r2 (ogld#6).
 
     Judged by `ogld.query.requests.window_of` first, which asks
@@ -62,7 +62,7 @@ def proxies(reader: StoreReader, alids: Sequence[str], *, r2: float, kb: float) 
 
 
 def _partner_rows(
-    reader: StoreReader, queries: npt.NDArray[np.int64], chrom: npt.NDArray[np.str_]
+    reader: Reader, queries: npt.NDArray[np.int64], chrom: npt.NDArray[np.str_]
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """Every query's whole Partner Rows row, as (its query's index, its Variant Set row, its r).
 
