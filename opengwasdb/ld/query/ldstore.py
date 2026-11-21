@@ -38,6 +38,17 @@ class LDStore:
         """The store's provenance, as recorded (spec §7)."""
         return self._reader.provenance
 
+    def close(self) -> None:
+        """Close the store's reader: its chunk cache and companion, or a Genotype Store's pgen
+        handles and ALID mappings. Closing twice is closing once, as a reader's `close` is."""
+        self._reader.close()
+
+    def __enter__(self) -> LDStore:
+        return self
+
+    def __exit__(self, kind: object, value: object, traceback: object) -> None:
+        self.close()
+
     @property
     def t_far(self) -> float:
         """The Far Threshold this store recorded, the one every answer uses (spec §3)."""

@@ -429,7 +429,7 @@ class VariantTable:
         chunk = np.empty(0, dtype=layout.ALID_KEY_DTYPE)
         for first in range(0, count, per):
             # Let the shard just searched go before the next is fetched and joined: a lookup holds
-            # one shard's keys, not the one before it as well (ogld#42's fix round 3).
+            # one shard's keys, not the one before it as well.
             del chunk
             chunk = self._chunk(index, first, min(first + per, count))
             a = int(np.searchsorted(wanted, chunk[0], "left"))

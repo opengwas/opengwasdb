@@ -321,7 +321,7 @@ def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
         real(self, keep)
 
     monkeypatch.setattr(tiles, "TILE_ROWS", 4)
-    monkeypatch.setattr(tiles, "UNIT_ROWS", 8)
+    monkeypatch.setattr(tiles, "BLOCK_ROWS", 8)
     monkeypatch.setattr(tiles.Window, "_move", spy)
     ogld.build(fixtures.inputs(pgen, k), tmp_path / "store")
     assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} time(s)"

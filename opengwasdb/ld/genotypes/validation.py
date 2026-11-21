@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +10,8 @@ import numpy.typing as npt
 import zarr
 
 from ogld.format import VALIDATION_RULES, REncoding
-from ogld.genotypes.layout import ARRAYS, KEY, VERSION, check_input, mapped_arrays
+from ogld.genotypes.layout import ARRAYS, VERSION, check_input, mapped_arrays
 from ogld.store import Finding, layout
-from ogld.store.location import open_group
 from ogld.store.validation import validate_group
 
 _VARIANT_RULES = tuple(
@@ -28,19 +26,6 @@ _VARIANT_RULES = tuple(
         "provenance.partner_threshold",
     )
 )
-
-
-def validate(location: str | os.PathLike[str], *, threads: int = 1) -> dict[str, list[Finding]]:
-    """Judge only Genotype Store components; never pretend missing LD arrays are valid."""
-    root = open_group(location)
-    record = root.attrs.get(KEY)
-    if not isinstance(record, dict):
-        return {
-            "genotypes.provenance": [
-                Finding("genotypes.provenance", str(location), "not a Genotype Store")
-            ]
-        }
-    return validate_sidecar(Path(location), root, record, threads=threads)
 
 
 def validate_sidecar(

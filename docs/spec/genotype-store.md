@@ -1,7 +1,7 @@
 # Genotype Store sidecar
 
 Status: implementation of #91; authority: #18's owner rulings of 20–21 November
-2026 and #91's relative-path ruling. ADR 0015 records the storage choices.
+2026 and #91's relative-path ruling. ADR 0014 records the storage choices.
 
 ## Container and shared data
 

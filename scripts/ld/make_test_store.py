@@ -92,8 +92,8 @@ def variant_set() -> VariantSet:
 
 def alt_counts(rows: npt.NDArray[np.int64], pgen: Path | None = None) -> npt.NDArray[np.int8]:
     """The ALT allele count (0, 1, 2) of each row of the Test Panel (or of `pgen`, a fileset
-    of rows of it), for the kept samples: [rows, samples], read by the build's own reader
-    (`ogld.build.genotypes`). A missing call is refused, never averaged in (ADR 0002)."""
+    of rows of it), for the kept samples: [rows, samples], read by the pgen reader
+    (`ogld.genotypes.Genotypes`). A missing call is refused, never averaged in (ADR 0002)."""
     panel = panel_data().panel()
     name = "the Test Panel"
     first = fileset(pgen or panel.pgen, read_keep(panel.keep, name), None, name)

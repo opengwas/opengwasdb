@@ -1,4 +1,4 @@
-"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0015).
+"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0014).
 
 `GenotypeReader` satisfies `ogld.query.reader.Reader` structurally, as `StoreReader` does: it
 composes the same `OpenedStore` and `VariantTable` and holds its own computed-LD half, rather
@@ -21,16 +21,16 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format import Codes, InputError, Provenance, REncoding
+from ogld.format.geometry import global_rows, local_rows, position_rows
 from ogld.genotypes.adjust import Block, r
 from ogld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from ogld.genotypes.pgen import Genotypes, import_pgenlib
 from ogld.store.location import ChunkCache, OpenedStore, open_group
 from ogld.store.tables import Variants
 from ogld.store.variants import VariantTable
+from ogld.store.workers import ComponentWorkers
 
 _READ_ROWS = 8192
-#: The most component threads one `clump` runs, the LD Store reader's cap (`COMPONENT_WORKERS_MAX`).
-_COMPONENT_WORKERS_MAX = 4
 _BLAS_LOCK = threading.Lock()
 _BLAS_CONTROL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ogld_blas")
 _blas_users = 0
@@ -139,7 +139,7 @@ class _PgenHandles:
             handle.close()
 
 
-class GenotypeReader:
+class GenotypeReader(ComponentWorkers):
     """The query reader interface with computed LD; it composes the variant table and store.
 
     The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (#94), and the
@@ -163,16 +163,11 @@ class GenotypeReader:
         cls, location: str | os.PathLike[str], *, cache_bytes: int | None = None
     ) -> GenotypeReader:
         """Open the Genotype Store at a local path, refusing an LD Store or another kind."""
-        path = Path(location)
         cache = ChunkCache(cache_bytes)
         root = open_group(location, cache=cache)
         record = root.attrs.get(KEY)
-        if not isinstance(record, dict) or "ld_store" in root.attrs:
-            raise InputError(f"{location}: not a Genotype Store: missing {KEY} or found ld_store")
-        if root.metadata.zarr_format != 3 or record.get("format_version") != VERSION:
-            raise InputError(f"{location}: unsupported Genotype Store format")
-        opened = OpenedStore(root, str(path), cast(Provenance, record), cache)
-        return cls.from_opened(opened)
+        provenance = cast(Provenance, record if isinstance(record, dict) else {})
+        return cls.from_opened(OpenedStore(root, str(Path(location)), provenance, cache))
 
     @classmethod
     def from_opened(cls, opened: OpenedStore) -> GenotypeReader:
@@ -200,7 +195,7 @@ class GenotypeReader:
         return reader
 
     def request(self) -> AbstractContextManager[object]:
-        """One public query holds the one-BLAS-thread guard for its whole duration (#91 fix 1)."""
+        """One public query holds the one-BLAS-thread guard for its whole duration."""
         return _one_blas_thread()
 
     def close(self) -> None:
@@ -209,14 +204,6 @@ class GenotypeReader:
         self._handles.close()
         self._variant_table.close()
         self._arrays = {}
-
-    def _set_query_workers(self, requested: int) -> None:
-        """Set the threads one `clump` may run its components on, capped as the LD reader's are."""
-        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
-            raise InputError(
-                f"the component thread count is a whole number of at least 1: {requested!r}"
-            )
-        self._query_workers = min(requested, _COMPONENT_WORKERS_MAX)
 
     @property
     def location(self) -> str:
@@ -280,7 +267,7 @@ class GenotypeReader:
                     calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
         # Completeness was checked by Variant Set selection. Inputs are pinned on open and
         # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
-        # pass without adding integrity beyond that contract (ADR 0015).
+        # pass without adding integrity beyond that contract (ADR 0014).
         return Block(calls, a["projection"][rows], a["norm"][rows], a["sign"][rows])
 
     def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
@@ -367,7 +354,7 @@ class GenotypeReader:
 
     def partner_row(self, chrom: str, row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         start, _ = self.chromosome_range(chrom)
-        lead = start + row
+        lead = int(global_rows(row, start))
         position = int(self.loci_of(np.array([lead], dtype=np.int64))[1][0])
         far = self.provenance["far_bp"]
         rows = self.rows_in(chrom, position - far, position + far)
@@ -387,20 +374,35 @@ class GenotypeReader:
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
     ) -> Iterator[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]:
         start, _ = self.chromosome_range(chrom)
-        hits = rows + start
+        hits = global_rows(rows, start)
         positions = self.loci_of(hits)[1]
         # This is component-local working memory, released when its greedy ends, not a call cache.
         # No non-hit is decoded and no eliminated lead's correlation row is computed.
         block = self._data(hits)
 
         def partners(row: int) -> tuple[npt.NDArray[np.int32], Codes]:
-            lead = row + start
-            at = int(np.searchsorted(hits, lead))
-            lo = int(np.searchsorted(positions, positions[at] - window))
-            hi = int(np.searchsorted(positions, positions[at] + window, side="right"))
-            return self._partners(start, lead, hits[lo:hi], block[lo:hi], positions[lo:hi])
+            lead = int(global_rows(row, start))
+            at = self._locate(hits, lead)
+            lo, hi = position_rows(positions, positions[at] - window, positions[at] + window)
+            first, last = int(lo), int(hi)
+            return self._partners(
+                start, lead, hits[first:last], block[first:last], positions[first:last]
+            )
 
         yield partners
+
+    def _locate(self, rows: npt.NDArray[np.int64], lead: int) -> int:
+        """The index of `lead` in the ascending `rows` of its window, refusing loudly if absent.
+
+        The window comes from the store, so the lead is in it; a store whose positions and rows
+        disagree must fail here, naming the ALID, rather than read the neighbouring variant's
+        row as the lead's (spec §2).
+        """
+        lo, hi = position_rows(rows, lead, lead)
+        if int(hi) - int(lo) != 1:
+            alid = str(self.alids_of(np.array([lead], dtype=np.int64))[0])
+            raise InputError(f"{self.location}: the lead {alid} is not among its window's rows")
+        return int(lo)
 
     def _partners(
         self,
@@ -410,7 +412,7 @@ class GenotypeReader:
         block: Block,
         position: npt.NDArray[np.int64] | None = None,
     ) -> tuple[npt.NDArray[np.int32], Codes]:
-        at = int(np.searchsorted(rows, lead))
+        at = self._locate(rows, lead)
         codes = self.encoding.quantise(r(block[at : at + 1], block))[0]
         if position is None:
             position = self.loci_of(rows)[1]
@@ -424,4 +426,4 @@ class GenotypeReader:
             partner_code_floor=p["partner_code_floor"],
             far_code_floor=p["far_code_floor"],
         )
-        return (rows[keep] - start).astype(np.int32), codes[keep]
+        return local_rows(rows[keep], start).astype(np.int32), codes[keep]

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import build_fixtures
+import numpy as np
 import pytest
+import testdata
 from contract.support import TEST_STORE
 
 import ogld
@@ -65,3 +68,34 @@ def test_the_genotype_reader_composes_the_variant_table_and_store(genotype_store
     # And an argument that had no meaning on this kind is refused, not ignored.
     with pytest.raises(TypeError):
         GenotypeReader.open(genotype_store, frame_cache_bytes=1)
+
+
+def test_a_store_closes_its_reader_and_its_pgen_handles(
+    genotype_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import closing
+
+    from ogld.genotypes.pgen import Genotypes
+
+    closed: list[object] = []
+    original_close = Genotypes.close
+
+    def counted_close(self: Genotypes) -> None:
+        closed.append(self)
+        original_close(self)
+
+    monkeypatch.setattr(Genotypes, "close", counted_close)
+    names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[:10])
+    store = ogld.open(genotype_store)
+    store.matrix(names)
+    reader = store._reader
+    handles = len(reader._handles._idle)
+    assert handles >= 1, "the fixture must open at least one pgen handle"
+    store.close()
+    assert reader._closed
+    assert reader._handles._idle == [], "a closed store keeps no idle pgen handle"
+    assert len(closed) == handles, "close() closes every handle the reader kept"
+    with pytest.raises(ogld.InputError):
+        store.matrix(names)
+    with closing(ogld.open(TEST_STORE)) as ld:
+        assert ld.provenance["format_version"]

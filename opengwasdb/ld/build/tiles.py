@@ -8,7 +8,7 @@ threads and written in row order, so the store is the same for any thread count.
 
 Prepared genotypes are held for a window of rows, never the whole chromosome (`Window`). The
 window runs from the first row of the oldest tile in flight to the far stop of the newest, plus
-the genotype block being read (`UNIT_ROWS` rows).
+the genotype block being read (`BLOCK_ROWS` rows).
 """
 
 from __future__ import annotations
@@ -30,9 +30,9 @@ from ogld.store import Cut
 TILE_ROWS: Final = 256
 #: Rows of genotypes read and adjusted at a time into the genotype window: 8,192 rows of
 #: 665 samples are 44 MB, where `ogld.build.inputs.CHUNK_RECORDS` rows would be 350 MB.
-UNIT_ROWS: Final = 8_192
+BLOCK_ROWS: Final = 8_192
 
-_Units = npt.NDArray[np.float64]
+_RMatrix = npt.NDArray[np.float64]
 #: One block: (first local row, prepared adjusted genotypes, intercept-only or None).
 GenotypeBlock = tuple[int, Block, Block | None]
 
@@ -161,7 +161,7 @@ class Inputs:
     band: Band
     outside: npt.NDArray[np.bool_]
     start: int
-    cut: Callable[[int, _Units], Cut]
+    cut: Callable[[int, _RMatrix], Cut]
 
 
 @dataclass(frozen=True)
@@ -220,13 +220,13 @@ def _change(inputs: Inputs, work: Work, values: npt.NDArray[np.float64]) -> npt.
 Tiled = tuple[Cut, npt.NDArray[np.float64]]
 
 
-def tiles(inputs: Inputs, units: Iterator[GenotypeBlock], threads: int) -> Iterator[Tiled]:
+def tiles(inputs: Inputs, blocks: Iterator[GenotypeBlock], threads: int) -> Iterator[Tiled]:
     """Every tile of the chromosome, in row order, computed on `threads` threads, each as its
     store cut and its change in r. At most 2 × `threads` tiles are in flight, and prepared
     genotypes are held for those tiles' window only."""
     n = len(inputs.band.far_stop)
     ahead = 2 * threads if threads > 1 else 1
-    window = Window(units, min(n, inputs.band.reach() + ahead * TILE_ROWS + UNIT_ROWS))
+    window = Window(blocks, min(n, inputs.band.reach() + ahead * TILE_ROWS + BLOCK_ROWS))
     pending: deque[tuple[int, Future[Tiled]]] = deque()
     with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
         for first, last in windows(0, n, TILE_ROWS):
