@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import VALIDATION_RULES
+from ogld.format import VALIDATION_RULES, REncoding
 from ogld.genotypes.sidecar import ARRAYS, KEY, VERSION, check_input, mapped_arrays
 from ogld.store import Finding, layout
 from ogld.store.location import open_group
@@ -84,6 +84,11 @@ def _metadata(path: Path, root: zarr.Group, record: dict[str, Any]) -> None:
             raise ValueError(f"{path}: invalid provenance {key}")
     if not record["filesets"]:
         raise ValueError(f"{path}: no pgen filesets recorded")
+    floor = REncoding.of(record.get("encoding")).partner_code_floor(
+        record["t_partner"], record["t_far"]
+    )
+    if record["partner_code_floor"] != floor:
+        raise ValueError(f"{path}: partner_code_floor differs from the recorded thresholds")
 
 
 def _inputs(path: Path, root: zarr.Group, record: dict[str, Any]) -> None:

@@ -36,6 +36,14 @@ def private_sidecar(genotype_store: Path, tmp_path: Path) -> Path:
     return copy
 
 
+def test_a_wrong_partner_floor_is_not_validated_as_an_old_ld_format(private_sidecar: Path) -> None:
+    root = zarr.open_group(private_sidecar, mode="a")
+    record = root.attrs["genotype_store"]
+    record["partner_code_floor"] += 1
+    root.attrs["genotype_store"] = record
+    assert ogld.validate(private_sidecar)["genotypes.provenance"]
+
+
 def test_kind_dispatch_and_explicit_wrong_kind_refusals(genotype_store: Path) -> None:
     assert isinstance(ogld.open(genotype_store)._reader, GenotypeReader)
     assert type(ogld.open(TEST_STORE)._reader) is StoreReader
