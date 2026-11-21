@@ -64,16 +64,17 @@ def test_codes_equal_the_independently_built_test_store_for_every_stored_pair() 
 
 @pytest.mark.parametrize("k", [0, 10])
 @pytest.mark.parametrize("scale", [511, 32767])
-def test_codes_are_identical_at_one_and_four_blas_threads(k: int, scale: int) -> None:
-    """Identical codes at 1 and 4 BLAS threads, at two block sizes and a row at a time.
+def test_codes_are_identical_in_two_block_sizes_and_one_row_at_a_time(k: int, scale: int) -> None:
+    """One BLAS thread: the whole matrix in two block sizes, and a row at a time, agree.
 
-    Eight threads is also #90's criterion, and it runs in the realdata tier
-    (`tests/realdata/test_genotype_threads.py`): on a CI runner, eight OpenBLAS threads in each
-    of many parallel workers oversubscribe the CPUs and spin until the test times out.
+    Multi-threaded BLAS is held in the realdata tier
+    (`tests/realdata/test_genotype_threads.py`): a small CI runner runs many xdist workers at
+    once, and eight or even four OpenBLAS threads in each oversubscribe its CPUs and spin until
+    the test times out.
     """
     from genotype_codes import assert_codes_identical
 
-    assert_codes_identical((1, 4), k, scale)
+    assert_codes_identical((1,), k, scale)
 
 
 def test_pgen_int8_and_float64_paths_read_the_same_test_panel_calls() -> None:
