@@ -9,17 +9,12 @@ has one owner (owner, on epic #18, 21 November 2026; ogld#94). `rows_of`, `rows_
 `chromosome_range`, `alids_of`, `loci_of` and `variants` are that owner's reads.
 
 A table opens no store: its reader opens the group, refuses what it cannot read (spec §13) and
-hands the table the root, the location that names the store in a refusal, the recorded
-provenance and the chunk cache every read goes through. So one store is opened once however many
-halves read it, and only the companion's mapping is the table's own to release (`close`). A caller
-that wants the table and nothing else opens it with the store layer's own opener,
+hands the table the `ogld.store.location.OpenedStore` both halves hold — the group, the location
+that names the store in a refusal, the recorded provenance and the one chunk cache every read goes
+through. So one store is opened once however many halves read it, a replaced cache is replaced for
+both, and only the companion's mapping is the table's own to release (`close`). A caller that
+wants the table and nothing else opens it with the store layer's own opener,
 `ogld.store.reader.open_variant_table` (#94).
-
-The two reads every other read is made of live here beside the table, because both halves of a
-reader make them: `elements_of` for an array's elements at coordinates, and `runs_of` for its
-ragged runs, each refusing a chunk the store lost (spec §6). `kept_array` is the other half of
-that rule, the fill value a chunk would read as if it were lost. The table is the first thing a
-reader opens, and the LD half opens its arrays the same way.
 """
 
 from __future__ import annotations
