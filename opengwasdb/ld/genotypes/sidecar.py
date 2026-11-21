@@ -137,16 +137,17 @@ class SidecarWriter:
         t_partner: float,
     ) -> None:
         self.path = root
+        ranges = chromosome_ranges(variants.chrom)
         self.cutter = Cutter(
             variants.position,
-            chromosome_ranges(variants.chrom),
+            ranges,
             (near_bp, far_bp),
             encoding,
             n=len(cov.basis),
             k=cov.k,
             t_partner=t_partner,
         )
-        self.root = write_variant_table(root, variants)
+        self.root = write_variant_table(root, variants, ranges)
         self.root.create_group("genotypes")
         self.count = len(variants.position)
         shapes = {

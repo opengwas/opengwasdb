@@ -178,10 +178,14 @@ class GenotypeReader(StoreReader):
         values = self.encoding.dequantise(codes)
         distance = np.abs(row_position[:, None] - span_position)
         p = self.provenance
-        missing = (distance > p["far_bp"]) | (
-            (distance > p["near_bp"]) & (np.abs(codes) < p["far_code_floor"])
+        stored = self.encoding.stored_mask(
+            distance,
+            codes,
+            near_bp=p["near_bp"],
+            far_bp=p["far_bp"],
+            far_code_floor=p["far_code_floor"],
         )
-        values[missing] = np.nan
+        values[~stored] = np.nan
         return values
 
     def region_r(self, start: int, stop: int) -> npt.NDArray[np.float64]:
@@ -262,6 +266,12 @@ class GenotypeReader(StoreReader):
             position = self.loci_of(rows)[1]
         distance = np.abs(position - position[at])
         p = self.provenance
-        floor = np.where(distance <= p["near_bp"], p["partner_code_floor"], p["far_code_floor"])
-        keep = (rows != lead) & (distance <= p["far_bp"]) & (np.abs(codes) >= floor)
+        keep = (rows != lead) & self.encoding.partner_mask(
+            distance,
+            codes,
+            near_bp=p["near_bp"],
+            far_bp=p["far_bp"],
+            partner_code_floor=p["partner_code_floor"],
+            far_code_floor=p["far_code_floor"],
+        )
         return (rows[keep] - start).astype(np.int32), codes[keep]

@@ -43,6 +43,8 @@ PC Diagnostic is null: scanning the Near Band solely for that diagnostic would
 undo the sidecar's build-cost saving; PC selection and its complete Check remain
 recorded. This distinction is explicit in the sidecar spec.
 
+The two rules a pair's answer turns on — whether a pair at a distance is Stored, and which floor a Partner Rows row keeps it at — are `REncoding.stored_mask` and `REncoding.partner_mask`, beside the code floors. The builder's cut, the Partner Rows emitter and this reader all call them, so the Bound and Not Measured cannot drift between a materialised store and a computed one (fix round 1).
+
 The clump seam is a request-local context manager yielding a row callable.
 For LD Stores it yields the existing partner_row, a no-op with respect to I/O
 and answers. For genotype reads it holds only a component's hit calls during
