@@ -22,7 +22,7 @@ from pathlib import Path
 import zarr
 
 from ogld.build import diagnostic, passes, pc_check, record
-from ogld.build.variant_set import Settings, variant_set
+from ogld.build.variant_set import Chromosome, Pass, Settings, variant_set
 from ogld.format import (
     FAR_BP,
     NEAR_BP,
@@ -148,6 +148,37 @@ def _check_pc_counts(k: int, k_min: int) -> None:
         raise InputError(f"k_min = {k_min} cannot exceed the target k = {k}")
 
 
+@dataclass(frozen=True)
+class _Prepared:
+    """What both builders read before they write: the plan, the Variant Set, the PC Check and
+    the variants FLAT drops from it (build inputs §8, §6)."""
+
+    plan: passes.Plan
+    found: Pass
+    chosen: passes.Choice
+    chromosomes: list[Chromosome]
+
+
+def _target(out: str | os.PathLike[str], *, threads: int) -> Path:
+    """The directory a build writes, refused if it exists or its thread count is not a count."""
+    target = Path(out)
+    if target.exists():
+        raise InputError(f"{target} exists: a store is never written over another")
+    if threads < 1:
+        raise InputError(f"threads counts worker threads, so it must be at least 1: {threads}")
+    return target
+
+
+def _prepare(inputs: BuildInputs, threads: int) -> _Prepared:
+    """The passes an LD Store and a Genotype Store build share, in their one order."""
+    plan = passes.plan(inputs.pgen, inputs.keep, inputs.pcs if inputs.k else None, inputs.panel_id)
+    settings = Settings(inputs.panel_id, inputs.mac_min, inputs.info_min, bool(inputs.k), threads)
+    found = variant_set(plan.filesets, settings, plan.samples.n)
+    chosen = passes.choose(plan, found, inputs.k, inputs.k_min)
+    chromosomes = passes.drop_flat(plan, found, chosen.covariates)
+    return _Prepared(plan, found, chosen, chromosomes)
+
+
 def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1) -> Provenance:
     """Build the LD Store of `inputs` at `out` and return its provenance (spec §7; ogld#5).
 
@@ -168,22 +199,16 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
     `build.threads`.
     """
     cost = record.Cost.start()
-    target = Path(out)
-    if target.exists():
-        raise InputError(f"{target} exists: a store is never written over another")
-    if threads < 1:
-        raise InputError(f"threads counts worker threads, so it must be at least 1: {threads}")
+    target = _target(out, threads=threads)
     with bounded(threads):
         return _build(inputs, target, threads, cost)
 
 
 def _build(inputs: BuildInputs, target: Path, threads: int, cost: record.Cost) -> Provenance:
     """`build`'s passes, within its thread bound."""
-    plan = passes.plan(inputs.pgen, inputs.keep, inputs.pcs if inputs.k else None, inputs.panel_id)
-    settings = Settings(inputs.panel_id, inputs.mac_min, inputs.info_min, bool(inputs.k), threads)
-    found = variant_set(plan.filesets, settings, plan.samples.n)
-    chosen = passes.choose(plan, found, inputs.k, inputs.k_min)
-    chromosomes = passes.drop_flat(plan, found, chosen.covariates)
+    prepared = _prepare(inputs, threads)
+    plan, found, chosen = prepared.plan, prepared.found, prepared.chosen
+    chromosomes = prepared.chromosomes
     diagnostic.require_change_pairs([(c.name, c.position) for c in chromosomes], plan.panel)
     k = chosen.covariates.k
     rates = passes.chance(plan, chromosomes, chosen.covariates)
@@ -248,20 +273,12 @@ def build_genotypes(
     from ogld.genotypes.layout import fileset_record, input_pin
     from ogld.genotypes.sidecar import SidecarWriter
 
-    target = Path(out)
-    if target.exists() or threads < 1:
-        raise InputError(f"{target}: needs a new output directory and threads >= 1")
+    target = _target(out, threads=threads)
     cost = record.Cost.start()
     with bounded(threads):
-        plan = passes.plan(
-            inputs.pgen, inputs.keep, inputs.pcs if inputs.k else None, inputs.panel_id
-        )
-        settings = Settings(
-            inputs.panel_id, inputs.mac_min, inputs.info_min, bool(inputs.k), threads
-        )
-        found = variant_set(plan.filesets, settings, plan.samples.n)
-        chosen = passes.choose(plan, found, inputs.k, inputs.k_min)
-        chromosomes = passes.drop_flat(plan, found, chosen.covariates)
+        prepared = _prepare(inputs, threads)
+        plan, found, chosen = prepared.plan, prepared.found, prepared.chosen
+        chromosomes = prepared.chromosomes
         writer = SidecarWriter(
             target,
             passes.variants_table(chromosomes),

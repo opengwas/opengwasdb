@@ -215,6 +215,8 @@ def test_a_lead_outside_its_window_is_refused_by_name(genotype_store: Path) -> N
     local = hits - start
     absent = next(row for row in range(stop - start) if row not in set(local.tolist()))
     alid = str(reader.alids_of(np.array([start + absent], dtype=np.int64))[0])
-    with reader.clump_rows(chrom, local, 3000.0) as partners:
-        with pytest.raises(ogld.InputError, match=alid):
-            partners(absent)
+    with (
+        reader.clump_rows(chrom, local, 3000.0) as partners,
+        pytest.raises(ogld.InputError, match=alid),
+    ):
+        partners(absent)
