@@ -18,6 +18,12 @@ def test_literal_blockmatrix_part() -> None:
     np.testing.assert_array_equal(matrix, [[4, 1, -3], [1, 1, 0.75], [-3, 0.75, 9]])
 
 
+def test_second_chromosome_has_an_independent_covariance_literal() -> None:
+    matrix = read_part(FIXTURE / "part-1")
+    assert not np.array_equal(matrix, read_part(FIXTURE / "part-0"))
+    np.testing.assert_array_equal(matrix, [[16, 2, 2], [2, 4, -1], [2, -1, 1]])
+
+
 @pytest.mark.parametrize("order", ["column", "row"])
 def test_nonsymmetric_part_pins_matrix_storage_order(order: str) -> None:
     matrix = read_part(FIXTURE / f"part-{order}-major")

@@ -50,7 +50,7 @@ def test_joined_chromosome_two_has_literal_signed_codes(joined_store) -> None:
         result = store.matrix(["2:1:A:C", "2:2:A:G", "2:4000001:A:G"])
         np.testing.assert_array_equal(
             result.r * 2047,
-            [[2047, -1024, -1024], [-1024, 2047, -512], [-1024, -512, 2047]],
+            [[2047, -512, 1024], [-512, 2047, 1024], [1024, 1024, 2047]],
         )
 
 

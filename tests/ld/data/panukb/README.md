@@ -15,9 +15,13 @@ data. It pins the native decoder without Hail in CI and costs under 100 B.
 `[[1, 2, 3], [4, 5, 6]]`, with order bytes 1 and 0 respectively. Symmetric
 covariance alone would not catch a decoder transposing storage order.
 
-The end-to-end fixture reuses the covariance literal for two chromosomes:
-`part-1` is identical to `part-0`; `metadata.json` allocates the two diagonal
-blocks in a 6×6 matrix, and `ledger.json` pins their bytes. `variants.tsv`
+The end-to-end fixture uses a different worked covariance for chromosome 2:
+`part-1` is `[[16, 2, 2], [2, 4, -1], [2, -1, 1]]`. Its correlations before A1
+orientation are 1/4, 1/2 and −1/2; flipping the middle variant's A1 gives
+−1/4, 1/2 and 1/2, hence ×2047 codes
+`[[2047, -512, 1024], [-512, 2047, 1024], [1024, 1024, 2047]]`.
+`metadata.json` allocates the two diagonal blocks in a 6×6 matrix, and
+`ledger.json` pins their different bytes. `variants.tsv`
 places three variants per chromosome at positions 1, 2 and 4,000,001, so both
 the Near Band and Far Pairs are nonempty. `identity.chain` preserves their
 coordinates. The gzip FASTA has A everywhere except G at position 2, allowing
