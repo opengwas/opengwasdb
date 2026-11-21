@@ -1,12 +1,12 @@
-"""One chromosome's r, tile by tile, from a window of its unit vectors (ogld#5, ogld#17).
+"""One chromosome's r, tile by tile, from a window of prepared genotypes (ADR 0013).
 
-A tile is a block of rows against every later variant within `far_bp`: one matrix product of
-unit vectors (`ogld.build.adjust`). The build hands the product to the store, `StoreWriter.cut`,
+A tile is a block of rows against every later variant within `far_bp`, computed by
+`ogld.genotypes.r`. The build hands the product to the store, `StoreWriter.cut`,
 which quantises, thresholds and counts (ogld#17). The build keeps only its own diagnostic, the
 change in r from PC Adjustment within `change_bp`. Tiles are computed on `threads` worker
 threads and written in row order, so the store is the same for any thread count.
 
-The unit vectors are held for a window of rows, never the whole chromosome (`Window`). The
+Prepared genotypes are held for a window of rows, never the whole chromosome (`Window`). The
 window runs from the first row of the oldest tile in flight to the far stop of the newest, plus
 the genotype block being read (`UNIT_ROWS` rows).
 """
@@ -23,17 +23,18 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
+from ogld.genotypes import Block, r
 from ogld.store import Cut
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
-#: Rows of genotypes read and adjusted at a time into the window of unit vectors: 8,192 rows of
+#: Rows of genotypes read and adjusted at a time into the genotype window: 8,192 rows of
 #: 665 samples are 44 MB, where `ogld.build.inputs.CHUNK_RECORDS` rows would be 350 MB.
 UNIT_ROWS: Final = 8_192
 
 _Units = npt.NDArray[np.float64]
-#: One block of a chromosome's unit vectors: (first local row, adjusted, unadjusted or None).
-UnitBlock = tuple[int, _Units, _Units | None]
+#: One block: (first local row, prepared adjusted genotypes, intercept-only or None).
+GenotypeBlock = tuple[int, Block, Block | None]
 
 
 @dataclass(frozen=True)
@@ -62,20 +63,18 @@ class Band:
 
 
 class Window:
-    """A window of one chromosome's unit vectors, adjusted and (at k > 0) unadjusted.
+    """A window of prepared genotypes, adjusted and (at k > 0) intercept-only.
 
-    The vectors arrive block by block in row order. They are held in one array, so that every
-    tile's product is the same call on contiguous rows that it was on the whole chromosome's,
-    and the store the same to the bit. When the array is full, the rows still needed move to a
-    new one. A tile in flight keeps its view of the old one until it finishes, so nothing it
-    reads is ever overwritten.
+    Blocks arrive in row order and their calls, projections, norms and signs are buffered
+    together. When full, rows still needed move to fresh arrays. An in-flight tile keeps
+    its views of the old arrays, so nothing it reads is ever overwritten (ogld#17).
     """
 
-    def __init__(self, blocks: Iterator[UnitBlock], capacity: int) -> None:
+    def __init__(self, blocks: Iterator[GenotypeBlock], capacity: int) -> None:
         self._blocks = blocks
         self._capacity = capacity
-        self._units: _Units | None = None
-        self._unadjusted: _Units | None = None
+        self._adjusted: Block | None = None
+        self._unadjusted: Block | None = None
         self._base = 0
         self._end = 0
 
@@ -84,44 +83,43 @@ class Window:
         must start where the last ended: a gap or an overlap would leave rows of the array that are
         not the chromosome's."""
         while self._end < stop:
-            first, units, unadjusted = next(self._blocks)
+            first, block, unadjusted = next(self._blocks)
             if first != self._end:
                 raise ValueError(
-                    f"a block of unit vectors starts at row {first}, not {self._end}: the window "
+                    f"a block of genotypes starts at row {first}, not {self._end}: the window "
                     "holds a chromosome's rows in order, with none missing (a builder fault)"
                 )
-            if first + len(units) - self._base > self._capacity:
+            if first + len(block) - self._base > self._capacity:
                 self._move(keep)
-            self._units = self._put(self._units, units)
+            self._adjusted = self._put(self._adjusted, block)
             if unadjusted is not None:
                 self._unadjusted = self._put(self._unadjusted, unadjusted)
-            self._end = first + len(units)
+            self._end = first + len(block)
 
-    def _put(self, held: _Units | None, block: _Units) -> _Units:
-        """Write `block` at the window's end, making the array at the first block."""
+    def _put(self, held: Block | None, block: Block) -> Block:
+        """Write `block` at the window's end, making the buffer at the first block."""
         if held is None:
-            held = np.empty((self._capacity, block.shape[1]))
-        at = self._end - self._base
-        held[at : at + len(block)] = block
+            held = _allocate(block, self._capacity)
+        _copy(held, self._end - self._base, block)
         return held
 
     def _move(self, keep: int) -> None:
         """Move rows `keep` … end to the start of new arrays."""
         live = slice(keep - self._base, self._end - self._base)
-        if self._units is not None:
-            self._units = _fresh(self._units, live, self._capacity)
+        if self._adjusted is not None:
+            self._adjusted = _fresh(self._adjusted, live, self._capacity)
         if self._unadjusted is not None:
             self._unadjusted = _fresh(self._unadjusted, live, self._capacity)
         self._base = keep
 
-    def rows(self, first: int, stop: int, unadjusted: bool = False) -> _Units:
+    def rows(self, first: int, stop: int, unadjusted: bool = False) -> Block:
         """Rows `first` … `stop − 1`, a view; the unadjusted ones when asked. Rows the window does
         not hold are refused: the array's other rows are some other variants' vectors."""
-        held = self._unadjusted if unadjusted else self._units
+        held = self._unadjusted if unadjusted else self._adjusted
         if held is None or not self._base <= first <= stop <= self._end:
             kind = "unadjusted " if unadjusted else ""
             raise ValueError(
-                f"rows {first}–{stop - 1} are not in the window of {kind}unit vectors, which holds "
+                f"rows {first}–{stop - 1} are not in the window of {kind}genotypes, which holds "
                 f"rows {self._base}–{self._end - 1}{'' if held is not None else ' (none at k = 0)'}"
             )
         return held[first - self._base : stop - self._base]
@@ -131,15 +129,32 @@ class Window:
         return self._unadjusted is not None
 
 
-def _fresh(old: _Units, live: slice, capacity: int) -> _Units:
-    new = np.empty((capacity, old.shape[1]))
-    new[: live.stop - live.start] = old[live]
+def _allocate(block: Block, capacity: int) -> Block:
+    return Block(
+        np.empty((capacity, block.calls.shape[1])),
+        np.empty((capacity, block.projection.shape[1])),
+        np.empty(capacity),
+        np.empty(capacity),
+    )
+
+
+def _copy(out: Block, at: int, block: Block) -> None:
+    end = at + len(block)
+    out.calls[at:end] = block.calls
+    out.projection[at:end] = block.projection
+    out.norm[at:end] = block.norm
+    out.sign[at:end] = block.sign
+
+
+def _fresh(old: Block, live: slice, capacity: int) -> Block:
+    new = _allocate(old, capacity)
+    _copy(new, 0, old[live])
     return new
 
 
 @dataclass(frozen=True)
 class Inputs:
-    """What every tile of one chromosome reads besides its unit vectors: its geometry, which
+    """What every tile of one chromosome reads besides its genotypes: its geometry, which
     variants lie outside the Long-Range LD Regions (whose pairs within `change_bp` the PC
     diagnostic's change in r is measured on), its first global row, and the store's `cut`."""
 
@@ -151,14 +166,14 @@ class Inputs:
 
 @dataclass(frozen=True)
 class Work:
-    """One tile's rows `first` … `last − 1` (local) and the unit vectors it reads: its own rows
+    """One tile's rows `first` … `last − 1` (local) and the genotypes it reads: its own rows
     and those up to its far stop, and, at k > 0, the unadjusted ones up to `change_bp`."""
 
     first: int
     last: int
-    rows: _Units
-    span: _Units
-    unadjusted: tuple[_Units, _Units] | None
+    rows: Block
+    span: Block
+    unadjusted: tuple[Block, Block] | None
 
 
 def _work(window: Window, band: Band, first: int, last: int) -> Work:
@@ -172,8 +187,8 @@ def _work(window: Window, band: Band, first: int, last: int) -> Work:
 
 def _tile(inputs: Inputs, work: Work) -> tuple[Cut, npt.NDArray[np.float64]]:
     """A tile's cut and its change in r."""
-    r = work.rows @ work.span.T
-    return inputs.cut(inputs.start + work.first, r), _change(inputs, work, r)
+    values = r(work.rows, work.span)
+    return inputs.cut(inputs.start + work.first, values), _change(inputs, work, values)
 
 
 def change_pairs(
@@ -190,25 +205,25 @@ def change_pairs(
     return t, partner, outside[first + t] & outside[partner]
 
 
-def _change(inputs: Inputs, work: Work, r: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def _change(inputs: Inputs, work: Work, values: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Adjusted minus unadjusted r for the tile's pairs within `change_bp`, both variants outside
     the Long-Range LD Regions; at k = 0 the two are one and every change is 0."""
     t, partner, clear = change_pairs(inputs.band, inputs.outside, work.first, work.last)
     t, column = t[clear], partner[clear] - work.first
-    after = r[t, column]
+    after = values[t, column]
     if work.unadjusted is None:
         return np.zeros_like(after)
     rows, span = work.unadjusted
-    return after - (rows @ span.T)[t, column]
+    return after - r(rows, span)[t, column]
 
 
 Tiled = tuple[Cut, npt.NDArray[np.float64]]
 
 
-def tiles(inputs: Inputs, units: Iterator[UnitBlock], threads: int) -> Iterator[Tiled]:
+def tiles(inputs: Inputs, units: Iterator[GenotypeBlock], threads: int) -> Iterator[Tiled]:
     """Every tile of the chromosome, in row order, computed on `threads` threads, each as its
-    store cut and its change in r. At most 2 × `threads` tiles are in flight, and the unit
-    vectors are held for those tiles' window only."""
+    store cut and its change in r. At most 2 × `threads` tiles are in flight, and prepared
+    genotypes are held for those tiles' window only."""
     n = len(inputs.band.far_stop)
     ahead = 2 * threads if threads > 1 else 1
     window = Window(units, min(n, inputs.band.reach() + ahead * TILE_ROWS + UNIT_ROWS))
