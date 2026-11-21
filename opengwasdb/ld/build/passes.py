@@ -30,7 +30,6 @@ from ogld.build.diagnostic import (
     chance_rates,
     outside_regions,
 )
-from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import (
     CHUNK_RECORDS,
     Fileset,
@@ -49,6 +48,7 @@ from ogld.format.geometry import (
     local_rows,
     windows,
 )
+from ogld.genotypes import Genotypes
 from ogld.identity import Orientation
 from ogld.store import StoreWriter, Variants
 

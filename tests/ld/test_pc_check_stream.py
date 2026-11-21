@@ -18,8 +18,8 @@ import pytest
 import testdata
 
 from ogld.build import passes, pc_check
-from ogld.build.genotypes import Genotypes
 from ogld.build.variant_set import Settings, variant_set
+from ogld.genotypes import Genotypes
 
 #: A window thins to at most this many variants here, so a small fixture is thinned too.
 THIN: Final = 40

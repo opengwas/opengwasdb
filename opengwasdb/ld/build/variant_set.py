@@ -29,9 +29,9 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.build import pc_check
-from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import Fileset, Records, records
 from ogld.format import InputError
+from ogld.genotypes import Genotypes
 from ogld.identity import (
     AUTOSOMES,
     IdentityError,
