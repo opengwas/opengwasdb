@@ -449,6 +449,9 @@ reads it.
   `scripts/export_panukb_variants.py`, outside the package. Required columns
   are `locus` (`chrom:position`, 1-based GRCh37), `alleles` (JSON REF/ALT),
   `AF` (ALT frequency) and `idx` (the existing global matrix row index).
+  Chromosomes are contiguous, as in Hail's locus-keyed export, so planning
+  holds only one chromosome's row objects at a time; duplicate global indices
+  and a chromosome returning after it closed are refused.
 - `--chain` maps GRCh37 to GRCh38. REF and ALT are reverse-complemented on
   negative-strand mappings, and REF must match the chromosome in `--fasta`
   (plain or gzip). Unmapped/ambiguous loci, chromosome/strand or allele-span

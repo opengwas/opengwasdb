@@ -6,7 +6,9 @@ import csv
 import gzip
 import json
 from collections import Counter, deque
+from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -34,9 +36,17 @@ def text_input(path: Path) -> TextIO:
     return gzip.open(path, "rt") if path.suffix in (".gz", ".bgz") else path.open()
 
 
-def read_variants(path: Path) -> dict[str, list[SourceVariant]]:
-    """Read the one-time Hail export, preserving its global matrix row indices."""
-    result: dict[str, list[SourceVariant]] = {}
+def variant_chromosomes(path: Path) -> Iterator[tuple[str, list[SourceVariant]]]:
+    """Stream Hail's chromosome-contiguous export without retaining genome-wide row objects."""
+    seen: set[str] = set()
+    for name, rows in groupby(_variant_rows(path), key=lambda row: row.chrom):
+        if name in seen:
+            raise ValueError(f"{path}: chromosome {name} is not contiguous in the Hail export")
+        seen.add(name)
+        yield name, list(rows)
+
+
+def _variant_rows(path: Path) -> Iterator[SourceVariant]:
     indices: set[int] = set()
     with text_input(path) as stream:
         for row in csv.DictReader(stream, delimiter="\t"):
@@ -50,10 +60,9 @@ def read_variants(path: Path) -> dict[str, list[SourceVariant]]:
             if index < 0 or index in indices or int(position) < 1:
                 raise ValueError(f"{path}: duplicate/invalid index or position at {row['idx']}")
             indices.add(index)
-            result.setdefault(chrom, []).append(
-                SourceVariant(index, chrom, int(position), alleles[0], alleles[1], float(row["AF"]))
+            yield SourceVariant(
+                index, chrom, int(position), alleles[0], alleles[1], float(row["AF"])
             )
-    return result
 
 
 def _reference(path: Path, chrom: str) -> str:

@@ -18,7 +18,7 @@ import numpy as np
 import zarr
 
 from ogld.build.importing.download import BUCKET, Fetch, Parts, atomic_json, https, inventory
-from ogld.build.importing.lift import Lifted, far_distance, lift_variants, read_variants
+from ogld.build.importing.lift import Lifted, far_distance, lift_variants, variant_chromosomes
 from ogld.build.importing.matrix import MatrixSource, correlation, diagonal_mask
 from ogld.build.record import sha256
 from ogld.format import NEAR_BP, Provenance, REncoding, Sourced
@@ -89,9 +89,7 @@ def _plan(inputs: ImportInputs, out: Path, metadata: dict[str, Any]) -> dict[str
         return plan
     source = MatrixSource(inputs.work, metadata)
     chromosomes: dict[str, Any] = {}
-    for name, rows in sorted(
-        read_variants(inputs.variants).items(), key=lambda entry: chromosome_rank(entry[0])
-    ):
+    for name, rows in variant_chromosomes(inputs.variants):
         if any(row.index >= source.rows for row in rows):
             raise ValueError(f"chromosome {name}: TSV index exceeds BlockMatrix")
         table, losses = lift_variants(rows, inputs.chain, inputs.fasta)
@@ -272,7 +270,8 @@ def _import(
     paths = []
     losses: Counter[str] = Counter()
     remaining = Counter(part for chrom in plan["chromosomes"].values() for part in chrom["parts"])
-    for name, chromosome in plan["chromosomes"].items():
+    for name in sorted(plan["chromosomes"], key=chromosome_rank):
+        chromosome = plan["chromosomes"][name]
         destination = inputs.work / f"{name}.store"
         closed = _closed(destination)
         if closed is None:
