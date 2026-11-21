@@ -144,3 +144,34 @@ def test_each_request_enters_the_blas_guard_once(
         call()
         entered = len(entries) - before
         assert entered == 1, f"{label} entered the BLAS guard {entered} times"
+
+
+def test_a_long_lived_reader_reuses_and_closes_its_pgen_handles(
+    genotype_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[Path] = []
+    closed: list[Path] = []
+    original_open = Genotypes.__init__
+    original_close = getattr(Genotypes, "close", None)
+
+    def counted_open(self: Genotypes, fileset: object) -> None:
+        original_open(self, fileset)  # type: ignore[arg-type]
+        opened.append(self._fileset.pgen)
+
+    def counted_close(self: Genotypes) -> None:
+        closed.append(self._fileset.pgen)
+        if original_close is not None:
+            original_close(self)
+
+    monkeypatch.setattr(Genotypes, "__init__", counted_open)
+    monkeypatch.setattr(Genotypes, "close", counted_close, raising=False)
+    names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[::9])
+    store = ogld.open(genotype_store)
+    store.matrix(names)
+    first = len(opened)
+    assert first >= 1, "the fixture must decode at least one fileset"
+    store.matrix(names)
+    store.proxies([names[0]], r2=0.01, kb=3000)
+    assert len(opened) == first, f"a second request rebuilt {len(opened) - first} pgen handles"
+    store._reader.close()
+    assert sorted(closed) == sorted(opened), "close() closes every handle the reader kept"

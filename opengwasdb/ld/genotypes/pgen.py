@@ -111,6 +111,10 @@ class Genotypes:
         value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release the native reader; a caller that keeps a handle for reuse closes it here."""
         self._reader.close()
 
     def _ordered(self, out: npt.NDArray[D]) -> npt.NDArray[D]:

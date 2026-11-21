@@ -59,6 +59,12 @@ survive a query. Candidate selection never decodes non-hits, and correlation
 rows are computed only for surviving leads. A component's lead window is
 selected with sorted positions before calling the shared arithmetic.
 
+Pgen handles are kept, per fileset, for the reader's lifetime: `_PgenHandles` leases one to a
+decoding thread at a time and closes the idle ones when the reader closes. On the whole-genome
+EUR sidecar the first clump built 101 handles in 1.59 s of its 6.07 s and now builds 25 (one per
+fileset plus the parallel slices) in 0.65 s of 4.19 s, and later clumps build none. This is a
+handle cache, never a decoded-call cache (fix round 1, item 7).
+
 Measured optimisation (#91): a first implementation spent 432 ms assembling
 one proxy window's dosage block, with 214 ms inside read/reorder, and 4.05 s
 on the 3 Mb region. Decode now writes disjoint output slices on at most four

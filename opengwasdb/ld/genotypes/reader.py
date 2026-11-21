@@ -69,12 +69,54 @@ def _one_blas_thread() -> Iterator[None]:
                 _blas_control = None
 
 
+class _PgenHandles:
+    """One fileset's pgen readers, leased one per decoding thread and kept for the reader's life.
+
+    A pgen handle takes ~16 ms to build on the EUR pgens, and a whole-genome clump built 101 of
+    them; keeping the handles a fileset's decodes already made is a handle cache, never a decoded
+    call cache (fix round 1, item 7). At most one thread holds a handle at a time (pgenlib readers
+    are not shared), `close` closes the idle ones, and a handle leased when `close` runs is closed
+    when its lease ends.
+    """
+
+    def __init__(self, fileset: Fileset) -> None:
+        self._fileset = fileset
+        self._free: list[Genotypes] = []
+        self._lock = threading.Lock()
+        self._closed = False
+
+    @contextmanager
+    def lease(self) -> Iterator[Genotypes]:
+        with self._lock:
+            if self._closed:
+                raise InputError(f"{self._fileset.pgen}: its Genotype Store reader is closed")
+            handle = self._free.pop() if self._free else None
+        if handle is None:
+            handle = Genotypes(self._fileset)
+        try:
+            yield handle
+        finally:
+            with self._lock:
+                if self._closed:
+                    handle.close()
+                else:
+                    self._free.append(handle)
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            free, self._free = self._free, []
+        for handle in free:
+            handle.close()
+
+
 class GenotypeReader:
     """The query reader interface with computed LD; it composes the variant table and store.
 
     The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (#94), and the
-    adjustment data and pgen handles are this class's. Pgen handles are request-local (pgenlib
-    handles are not shared between concurrent requests).
+    adjustment data and pgen handles are this class's. A pgen handle serves one decoding thread
+    at a time and is kept for the reader's lifetime (pgenlib handles are not shared concurrently);
+    `_PgenHandles` leases it and `close()` closes it.
     """
 
     _opened: OpenedStore
@@ -82,6 +124,7 @@ class GenotypeReader:
     _variant_table: VariantTable
     _ranges: dict[str, tuple[int, int]]
     _filesets: list[Fileset]
+    _handles: list[_PgenHandles]
     _arrays: dict[str, npt.NDArray[Any]]
     _query_workers: int
     _closed: bool
@@ -121,6 +164,7 @@ class GenotypeReader:
         reader._variant_table = VariantTable(opened)
         reader._ranges = reader._variant_table.ranges
         reader._filesets = open_filesets(path, record["filesets"])
+        reader._handles = [_PgenHandles(fileset) for fileset in reader._filesets]
         reader._arrays = mapped_arrays(path, record["arrays"])
         reader._query_workers = 1
         reader._closed = False
@@ -131,8 +175,10 @@ class GenotypeReader:
         return _one_blas_thread()
 
     def close(self) -> None:
-        """Close the reader and release the variant table's optional ALID mappings."""
+        """Close the reader, the pgen handles it kept, and the ALID mappings its table kept."""
         self._closed = True
+        for handles in self._handles:
+            handles.close()
         self._variant_table.close()
         self._arrays = {}
 
@@ -202,7 +248,7 @@ class GenotypeReader:
             calls = np.empty((len(rows), a["basis"].shape[0]), dtype=np.float64)
             for index in sources:
                 at = np.flatnonzero(files == index)
-                with Genotypes(self._filesets[int(index)]) as genotypes:
+                with self._handles[int(index)].lease() as genotypes:
                     calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
         # Completeness was checked by Variant Set selection. Inputs are pinned on open and
         # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
@@ -212,13 +258,13 @@ class GenotypeReader:
     def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         source = self._filesets[fileset]
         if len(rows) < _READ_ROWS:
-            with Genotypes(source) as genotypes:
+            with self._handles[fileset].lease() as genotypes:
                 return genotypes.rows(rows)
         calls = np.empty((len(rows), len(source.subset)), dtype=np.float64)
 
         def read(bounds: tuple[int, int]) -> None:
             lo, hi = bounds
-            with Genotypes(source) as genotypes:
+            with self._handles[fileset].lease() as genotypes:
                 genotypes.rows_into(rows[lo:hi], calls[lo:hi])
 
         bounds = [(lo, min(lo + _READ_ROWS, len(rows))) for lo in range(0, len(rows), _READ_ROWS)]
