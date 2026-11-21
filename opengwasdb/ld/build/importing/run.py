@@ -353,9 +353,7 @@ def _import(
     for name in sorted(plan["chromosomes"], key=chromosome_rank):
         chromosome = plan["chromosomes"][name]
         destination = inputs.work / f"{name}.store"
-        closed = _closed_chromosome(
-            inputs, name, plan, metadata, parts, destination, start
-        )
+        closed = _closed_chromosome(inputs, name, plan, metadata, parts, destination, start)
         paths.append(destination)
         losses.update(closed["variants_dropped"])
         remaining.subtract(chromosome["parts"])

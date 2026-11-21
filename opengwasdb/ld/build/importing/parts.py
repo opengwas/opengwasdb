@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 import struct
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -41,7 +41,7 @@ def _block(stream: BinaryIO, lz4: Any) -> bytes | None:
     result = lz4.decompress(payload, uncompressed_size=raw)
     if len(result) != raw:
         raise ValueError("wrong Hail decompressed length")
-    return result
+    return cast(bytes, result)
 
 
 def _decoded(path: Path) -> bytearray:

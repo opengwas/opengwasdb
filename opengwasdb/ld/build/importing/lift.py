@@ -211,9 +211,7 @@ def _targets(
     return kept, losses
 
 
-def _without_collisions(
-    kept: list[LiftedVariant], losses: Counter[str]
-) -> list[LiftedVariant]:
+def _without_collisions(kept: list[LiftedVariant], losses: Counter[str]) -> list[LiftedVariant]:
     multiplicity = Counter(row.alid for row in kept)
     unique = [row for row in kept if multiplicity[row.alid] == 1]
     losses["liftover_identity_collision"] = len(kept) - len(unique)
@@ -261,9 +259,7 @@ def _start_within(target: IntArray, i: int, distance: int, start: int) -> int:
     return start
 
 
-def _add_extreme(
-    queue: deque[int], source: IntArray, i: int, start: int, minimum: bool
-) -> None:
+def _add_extreme(queue: deque[int], source: IntArray, i: int, start: int, minimum: bool) -> None:
     while queue and queue[0] < start:
         queue.popleft()
     while queue and ((source[queue[-1]] >= source[i]) == minimum):
