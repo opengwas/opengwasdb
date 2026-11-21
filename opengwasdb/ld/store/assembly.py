@@ -1511,7 +1511,7 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     return cast(Provenance, made)
 
 
-def derive_alid_mmap(path: Path) -> int:
+def derive_alid_mmap(path: Path, *, provenance_key: str = "ld_store") -> int:
     """Publish an optional local companion from validated canonical arrays (ADR 0012).
 
     Serialize cooperating derivations. A private partial is fsynced before its immutable
@@ -1522,13 +1522,13 @@ def derive_alid_mmap(path: Path) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".lock").open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _derive_alid_mmap(path, directory)
+        return _derive_alid_mmap(path, directory, provenance_key)
 
 
-def _derive_alid_mmap(path: Path, directory: Path) -> int:
+def _derive_alid_mmap(path: Path, directory: Path, provenance_key: str) -> int:
     root = zarr.open_group(path, mode="r")
     rules = ("alid_index.count", "alid_index.rows", "alid_index.order", "alid_index.keys")
-    findings = validate_group(root, root.attrs.get("ld_store"), rules=rules)
+    findings = validate_group(root, root.attrs.get(provenance_key), rules=rules)
     if any(findings.values()):
         raise ValidationFailed(findings)
     existing = layout.alid_companion(root)

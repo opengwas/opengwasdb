@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ogld.build import BuildInputs, build
+from ogld.build import BuildInputs, build, build_genotypes
 from ogld.format import InputError, Refusal
 from ogld.identity import IdentityError
 from ogld.query import open as open_store
@@ -55,6 +55,7 @@ def _build_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]
         "build", help="build an LD Store from a Source Panel (docs/spec/build-inputs.md)"
     )
     b.add_argument("out", type=Path)
+    b.add_argument("--genotypes", action="store_true", help="write a Genotype Store sidecar")
     b.add_argument(
         "--pgen",
         type=Path,
@@ -152,7 +153,8 @@ def _build(args: argparse.Namespace) -> int:
         t_partner=args.t_partner,
         **_given(args, "k", "k_min", "mac_min", "info_min"),
     )
-    provenance = build(inputs, args.out, **_given(args, "threads"))
+    builder = build_genotypes if args.genotypes else build
+    provenance = builder(inputs, args.out, **_given(args, "threads"))
     print(json.dumps(provenance, indent=1))
     return 0
 

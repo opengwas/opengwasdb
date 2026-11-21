@@ -118,20 +118,7 @@ class StoreWriter:
             k=k,
             t_partner=t_partner,
         )
-        position = _positions(variants.position)
-        root = zarr.open_group(str(path), mode="w-", zarr_format=3)
-        group = root.create_group("variants")
-        layout.put_numbers(group, "position", position, layout.POSITION_FILL)
-        layout.put_strings(group, "alid", variants.alid)
-        layout.put_strings(group, "a1", variants.a1)
-        layout.put_strings(group, "a2", variants.a2)
-        layout.put_numbers(
-            group,
-            "a1_frequency",
-            variants.a1_frequency.astype(np.float32),
-            layout.FREQUENCY_FILL,
-        )
-        group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
+        root = write_variant_table(path, variants)
         return cls(root, cutter, ranges, compress_workers=compress_workers)
 
     @property
@@ -257,6 +244,26 @@ class StoreWriter:
         assert path is not None
         derive_alid_mmap(path)
         return cast(Provenance, recorded)
+
+
+def write_variant_table(location: Path, variants: Variants) -> zarr.Group:
+    """Write the shared variant half, without LD components or a provenance claim (#91).
+
+    The LD writer and Genotype Store builder use exactly the same columns and layout.
+    Index derivation follows once the producer has completed its own arrays.
+    """
+    position = _positions(variants.position)
+    root = zarr.open_group(str(location), mode="w-", zarr_format=3)
+    group = root.create_group("variants")
+    layout.put_numbers(group, "position", position, layout.POSITION_FILL)
+    layout.put_strings(group, "alid", variants.alid)
+    layout.put_strings(group, "a1", variants.a1)
+    layout.put_strings(group, "a2", variants.a2)
+    layout.put_numbers(
+        group, "a1_frequency", variants.a1_frequency.astype(np.float32), layout.FREQUENCY_FILL
+    )
+    group.attrs["chromosomes"] = layout.chromosomes_record(chromosome_ranges(variants.chrom))
+    return root
 
 
 def _as_json(provenance: Provenance) -> dict[str, Any]:
