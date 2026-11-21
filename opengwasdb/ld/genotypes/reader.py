@@ -21,6 +21,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.format import Codes, InputError, Provenance, REncoding
+from ogld.format.geometry import global_rows, local_rows, position_rows
 from ogld.genotypes.adjust import Block, r
 from ogld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from ogld.genotypes.pgen import Genotypes, import_pgenlib
@@ -162,16 +163,11 @@ class GenotypeReader(ComponentWorkers):
         cls, location: str | os.PathLike[str], *, cache_bytes: int | None = None
     ) -> GenotypeReader:
         """Open the Genotype Store at a local path, refusing an LD Store or another kind."""
-        path = Path(location)
         cache = ChunkCache(cache_bytes)
         root = open_group(location, cache=cache)
         record = root.attrs.get(KEY)
-        if not isinstance(record, dict) or "ld_store" in root.attrs:
-            raise InputError(f"{location}: not a Genotype Store: missing {KEY} or found ld_store")
-        if root.metadata.zarr_format != 3 or record.get("format_version") != VERSION:
-            raise InputError(f"{location}: unsupported Genotype Store format")
-        opened = OpenedStore(root, str(path), cast(Provenance, record), cache)
-        return cls.from_opened(opened)
+        provenance = cast(Provenance, record if isinstance(record, dict) else {})
+        return cls.from_opened(OpenedStore(root, str(Path(location)), provenance, cache))
 
     @classmethod
     def from_opened(cls, opened: OpenedStore) -> GenotypeReader:
@@ -358,7 +354,7 @@ class GenotypeReader(ComponentWorkers):
 
     def partner_row(self, chrom: str, row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         start, _ = self.chromosome_range(chrom)
-        lead = start + row
+        lead = int(global_rows(row, start))
         position = int(self.loci_of(np.array([lead], dtype=np.int64))[1][0])
         far = self.provenance["far_bp"]
         rows = self.rows_in(chrom, position - far, position + far)
@@ -378,20 +374,35 @@ class GenotypeReader(ComponentWorkers):
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
     ) -> Iterator[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]:
         start, _ = self.chromosome_range(chrom)
-        hits = rows + start
+        hits = global_rows(rows, start)
         positions = self.loci_of(hits)[1]
         # This is component-local working memory, released when its greedy ends, not a call cache.
         # No non-hit is decoded and no eliminated lead's correlation row is computed.
         block = self._data(hits)
 
         def partners(row: int) -> tuple[npt.NDArray[np.int32], Codes]:
-            lead = row + start
-            at = int(np.searchsorted(hits, lead))
-            lo = int(np.searchsorted(positions, positions[at] - window))
-            hi = int(np.searchsorted(positions, positions[at] + window, side="right"))
-            return self._partners(start, lead, hits[lo:hi], block[lo:hi], positions[lo:hi])
+            lead = int(global_rows(row, start))
+            at = self._locate(hits, lead)
+            lo, hi = position_rows(positions, positions[at] - window, positions[at] + window)
+            first, last = int(lo), int(hi)
+            return self._partners(
+                start, lead, hits[first:last], block[first:last], positions[first:last]
+            )
 
         yield partners
+
+    def _locate(self, rows: npt.NDArray[np.int64], lead: int) -> int:
+        """The index of `lead` in the ascending `rows` of its window, refusing loudly if absent.
+
+        The window comes from the store, so the lead is in it; a store whose positions and rows
+        disagree must fail here, naming the ALID, rather than read the neighbouring variant's
+        row as the lead's (spec §2).
+        """
+        lo, hi = position_rows(rows, lead, lead)
+        if int(hi) - int(lo) != 1:
+            alid = str(self.alids_of(np.array([lead], dtype=np.int64))[0])
+            raise InputError(f"{self.location}: the lead {alid} is not among its window's rows")
+        return int(lo)
 
     def _partners(
         self,
@@ -401,7 +412,7 @@ class GenotypeReader(ComponentWorkers):
         block: Block,
         position: npt.NDArray[np.int64] | None = None,
     ) -> tuple[npt.NDArray[np.int32], Codes]:
-        at = int(np.searchsorted(rows, lead))
+        at = self._locate(rows, lead)
         codes = self.encoding.quantise(r(block[at : at + 1], block))[0]
         if position is None:
             position = self.loci_of(rows)[1]
@@ -415,4 +426,4 @@ class GenotypeReader(ComponentWorkers):
             partner_code_floor=p["partner_code_floor"],
             far_code_floor=p["far_code_floor"],
         )
-        return (rows[keep] - start).astype(np.int32), codes[keep]
+        return local_rows(rows[keep], start).astype(np.int32), codes[keep]

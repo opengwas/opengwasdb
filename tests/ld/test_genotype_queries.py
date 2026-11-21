@@ -202,3 +202,19 @@ def test_the_handle_bound_evicts_and_closes(
     assert len(pool._idle) == 2
     pool.close()
     assert len(closed) == 3, "close() closes every handle left idle"
+
+
+def test_a_lead_outside_its_window_is_refused_by_name(genotype_store: Path) -> None:
+    store = ogld.open(genotype_store)
+    reader = store._reader
+    rows = np.flatnonzero(testdata.variants().passes_filters)[:5]
+    names = build_fixtures.alids(rows)
+    hits = reader.rows_of(names)
+    chrom = str(reader.loci_of(hits)[0][0])
+    start, stop = reader.chromosome_range(chrom)
+    local = hits - start
+    absent = next(row for row in range(stop - start) if row not in set(local.tolist()))
+    alid = str(reader.alids_of(np.array([start + absent], dtype=np.int64))[0])
+    with reader.clump_rows(chrom, local, 3000.0) as partners:
+        with pytest.raises(ogld.InputError, match=alid):
+            partners(absent)
