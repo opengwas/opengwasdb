@@ -20,8 +20,18 @@ def _equal(actual: object, expected: object) -> None:
         a, b = getattr(actual, field.name), getattr(expected, field.name)
         if isinstance(a, np.ndarray):
             np.testing.assert_array_equal(a, b, err_msg=field.name)
+        elif dataclasses.is_dataclass(a):
+            _equal(a, b)
         else:
             assert a == b, field.name
+
+
+@pytest.mark.parametrize("fill", [None, 0.0])
+def test_regions_equal_the_test_store(genotype_store: Path, fill: float | None) -> None:
+    actual = ogld.open(genotype_store).region("chr22", 25000000, 1500000, fill=fill)
+    expected = ogld.open(TEST_STORE).region("22", 25000000, 1500000, fill=fill)
+    assert len(actual.r) > 10
+    _equal(actual, expected)
 
 
 def test_proxies_equal_the_test_store(genotype_store: Path) -> None:
