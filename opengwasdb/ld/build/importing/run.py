@@ -22,6 +22,7 @@ from ogld.build.importing.lift import Lifted, far_distance, lift_variants, varia
 from ogld.build.importing.matrix import MatrixSource, correlation, diagonal_mask
 from ogld.build.record import sha256
 from ogld.format import NEAR_BP, Provenance, REncoding, Sourced
+from ogld.format.geometry import stop_within
 from ogld.identity import chromosome_rank
 from ogld.store import StoreWriter, Variants
 from ogld.version import __version__
@@ -203,9 +204,10 @@ def _write(
         compress_workers=inputs.threads,
     )
     positions = table.variants.position
+    far_stops = stop_within(positions, writer.far_bp)
     for first in range(0, len(table), 128):
         last = min(first + 128, len(table))
-        stop = int(np.searchsorted(positions, positions[last - 1] + writer.far_bp, side="right"))
+        stop = int(far_stops[last - 1])
         raw = source.covariance(table.index[first:last], table.index[first:stop])
         normal = correlation(
             raw,
