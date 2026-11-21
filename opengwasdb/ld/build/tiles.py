@@ -73,7 +73,7 @@ class Window:
     def __init__(self, blocks: Iterator[GenotypeBlock], capacity: int) -> None:
         self._blocks = blocks
         self._capacity = capacity
-        self._units: Block | None = None
+        self._adjusted: Block | None = None
         self._unadjusted: Block | None = None
         self._base = 0
         self._end = 0
@@ -83,18 +83,18 @@ class Window:
         must start where the last ended: a gap or an overlap would leave rows of the array that are
         not the chromosome's."""
         while self._end < stop:
-            first, units, unadjusted = next(self._blocks)
+            first, block, unadjusted = next(self._blocks)
             if first != self._end:
                 raise ValueError(
                     f"a block of genotypes starts at row {first}, not {self._end}: the window "
                     "holds a chromosome's rows in order, with none missing (a builder fault)"
                 )
-            if first + len(units) - self._base > self._capacity:
+            if first + len(block) - self._base > self._capacity:
                 self._move(keep)
-            self._units = self._put(self._units, units)
+            self._adjusted = self._put(self._adjusted, block)
             if unadjusted is not None:
                 self._unadjusted = self._put(self._unadjusted, unadjusted)
-            self._end = first + len(units)
+            self._end = first + len(block)
 
     def _put(self, held: Block | None, block: Block) -> Block:
         """Write `block` at the window's end, making the buffer at the first block."""
@@ -106,8 +106,8 @@ class Window:
     def _move(self, keep: int) -> None:
         """Move rows `keep` … end to the start of new arrays."""
         live = slice(keep - self._base, self._end - self._base)
-        if self._units is not None:
-            self._units = _fresh(self._units, live, self._capacity)
+        if self._adjusted is not None:
+            self._adjusted = _fresh(self._adjusted, live, self._capacity)
         if self._unadjusted is not None:
             self._unadjusted = _fresh(self._unadjusted, live, self._capacity)
         self._base = keep
@@ -115,7 +115,7 @@ class Window:
     def rows(self, first: int, stop: int, unadjusted: bool = False) -> Block:
         """Rows `first` … `stop − 1`, a view; the unadjusted ones when asked. Rows the window does
         not hold are refused: the array's other rows are some other variants' vectors."""
-        held = self._unadjusted if unadjusted else self._units
+        held = self._unadjusted if unadjusted else self._adjusted
         if held is None or not self._base <= first <= stop <= self._end:
             kind = "unadjusted " if unadjusted else ""
             raise ValueError(

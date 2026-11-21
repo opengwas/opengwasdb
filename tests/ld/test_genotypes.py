@@ -113,21 +113,34 @@ def test_pgen_int8_and_float64_paths_read_the_same_test_panel_calls() -> None:
         assert reader.range_int8(0, 0).shape == (0, p.n_samples)
 
 
-def test_build_has_no_pgen_calls_or_pc_adjustment_implementation() -> None:
+def test_build_and_query_have_no_pgen_calls_or_pc_adjustment_implementation() -> None:
+    import ast
     import re
 
-    build = Path(__file__).resolve().parents[1] / "ogld" / "build"
+    root = Path(__file__).resolve().parents[1] / "ogld"
     forbidden = re.compile(
         r"\b(?:import pgenlib|PgenReader|read_dosages_\w+|linalg\.qr|"
-        r"def residuals|def unit_vectors)\b"
+        r"def residuals|unit_vectors|residual_fit)\b"
     )
-    found = [
-        (p.name, line)
-        for p in build.glob("*.py")
-        for line in p.read_text().splitlines()
-        if forbidden.search(line)
-    ]
-    assert not found, f"genotypes owns pgen reads and PC Adjustment, not build: {found}"
+    found = []
+    for package in ("build", "query"):
+        for path in (root / package).rglob("*.py"):
+            source = path.read_text()
+            found.extend(
+                (str(path.relative_to(root)), number, line)
+                for number, line in enumerate(source.splitlines(), 1)
+                if forbidden.search(line)
+            )
+            for node in ast.walk(ast.parse(source)):
+                if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult)):
+                    continue
+                names = [part.id for part in ast.walk(node) if isinstance(part, ast.Name)]
+                attributes = [
+                    part.attr for part in ast.walk(node) if isinstance(part, ast.Attribute)
+                ]
+                if any(re.search(r"unit|resid", name) for name in names + attributes):
+                    found.append((str(path.relative_to(root)), node.lineno, ast.unparse(node)))
+    assert not found, f"genotypes owns pgen reads and PC-adjusted r, not build/query: {found}"
 
 
 def test_a_missing_call_is_not_hidden_by_either_read_path(tmp_path: Path) -> None:

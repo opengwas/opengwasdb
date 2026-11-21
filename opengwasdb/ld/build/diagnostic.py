@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 import importlib.resources
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib.resources.abc import Traversable
 from typing import Final
@@ -132,26 +132,6 @@ class ChanceRates:
     pairs: int
     unadjusted: float | None
     adjusted: float | None
-
-
-def chance_rates(
-    chromosome: npt.NDArray[np.str_],
-    units_of: Callable[[npt.NDArray[np.int64]], tuple[npt.NDArray[np.float64], ...]],
-) -> ChanceRates:
-    """The rates over #405's pairs. `units_of(rows)` gives the drawn Variant Set rows' unit
-    vectors at k = 0 and adjusted, in that order."""
-    if len(set(chromosome.tolist())) < 2:
-        return ChanceRates(0, None, None)
-    used = draw_variants(len(chromosome))
-    first, second = draw_pairs(chromosome[used])
-    unadjusted, adjusted = units_of(used)
-    return ChanceRates(PAIRS, _rate(unadjusted, first, second), _rate(adjusted, first, second))
-
-
-def _rate(
-    units: npt.NDArray[np.float64], first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
-) -> float:
-    return chance_rate((units @ units.T)[first, second])
 
 
 def chance_rate(r: npt.NDArray[np.float64]) -> float:

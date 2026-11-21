@@ -39,6 +39,11 @@ Store, and a base-against-head chr22 rebuild, must establish that. Dosage-bearin
 retain float64 dosage reads and this same formula, without the integer exactness claim.
 An int8 hard-call read path does not replace dosage reads in the builder.
 
+The PC Diagnostic's float summaries are reproducible only to float rounding across software
+versions, while Stored r codes remain exactly equal in the acceptance comparisons. The
+orchestrator accepted the chr22 diagnostic-extrema drift of at most 3.1×10⁻¹⁵ in #90's
+first review round; the diagnostic is provenance about chance LD, not a Pair Answer.
+
 The import layer is `identity, format → store → genotypes → build, query → cli`.
 `genotypes` may import only `store`, `format`, `identity` (and ubiquitous `version`).
 Build threading policy (`bounded`) stays in `build`. Build input parsing and Variant Set
