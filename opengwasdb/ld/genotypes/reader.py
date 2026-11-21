@@ -1,10 +1,17 @@
-"""On-demand LD from pinned pgens, composed with the canonical VariantTable (ADR 0015)."""
+"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0015).
+
+`GenotypeReader` satisfies `ogld.query.reader.Reader` structurally, as `StoreReader` does: it
+composes the same `OpenedStore` and `VariantTable` and holds its own computed-LD half, rather
+than inheriting the LD Store reader's (fix round 1, Standards: composition, not inheritance).
+No decoded calls survive a request. Adjustment arrays are read-only mmaps, shared by worker
+processes through the page cache.
+"""
 
 from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
@@ -17,11 +24,13 @@ from ogld.format import Codes, InputError, Provenance, REncoding
 from ogld.genotypes.adjust import Block, r
 from ogld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from ogld.genotypes.pgen import Genotypes, import_pgenlib
-from ogld.store import StoreReader
 from ogld.store.location import ChunkCache, OpenedStore, open_group
+from ogld.store.tables import Variants
 from ogld.store.variants import VariantTable
 
 _READ_ROWS = 8192
+#: The most component threads one `clump` runs, the LD Store reader's cap (`COMPONENT_WORKERS_MAX`).
+_COMPONENT_WORKERS_MAX = 4
 _BLAS_LOCK = threading.Lock()
 _BLAS_CONTROL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ogld_blas")
 _blas_users = 0
@@ -60,55 +69,122 @@ def _one_blas_thread() -> Iterator[None]:
                 _blas_control = None
 
 
-class GenotypeReader(StoreReader):
-    """The query reader interface with computed LD; inherited variant reads delegate only.
+class GenotypeReader:
+    """The query reader interface with computed LD; it composes the variant table and store.
 
-    No decoded calls survive a request. Adjustment arrays are read-only mmaps, shared by
-    worker processes through the page cache. Pgen handles are request-local (pgenlib handles
-    are not shared between concurrent requests).
+    The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (#94), and the
+    adjustment data and pgen handles are this class's. Pgen handles are request-local (pgenlib
+    handles are not shared between concurrent requests).
     """
 
+    _opened: OpenedStore
+    _encoding: REncoding
+    _variant_table: VariantTable
+    _ranges: dict[str, tuple[int, int]]
     _filesets: list[Fileset]
     _arrays: dict[str, npt.NDArray[Any]]
+    _query_workers: int
+    _closed: bool
 
     @classmethod
     def open(
-        cls,
-        location: str | os.PathLike[str],
-        *,
-        frame_cache_bytes: int | None = None,
-        cache_bytes: int | None = None,
+        cls, location: str | os.PathLike[str], *, cache_bytes: int | None = None
     ) -> GenotypeReader:
+        """Open the Genotype Store at a local path, refusing an LD Store or another kind."""
         path = Path(location)
         cache = ChunkCache(cache_bytes)
         root = open_group(location, cache=cache)
-        recorded = root.attrs.get(KEY)
-        if not isinstance(recorded, dict) or "ld_store" in root.attrs:
+        record = root.attrs.get(KEY)
+        if not isinstance(record, dict) or "ld_store" in root.attrs:
             raise InputError(f"{location}: not a Genotype Store: missing {KEY} or found ld_store")
-        if root.metadata.zarr_format != 3 or recorded.get("format_version") != VERSION:
+        if root.metadata.zarr_format != 3 or record.get("format_version") != VERSION:
             raise InputError(f"{location}: unsupported Genotype Store format")
+        opened = OpenedStore(root, str(path), cast(Provenance, record), cache)
+        return cls.from_opened(opened)
+
+    @classmethod
+    def from_opened(cls, opened: OpenedStore) -> GenotypeReader:
+        """A reader over a root a dispatcher has already opened and named a Genotype Store."""
+        root = opened.root
+        record = root.attrs.get(KEY)
+        if not isinstance(record, dict) or "ld_store" in root.attrs:
+            raise InputError(
+                f"{opened.location}: not a Genotype Store: missing {KEY} or found ld_store"
+            )
+        if root.metadata.zarr_format != 3 or record.get("format_version") != VERSION:
+            raise InputError(f"{opened.location}: unsupported Genotype Store format")
         import_pgenlib()
+        path = Path(opened.location)
         reader = cls()
-        reader._opened = OpenedStore(root, str(location), cast(Provenance, recorded), cache)
-        reader._encoding = REncoding.of(recorded.get("encoding"))
-        reader._variant_table = VariantTable(reader._opened)
+        reader._opened = opened
+        reader._encoding = REncoding.of(record.get("encoding"))
+        reader._variant_table = VariantTable(opened)
         reader._ranges = reader._variant_table.ranges
-        reader._filesets = open_filesets(path, recorded["filesets"])
-        reader._arrays = mapped_arrays(path, recorded["arrays"])
+        reader._filesets = open_filesets(path, record["filesets"])
+        reader._arrays = mapped_arrays(path, record["arrays"])
         reader._query_workers = 1
         reader._closed = False
         return reader
 
     def close(self) -> None:
+        """Close the reader and release the variant table's optional ALID mappings."""
         self._closed = True
         self._variant_table.close()
         self._arrays = {}
 
+    def _set_query_workers(self, requested: int) -> None:
+        """Set the threads one `clump` may run its components on, capped as the LD reader's are."""
+        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+            raise InputError(
+                f"the component thread count is a whole number of at least 1: {requested!r}"
+            )
+        self._query_workers = min(requested, _COMPONENT_WORKERS_MAX)
+
+    @property
+    def location(self) -> str:
+        """Where the store was opened from, as the caller named it."""
+        return self._opened.location
+
+    @property
+    def provenance(self) -> Provenance:
+        """The root group's `genotype_store` attribute, as recorded (spec §7)."""
+        return self._opened.provenance
+
+    @property
+    def encoding(self) -> REncoding:
+        """The encoding the store records, which every code it reads is decoded with (§3)."""
+        return self._encoding
+
+    # ------------------------------------------------------- the variant table's reads
+    #
+    # As in `StoreReader`, their one owner is `ogld.store.VariantTable` (#94): both readers
+    # answer through the table they compose, so neither drifts on an ALID, a region or a locus.
+
+    def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
+        return self._variant_table.rows_of(alids)
+
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         return self._variant_table.rows_in(chrom, start, stop)
 
+    def chromosome_range(self, chrom: str) -> tuple[int, int]:
+        return self._variant_table.chromosome_range(chrom)
+
+    def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
+        return self._variant_table.alids_of(rows)
+
+    def loci_of(
+        self, rows: npt.NDArray[np.int64]
+    ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.int64]]:
+        return self._variant_table.loci_of(rows)
+
+    def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
+        return self._variant_table.variants(rows)
+
+    # ------------------------------------------------------------ the computed LD half
+
     def require_partner_rows(self) -> float:
-        return self.provenance["t_partner"]
+        """The Partner Threshold this sidecar recorded (spec §7; partner-rows §3)."""
+        return float(self.provenance["t_partner"])
 
     def _data(self, rows: npt.NDArray[np.int64]) -> Block:
         if self._closed:

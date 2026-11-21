@@ -45,6 +45,12 @@ recorded. This distinction is explicit in the sidecar spec.
 
 The two rules a pair's answer turns on — whether a pair at a distance is Stored, and which floor a Partner Rows row keeps it at — are `REncoding.stored_mask` and `REncoding.partner_mask`, beside the code floors. The builder's cut, the Partner Rows emitter and this reader all call them, so the Bound and Not Measured cannot drift between a materialised store and a computed one (fix round 1).
 
+The reader is a composition, not a subclass: it holds its own `OpenedStore` and composes
+`VariantTable` exactly as `StoreReader` does, and both satisfy `ogld.query.reader.Reader`
+structurally. So a genotype reader has no LD reader's members that mean nothing here
+(`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `ogld.open` and `ogld.validate`
+read the root once and hand the opened metadata to the kind that owns it (fix round 1).
+
 The clump seam is a request-local context manager yielding a row callable.
 For LD Stores it yields the existing partner_row, a no-op with respect to I/O
 and answers. For genotype reads it holds only a component's hit calls during

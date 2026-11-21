@@ -15,19 +15,19 @@ from collections.abc import Sequence
 import numpy.typing as npt
 
 from ogld.format import Provenance
-from ogld.genotypes.layout import KEY
 from ogld.genotypes.reader import GenotypeReader
 from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
+from ogld.query.kind import GENOTYPE, open_kind
+from ogld.query.reader import Reader
 from ogld.query.results import Clumps, LDMatrix, Proxies
 from ogld.store import StoreReader
-from ogld.store.location import open_group
 
 
 class LDStore:
     """An opened LD Store. Get one from `ogld.open`."""
 
-    def __init__(self, reader: StoreReader) -> None:
+    def __init__(self, reader: Reader) -> None:
         self._reader = reader
 
     @property
@@ -74,7 +74,10 @@ def open(location: str | os.PathLike[str], *, cache_bytes: int | None = None) ->
 
     The store keeps at most `cache_bytes` of the chunks and shard indexes its reads fetch, 4 GiB
     if None, and none if 0; anything but an int ≥ 0 is an `InputError` (spec §10; ogld#32)."""
-    root = open_group(location)
-    if KEY in root.attrs:
-        return LDStore(GenotypeReader.open(location, cache_bytes=cache_bytes))
-    return LDStore(StoreReader.open(location, cache_bytes=cache_bytes))
+    kinded = open_kind(location, cache_bytes=cache_bytes)
+    reader: Reader
+    if kinded.kind == GENOTYPE:
+        reader = GenotypeReader.from_opened(kinded.opened)
+    else:
+        reader = StoreReader.from_opened(kinded.opened)
+    return LDStore(reader)

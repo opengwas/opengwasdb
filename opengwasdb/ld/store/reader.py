@@ -212,11 +212,20 @@ class StoreReader:
         `cache_bytes` of its Near Band chunks (spec §10; the default if None, ogld#32) and
         `frame_cache_bytes` of its decoded Partner Rows frames (partner-rows §7; its own default
         if None). The two are separate budgets, because the two reads serve different queries."""
-        opened = _opened_store(location, cache_bytes)
+        return cls.from_opened(
+            _opened_store(location, cache_bytes), frame_cache_bytes=frame_cache_bytes
+        )
+
+    @classmethod
+    def from_opened(
+        cls, opened: OpenedStore, *, frame_cache_bytes: int | None = None
+    ) -> StoreReader:
+        """An LD reader over a root a dispatcher has already opened and named an LD Store (#91):
+        the root is read once, so an open costs the metadata reads it did before the kind split."""
         try:
             encoding = REncoding.of(opened.provenance.get("encoding"))
         except InputError as unimplemented:
-            raise InputError(f"{location}: {unimplemented}") from unimplemented
+            raise InputError(f"{opened.location}: {unimplemented}") from unimplemented
         reader = cls()
         reader._attach(opened, encoding, FrameCache(frame_cache_bytes))
         return reader
@@ -769,7 +778,15 @@ def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> 
     wrong with it (spec §1, §7, §13). It reads the root's metadata and nothing else, so it is the
     same work whether a reader or a bare variant table follows."""
     cache = ChunkCache(cache_bytes)
-    root = open_group(location, cache=cache)
+    return opened_ld(open_group(location, cache=cache), str(location), cache)
+
+
+def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore:
+    """`OpenedStore` for an already opened root, checked as an LD Store (spec §1, §7, §13).
+
+    The kind dispatcher (`ogld.query.kind`) opens a root once and hands it here or to the
+    Genotype Store reader, so one open is one metadata read whichever kind it holds (#91).
+    """
     if root.metadata.zarr_format != 3:
         raise InputError(
             f"{location} is a Zarr v{root.metadata.zarr_format} hierarchy; an LD Store is "
@@ -783,4 +800,4 @@ def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> 
             f"{location} is LD Store format {recorded.get('format_version')!r}; "
             f"this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
         )
-    return OpenedStore(root, str(location), cast(Provenance, recorded), cache)
+    return OpenedStore(root, location, cast(Provenance, recorded), cache)
