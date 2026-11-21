@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -19,17 +21,43 @@ from ogld.store import StoreReader
 from ogld.store.location import ChunkCache, OpenedStore, open_group
 from ogld.store.variants import VariantTable
 
+_READ_ROWS = 8192
+_BLAS_LOCK = threading.Lock()
+_BLAS_CONTROL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ogld_blas")
+_blas_users = 0
+_blas_control: AbstractContextManager[object] | None = None
 
-@contextmanager
-def _one_blas_thread() -> Iterator[None]:
+
+def _limit_blas() -> AbstractContextManager[object]:
     try:
         from threadpoolctl import threadpool_limits
     except ImportError as missing:
         raise InputError(
             "genotype requests need threadpoolctl from pip install 'ogld[build]'"
         ) from missing
-    with threadpool_limits(limits=1, user_api="blas"):
+    control: AbstractContextManager[object] = threadpool_limits(limits=1, user_api="blas")
+    control.__enter__()
+    return control
+
+
+@contextmanager
+def _one_blas_thread() -> Iterator[None]:
+    global _blas_users, _blas_control
+    # The pool is process-wide, and threadpoolctl retains a controlling thread. Both
+    # changes run on that same thread; restoration waits for the last active request.
+    with _BLAS_LOCK:
+        if not _blas_users:
+            _blas_control = _BLAS_CONTROL.submit(_limit_blas).result()
+        _blas_users += 1
+    try:
         yield
+    finally:
+        with _BLAS_LOCK:
+            _blas_users -= 1
+            if not _blas_users:
+                assert _blas_control is not None
+                _BLAS_CONTROL.submit(_blas_control.__exit__, None, None, None).result()
+                _blas_control = None
 
 
 class GenotypeReader(StoreReader):
@@ -86,40 +114,100 @@ class GenotypeReader(StoreReader):
         if self._closed:
             raise InputError(f"{self.location}: Genotype Store reader is closed")
         a = self._arrays
-        calls = np.empty((len(rows), a["basis"].shape[0]), dtype=np.float64)
         files = a["fileset"][rows]
-        for index in np.unique(files):
-            at = np.flatnonzero(files == index)
-            with Genotypes(self._filesets[int(index)]) as genotypes:
-                calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
-        if (calls < 0).any() or not np.isfinite(calls).all():
-            raise InputError(f"{self.location}: missing or invalid genotype calls")
+        sources = np.unique(files)
+        if len(sources) == 1:
+            calls = self._calls(int(sources[0]), a["pgen_row"][rows])
+        else:
+            calls = np.empty((len(rows), a["basis"].shape[0]), dtype=np.float64)
+            for index in sources:
+                at = np.flatnonzero(files == index)
+                with Genotypes(self._filesets[int(index)]) as genotypes:
+                    calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
+        # Completeness was checked by Variant Set selection. Inputs are pinned on open and
+        # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
+        # pass without adding integrity beyond that contract (ADR 0015).
         return Block(calls, a["projection"][rows], a["norm"][rows], a["sign"][rows])
+
+    def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
+        source = self._filesets[fileset]
+        if len(rows) < _READ_ROWS:
+            with Genotypes(source) as genotypes:
+                return genotypes.rows(rows)
+        calls = np.empty((len(rows), len(source.subset)), dtype=np.float64)
+
+        def read(bounds: tuple[int, int]) -> None:
+            lo, hi = bounds
+            with Genotypes(source) as genotypes:
+                genotypes.rows_into(rows[lo:hi], calls[lo:hi])
+
+        bounds = [(lo, min(lo + _READ_ROWS, len(rows))) for lo in range(0, len(rows), _READ_ROWS)]
+        # Native pgen decoding releases the GIL. Four disjoint output slices avoid both the
+        # serial 95 ms dosage decode and a concatenation-sized copy measured in #91.
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="ogld_pgen") as pool:
+            list(pool.map(read, bounds))
+        return calls
 
     def pair_r(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         rows = self._variant_table.checked_rows(rows)
         out = np.full((len(rows), len(rows)), np.nan)
         chrom, position = self.loci_of(rows)
-        p = self.provenance
         with _one_blas_thread():
             for name in np.unique(chrom):
                 at = np.flatnonzero(chrom == name)
                 block = self._data(rows[at])
-                for first in range(0, len(at), 128):
-                    stop = min(first + 128, len(at))
-                    codes = self.encoding.quantise(r(block[first:stop], block))
-                    values = self.encoding.dequantise(codes)
-                    distance = np.abs(position[at[first:stop], None] - position[at])
-                    missing = (distance > p["far_bp"]) | (
-                        (distance > p["near_bp"]) & (np.abs(codes) < p["far_code_floor"])
+                for first in range(0, len(at), 512):
+                    stop = min(first + 512, len(at))
+                    values = self._values(
+                        r(block[first:stop], block), position[at[first:stop]], position[at]
                     )
-                    values[missing] = np.nan
-                    out[np.ix_(at[first:stop], at)] = values
+                    if len(at) == len(rows):
+                        out[first:stop] = values
+                    else:
+                        out[np.ix_(at[first:stop], at)] = values
         np.fill_diagonal(out, 1.0)
         return out
 
+    def _values(
+        self,
+        correlations: npt.NDArray[np.float64],
+        row_position: npt.NDArray[np.int64],
+        span_position: npt.NDArray[np.int64],
+    ) -> npt.NDArray[np.float64]:
+        codes = self.encoding.quantise(correlations)
+        values = self.encoding.dequantise(codes)
+        distance = np.abs(row_position[:, None] - span_position)
+        p = self.provenance
+        missing = (distance > p["far_bp"]) | (
+            (distance > p["near_bp"]) & (np.abs(codes) < p["far_code_floor"])
+        )
+        values[missing] = np.nan
+        return values
+
     def region_r(self, start: int, stop: int) -> npt.NDArray[np.float64]:
-        return self.pair_r(np.arange(start, stop, dtype=np.int64))
+        rows = self._variant_table.checked_rows(np.arange(start, stop, dtype=np.int64))
+        chrom, position = self.loci_of(rows)
+        if len(rows) and chrom[0] != chrom[-1]:
+            raise InputError(f"{self.location}: a region cannot cross chromosomes")
+        out = np.empty((len(rows), len(rows)), dtype=np.float64)
+        with _one_blas_thread():
+            block = self._data(rows)
+            for first in range(0, len(rows), 128):
+                last = min(first + 128, len(rows))
+                raw = r(block[first:last], block[first:])
+                # Small stripes keep quantisation's temporary arrays in cache. Compute each
+                # off-diagonal tile only once, then mirror its codes like the LD Store (#91).
+                for lo in range(first, last, 16):
+                    hi = min(lo + 16, last)
+                    out[lo:hi, first:] = self._values(
+                        raw[lo - first : hi - first], position[lo:hi], position[first:]
+                    )
+                out[first:last, :first] = out[:first, first:last].T
+                diagonal = out[first:last, first:last]
+                lower = np.tril_indices(last - first, k=-1)
+                diagonal[lower] = diagonal.T[lower]
+        np.fill_diagonal(out, 1.0)
+        return out
 
     def partner_row(self, chrom: str, row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         start, _ = self.chromosome_range(chrom)

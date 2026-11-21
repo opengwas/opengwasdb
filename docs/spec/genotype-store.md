@@ -76,7 +76,10 @@ through REncoding, and applies ld-store.md §8 unchanged. Pairs on different
 chromosomes or beyond far_bp are NaN; beyond near_bp, codes below the recorded
 far floor are NaN (the Bound). Diagonal entries are 1. Fills and Absent remain
 the existing query module's responsibilities. `region` uses the same vectorised
-assembly and existing region refusal.
+assembly and existing region refusal. Regions compute only the upper triangle,
+in 128-row arithmetic tiles and 16-row quantisation stripes, then mirror the
+codes. This follows the LD Store's earlier-variant orientation and avoids both
+recomputing correlations and a square-sized temporary allocation.
 
 ## Threshold queries and clump working set
 
@@ -93,3 +96,16 @@ component's hits once as request-local working memory, computes each surviving
 lead against hits within the window through `adjust.r`, and releases the block
 when the component ends. It never sets reader attributes to restrict a request,
 never computes an eliminated lead's row, and retains no calls between queries.
+
+Large pgen reads decode disjoint 8,192-row output slices on at most four native
+reader threads, each owning its pgen handle. `Genotypes.rows_into` writes into
+the final float64 buffer; only physically reordered rows are permuted in place
+when possible. No hard-call substitution is made for dosage-bearing inputs.
+The builder already checks completeness, so query reads rely on the pinned,
+immutable-input contract instead of scanning every dosage again.
+
+BLAS is bounded to one thread while requests are active. A process-wide active
+count and a single control thread keep threadpoolctl's controlling-thread
+ownership consistent: the last request restores the caller's original limit.
+No decoded calls or array mappings are held by this control mechanism. Reader
+processes use spawn, not inherited readers or executors after fork.

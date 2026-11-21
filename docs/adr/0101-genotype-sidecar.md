@@ -51,6 +51,23 @@ survive a query. Candidate selection never decodes non-hits, and correlation
 rows are computed only for surviving leads. A component's lead window is
 selected with sorted positions before calling the shared arithmetic.
 
+Measured optimisation (#91): a first implementation spent 432 ms assembling
+one proxy window's dosage block, with 214 ms inside read/reorder, and 4.05 s
+on the 3 Mb region. Decode now writes disjoint output slices on at most four
+reader threads, with no concatenation or retained calls. Rows at tied loci
+that differ between physical pgen and ALID order are reordered in place rather
+than copying the whole block. The shared float64 dosage/r path is preserved;
+no integer-only arithmetic shortcut is introduced.
+
+Region tiles compute only the upper triangle and mirror its codes. Quantising
+16-row stripes keeps temporary arrays cache-sized; a 512-row quantisation
+experiment was slower (5.01 s). The resulting region measured 1.79–1.88 s.
+BLAS limit/restore operations run on one process-local control thread, with an
+active-request count, because threadpoolctl's OpenBLAS controller owns a thread
+and an early request exit must not restore limits under another active request.
+A fresh-process concurrent-request test starts at two threads, observes one
+through both requests, then verifies restoration to two.
+
 ## Consequences and rejected alternatives
 
 Absolute paths were rejected by the owner's ruling: a deployment moves its input

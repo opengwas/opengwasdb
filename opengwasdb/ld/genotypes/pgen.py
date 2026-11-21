@@ -58,6 +58,21 @@ def import_pgenlib() -> Any:
     return pgenlib
 
 
+def _requested(
+    ordered: npt.NDArray[np.float64],
+    out: npt.NDArray[np.float64],
+    back: npt.NDArray[np.int64] | None,
+) -> None:
+    if back is None:
+        if ordered is not out:
+            out[:] = ordered
+    elif ordered is out:
+        changed = np.flatnonzero(back != np.arange(len(back)))
+        out[changed] = out[back[changed]]
+    else:
+        out[:] = ordered[back]
+
+
 class Genotypes:
     """One fileset's genotypes, open for reading: [variants, samples] float64 ALT dosages."""
 
@@ -111,11 +126,28 @@ class Genotypes:
 
     def rows(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         """The pgen rows `rows`, in the order given."""
-        wanted, back = np.unique(rows, return_inverse=True)
-        out = np.empty((len(wanted), len(self._fileset.subset)), dtype=np.float64)
+        out = np.empty((len(rows), len(self._fileset.subset)), dtype=np.float64)
+        self.rows_into(rows, out)
+        return out
+
+    def rows_into(self, rows: npt.NDArray[np.int64], out: npt.NDArray[np.float64]) -> None:
+        """Decode into a caller-owned contiguous buffer, including a disjoint thread's slice.
+
+        Genomic ALID order differs from physical pgen order at some tied positions. Reorder
+        only those rows in place, not a full dosage matrix (#91: 214 ms proxy read/copy).
+        Each caller/thread owns its Genotypes handle; no native reader is shared.
+        """
+        if out.shape != (len(rows), len(self._fileset.subset)) or not out.flags.c_contiguous:
+            raise ValueError(
+                "pgen output must be contiguous, with one row per variant and kept sample"
+            )
+        ascending = len(rows) < 2 or bool(np.all(np.diff(rows) > 0))
+        wanted, back = (rows, None) if ascending else np.unique(rows, return_inverse=True)
+        direct = len(wanted) == len(rows) and self._fileset.order is None
+        buffer = out if direct else np.empty((len(wanted), out.shape[1]), dtype=np.float64)
         if len(wanted):
-            self._read(lambda: self._reader.read_dosages_list(wanted.astype(np.uint32), out))
-        return self._ordered(out)[back]
+            self._read(lambda: self._reader.read_dosages_list(wanted.astype(np.uint32), buffer))
+        _requested(self._ordered(buffer), out, back)
 
     def range_int8(self, first: int, stop: int) -> npt.NDArray[np.int8]:
         """Hard calls only, with missing calls still −9 for the caller's named refusal.
