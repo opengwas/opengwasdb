@@ -128,7 +128,9 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    On our v2 PCs it drops no PC in any of the five panels: each keeps 20 of 20 and uses
    PC1–PC10. The smallest ratio of any PC is EUR PC2's, 0.104, which LCT's window explains 0.195
    of (`proto/1-build-inputs@8c25ab3:…/results/pc_check_v2_scan.tsv`).
-6. **Imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
+6. **Superseded by [ADR 0015](./0015-imported-ld.md)** (owner, #88/#93,
+   20–21 November 2026): published Pan-UKB covariance may now be imported.
+   **Originally: imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
    the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
 7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
    EUR samples, with the EUR PC File and independent reference answers
