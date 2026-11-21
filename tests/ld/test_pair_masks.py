@@ -8,7 +8,6 @@ import build_fixtures
 import numpy as np
 import pytest
 import testdata
-from test_genotype_store import genotype_store as genotype_store
 
 import ogld
 from ogld.format import REncoding

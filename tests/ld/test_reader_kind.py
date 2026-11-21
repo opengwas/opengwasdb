@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 from contract.support import TEST_STORE
-from test_genotype_store import genotype_store as genotype_store
 
 import ogld
 from ogld.genotypes.reader import GenotypeReader

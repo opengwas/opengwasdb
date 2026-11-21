@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from test_genotype_store import genotype_store as genotype_store
 
 import ogld
 from ogld.cli import main

@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 import testdata
 from contract.support import TEST_STORE
-from test_genotype_store import genotype_store as genotype_store
 
 import ogld
 from ogld.genotypes import reader as genotype_reader

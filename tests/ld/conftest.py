@@ -25,6 +25,52 @@ settings.register_profile("dev", max_examples=100, deadline=timedelta(millisecon
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 
+@pytest.fixture(scope="session")
+def genotype_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The Test Panel's Genotype Store, built once for the whole session (#91 fix round 1).
+
+    Defined here, not imported between test modules: a fixture imported by name is registered
+    once per module, which built four sidecars — 0.7 s of setup each — for the same store.
+    """
+    import testdata
+
+    from ogld.cli import main
+
+    panel = testdata.panel()
+    out = tmp_path_factory.mktemp("genotype-store") / "sidecar"
+    assert (
+        main(
+            [
+                "build",
+                str(out),
+                "--genotypes",
+                "--pgen",
+                str(panel.pgen),
+                "--keep",
+                str(panel.keep),
+                "--pcs",
+                str(panel.pcs),
+                "--pc-source",
+                "Test Panel",
+                "--panel-id",
+                "Test Panel",
+                "--ancestry",
+                "EUR",
+                "--genotype-source",
+                "Test Panel",
+                "--r-scale",
+                "511",
+                "--t-partner",
+                "0.01",
+                "--info-min",
+                "none",
+            ]
+        )
+        == 0
+    )
+    return out
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items: list[Any]) -> None:
     """Before `-m` deselects anything, so a misplaced test is seen however the run selects: a mark
