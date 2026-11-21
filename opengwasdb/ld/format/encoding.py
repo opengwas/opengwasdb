@@ -246,6 +246,12 @@ class REncoding:
         beyond it, out to `far_bp`, when its |code| reaches the far code floor. This is the
         floor choice the Partner Rows emitter makes and the Genotype Store reader answers
         `proxies` and `clump` with, held once (owner, 21 November 2026).
+
+        Pass each pair's real `distance`. The Partner Rows emitter instead passes its two
+        already-split groups' boundary: `near_bp` for the Near Band's codes, every one of which
+        is within `near_bp`, and `far_bp` for the Far Pairs, every one of which is beyond
+        `near_bp` and within `far_bp`. The answer is the same for every such pair, and
+        `tests/test_pair_masks.py` holds the emitter's bytes to this rule, pair by pair.
         """
         gap = np.abs(np.asarray(distance, dtype=np.int64))
         magnitude = np.abs(np.asarray(codes, dtype=np.int32))
