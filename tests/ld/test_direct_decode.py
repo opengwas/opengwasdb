@@ -239,7 +239,7 @@ def test_an_elided_near_band_inner_chunk_is_refused(tmp_path: Path) -> None:
 
     path = resharded(tmp_path / "store", 512, 4)
     store = ogld.open(path)
-    start, _ = store._reader._ranges["22"]
+    start, _ = store._reader._variant_table.ranges["22"]
     names = store._reader.alids_of(np.array([start, start + 1])).tolist()
     assert np.isfinite(store.matrix(names).r).all()
     array = zarr.open_array(path / "near/22/r", mode="r+")

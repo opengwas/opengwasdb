@@ -265,7 +265,7 @@ def test_validation_rejects_self_consistent_wrong_rows(tmp_path: Path) -> None:
 
 def test_mapped_lookup_uses_no_locus_or_column_reads(tmp_path: Path, monkeypatch) -> None:
     from ogld.store import StoreReader
-    from ogld.store import reader as reader_module
+    from ogld.store import variants as variants_module
 
     store = written(tmp_path / "store")
     root = zarr.open_group(store, mode="r")
@@ -279,10 +279,10 @@ def test_mapped_lookup_uses_no_locus_or_column_reads(tmp_path: Path, monkeypatch
     def forbidden(*args, **kwargs):
         raise AssertionError("mapped lookup parsed loci or read Zarr payloads")
 
-    monkeypatch.setattr(reader_module, "_loci", forbidden)
-    monkeypatch.setattr(reader, "_read", forbidden)
-    monkeypatch.setattr(reader, "_runs", forbidden)
-    monkeypatch.setattr(reader, "_strings", forbidden)
+    monkeypatch.setattr(variants_module, "_loci", forbidden)
+    monkeypatch.setattr(variants_module, "elements_of", forbidden)
+    monkeypatch.setattr(variants_module, "runs_of", forbidden)
+    monkeypatch.setattr(reader._variant_table, "_strings", forbidden)
     asked = [
         *reversed(fitting),
         fitting[0],

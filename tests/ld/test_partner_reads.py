@@ -61,7 +61,10 @@ def counted(where: object) -> tuple[StoreReader, Counting]:
     """A reader of the store at `where` whose own chunk cache counts what it is asked for."""
     reader = StoreReader.open(str(where))
     cache = Counting()
+    # One cache, shared: the reader serves the LD half and the variant table it composes serves
+    # the variant half, so a cache swapped in for counting must be the one both read through.
     reader._cache = cache
+    reader._variant_table._cache = cache
     return reader, cache
 
 

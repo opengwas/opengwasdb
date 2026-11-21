@@ -19,7 +19,7 @@ import zarr
 from store_copies import TEST_STORE, copy_store
 
 from ogld.store import StoreReader, layout
-from ogld.store.reader import _index_pays
+from ogld.store.variants import _index_pays
 
 
 def oracle(store: Path) -> dict[str, int]:
@@ -158,14 +158,14 @@ def peak_lookup(tmp_path: Path, name: str, entries: int) -> tuple[int, int]:
     layout.put_numbers(group, "alid", keys.reshape(-1), layout.ALID_KEY_FILL, layout.ALID_KEYS)
     layout.put_numbers(group, "row", rows, layout.ALID_ROW_FILL, layout.ALID_ROWS)
     reader = StoreReader.open(store, cache_bytes=0)
-    index = reader._index()
+    index = reader._variant_table._index()
     assert int(index.alid.chunks[0]) == layout.ALID_KEYS[0], "a store's inner chunks"
     if entries * layout.ALID_INDEX_WIDTH > layout.ALID_KEYS[1]:
         assert int(index.alid.shards[0]) == layout.ALID_KEYS[1], "a store's shards"
     present = [f"22:{i:0{DIGITS}d}:A:C" for i in range(0, entries, entries // 100)]
     tracemalloc.start()
     try:
-        hits = reader._searched(layout.alid_keys(present)[0])
+        hits = reader._variant_table._searched(layout.alid_keys(present)[0])
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
