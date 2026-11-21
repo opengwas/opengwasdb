@@ -174,3 +174,31 @@ def test_a_long_lived_reader_reuses_and_closes_its_pgen_handles(
     assert len(opened) == first, f"a second request rebuilt {len(opened) - first} pgen handles"
     store._reader.close()
     assert sorted(closed) == sorted(opened), "close() closes every handle the reader kept"
+
+
+def test_the_handle_bound_evicts_and_closes(
+    genotype_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reader = ogld.open(genotype_store)._reader
+    filesets = [reader._filesets[0]] * 3  # three pool entries, each a real fileset to open
+    pool = genotype_reader._PgenHandles(filesets, keep=2)
+    opened: list[int] = []
+    closed: list[int] = []
+    original_open = Genotypes.__init__
+
+    def counted_open(self: Genotypes, fileset: PgenFileset) -> None:
+        opened.append(len(opened))
+        original_open(self, fileset)
+
+    monkeypatch.setattr(Genotypes, "__init__", counted_open)
+    monkeypatch.setattr(Genotypes, "close", lambda self: closed.append(len(closed)))
+    for index in range(3):
+        with pool.lease(index):
+            pass
+    # The third lease needs a handle and the bound is two, so one idle handle is evicted and
+    # closed, and two stay for the next decode.
+    assert len(opened) == 3, "each fileset's first lease opens one handle"
+    assert len(closed) == 1, f"the bound evicted and closed {len(closed)} handles, not one"
+    assert len(pool._idle) == 2
+    pool.close()
+    assert len(closed) == 3, "close() closes every handle left idle"

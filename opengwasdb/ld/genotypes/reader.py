@@ -88,8 +88,11 @@ class _PgenHandles:
     handle leased when `close` runs is closed when its lease ends.
     """
 
-    def __init__(self, filesets: list[Fileset]) -> None:
+    def __init__(self, filesets: list[Fileset], *, keep: int = _HANDLES_KEPT) -> None:
+        if keep < 1:
+            raise ValueError(f"at least one pgen handle must be kept idle, not {keep}")
         self._filesets = filesets
+        self._keep = keep
         self._idle: list[tuple[int, Genotypes]] = []
         self._lock = threading.Lock()
         self._closed = False
@@ -118,7 +121,7 @@ class _PgenHandles:
         evicted = None
         with self._lock:
             if not self._closed:
-                if len(self._idle) >= _HANDLES_KEPT:
+                if len(self._idle) >= self._keep:
                     _, evicted = self._idle.pop(0)
                 self._idle.append((index, handle))
                 keep = True
