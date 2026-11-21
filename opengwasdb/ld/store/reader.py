@@ -70,9 +70,17 @@ from ogld.format.geometry import (
 )
 from ogld.store import layout
 from ogld.store.frames import FrameCache, PartnerFrames, open_partner_frames
-from ogld.store.location import ChunkCache, open_group
+from ogld.store.location import (
+    ChunkCache,
+    OpenedStore,
+    array_indptr,
+    elements_of,
+    kept_array,
+    open_group,
+    runs_of,
+)
 from ogld.store.tables import Variants
-from ogld.store.variants import VariantTable, array_indptr, elements_of, kept_array, runs_of
+from ogld.store.variants import VariantTable
 
 #: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
 #: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
@@ -146,9 +154,7 @@ class StoreReader:
     reader (partner-rows §9; ogld#71).
     """
 
-    _root: zarr.Group
-    _location: str
-    _provenance: Provenance
+    _opened: OpenedStore
     _encoding: REncoding
     _variant_table: VariantTable
     _ranges: dict[str, tuple[int, int]]
@@ -156,7 +162,6 @@ class StoreReader:
     _stops: npt.NDArray[np.int64]
     _loaded: dict[str, _Chromosome]
     _far: dict[str, _Sparse]
-    _cache: ChunkCache
     _frame_cache: FrameCache
     _partner_frames: dict[str, PartnerFrames]
     _loaded_lock: threading.Lock
@@ -164,31 +169,22 @@ class StoreReader:
     _query_workers: int
     _closed: bool
 
-    def _attach(
-        self,
-        root: zarr.Group,
-        location: str,
-        provenance: Provenance,
-        encoding: REncoding,
-        cache: ChunkCache,
-        frames: FrameCache,
-    ) -> None:
-        """Keep the provenance, the encoding and the variant table of an opened, checked store,
-        and the two caches its reads go through: decoded Near Band chunks, and decoded
-        Partner Rows frames (partner-rows §7), and the component threads it may run (§9.2).
+    def _attach(self, opened: OpenedStore, encoding: REncoding, frames: FrameCache) -> None:
+        """Keep the opened store, the encoding and the variant table of a checked store, and the
+        second cache its reads go through: decoded Partner Rows frames (partner-rows §7), and the
+        component threads it may run (§9.2).
 
-        The table takes the group this reader has already opened and checked, so one store is
-        opened once (#94). Its chromosome record is held here too, as the same objects and never a
-        copy, because the LD reads walk it per step: a range, a label and a stop.
+        The table takes the same `OpenedStore` this reader holds, so one store is opened once
+        (#94) and the group, the location a refusal names, the provenance and the one chunk cache
+        are one object's for both halves. Its chromosome record is held here too, as the same
+        objects and never a copy, because the LD reads walk it per step: a range, a label and a
+        stop.
         """
-        self._root = root
-        self._location = location
-        self._provenance = provenance
+        self._opened = opened
         self._encoding = encoding
-        self._cache = cache
         self._frame_cache = frames
         self._query_workers = COMPONENT_WORKERS_MAX
-        self._variant_table = VariantTable(root, location, provenance, cache)
+        self._variant_table = VariantTable(opened)
         self._ranges = self._variant_table.ranges
         self._names = self._variant_table.names
         self._stops = self._variant_table.stops
@@ -215,16 +211,49 @@ class StoreReader:
         `cache_bytes` of its Near Band chunks (spec §10; the default if None, ogld#32) and
         `frame_cache_bytes` of its decoded Partner Rows frames (partner-rows §7; its own default
         if None). The two are separate budgets, because the two reads serve different queries."""
-        cache = ChunkCache(cache_bytes)
-        frame_cache = FrameCache(frame_cache_bytes)
-        root, recorded = _opened_store(location, cache)
+        opened = _opened_store(location, cache_bytes)
         try:
-            encoding = REncoding.of(recorded.get("encoding"))
+            encoding = REncoding.of(opened.provenance.get("encoding"))
         except InputError as unimplemented:
             raise InputError(f"{location}: {unimplemented}") from unimplemented
         reader = cls()
-        reader._attach(root, str(location), recorded, encoding, cache, frame_cache)
+        reader._attach(opened, encoding, FrameCache(frame_cache_bytes))
         return reader
+
+    # The store's facts and its chunk cache are the `OpenedStore` the variant table holds too, so
+    # these read and, for the cache, replace it for both halves (#94). The benchmark harness swaps
+    # `_cache` to measure what a read holds; a copy here would leave the variant reads behind.
+    @property
+    def _root(self) -> zarr.Group:
+        return self._opened.root
+
+    @_root.setter
+    def _root(self, root: zarr.Group) -> None:
+        self._opened.root = root
+
+    @property
+    def _location(self) -> str:
+        return self._opened.location
+
+    @_location.setter
+    def _location(self, location: str) -> None:
+        self._opened.location = location
+
+    @property
+    def _provenance(self) -> Provenance:
+        return self._opened.provenance
+
+    @_provenance.setter
+    def _provenance(self, provenance: Provenance) -> None:
+        self._opened.provenance = provenance
+
+    @property
+    def _cache(self) -> ChunkCache:
+        return self._opened.cache
+
+    @_cache.setter
+    def _cache(self, cache: ChunkCache) -> None:
+        self._opened.cache = cache
 
     @property
     def cache_bytes(self) -> int:
@@ -720,17 +749,15 @@ def open_variant_table(
     v3 hierarchy, a finished store, a format this package reads (spec §1, §13) — and says nothing
     about the encoding, which no variant read decodes a code with.
     """
+    return VariantTable(_opened_store(location, cache_bytes))
+
+
+def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> OpenedStore:
+    """An opened store this package can read: its group, the location naming it, its `ld_store`
+    provenance and the one chunk cache its reads go through, refused naming the store and what is
+    wrong with it (spec §1, §7, §13). It reads the root's metadata and nothing else, so it is the
+    same work whether a reader or a bare variant table follows."""
     cache = ChunkCache(cache_bytes)
-    root, recorded = _opened_store(location, cache)
-    return VariantTable(root, str(location), recorded, cache)
-
-
-def _opened_store(
-    location: str | os.PathLike[str], cache: ChunkCache
-) -> tuple[zarr.Group, Provenance]:
-    """The group and `ld_store` provenance of an opened store this package can read, refused
-    naming the store and what is wrong with it (spec §1, §7, §13). It reads the root's metadata
-    and nothing else, so it is the same work whether a reader or a bare variant table follows."""
     root = open_group(location, cache=cache)
     if root.metadata.zarr_format != 3:
         raise InputError(
@@ -745,4 +772,4 @@ def _opened_store(
             f"{location} is LD Store format {recorded.get('format_version')!r}; "
             f"this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
         )
-    return root, cast(Provenance, recorded)
+    return OpenedStore(root, str(location), cast(Provenance, recorded), cache)

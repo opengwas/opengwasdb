@@ -13,6 +13,13 @@ time, as clumping does once per lead, fetches each chunk once, from disk or over
 missing runs of chunks are fetched together, a bounded batch at a time (ogld#32). How a store is
 read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/latency.md`), and
 ogld#32 tuned it (`docs/benchmarks/fast-reader.md`).
+
+`OpenedStore` is the one object an opened store's facts and its cache are held in, because a
+reader and the `VariantTable` it composes are two halves of one store and not two stores (#94): a
+replaced cache is replaced for both. The reads every other read is made of are here beside it —
+`elements_of` for an array's elements at coordinates, `runs_of` for its ragged runs, both refused
+if a chunk was lost, `array_indptr` for an offset array read whole, and `kept_array` for an array
+whose fill value no valid store can hold (spec §6).
 """
 
 from __future__ import annotations
@@ -38,10 +45,11 @@ from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
 from zarr.core.sync import sync
 from zarr.storage import LocalStore, StorePath, WrapperStore
 
-from ogld.format import InputError
+from ogld.format import InputError, Provenance
 from ogld.format.geometry import spans
 from ogld.store import layout
 from ogld.store.decoding import DecodedChunk, NumericDecoder, on_pool
+from ogld.store.layout import never_data, refused_if_lost, shown_fill
 
 #: The decoded inner chunks and shard indexes a reader keeps unless its caller says otherwise,
 #: in bytes: 8,192 of layout C's 512 KiB Near Band chunks. ogld#8 measured repeated reads
@@ -244,6 +252,24 @@ def frame_source(array: zarr.Array[Any]) -> FrameSource:
     except ValueError:
         return RangeSource(array)
     return PreadSource(path)
+
+
+@dataclass
+class OpenedStore:
+    """An opened LD Store as both halves of its reader see it (spec §7, §10; ogld#94).
+
+    The group, the location a refusal names (spec §9), the provenance the reads judge rows and
+    entries by, and the one chunk cache every read goes through. A reader and the `VariantTable`
+    it composes hold this same object rather than copies, so replacing any of the four replaces it
+    for both halves: `StoreReader._cache` is this `cache`, and the benchmark harness swaps it to
+    measure what a read holds. One store therefore keeps one chunk budget, and a query's positions
+    and its pairs are kept under it (spec §10).
+    """
+
+    root: zarr.Group
+    location: str
+    provenance: Provenance
+    cache: ChunkCache
 
 
 @dataclass(frozen=True)
@@ -487,6 +513,53 @@ class ChunkCache:
             _, (_, dropped) = self._kept.popitem(last=False)
             self._bytes -= dropped
         return chunk
+
+
+def elements_of(
+    array: zarr.Array[Any], cache: ChunkCache, coords: npt.NDArray[np.int64]
+) -> npt.NDArray[Any]:
+    """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
+    return refused_if_lost(array, cache.take(array, coords))
+
+
+def runs_of(
+    array: zarr.Array[Any],
+    cache: ChunkCache,
+    first: npt.NDArray[np.int64],
+    length: npt.NDArray[np.int64],
+) -> list[npt.NDArray[Any]]:
+    """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
+    a lost chunk refused."""
+    return [refused_if_lost(array, run) for run in cache.runs(array, first, length)]
+
+
+def array_indptr(array: zarr.Array[Any], cache: ChunkCache) -> npt.NDArray[np.int64]:
+    """An offset array read whole, refused if a chunk of it was lost."""
+    data = cache.runs(array, [0], [array.shape[0]])[0]
+    return refused_if_lost(array, data).astype(np.int64, copy=False)
+
+
+def kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
+    """An array, refused unless a chunk it lost would read as a value no store holds there."""
+    array = _array(root, path)
+    if not never_data(path, array.fill_value).all():
+        raise ValueError(
+            f"{path} has the fill value {shown_fill(array.fill_value)}, which valid data can hold "
+            "there: a chunk it lost would read as data (spec §6, envelope.fill)"
+        )
+    return array
+
+
+def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
+    """The array at `path`; one the store lacks is refused, naming it, never read as empty."""
+    try:
+        member = root[path]
+    except KeyError:
+        raise ValueError(
+            f"{path} is missing: every LD Store holds it (spec §1, envelope.arrays)"
+        ) from None
+    assert isinstance(member, zarr.Array)
+    return member
 
 
 def _pieces(missing: list[int], per_shard: int, most: int) -> list[tuple[int, int]]:

@@ -46,13 +46,8 @@ from ogld.format.geometry import (
 )
 from ogld.identity import alid_locus
 from ogld.store import layout
-from ogld.store.layout import (
-    chromosomes_listed,
-    never_data,
-    refused_if_lost,
-    shown_fill,
-)
-from ogld.store.location import ChunkCache
+from ogld.store.layout import chromosomes_listed, refused_if_lost
+from ogld.store.location import OpenedStore, elements_of, kept_array, runs_of
 from ogld.store.tables import Variants
 
 #: The variant table's columns (spec §2).
@@ -185,41 +180,6 @@ def _mapped_keys(
     )
 
 
-def runs_of(
-    array: zarr.Array[Any],
-    cache: ChunkCache,
-    first: npt.NDArray[np.int64],
-    length: npt.NDArray[np.int64],
-) -> list[npt.NDArray[Any]]:
-    """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
-    a lost chunk refused."""
-    return [refused_if_lost(array, run) for run in cache.runs(array, first, length)]
-
-
-def elements_of(
-    array: zarr.Array[Any], cache: ChunkCache, coords: npt.NDArray[np.int64]
-) -> npt.NDArray[Any]:
-    """The elements of `array` at `coords`, through the chunk cache; a lost chunk refused."""
-    return refused_if_lost(array, cache.take(array, coords))
-
-
-def kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
-    """An array, refused unless a chunk it lost would read as a value no store holds there."""
-    array = _array(root, path)
-    if not never_data(path, array.fill_value).all():
-        raise ValueError(
-            f"{path} has the fill value {shown_fill(array.fill_value)}, which valid data can hold "
-            "there: a chunk it lost would read as data (spec §6, envelope.fill)"
-        )
-    return array
-
-
-def array_indptr(array: zarr.Array[Any], cache: ChunkCache) -> npt.NDArray[np.int64]:
-    """An offset array read whole, refused if a chunk of it was lost."""
-    data = cache.runs(array, [0], [array.shape[0]])[0]
-    return refused_if_lost(array, data).astype(np.int64, copy=False)
-
-
 class VariantTable:
     """An LD Store's variant table and ALID lookup, over a group its reader opened (spec §2).
 
@@ -230,10 +190,7 @@ class VariantTable:
     lookup that finds it closed refuses rather than answering from the canonical index.
     """
 
-    _root: zarr.Group
-    _location: str
-    _provenance: Provenance
-    _cache: ChunkCache
+    _opened: OpenedStore
     _ranges: dict[str, tuple[int, int]]
     _names: list[str]
     _stops: npt.NDArray[np.int64]
@@ -248,21 +205,15 @@ class VariantTable:
     _has_alid_mmap: bool
     _closed: bool
 
-    def __init__(
-        self,
-        root: zarr.Group,
-        location: str,
-        provenance: Provenance,
-        cache: ChunkCache,
-    ) -> None:
+    def __init__(self, opened: OpenedStore) -> None:
         """Take the variant table of a store its reader has opened and checked: the chromosome
-        ranges, the columns' handles (each opened once, because opening one reads its metadata
-        document, which over HTTP is a request) and the cache every read goes through. The table
-        opens no group of its own, so the reader that composes it opens the store once."""
-        self._root = root
-        self._location = location
-        self._provenance = provenance
-        self._cache = cache
+        ranges and the columns' handles (each opened once, because opening one reads its metadata
+        document, which over HTTP is a request). The table opens no group of its own, so the reader
+        that composes it opens the store once, and it holds the reader's `OpenedStore` rather than
+        a copy of it, so the one chunk cache and the location a refusal names are one object's
+        (#94)."""
+        self._opened = opened
+        root = opened.root
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
         self._ranges = {name: (start, stop) for name, start, stop in listed}
         self._names = list(self._ranges)
@@ -289,6 +240,17 @@ class VariantTable:
             self._closed = True
             if self._alid_mmap is not None:
                 self._alid_mmap.release()
+
+    @property
+    def location(self) -> str:
+        """Where the store was opened from, as the caller named it: what a refusal names (§9), so
+        a user with two stores knows which one declined to answer."""
+        return self._opened.location
+
+    @property
+    def provenance(self) -> Provenance:
+        """The root group's `ld_store` attribute, as recorded (spec §7)."""
+        return self._opened.provenance
 
     @property
     def ranges(self) -> dict[str, tuple[int, int]]:
@@ -360,7 +322,7 @@ class VariantTable:
                 raise self._alid_refusal("reader has been released")
             if not self._alid_checked:
                 try:
-                    companion = layout.alid_companion(self._root)
+                    companion = layout.alid_companion(self._opened.root)
                     self._alid_mmap = None if companion is None else _MappedAlids(companion)
                 except Exception as failed:
                     # Keep text, not a traceback retaining the half-built table/mappings.
@@ -372,7 +334,8 @@ class VariantTable:
 
     def _alid_refusal(self, reason: object) -> InputError:
         return InputError(
-            f"{self._location}: ALID companion {self._root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
+            f"{self.location}: ALID companion "
+            f"{self._opened.root.attrs.get(layout.ALID_MMAP_ATTR)!r}, "
             f"{layout.ALID_MMAP_MANIFEST}: {reason}"
         )
 
@@ -409,12 +372,12 @@ class VariantTable:
         keys, fitting = layout.alid_keys([alids[i] for i in asked])
         if not len(keys) or not _index_pays(len(keys), self._entries()):
             return
-        if self._root.get(layout.ALID_INDEX) is None:
+        if self._opened.root.get(layout.ALID_INDEX) is None:
             return
         hits = self._searched(keys)
         where = hits >= 0
         found[np.array(asked, dtype=np.int64)[fitting[where]]] = elements_of(
-            self._index().row, self._cache, hits[where]
+            self._index().row, self._opened.cache, hits[where]
         )
         scanned[np.array(asked, dtype=np.int64)[fitting[where]]] = False
 
@@ -422,8 +385,8 @@ class VariantTable:
         """How many entries the Variant Set's index holds: its rows less the ALIDs too wide for its
         slot, which the store's provenance counts (spec §7). A store written before the index
         records no count; `_from_index` keeps that store on the exact-scan fallback (ADR 0012)."""
-        counts = self._provenance["counts"]
-        return int(self._provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
+        counts = self._opened.provenance["counts"]
+        return int(self._opened.provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
 
     def _scanned(self, alids: Sequence[str], which: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """The rows of the ALIDs at `which`, in that order: the exact scan of the variant table
@@ -488,7 +451,7 @@ class VariantTable:
         one of its chunks is lost."""
         width = layout.ALID_INDEX_WIDTH
         length = np.array([(stop - first) * width])
-        run = runs_of(index.alid, self._cache, np.array([first * width]), length)[0]
+        run = runs_of(index.alid, self._opened.cache, np.array([first * width]), length)[0]
         keys = refused_if_lost(index.alid, run)
         return keys.view(layout.ALID_KEY_DTYPE).ravel()
 
@@ -497,8 +460,8 @@ class VariantTable:
         metadata, and nothing reads them until a search does."""
         if self._index_arrays is None:
             self._index_arrays = _AlidIndex(
-                kept_array(self._root, layout.ALID_INDEX_ALID),
-                kept_array(self._root, layout.ALID_INDEX_ROW),
+                kept_array(self._opened.root, layout.ALID_INDEX_ALID),
+                kept_array(self._opened.root, layout.ALID_INDEX_ROW),
             )
         return self._index_arrays
 
@@ -555,7 +518,7 @@ class VariantTable:
         """The Variant Set's columns at `rows`, in the order given (spec §2)."""
         rows = self.checked_rows(rows)
         chrom, position = self.loci_of(rows)
-        frequency = elements_of(self._columns["a1_frequency"], self._cache, rows)
+        frequency = elements_of(self._columns["a1_frequency"], self._opened.cache, rows)
         return Variants(
             chrom=chrom,
             position=position,
@@ -588,7 +551,7 @@ class VariantTable:
                 name,
                 start,
                 stop,
-                runs_of(position, self._cache, np.array([start]), np.array([stop - start]))[
+                runs_of(position, self._opened.cache, np.array([start]), np.array([stop - start]))[
                     0
                 ].astype(np.int64),
             )
@@ -608,7 +571,7 @@ class VariantTable:
         """The string column `name` at `rows`; an empty string is a lost chunk's, never data."""
         # zarr hands back numpy StringDType, which casts to a fixed width only via a list.
         values = np.array(
-            elements_of(self._columns[name], self._cache, rows).tolist(), dtype=np.str_
+            elements_of(self._columns[name], self._opened.cache, rows).tolist(), dtype=np.str_
         )
         return values
 
@@ -633,16 +596,4 @@ def _loci(
 def _group(root: zarr.Group, path: str) -> zarr.Group:
     member = root[path]
     assert isinstance(member, zarr.Group)
-    return member
-
-
-def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
-    """The array at `path`; one the store lacks is refused, naming it, never read as empty."""
-    try:
-        member = root[path]
-    except KeyError:
-        raise ValueError(
-            f"{path} is missing: every LD Store holds it (spec §1, envelope.arrays)"
-        ) from None
-    assert isinstance(member, zarr.Array)
     return member
