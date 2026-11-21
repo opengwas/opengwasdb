@@ -29,7 +29,7 @@ from ogld.format import InputError, Refusal, RefusalReason, t_far
 from ogld.identity import alid_locus
 from ogld.query import clumping
 from ogld.store import StoreReader
-from ogld.store.reader import COMPONENT_WORKERS_MAX
+from ogld.store.workers import COMPONENT_WORKERS_MAX
 
 #: The Test Store's rows, all of them: a clump of every variant, and a proxies query on each.
 ALL = np.arange(1056, dtype=np.int64)

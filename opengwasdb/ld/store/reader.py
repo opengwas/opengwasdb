@@ -82,6 +82,7 @@ from ogld.store.location import (
 )
 from ogld.store.tables import Variants
 from ogld.store.variants import VariantTable
+from ogld.store.workers import COMPONENT_WORKERS_MAX, ComponentWorkers
 
 #: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
 #: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
@@ -93,11 +94,6 @@ _CHROMOSOME_ARRAYS: Final = (
 _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
-#: The most component threads one request runs (partner-rows §9.2). Four is where the prototype was
-#: fastest (#65: 1.051 s at G = 8 and 1.067 s at G = 16); eight is slower, 5.753 s and 5.109 s,
-#: because a component's per-lead Python work holds the GIL while only the reads and the decode
-#: release it. The pool's size is the reader's, so no query signature carries it.
-COMPONENT_WORKERS_MAX: Final = 4
 
 
 @dataclass(frozen=True)
@@ -138,7 +134,7 @@ class _Placed:
     out: npt.NDArray[np.float64]
 
 
-class StoreReader:
+class StoreReader(ComponentWorkers):
     """An opened LD Store, local or over HTTP (spec §2, §10).
 
     Opening reads the provenance and the chromosome ranges and refuses a store whose
@@ -278,18 +274,6 @@ class StoreReader:
     def request(self) -> AbstractContextManager[object]:
         """Held for one public query; an LD Store has nothing to enter, its codes are stored."""
         return nullcontext()
-
-    def _set_query_workers(self, requested: int) -> None:
-        """Set the threads one `clump` may run its components on (partner-rows §9.2).
-
-        The size of that pool is the reader's, not a caller's setting: this is the private seam
-        #71's tests use, and it holds the cap, so asking for eight gives `COMPONENT_WORKERS_MAX`.
-        """
-        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
-            raise InputError(
-                f"the component thread count is a whole number of at least 1: {requested!r}"
-            )
-        self._query_workers = min(requested, COMPONENT_WORKERS_MAX)
 
     def close(self) -> None:
         """Close the reader: after it returns no Partner Rows read is answered, and every chunk file

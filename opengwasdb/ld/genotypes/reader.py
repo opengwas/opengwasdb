@@ -27,10 +27,9 @@ from ogld.genotypes.pgen import Genotypes, import_pgenlib
 from ogld.store.location import ChunkCache, OpenedStore, open_group
 from ogld.store.tables import Variants
 from ogld.store.variants import VariantTable
+from ogld.store.workers import ComponentWorkers
 
 _READ_ROWS = 8192
-#: The most component threads one `clump` runs, the LD Store reader's cap (`COMPONENT_WORKERS_MAX`).
-_COMPONENT_WORKERS_MAX = 4
 _BLAS_LOCK = threading.Lock()
 _BLAS_CONTROL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ogld_blas")
 _blas_users = 0
@@ -139,7 +138,7 @@ class _PgenHandles:
             handle.close()
 
 
-class GenotypeReader:
+class GenotypeReader(ComponentWorkers):
     """The query reader interface with computed LD; it composes the variant table and store.
 
     The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (#94), and the
@@ -209,14 +208,6 @@ class GenotypeReader:
         self._handles.close()
         self._variant_table.close()
         self._arrays = {}
-
-    def _set_query_workers(self, requested: int) -> None:
-        """Set the threads one `clump` may run its components on, capped as the LD reader's are."""
-        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
-            raise InputError(
-                f"the component thread count is a whole number of at least 1: {requested!r}"
-            )
-        self._query_workers = min(requested, _COMPONENT_WORKERS_MAX)
 
     @property
     def location(self) -> str:
