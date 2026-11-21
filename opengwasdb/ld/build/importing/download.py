@@ -36,33 +36,47 @@ def atomic_json(path: Path, value: object) -> None:
     temporary.replace(path)
 
 
+_S3_NS = {"s": "http://s3.amazonaws.com/doc/2006-03-01/"}
+
+
+def _listing_entry(obj: ET.Element) -> dict[str, Any]:
+    key = obj.findtext("s:Key", namespaces=_S3_NS) or ""
+    return {
+        "name": key.removeprefix(PREFIX),
+        "bytes": int(obj.findtext("s:Size", namespaces=_S3_NS) or "-1"),
+    }
+
+
+def _listing_page(fetch: Fetch, token: str) -> tuple[list[dict[str, Any]], str | None]:
+    query = {"list-type": "2", "prefix": PREFIX}
+    if token:
+        query["continuation-token"] = token
+    with fetch(BUCKET + "?" + urllib.parse.urlencode(query)) as stream:
+        root = ET.fromstring(stream.read())
+    entries = [_listing_entry(obj) for obj in root.findall("s:Contents", _S3_NS)]
+    truncated = root.findtext("s:IsTruncated", namespaces=_S3_NS)
+    if truncated == "false":
+        return entries, None
+    following = root.findtext("s:NextContinuationToken", namespaces=_S3_NS) or ""
+    if truncated != "true" or not following:
+        raise ValueError("incomplete Pan-UKB bucket listing")
+    return entries, following
+
+
 def inventory(fetch: Fetch = https) -> list[dict[str, Any]]:
     """Paginate the bucket listing; an incomplete page is never a complete inventory."""
     result: list[dict[str, Any]] = []
     token = ""
-    ns = {"s": "http://s3.amazonaws.com/doc/2006-03-01/"}
     seen: set[str] = set()
     while True:
-        query = {"list-type": "2", "prefix": PREFIX}
-        if token:
-            query["continuation-token"] = token
-        with fetch(BUCKET + "?" + urllib.parse.urlencode(query)) as stream:
-            root = ET.fromstring(stream.read())
-        for obj in root.findall("s:Contents", ns):
-            key = obj.findtext("s:Key", namespaces=ns) or ""
-            result.append(
-                {
-                    "name": key.removeprefix(PREFIX),
-                    "bytes": int(obj.findtext("s:Size", namespaces=ns) or "-1"),
-                }
-            )
-        truncated = root.findtext("s:IsTruncated", namespaces=ns)
-        if truncated == "false":
+        entries, following = _listing_page(fetch, token)
+        result.extend(entries)
+        if following is None:
             return result
-        token = root.findtext("s:NextContinuationToken", namespaces=ns) or ""
-        if truncated != "true" or not token or token in seen:
+        if following in seen:
             raise ValueError("incomplete Pan-UKB bucket listing")
-        seen.add(token)
+        seen.add(following)
+        token = following
 
 
 class Parts:

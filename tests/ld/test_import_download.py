@@ -4,11 +4,12 @@ import hashlib
 import io
 import json
 import os
+import urllib.parse
 from pathlib import Path
 
 import pytest
 
-from ogld.build.importing.download import Parts
+from ogld.build.importing.download import Parts, inventory
 
 
 def test_download_retries_checks_bytes_and_remembers_sha256(tmp_path: Path) -> None:
@@ -34,6 +35,81 @@ def test_part_hash_mismatch_refuses_by_name(tmp_path: Path) -> None:
     parts = Parts(tmp_path, [{"name": "part-1", "bytes": 7, "sha256": "0" * 64}])
     with pytest.raises(ValueError, match=r"part-1.*SHA-256"):
         parts.ensure("part-1")
+
+
+def _listing(*entries: str, truncated: bool = False, token: str = "") -> str:
+    continuation = f"<NextContinuationToken>{token}</NextContinuationToken>" if token else ""
+    return (
+        '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        + "".join(entries)
+        + f"<IsTruncated>{str(truncated).lower()}</IsTruncated>{continuation}"
+        + "</ListBucketResult>"
+    )
+
+
+def _entry(name: str, size: int | None) -> str:
+    return (
+        "<Contents><Key>ld_release/UKBB.EUR.ldadj.bm/parts/"
+        + name
+        + "</Key>"
+        + (f"<Size>{size}</Size>" if size is not None else "")
+        + "</Contents>"
+    )
+
+
+def test_inventory_reads_a_single_listing_page() -> None:
+    calls = []
+
+    def fetch(url: str) -> io.BytesIO:
+        calls.append(url)
+        return io.BytesIO(_listing(_entry("part-0", 54)).encode())
+
+    assert inventory(fetch) == [{"name": "part-0", "bytes": 54}]
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(calls[0]).query)
+    assert query == {
+        "list-type": ["2"],
+        "prefix": ["ld_release/UKBB.EUR.ldadj.bm/parts/"],
+    }
+
+
+def test_inventory_follows_a_continuation_token() -> None:
+    pages = iter(
+        [
+            _listing(_entry("part-0", 54), truncated=True, token="next page"),
+            _listing(_entry("part-1", 47)),
+        ]
+    )
+    calls = []
+
+    def fetch(url: str) -> io.BytesIO:
+        calls.append(url)
+        return io.BytesIO(next(pages).encode())
+
+    assert inventory(fetch) == [
+        {"name": "part-0", "bytes": 54},
+        {"name": "part-1", "bytes": 47},
+    ]
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(calls[1]).query)
+    assert query["continuation-token"] == ["next page"]
+
+
+def test_inventory_refuses_a_truncated_listing_without_a_continuation() -> None:
+    def fetch(_url: str) -> io.BytesIO:
+        return io.BytesIO(_listing(truncated=True).encode())
+
+    with pytest.raises(ValueError, match="incomplete Pan-UKB bucket listing"):
+        inventory(fetch)
+
+
+def test_inventory_marks_a_part_entry_without_a_size_as_invalid(tmp_path: Path) -> None:
+    def fetch(_url: str) -> io.BytesIO:
+        return io.BytesIO(_listing(_entry("part-0", None)).encode())
+
+    # Parts refuses this sentinel by part name before attempting a download.
+    found = inventory(fetch)
+    assert found == [{"name": "part-0", "bytes": -1}]
+    with pytest.raises(ValueError, match="part-0: invalid listing byte count"):
+        Parts(tmp_path, found).ensure("part-0")
 
 
 def _identity(path: Path) -> list[int]:
