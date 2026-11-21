@@ -627,7 +627,10 @@ def test_a_partner_rows_stream_closed_with_rows_not_written_is_refused(tmp_path:
         "21",
         near_row_lengths(position, NEAR_BP),
         REncoding(R_SCALE),
-        PARTNER_FLOOR,
+        partner_floor=PARTNER_FLOOR,
+        far_floor=FLOOR,
+        near_bp=NEAR_BP,
+        far_bp=FAR_BP,
     )
     stream.add(cut.rows, cut.near, cut.lo[cut.far], cut.hi[cut.far], cut.codes[cut.far])
     with pytest.raises(ValueError, match="rows not written"):
@@ -638,7 +641,14 @@ def test_partner_rows_refuse_a_code_no_store_holds(tmp_path: Path) -> None:
     # A code of −32768 is what a chunk the store lost reads as: compared against the Partner
     # Floor it would quietly drop its pair, so the emitter refuses it (spec §3, partner-rows §6.1).
     stream = assembly.PartnerRowsStream(
-        zarr.open_group(tmp_path / "g", mode="w"), "1", np.array([2, 1]), REncoding(R_SCALE), 52
+        zarr.open_group(tmp_path / "g", mode="w"),
+        "1",
+        np.array([2, 1]),
+        REncoding(R_SCALE),
+        partner_floor=PARTNER_FLOOR,
+        far_floor=FLOOR,
+        near_bp=NEAR_BP,
+        far_bp=FAR_BP,
     )
     near = np.array([60, REncoding.reserved_code, 80], dtype=np.int16)
     with pytest.raises(ValueError, match=str(REncoding.reserved_code)):

@@ -235,4 +235,63 @@ def _adjustment(inputs: BuildInputs, plan: passes.Plan, chosen: passes.Choice) -
     )
 
 
-__all__ = ["BuildInputs", "build"]
+def build_genotypes(
+    inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1
+) -> Provenance:
+    """Build a local sidecar over existing pgens, without materialising pairwise LD (ADR 0015).
+
+    Variant Set selection, PC Check, sample ordering and FLAT drops are the LD builder's.
+    The PC Diagnostic is null: computing the entire Near Band only for its diagnostic would
+    defeat the sidecar's purpose; the selected covariates and PC Check remain recorded.
+    """
+    from ogld.genotypes import Genotypes, prepare
+    from ogld.genotypes.layout import fileset_record, input_pin
+    from ogld.genotypes.sidecar import SidecarWriter
+
+    target = Path(out)
+    if target.exists() or threads < 1:
+        raise InputError(f"{target}: needs a new output directory and threads >= 1")
+    cost = record.Cost.start()
+    with bounded(threads):
+        plan = passes.plan(
+            inputs.pgen, inputs.keep, inputs.pcs if inputs.k else None, inputs.panel_id
+        )
+        settings = Settings(
+            inputs.panel_id, inputs.mac_min, inputs.info_min, bool(inputs.k), threads
+        )
+        found = variant_set(plan.filesets, settings, plan.samples.n)
+        chosen = passes.choose(plan, found, inputs.k, inputs.k_min)
+        chromosomes = passes.drop_flat(plan, found, chosen.covariates)
+        writer = SidecarWriter(
+            target,
+            passes.variants_table(chromosomes),
+            chosen.covariates,
+            inputs.encoding(),
+            near_bp=NEAR_BP,
+            far_bp=FAR_BP,
+            t_partner=inputs.t_partner,
+        )
+        for chromosome in chromosomes:
+            with Genotypes(plan.filesets[chromosome.fileset]) as genotypes:
+                for first in range(0, len(chromosome), 1024):
+                    rows = chromosome.rows[first : first + 1024]
+                    block = prepare(
+                        genotypes.rows(rows),
+                        chosen.covariates,
+                        chromosome.a1_is_alt[first : first + len(rows)],
+                    )
+                    writer.write(rows, chromosome.fileset, block)
+        sourced = record.sourced(
+            _head(inputs, plan),
+            _adjustment(inputs, plan, chosen),
+            record.Made(found.dropped, None),
+            cost.record(threads),
+        )
+        filesets = [fileset_record(f, f.pvar, target) for f in plan.filesets]
+        pins = [input_pin(inputs.keep, target)]
+        if inputs.k and inputs.pcs is not None:
+            pins.append(input_pin(inputs.pcs, target))
+        return writer.finish(sourced, filesets, pins)
+
+
+__all__ = ["BuildInputs", "build", "build_genotypes"]

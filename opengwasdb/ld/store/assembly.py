@@ -109,9 +109,10 @@ class Cut:
 
     `first` is the block's first global row and `rows` how many it holds, all on one chromosome.
     `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are their
-    pairs at the far code floor, as local rows lo < hi: each partner hi within far_bp of row lo
-    whose code reaches that floor, once, with its one code (spec §3, §5), ascending by (lo, hi).
-    `far` marks those more than near_bp apart: the block's Far Pairs (spec §5). `far_candidates`
+    Far Pairs, as local rows lo < hi: each partner hi more than near_bp and at most far_bp from
+    row lo whose code `REncoding.stored_mask` keeps, once, with its one code (spec §3, §5),
+    ascending by (lo, hi). `far` marks those more than near_bp apart — every one of them, and it
+    is kept so a reader of a Cut can name the half it reads. `far_candidates`
     counts the block's pairs more than near_bp and at most far_bp apart, all judged, and
     `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a cut is
     written only by its own store.
@@ -202,7 +203,7 @@ class Cutter:
         local = first - start
         near_stop, far_stop = self._stops_of(name, local, rows, width)
         near = self._near(first, r, near_stop)
-        lo, hi, codes = self._pairs(first, r, far_stop)
+        lo, hi, codes = self._pairs(first, r, near_stop, far_stop)
         return Cut(
             first,
             rows,
@@ -249,20 +250,36 @@ class Cutter:
         return self._quantised(values, pair)
 
     def _pairs(
-        self, first: int, r: npt.NDArray[np.floating[Any]], far_stop: npt.NDArray[np.int64]
+        self,
+        first: int,
+        r: npt.NDArray[np.floating[Any]],
+        near_stop: npt.NDArray[np.int64],
+        far_stop: npt.NDArray[np.int64],
     ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], Codes]:
-        """The block's pairs (t, c), t < c < far stop(t), whose code reaches the floor, as
-        offsets from its first row, ascending by (t, c), with their codes. Only those whose |r|
-        is not below the encoding's `least_r(floor)` are quantised, which keeps every pair whose
-        code can reach the floor; NaN is never below it. The test is two comparisons, not |r|,
-        which would copy the block's r: 133 MB a worker on chr6's widest tile."""
+        """The block's Far Pairs beyond near_bp: (t, c), near stop(t) ≤ c < far stop(t), that
+        `REncoding.stored_mask` keeps at their distance, as offsets from its first row, ascending
+        by (t, c), with their codes. The Near Band's own pairs are `_near`'s, so no pair inside
+        near_bp is quantised, given a distance or masked here. Only those whose |r| is not below
+        the encoding's `least_r(floor)` are quantised, which keeps every pair whose code can reach
+        the floor; NaN is never below it. The test is two comparisons, not |r|, which would copy
+        the block's r: 133 MB a worker on chr6's widest tile."""
         below = (r > -self._least) & (r < self._least)
         t, c = np.nonzero(~below)
         del below
-        inside = (c > t) & (c < far_stop[t])
+        # Only the far half: [cut.far] is all that reads lo, hi and codes, and the Near Band
+        # holds every pair inside near_bp.
+        inside = (c > t) & (c >= near_stop[t]) & (c < far_stop[t])
         t, c = t[inside], c[inside]
         codes = self._quantised(r[t, c], lambda at: (first + int(t[at]), first + int(c[at])))
-        keep = np.abs(codes.astype(np.int32)) >= self.floor
+        name, start, _ = self.chromosome(first)
+        position = self.positions(name)
+        keep = self.encoding.stored_mask(
+            position[first - start + t] - position[first - start + c],
+            codes,
+            near_bp=self.near_bp,
+            far_bp=self.far_bp,
+            far_code_floor=self.floor,
+        )
         return t[keep], c[keep], codes[keep]
 
     def _quantised(
@@ -572,19 +589,26 @@ class PartnerRowsStream:
         chrom: str,
         lengths: npt.NDArray[np.int64],
         encoding: REncoding,
-        partner_floor: int,
         *,
+        partner_floor: int,
+        far_floor: int,
+        near_bp: int,
+        far_bp: int,
         workers: int = 1,
         container: Path | None = None,
     ) -> None:
         """The Partner Rows of chromosome `chrom`, whose Near Band rows are `lengths` codes long
-        and whose pairs are kept at `partner_floor` within near_bp. `container` is the directory
-        the group is published into, the store's `partners/` group by default; a derivation gives
-        a directory that is not yet one (#69)."""
+        and whose pairs are kept at the floors `REncoding.partner_mask` chooses: the Partner
+        Floor within `near_bp`, the far code floor beyond it to `far_bp`. `container` is the
+        directory the group is published into, the store's `partners/` group by default; a
+        derivation gives a directory that is not yet one (#69)."""
         self._chrom = chrom
         self._encoding = encoding
         self._indptr = indptr_of(lengths)
-        self._floor = partner_floor
+        self._partner_floor = partner_floor
+        self._far_floor = far_floor
+        self._near_bp = near_bp
+        self._far_bp = far_bp
         self._rows = RowCarry(len(lengths))
         self._group = frames.FramesGroup(
             root, chrom, len(lengths), workers=workers, container=container
@@ -618,19 +642,36 @@ class PartnerRowsStream:
         # The floor is judged on the code alone, so only the codes that reach it need their pair:
         # the address rule runs on those, and never on a whole block. On EUR chr22 that is 5.0% of
         # the band's codes, and computing the other 95%'s pairs and discarding them was 37 s of
-        # the chromosome's 41 s of selection (ogld#69).
-        keep = np.abs(near) >= self._floor
-        near_lo, near_hi = near_pair_of(self._indptr[first : first + rows + 1], at[keep])
+        # the chromosome's 41 s of selection (ogld#69). The near codes are all within near_bp and
+        # the Far Pairs all beyond it, so each group is judged at its own side's boundary; the one
+        # `REncoding.partner_mask` makes the floor choice for both.
+        near_keep = self._encoding.partner_mask(
+            np.full(len(near), self._near_bp, dtype=np.int64),
+            near,
+            near_bp=self._near_bp,
+            far_bp=self._far_bp,
+            partner_code_floor=self._partner_floor,
+            far_code_floor=self._far_floor,
+        )
+        far_keep = self._encoding.partner_mask(
+            np.full(len(codes), self._far_bp, dtype=np.int64),
+            codes,
+            near_bp=self._near_bp,
+            far_bp=self._far_bp,
+            partner_code_floor=self._partner_floor,
+            far_code_floor=self._far_floor,
+        )
+        near_lo, near_hi = near_pair_of(self._indptr[first : first + rows + 1], at[near_keep])
         # The Near Band's kept pairs come first and every one of them is closer than the Far Pairs
         # of its row, so a stable sort by the earlier row gives the (lo, hi) order `RowCarry` needs.
-        rows_lo = np.concatenate([near_lo + first, lo]).astype(np.int32)
+        rows_lo = np.concatenate([near_lo + first, lo[far_keep]]).astype(np.int32)
         order = np.argsort(rows_lo, kind="stable")
-        rows_hi = np.concatenate([near_hi + first, hi]).astype(np.int32)
+        rows_hi = np.concatenate([near_hi + first, hi[far_keep]]).astype(np.int32)
         block = self._rows.complete(
             rows,
             rows_lo[order],
             rows_hi[order],
-            np.concatenate([near[keep], codes])[order],
+            np.concatenate([near[near_keep], codes[far_keep]])[order],
         )
         self._rows_in(block)
 
@@ -833,7 +874,10 @@ class Chromosome:
             name,
             lengths,
             cutter.encoding,
-            cutter.partner_floor,
+            partner_floor=cutter.partner_floor,
+            far_floor=cutter.floor,
+            near_bp=cutter.near_bp,
+            far_bp=cutter.far_bp,
             workers=compress_workers,
         )
 
@@ -947,7 +991,9 @@ class _Schedule:
     start: int
     stop: int
     near_bp: int
+    far_bp: int
     floor: int
+    far_floor: int
     encoding: REncoding
     threads: int
 
@@ -964,7 +1010,9 @@ class _Plan:
     store: Path
     encoding: REncoding
     near_bp: int
+    far_bp: int
     floor: int
+    far_floor: int
     recorded: dict[str, Any]
     ranges: dict[str, tuple[int, int]]
     named: tuple[str, ...]
@@ -1218,7 +1266,9 @@ def _plan(
         store,
         encoding,
         _integer(recorded, "near_bp", store),
+        _integer(recorded, "far_bp", store),
         floor,
+        _integer(recorded, "far_code_floor", store),
         recorded,
         ranges,
         named,
@@ -1328,7 +1378,9 @@ def _derive(
             chrom,
             *plan.ranges[chrom],
             plan.near_bp,
+            plan.far_bp,
             plan.floor,
+            plan.far_floor,
             plan.encoding,
             threads,
         )
@@ -1367,7 +1419,10 @@ def derive_partner_rows(job: _Schedule) -> int:
         job.chrom,
         lengths,
         job.encoding,
-        job.floor,
+        partner_floor=job.floor,
+        far_floor=job.far_floor,
+        near_bp=job.near_bp,
+        far_bp=job.far_bp,
         workers=job.threads,
         container=job.store / layout.PARTNERS,
     )
@@ -1512,6 +1567,11 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
 
 
 def derive_alid_mmap(path: Path) -> int:
+    """Publish the LD Store's optional local companion (ADR 0012)."""
+    return derive_variant_companion(path, provenance_key="ld_store")
+
+
+def derive_variant_companion(path: Path, *, provenance_key: str) -> int:
     """Publish an optional local companion from validated canonical arrays (ADR 0012).
 
     Serialize cooperating derivations. A private partial is fsynced before its immutable
@@ -1522,13 +1582,13 @@ def derive_alid_mmap(path: Path) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".lock").open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _derive_alid_mmap(path, directory)
+        return _derive_alid_mmap(path, directory, provenance_key)
 
 
-def _derive_alid_mmap(path: Path, directory: Path) -> int:
+def _derive_alid_mmap(path: Path, directory: Path, provenance_key: str) -> int:
     root = zarr.open_group(path, mode="r")
     rules = ("alid_index.count", "alid_index.rows", "alid_index.order", "alid_index.keys")
-    findings = validate_group(root, root.attrs.get("ld_store"), rules=rules)
+    findings = validate_group(root, root.attrs.get(provenance_key), rules=rules)
     if any(findings.values()):
         raise ValidationFailed(findings)
     existing = layout.alid_companion(root)
