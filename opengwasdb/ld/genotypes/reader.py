@@ -42,7 +42,8 @@ def _limit_blas() -> AbstractContextManager[object]:
         from threadpoolctl import threadpool_limits
     except ImportError as missing:
         raise InputError(
-            "genotype requests need threadpoolctl from pip install 'ogld[build]'"
+            "genotype requests need threadpoolctl, which ogld installs with the build extra: "
+            "pip install 'ogld[build]'"
         ) from missing
     control: AbstractContextManager[object] = threadpool_limits(limits=1, user_api="blas")
     control.__enter__()

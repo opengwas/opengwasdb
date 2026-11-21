@@ -524,10 +524,13 @@ class StoreReader:
     def clump_rows(
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
     ) -> AbstractContextManager[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]:
-        """A request-local row source restricted to clump hits where computation needs it (#91).
+        """The request-local row-source seam `clump` reads a component's partners through (#91).
 
-        Stored Partner Rows already exist, so this is a no-op for an LD Store: no arrays
-        are read and the exact same partner_row method answers each lead.
+        `clump` asks this for a callable instead of calling `partner_row` itself, so a reader
+        whose pairs are not materialised can answer from the component's hits alone. For an LD
+        Store the seam adds nothing: its Partner Rows are stored, so the callable is the same
+        `partner_row`, with no read of its own and no change to an answer or a timing. How
+        another kind restricts it is that reader's to say.
         """
         return nullcontext(partial(self.partner_row, chrom))
 

@@ -136,3 +136,13 @@ def test_invalid_scores_equal_the_test_store(genotype_store: Path, score: list[f
     for path in (TEST_STORE, genotype_store):
         with pytest.raises(ogld.Refusal, match="score"):
             ogld.open(path).clump(["absent"], score, r2=0.1, kb=3000)
+
+
+def test_missing_threadpoolctl_names_the_build_extra(
+    genotype_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[:5])
+    store = ogld.open(genotype_store)
+    monkeypatch.setitem(sys.modules, "threadpoolctl", None)
+    with pytest.raises(ogld.InputError, match=r"threadpoolctl.*build.*extra"):
+        store.matrix(names)
