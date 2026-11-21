@@ -11,6 +11,7 @@ import pytest
 import ogld
 from ogld.cli import main
 from ogld.format import REQUIRED_KEYS
+from ogld.store import StoreReader
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 
@@ -34,6 +35,53 @@ def import_args(out: Path, work: Path) -> list[str]:
         "--parts",
         str(FIXTURE),
     ]
+
+
+@pytest.fixture(scope="module")
+def joined_store(tmp_path_factory):
+    root = tmp_path_factory.mktemp("literal-joined-import")
+    out = root / "import.store"
+    assert main(import_args(out, root / "work")) == 0
+    return out
+
+
+def test_joined_chromosome_two_has_literal_signed_codes(joined_store) -> None:
+    with ogld.open(joined_store) as store:
+        result = store.matrix(["2:1:A:C", "2:2:A:G", "2:4000001:A:G"])
+        np.testing.assert_array_equal(
+            result.r * 2047,
+            [[2047, -1024, -1024], [-1024, 2047, -512], [-1024, -512, 2047]],
+        )
+
+
+def test_joined_cross_chromosome_pairs_are_not_measured(joined_store) -> None:
+    with ogld.open(joined_store) as store:
+        result = store.matrix(["1:1:A:C", "2:2:A:G"])
+        np.testing.assert_array_equal(result.r, [[1, np.nan], [np.nan, 1]])
+        np.testing.assert_array_equal(
+            result.kinds(), [["stored", "not_measured"], ["not_measured", "stored"]]
+        )
+
+
+def test_joined_alid_lookups_name_literal_global_rows_on_both_chromosomes(joined_store) -> None:
+    with StoreReader.open(joined_store) as reader:
+        rows = reader.rows_of(["2:4000001:A:G", "1:1:A:C", "2:1:A:C", "1:4000001:A:G", "2:99:A:C"])
+        np.testing.assert_array_equal(rows, [5, 0, 3, 2, -1])
+        np.testing.assert_array_equal(
+            reader.alids_of(np.array([0, 3, 5])), ["1:1:A:C", "2:1:A:C", "2:4000001:A:G"]
+        )
+
+
+def test_joined_component_counts_are_literal_sums(joined_store) -> None:
+    with ogld.open(joined_store) as store:
+        # Per chromosome: one Near Band pair, two far candidates/pairs, six directed partners.
+        assert store.provenance["counts"] == {
+            "near_pairs": 2,
+            "far_candidates": 4,
+            "far_pairs": 4,
+            "partner_entries": 12,
+            "alids_left_out": 0,
+        }
 
 
 @pytest.mark.parametrize("alias", ["direct", "supplied-symlink", "cache-symlink"])
