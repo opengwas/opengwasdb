@@ -125,14 +125,16 @@ def test_joined_component_counts_are_literal_sums(joined_store) -> None:
 
 
 def test_cli_delete_preserves_supplied_parts_and_deletes_only_downloads(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ) -> None:
     work = tmp_path / "work"
     cache = work / "parts"
+    cache.mkdir(parents=True)
     supplied = tmp_path / "supplied"
     supplied.mkdir()
     original = (FIXTURE / "part-0").read_bytes()
     (supplied / "part-0").write_bytes(original)
+    (cache / "part-0").write_bytes(original)
     fetches = []
 
     def fetch(url, *, timeout):
@@ -146,10 +148,12 @@ def test_cli_delete_preserves_supplied_parts_and_deletes_only_downloads(
     assert main([*args, "--delete-parts"]) == 0
     assert fetches == ["part-1"]
     assert (supplied / "part-0").read_bytes() == original
+    assert (cache / "part-0").read_bytes() == original
     assert not (cache / "part-1").exists()
     assert not (supplied / "part-1").exists()
     assert json.loads((cache / ".sha256/part-0.json").read_text())["downloaded"] is False
     assert json.loads((cache / ".sha256/part-1.json").read_text())["downloaded"] is True
+    assert "kept 1 unowned part" in capsys.readouterr().out
 
 
 def test_cli_import_writes_literal_signed_codes_and_complete_provenance(tmp_path, capsys) -> None:

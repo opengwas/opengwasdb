@@ -272,6 +272,7 @@ def _import(
     paths = []
     losses: Counter[str] = Counter()
     remaining = Counter(part for chrom in plan["chromosomes"].values() for part in chrom["parts"])
+    kept = 0
     for name in sorted(plan["chromosomes"], key=chromosome_rank):
         chromosome = plan["chromosomes"][name]
         destination = inputs.work / f"{name}.store"
@@ -292,7 +293,7 @@ def _import(
         losses.update(closed["variants_dropped"])
         remaining.subtract(chromosome["parts"])
         if inputs.delete_parts:
-            parts.delete([part for part in chromosome["parts"] if not remaining[part]])
+            kept += parts.delete([part for part in chromosome["parts"] if not remaining[part]])
         if on_chromosome is not None:
             on_chromosome(name)
     assembled = inputs.work / "assembled.store"
@@ -306,4 +307,6 @@ def _import(
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     assembled.rename(out)
+    if kept:
+        print(f"kept {kept} unowned {'part' if kept == 1 else 'parts'}")
     return made

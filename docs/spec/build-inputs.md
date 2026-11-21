@@ -484,8 +484,10 @@ reads it.
   disjoint after resolving symlinks: an alias or containment in either
   direction is refused before receipts or downloads are written. Files
   supplied at invocation also remain protected by file identity. Receipts
-  without ownership evidence never permit deletion. Without it, parts are retained. `--threads` bounds compression/validation
-  workers. Only one chromosome's source working set is live at a time.
+  without ownership evidence never permit deletion. The import summary reports
+  how many parts were kept because the importer did not own them. Without
+  `--delete-parts`, parts are retained. `--threads` bounds compression and
+  validation workers. Only one chromosome's source working set is live at a time.
 - Closed immutable chromosome components are joined by `StoreWriter.join`
   using hard links on the same filesystem. Variant columns are concatenated
   in engine order, with chromosome-local LD coordinates unchanged. A join

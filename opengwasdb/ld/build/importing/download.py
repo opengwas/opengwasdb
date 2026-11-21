@@ -203,10 +203,17 @@ class Parts:
             and not path.is_symlink()
         )
 
-    def delete(self, names: list[str]) -> None:
-        """Only unlink the recorded downloads, never supplied files or their path aliases."""
+    def delete(self, names: list[str]) -> int:
+        """Unlink recorded downloads and count logical parts retained as unowned."""
+        kept = 0
         for name in names:
             record = self._record(name)
             path = self.cache / name
-            if path.exists() and self._owned(path, record):
-                path.unlink()
+            retained = self.local is not None and (self.local / name).exists()
+            if path.exists():
+                if self._owned(path, record):
+                    path.unlink()
+                else:
+                    retained = True
+            kept += int(retained)
+        return kept
