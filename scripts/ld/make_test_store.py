@@ -43,11 +43,11 @@ import zarr
 
 import ogld
 from ogld.build import diagnostic, record, tiles
-from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import fileset, read_keep
 from ogld.build.pc_check import K_MIN
 from ogld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
 from ogld.format.geometry import chromosome_ranges, local_rows
+from ogld.genotypes import Genotypes
 from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from ogld.store import StoreWriter, Variants
 

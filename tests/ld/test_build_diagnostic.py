@@ -21,7 +21,8 @@ import pytest
 import testdata
 
 import ogld
-from ogld.build import adjust, diagnostic, record
+from ogld import genotypes as adjust
+from ogld.build import diagnostic, record
 from ogld.format import InputError
 from ogld.store import StoreReader
 
@@ -149,7 +150,7 @@ def test_a_variant_the_covariates_span_has_no_variance_left() -> None:
     _, flat = adjust.residuals(np.vstack([spanned, free]), covariates)
     assert flat.tolist() == [True, False]
     with pytest.raises(ValueError, match="no residual variance"):
-        adjust.unit_vectors(np.vstack([spanned, free]), covariates, np.array([True, True]))
+        adjust.prepare(np.vstack([spanned, free]), covariates, np.array([True, True]))
 
 
 def test_the_package_owns_the_long_range_ld_regions() -> None:

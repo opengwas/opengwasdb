@@ -11,18 +11,39 @@ pgenlib is imported here, inside the read path only (ADR 0002, decision 10).
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager, ExitStack
+from pathlib import Path
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 import numpy.typing as npt
-import zarr
 
-from ogld.build.inputs import Fileset
 from ogld.format import InputError
 
 T = TypeVar("T")
+D = TypeVar("D", np.float64, np.int8)
+
+
+class PgenFileset(Protocol):
+    """The read-only input description; builders supply their Fileset without an upward import."""
+
+    @property
+    def pgen(self) -> Path: ...
+
+    @property
+    def psam(self) -> Path: ...
+
+    @property
+    def subset(self) -> npt.NDArray[np.uint32]: ...
+
+    @property
+    def order(self) -> npt.NDArray[np.int64] | None: ...
+
+    @property
+    def samples(self) -> int: ...
+
+    @property
+    def panel(self) -> str: ...
 
 
 def import_pgenlib() -> Any:
@@ -37,32 +58,10 @@ def import_pgenlib() -> Any:
     return pgenlib
 
 
-def bounded(threads: int) -> AbstractContextManager[object]:
-    """The build's thread bound, until the context closes (review of ogld#5): BLAS runs one
-    thread, since every parallel part of a build runs on its own `threads` workers, and zarr's
-    pool, which encodes the store's chunks, runs at most `threads`. OpenBLAS otherwise starts a
-    thread per core in each matrix product, and zarr's default pool adds 28 to the write.
-
-    The caller's zarr setting is restored on exit. zarr makes its pool once, on first use, so
-    the cap holds when the build is its process's first zarr work, as `ogld build` is.
-    threadpoolctl comes with the build extra, as pgenlib does."""
-    try:
-        from threadpoolctl import threadpool_limits
-    except ImportError as missing:
-        raise InputError(
-            "a build bounds its threads with threadpoolctl, which ogld installs with the build "
-            "extra: pip install 'ogld[build]'"
-        ) from missing
-    stack = ExitStack()
-    stack.enter_context(threadpool_limits(limits=1, user_api="blas"))
-    stack.enter_context(zarr.config.set({"threading.max_workers": threads}))
-    return stack
-
-
 class Genotypes:
     """One fileset's genotypes, open for reading: [variants, samples] float64 ALT dosages."""
 
-    def __init__(self, fileset: Fileset) -> None:
+    def __init__(self, fileset: PgenFileset) -> None:
         self._fileset = fileset
         pgenlib = import_pgenlib()
         self._reader = self._read(
@@ -99,7 +98,7 @@ class Genotypes:
     ) -> None:
         self._reader.close()
 
-    def _ordered(self, out: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    def _ordered(self, out: npt.NDArray[D]) -> npt.NDArray[D]:
         order = self._fileset.order
         return out if order is None else np.ascontiguousarray(out[:, order])
 
@@ -116,4 +115,22 @@ class Genotypes:
         out = np.empty((len(wanted), len(self._fileset.subset)), dtype=np.float64)
         if len(wanted):
             self._read(lambda: self._reader.read_dosages_list(wanted.astype(np.uint32), out))
+        return self._ordered(out)[back]
+
+    def range_int8(self, first: int, stop: int) -> npt.NDArray[np.int8]:
+        """Hard calls only, with missing calls still −9 for the caller's named refusal.
+
+        This path deliberately does not substitute for float64 dosage reads (ADR 0013).
+        """
+        out = np.empty((stop - first, len(self._fileset.subset)), dtype=np.int8)
+        if stop > first:
+            self._read(lambda: self._reader.read_range(first, stop, out))
+        return self._ordered(out)
+
+    def rows_int8(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int8]:
+        """Hard calls at the requested rows, retaining duplicates and sample order."""
+        wanted, back = np.unique(rows, return_inverse=True)
+        out = np.empty((len(wanted), len(self._fileset.subset)), dtype=np.int8)
+        if len(wanted):
+            self._read(lambda: self._reader.read_list(wanted.astype(np.uint32), out))
         return self._ordered(out)[back]

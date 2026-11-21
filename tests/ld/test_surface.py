@@ -172,7 +172,7 @@ def test_a_pgen_read_without_pgenlib_refuses_naming_the_extra() -> None:
         "sys.modules['pgenlib'] = None\n"
         "from pathlib import Path\n"
         "import ogld\n"
-        "from ogld.build.genotypes import Genotypes\n"
+        "from ogld.genotypes import Genotypes\n"
         "from ogld.build.inputs import fileset, read_keep\n"
         f"pgen, keep = Path({str(panel.pgen)!r}), Path({str(panel.keep)!r})\n"
         "opened = fileset(pgen, read_keep(keep, 'p'), None, 'p')\n"
