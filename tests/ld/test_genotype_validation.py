@@ -48,3 +48,111 @@ def test_corrupted_sidecar_fails_validation(
     assert main(["validate", str(copy)]) == 1
     findings = ogld.validate(copy)
     assert findings["genotypes.inputs" if fault == "hash" else "genotypes.arrays"]
+
+
+def _copy(genotype_store: Path, tmp_path: Path) -> tuple[Path, zarr.Group, dict]:
+    """A private copy whose pins point at the original inputs, its companion dropped."""
+    copy = tmp_path / "sidecar"
+    shutil.copytree(genotype_store, copy)
+    root = zarr.open_group(copy, mode="a")
+    record = dict(root.attrs["genotype_store"])
+    for fileset in record["filesets"]:
+        for name in ("pgen", "psam", "pvar"):
+            pin = fileset[name]
+            pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    for pin in record["inputs"]:
+        pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    if "alid_mmap" in root.attrs:
+        del root.attrs["alid_mmap"]
+    return copy, root, record
+
+
+def _rewrite(copy: Path, record: dict, name: str, change) -> None:
+    """Change one array's contents and record the new file's hash, so later checks are reached."""
+    from ogld.store import layout
+
+    path = copy / "genotypes" / f"{name}.npy"
+    array = np.load(path, mmap_mode="r+")
+    change(array)
+    array.flush()
+    del array
+    record["arrays"][name]["sha256"] = layout.file_sha256(path)
+
+
+def _save(root: zarr.Group, record: dict) -> None:
+    root.attrs["genotype_store"] = record
+
+
+def test_a_sidecar_claiming_an_ld_store_is_refused(genotype_store: Path, tmp_path: Path) -> None:
+    copy, root, _ = _copy(genotype_store, tmp_path)
+    root.attrs["ld_store"] = {}
+    findings = ogld.validate(copy)
+    assert findings["genotypes.provenance"], "a root of both kinds is not a Genotype Store"
+
+
+def test_an_unsupported_sidecar_version_is_refused(genotype_store: Path, tmp_path: Path) -> None:
+    copy, root, record = _copy(genotype_store, tmp_path)
+    record["format_version"] = "9.9.9"
+    _save(root, record)
+    findings = ogld.validate(copy)
+    assert findings["genotypes.provenance"], "an unknown Genotype Store version is refused"
+
+
+@pytest.mark.parametrize("key", ["panel", "adjustment", "filesets", "arrays", "inputs"])
+def test_a_provenance_key_of_the_wrong_type_is_refused(
+    genotype_store: Path, tmp_path: Path, key: str
+) -> None:
+    copy, root, record = _copy(genotype_store, tmp_path)
+    record[key] = 5
+    _save(root, record)
+    findings = ogld.validate(copy)
+    assert findings["genotypes.provenance"], f"a numeric {key} is not a provenance record"
+
+
+def test_a_sidecar_recording_no_fileset_is_refused(genotype_store: Path, tmp_path: Path) -> None:
+    copy, root, record = _copy(genotype_store, tmp_path)
+    record["filesets"] = []
+    _save(root, record)
+    findings = ogld.validate(copy)
+    assert findings["genotypes.provenance"], "a sidecar without a fileset has no inputs"
+
+
+def test_an_array_whose_shape_disagrees_with_n_is_refused(
+    genotype_store: Path, tmp_path: Path
+) -> None:
+    copy, root, record = _copy(genotype_store, tmp_path)
+    record["panel"]["n"] += 1
+    _save(root, record)
+    findings = ogld.validate(copy)
+    assert findings["genotypes.arrays"], "the basis is not n × (k + 1) any more"
+
+
+def test_a_basis_that_is_not_orthonormal_is_refused(genotype_store: Path, tmp_path: Path) -> None:
+    copy, root, record = _copy(genotype_store, tmp_path)
+    _rewrite(copy, record, "basis", lambda array: array.__setitem__((slice(None), 0), 0.0))
+    _save(root, record)
+    findings = ogld.validate(copy)
+    assert findings["genotypes.arrays"], "a basis whose columns are not orthonormal is refused"
+
+
+@pytest.mark.parametrize(
+    ("name", "change", "message"),
+    [
+        ("projection", lambda array: array.__setitem__((0, 0), np.nan), "nonfinite projection"),
+        ("norm", lambda array: array.__setitem__(0, np.inf), "nonfinite norm"),
+        ("norm", lambda array: array.__setitem__(0, 0.0), "nonpositive residual norm"),
+        ("sign", lambda array: array.__setitem__(0, 2.0), "A1 sign"),
+        ("fileset", lambda array: array.__setitem__(0, 99), "fileset index"),
+        ("pgen_row", lambda array: array.__setitem__(0, -1), "pgen row"),
+    ],
+)
+def test_a_bad_adjustment_value_is_refused(
+    genotype_store: Path, tmp_path: Path, name: str, change, message: str
+) -> None:
+    copy, root, record = _copy(genotype_store, tmp_path)
+    _rewrite(copy, record, name, change)
+    _save(root, record)
+    findings = ogld.validate(copy)
+    assert findings["genotypes.arrays"], f"a bad {name} is refused"
+    why = findings["genotypes.arrays"][0].message
+    assert message in why, why

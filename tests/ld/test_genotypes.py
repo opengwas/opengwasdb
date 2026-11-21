@@ -145,3 +145,19 @@ def test_a_missing_call_is_not_hidden_by_either_read_path(tmp_path: Path) -> Non
         InputError, match=rf"panel {made.PANEL_ID}.*1 missing.*{testdata.variants().id[1]}"
     ):
         ogld.build(made.inputs(pgen), tmp_path / "store")
+
+
+def test_rows_into_refuses_a_buffer_of_another_size_or_layout() -> None:
+    """The caller's buffer must be one row per variant and as many kept samples, contiguous."""
+    from ogld.build.passes import plan
+    from ogld.genotypes import Genotypes
+
+    p = testdata.panel()
+    fileset = plan((p.pgen,), p.keep, None, made.PANEL_ID).filesets[0]
+    with Genotypes(fileset) as reader:
+        rows = np.array([0, 1], dtype=np.int64)
+        with pytest.raises(ValueError, match="contiguous"):
+            reader.rows_into(rows, np.empty((1, len(fileset.subset)), dtype=np.float64))
+        strided = np.empty((2, 2 * len(fileset.subset)), dtype=np.float64)[:, ::2]
+        with pytest.raises(ValueError, match="contiguous"):
+            reader.rows_into(rows, strided)
