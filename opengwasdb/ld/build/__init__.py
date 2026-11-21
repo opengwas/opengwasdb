@@ -263,7 +263,7 @@ def _adjustment(inputs: BuildInputs, plan: passes.Plan, chosen: passes.Choice) -
 def build_genotypes(
     inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1
 ) -> Provenance:
-    """Build a local sidecar over existing pgens, without materialising pairwise LD (ADR 0015).
+    """Build a local sidecar over existing pgens, without materialising pairwise LD (ADR 0014).
 
     Variant Set selection, PC Check, sample ordering and FLAT drops are the LD builder's.
     The PC Diagnostic is null: computing the entire Near Band only for its diagnostic would

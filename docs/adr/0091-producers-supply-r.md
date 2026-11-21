@@ -5,6 +5,10 @@
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
+> **ADR 0013 supersedes §5's builder unit vectors** ([ADR 0013](./0013-shared-genotype-arithmetic.md), #90).
+> The builder computes r through `ogld.genotypes.r(rows, span)` over prepared `Block`s, not from
+> an array of unit vectors; §5's memory bound and the rest of the record stand.
+
 Issue [#17](https://github.com/opengwas/ogld/issues/17), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The format is in `docs/spec/ld-store.md` (§3–§7, §12); the owners are in
 `docs/architecture/ownership.md`, "Provenance and what goes in a store"; the terms are in `CONTEXT.md`.

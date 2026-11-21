@@ -1,4 +1,4 @@
-"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0015).
+"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0014).
 
 `GenotypeReader` satisfies `ogld.query.reader.Reader` structurally, as `StoreReader` does: it
 composes the same `OpenedStore` and `VariantTable` and holds its own computed-LD half, rather
@@ -267,7 +267,7 @@ class GenotypeReader(ComponentWorkers):
                     calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
         # Completeness was checked by Variant Set selection. Inputs are pinned on open and
         # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
-        # pass without adding integrity beyond that contract (ADR 0015).
+        # pass without adding integrity beyond that contract (ADR 0014).
         return Block(calls, a["projection"][rows], a["norm"][rows], a["sign"][rows])
 
     def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
