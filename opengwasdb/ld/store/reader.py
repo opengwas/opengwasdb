@@ -510,9 +510,7 @@ class StoreReader:
 
     def clump_rows(
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
-    ) -> AbstractContextManager[
-        Callable[[int], tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]]
-    ]:
+    ) -> AbstractContextManager[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]:
         """A request-local row source restricted to clump hits where computation needs it (#91).
 
         Stored Partner Rows already exist, so this is a no-op for an LD Store: no arrays

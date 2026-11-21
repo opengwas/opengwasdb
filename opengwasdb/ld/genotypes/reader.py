@@ -10,15 +10,26 @@ from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
-from threadpoolctl import threadpool_limits
 
-from ogld.format import InputError, Provenance, REncoding
+from ogld.format import Codes, InputError, Provenance, REncoding
 from ogld.genotypes.adjust import Block, r
 from ogld.genotypes.pgen import Genotypes, import_pgenlib
 from ogld.genotypes.sidecar import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from ogld.store import StoreReader
 from ogld.store.location import ChunkCache, OpenedStore, open_group
 from ogld.store.variants import VariantTable
+
+
+@contextmanager
+def _one_blas_thread() -> Iterator[None]:
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError as missing:
+        raise InputError(
+            "genotype requests need threadpoolctl from pip install 'ogld[build]'"
+        ) from missing
+    with threadpool_limits(limits=1, user_api="blas"):
+        yield
 
 
 class GenotypeReader(StoreReader):
@@ -90,7 +101,7 @@ class GenotypeReader(StoreReader):
         out = np.full((len(rows), len(rows)), np.nan)
         chrom, position = self.loci_of(rows)
         p = self.provenance
-        with threadpool_limits(limits=1, user_api="blas"):
+        with _one_blas_thread():
             for name in np.unique(chrom):
                 at = np.flatnonzero(chrom == name)
                 block = self._data(rows[at])
@@ -110,20 +121,18 @@ class GenotypeReader(StoreReader):
     def region_r(self, start: int, stop: int) -> npt.NDArray[np.float64]:
         return self.pair_r(np.arange(start, stop, dtype=np.int64))
 
-    def partner_row(
-        self, chrom: str, row: int
-    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+    def partner_row(self, chrom: str, row: int) -> tuple[npt.NDArray[np.int32], Codes]:
         start, _ = self.chromosome_range(chrom)
         lead = start + row
         position = int(self.loci_of(np.array([lead], dtype=np.int64))[1][0])
         far = self.provenance["far_bp"]
         rows = self.rows_in(chrom, position - far, position + far)
-        with threadpool_limits(limits=1, user_api="blas"):
+        with _one_blas_thread():
             return self._partners(start, lead, rows, self._data(rows))
 
     def partner_rows(
         self, chrom: str, local_rows: npt.NDArray[np.int64]
-    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int32], Codes]:
         pairs = [self.partner_row(chrom, int(row)) for row in local_rows]
         indptr = np.r_[0, np.cumsum([len(pair[0]) for pair in pairs])].astype(np.int64)
         if not pairs:
@@ -133,16 +142,16 @@ class GenotypeReader(StoreReader):
     @contextmanager
     def clump_rows(
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
-    ) -> Iterator[Callable[[int], tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]]]:
+    ) -> Iterator[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]:
         start, _ = self.chromosome_range(chrom)
         hits = rows + start
         positions = self.loci_of(hits)[1]
         # This is component-local working memory, released when its greedy ends, not a call cache.
         # No non-hit is decoded and no eliminated lead's correlation row is computed.
-        with threadpool_limits(limits=1, user_api="blas"):
+        with _one_blas_thread():
             block = self._data(hits)
 
-            def partners(row: int) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+            def partners(row: int) -> tuple[npt.NDArray[np.int32], Codes]:
                 lead = row + start
                 at = int(np.searchsorted(hits, lead))
                 lo = int(np.searchsorted(positions, positions[at] - window))
@@ -158,7 +167,7 @@ class GenotypeReader(StoreReader):
         rows: npt.NDArray[np.int64],
         block: Block,
         position: npt.NDArray[np.int64] | None = None,
-    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int16]]:
+    ) -> tuple[npt.NDArray[np.int32], Codes]:
         at = int(np.searchsorted(rows, lead))
         codes = self.encoding.quantise(r(block[at : at + 1], block))[0]
         if position is None:
