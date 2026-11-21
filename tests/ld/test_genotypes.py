@@ -65,14 +65,15 @@ def test_codes_equal_the_independently_built_test_store_for_every_stored_pair() 
 
 @pytest.mark.parametrize("k", [0, 10])
 @pytest.mark.parametrize("scale", [511, 32767])
-def test_codes_are_identical_across_threads_block_sizes_and_single_rows(k: int, scale: int) -> None:
+def test_codes_are_identical_at_one_and_eight_blas_threads(k: int, scale: int) -> None:
+    """#90's criterion: identical codes at 1 and 8 BLAS threads, and at two block sizes."""
     from ogld.genotypes import covariates, prepare, r
 
     rows = np.flatnonzero(testdata.variants().passes_filters)
     calls = made.hard_calls()[rows].astype(np.float64)
     enc = REncoding(scale)
     expected = None
-    for threads in (1, 4):
+    for threads in (1, 8):
         with threadpool_limits(limits=threads, user_api="blas"):
             cov = covariates(
                 list(testdata.pcs().names[:k]), testdata.pcs().values[:, :k], calls.shape[1]
