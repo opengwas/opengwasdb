@@ -223,7 +223,7 @@ def _write(
 
 
 def _closed(path: Path) -> Provenance | None:
-    if not path.exists():
+    if not (path / "zarr.json").exists():
         return None
     root = zarr.open_group(str(path), mode="r")
     return cast(Provenance | None, root.attrs.get("ld_store"))

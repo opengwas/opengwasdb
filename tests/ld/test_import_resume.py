@@ -66,6 +66,20 @@ def test_restart_does_not_fetch_closed_deleted_chromosome(complete_import, tmp_p
         )
 
 
+def test_restart_rebuilds_chromosome_interrupted_before_root_metadata(
+    complete_import, tmp_path
+) -> None:
+    original, _ = complete_import
+    work = tmp_path / "work"
+    unfinished = work / "1.store"
+    unfinished.mkdir(parents=True)
+    assert not (unfinished / "zarr.json").exists()
+    out = tmp_path / "resumed.store"
+    import_panukb(replace(original, work=work), out)
+    with ogld.open(out) as store:
+        assert store.provenance["n_variants"] == 6
+
+
 def test_restart_refuses_changed_ledger_after_part_deletion(complete_import, tmp_path) -> None:
     original, _ = complete_import
     ledger = tmp_path / "ledger.json"

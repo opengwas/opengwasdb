@@ -63,5 +63,7 @@ def read_part(path: Path) -> npt.NDArray[np.float64]:
         return np.frombuffer(decoded, dtype="<f8", offset=9).reshape(
             (rows, cols), order="C" if row_major else "F"
         )
+    except InputError:
+        raise
     except (ValueError, RuntimeError, OSError) as corrupt:
         raise ValueError(f"{path}: {corrupt}") from corrupt
