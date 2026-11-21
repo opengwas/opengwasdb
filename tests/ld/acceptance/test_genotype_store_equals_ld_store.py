@@ -8,13 +8,16 @@ Store and the Genotype Store sidecar built from the same pgens — and compares 
   the whole panel;
 - all 37 Analyses over the whole panel at r² 0.01 and 0.001 (74 requests; a refusal is compared
   by reason, and within 3 Mb the stores refuse 0.001 at their Partner Threshold);
-- #19's chr22 suite: matrices with absent, malformed and duplicate names, a filled matrix, a
-  region, proxies and clump at several thresholds, and the refusals;
-- per chromosome, a 3 Mb region, and one whole-genome matrix of 1,000 seeded-random variants.
+- #19's 50 frozen chr22 requests (`chr22_workload_19.json`, from
+  `9448650:prototypes/19_genotype_store/results/workload.json`): the 500-variant matrix, the
+  region, both proxies, the 37 Analyses' chr22 clumps, and the ten edge and refusal requests;
+- per chromosome, a 3 Mb region, plus one whole-genome matrix of 1,000 seeded-random variants.
 
 Every comparison is against the LD Store, code for code: the matrices' r and kinds, the regions',
-the proxies' columns and the clumps' leads and joined r. An input that is unset or missing fails
-the run; it never skips.
+the proxies' columns and the clumps' leads and joined r. A comparison whose answers hold nothing
+proves nothing, so every one asserts its answer is non-empty (or, for the deliberately empty edge
+requests, exactly what emptiness it expects) before comparing. An input that is unset or missing
+fails the run; it never skips.
 
 Environment (`tests/acceptance/run_genotypes.sh` sets the defaults):
 
@@ -27,6 +30,8 @@ Environment (`tests/acceptance/run_genotypes.sh` sets the defaults):
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -42,6 +47,7 @@ KB = 3000
 REGION_BP = 1_500_000
 MATRIX_VARIANTS = 1_000
 SEED = 91
+FROZEN = Path(__file__).with_name("chr22_workload_19.json")
 
 
 def named(variable: str, what: str) -> Path:
@@ -76,12 +82,36 @@ def analyses() -> list[tuple[str, list[str], np.ndarray]]:
     return loaded
 
 
+@pytest.fixture(scope="session")
+def frozen() -> dict[str, Any]:
+    """#19's frozen chr22 workload, and the input hashes it names."""
+    spec: dict[str, Any] = json.loads(FROZEN.read_text())
+    assert spec["frozen_from"].endswith("results/workload.json")
+    assert len(spec["matrix"]) == 500
+    assert len(spec["analyses"]) == 37
+    return spec
+
+
 def outcome(store: ogld.LDStore, method: str, *args: Any, **kwargs: Any) -> Any:
     """A query's answer, or its refusal by reason: a refusal is an answer to compare too."""
     try:
         return getattr(store, method)(*args, **kwargs)
     except ogld.Refusal as refused:
         return ("refusal", refused.reason)
+
+
+def assert_meaningful(answer: Any, method: str, label: str) -> None:
+    """An empty pair of answers passes both ways and proves nothing (CLAUDE.md)."""
+    if isinstance(answer, tuple):
+        return
+    if method in ("matrix", "region"):
+        assert answer.r.size, f"{label}: the answer has no row"
+        assert int(np.isfinite(answer.r).sum()) > 1, f"{label}: the answer holds no pair"
+    elif method == "proxies":
+        assert len(answer) > 0, f"{label}: the answer holds no proxy"
+    else:
+        assert len(answer) > 0, f"{label}: the answer holds no variant"
+        assert len(answer.leads()) > 0, f"{label}: the answer holds no lead"
 
 
 def assert_equal(actual: Any, expected: Any, label: str) -> None:
@@ -107,9 +137,14 @@ def compare(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     label: str,
+    *,
+    meaningful: bool = True,
 ) -> None:
     theirs = outcome(ld, method, *args, **kwargs)
     ours = outcome(genotype, method, *args, **kwargs)
+    if meaningful:
+        assert_meaningful(theirs, method, f"{label} (LD Store)")
+        assert_meaningful(ours, method, f"{label} (Genotype Store)")
     assert_equal(ours, theirs, label)
     if (
         method in ("matrix", "region")
@@ -190,37 +225,95 @@ def test_the_37_analyses_equal_the_ld_store_at_both_thresholds(
     )
 
 
-def test_the_chr22_suite_equals_the_ld_store(
+def test_19_s_fifty_chr22_requests_equal_the_ld_store(
     stores: tuple[ogld.LDStore, ogld.LDStore],
     analyses: list[tuple[str, list[str], np.ndarray]],
+    frozen: dict[str, Any],
 ) -> None:
+    """#19's frozen suite, request for request: its matrix, region, proxies, clumps and edges."""
     genotype, ld = stores
-    _, alids, scores = next(case for case in analyses if case[0] == TARGET)
-    on_chr22 = chr22(alids)
-    assert len(on_chr22) > 10, "the target must have chr22 hits for this suite to mean anything"
-    names, chr22_scores = held(ld, alids, scores, on_chr22)
-    first = names[0]
-    requests: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
-        ("matrix", (names[:10],), {}),
-        ("matrix", (names[:10][::-1],), {}),
-        ("matrix", ([first, "not-an-alid", first, names[1]],), {}),
-        ("matrix", (["22:1:A:C"],), {}),
-        ("matrix", ([],), {}),
-        ("matrix", (names[:2],), {"fill": 0.0}),
-        ("region", ("22", 25_000_000, REGION_BP), {}),
-        ("region", ("22", 25_000_000, REGION_BP), {"fill": 0.0}),
-        ("region", ("22", 32_000_000, 5_000_001), {}),
-        ("proxies", ([first],), {"r2": 0.01, "kb": KB}),
-        ("proxies", ([first],), {"r2": 0.01, "kb": 10_000}),
-        ("proxies", ([first],), {"r2": 0.001, "kb": KB}),
-        ("proxies", ([first],), {"r2": 0.8, "kb": 10_001}),
-        ("clump", ([first], [1.0]), {"r2": 0.01, "kb": KB}),
-        ("clump", ([first], [1.0]), {"r2": 0.001, "kb": KB}),
-        ("clump", (names, chr22_scores), {"r2": 0.01, "kb": KB}),
-        ("clump", (names, chr22_scores), {"r2": 0.01, "kb": 5000}),
+    compared = 0
+    compare(genotype, ld, "matrix", (frozen["matrix"],), {}, "19: 500-variant matrix")
+    compared += 1
+    compare(genotype, ld, "region", tuple(frozen["region"]), {}, "19: region")
+    compared += 1
+    for settings in frozen["proxies"]:
+        compare(
+            genotype,
+            ld,
+            "proxies",
+            (frozen["proxy_alids"],),
+            settings,
+            f"19: proxies {settings}",
+        )
+        compared += 1
+    analyses_by_name = {entry["name"]: entry for entry in frozen["analyses"]}
+    for name, alids, scores in analyses:
+        entry = analyses_by_name[name]
+        source = named("OGLD_403_ANALYSES", "#403's 37 Analyses' hits") / name / "hits.tsv"
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == entry["source_sha256"], (
+            f"{source} is not the frozen input #19 measured"
+        )
+        indexes = chr22(alids)
+        assert len(indexes) == entry["hits_chr22"], f"{name}: the frozen chr22 hit count differs"
+        names, hits = [alids[i] for i in indexes], scores[indexes]
+        settings = {"r2": frozen["clump_r2"], "kb": frozen["clump_kb"]}
+        if entry["hits_chr22"]:
+            compare(genotype, ld, "clump", (names, hits), settings, f"19: clump {name}")
+        else:
+            # Ten frozen Analyses have no chr22 hit: their request is empty by input, and the
+            # assertion that means something is that the fixture is empty and both answers are.
+            assert len(ld.clump(names, hits, **settings)) == 0, f"{name}: the fixture is not empty"
+            compare(
+                genotype,
+                ld,
+                "clump",
+                (names, hits),
+                settings,
+                f"19: clump {name}",
+                meaningful=False,
+            )
+            assert len(genotype.clump(names, hits, **settings)) == 0
+        compared += 1
+    assert compared == 37 + 1 + 1 + len(frozen["proxies"])
+    first, last = frozen["matrix"][0], frozen["matrix"][-1]
+    edges: list[tuple[str, list[str], dict[str, Any]]] = [
+        ("absent_duplicate", [first, "22:1:A:C", first, "not-an-alid"], {}),
+        ("all_absent", ["22:1:A:C", "not-an-alid"], {}),
+        ("empty", [], {}),
+        ("explicit_fill", [first, last], {"fill": 0.0}),
     ]
-    for method, args, kwargs in requests:
-        compare(genotype, ld, method, args, kwargs, f"chr22 {method} {args[1:2]} {kwargs}")
+    for label, names, kwargs in edges:
+        compare(genotype, ld, "matrix", (names,), kwargs, f"19: {label}", meaningful=False)
+        answer = genotype.matrix(names, **kwargs)
+        if label == "absent_duplicate":
+            assert answer.absent == ("22:1:A:C", "not-an-alid")
+            assert len(answer.r) == 2
+            assert np.isfinite(answer.r).all()
+        elif label == "all_absent":
+            assert answer.absent == ("22:1:A:C", "not-an-alid")
+            assert answer.r.shape == (0, 0)
+        elif label == "empty":
+            assert answer.absent == ()
+            assert answer.r.shape == (0, 0)
+        else:
+            assert answer.fill == 0.0
+            assert np.isfinite(answer.r).all()
+        compared += 1
+    refusals: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
+        ("proxies", ([first],), {"r2": 0.001, "kb": KB}),
+        ("proxies", ([first],), {"r2": 0.01, "kb": 10_000}),
+        ("proxies", ([first],), {"r2": 0.8, "kb": 10_001}),
+        ("clump", ([first], [1.0]), {"r2": 0.001, "kb": KB}),
+        ("region", ("22", 32_000_000, 5_000_001), {}),
+    ]
+    for method, args, kwargs in refusals:
+        theirs = outcome(ld, method, *args, **kwargs)
+        assert isinstance(theirs, tuple), f"19: {method} {kwargs} is not the store's refusal"
+        assert theirs[0] == "refusal", f"19: {method} {kwargs} is not the store's refusal"
+        assert_equal(outcome(genotype, method, *args, **kwargs), theirs, f"19: refusal {method}")
+        compared += 1
+    assert compared == 50, f"#19's suite is 50 requests; this run made {compared}"
 
 
 def test_each_chromosome_s_region_and_a_whole_genome_matrix_equal_the_ld_store(
