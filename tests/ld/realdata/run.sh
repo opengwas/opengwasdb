@@ -13,6 +13,7 @@ cd "$(dirname "$0")/../.."
 PREFLIGHT=(
   "tests/realdata/test_build_panel.py"
   "tests/realdata/test_derive_partners_workers.py"
+  "tests/realdata/test_genotype_threads.py"
   "tests/realdata/test_query_panel.py"
 )
 
