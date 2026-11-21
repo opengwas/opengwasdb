@@ -138,7 +138,7 @@ class StoreWriter:
         """
         from ogld.store.joining import joined
 
-        root, cutter, ranges, tally = joined(location, chromosomes)
+        root, cutter, ranges, tally = joined(location, chromosomes, sourced)
         writer = cls(root, cutter, ranges)
         writer._tally = tally
         writer._next = writer._rows

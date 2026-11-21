@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 
 import ogld
 from ogld.build.importing.run import ImportInputs, import_panukb
@@ -64,6 +65,27 @@ def test_restart_does_not_fetch_closed_deleted_chromosome(complete_import, tmp_p
         assert (
             resumed.provenance["source"]["sha256"] == uninterrupted.provenance["source"]["sha256"]
         )
+
+
+def test_restart_refuses_a_closed_chromosome_claiming_another_panel(
+    complete_import, tmp_path
+) -> None:
+    original, _ = complete_import
+    inputs = replace(original, work=tmp_path / "work")
+
+    def interrupt(_name):
+        raise InterruptedError("after close")
+
+    out = tmp_path / "resumed.store"
+    with pytest.raises(InterruptedError, match="after close"):
+        import_panukb(inputs, out, on_chromosome=interrupt)
+    root = zarr.open_group(str(inputs.work / "1.store"), mode="r+")
+    record = dict(root.attrs["ld_store"])
+    record["panel"]["id"] = "another-panel"
+    root.attrs["ld_store"] = record
+    with pytest.raises(ValueError, match="panel"):
+        import_panukb(inputs, out)
+    assert not out.exists()
 
 
 def test_restart_rebuilds_chromosome_interrupted_before_root_metadata(

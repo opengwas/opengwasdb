@@ -11,7 +11,7 @@ from typing import Any, cast
 import numpy as np
 import zarr
 
-from ogld.format import REncoding
+from ogld.format import REncoding, Sourced
 from ogld.identity import chromosome_rank
 from ogld.store import layout
 from ogld.store.assembly import Cutter, Tally
@@ -30,6 +30,7 @@ def _compatible(first: dict[str, Any], record: dict[str, Any]) -> None:
 def joined(
     location: Path,
     paths: Sequence[Path],
+    sourced: Sourced,
 ) -> tuple[zarr.Group, Cutter, dict[str, tuple[int, int]], Tally]:
     """Retain chromosome-local component coordinates; only variant row ranges shift."""
     if location.exists():
@@ -38,6 +39,7 @@ def joined(
         raise ValueError("no closed chromosomes to join")
     records = _records(paths)
     first = records[0][3]
+    _source_matches(sourced, records)
     # Import here avoids a writer/joining import cycle; all public entry is StoreWriter.join.
     from ogld.store.writer import write_variant_table
 
@@ -77,6 +79,17 @@ def joined(
         t_partner=first["t_partner"],
     )
     return out, cutter, ranges_out, tally
+
+
+def _source_matches(
+    sourced: Sourced, records: list[tuple[str, Path, zarr.Group, dict[str, Any]]]
+) -> None:
+    for _, path, _, record in records:
+        for key in ("panel", "adjustment", "variant_filters", "reference_assembly"):
+            if record[key] != dict(sourced)[key]:
+                raise ValueError(f"{path}: closed chromosome disagrees with source {key}")
+        if record["source"]["kind"] != sourced["source"]["kind"]:
+            raise ValueError(f"{path}: closed chromosome disagrees with source kind")
 
 
 def _records(paths: Sequence[Path]) -> list[tuple[str, Path, zarr.Group, dict[str, Any]]]:

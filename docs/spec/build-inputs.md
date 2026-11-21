@@ -482,7 +482,10 @@ reads it.
   workers. Only one chromosome's source working set is live at a time.
 - Closed immutable chromosome components are joined by `StoreWriter.join`
   using hard links on the same filesystem. Variant columns are concatenated
-  in engine order, with chromosome-local LD coordinates unchanged. The final
+  in engine order, with chromosome-local LD coordinates unchanged. A join
+  refuses mismatched encodings/distances/thresholds, or chromosome claims
+  disagreeing with the supplied panel, adjustment, filters, assembly or source
+  kind; matching n and k alone cannot establish one Source Panel. The final
   store is validated and atomically renamed to OUT, which must not exist.
   WORK and OUT must be on the same filesystem. Keep WORK until publication
   succeeds; afterwards its staging stores may be removed without harming OUT.
