@@ -11,7 +11,7 @@ import numpy.typing as npt
 import zarr
 
 from ogld.format import VALIDATION_RULES, REncoding
-from ogld.genotypes.sidecar import ARRAYS, KEY, VERSION, check_input, mapped_arrays
+from ogld.genotypes.layout import ARRAYS, KEY, VERSION, check_input, mapped_arrays
 from ogld.store import Finding, layout
 from ogld.store.location import open_group
 from ogld.store.validation import validate_group

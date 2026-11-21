@@ -15,8 +15,8 @@ from collections.abc import Sequence
 import numpy.typing as npt
 
 from ogld.format import Provenance
+from ogld.genotypes.layout import KEY
 from ogld.genotypes.reader import GenotypeReader
-from ogld.genotypes.sidecar import KEY
 from ogld.query import clumping, matrices
 from ogld.query import proxies as proxies_query
 from ogld.query.results import Clumps, LDMatrix, Proxies

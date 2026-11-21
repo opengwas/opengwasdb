@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from ogld.genotypes import validation as genotypes
-from ogld.genotypes.sidecar import KEY
+from ogld.genotypes.layout import KEY
 from ogld.store import Finding
 from ogld.store.location import open_group
 from ogld.store.validation import validate_at as validate_ld

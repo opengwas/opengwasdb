@@ -15,8 +15,8 @@ import numpy.typing as npt
 
 from ogld.format import Codes, InputError, Provenance, REncoding
 from ogld.genotypes.adjust import Block, r
+from ogld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from ogld.genotypes.pgen import Genotypes, import_pgenlib
-from ogld.genotypes.sidecar import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from ogld.store import StoreReader
 from ogld.store.location import ChunkCache, OpenedStore, open_group
 from ogld.store.variants import VariantTable

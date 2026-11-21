@@ -245,7 +245,8 @@ def build_genotypes(
     defeat the sidecar's purpose; the selected covariates and PC Check remain recorded.
     """
     from ogld.genotypes import Genotypes, prepare
-    from ogld.genotypes.sidecar import SidecarWriter, fileset_record, input_pin
+    from ogld.genotypes.layout import fileset_record, input_pin
+    from ogld.genotypes.sidecar import SidecarWriter
 
     target = Path(out)
     if target.exists() or threads < 1:
