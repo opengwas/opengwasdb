@@ -98,8 +98,8 @@ when the component ends. It never sets reader attributes to restrict a request,
 never computes an eliminated lead's row, and retains no calls between queries.
 
 Large pgen reads decode disjoint 8,192-row output slices on at most four native
-reader threads, each leasing its pgen handle. Handles are kept per fileset for the reader's
-lifetime, one thread at a time, and released by `close()`. `Genotypes.rows_into` writes into
+reader threads, each leasing its pgen handle. Handles are kept for the reader's lifetime, one
+thread at a time, at most eight idle, and released by `close()`. `Genotypes.rows_into` writes into
 the final float64 buffer; only physically reordered rows are permuted in place
 when possible. No hard-call substitution is made for dosage-bearing inputs.
 The builder already checks completeness, so query reads rely on the pinned,

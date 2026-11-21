@@ -70,44 +70,70 @@ def _one_blas_thread() -> Iterator[None]:
                 _blas_control = None
 
 
+#: The pgen handles kept idle across decodes. A handle keeps the file pages its decode touched,
+#: so keeping all 22 EUR pgens' handles added ~830 MB to a whole-genome clump's peak RSS; eight
+#: keeps the reuse that matters (a chromosome's components, a chr22 request) within the bound.
+_HANDLES_KEPT = 8
+
+
 class _PgenHandles:
-    """One fileset's pgen readers, leased one per decoding thread and kept for the reader's life.
+    """Pgen readers leased one to a decoding thread at a time, at most `_HANDLES_KEPT` kept.
 
     A pgen handle takes ~16 ms to build on the EUR pgens, and a whole-genome clump built 101 of
-    them; keeping the handles a fileset's decodes already made is a handle cache, never a decoded
+    them; keeping the handles a request's decodes already made is a handle cache, never a decoded
     call cache (fix round 1, item 7). At most one thread holds a handle at a time (pgenlib readers
-    are not shared), `close` closes the idle ones, and a handle leased when `close` runs is closed
-    when its lease ends.
+    are not shared). The idle list is bounded because a handle also keeps the pgen file pages its
+    decode touched: all 22 at once measurably grew a clump's peak RSS, so the least recently
+    returned handle is closed when the bound is reached. `close` closes every idle handle, and a
+    handle leased when `close` runs is closed when its lease ends.
     """
 
-    def __init__(self, fileset: Fileset) -> None:
-        self._fileset = fileset
-        self._free: list[Genotypes] = []
+    def __init__(self, filesets: list[Fileset]) -> None:
+        self._filesets = filesets
+        self._idle: list[tuple[int, Genotypes]] = []
         self._lock = threading.Lock()
         self._closed = False
 
     @contextmanager
-    def lease(self) -> Iterator[Genotypes]:
+    def lease(self, index: int) -> Iterator[Genotypes]:
         with self._lock:
             if self._closed:
-                raise InputError(f"{self._fileset.pgen}: its Genotype Store reader is closed")
-            handle = self._free.pop() if self._free else None
+                raise InputError(
+                    f"{self._filesets[index].pgen}: its Genotype Store reader is closed"
+                )
+            handle = None
+            for at, (fileset, idle) in enumerate(self._idle):
+                if fileset == index:
+                    handle = idle
+                    del self._idle[at]
+                    break
         if handle is None:
-            handle = Genotypes(self._fileset)
+            handle = Genotypes(self._filesets[index])
         try:
             yield handle
         finally:
-            with self._lock:
-                if self._closed:
-                    handle.close()
-                else:
-                    self._free.append(handle)
+            self._release(index, handle)
+
+    def _release(self, index: int, handle: Genotypes) -> None:
+        evicted = None
+        with self._lock:
+            if not self._closed:
+                if len(self._idle) >= _HANDLES_KEPT:
+                    _, evicted = self._idle.pop(0)
+                self._idle.append((index, handle))
+                keep = True
+            else:
+                keep = False
+        if evicted is not None:
+            evicted.close()
+        if not keep:
+            handle.close()
 
     def close(self) -> None:
         with self._lock:
             self._closed = True
-            free, self._free = self._free, []
-        for handle in free:
+            idle, self._idle = self._idle, []
+        for _, handle in idle:
             handle.close()
 
 
@@ -125,7 +151,7 @@ class GenotypeReader:
     _variant_table: VariantTable
     _ranges: dict[str, tuple[int, int]]
     _filesets: list[Fileset]
-    _handles: list[_PgenHandles]
+    _handles: _PgenHandles
     _arrays: dict[str, npt.NDArray[Any]]
     _query_workers: int
     _closed: bool
@@ -165,7 +191,7 @@ class GenotypeReader:
         reader._variant_table = VariantTable(opened)
         reader._ranges = reader._variant_table.ranges
         reader._filesets = open_filesets(path, record["filesets"])
-        reader._handles = [_PgenHandles(fileset) for fileset in reader._filesets]
+        reader._handles = _PgenHandles(reader._filesets)
         reader._arrays = mapped_arrays(path, record["arrays"])
         reader._query_workers = 1
         reader._closed = False
@@ -178,8 +204,7 @@ class GenotypeReader:
     def close(self) -> None:
         """Close the reader, the pgen handles it kept, and the ALID mappings its table kept."""
         self._closed = True
-        for handles in self._handles:
-            handles.close()
+        self._handles.close()
         self._variant_table.close()
         self._arrays = {}
 
@@ -249,7 +274,7 @@ class GenotypeReader:
             calls = np.empty((len(rows), a["basis"].shape[0]), dtype=np.float64)
             for index in sources:
                 at = np.flatnonzero(files == index)
-                with self._handles[int(index)].lease() as genotypes:
+                with self._handles.lease(int(index)) as genotypes:
                     calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
         # Completeness was checked by Variant Set selection. Inputs are pinned on open and
         # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
@@ -259,13 +284,13 @@ class GenotypeReader:
     def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
         source = self._filesets[fileset]
         if len(rows) < _READ_ROWS:
-            with self._handles[fileset].lease() as genotypes:
+            with self._handles.lease(fileset) as genotypes:
                 return genotypes.rows(rows)
         calls = np.empty((len(rows), len(source.subset)), dtype=np.float64)
 
         def read(bounds: tuple[int, int]) -> None:
             lo, hi = bounds
-            with self._handles[fileset].lease() as genotypes:
+            with self._handles.lease(fileset) as genotypes:
                 genotypes.rows_into(rows[lo:hi], calls[lo:hi])
 
         bounds = [(lo, min(lo + _READ_ROWS, len(rows))) for lo in range(0, len(rows), _READ_ROWS)]
