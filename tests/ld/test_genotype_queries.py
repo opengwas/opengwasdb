@@ -14,7 +14,7 @@ from contract.support import TEST_STORE
 
 import ogld
 from ogld.genotypes import reader as genotype_reader
-from ogld.genotypes.pgen import Genotypes
+from ogld.genotypes.pgen import Genotypes, PgenFileset
 from ogld.genotypes.reader import GenotypeReader
 
 
@@ -153,8 +153,8 @@ def test_a_long_lived_reader_reuses_and_closes_its_pgen_handles(
     original_open = Genotypes.__init__
     original_close = getattr(Genotypes, "close", None)
 
-    def counted_open(self: Genotypes, fileset: object) -> None:
-        original_open(self, fileset)  # type: ignore[arg-type]
+    def counted_open(self: Genotypes, fileset: PgenFileset) -> None:
+        original_open(self, fileset)
         opened.append(self._fileset.pgen)
 
     def counted_close(self: Genotypes) -> None:

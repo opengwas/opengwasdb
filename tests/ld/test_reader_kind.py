@@ -64,4 +64,4 @@ def test_the_genotype_reader_composes_the_variant_table_and_store(genotype_store
     assert not hasattr(reader, "has_partner_rows")
     # And an argument that had no meaning on this kind is refused, not ignored.
     with pytest.raises(TypeError):
-        GenotypeReader.open(genotype_store, frame_cache_bytes=1)  # type: ignore[call-arg]
+        GenotypeReader.open(genotype_store, frame_cache_bytes=1)

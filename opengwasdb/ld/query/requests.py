@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from ogld.format import judge_partner_request
-from ogld.query.reader import Reader
+from ogld.query.reader import Reader as StoreReader
 
 
-def window_of(reader: Reader, *, r2: float, kb: float) -> float:
+def window_of(reader: StoreReader, *, r2: float, kb: float) -> float:
     """The request's window in bp, W = kb × 1,000, or the refusal it is given instead.
 
     It is compared with the distances and the thresholds the store recorded, never a rounded

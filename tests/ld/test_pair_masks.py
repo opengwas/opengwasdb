@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import build_fixtures
 import numpy as np
@@ -58,13 +59,13 @@ def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
     calls = {"stored": 0, "partner": 0}
     stored, partner = REncoding.stored_mask, REncoding.partner_mask
 
-    def counted_stored(self: REncoding, *args: object, **kwargs: object) -> np.ndarray:
+    def counted_stored(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
         calls["stored"] += 1
-        return stored(self, *args, **kwargs)  # type: ignore[arg-type]
+        return stored(self, *args, **kwargs)
 
-    def counted_partner(self: REncoding, *args: object, **kwargs: object) -> np.ndarray:
+    def counted_partner(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
         calls["partner"] += 1
-        return partner(self, *args, **kwargs)  # type: ignore[arg-type]
+        return partner(self, *args, **kwargs)
 
     monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
     monkeypatch.setattr(REncoding, "partner_mask", counted_partner)
@@ -81,13 +82,13 @@ def test_the_genotype_reader_calls_the_masks(
     calls = {"stored": 0, "partner": 0}
     stored, partner = REncoding.stored_mask, REncoding.partner_mask
 
-    def counted_stored(self: REncoding, *args: object, **kwargs: object) -> np.ndarray:
+    def counted_stored(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
         calls["stored"] += 1
-        return stored(self, *args, **kwargs)  # type: ignore[arg-type]
+        return stored(self, *args, **kwargs)
 
-    def counted_partner(self: REncoding, *args: object, **kwargs: object) -> np.ndarray:
+    def counted_partner(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
         calls["partner"] += 1
-        return partner(self, *args, **kwargs)  # type: ignore[arg-type]
+        return partner(self, *args, **kwargs)
 
     monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
     monkeypatch.setattr(REncoding, "partner_mask", counted_partner)

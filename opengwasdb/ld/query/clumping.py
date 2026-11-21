@@ -19,13 +19,13 @@ import numpy.typing as npt
 
 from ogld.format import Refusal, RefusalReason
 from ogld.format.geometry import global_rows, local_rows
-from ogld.query.reader import Reader
+from ogld.query.reader import Reader as StoreReader
 from ogld.query.requests import window_of
 from ogld.query.results import Clumps
 
 
 def clump(
-    reader: Reader, alids: Sequence[str], score: npt.ArrayLike, *, r2: float, kb: float
+    reader: StoreReader, alids: Sequence[str], score: npt.ArrayLike, *, r2: float, kb: float
 ) -> Clumps:
     """Clump the present `alids` by `score`, strongest first (ogld#6).
 
@@ -95,7 +95,7 @@ class _Component:
 
 
 def _components(
-    reader: Reader,
+    reader: StoreReader,
     rows: npt.NDArray[np.int64],
     scores: npt.NDArray[np.float64],
     chrom: npt.NDArray[np.str_],
@@ -144,7 +144,7 @@ def _components(
 
 
 def _pooled(
-    reader: Reader,
+    reader: StoreReader,
     tasks: list[_Component],
     workers: int,
     *,
@@ -168,7 +168,7 @@ def _pooled(
 
 
 def _component(
-    reader: Reader, task: _Component, *, r2: float, window: float
+    reader: StoreReader, task: _Component, *, r2: float, window: float
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """One component's greedy: each hit's lead, as an index into `task.rows`, and its signed r.
 

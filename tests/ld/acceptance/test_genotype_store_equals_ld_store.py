@@ -84,13 +84,13 @@ def outcome(store: ogld.LDStore, method: str, *args: Any, **kwargs: Any) -> Any:
         return ("refusal", refused.reason)
 
 
-def assert_equal(actual: object, expected: object, label: str) -> None:
+def assert_equal(actual: Any, expected: Any, label: str) -> None:
     """The LD Store's answer and the sidecar's, field for field, with every code compared."""
     assert type(actual) is type(expected), f"{label}: {type(actual)} vs {type(expected)}"
     if isinstance(actual, tuple) and actual and actual[0] == "refusal":
         assert actual == expected, f"{label}: refusals differ"
         return
-    for field in dataclasses.fields(actual):  # type: ignore[arg-type]
+    for field in dataclasses.fields(actual):
         a, b = getattr(actual, field.name), getattr(expected, field.name)
         if isinstance(a, np.ndarray):
             np.testing.assert_array_equal(a, b, err_msg=f"{label}: {field.name}")
