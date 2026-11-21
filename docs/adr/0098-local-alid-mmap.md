@@ -7,6 +7,11 @@ ADR 0011's Partner Rows nor the Store format version.
 **Decision authority:** the owner's #81 brief requests this isolated port of #47's
 representation, publication and local lookup behavior onto main.
 
+> **The bundle's owner moved, and kept its behaviour** (see "Clarification, 21 November 2026" at
+> the end). It is `_MappedAlids`, a module-level class in `ogld/store/variants.py`, owned and
+> released by the `VariantTable` that composes it (#94); `reader._MappedAlids` below names it as
+> this ADR first wrote it.
+
 ## Context
 
 After Partner Rows, ALID resolution is a larger cost than clump's LD work: #81 records
@@ -88,9 +93,11 @@ completeness, fitting misses need no scan. This extends ADR 0010's always-scan-m
 only for the validated companion. Missing pointers and HTTP retain the canonical fallback;
 a present broken publication refuses rather than silently falling back.
 
-`reader._MappedAlids` owns its mappings and their diagnostic path. Lookup returns independent
-int64 rows. Release serializes with lookup, discards views, then closes mappings, and is
-idempotent. `StoreReader.close` releases the bundle with its Partner Rows resources. Failed
+`reader._MappedAlids` — `_MappedAlids` in `ogld/store/variants.py` since #94, and owned by the
+`VariantTable` that composes it — owns its mappings and their diagnostic path. Lookup returns
+independent int64 rows. Release serializes with lookup, discards views, then closes mappings, and
+is idempotent. `StoreReader.close` releases the bundle with its Partner Rows resources, by closing
+its variant table. Failed
 attachment immediately releases already acquired mappings, even with a retained traceback.
 Normal object collection also releases mappings; no process-global registry is introduced.
 
@@ -126,3 +133,14 @@ Breakers cover truncation, missing/wrong payloads, malformed manifests and schem
 stale metadata, self-consistent wrong keys/rows and row permutations. Interrupted publication
 is restartable without exposing a partial pointer. Lifetime tests use real mappings, retained
 tracebacks and event-gated concurrent lookup/release rather than timing guesses.
+
+## Clarification, 21 November 2026
+
+Epic [#18](https://github.com/opengwas/ogld/issues/18)'s owner decision of 21 November 2026 took the
+variant table and the ALID lookup out of `StoreReader` into `ogld.store.VariantTable`
+(`ogld/store/variants.py`, #94) as a pure move, so a second reader composes the same lookup. The
+companion's owner is unchanged in what it does and named by where it now lives: `_MappedAlids` is a
+module-level class in `ogld/store/variants.py`, and the `VariantTable` owns and releases it, which
+`StoreReader.close` does by closing that table. First-use verification, the sticky refusal, the
+lookup/release lock, the cost of the first use and the absence of any process-global registry are
+as written above.
