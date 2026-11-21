@@ -19,3 +19,15 @@ def test_matrix_equals_the_independent_test_store(genotype_store: Path) -> None:
     assert actual.absent == expected.absent == ("absent",)
     np.testing.assert_array_equal(actual.r, expected.r)
     np.testing.assert_array_equal(actual.kinds(), expected.kinds())
+
+
+def test_provenance_claims_partner_rows_for_both_store_kinds(genotype_store: Path) -> None:
+    """`claims_partner_rows` is the capability rule: both kinds answer `clump` from t_partner."""
+    from ogld.format import claims_partner_rows
+
+    ld = ogld.open(TEST_STORE).provenance
+    sidecar = ogld.open(genotype_store).provenance
+    assert claims_partner_rows(ld), "the LD Store records its Partner Threshold"
+    assert claims_partner_rows(sidecar), "the sidecar answers clump and proxies from t_partner"
+    without = {key: value for key, value in dict(ld).items() if key != "t_partner"}
+    assert not claims_partner_rows(without), "a store that records no threshold claims none"
