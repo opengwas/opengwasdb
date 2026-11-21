@@ -195,7 +195,7 @@ class GenotypeReader(ComponentWorkers):
         return reader
 
     def request(self) -> AbstractContextManager[object]:
-        """One public query holds the one-BLAS-thread guard for its whole duration (#91 fix 1)."""
+        """One public query holds the one-BLAS-thread guard for its whole duration."""
         return _one_blas_thread()
 
     def close(self) -> None:

@@ -20,7 +20,7 @@ for blocks of rows in order, and at `finish` it supplies what only the source kn
 (`ogld.format.Sourced`).
 
 **Memory is bounded by the block and the far_bp window, never the chromosome.** These are
-measured on chr6 of lane #5's whole-EUR store (602,466 rows, 6,826,805,033 Near Band codes).
+measured on chr6 of the whole-panel EUR store (602,466 rows, 6,826,805,033 Near Band codes).
 What is held:
 
 - **The Near Band carry:** less than one shard of `r`, 67,108,864 codes, so 128 MiB.

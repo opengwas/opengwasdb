@@ -11,7 +11,8 @@ file, warmed:
 It builds a temporary one-chunk `uint8` array whose chunk file is `--bytes` long and whose frames
 are `--frame-bytes` each (25,600 by default: 20 KiB compressed is EUR chr22's median frame), then
 times `--reads` random frame reads through `PreadSource` and through `location.RangeSource`, which
-is the store path a remote store uses and a local one paid before #70's fix round. Interleave the
+is the store path a remote store uses, and the one a local store paid before ADR 0009's direct
+decoder. Interleave the
 two, report the median of `--runs`, and print µs/read and the projection onto 3,850 frames (the
 reads GCST90476460's clump made, #65). Only the I/O is timed: nothing is decompressed and no frame
 is decoded. Nothing is committed.
