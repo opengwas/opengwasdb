@@ -128,7 +128,7 @@ def ages(store: ogld.LDStore, reader: StoreReader, rows: np.ndarray) -> dict[str
             ("tail", stop - 200, stop),
         ]:
             found[f"region_r-{chrom}-{label}"] = fingerprint({"r": reader.region_r(a, b)})
-            got = store.region(chrom, int(reader._columns["position"][a]), 500_000)
+            got = store.region(chrom, int(reader._variant_table._columns["position"][a]), 500_000)
             found[f"region-{chrom}-{label}-500k"] = region_fingerprint(got)
     found["pair_r-sample"] = fingerprint({"r": reader.pair_r(ALL[::5])})
     first, second = ladder()

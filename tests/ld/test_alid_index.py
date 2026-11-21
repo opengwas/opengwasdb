@@ -380,10 +380,12 @@ def test_a_present_alid_is_found_without_loading_its_chromosome(tmp_path: Path) 
     reader = StoreReader.open(built.path)
     assert reader.rows_of([built.alids[2]]).tolist() == [2]
     assert reader._loaded == {}
+    assert reader._variant_table._located == {}, "the search read no positions either"
     # An ALID at the slot's width is indexed like any other: validation guarantees its key is
     # the full ALID (ADR 0010; ogld#42's fix round 1).
     assert reader.rows_of([built.alids[0]]).tolist() == [0]
     assert reader._loaded == {}
+    assert reader._variant_table._located == {}
 
 
 def test_the_index_is_read_only_for_an_alid_it_could_hold(tmp_path: Path) -> None:

@@ -22,15 +22,15 @@ import numpy as np
 import numpy.typing as npt
 
 from ogld.build import pc_check, tiles
-from ogld.build.adjust import Covariates, covariates, residuals, unit_vectors
 from ogld.build.diagnostic import (
     CHANGE_BP,
     ChanceRates,
     ChangeHistogram,
-    chance_rates,
+    chance_rate,
+    draw_pairs,
+    draw_variants,
     outside_regions,
 )
-from ogld.build.genotypes import Genotypes
 from ogld.build.inputs import (
     CHUNK_RECORDS,
     Fileset,
@@ -49,6 +49,7 @@ from ogld.format.geometry import (
     local_rows,
     windows,
 )
+from ogld.genotypes import Covariates, Genotypes, covariates, prepare, r, residuals
 from ogld.identity import Orientation
 from ogld.store import StoreWriter, Variants
 
@@ -150,15 +151,6 @@ def _strings(oriented: list[Orientation], name: str) -> npt.NDArray[np.str_]:
     return column
 
 
-def _units(the_plan: Plan, chromosome: Chromosome, chosen: Covariates) -> npt.NDArray[np.float64]:
-    """The chromosome's unit vectors after PC Adjustment by `chosen`, in Variant Set order."""
-    out = np.empty((len(chromosome), the_plan.samples.n))
-    for first, dosages in _blocks(the_plan, chromosome):
-        stop = first + len(dosages)
-        out[first:stop] = unit_vectors(dosages, chosen, chromosome.a1_is_alt[first:stop])
-    return out
-
-
 def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
     """The chromosome of each row of the Variant Set, in its order."""
     return np.concatenate([np.full(len(c), c.name) for c in chromosomes])
@@ -167,21 +159,32 @@ def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
 def chance(the_plan: Plan, chromosomes: list[Chromosome], chosen: Covariates) -> ChanceRates:
     """#405's chance-LD rates over the Variant Set (`ogld.build.diagnostic`)."""
     labels = _labels(chromosomes)
-    ranges = list(chromosome_ranges(labels).values())
+    if len(set(labels.tolist())) < 2:
+        return ChanceRates(0, None, None)
+    used = draw_variants(len(labels))
+    first, second = draw_pairs(labels[used])
+    calls, signs = _chance_calls(the_plan, chromosomes, used)
+    rates = []
+    for cov in (covariates([], None, the_plan.samples.n), chosen):
+        block = prepare(calls, cov, signs)
+        rates.append(chance_rate(r(block, block)[first, second]))
+    return ChanceRates(len(first), rates[0], rates[1])
+
+
+def _chance_calls(
+    the_plan: Plan, chromosomes: list[Chromosome], rows: npt.NDArray[np.int64]
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.bool_]]:
+    ranges = list(chromosome_ranges(_labels(chromosomes)).values())
     stops = [stop for _, stop in ranges]
-    unadjusted = covariates([], None, the_plan.samples.n)
-
-    def units_of(rows: npt.NDArray[np.int64]) -> tuple[npt.NDArray[np.float64], ...]:
-        both: tuple[list[npt.NDArray[np.float64]], ...] = ([], [])
-        for i, c in enumerate(chromosomes):
-            own = chromosome_index(stops, rows) == i
-            mine = local_rows(rows[own], ranges[i][0])
-            picked = c.without(~np.isin(np.arange(len(c)), mine))
-            for out, cov in zip(both, (unadjusted, chosen), strict=True):
-                out.append(_units(the_plan, picked, cov))
-        return tuple(np.concatenate(out) for out in both)
-
-    return chance_rates(labels, units_of)
+    calls: list[npt.NDArray[np.float64]] = []
+    signs: list[npt.NDArray[np.bool_]] = []
+    for i, c in enumerate(chromosomes):
+        own = chromosome_index(stops, rows) == i
+        mine = local_rows(rows[own], ranges[i][0])
+        picked = c.without(~np.isin(np.arange(len(c)), mine))
+        calls.extend(dosages for _, dosages in _blocks(the_plan, picked))
+        signs.append(picked.a1_is_alt)
+    return np.concatenate(calls), np.concatenate(signs)
 
 
 def write_ld(
@@ -202,7 +205,7 @@ def write_ld(
             ranges[chromosome.name][0],
             writer.cut,
         )
-        units = _unit_blocks(the_plan, chromosome, chosen)
+        units = _genotype_blocks(the_plan, chromosome, chosen)
         try:
             for cut, changed in tiles.tiles(inputs, units, threads):
                 writer.write(cut)
@@ -212,14 +215,14 @@ def write_ld(
     return change
 
 
-def _unit_blocks(
+def _genotype_blocks(
     the_plan: Plan, chromosome: Chromosome, chosen: Covariates
-) -> Generator[tiles.UnitBlock, None, None]:
-    """The chromosome's unit vectors, a genotype block at a time, in Variant Set order: after PC
+) -> Generator[tiles.GenotypeBlock, None, None]:
+    """Prepared genotypes, a block at a time, in Variant Set order: after PC
     Adjustment by `chosen`, and at k > 0 also unadjusted, for the PC Diagnostic."""
     plain = covariates([], None, the_plan.samples.n) if chosen.k else None
-    for first, dosages in _blocks(the_plan, chromosome, tiles.UNIT_ROWS):
+    for first, dosages in _blocks(the_plan, chromosome, tiles.BLOCK_ROWS):
         a1_is_alt = chromosome.a1_is_alt[first : first + len(dosages)]
-        adjusted = unit_vectors(dosages, chosen, a1_is_alt)
-        unadjusted = None if plain is None else unit_vectors(dosages, plain, a1_is_alt)
+        adjusted = prepare(dosages, chosen, a1_is_alt)
+        unadjusted = None if plain is None else prepare(dosages, plain, a1_is_alt)
         yield first, adjusted, unadjusted

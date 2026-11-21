@@ -142,7 +142,7 @@ class Made:
     """What the build made that only it knows: the Variant Set's drops and the PC Diagnostic."""
 
     dropped: dict[str, int]
-    diagnostic: PcDiagnostic
+    diagnostic: PcDiagnostic | None
 
 
 def software() -> dict[str, str]:

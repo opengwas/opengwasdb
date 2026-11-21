@@ -222,7 +222,13 @@ def window_blocks(firsts: range | list[int] = range(0, 64, 8)) -> Iterator[tuple
     """WINDOW_SOURCE as the build reads it, 8 rows a block, starting at each of `firsts`."""
     for first in firsts:
         rows = WINDOW_SOURCE[first : first + 8]
-        yield first, rows.copy(), -rows
+        from ogld.genotypes import Block
+
+        yield (
+            first,
+            Block(rows.copy(), rows[:, :2].copy(), rows[:, 0] + 1, np.ones(len(rows))),
+            Block(-rows, -rows[:, :2], rows[:, 0] + 2, -np.ones(len(rows))),
+        )
 
 
 def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_tile_s_view() -> None:
@@ -235,14 +241,18 @@ def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_til
     window = tiles.Window(window_blocks(), capacity=20)
     window.reach(10, keep=0)
     in_flight = window.rows(4, 12)
-    np.testing.assert_array_equal(in_flight, source[4:12])
+    np.testing.assert_array_equal(in_flight.calls, source[4:12])
     window.reach(24, keep=8)  # 24 rows from row 0 do not fit 20: rows 8 … 15 move
-    np.testing.assert_array_equal(window.rows(8, 24), source[8:24])
-    np.testing.assert_array_equal(window.rows(8, 24, unadjusted=True), -source[8:24])
-    np.testing.assert_array_equal(in_flight, source[4:12])
+    held = window.rows(8, 24)
+    np.testing.assert_array_equal(held.calls, source[8:24])
+    np.testing.assert_array_equal(held.projection, source[8:24, :2])
+    np.testing.assert_array_equal(held.norm, source[8:24, 0] + 1)
+    np.testing.assert_array_equal(held.sign, np.ones(16))
+    np.testing.assert_array_equal(window.rows(8, 24, unadjusted=True).calls, -source[8:24])
+    np.testing.assert_array_equal(in_flight.calls, source[4:12])
     window.reach(36, keep=20)
-    np.testing.assert_array_equal(window.rows(20, 36), source[20:36])
-    np.testing.assert_array_equal(in_flight, source[4:12])
+    np.testing.assert_array_equal(window.rows(20, 36).calls, source[20:36])
+    np.testing.assert_array_equal(in_flight.calls, source[4:12])
 
 
 @pytest.mark.parametrize(("first", "stop"), [(4, 12), (16, 26), (12, 10)])
@@ -254,7 +264,7 @@ def test_the_window_refuses_rows_it_does_not_hold(first: int, stop: int) -> None
     window = tiles.Window(window_blocks(), capacity=20)
     window.reach(10, keep=0)
     window.reach(24, keep=8)  # holds rows 8 … 23
-    np.testing.assert_array_equal(window.rows(8, 24), WINDOW_SOURCE[8:24])
+    np.testing.assert_array_equal(window.rows(8, 24).calls, WINDOW_SOURCE[8:24])
     with pytest.raises(ValueError, match=f"rows {first}–{stop - 1} .*rows 8–23"):
         window.rows(first, stop)
 
@@ -311,7 +321,7 @@ def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
         real(self, keep)
 
     monkeypatch.setattr(tiles, "TILE_ROWS", 4)
-    monkeypatch.setattr(tiles, "UNIT_ROWS", 8)
+    monkeypatch.setattr(tiles, "BLOCK_ROWS", 8)
     monkeypatch.setattr(tiles.Window, "_move", spy)
     ogld.build(fixtures.inputs(pgen, k), tmp_path / "store")
     assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} time(s)"

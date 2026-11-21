@@ -420,7 +420,7 @@ cache. No speculative reads and no reads for eliminated hits. On the whole of GC
 3,869 leads fall in 95 components, G = 16 with four component workers made 3,854 frame reads and
 101,810,367 bytes, with 15 cache hits. Its LD work, cold and warm, in seconds, by the reader's
 worker count, median of three alternating fresh subprocesses on 8 CPUs with `taskset -c 0-7`, while
-another lane derived Partner Rows (load average 5.6–6.5):
+Partner Rows were being derived on the same node (load average 5.6–6.5):
 
 | workers | cold | warm |
 |---|---|---|

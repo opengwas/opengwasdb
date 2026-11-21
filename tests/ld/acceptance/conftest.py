@@ -1,8 +1,10 @@
 """Every test under tests/acceptance/ is in the `acceptance` tier (CONTRIBUTING.md, "Acceptance
 runs"): the default tier and the realdata tier deselect it. Each run has its own task:
-`pixi run -e dev acceptance-clump` runs `test_clump_equals_plink2.py` (ogld#6), and
-`pixi run -e dev acceptance-stores` runs `test_hgdp1kgp_stores.py` (ogld#7). Marking by
-directory means a test placed here cannot run in either tier by forgetting its marker."""
+`pixi run -e dev acceptance-clump` runs `test_clump_equals_plink2.py` (ogld#6),
+`pixi run -e dev acceptance-stores` runs `test_hgdp1kgp_stores.py` (ogld#7), and
+`pixi run -e dev acceptance-genotypes` runs
+`test_genotype_store_equals_ld_store.py` (ogld#91). Marking by directory means a test placed
+here cannot run in either tier by forgetting its marker."""
 
 from __future__ import annotations
 

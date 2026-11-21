@@ -14,8 +14,8 @@ from test_alid_index import written
 
 from ogld.format import InputError
 from ogld.store import StoreReader, layout
-from ogld.store import reader as reader_module
-from ogld.store.reader import _MappedAlids
+from ogld.store import variants as variants_module
+from ogld.store.variants import _MappedAlids
 
 
 class ObservedLock:
@@ -65,7 +65,7 @@ def test_only_wide_queries_do_not_attach_until_a_fitting_query(tmp_path: Path, m
 
     monkeypatch.setattr(layout, "file_sha256", forbidden)
     assert reader.rows_of([names[1], names[1]]).tolist() == [1, 1]
-    assert reader._alid_mmap is None
+    assert reader._variant_table._alid_mmap is None
     reader.close()
 
 
@@ -90,8 +90,8 @@ def test_concurrent_first_lookups_verify_and_attach_once(tmp_path: Path, monkeyp
         futures = [pool.submit(lookup) for _ in range(4)]
         assert [f.result() for f in futures] == [[2, -1, 2]] * 4
     assert len(calls) == 1
-    assert reader._alid_mmap is not None
-    assert len(reader._alid_mmap._maps) == 2
+    assert reader._variant_table._alid_mmap is not None
+    assert len(reader._variant_table._alid_mmap._maps) == 2
     reader.close()
 
 
@@ -100,7 +100,7 @@ def test_failed_first_verification_is_not_retried_even_after_repair(
 ) -> None:
     store = written(tmp_path / "store")
     reader = StoreReader.open(store)
-    assert reader._alid_mmap is None
+    assert reader._variant_table._alid_mmap is None
     pointer = reader._root.attrs[layout.ALID_MMAP_ATTR]
     payload = store / "variants/alid_mmap" / pointer["generation"] / "keys.bin"
     before = payload.read_bytes()
@@ -124,7 +124,7 @@ def test_failed_first_verification_is_not_retried_even_after_repair(
     assert pointer["generation"] in str(first.value)
     assert "keys.bin" in str(first.value)
     assert len(calls) == 1, "a failed commitment cannot become a successful retry or fallback"
-    assert reader._alid_mmap is None
+    assert reader._variant_table._alid_mmap is None
     reader.close()
 
 
@@ -133,7 +133,7 @@ def test_close_waits_for_first_attachment_and_releases_every_mapping(
 ) -> None:
     reader = StoreReader.open(written(tmp_path / "store"))
     verify = layout.alid_companion
-    construct = reader_module._MappedAlids
+    construct = variants_module._MappedAlids
     entered, unblock, closing = (threading.Event() for _ in range(3))
     mappings = []
 
@@ -147,9 +147,9 @@ def test_close_waits_for_first_attachment_and_releases_every_mapping(
         mappings.extend(bundle._maps)
         return bundle
 
-    monkeypatch.setattr(reader, "_alid_lock", ObservedLock(closing))
+    monkeypatch.setattr(reader._variant_table, "_alid_lock", ObservedLock(closing))
     monkeypatch.setattr(layout, "alid_companion", checked)
-    monkeypatch.setattr(reader_module, "_MappedAlids", constructed)
+    monkeypatch.setattr(variants_module, "_MappedAlids", constructed)
     with ThreadPoolExecutor(max_workers=2) as pool:
         lookup = pool.submit(reader.rows_of, ["22:200:A:C"])
         try:
@@ -200,7 +200,7 @@ def test_failed_construction_closes_maps_with_a_retained_traceback(
         return mapped
 
     monkeypatch.setattr(Path, "open", opening)
-    monkeypatch.setattr(reader_module.mmap, "mmap", mapping)
+    monkeypatch.setattr(variants_module.mmap, "mmap", mapping)
     # Keeping both the bundle and exception alive rules out collection as the cleanup mechanism.
     bundle = object.__new__(_MappedAlids)
     with pytest.raises(InputError, match="attachment failed") as stopped:
@@ -220,9 +220,9 @@ def test_failed_construction_closes_maps_with_a_retained_traceback(
 def test_lookup_results_survive_idempotent_release(tmp_path: Path) -> None:
     store = written(tmp_path / "store")
     reader = StoreReader.open(store)
-    assert reader._alid_mmap is None
+    assert reader._variant_table._alid_mmap is None
     public = reader.rows_of(["22:200:A:C", "22:300:A:G", "absent", "22:200:A:C"])
-    bundle = reader._alid_mmap
+    bundle = reader._variant_table._alid_mmap
     assert bundle is not None
     mappings = tuple(bundle._maps)
     assert len(mappings) == 2
@@ -244,9 +244,9 @@ def test_lookup_results_survive_idempotent_release(tmp_path: Path) -> None:
 
 def test_reader_close_releases_mappings_and_keeps_returned_rows(tmp_path: Path) -> None:
     reader = StoreReader.open(written(tmp_path / "store"))
-    assert reader._alid_mmap is None
+    assert reader._variant_table._alid_mmap is None
     rows = reader.rows_of(["22:200:A:C", "22:300:A:G"])
-    bundle = reader._alid_mmap
+    bundle = reader._variant_table._alid_mmap
     assert bundle is not None
     mappings = tuple(bundle._maps)
     assert len(mappings) == 2
@@ -264,7 +264,7 @@ def test_release_waits_for_a_lookup_then_closes_its_mappings(
 ) -> None:
     reader = StoreReader.open(written(tmp_path / "store"))
     reader.rows_of(["22:200:A:C"])
-    bundle = reader._alid_mmap
+    bundle = reader._variant_table._alid_mmap
     assert bundle is not None
     mappings = tuple(bundle._maps)
     assert len(mappings) == 2
@@ -277,7 +277,7 @@ def test_release_waits_for_a_lookup_then_closes_its_mappings(
         return search(*args, **kwargs)
 
     monkeypatch.setattr(bundle, "_lock", ObservedLock(releasing))
-    monkeypatch.setattr(reader_module.np, "searchsorted", held_search)
+    monkeypatch.setattr(variants_module.np, "searchsorted", held_search)
     with ThreadPoolExecutor(max_workers=2) as workers:
         lookup = workers.submit(bundle.lookup, np.array([b"22:200:A:C"], dtype="S32"))
         try:
@@ -315,7 +315,7 @@ def test_replaced_descriptor_file_is_refused_and_releases_prior_mapping(
         acquired.append(mapped)
         return mapped
 
-    monkeypatch.setattr(reader_module.mmap, "mmap", mapping)
+    monkeypatch.setattr(variants_module.mmap, "mmap", mapping)
     with pytest.raises(InputError, match="changed before mapping") as stopped:
         _MappedAlids(companion)
     assert str(store) in str(stopped.value)

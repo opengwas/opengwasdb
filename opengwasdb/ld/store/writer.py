@@ -9,10 +9,11 @@ derives from itself, and validation.
 How each producer calls it:
 
 - **The builder** creates the writer with its encoding, `NEAR_BP`, `FAR_BP`, `t_partner`, the
-  kept samples' n and the covariates' k. Each of its workers computes a tile's product, `r =
-  units[first:last] @ units[first:stop].T`, where `stop` is the far stop of row `last − 1`. It
-  cuts the tile, `writer.cut(start + first, r)`, and measures its own PC Diagnostic on the same
-  `r`. The build's thread writes the cuts in row order, `writer.write(cut)`, then calls `finish`.
+  kept samples' n and the covariates' k. Each of its workers computes a tile's product,
+  `ogld.genotypes.r(rows, span)`, with `span` running from the tile's first row to the far stop
+  of row `last − 1`. It cuts the tile, `writer.cut(start + first, r)`, and measures its own PC
+  Diagnostic on the same `r`. The build's thread writes the cuts in row order,
+  `writer.write(cut)`, then calls `finish`.
 - **The Test Store's script** cuts each chromosome whole from the reference r as a dense matrix.
   The matrix is NaN where the reference holds no pair, so a pair it lacks within far_bp is
   refused by `cut`.
@@ -118,20 +119,7 @@ class StoreWriter:
             k=k,
             t_partner=t_partner,
         )
-        position = _positions(variants.position)
-        root = zarr.open_group(str(path), mode="w-", zarr_format=3)
-        group = root.create_group("variants")
-        layout.put_numbers(group, "position", position, layout.POSITION_FILL)
-        layout.put_strings(group, "alid", variants.alid)
-        layout.put_strings(group, "a1", variants.a1)
-        layout.put_strings(group, "a2", variants.a2)
-        layout.put_numbers(
-            group,
-            "a1_frequency",
-            variants.a1_frequency.astype(np.float32),
-            layout.FREQUENCY_FILL,
-        )
-        group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
+        root = write_variant_table(path, variants, ranges)
         return cls(root, cutter, ranges, compress_workers=compress_workers)
 
     @property
@@ -150,8 +138,8 @@ class StoreWriter:
 
         `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (spec §3). It runs
         for every column c up to the last variant within far_bp of the block's last row, and no
-        further: `r.shape[1]` is that variant's row + 1 − first. That is what a product of the
-        block's unit vectors with those of the rows from `first` to there gives, and the
+        further: `r.shape[1]` is that variant's row + 1 − first. That is what
+        `ogld.genotypes.r(rows, span)` gives for the block against those rows, and the
         chromosome's whole matrix for a block of all its rows. Only each row's later partners
         within far_bp are read. On and below the diagonal, and past a row's own far stop, `r` may
         hold anything, NaN included. Any floating dtype is accepted.
@@ -257,6 +245,30 @@ class StoreWriter:
         assert path is not None
         derive_alid_mmap(path)
         return cast(Provenance, recorded)
+
+
+def write_variant_table(
+    location: Path, variants: Variants, ranges: dict[str, tuple[int, int]]
+) -> zarr.Group:
+    """Write the shared variant half, without LD components or a provenance claim (#91).
+
+    The LD writer and Genotype Store builder use exactly the same columns and layout. `ranges`
+    is the chromosome record its caller computed (`chromosome_ranges`), so the write path has
+    one source for it, not two. Index derivation follows once the producer has completed its own
+    arrays.
+    """
+    position = _positions(variants.position)
+    root = zarr.open_group(str(location), mode="w-", zarr_format=3)
+    group = root.create_group("variants")
+    layout.put_numbers(group, "position", position, layout.POSITION_FILL)
+    layout.put_strings(group, "alid", variants.alid)
+    layout.put_strings(group, "a1", variants.a1)
+    layout.put_strings(group, "a2", variants.a2)
+    layout.put_numbers(
+        group, "a1_frequency", variants.a1_frequency.astype(np.float32), layout.FREQUENCY_FILL
+    )
+    group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
+    return root
 
 
 def _as_json(provenance: Provenance) -> dict[str, Any]:

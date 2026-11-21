@@ -208,6 +208,56 @@ class REncoding:
         so a builder may judge only the r above it."""
         return (code - 1) / self.scale
 
+    def stored_mask(
+        self,
+        distance: npt.ArrayLike,
+        codes: npt.ArrayLike,
+        *,
+        near_bp: int,
+        far_bp: int,
+        far_code_floor: int,
+    ) -> npt.NDArray[np.bool_]:
+        """Whether each pair is Stored at its distance, from its code (spec §8).
+
+        Every pair within `near_bp` is Stored; beyond it, one is Stored exactly when it is
+        within `far_bp` and its |code| reaches `far_code_floor`. The builder, the Partner Rows
+        emitter and the Genotype Store reader all judge with this one predicate, so the Bound
+        and Not Measured cannot drift between them (owner, 21 November 2026).
+        """
+        gap = np.abs(np.asarray(distance, dtype=np.int64))
+        magnitude = np.abs(np.asarray(codes, dtype=np.int32))
+        near = gap <= near_bp
+        far = (gap <= far_bp) & (magnitude >= far_code_floor)
+        return near | far
+
+    def partner_mask(
+        self,
+        distance: npt.ArrayLike,
+        codes: npt.ArrayLike,
+        *,
+        near_bp: int,
+        far_bp: int,
+        partner_code_floor: int,
+        far_code_floor: int,
+    ) -> npt.NDArray[np.bool_]:
+        """Whether each pair is in a Partner Rows row, from its code (partner-rows §3, §7).
+
+        A pair within `near_bp` is kept when its |code| reaches the Partner Floor, and a pair
+        beyond it, out to `far_bp`, when its |code| reaches the far code floor. This is the
+        floor choice the Partner Rows emitter makes and the Genotype Store reader answers
+        `proxies` and `clump` with, held once (owner, 21 November 2026).
+
+        Pass each pair's real `distance`. The Partner Rows emitter instead passes its two
+        already-split groups' boundary: `near_bp` for the Near Band's codes, every one of which
+        is within `near_bp`, and `far_bp` for the Far Pairs, every one of which is beyond
+        `near_bp` and within `far_bp`. The answer is the same for every such pair, and
+        `tests/test_pair_masks.py` holds the emitter's bytes to this rule, pair by pair.
+        """
+        gap = np.abs(np.asarray(distance, dtype=np.int64))
+        magnitude = np.abs(np.asarray(codes, dtype=np.int32))
+        floor = np.where(gap <= near_bp, partner_code_floor, far_code_floor)
+        return (gap <= far_bp) & (magnitude >= floor)
+
 
 def _whole(value: object) -> TypeGuard[int]:
     """A whole number as JSON holds one: an int, never a bool or a float."""
