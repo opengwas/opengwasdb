@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -121,6 +122,27 @@ class StoreWriter:
         )
         root = write_variant_table(path, variants, ranges)
         return cls(root, cutter, ranges, compress_workers=compress_workers)
+
+    @classmethod
+    def join(
+        cls, location: Path, chromosomes: Sequence[Path], sourced: Sourced, *, threads: int = 1
+    ) -> Provenance:
+        """Join closed single-chromosome stores without recomputing a code (ADR 0015).
+
+        This additive import path lets a producer discover diagonal losses one chromosome
+        at a time, whereas `create` deliberately fixes a genotype build's Variant Set up
+        front. Inputs remain immutable and restartable. Component files are hard-linked
+        on the same filesystem; the final store owns independent variant/index metadata.
+        As for `create`, a pre-existing output is refused and `finish` validates every rule
+        before claiming a store. No genotype build calls this path.
+        """
+        from ogld.store.joining import joined
+
+        root, cutter, ranges, tally = joined(location, chromosomes)
+        writer = cls(root, cutter, ranges)
+        writer._tally = tally
+        writer._next = writer._rows
+        return writer.finish(sourced, threads=threads)
 
     @property
     def encoding(self) -> REncoding:

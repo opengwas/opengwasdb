@@ -44,6 +44,7 @@ class MatrixSource:
 
     def __init__(self, folder: Path, metadata: dict[str, Any], *, cache_blocks: int = 48):
         self.folder = folder
+        self.paths: dict[str, Path] = {}
         self.size = int(metadata["blockSize"])
         if not 0 < self.size <= 4096 or metadata["nRows"] != metadata["nCols"]:
             raise ValueError("expected square BlockMatrix with blockSize at most 4096")
@@ -64,7 +65,7 @@ class MatrixSource:
             return self.block(column, row).T
         name = self.parts[row, column]
         if name not in self._cache:
-            part = read_part(self.folder / name)
+            part = read_part(self.paths.get(name, self.folder / name))
             expected = (
                 min(self.size, self.rows - row * self.size),
                 min(self.size, self.rows - column * self.size),

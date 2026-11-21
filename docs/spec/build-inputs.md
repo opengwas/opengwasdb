@@ -418,14 +418,6 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   variable and its SHA-256; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 
-## 12. Published LD import inputs
-
-Published covariance import follows ADR 0015. Its runtime dependencies are
-`ogld[import]`, not Hail. A native reader accepts Hail 0.2.64 dense BlockMatrix
-parts and refuses malformed/truncated data by part name; an absent part is
-never a measured zero. The variant index is supplied as a TSV exported once
-with Hail outside the package.
-
 ## 11. The Test Panel
 
 The Test Panel, `tests/data/test-panel/`, is v2 chr21 and chr22 for the 771 EUR samples, with the
@@ -442,3 +434,61 @@ reads it.
   of the threshold (≥ or >).
 - **k = 10** uses the first 10 PCs the PC Check keeps on the Test Panel's own common variants:
   PC1–PC10.
+
+## 12. Published LD import inputs
+
+`ogld import OUT --work WORK --metadata metadata.json --variants variants.tsv.bgz
+--chain hg19ToHg38.over.chain.gz --fasta GRCh38.fa.gz` imports Pan-UKB EUR
+(ADR 0015). Its dependencies are `ogld[import]`, not Hail. The fixed source is
+`https://pan-ukb-us-east-1.s3.us-east-1.amazonaws.com/ld_release/UKBB.EUR.ldadj.bm`.
+
+- `--metadata` supplies Hail BlockMatrix metadata (`blockSize`, `nRows`, `nCols`,
+  `maybeFiltered`, `partFiles`). Native Hail 0.2.64 parts are decoded, never
+  interpreting an unallocated block as a measured zero.
+- `--variants` is a plain or gzip/BGZF TSV exported once with
+  `scripts/export_panukb_variants.py`, outside the package. Required columns
+  are `locus` (`chrom:position`, 1-based GRCh37), `alleles` (JSON REF/ALT),
+  `AF` (ALT frequency) and `idx` (the existing global matrix row index).
+- `--chain` maps GRCh37 to GRCh38. REF and ALT are reverse-complemented on
+  negative-strand mappings, and REF must match the chromosome in `--fasta`
+  (plain or gzip). Unmapped/ambiguous loci, chromosome/strand or allele-span
+  failures, allele mismatch/identity, invalid frequency and every member of
+  an identity collision are dropped under named loss classes, as in #89.
+- A non-finite or non-positive covariance diagonal drops its variant, counted
+  separately. Surviving covariance is divided by sqrt(C_ii C_jj), then signed
+  with `ogld.identity.orient`. The existing writer alone quantises at ×2047
+  and emits Near Band, Far Pairs, Partner Rows and the ALID companion.
+- The largest complete target radius is measured after liftover per
+  chromosome; the store records their minimum, and provenance records all
+  radii. A radius no larger than the mandatory Near Band is refused.
+- `--ledger` optionally supplies a JSON list of `{name, bytes, sha256}` parts
+  (SHA-256 may be absent on first acquisition). Otherwise the public HTTPS
+  listing supplies byte counts. `--parts` is an optional **read-only** directory
+  of existing parts. New downloads use stdlib HTTPS with retries, listing byte
+  counts and atomic SHA-256 receipts in `WORK/parts/.sha256/`. S3 multipart ETags
+  are not SHA-256 hashes: first acquisition pins bytes locally, and later
+  reads verify that pin. A supplied SHA-256 is always enforced.
+- `WORK` is exclusively locked and pins the metadata, TSV, chain and FASTA by
+  SHA-256, plus the supplied ledger's SHA-256 and the output path. Repeat the same command to resume. A complete
+  single-chromosome store in WORK is the checkpoint; an unfinished chromosome
+  is rebuilt, never finished over. Retained input parts are re-hashed; deleted
+  parts of closed chromosomes are not fetched again.
+- `--delete-parts` deletes only owned downloads, after close and after their
+  last consuming chromosome (a source block can span a chromosome boundary).
+  Without it, parts are retained. `--threads` bounds compression/validation
+  workers. Only one chromosome's source working set is live at a time.
+- Closed immutable chromosome components are joined by `StoreWriter.join`
+  using hard links on the same filesystem. Variant columns are concatenated
+  in engine order, with chromosome-local LD coordinates unchanged. The final
+  store is validated and atomically renamed to OUT, which must not exist.
+  WORK and OUT must be on the same filesystem. Keep WORK until publication
+  succeeds; afterwards its staging stores may be removed without harming OUT.
+
+Provenance records `source.kind = ld_matrix`. Its `source.description` is a
+JSON object naming the source URL, licence, producer commit, transformation,
+chain, published QC (not reapplied) and per-chromosome radii; `source.sha256`
+holds every part and the metadata, TSV, chain and FASTA pins. The panel is
+Pan-UKB EUR, n = 420,542, with 15 named covariates (age, sex, age×sex, age²,
+age²×sex and PC1–PC10); k is not described as 15 PCs. Losses are in
+`variants_dropped`. Thresholds follow `ld-store.md` §3: `t_partner = t_far =
+0.001`, far code floor 65. The existing `ogld validate` is the sole validator.

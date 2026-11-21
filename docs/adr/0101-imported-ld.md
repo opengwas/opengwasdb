@@ -37,6 +37,22 @@ SHA-256 ledger. A restart verifies retained inputs and skips closed
 chromosomes. Parts are deletable only after their chromosome is closed;
 shared parts must remain until their last consuming chromosome closes.
 
+The existing writer requires every variant up front. Rather than change a
+genotype build's output, refusals or poisoned-writer contract, import closes
+one ordinary single-chromosome store at a time in its exclusively locked work
+directory. These are restart checkpoints, each validated by the existing
+writer. The additive `StoreWriter.join` hard-links their immutable LD
+components, concatenates the variant half in bounded slices, derives the
+combined index/companion and validates before publishing. Work and output
+must share a filesystem. A failed final join is rebuilt from closed inputs;
+an incomplete chromosome is rebuilt from verified parts. This avoids a
+whole-genome diagonal-parts prepass (which would defeat chromosome staging),
+at the cost of validating each chromosome and then the combined store.
+The work directory pins metadata, TSV, chain and FASTA hashes and output
+identity and the supplied hash ledger's SHA-256. Supplied local parts remain read-only. Initial downloads establish
+local SHA-256 receipts because S3 listings publish sizes, not SHA-256;
+subsequent reads and supplied hash ledgers enforce the pinned bytes.
+
 Provenance records source kind `ld_matrix`, source URL and producer commit,
 SHA-256 of every part, matrix metadata, TSV, chain and FASTA, all named
 covariates, n = 420,542, k = 15, published QC (not reapplied), transformation,
