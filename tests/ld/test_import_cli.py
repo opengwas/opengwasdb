@@ -1,9 +1,12 @@
 """Published LD import through the CLI, existing validator and reader (#93)."""
 
+import io
 import json
+import urllib.request
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import ogld
 from ogld.cli import main
@@ -31,6 +34,44 @@ def import_args(out: Path, work: Path) -> list[str]:
         "--parts",
         str(FIXTURE),
     ]
+
+
+@pytest.mark.parametrize("alias", ["direct", "supplied-symlink", "cache-symlink"])
+def test_cli_delete_preserves_supplied_parts_and_deletes_only_downloads(
+    tmp_path, monkeypatch, alias
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    cache = work / "parts"
+    if alias == "cache-symlink":
+        supplied = tmp_path / "supplied"
+        supplied.mkdir()
+        cache.symlink_to(supplied, target_is_directory=True)
+    else:
+        cache.mkdir()
+        supplied = cache
+        if alias == "supplied-symlink":
+            supplied = tmp_path / "supplied-alias"
+            supplied.symlink_to(cache, target_is_directory=True)
+    original = (FIXTURE / "part-0").read_bytes()
+    (supplied / "part-0").write_bytes(original)
+    fetches = []
+
+    def fetch(url, *, timeout):
+        name = url.rsplit("/", 1)[-1]
+        fetches.append(name)
+        return io.BytesIO((FIXTURE / name).read_bytes())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fetch)
+    args = import_args(tmp_path / "import.store", work)
+    args[args.index("--parts") + 1] = str(supplied)
+    assert main([*args, "--delete-parts"]) == 0
+    assert fetches == ["part-1"]
+    assert (supplied / "part-0").read_bytes() == original
+    assert not (cache / "part-1").exists()
+    assert not (supplied / "part-1").exists()
+    assert json.loads((cache / ".sha256/part-0.json").read_text())["downloaded"] is False
+    assert json.loads((cache / ".sha256/part-1.json").read_text())["downloaded"] is True
 
 
 def test_cli_import_writes_literal_signed_codes_and_complete_provenance(tmp_path, capsys) -> None:

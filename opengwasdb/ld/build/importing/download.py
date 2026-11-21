@@ -83,6 +83,12 @@ class Parts:
         retry_delay: float = 1,
     ) -> None:
         self.cache, self.local = cache, local
+        self._supplied: set[tuple[int, int]] = set()
+        if local is not None:
+            for entry in local.iterdir():
+                if entry.is_file():
+                    stat = entry.stat()
+                    self._supplied.add((stat.st_dev, stat.st_ino))
         self._fetch, self._delay = fetch, retry_delay
         self._ledger = {entry["name"]: entry for entry in ledger}
         self._receipts = cache / ".sha256"
@@ -96,6 +102,9 @@ class Parts:
         receipt = self._receipts / (name + ".json")
         saved = json.loads(receipt.read_text()) if receipt.exists() else {}
         record = {**saved, **supplied}
+        # A supplied ledger may pin bytes, but cannot grant permission to unlink them.
+        record["downloaded"] = saved.get("downloaded", False)
+        record["download_identity"] = saved.get("download_identity")
         if "bytes" not in record:
             raise ValueError(f"{name}: absent from listing and SHA-256 ledger")
         if int(record["bytes"]) <= 0:
@@ -111,10 +120,20 @@ class Parts:
         """Re-verify existing bytes, or fetch and verify before publishing the receipt."""
         record = self._record(name)
         path = self._path(name)
-        if not path.exists():
+        downloaded = not path.exists()
+        if downloaded:
             self._download(name, record, path)
         digest = self._verify(path, record)
-        atomic_json(self._receipts / (name + ".json"), {**record, "sha256": digest})
+        owned = downloaded or self._owned(path, record)
+        atomic_json(
+            self._receipts / (name + ".json"),
+            {
+                **record,
+                "sha256": digest,
+                "downloaded": owned,
+                "download_identity": self._identity(path) if owned else None,
+            },
+        )
         self.hashes[name] = digest
         return path
 
@@ -160,8 +179,24 @@ class Parts:
                 self._verify(path, record)
             self.hashes[name] = record["sha256"]
 
+    @staticmethod
+    def _identity(path: Path) -> list[int]:
+        stat = path.stat()
+        return [stat.st_dev, stat.st_ino, stat.st_ctime_ns]
+
+    def _owned(self, path: Path, record: dict[str, Any]) -> bool:
+        identity = self._identity(path)
+        return (
+            record.get("downloaded") is True
+            and record.get("download_identity") == identity
+            and (identity[0], identity[1]) not in self._supplied
+            and not path.is_symlink()
+        )
+
     def delete(self, names: list[str]) -> None:
-        """Only delete owned downloads: supplied local parts are always read-only."""
+        """Only unlink the recorded downloads, never supplied files or their path aliases."""
         for name in names:
-            self._record(name)
-            (self.cache / name).unlink(missing_ok=True)
+            record = self._record(name)
+            path = self.cache / name
+            if path.exists() and self._owned(path, record):
+                path.unlink()

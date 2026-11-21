@@ -478,6 +478,11 @@ reads it.
   parts of closed chromosomes are not fetched again.
 - `--delete-parts` deletes only owned downloads, after close and after their
   last consuming chromosome (a source block can span a chromosome boundary).
+  A receipt grants deletion only when `downloaded` is true and its recorded
+  device/inode/ctime still identify the downloaded file. Supplied ledgers
+  cannot grant ownership. Files supplied at invocation remain protected by
+  file identity even if `--parts` aliases `WORK/parts` through symlinks or
+  other paths. Receipts without ownership evidence never permit deletion.
   Without it, parts are retained. `--threads` bounds compression/validation
   workers. Only one chromosome's source working set is live at a time.
 - Closed immutable chromosome components are joined by `StoreWriter.join`

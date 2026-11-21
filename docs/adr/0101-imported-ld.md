@@ -53,6 +53,13 @@ identity and the supplied hash ledger's SHA-256. Supplied local parts remain rea
 local SHA-256 receipts because S3 listings publish sizes, not SHA-256;
 subsequent reads and supplied hash ledgers enforce the pinned bytes.
 
+A download receipt records ownership (`downloaded`) and the downloaded
+file's device/inode/ctime. Only that recorded file may be deleted; a supplied
+ledger cannot grant ownership, and old receipts without ownership retain
+their parts. Supplied files are protected by file identity at invocation,
+not spelling of the directory: symlink/path aliases of the download cache
+must not turn supplied inputs into owned downloads (#93 fix round 1).
+
 Provenance records source kind `ld_matrix`, source URL and producer commit,
 SHA-256 of every part, matrix metadata, TSV, chain and FASTA, all named
 covariates, n = 420,542, k = 15, published QC (not reapplied), transformation,
