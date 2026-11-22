@@ -1,0 +1,958 @@
+{
+ "store": "/data/opengwasdb/work/ogld/stores/hgdp1kgp-v2-EUR-k10.store",
+ "near_bp": 3000000,
+ "counts": {
+  "near_pairs": 83623618163,
+  "far_candidates": 176740490597,
+  "far_pairs": 132924736,
+  "index_entries": 5287398542
+ },
+ "chromosomes": [
+  {
+   "chrom": "1",
+   "rows": 662076,
+   "index_entries": 321769494,
+   "far_pairs": 816962,
+   "far_pairs_per_row": 1.2339399102217872,
+   "rows_with_far_pairs": 108631,
+   "far_pairs_chunks": 50,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 507,
+     "far_pairs_chunks": 29
+    },
+    {
+     "seed": 9,
+     "index_chunks": 501,
+     "far_pairs_chunks": 29
+    },
+    {
+     "seed": 10,
+     "index_chunks": 504,
+     "far_pairs_chunks": 28
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 37,
+     "far_pairs_chunks": 7
+    },
+    {
+     "seed": 9,
+     "index_chunks": 36,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 10,
+     "index_chunks": 27,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "2",
+   "rows": 707895,
+   "index_entries": 378908440,
+   "far_pairs": 1066935,
+   "far_pairs_per_row": 1.507193863496705,
+   "rows_with_far_pairs": 115849,
+   "far_pairs_chunks": 66,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 507,
+     "far_pairs_chunks": 26
+    },
+    {
+     "seed": 9,
+     "index_chunks": 502,
+     "far_pairs_chunks": 30
+    },
+    {
+     "seed": 10,
+     "index_chunks": 507,
+     "far_pairs_chunks": 28
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 35,
+     "far_pairs_chunks": 8
+    },
+    {
+     "seed": 9,
+     "index_chunks": 44,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 10,
+     "index_chunks": 56,
+     "far_pairs_chunks": 9
+    }
+   ]
+  },
+  {
+   "chrom": "3",
+   "rows": 608822,
+   "index_entries": 367545178,
+   "far_pairs": 2321033,
+   "far_pairs_per_row": 3.8123343111779797,
+   "rows_with_far_pairs": 102970,
+   "far_pairs_chunks": 142,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 510,
+     "far_pairs_chunks": 37
+    },
+    {
+     "seed": 9,
+     "index_chunks": 504,
+     "far_pairs_chunks": 33
+    },
+    {
+     "seed": 10,
+     "index_chunks": 512,
+     "far_pairs_chunks": 33
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 39,
+     "far_pairs_chunks": 7
+    },
+    {
+     "seed": 9,
+     "index_chunks": 31,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 10,
+     "index_chunks": 30,
+     "far_pairs_chunks": 4
+    }
+   ]
+  },
+  {
+   "chrom": "4",
+   "rows": 626683,
+   "index_entries": 372254450,
+   "far_pairs": 858715,
+   "far_pairs_per_row": 1.3702541795453205,
+   "rows_with_far_pairs": 100425,
+   "far_pairs_chunks": 53,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 510,
+     "far_pairs_chunks": 28
+    },
+    {
+     "seed": 9,
+     "index_chunks": 503,
+     "far_pairs_chunks": 27
+    },
+    {
+     "seed": 10,
+     "index_chunks": 505,
+     "far_pairs_chunks": 24
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 36,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 9,
+     "index_chunks": 35,
+     "far_pairs_chunks": 5
+    },
+    {
+     "seed": 10,
+     "index_chunks": 45,
+     "far_pairs_chunks": 8
+    }
+   ]
+  },
+  {
+   "chrom": "5",
+   "rows": 552360,
+   "index_entries": 339017258,
+   "far_pairs": 6560407,
+   "far_pairs_per_row": 11.877049388080238,
+   "rows_with_far_pairs": 91618,
+   "far_pairs_chunks": 401,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 508,
+     "far_pairs_chunks": 32
+    },
+    {
+     "seed": 9,
+     "index_chunks": 511,
+     "far_pairs_chunks": 31
+    },
+    {
+     "seed": 10,
+     "index_chunks": 512,
+     "far_pairs_chunks": 32
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 21,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 9,
+     "index_chunks": 34,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 10,
+     "index_chunks": 45,
+     "far_pairs_chunks": 5
+    }
+   ]
+  },
+  {
+   "chrom": "6",
+   "rows": 584545,
+   "index_entries": 641222286,
+   "far_pairs": 12150924,
+   "far_pairs_per_row": 20.786977905892616,
+   "rows_with_far_pairs": 106050,
+   "far_pairs_chunks": 742,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 526,
+     "far_pairs_chunks": 45
+    },
+    {
+     "seed": 9,
+     "index_chunks": 515,
+     "far_pairs_chunks": 36
+    },
+    {
+     "seed": 10,
+     "index_chunks": 528,
+     "far_pairs_chunks": 44
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 42,
+     "far_pairs_chunks": 7
+    },
+    {
+     "seed": 9,
+     "index_chunks": 26,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 10,
+     "index_chunks": 46,
+     "far_pairs_chunks": 5
+    }
+   ]
+  },
+  {
+   "chrom": "7",
+   "rows": 509923,
+   "index_entries": 316102426,
+   "far_pairs": 5626236,
+   "far_pairs_per_row": 11.033501136446091,
+   "rows_with_far_pairs": 86960,
+   "far_pairs_chunks": 344,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 513,
+     "far_pairs_chunks": 28
+    },
+    {
+     "seed": 9,
+     "index_chunks": 507,
+     "far_pairs_chunks": 23
+    },
+    {
+     "seed": 10,
+     "index_chunks": 505,
+     "far_pairs_chunks": 29
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 38,
+     "far_pairs_chunks": 5
+    },
+    {
+     "seed": 9,
+     "index_chunks": 23,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 10,
+     "index_chunks": 27,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "8",
+   "rows": 466195,
+   "index_entries": 300577398,
+   "far_pairs": 2778549,
+   "far_pairs_per_row": 5.960057486674032,
+   "rows_with_far_pairs": 82764,
+   "far_pairs_chunks": 170,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 498,
+     "far_pairs_chunks": 26
+    },
+    {
+     "seed": 9,
+     "index_chunks": 508,
+     "far_pairs_chunks": 25
+    },
+    {
+     "seed": 10,
+     "index_chunks": 505,
+     "far_pairs_chunks": 34
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 28,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 29,
+     "far_pairs_chunks": 7
+    },
+    {
+     "seed": 10,
+     "index_chunks": 30,
+     "far_pairs_chunks": 1
+    }
+   ]
+  },
+  {
+   "chrom": "9",
+   "rows": 372515,
+   "index_entries": 173014580,
+   "far_pairs": 335049,
+   "far_pairs_per_row": 0.8994241842610364,
+   "rows_with_far_pairs": 58709,
+   "far_pairs_chunks": 21,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 491,
+     "far_pairs_chunks": 17
+    },
+    {
+     "seed": 9,
+     "index_chunks": 493,
+     "far_pairs_chunks": 16
+    },
+    {
+     "seed": 10,
+     "index_chunks": 501,
+     "far_pairs_chunks": 17
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 21,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 9,
+     "index_chunks": 28,
+     "far_pairs_chunks": 1
+    },
+    {
+     "seed": 10,
+     "index_chunks": 14,
+     "far_pairs_chunks": 2
+    }
+   ]
+  },
+  {
+   "chrom": "10",
+   "rows": 442277,
+   "index_entries": 307866978,
+   "far_pairs": 13381159,
+   "far_pairs_per_row": 30.25515457507399,
+   "rows_with_far_pairs": 78007,
+   "far_pairs_chunks": 817,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 508,
+     "far_pairs_chunks": 28
+    },
+    {
+     "seed": 9,
+     "index_chunks": 511,
+     "far_pairs_chunks": 34
+    },
+    {
+     "seed": 10,
+     "index_chunks": 507,
+     "far_pairs_chunks": 30
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 28,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 33,
+     "far_pairs_chunks": 8
+    },
+    {
+     "seed": 10,
+     "index_chunks": 22,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "11",
+   "rows": 427295,
+   "index_entries": 508115652,
+   "far_pairs": 69017129,
+   "far_pairs_per_row": 161.52103113773856,
+   "rows_with_far_pairs": 76296,
+   "far_pairs_chunks": 4213,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 529,
+     "far_pairs_chunks": 51
+    },
+    {
+     "seed": 9,
+     "index_chunks": 522,
+     "far_pairs_chunks": 32
+    },
+    {
+     "seed": 10,
+     "index_chunks": 528,
+     "far_pairs_chunks": 45
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 22,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 28,
+     "far_pairs_chunks": 5
+    },
+    {
+     "seed": 10,
+     "index_chunks": 18,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "12",
+   "rows": 414737,
+   "index_entries": 249760514,
+   "far_pairs": 9210890,
+   "far_pairs_per_row": 22.208990275765125,
+   "rows_with_far_pairs": 70642,
+   "far_pairs_chunks": 563,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 512,
+     "far_pairs_chunks": 25
+    },
+    {
+     "seed": 9,
+     "index_chunks": 503,
+     "far_pairs_chunks": 29
+    },
+    {
+     "seed": 10,
+     "index_chunks": 503,
+     "far_pairs_chunks": 30
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 36,
+     "far_pairs_chunks": 7
+    },
+    {
+     "seed": 9,
+     "index_chunks": 28,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 10,
+     "index_chunks": 12,
+     "far_pairs_chunks": 1
+    }
+   ]
+  },
+  {
+   "chrom": "13",
+   "rows": 321544,
+   "index_entries": 172446018,
+   "far_pairs": 271424,
+   "far_pairs_per_row": 0.8441270868061603,
+   "rows_with_far_pairs": 50822,
+   "far_pairs_chunks": 17,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 503,
+     "far_pairs_chunks": 16
+    },
+    {
+     "seed": 9,
+     "index_chunks": 502,
+     "far_pairs_chunks": 15
+    },
+    {
+     "seed": 10,
+     "index_chunks": 498,
+     "far_pairs_chunks": 14
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 15,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 25,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 10,
+     "index_chunks": 22,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "14",
+   "rows": 281562,
+   "index_entries": 151186176,
+   "far_pairs": 212673,
+   "far_pairs_per_row": 0.75533275086837,
+   "rows_with_far_pairs": 43861,
+   "far_pairs_chunks": 13,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 486,
+     "far_pairs_chunks": 11
+    },
+    {
+     "seed": 9,
+     "index_chunks": 495,
+     "far_pairs_chunks": 12
+    },
+    {
+     "seed": 10,
+     "index_chunks": 497,
+     "far_pairs_chunks": 11
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 20,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 9,
+     "index_chunks": 25,
+     "far_pairs_chunks": 3
+    },
+    {
+     "seed": 10,
+     "index_chunks": 26,
+     "far_pairs_chunks": 5
+    }
+   ]
+  },
+  {
+   "chrom": "15",
+   "rows": 241261,
+   "index_entries": 111778380,
+   "far_pairs": 138945,
+   "far_pairs_per_row": 0.5759115646540469,
+   "rows_with_far_pairs": 37920,
+   "far_pairs_chunks": 9,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 482,
+     "far_pairs_chunks": 9
+    },
+    {
+     "seed": 9,
+     "index_chunks": 470,
+     "far_pairs_chunks": 9
+    },
+    {
+     "seed": 10,
+     "index_chunks": 479,
+     "far_pairs_chunks": 9
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 14,
+     "far_pairs_chunks": 1
+    },
+    {
+     "seed": 9,
+     "index_chunks": 11,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 10,
+     "index_chunks": 18,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "16",
+   "rows": 258923,
+   "index_entries": 96807874,
+   "far_pairs": 287786,
+   "far_pairs_per_row": 1.1114732951495232,
+   "rows_with_far_pairs": 45174,
+   "far_pairs_chunks": 18,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 479,
+     "far_pairs_chunks": 11
+    },
+    {
+     "seed": 9,
+     "index_chunks": 480,
+     "far_pairs_chunks": 14
+    },
+    {
+     "seed": 10,
+     "index_chunks": 478,
+     "far_pairs_chunks": 15
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 17,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 11,
+     "far_pairs_chunks": 1
+    },
+    {
+     "seed": 10,
+     "index_chunks": 20,
+     "far_pairs_chunks": 4
+    }
+   ]
+  },
+  {
+   "chrom": "17",
+   "rows": 230868,
+   "index_entries": 105271334,
+   "far_pairs": 1512699,
+   "far_pairs_per_row": 6.55222464785072,
+   "rows_with_far_pairs": 37192,
+   "far_pairs_chunks": 93,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 483,
+     "far_pairs_chunks": 15
+    },
+    {
+     "seed": 9,
+     "index_chunks": 475,
+     "far_pairs_chunks": 15
+    },
+    {
+     "seed": 10,
+     "index_chunks": 479,
+     "far_pairs_chunks": 14
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 18,
+     "far_pairs_chunks": 6
+    },
+    {
+     "seed": 9,
+     "index_chunks": 16,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 10,
+     "index_chunks": 10,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "18",
+   "rows": 247853,
+   "index_entries": 106267114,
+   "far_pairs": 365278,
+   "far_pairs_per_row": 1.473768725817319,
+   "rows_with_far_pairs": 39370,
+   "far_pairs_chunks": 23,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 485,
+     "far_pairs_chunks": 12
+    },
+    {
+     "seed": 9,
+     "index_chunks": 478,
+     "far_pairs_chunks": 13
+    },
+    {
+     "seed": 10,
+     "index_chunks": 488,
+     "far_pairs_chunks": 12
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 16,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 18,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 10,
+     "index_chunks": 12,
+     "far_pairs_chunks": 2
+    }
+   ]
+  },
+  {
+   "chrom": "19",
+   "rows": 201398,
+   "index_entries": 100423794,
+   "far_pairs": 3520100,
+   "far_pairs_per_row": 17.478326497780515,
+   "rows_with_far_pairs": 37734,
+   "far_pairs_chunks": 215,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 478,
+     "far_pairs_chunks": 25
+    },
+    {
+     "seed": 9,
+     "index_chunks": 470,
+     "far_pairs_chunks": 16
+    },
+    {
+     "seed": 10,
+     "index_chunks": 484,
+     "far_pairs_chunks": 27
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 9,
+     "far_pairs_chunks": 0
+    },
+    {
+     "seed": 9,
+     "index_chunks": 12,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 10,
+     "index_chunks": 11,
+     "far_pairs_chunks": 1
+    }
+   ]
+  },
+  {
+   "chrom": "20",
+   "rows": 190375,
+   "index_entries": 78089012,
+   "far_pairs": 2320861,
+   "far_pairs_per_row": 12.190996717005909,
+   "rows_with_far_pairs": 31774,
+   "far_pairs_chunks": 142,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 469,
+     "far_pairs_chunks": 22
+    },
+    {
+     "seed": 9,
+     "index_chunks": 459,
+     "far_pairs_chunks": 16
+    },
+    {
+     "seed": 10,
+     "index_chunks": 467,
+     "far_pairs_chunks": 18
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 12,
+     "far_pairs_chunks": 4
+    },
+    {
+     "seed": 9,
+     "index_chunks": 12,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 10,
+     "index_chunks": 13,
+     "far_pairs_chunks": 3
+    }
+   ]
+  },
+  {
+   "chrom": "21",
+   "rows": 118150,
+   "index_entries": 43477422,
+   "far_pairs": 69096,
+   "far_pairs_per_row": 0.5848159119763013,
+   "rows_with_far_pairs": 16177,
+   "far_pairs_chunks": 5,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 457,
+     "far_pairs_chunks": 5
+    },
+    {
+     "seed": 9,
+     "index_chunks": 441,
+     "far_pairs_chunks": 5
+    },
+    {
+     "seed": 10,
+     "index_chunks": 439,
+     "far_pairs_chunks": 5
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 3,
+     "far_pairs_chunks": 0
+    },
+    {
+     "seed": 9,
+     "index_chunks": 10,
+     "far_pairs_chunks": 0
+    },
+    {
+     "seed": 10,
+     "index_chunks": 7,
+     "far_pairs_chunks": 1
+    }
+   ]
+  },
+  {
+   "chrom": "22",
+   "rows": 119632,
+   "index_entries": 45496764,
+   "far_pairs": 101886,
+   "far_pairs_per_row": 0.8516617627390665,
+   "rows_with_far_pairs": 18645,
+   "far_pairs_chunks": 7,
+   "draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 447,
+     "far_pairs_chunks": 5
+    },
+    {
+     "seed": 9,
+     "index_chunks": 448,
+     "far_pairs_chunks": 6
+    },
+    {
+     "seed": 10,
+     "index_chunks": 433,
+     "far_pairs_chunks": 6
+    }
+   ],
+   "genome_draws_of_500": [
+    {
+     "seed": 8,
+     "index_chunks": 7,
+     "far_pairs_chunks": 0
+    },
+    {
+     "seed": 9,
+     "index_chunks": 6,
+     "far_pairs_chunks": 2
+    },
+    {
+     "seed": 10,
+     "index_chunks": 3,
+     "far_pairs_chunks": 1
+    }
+   ]
+  }
+ ]
+}
