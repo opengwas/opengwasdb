@@ -467,10 +467,21 @@ reads it.
 - `--ledger` optionally supplies a JSON list of `{name, bytes, sha256}` parts
   (SHA-256 may be absent on first acquisition). Otherwise the public HTTPS
   listing supplies byte counts. `--parts` is an optional **read-only** directory
-  of existing parts. New downloads use stdlib HTTPS with retries, listing byte
-  counts and atomic SHA-256 receipts in `WORK/parts/.sha256/`. S3 multipart ETags
+  of existing parts. New downloads use stdlib HTTPS with retries (8 attempts,
+  with backoff), listing byte counts and atomic SHA-256 receipts in
+  `WORK/parts/.sha256/`. S3 multipart ETags
   are not SHA-256 hashes: first acquisition pins bytes locally, and later
   reads verify that pin. A supplied SHA-256 is always enforced.
+- `--download-workers N` (default 8) fetches a chromosome's missing parts in
+  parallel before it is written; each still takes the single-part path (byte
+  count, SHA-256 receipt, atomic rename, ownership). The first failed part, once
+  in-flight downloads stop, refuses the import by name. Each connection has its
+  own short connect timeout (12 s) beside the 120 s read timeout. The bucket
+  host's addresses are tried in turn; an address whose TCP connect or TLS
+  handshake fails is not tried again in that run, while a timeout, reset or HTTP
+  error after the connect leaves it in use and the attempt is retried. If every
+  address is dead and none has answered, the dead marks are cleared. TLS connects to the chosen address but verifies the
+  bucket's hostname.
 - `WORK` is exclusively locked and pins the metadata, TSV, chain and FASTA by
   SHA-256, plus the supplied ledger's SHA-256 and the output path. Repeat the same command to resume. A complete
   single-chromosome store in WORK is the checkpoint; an unfinished chromosome
