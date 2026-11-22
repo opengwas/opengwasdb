@@ -109,6 +109,34 @@ def _import_command(commands: argparse._SubParsersAction[argparse.ArgumentParser
         default=8,
         help="parts of a chromosome downloaded at once",
     )
+    command.add_argument(
+        "--far-target-bp",
+        type=_far_target,
+        default=8_000_000,
+        help="complete radius every chromosome must reach, after dropping displaced liftover",
+    )
+    command.add_argument(
+        "--displaced-cap",
+        type=_displaced_cap,
+        default=10_000,
+        help="most variants one displaced liftover segment may lose; a larger one refuses",
+    )
+
+
+def _far_target(text: str) -> int:
+    from ogld.format import NEAR_BP
+
+    if not text.strip().isdigit() or int(text) <= NEAR_BP:
+        raise argparse.ArgumentTypeError(
+            f"needs a whole number of base pairs above the Near Band ({NEAR_BP}), not {text!r}"
+        )
+    return int(text)
+
+
+def _displaced_cap(text: str) -> int:
+    if not text.strip().isdigit():
+        raise argparse.ArgumentTypeError(f"needs a whole number of at least 0, not {text!r}")
+    return int(text)
 
 
 def _import(args: argparse.Namespace) -> int:
@@ -128,6 +156,8 @@ def _import(args: argparse.Namespace) -> int:
             "delete_parts",
             "threads",
             "download_workers",
+            "far_target_bp",
+            "displaced_cap",
         )
     )
     try:

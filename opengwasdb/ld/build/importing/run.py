@@ -21,6 +21,7 @@ from ogld.build.importing.download import BUCKET, Fetch, Parts, PinnedHttps, ato
 from ogld.build.importing.lift import (
     Lifted,
     SourceVariant,
+    drop_displaced,
     far_distance,
     lift_variants,
     variant_chromosomes,
@@ -35,6 +36,10 @@ from ogld.version import __version__
 
 # The source policy, not an encoding default (owner #88; ADR 0015).
 PANUKB_SCALE: Final = 2047
+# The complete radius an import must reach, and the most variants one displaced liftover
+# segment may cost to get there (owner #99).
+FAR_TARGET_BP: Final = 8_000_000
+DISPLACED_CAP: Final = 10_000
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,8 @@ class ImportInputs:
     delete_parts: bool = False
     threads: int = 1
     download_workers: int = 8
+    far_target_bp: int = FAR_TARGET_BP
+    displaced_cap: int = DISPLACED_CAP
 
 
 def _save(path: Path, table: Lifted) -> None:
@@ -87,7 +94,9 @@ def _identity(inputs: ImportInputs, out: Path) -> dict[str, Any]:
         "inputs": pins,
         "ledger_sha256": sha256(inputs.ledger) if inputs.ledger else None,
         "out": str(out.resolve()),
-        "schema": 1,
+        "far_target_bp": inputs.far_target_bp,
+        "displaced_cap": inputs.displaced_cap,
+        "schema": 2,
     }
 
 
@@ -120,6 +129,9 @@ def _plan_chromosome(
     if any(row.index >= source.rows for row in rows):
         raise ValueError(f"chromosome {name}: TSV index exceeds BlockMatrix")
     table, losses = lift_variants(rows, inputs.chain, inputs.fasta)
+    table, losses["liftover_displaced"] = drop_displaced(
+        name, table, target=inputs.far_target_bp, cap=inputs.displaced_cap
+    )
     radius = _checked_radius(name, table)
     names = _parts_of(source, rows)
     _save(inputs.work / f"{name}.lifted.npz", table)
@@ -176,6 +188,12 @@ def _sourced(
         "liftover_chain": str(inputs.chain),
         "far_bp_by_chromosome": {
             name: chrom["far_bp"] for name, chrom in plan["chromosomes"].items()
+        },
+        "far_target_bp": inputs.far_target_bp,
+        "displaced_cap": inputs.displaced_cap,
+        "displaced_by_chromosome": {
+            name: chrom["losses"]["liftover_displaced"]
+            for name, chrom in plan["chromosomes"].items()
         },
         "qc": "Pan-UKB published QC: MAC >= 20, INFO > 0.8; not reapplied",
     }
