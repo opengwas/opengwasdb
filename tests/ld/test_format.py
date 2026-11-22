@@ -219,8 +219,7 @@ def test_an_encoding_ogld_does_not_implement_is_refused_naming_it(case: str) -> 
 # 771 EUR members (owner's ruling), so the Test Store's rows are its own. The values were computed
 # in 50-digit decimal arithmetic, outside ogld.
 T_FAR_TABLE = [
-    ("UK Biobank EUR", 49766, 0, 2047, 0.001, 65, 65, True, 0.0009929),
-    ("UK Biobank EUR", 49766, 10, 2047, 0.001, 65, 65, True, 0.0009929),
+    ("UK Biobank EUR (Pan-UKB)", 420542, 15, 2047, 0.001, 65, 65, True, 0.0009929),
     ("HGDP+1kGP EUR", 665, 0, 511, 0.0313855, 91, 91, True, 0.0313657),
     ("HGDP+1kGP EUR", 665, 10, 511, 0.0318654, 92, 91, False, 0.0320627),
     ("HGDP+1kGP AFR", 608, 0, 511, 0.0343328, 95, 95, True, 0.0341997),

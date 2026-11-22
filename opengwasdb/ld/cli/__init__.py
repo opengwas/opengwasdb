@@ -43,6 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     _build_command(commands)
+    _import_command(commands)
     _validate_command(commands)
     _derive_command(commands)
     commands.add_parser("info", help="print the provenance").add_argument("location")
@@ -89,6 +90,45 @@ def _build_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]
     b.add_argument("--mac-min", type=int, default=unset)
     b.add_argument("--info-min", type=_optional_float, default=unset, help="a number, or none")
     b.add_argument("--threads", type=int, default=unset)
+
+
+def _import_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    command = commands.add_parser("import", help="import Pan-UKB published LD (ADR 0015)")
+    command.add_argument("out", type=Path)
+    for name in ("metadata", "variants", "chain", "fasta", "work"):
+        command.add_argument("--" + name, type=Path, required=True)
+    command.add_argument("--ledger", type=Path, help="supplied part listing/SHA-256 ledger")
+    command.add_argument("--parts", type=Path, help="read-only directory of existing parts")
+    command.add_argument(
+        "--delete-parts", action="store_true", help="delete owned downloads after close"
+    )
+    command.add_argument("--threads", type=_threads, default=1)
+
+
+def _import(args: argparse.Namespace) -> int:
+    # Optional dependencies are loaded only on this path, never when opening an LD Store.
+    from ogld.build.importing.run import ImportInputs, import_panukb
+
+    inputs = ImportInputs(
+        **_given(
+            args,
+            "metadata",
+            "variants",
+            "chain",
+            "fasta",
+            "work",
+            "ledger",
+            "parts",
+            "delete_parts",
+            "threads",
+        )
+    )
+    try:
+        made = import_panukb(inputs, args.out)
+    except (ValueError, OSError) as problem:
+        raise InputError(str(problem)) from problem
+    print(json.dumps(made, indent=1))
+    return 0
 
 
 def _validate_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -203,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     run = {
         "build": _build,
+        "import": _import,
         "validate": _validate,
         "info": _info,
         "derive-partners": _derive,

@@ -13,6 +13,7 @@ from ogld.format.geometry import (
     blocks,
     chromosome_index,
     chromosome_ranges,
+    chromosome_ranges_from_counts,
     global_rows,
     indptr_of,
     local_rows,
@@ -28,6 +29,26 @@ from ogld.format.geometry import (
     windows,
     within,
 )
+
+
+def test_closed_chromosome_counts_form_joined_row_ranges() -> None:
+    assert chromosome_ranges_from_counts([("1", 3), ("2", 3), ("22", 2)]) == {
+        "1": (0, 3),
+        "2": (3, 6),
+        "22": (6, 8),
+    }
+    assert chromosome_ranges_from_counts([]) == {}
+
+
+@pytest.mark.parametrize("count", [0, -1, 1.5, True])
+def test_joined_chromosome_counts_must_be_positive_integers(count) -> None:
+    with pytest.raises(ValueError, match=r"chromosome 2.*positive integer"):
+        chromosome_ranges_from_counts([("1", 3), ("2", count)])
+
+
+def test_joined_chromosome_counts_cannot_repeat_a_chromosome() -> None:
+    with pytest.raises(ValueError, match="chromosome 1 is not contiguous"):
+        chromosome_ranges_from_counts([("1", 3), ("2", 3), ("1", 2)])
 
 
 @st.composite

@@ -234,6 +234,17 @@ reads back as r̂² = 0.0099609 and does not reach it, while 0.0102 is code 52, 
 ogld#6 lists any pair like this, at the store's own step, when it compares clumping with
 `plink2 --clump`.
 
+For imported Pan-UKB EUR (ADR 0015), n = 420,542 and k = 15 named
+covariates, not only PCs. Thus 20.84 / (420,542 − 15 − 1) = 0.00004955698;
+`t_far = max(0.001, 0.00004955698) = 0.001`. At ×2047,
+√0.001 × 2047 = 64.73182370, giving far code floor 65. The Partner
+Threshold is also 0.001. Its GRCh38 `far_bp` is measured after liftover,
+per chromosome, with the store recording the minimum; chr22 is 9,591,521 bp,
+not an assumed 10 Mb. The source is residual covariance, diagonal-normalised
+before A1 orientation and quantisation; all transformations and losses are
+recorded (`build-inputs.md` §12). Its LD is not presented as equivalent to
+k = 0 or k = 10 genotype-derived LD.
+
 **The far code floor.** `far_code_floor` is the smallest integer c ≥ 0 with (c / s)² ≥ t_far in
 float64, at the store's scale s. A pair is at that floor exactly when it is within `far_bp` and
 |code| ≥ `far_code_floor`, so a pair more than `near_bp` apart is a **Far Pair** exactly then.
@@ -258,7 +269,7 @@ ogld, and `tests/test_format.py` holds the code to every row.
 
 | LD Store | scale | n | k | t_far | √t_far × s | far code floor | a pair at exactly t_far | true r² cut |
 |---|---|---|---|---|---|---|---|---|
-| UK Biobank EUR | 2047 | 49,766 | 0 or 10 | 0.001 | 64.73 → 65 | 65 | stored | 0.0009929 |
+| UK Biobank EUR (Pan-UKB) | 2047 | 420,542 | 15 | 0.001 | 64.73 → 65 | 65 | stored | 0.0009929 |
 | HGDP+1kGP EUR | 511 | 665 | 0 | 0.0313855 | 90.53 → 91 | 91 | stored | 0.0313657 |
 | HGDP+1kGP EUR | 511 | 665 | 10 | 0.0318654 | 91.22 → 91 | 92 | **the Bound** | 0.0320627 |
 | HGDP+1kGP AFR | 511 | 608 | 0 | 0.0343328 | 94.68 → 95 | 95 | stored | 0.0341997 |
