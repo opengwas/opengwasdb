@@ -103,6 +103,12 @@ def _import_command(commands: argparse._SubParsersAction[argparse.ArgumentParser
         "--delete-parts", action="store_true", help="delete owned downloads after close"
     )
     command.add_argument("--threads", type=_threads, default=1)
+    command.add_argument(
+        "--download-workers",
+        type=_threads,
+        default=8,
+        help="parts of a chromosome downloaded at once",
+    )
 
 
 def _import(args: argparse.Namespace) -> int:
@@ -121,6 +127,7 @@ def _import(args: argparse.Namespace) -> int:
             "parts",
             "delete_parts",
             "threads",
+            "download_workers",
         )
     )
     try:
