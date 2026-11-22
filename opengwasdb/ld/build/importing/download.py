@@ -126,14 +126,14 @@ class PinnedHttps:
         self._probe = threading.Lock()
 
     def _candidates(self) -> list[str]:
-        """Addresses that have answered first, then unknown ones; the dead are skipped."""
+        """Addresses that have answered first (DNS rotates, so even if not just returned)."""
         found = self._resolve(HOST)
         with self._lock:
             live = [a for a in found if a not in self.dead]
-            if not live:  # all known dead: forgive them, an outage may have passed
+            if not live and not self.good:  # all dead: forgive them, an outage may have passed
                 self.dead.difference_update(found)
                 live = list(found)
-            known = [a for a in live if a in self.good]
+            known = list(self.good)
         random.shuffle(known)
         return known + [a for a in live if a not in known]
 
