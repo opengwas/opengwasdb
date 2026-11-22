@@ -47,6 +47,10 @@ def _listing_entry(obj: ET.Element) -> dict[str, Any]:
     }
 
 
+def _incomplete() -> ValueError:
+    return ValueError("incomplete Pan-UKB bucket listing")
+
+
 def _listing_page(fetch: Fetch, token: str) -> tuple[list[dict[str, Any]], str | None]:
     query = {"list-type": "2", "prefix": PREFIX}
     if token:
@@ -59,7 +63,7 @@ def _listing_page(fetch: Fetch, token: str) -> tuple[list[dict[str, Any]], str |
         return entries, None
     following = root.findtext("s:NextContinuationToken", namespaces=_S3_NS) or ""
     if truncated != "true" or not following:
-        raise ValueError("incomplete Pan-UKB bucket listing")
+        raise _incomplete()
     return entries, following
 
 
@@ -74,7 +78,7 @@ def inventory(fetch: Fetch = https) -> list[dict[str, Any]]:
         if following is None:
             return result
         if following in seen:
-            raise ValueError("incomplete Pan-UKB bucket listing")
+            raise _incomplete()
         seen.add(following)
         token = following
 

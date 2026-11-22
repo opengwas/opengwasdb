@@ -130,6 +130,10 @@ def _plan_chromosome(
     }
 
 
+def _plan_path(inputs: ImportInputs) -> Path:
+    return inputs.work / "plan.json"
+
+
 def _new_plan(
     inputs: ImportInputs, metadata: dict[str, Any], identity: dict[str, Any]
 ) -> dict[str, Any]:
@@ -144,13 +148,13 @@ def _new_plan(
         "chromosomes": chromosomes,
         "far_bp": min(chrom["far_bp"] for chrom in chromosomes.values()),
     }
-    atomic_json(inputs.work / "plan.json", plan)
+    atomic_json(_plan_path(inputs), plan)
     return plan
 
 
 def _plan(inputs: ImportInputs, out: Path, metadata: dict[str, Any]) -> dict[str, Any]:
     identity = _identity(inputs, out)
-    saved = _saved_plan(inputs.work / "plan.json", identity)
+    saved = _saved_plan(_plan_path(inputs), identity)
     if saved is not None:
         return saved
     return _new_plan(inputs, metadata, identity)
@@ -311,7 +315,6 @@ def _closed_chromosome(
         source = MatrixSource(parts.cache, metadata)
         source.paths = {part: parts.ensure(part) for part in chromosome["parts"]}
         closed = _write(inputs, name, plan, source, parts, destination, start)
-        del source
         return closed
     parts.verify_closed(chromosome["parts"])
     for part in chromosome["parts"]:
@@ -343,7 +346,7 @@ def _publish(
     return made
 
 
-def _closed_all(
+def _close_chromosomes_releasing_parts(
     inputs: ImportInputs,
     plan: dict[str, Any],
     metadata: dict[str, Any],
@@ -381,7 +384,9 @@ def _import(
     ledger = json.loads(inputs.ledger.read_text()) if inputs.ledger else inventory(fetch)
     cache = inputs.work / "parts"
     parts = Parts(cache, ledger, local=inputs.parts, fetch=fetch)
-    paths, losses, kept = _closed_all(inputs, plan, metadata, parts, start, on_chromosome)
+    paths, losses, kept = _close_chromosomes_releasing_parts(
+        inputs, plan, metadata, parts, start, on_chromosome
+    )
     made = _publish(inputs, out, plan, parts, paths, losses, start)
     if kept:
         print(f"kept {kept} unowned {'part' if kept == 1 else 'parts'}")
