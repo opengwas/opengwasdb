@@ -8,6 +8,13 @@ it will look like the code around it.
 use its terms (Analysis, Store Release, Variant Index) in code, comments and
 commit messages.
 
+**Sign the Contributor License Agreement first.** OpenGWASDB is released under
+GPL-3.0-only ([LICENSE](./LICENSE)), and the University of Bristol holds the
+copyright. Every contribution from outside the University needs a signed
+Harmony agreement; [CLA.md](./CLA.md) says which one and how to sign it. The CLA
+bot asks on your first pull request into `main`, and a pull request is not
+merged until it passes.
+
 ---
 
 ## The one principle everything else serves
@@ -585,6 +592,11 @@ State what you did and what you did not. If part of the scope is unfinished,
 say which part and why. If a test is failing, show the output. Do not describe
 work as complete when it is partial — the reader cannot check, and this project
 has already lost time to plausible-looking claims that were not true.
+
+### Licence
+
+By contributing, you agree that your contribution is licensed as described in
+the CLA you signed. OpenGWASDB is released under GPL-3.0-only ([LICENSE](./LICENSE)).
 
 ---
 

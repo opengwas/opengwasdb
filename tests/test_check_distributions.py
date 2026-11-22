@@ -191,8 +191,8 @@ def test_anything_but_one_sdist_and_one_wheel_is_refused(tmp_path: Path) -> None
 def test_the_repository_expects_its_resources_licence_and_urls() -> None:
     expected = check_distributions.expected_from_repository(REPO)
     assert "opengwasdb/readers/column_maps/gwas-ssf.toml" in expected.tracked
-    assert expected.licence_expression == "LicenseRef-Sustainable-Use-License"
-    assert expected.licence_text.startswith(b"# License\n\nCopyright (c) 2026 Gibran Hemani")
+    assert expected.licence_expression == "GPL-3.0-only"
+    assert expected.licence_text.lstrip().startswith(b"GNU GENERAL PUBLIC LICENSE\n")
     assert expected.sdist_top_level == {
         "PKG-INFO",
         "pyproject.toml",

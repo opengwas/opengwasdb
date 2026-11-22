@@ -88,5 +88,6 @@ which also provides bcftools. See the [README](../README.md) and
 
 ## Licence
 
-OpenGWASDB is under the [Sustainable Use License](../LICENSE), version 1.0,
-which is not an OSI open-source licence.
+OpenGWASDB is released under GPL-3.0-only ([LICENSE](../LICENSE)), and the
+University of Bristol holds the copyright. Versions released before this change
+keep the Sustainable Use License, version 1.0, they were published under.
