@@ -101,6 +101,35 @@ def test_inventory_refuses_a_truncated_listing_without_a_continuation() -> None:
         inventory(fetch)
 
 
+def test_inventory_refuses_a_repeated_continuation_token_rather_than_loop() -> None:
+    calls = []
+
+    def fetch(_url: str) -> io.BytesIO:
+        calls.append(_url)
+        assert len(calls) < 10, "inventory looped on a repeating token"
+        return io.BytesIO(_listing(_entry("part-0", 54), truncated=True, token="same").encode())
+
+    with pytest.raises(ValueError, match="incomplete Pan-UKB bucket listing"):
+        inventory(fetch)
+    assert len(calls) == 2
+
+
+def test_inventory_refuses_a_page_without_is_truncated() -> None:
+    unmarked = (
+        '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        + _entry("part-0", 54)
+        + "<NextContinuationToken>next</NextContinuationToken>"
+        + "</ListBucketResult>"
+    )
+    pages = iter([unmarked, _listing(_entry("part-1", 47))])
+
+    def fetch(_url: str) -> io.BytesIO:
+        return io.BytesIO(next(pages).encode())
+
+    with pytest.raises(ValueError, match="incomplete Pan-UKB bucket listing"):
+        inventory(fetch)
+
+
 def test_inventory_marks_a_part_entry_without_a_size_as_invalid(tmp_path: Path) -> None:
     def fetch(_url: str) -> io.BytesIO:
         return io.BytesIO(_listing(_entry("part-0", None)).encode())
