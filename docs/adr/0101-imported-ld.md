@@ -36,8 +36,9 @@ Band, which would join pairs outside the published 10 Mb source band. Rather tha
 refuse the chromosome, the import drops the smaller of the two segments holding a
 target-radius window's GRCh37 extremes (segments split where the GRCh37−GRCh38
 offset jumps by more than 100 kb; ties drop the one with the lowest GRCh37
-position), repeating until the radius reaches a target of 8 Mb (#99, owner
-ruling). A segment over a cap of 10,000 variants is never dropped: the chromosome
+position), repeating until the radius reaches the target, `--far-target-bp`
+(default 8 Mb, at most the format's 10 Mb `far_bp`; #99, owner ruling). A
+segment over `--displaced-cap` (default 10,000 variants) is never dropped: the chromosome
 is refused by name. Dropped variants are counted as `liftover_displaced`.
 
 One chromosome is the unit of streaming, restart and optional part deletion.

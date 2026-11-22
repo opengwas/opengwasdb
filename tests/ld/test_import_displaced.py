@@ -30,10 +30,10 @@ def literal_table() -> Lifted:
             np.array(["C"] * count),
             np.full(count, 0.25),
         ),
-        np.array([10, 11, 12, 13, 14, 15]),
+        np.array([10, 11, 12, 25, 26, 15]),
         np.array(source),
-        np.ones(count, dtype=np.int64),
-        np.zeros(count, dtype=bool),
+        np.array([1, -1, 1, 1, -1, -1]),
+        np.array([False, True, False, True, True, False]),
     )
 
 
@@ -54,11 +54,16 @@ def test_plan_saves_only_kept_rows_and_counts_the_displaced(tmp_path, monkeypatc
     table = literal_table()
     assert far_distance(table.source_position, table.variants.position) < NEAR_BP
     monkeypatch.setattr(run, "lift_variants", lambda *_: (table, {"allele_mismatch": 3}))
-    monkeypatch.setattr(run, "_parts_of", lambda *_: [])
+    source = SimpleNamespace(
+        rows=99, size=10, parts={(1, 1): "p11", (2, 2): "p22", (1, 2): "p12", (2, 1): "p21"}
+    )
     rows = [SimpleNamespace(index=0)]
-    planned = run._plan_chromosome(plan_inputs(tmp_path), SimpleNamespace(rows=99), "1", rows)
+    planned = run._plan_chromosome(plan_inputs(tmp_path), source, "1", rows)
+    assert planned["parts"] == ["p11"]  # block 2 was needed only by the dropped rows
     saved = load_lifted(tmp_path / "work" / "1.lifted.npz")
     assert saved.index.tolist() == [10, 11, 12, 15]
+    assert saved.sign.tolist() == [1, -1, 1, -1]
+    assert saved.negative_strand.tolist() == [False, True, False, False]
     assert saved.source_position.tolist() == [1, 500_000, 1_000_000, 12_000_000]
     assert saved.variants.position.tolist() == [1, 500_000, 1_000_000, 12_000_000]
     assert planned["losses"] == {"allele_mismatch": 3, "liftover_displaced": 2}
@@ -76,6 +81,7 @@ def test_plan_refuses_a_displaced_segment_over_the_cap(tmp_path, monkeypatch) ->
     ("option", "value"),
     [
         ("--far-target-bp", "2000000"),
+        ("--far-target-bp", "10000001"),
         ("--far-target-bp", "x"),
         ("--far-target-bp", "-8000000"),
         ("--displaced-cap", "-1"),
@@ -94,9 +100,11 @@ def test_options_reach_the_import_and_default_to_the_owner_ruling(tmp_path, monk
     monkeypatch.setattr(run, "import_panukb", lambda inputs, out: seen.append(inputs) or {})
     base = import_args(tmp_path / "a.store", tmp_path / "work")
     assert main(base) == 0
+    assert main([*base, "--far-target-bp", "10000000", "--displaced-cap", "10000"]) == 0
     assert main([*base, "--far-target-bp", "9000000", "--displaced-cap", "0"]) == 0
     assert [(i.far_target_bp, i.displaced_cap) for i in seen] == [
         (8_000_000, 10_000),
+        (10_000_000, 10_000),
         (9_000_000, 0),
     ]
 

@@ -26,20 +26,17 @@ from ogld.build.importing.lift import (
     lift_variants,
     variant_chromosomes,
 )
-from ogld.build.importing.matrix import MatrixSource, correlation, diagonal_mask
+from ogld.build.importing.matrix import IntArray, MatrixSource, correlation, diagonal_mask
 from ogld.build.record import sha256
 from ogld.format import NEAR_BP, Provenance, REncoding, Sourced
 from ogld.format.geometry import stop_within
+from ogld.format.import_policy import DISPLACED_CAP, FAR_TARGET_BP
 from ogld.identity import chromosome_rank
 from ogld.store import StoreWriter, Variants
 from ogld.version import __version__
 
 # The source policy, not an encoding default (owner #88; ADR 0015).
 PANUKB_SCALE: Final = 2047
-# The complete radius an import must reach, and the most variants one displaced liftover
-# segment may cost to get there (owner #99).
-FAR_TARGET_BP: Final = 8_000_000
-DISPLACED_CAP: Final = 10_000
 
 
 @dataclass(frozen=True)
@@ -118,8 +115,8 @@ def _checked_radius(name: str, table: Lifted) -> int:
     return radius
 
 
-def _parts_of(source: MatrixSource, rows: list[SourceVariant]) -> list[str]:
-    blocks = {row.index // source.size for row in rows}
+def _parts_of(source: MatrixSource, indices: IntArray) -> list[str]:
+    blocks = {int(index) // source.size for index in indices}
     return [part for (r, c), part in source.parts.items() if r in blocks and c in blocks]
 
 
@@ -133,7 +130,7 @@ def _plan_chromosome(
         name, table, target=inputs.far_target_bp, cap=inputs.displaced_cap
     )
     radius = _checked_radius(name, table)
-    names = _parts_of(source, rows)
+    names = _parts_of(source, table.index)
     _save(inputs.work / f"{name}.lifted.npz", table)
     return {
         "parts": names,
