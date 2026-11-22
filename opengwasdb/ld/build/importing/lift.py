@@ -10,15 +10,19 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Final, TextIO
 
 import numpy as np
 import numpy.typing as npt
 
 from ogld.build.importing.matrix import IntArray
 from ogld.build.importing.parts import optional_module
+from ogld.format import NEAR_BP
 from ogld.identity import AUTOSOMES, IdentityError, order_key, orient
 from ogld.store import Variants
+
+# The published Pan-UKB LD band: pairs further apart than this in GRCh37 are not measured.
+SOURCE_BAND_BP: Final = 10_000_000
 
 
 @dataclass(frozen=True)
@@ -253,6 +257,124 @@ def _table(rows: list[LiftedVariant]) -> Lifted:
     )
 
 
+def drop_displaced(name: str, table: Lifted, *, target: int, cap: int) -> tuple[Lifted, int]:
+    """Drop smaller displaced segments until the complete radius reaches `target` (#99).
+
+    Ties drop the segment holding the window's lowest GRCh37 position. A zero cap
+    refuses with the radius reached (the Near Band text only if it has a hole); a
+    positive cap names the segment that cannot be sacrificed. `far_distance` remains the
+    sole radius measurement.
+    """
+    if far_distance(table.source_position, table.variants.position) >= target:
+        return table, 0
+    order = np.argsort(table.variants.position, kind="stable")
+    source = table.source_position[order]
+    position = table.variants.position[order]
+    keep = _surviving(name, source, position, target, cap)
+    radius = far_distance(source[keep], position[keep])
+    if radius < target:
+        _refuse_radius(name, radius, target)
+    selected = np.zeros(len(table), dtype=bool)
+    selected[order] = keep
+    return table.select(selected), len(table) - int(np.count_nonzero(keep))
+
+
+def _surviving(
+    name: str, source: IntArray, position: IntArray, target: int, cap: int
+) -> npt.NDArray[np.bool_]:
+    offset_jumps = np.abs(np.diff(source - position)) > 100_000
+    segments = np.concatenate([np.zeros(1, dtype=np.int64), np.cumsum(offset_jumps)])
+    keep = np.ones(len(source), dtype=bool)
+    while True:
+        rows = np.flatnonzero(keep)
+        extremes = _first_displaced(source[rows], position[rows], target)
+        if extremes is None:
+            return keep
+        low, high = (segments[rows[extreme]] for extreme in extremes)
+        low_count = int(np.count_nonzero(keep & (segments == low)))
+        high_count = int(np.count_nonzero(keep & (segments == high)))
+        drop = keep & (segments == (low if low_count <= high_count else high))
+        if int(np.count_nonzero(drop)) > cap:
+            _refuse_cap(name, source, position, drop, keep, cap, target)
+        keep &= ~drop
+
+
+def _first_displaced(source: IntArray, position: IntArray, target: int) -> tuple[int, int] | None:
+    """The GRCh37 min/max rows of the first target-radius window outside the source band."""
+    start = np.searchsorted(position, position - target, side="left")
+    stop = np.arange(len(position), dtype=np.int64)
+    low = _range_extreme(source, start, stop, minimum=True)
+    high = _range_extreme(source, start, stop, minimum=False)
+    bad = np.flatnonzero(source[high] - source[low] > SOURCE_BAND_BP)
+    if not len(bad):
+        return None
+    first = int(bad[0])
+    return int(low[first]), int(high[first])
+
+
+def _range_extreme(source: IntArray, low: IntArray, high: IntArray, *, minimum: bool) -> IntArray:
+    """Sparse-table range queries, vectorised across every target window."""
+    levels = [np.arange(len(source), dtype=np.int64)]
+    step = 1
+    while 2 * step <= len(source):
+        previous = levels[-1]
+        current = previous.copy()
+        current[: len(source) - step] = _pick_extreme(
+            source, previous[: len(source) - step], previous[step:], minimum=minimum
+        )
+        levels.append(current)
+        step *= 2
+    width = high - low + 1
+    powers = np.floor(np.log2(width)).astype(np.int64)
+    result = np.empty(len(low), dtype=np.int64)
+    for power in np.unique(powers):
+        at = powers == power
+        level = levels[int(power)]
+        reach = 1 << int(power)
+        result[at] = _pick_extreme(
+            source,
+            level[low[at]],
+            level[high[at] - reach + 1],
+            minimum=minimum,
+        )
+    return result
+
+
+def _pick_extreme(source: IntArray, left: IntArray, right: IntArray, *, minimum: bool) -> IntArray:
+    choose_left = source[left] <= source[right] if minimum else source[left] >= source[right]
+    return np.where(choose_left, left, right)
+
+
+def _refuse_radius(name: str, radius: int, target: int) -> None:
+    """The Near Band text only when the Near Band really has a hole (far_bp is inclusive)."""
+    if radius < NEAR_BP:
+        raise ValueError(f"chromosome {name}: liftover leaves holes in the Near Band")
+    raise ValueError(
+        f"chromosome {name}: liftover reaches a complete radius of {radius}, "
+        f"short of target {target}"
+    )
+
+
+def _refuse_cap(
+    name: str,
+    source: IntArray,
+    position: IntArray,
+    drop: npt.NDArray[np.bool_],
+    keep: npt.NDArray[np.bool_],
+    cap: int,
+    target: int,
+) -> None:
+    if cap == 0:
+        _refuse_radius(name, far_distance(source[keep], position[keep]), target)
+    count = int(np.count_nonzero(drop))
+    raise ValueError(
+        f"chromosome {name}: displaced segment has {count} variants, over cap {cap}; "
+        f"GRCh37 {int(source[drop].min())}-{int(source[drop].max())}, "
+        f"GRCh38 {int(position[drop].min())}-{int(position[drop].max())}, "
+        f"needed for target {target}"
+    )
+
+
 def _start_within(target: IntArray, i: int, distance: int, start: int) -> int:
     while start < i and target[start] < target[i] - distance:
         start += 1
@@ -275,14 +397,14 @@ def _complete(source: IntArray, target: IntArray, distance: int) -> bool:
         start = _start_within(target, i, distance, start)
         _add_extreme(low, source, i, start, True)
         _add_extreme(high, source, i, start, False)
-        if source[high[0]] - source[low[0]] > 10_000_000:
+        if source[high[0]] - source[low[0]] > SOURCE_BAND_BP:
             return False
     return True
 
 
 def far_distance(source: IntArray, target: IntArray) -> int:
     """Largest target radius containing no pair outside the published 10 Mb source band."""
-    lo, hi = 0, 10_000_000
+    lo, hi = 0, SOURCE_BAND_BP
     while lo < hi:
         mid = (lo + hi + 1) // 2
         if _complete(source, target, mid):

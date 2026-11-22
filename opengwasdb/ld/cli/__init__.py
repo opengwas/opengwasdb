@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from ogld.build import BuildInputs, build, build_genotypes
-from ogld.format import InputError, Refusal
+from ogld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
+from ogld.format import FAR_BP, NEAR_BP, InputError, Refusal
 from ogld.identity import IdentityError
 from ogld.query import open as open_store
 from ogld.query.validation import validate_at
@@ -109,6 +110,33 @@ def _import_command(commands: argparse._SubParsersAction[argparse.ArgumentParser
         default=8,
         help="parts of a chromosome downloaded at once",
     )
+    command.add_argument(
+        "--far-target-bp",
+        type=_far_target,
+        default=FAR_TARGET_BP,
+        help="complete radius every chromosome must reach, after dropping displaced liftover",
+    )
+    command.add_argument(
+        "--displaced-cap",
+        type=_displaced_cap,
+        default=DISPLACED_CAP,
+        help="most variants one displaced liftover segment may lose; a larger one refuses",
+    )
+
+
+def _far_target(text: str) -> int:
+    if not text.strip().isdigit() or not NEAR_BP < int(text) <= FAR_BP:
+        raise argparse.ArgumentTypeError(
+            f"needs a whole number of base pairs above the Near Band ({NEAR_BP}) and at most "
+            f"the format's far_bp ({FAR_BP}), not {text!r}"
+        )
+    return int(text)
+
+
+def _displaced_cap(text: str) -> int:
+    if not text.strip().isdigit():
+        raise argparse.ArgumentTypeError(f"needs a whole number of at least 0, not {text!r}")
+    return int(text)
 
 
 def _import(args: argparse.Namespace) -> int:
@@ -128,6 +156,8 @@ def _import(args: argparse.Namespace) -> int:
             "delete_parts",
             "threads",
             "download_workers",
+            "far_target_bp",
+            "displaced_cap",
         )
     )
     try:
