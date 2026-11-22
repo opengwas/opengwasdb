@@ -59,6 +59,7 @@ from the `v*` tags; clone with them.
 
 ## Licence
 
-[Sustainable Use License](./LICENSE), version 1.0: use is limited to internal
-business, non-commercial and personal purposes. It is not an OSI open-source
-licence.
+GPL-3.0-only. See [LICENSE](./LICENSE). Copyright © University of Bristol.
+Contributions from outside the University of Bristol need a signed
+[Contributor License Agreement](./CLA.md). Versions before this change were
+released under the Sustainable Use License, version 1.0, and keep it.

@@ -1,0 +1,48 @@
+name: CLA
+
+# CLA Assistant Lite: contributors sign HA-CLA-I-Any by commenting on their pull
+# request; signatures are stored on the cla-signatures branch. See CLA.md.
+on:
+  issue_comment:
+    types: [created]
+  # Only pull requests into main: a contribution reaches the project there, and
+  # an epic's lane pull requests into its `orch/**` integration branch all reach
+  # main again in the epic's pull request, which this checks.
+  pull_request_target:
+    types: [opened, closed, synchronize]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+       (github.event.comment.body == 'recheck' ||
+        github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+    steps:
+      - name: CLA Assistant
+        # v2.6.1, pinned to its commit. This job never checks out or runs pull request code.
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: signatures/version1/cla.json
+          path-to-document: https://github.com/opengwas/opengwasdb/blob/main/CLA.md
+          branch: cla-signatures
+          # University of Bristol contributors and bots, who need no CLA (CLA.md).
+          allowlist: explodecomputer,t0mrg,dependabot[bot],github-actions[bot],renovate[bot]
+          custom-notsigned-prcomment: >-
+            Thank you for your contribution. Before we can merge it, please read our
+            [Contributor License Agreement](https://github.com/opengwas/opengwasdb/blob/main/CLA.md)
+            (Harmony HA-CLA-I-Any for individuals; organisations, see CLA.md) and sign it by
+            replying to this pull request with the sentence below.
+          custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA
+          custom-allsigned-prcomment: All contributors have signed the CLA. Thank you.
+          lock-pullrequest-aftermerge: false

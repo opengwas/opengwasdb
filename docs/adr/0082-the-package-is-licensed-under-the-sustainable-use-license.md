@@ -1,5 +1,10 @@
 # The package is licensed under the Sustainable Use License
 
+> **Superseded by [ADR 0086](./0086-the-package-is-gpl-3-only-and-the-university-holds-the-copyright.md)**
+> (owner, 22 November 2026, #452): the package is GPL-3.0-only, and the
+> University of Bristol holds the copyright. Versions published under this ADR keep
+> the Sustainable Use License.
+
 Issue [#438](https://github.com/opengwas/opengwasdb/issues/438), under epic
 [#437](https://github.com/opengwas/opengwasdb/issues/437), which publishes the
 package to PyPI.

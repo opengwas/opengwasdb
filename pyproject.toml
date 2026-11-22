@@ -13,11 +13,11 @@ readme = "README.md"
 # numpy >=2.  The old floor of 3.11 cannot resolve it, so the floor moves with
 # the dependency; see CHANGELOG.md.
 requires-python = ">=3.12"
-# The Sustainable Use License, v1.0 (owner's ruling, 17 Nov 2026, #437/#438).
-# It has no SPDX identifier, so PEP 639 names it as a `LicenseRef-` and the
-# text travels in both distributions as LICENSE. No `License ::` classifier:
-# PEP 639 forbids one beside a licence expression. This is not an OSI licence.
-license = "LicenseRef-Sustainable-Use-License"
+# GPL-3.0-only, with the University of Bristol holding the copyright (owner's
+# ruling, 22 Nov 2026, #452, ADR 0086, which supersedes ADR 0082's Sustainable
+# Use License). The text travels in both distributions as LICENSE. No
+# `License ::` classifier: PEP 639 forbids one beside a licence expression.
+license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [
   { name = "OpenGWASDB contributors" }

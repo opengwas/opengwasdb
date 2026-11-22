@@ -1,0 +1,1 @@
+**OpenGWASDB is now released under GPL-3.0-only, and the University of Bristol holds the copyright** (#452, ADR 0086, which supersedes ADR 0082). Earlier versions keep the Sustainable Use License they were published under. Contributions from outside the University of Bristol need a signed Harmony CLA (`CLA.md`); the CLA bot asks on a contributor's first pull request into `main`.
