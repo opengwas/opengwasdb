@@ -211,11 +211,10 @@ def _targets(
     return kept, losses
 
 
-def _without_collisions(kept: list[LiftedVariant], losses: Counter[str]) -> list[LiftedVariant]:
+def _without_collisions(kept: list[LiftedVariant]) -> tuple[list[LiftedVariant], int]:
     multiplicity = Counter(row.alid for row in kept)
     unique = [row for row in kept if multiplicity[row.alid] == 1]
-    losses["liftover_identity_collision"] = len(kept) - len(unique)
-    return unique
+    return unique, len(kept) - len(unique)
 
 
 def lift_variants(
@@ -227,7 +226,8 @@ def lift_variants(
     lift = optional_module("pyliftover").LiftOver(str(chain))
     reference = _reference(fasta, rows[0].chrom)
     kept, losses = _targets(rows, lift, reference)
-    unique = _without_collisions(kept, losses)
+    unique, collisions = _without_collisions(kept)
+    losses["liftover_identity_collision"] = collisions
     unique.sort(key=lambda row: order_key(row.chrom, row.position, row.alid))
     return _table(unique), dict(losses)
 
@@ -271,7 +271,7 @@ def _complete(source: IntArray, target: IntArray, distance: int) -> bool:
     low: deque[int] = deque()
     high: deque[int] = deque()
     start = 0
-    for i, _position in enumerate(target):
+    for i in range(len(target)):
         start = _start_within(target, i, distance, start)
         _add_extreme(low, source, i, start, True)
         _add_extreme(high, source, i, start, False)
