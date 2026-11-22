@@ -92,7 +92,7 @@ import would spend days stalled. A chromosome's missing parts are therefore
 fetched by `--download-workers` threads (default 8) through the existing single-part path
 (`Parts.ensure`), so byte counts, receipts and ownership are unchanged and peak disk is still
 one chromosome's parts. Connections use a 12 s connect timeout apart from the read timeout, and try
-the resolved addresses in turn; an address that fails to connect is remembered for the run. TLS
+the resolved addresses in turn; an address whose connect or TLS handshake fails is remembered as dead for the run (a later timeout or reset is an ordinary failed attempt). TLS
 verifies the real bucket hostname (SNI and certificate) against the chosen address. If every
 address is marked dead, the marks are cleared: an outage may have passed. A part gets 8
 attempts; the final failure refuses by part name.

@@ -1,6 +1,5 @@
 """Published LD import through the CLI, existing validator and reader (#93)."""
 
-import importlib
 import io
 import json
 import urllib.request
@@ -10,6 +9,7 @@ import numpy as np
 import pytest
 
 import ogld
+from ogld.build.importing import run
 from ogld.cli import main
 from ogld.format import REQUIRED_KEYS
 from ogld.store import StoreReader
@@ -143,9 +143,7 @@ def test_cli_delete_preserves_supplied_parts_and_deletes_only_downloads(
         fetches.append(name)
         return io.BytesIO((FIXTURE / name).read_bytes())
 
-    monkeypatch.setattr(
-        importlib.import_module("ogld.build.importing.run"), "PinnedHttps", lambda: fetch
-    )
+    monkeypatch.setattr(run, "PinnedHttps", lambda: fetch)
     args = import_args(tmp_path / "import.store", work)
     args[args.index("--parts") + 1] = str(supplied)
     assert main([*args, "--delete-parts"]) == 0
@@ -183,3 +181,36 @@ def test_cli_import_writes_literal_signed_codes_and_complete_provenance(tmp_path
     assert record["far_code_floor"] == 65
     assert record["t_far"] == record["t_partner"] == 0.001
     assert "ok  " in capsys.readouterr().out
+
+
+def test_download_workers_reach_ensure_all(tmp_path, monkeypatch) -> None:
+    workers = []
+    ensure_all = run.Parts.ensure_all
+
+    def spy(self, names, count=8):
+        workers.append(count)
+        return ensure_all(self, names, count)
+
+    monkeypatch.setattr(run.Parts, "ensure_all", spy)
+    work = tmp_path / "work"
+    assert main([*import_args(tmp_path / "a.store", work), "--download-workers", "3"]) == 0
+    assert set(workers) == {3}
+
+
+def test_download_workers_default_to_eight(tmp_path, monkeypatch) -> None:
+    workers = []
+    ensure_all = run.Parts.ensure_all
+    monkeypatch.setattr(
+        run.Parts,
+        "ensure_all",
+        lambda self, names, count=8: workers.append(count) or ensure_all(self, names, count),
+    )
+    assert main([*import_args(tmp_path / "a.store", tmp_path / "work")]) == 0
+    assert set(workers) == {8}
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "x"])
+def test_download_workers_below_one_are_refused(tmp_path, capsys, value) -> None:
+    with pytest.raises(SystemExit):
+        main([*import_args(tmp_path / "a.store", tmp_path / "work"), "--download-workers", value])
+    assert "--download-workers" in capsys.readouterr().err

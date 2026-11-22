@@ -29,12 +29,21 @@ CONNECT_TIMEOUT = 12.0
 READ_TIMEOUT = 120.0
 ATTEMPTS = 8
 Resolve = Callable[[str], list[str]]
-OpenAddress = Callable[[str, str, float, float], BinaryIO]
+Connected = Callable[[], None]
+OpenAddress = Callable[[str, str, float, float, Connected], BinaryIO]
 
 
 def _resolve(host: str) -> list[str]:
     found = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
     return sorted({str(info[4][0]) for info in found})
+
+
+class _Unreachable(OSError):
+    """The TCP connect or the TLS handshake failed: only this marks an address dead."""
+
+
+class _Refused(OSError):
+    """The server answered, so the address is alive: only the request failed."""
 
 
 class _Pinned(http.client.HTTPSConnection):
@@ -45,17 +54,26 @@ class _Pinned(http.client.HTTPSConnection):
         address: str,
         host: str,
         timeouts: tuple[float, float],
+        connected: Connected,
         context: ssl.SSLContext | None = None,
         port: int = 443,
     ):
-        context = context or ssl.create_default_context()
-        super().__init__(host, port, timeout=timeouts[0], context=context)
-        self._address, self._read_timeout = address, timeouts[1]
+        self._tls = context or ssl.create_default_context()
+        super().__init__(host, port, timeout=timeouts[0], context=self._tls)
+        self._address, self._read_timeout, self._connected = address, timeouts[1], connected
 
     def connect(self) -> None:
-        raw = socket.create_connection((self._address, self.port), timeout=self.timeout)
-        self.sock = self._context.wrap_socket(raw, server_hostname=self.host)  # type: ignore[attr-defined]
+        try:
+            raw = socket.create_connection((self._address, self.port), timeout=self.timeout)
+        except OSError as failed:
+            raise _Unreachable(f"{self._address}: {failed}") from failed
+        try:
+            self.sock = self._tls.wrap_socket(raw, server_hostname=self.host)
+        except (TimeoutError, ConnectionError) as failed:
+            raw.close()
+            raise _Unreachable(f"{self._address}: {failed}") from failed
         self.sock.settimeout(self._read_timeout)
+        self._connected()
 
 
 class _Body:
@@ -80,12 +98,13 @@ def _open_address(
     url: str,
     connect_timeout: float,
     read_timeout: float,
+    connected: Connected,
     *,
     context: ssl.SSLContext | None = None,
     port: int = 443,
 ) -> BinaryIO:
     split = urllib.parse.urlsplit(url)
-    connection = _Pinned(address, HOST, (connect_timeout, read_timeout), context, port)
+    connection = _Pinned(address, HOST, (connect_timeout, read_timeout), connected, context, port)
     try:
         connection.request("GET", split.path + ("?" + split.query if split.query else ""))
         response = connection.getresponse()
@@ -98,16 +117,14 @@ def _open_address(
     return cast(BinaryIO, _Body(response, connection))
 
 
-class _Refused(OSError):
-    """The server answered, so the address is alive: only the request failed."""
-
-
 class PinnedHttps:
     """Fetch the public bucket over addresses that answer; skip those that never do.
 
-    S3's DNS rotates over addresses, some of which never answer. A connect
-    failure marks that address dead for this run's life (and is not retried);
-    any other failure leaves it alive. TLS still verifies the bucket's hostname.
+    S3's DNS rotates over addresses, some of which never answer. An address whose
+    TCP connect or TLS handshake fails is dead for this run (and not tried again);
+    a timeout, reset or HTTP error after the connect leaves it alive, and the
+    attempt is retried. If every address is dead and none has answered, the marks
+    are cleared. TLS still verifies the bucket's hostname.
     """
 
     def __init__(
@@ -137,18 +154,38 @@ class PinnedHttps:
         random.shuffle(known)
         return known + [a for a in live if a not in known]
 
-    def _try(self, address: str, url: str) -> BinaryIO:
-        stream = self._open(address, url, self._connect, self._read)
-        with self._lock:
-            self.good.add(address)
-        return stream
+    def _attempt(self, address: str, url: str, connected: Connected) -> BinaryIO:
+        def reached() -> None:
+            with self._lock:
+                self.good.add(address)
+            connected()
+
+        return self._open(address, url, self._connect, self._read, reached)
 
     def _unknown(self, address: str, url: str) -> BinaryIO | None:
-        """Probe an address one caller at a time, so a dead one costs a single timeout."""
-        with self._probe:
+        """Probe an address one caller at a time, so a dead one costs a single timeout.
+
+        The probe lock is released as soon as the connect succeeds, never held
+        while waiting for the response.
+        """
+        self._probe.acquire()
+        held = [True]
+
+        def release() -> None:
+            if held[0]:
+                held[0] = False
+                self._probe.release()
+
+        try:
             with self._lock:
-                skipped = address in self.dead
-            return None if skipped else self._try(address, url)
+                skipped, known = address in self.dead, address in self.good
+            if skipped:
+                return None
+            if known:
+                release()
+            return self._attempt(address, url, release)
+        finally:
+            release()
 
     def __call__(self, url: str) -> BinaryIO:
         if not url.startswith(BUCKET):
@@ -158,14 +195,16 @@ class PinnedHttps:
             with self._lock:
                 known = address in self.good
             try:
-                stream = self._try(address, url) if known else self._unknown(address, url)
-            except _Refused:
-                raise
-            except (TimeoutError, ConnectionError, socket.gaierror) as failed:
+                stream = (
+                    self._attempt(address, url, lambda: None)
+                    if known
+                    else self._unknown(address, url)
+                )
+            except _Unreachable as failed:
                 with self._lock:
                     self.dead.add(address)
                     self.good.discard(address)
-                last = OSError(f"{address}: {failed}")
+                last = failed
                 continue
             if stream is not None:
                 return stream

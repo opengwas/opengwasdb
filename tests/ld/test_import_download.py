@@ -5,11 +5,16 @@ import hashlib
 import io
 import json
 import os
+import socket
+import ssl
+import subprocess
+import threading
 import urllib.parse
 from pathlib import Path
 
 import pytest
 
+from ogld.build.importing import download
 from ogld.build.importing.download import Parts, inventory
 
 
@@ -209,8 +214,6 @@ def _ledger(*names: str) -> list[dict]:
 
 
 def test_ensure_all_fetches_parts_concurrently_with_receipts(tmp_path: Path) -> None:
-    import threading
-
     names = [f"part-{i}" for i in range(4)]
     lock, state = threading.Lock(), {"now": 0, "peak": 0}
     gather = threading.Barrier(4, timeout=1)
@@ -271,25 +274,24 @@ def test_delete_after_concurrent_download_removes_only_owned(tmp_path: Path) -> 
     assert not (tmp_path / "cache" / "part-1").exists()
 
 
-def _endpoint(tmp_path: Path, dead: set[str], timeouts: list[str]):
-    from ogld.build.importing.download import PinnedHttps
-
+def _endpoint(dead: set[str], timeouts: list[str]) -> download.PinnedHttps:
     def resolve(host: str) -> list[str]:
-        assert host == "pan-ukb-us-east-1.s3.us-east-1.amazonaws.com"
+        assert host == download.HOST
         return ["10.0.0.1", "10.0.0.2"]
 
-    def open_address(address: str, url: str, connect_timeout: float, read_timeout: float):
+    def open_address(address, url, connect_timeout, read_timeout, connected):
         if address in dead:
             timeouts.append(address)
-            raise TimeoutError("connect timed out")
+            raise download._Unreachable("connect timed out")
+        connected()
         return io.BytesIO(_payload(url.rsplit("/", 1)[-1]))
 
-    return PinnedHttps(resolve=resolve, open_address=open_address)
+    return download.PinnedHttps(resolve=resolve, open_address=open_address)
 
 
 def test_a_dead_address_costs_one_timeout_then_is_skipped(tmp_path: Path) -> None:
     timeouts: list[str] = []
-    endpoint = _endpoint(tmp_path, {"10.0.0.1"}, timeouts)
+    endpoint = _endpoint({"10.0.0.1"}, timeouts)
     names = [f"part-{i}" for i in range(8)]
     parts = Parts(tmp_path, _ledger(*names), fetch=endpoint, retry_delay=0)
     parts.ensure_all(names, workers=4)
@@ -299,8 +301,7 @@ def test_a_dead_address_costs_one_timeout_then_is_skipped(tmp_path: Path) -> Non
 
 
 def test_every_address_failing_refuses_the_part(tmp_path: Path) -> None:
-    timeouts: list[str] = []
-    endpoint = _endpoint(tmp_path, {"10.0.0.1", "10.0.0.2"}, timeouts)
+    endpoint = _endpoint({"10.0.0.1", "10.0.0.2"}, [])
     parts = Parts(tmp_path, _ledger("part-0"), fetch=endpoint, retry_delay=0)
     with pytest.raises(ValueError, match=r"part-0: HTTPS download failed"):
         parts.ensure_all(["part-0"], workers=2)
@@ -308,19 +309,146 @@ def test_every_address_failing_refuses_the_part(tmp_path: Path) -> None:
     assert not (tmp_path / ".sha256" / "part-0.json").exists()
 
 
-def test_only_the_bucket_host_is_a_target() -> None:
-    from ogld.build.importing.download import PinnedHttps
+def test_when_every_address_is_dead_and_none_answered_the_marks_are_cleared() -> None:
+    timeouts: list[str] = []
+    endpoint = _endpoint({"10.0.0.1", "10.0.0.2"}, timeouts)
+    for _ in range(2):
+        with pytest.raises(OSError, match="connect timed out"):
+            endpoint(download.BUCKET + download.PREFIX + "part-0")
+    # The second call probed both again: the first call's dead marks were forgiven.
+    assert sorted(timeouts) == ["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.2"]
+    assert endpoint.good == set()
 
+
+def _after_connect(failure: Exception) -> download.PinnedHttps:
+    def open_address(address, url, connect_timeout, read_timeout, connected):
+        connected()
+        raise failure
+
+    return download.PinnedHttps(resolve=lambda host: ["10.0.0.1"], open_address=open_address)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("read timed out"), ConnectionResetError("reset"), download._Refused("HTTP 503")],
+)
+def test_a_failure_after_the_connect_leaves_the_address_alive(failure: Exception) -> None:
+    endpoint = _after_connect(failure)
+    with pytest.raises(OSError, match=str(failure)):
+        endpoint(download.BUCKET + "x")
+    assert endpoint.dead == set()
+    assert endpoint.good == {"10.0.0.1"}
+
+
+def test_the_probe_lock_is_released_once_the_connect_succeeds() -> None:
+    connected_a, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def open_address(address, url, connect_timeout, read_timeout, connected):
+        calls.append(1)
+        connected()
+        if len(calls) == 1:  # a slow response: headers take their time
+            connected_a.set()
+            assert release.wait(5)
+        return io.BytesIO(b"x")
+
+    endpoint = download.PinnedHttps(resolve=lambda host: ["10.0.0.1"], open_address=open_address)
+    url = download.BUCKET + "x"
+    first = threading.Thread(target=endpoint, args=(url,))
+    first.start()
+    assert connected_a.wait(5)
+    # A second worker, whose candidate list predates the success, is not queued behind the first.
+    second = threading.Thread(target=endpoint, args=(url,))
+    second.start()
+    second.join(2)
+    stuck = second.is_alive()
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert not stuck
+    assert len(calls) == 2
+
+
+def test_only_the_bucket_host_is_a_target() -> None:
     with pytest.raises(ValueError, match="not the public Pan-UKB"):
-        PinnedHttps(resolve=lambda h: [], open_address=lambda *a: io.BytesIO())("https://x/")
+        download.PinnedHttps(resolve=lambda h: [], open_address=lambda *a: io.BytesIO())(
+            "https://x/"
+        )
+
+
+# --- the connection seam: timeouts and what counts as unreachable (#97) ------------------
+
+
+class _Sock:
+    def __init__(self) -> None:
+        self.timeouts: list[float | None] = []
+
+    def close(self) -> None:
+        pass
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeouts.append(value)
+
+
+class _Context:
+    def __init__(self, handshake: Exception | None = None) -> None:
+        self.sock, self.hostname, self.handshake = _Sock(), None, handshake
+
+    def wrap_socket(self, raw, *, server_hostname):
+        self.hostname = server_hostname
+        if self.handshake is not None:
+            raise self.handshake
+        return self.sock
+
+
+def _connection(context: _Context) -> download._Pinned:
+    return download._Pinned("10.0.0.1", download.HOST, (12.0, 120.0), lambda: None, context)
+
+
+def test_connect_and_read_timeouts_reach_the_socket_separately(monkeypatch) -> None:
+    seen = {}
+
+    def create_connection(address, timeout):
+        seen["address"], seen["timeout"] = address, timeout
+        return object()
+
+    monkeypatch.setattr(download.socket, "create_connection", create_connection)
+    context = _Context()
+    _connection(context).connect()
+    assert seen == {"address": ("10.0.0.1", 443), "timeout": 12.0}
+    assert context.sock.timeouts == [120.0]
+    assert context.hostname == download.HOST
+
+
+def test_the_connected_callback_runs_after_the_handshake(monkeypatch) -> None:
+    monkeypatch.setattr(download.socket, "create_connection", lambda *a, **k: object())
+    events = []
+    context = _Context()
+    connection = download._Pinned(
+        "10.0.0.1", download.HOST, (12.0, 120.0), lambda: events.append("connected"), context
+    )
+    connection.connect()
+    assert events == ["connected"]
+
+
+@pytest.mark.parametrize("stage", ["connect", "handshake"])
+@pytest.mark.parametrize("failure", [TimeoutError("timed out"), ConnectionRefusedError("refused")])
+def test_a_connect_or_handshake_failure_is_unreachable(monkeypatch, stage, failure) -> None:
+    def create_connection(address, timeout):
+        if stage == "connect":
+            raise failure
+        return _Sock()
+
+    monkeypatch.setattr(download.socket, "create_connection", create_connection)
+    context = _Context(handshake=failure if stage == "handshake" else None)
+    with pytest.raises(download._Unreachable):
+        _connection(context).connect()
 
 
 # --- the real socket path, against a local TLS server (#97) ------------------------------
 
 
 def _certificate(directory: Path, hostname: str) -> tuple[Path, Path]:
-    import subprocess
-
     cert, key = directory / f"{hostname}.pem", directory / f"{hostname}.key"
     subprocess.run(
         [
@@ -334,14 +462,11 @@ def _certificate(directory: Path, hostname: str) -> tuple[Path, Path]:
     return cert, key
 
 
-def _serve(cert: Path, key: Path, status: int, body: bytes):
-    import socket
-    import ssl
-    import threading
-
+def _serve(cert: Path, key: Path, status: int, body: bytes) -> int:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     listener = socket.socket()
+    listener.settimeout(5)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
 
@@ -355,42 +480,43 @@ def _serve(cert: Path, key: Path, status: int, body: bytes):
                 )
 
     threading.Thread(target=serve, daemon=True).start()
-    return listener.getsockname()[1]
-
-
-def _client(cert: Path):
-    import ssl
-
-    return ssl.create_default_context(cafile=str(cert))
+    return int(listener.getsockname()[1])
 
 
 def _open(port: int, cert: Path):
-    from ogld.build.importing import download
-
     return download._open_address(
-        "127.0.0.1", download.BUCKET + "x?a=b", 2, 2, context=_client(cert), port=port
+        "127.0.0.1",
+        download.BUCKET + "x?a=b",
+        2,
+        2,
+        lambda: None,
+        context=ssl.create_default_context(cafile=str(cert)),
+        port=port,
     )
 
 
 def test_a_pinned_address_is_verified_against_the_bucket_hostname(tmp_path: Path) -> None:
-    from ogld.build.importing.download import HOST
-
-    cert, key = _certificate(tmp_path, HOST)
+    cert, key = _certificate(tmp_path, download.HOST)
     with _open(_serve(cert, key, 200, b"bytes"), cert) as stream:
         assert stream.read() == b"bytes"
 
 
 def test_a_certificate_for_another_hostname_is_refused(tmp_path: Path) -> None:
-    import ssl
-
     cert, key = _certificate(tmp_path, "imposter.example.com")
     with pytest.raises(ssl.SSLCertVerificationError):
         _open(_serve(cert, key, 200, b"bytes"), cert)
 
 
-def test_an_http_error_is_a_failure_that_does_not_kill_the_address(tmp_path: Path) -> None:
-    from ogld.build.importing.download import HOST, _Refused
-
-    cert, key = _certificate(tmp_path, HOST)
-    with pytest.raises(_Refused, match="HTTP 503"):
-        _open(_serve(cert, key, 503, b""), cert)
+def test_an_http_error_is_refused_and_does_not_kill_the_address(tmp_path: Path) -> None:
+    cert, key = _certificate(tmp_path, download.HOST)
+    port = _serve(cert, key, 503, b"")
+    endpoint = download.PinnedHttps(
+        resolve=lambda host: ["127.0.0.1"],
+        open_address=lambda a, u, c, r, connected: download._open_address(
+            a, u, c, r, connected, context=ssl.create_default_context(cafile=str(cert)), port=port
+        ),
+    )
+    with pytest.raises(download._Refused, match="HTTP 503"):
+        endpoint(download.BUCKET + "x")
+    assert endpoint.dead == set()
+    assert endpoint.good == {"127.0.0.1"}

@@ -477,8 +477,10 @@ reads it.
   count, SHA-256 receipt, atomic rename, ownership). The first failed part, once
   in-flight downloads stop, refuses the import by name. Each connection has its
   own short connect timeout (12 s) beside the 120 s read timeout. The bucket
-  host's addresses are tried in turn; an address that fails to connect is not
-  tried again in that run. TLS connects to the chosen address but verifies the
+  host's addresses are tried in turn; an address whose TCP connect or TLS
+  handshake fails is not tried again in that run, while a timeout, reset or HTTP
+  error after the connect leaves it in use and the attempt is retried. If every
+  address is dead and none has answered, the dead marks are cleared. TLS connects to the chosen address but verifies the
   bucket's hostname.
 - `WORK` is exclusively locked and pins the metadata, TSV, chain and FASTA by
   SHA-256, plus the supplied ledger's SHA-256 and the output path. Repeat the same command to resume. A complete
