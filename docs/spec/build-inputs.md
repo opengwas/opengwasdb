@@ -464,6 +464,18 @@ reads it.
 - The largest complete target radius is measured after liftover per
   chromosome; the store records their minimum, and provenance records all
   radii. A radius no larger than the mandatory Near Band is refused.
+- Displaced liftover segments are dropped until every chromosome's radius
+  reaches `--far-target-bp` (default 8,000,000; must be above `near_bp` and at most
+  `far_bp`'s maximum, 10,000,000, refused at parse time otherwise). The
+  GRCh37−GRCh38 offset splits segments where it jumps by more than 100 kb; while
+  a target-radius window spans more than the 10 Mb source band, the segment holding
+  one extreme with fewer surviving variants is dropped (ties: the one with the lowest
+  GRCh37 position). A segment of more than `--displaced-cap` variants (default
+  10,000; 0 or more) is never dropped: the chromosome is refused naming its
+  GRCh37 and GRCh38 spans and the target. Drops are the `liftover_displaced`
+  loss class; provenance records the target, the cap and the per-chromosome
+  counts. A chromosome already reaching the target loses nothing. Both options
+  are pinned in `WORK`.
 - `--ledger` optionally supplies a JSON list of `{name, bytes, sha256}` parts
   (SHA-256 may be absent on first acquisition). Otherwise the public HTTPS
   listing supplies byte counts. `--parts` is an optional **read-only** directory
@@ -483,7 +495,7 @@ reads it.
   address is dead and none has answered, the dead marks are cleared. TLS connects to the chosen address but verifies the
   bucket's hostname.
 - `WORK` is exclusively locked and pins the metadata, TSV, chain and FASTA by
-  SHA-256, plus the supplied ledger's SHA-256 and the output path. Repeat the same command to resume. A complete
+  SHA-256, the radius target and displaced cap, plus the supplied ledger's SHA-256 and the output path. Repeat the same command to resume. A complete
   single-chromosome store in WORK is the checkpoint; an unfinished chromosome
   is rebuilt, never finished over. Retained input parts are re-hashed; deleted
   parts of closed chromosomes are not fetched again.
