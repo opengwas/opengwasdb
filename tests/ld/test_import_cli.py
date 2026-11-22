@@ -1,5 +1,6 @@
 """Published LD import through the CLI, existing validator and reader (#93)."""
 
+import importlib
 import io
 import json
 import urllib.request
@@ -137,12 +138,14 @@ def test_cli_delete_preserves_supplied_parts_and_deletes_only_downloads(
     (cache / "part-0").write_bytes(original)
     fetches = []
 
-    def fetch(url, *, timeout):
+    def fetch(url):
         name = url.rsplit("/", 1)[-1]
         fetches.append(name)
         return io.BytesIO((FIXTURE / name).read_bytes())
 
-    monkeypatch.setattr(urllib.request, "urlopen", fetch)
+    monkeypatch.setattr(
+        importlib.import_module("ogld.build.importing.run"), "PinnedHttps", lambda: fetch
+    )
     args = import_args(tmp_path / "import.store", work)
     args[args.index("--parts") + 1] = str(supplied)
     assert main([*args, "--delete-parts"]) == 0

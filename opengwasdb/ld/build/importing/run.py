@@ -17,7 +17,7 @@ from typing import Any, Final, cast
 import numpy as np
 import zarr
 
-from ogld.build.importing.download import BUCKET, Fetch, Parts, atomic_json, https, inventory
+from ogld.build.importing.download import BUCKET, Fetch, Parts, PinnedHttps, atomic_json, inventory
 from ogld.build.importing.lift import (
     Lifted,
     SourceVariant,
@@ -48,6 +48,7 @@ class ImportInputs:
     parts: Path | None = None
     delete_parts: bool = False
     threads: int = 1
+    download_workers: int = 8
 
 
 def _save(path: Path, table: Lifted) -> None:
@@ -276,7 +277,7 @@ def import_panukb(
     inputs: ImportInputs,
     out: Path,
     *,
-    fetch: Fetch = https,
+    fetch: Fetch | None = None,
     on_chromosome: Callable[[str], None] | None = None,
 ) -> Provenance:
     """Import/restart at the first unclosed chromosome; never overwrite a published store.
@@ -287,6 +288,8 @@ def import_panukb(
     """
     if inputs.threads < 1:
         raise ValueError("import threads must be positive")
+    if inputs.download_workers < 1:
+        raise ValueError("import download workers must be positive")
     if out.exists():
         raise FileExistsError(f"{out} exists: a store is never written over another")
     inputs.work.mkdir(parents=True, exist_ok=True)
@@ -295,7 +298,7 @@ def import_panukb(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as busy:
             raise ValueError(f"{inputs.work}: another import owns this work directory") from busy
-        return _import(inputs, out, fetch, on_chromosome)
+        return _import(inputs, out, fetch or PinnedHttps(), on_chromosome)
 
 
 def _closed_chromosome(
@@ -313,7 +316,8 @@ def _closed_chromosome(
         if destination.exists():
             shutil.rmtree(destination)
         source = MatrixSource(parts.cache, metadata)
-        source.paths = {part: parts.ensure(part) for part in chromosome["parts"]}
+        ensured = parts.ensure_all(chromosome["parts"], inputs.download_workers)
+        source.paths = dict(zip(chromosome["parts"], ensured, strict=True))
         closed = _write(inputs, name, plan, source, parts, destination, start)
         return closed
     parts.verify_closed(chromosome["parts"])

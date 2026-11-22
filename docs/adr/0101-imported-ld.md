@@ -83,3 +83,16 @@ not correlation. Assuming a 10 Mb target radius was rejected because liftover
 can join unmeasured pairs. Whole-genome staging was rejected on disk cost.
 The existing `ogld validate` remains the sole validator. The matched 511/0.01
 analysis view, benchmarking and the whole-genome run belong elsewhere.
+
+## Concurrent downloads and dead addresses (#97)
+
+S3's DNS for the bucket rotates over addresses, about a third of which never
+answer from the IEU host, and a single stream is 13–20 MB/s: the whole-genome
+import would spend days stalled. A chromosome's missing parts are therefore
+fetched by `--download-workers` threads (default 8) through the existing single-part path
+(`Parts.ensure`), so byte counts, receipts and ownership are unchanged and peak disk is still
+one chromosome's parts. Connections use a 12 s connect timeout apart from the read timeout, and try
+the resolved addresses in turn; an address that fails to connect is remembered for the run. TLS
+verifies the real bucket hostname (SNI and certificate) against the chosen address. If every
+address is marked dead, the marks are cleared: an outage may have passed. A part gets 8
+attempts; the final failure refuses by part name.

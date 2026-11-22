@@ -1,5 +1,6 @@
 """Downloader's external HTTPS seam is exercised without a network (#93)."""
 
+import contextlib
 import hashlib
 import io
 import json
@@ -194,3 +195,202 @@ def test_delete_refuses_an_ownership_claim_for_a_preexisting_cache_part(
     parts = Parts(tmp_path, ledger)
     assert parts.delete(["part-1"]) == 1
     assert path.read_bytes() == b"payload"
+
+
+# --- concurrent downloads and dead addresses (#97) ---------------------------------------
+
+
+def _payload(name: str) -> bytes:
+    return (name * 4).encode()
+
+
+def _ledger(*names: str) -> list[dict]:
+    return [{"name": n, "bytes": len(_payload(n))} for n in names]
+
+
+def test_ensure_all_fetches_parts_concurrently_with_receipts(tmp_path: Path) -> None:
+    import threading
+
+    names = [f"part-{i}" for i in range(4)]
+    lock, state = threading.Lock(), {"now": 0, "peak": 0}
+    gather = threading.Barrier(4, timeout=1)
+
+    def fetch(url: str) -> io.BytesIO:
+        name = url.rsplit("/", 1)[-1]
+        with lock:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        with contextlib.suppress(threading.BrokenBarrierError):
+            gather.wait()  # four fetches must be in flight together to pass
+        with lock:
+            state["now"] -= 1
+        return io.BytesIO(_payload(name))
+
+    parts = Parts(tmp_path, _ledger(*names), fetch=fetch, retry_delay=0)
+    paths = parts.ensure_all(names, workers=4)
+    assert state["peak"] == 4
+    assert [p.name for p in paths] == names
+    for name in names:
+        receipt = json.loads((tmp_path / ".sha256" / (name + ".json")).read_text())
+        assert receipt["sha256"] == hashlib.sha256(_payload(name)).hexdigest()
+        assert receipt["downloaded"] is True
+        assert receipt["download_identity"] == parts._identity(tmp_path / name)
+        assert parts.hashes[name] == receipt["sha256"]
+
+
+def test_concurrent_failure_refuses_by_name_and_leaves_nothing(tmp_path: Path) -> None:
+    def fetch(url: str) -> io.BytesIO:
+        name = url.rsplit("/", 1)[-1]
+        if name == "part-2":
+            raise OSError("connection reset")
+        return io.BytesIO(_payload(name))
+
+    names = [f"part-{i}" for i in range(4)]
+    parts = Parts(tmp_path, _ledger(*names), fetch=fetch, retry_delay=0)
+    with pytest.raises(ValueError, match=r"part-2: HTTPS download failed"):
+        parts.ensure_all(names, workers=3)
+    assert not list(tmp_path.glob("*.partial"))
+    assert not (tmp_path / "part-2").exists()
+    assert not (tmp_path / ".sha256" / "part-2.json").exists()
+
+
+def test_delete_after_concurrent_download_removes_only_owned(tmp_path: Path) -> None:
+    supplied = tmp_path / "supplied"
+    supplied.mkdir()
+    (supplied / "part-0").write_bytes(_payload("part-0"))
+    names = ["part-0", "part-1"]
+    parts = Parts(
+        tmp_path / "cache",
+        _ledger(*names),
+        local=supplied,
+        fetch=lambda url: io.BytesIO(_payload(url.rsplit("/", 1)[-1])),
+    )
+    parts.ensure_all(names, workers=2)
+    assert parts.delete(names) == 1
+    assert (supplied / "part-0").exists()
+    assert not (tmp_path / "cache" / "part-1").exists()
+
+
+def _endpoint(tmp_path: Path, dead: set[str], timeouts: list[str]):
+    from ogld.build.importing.download import PinnedHttps
+
+    def resolve(host: str) -> list[str]:
+        assert host == "pan-ukb-us-east-1.s3.us-east-1.amazonaws.com"
+        return ["10.0.0.1", "10.0.0.2"]
+
+    def open_address(address: str, url: str, connect_timeout: float, read_timeout: float):
+        if address in dead:
+            timeouts.append(address)
+            raise TimeoutError("connect timed out")
+        return io.BytesIO(_payload(url.rsplit("/", 1)[-1]))
+
+    return PinnedHttps(resolve=resolve, open_address=open_address)
+
+
+def test_a_dead_address_costs_one_timeout_then_is_skipped(tmp_path: Path) -> None:
+    timeouts: list[str] = []
+    endpoint = _endpoint(tmp_path, {"10.0.0.1"}, timeouts)
+    names = [f"part-{i}" for i in range(8)]
+    parts = Parts(tmp_path, _ledger(*names), fetch=endpoint, retry_delay=0)
+    parts.ensure_all(names, workers=4)
+    assert timeouts == ["10.0.0.1"]
+    assert endpoint.dead == {"10.0.0.1"}
+    assert all((tmp_path / n).read_bytes() == _payload(n) for n in names)
+
+
+def test_every_address_failing_refuses_the_part(tmp_path: Path) -> None:
+    timeouts: list[str] = []
+    endpoint = _endpoint(tmp_path, {"10.0.0.1", "10.0.0.2"}, timeouts)
+    parts = Parts(tmp_path, _ledger("part-0"), fetch=endpoint, retry_delay=0)
+    with pytest.raises(ValueError, match=r"part-0: HTTPS download failed"):
+        parts.ensure_all(["part-0"], workers=2)
+    assert not list(tmp_path.glob("part-0*"))
+    assert not (tmp_path / ".sha256" / "part-0.json").exists()
+
+
+def test_only_the_bucket_host_is_a_target() -> None:
+    from ogld.build.importing.download import PinnedHttps
+
+    with pytest.raises(ValueError, match="not the public Pan-UKB"):
+        PinnedHttps(resolve=lambda h: [], open_address=lambda *a: io.BytesIO())("https://x/")
+
+
+# --- the real socket path, against a local TLS server (#97) ------------------------------
+
+
+def _certificate(directory: Path, hostname: str) -> tuple[Path, Path]:
+    import subprocess
+
+    cert, key = directory / f"{hostname}.pem", directory / f"{hostname}.key"
+    subprocess.run(
+        [
+            *("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1"),
+            *("-subj", f"/CN={hostname}", "-addext", f"subjectAltName=DNS:{hostname}"),
+            *("-keyout", str(key), "-out", str(cert)),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert, key
+
+
+def _serve(cert: Path, key: Path, status: int, body: bytes):
+    import socket
+    import ssl
+    import threading
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def serve() -> None:
+        with listener, contextlib.suppress(OSError):
+            conn, _ = listener.accept()
+            with context.wrap_socket(conn, server_side=True) as tls:
+                tls.recv(4096)
+                tls.sendall(
+                    f"HTTP/1.1 {status} X\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
+                )
+
+    threading.Thread(target=serve, daemon=True).start()
+    return listener.getsockname()[1]
+
+
+def _client(cert: Path):
+    import ssl
+
+    return ssl.create_default_context(cafile=str(cert))
+
+
+def _open(port: int, cert: Path):
+    from ogld.build.importing import download
+
+    return download._open_address(
+        "127.0.0.1", download.BUCKET + "x?a=b", 2, 2, context=_client(cert), port=port
+    )
+
+
+def test_a_pinned_address_is_verified_against_the_bucket_hostname(tmp_path: Path) -> None:
+    from ogld.build.importing.download import HOST
+
+    cert, key = _certificate(tmp_path, HOST)
+    with _open(_serve(cert, key, 200, b"bytes"), cert) as stream:
+        assert stream.read() == b"bytes"
+
+
+def test_a_certificate_for_another_hostname_is_refused(tmp_path: Path) -> None:
+    import ssl
+
+    cert, key = _certificate(tmp_path, "imposter.example.com")
+    with pytest.raises(ssl.SSLCertVerificationError):
+        _open(_serve(cert, key, 200, b"bytes"), cert)
+
+
+def test_an_http_error_is_a_failure_that_does_not_kill_the_address(tmp_path: Path) -> None:
+    from ogld.build.importing.download import HOST, _Refused
+
+    cert, key = _certificate(tmp_path, HOST)
+    with pytest.raises(_Refused, match="HTTP 503"):
+        _open(_serve(cert, key, 503, b""), cert)
