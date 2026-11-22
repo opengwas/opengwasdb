@@ -115,13 +115,26 @@ def test_displaced_segment_over_cap_is_refused_with_its_spans() -> None:
     assert "target 8000000" in message
 
 
-def test_a_zero_cap_keeps_the_near_band_refusal() -> None:
+def test_a_real_near_band_hole_keeps_the_near_band_refusal() -> None:
     table = lifted(
         [1, 500_000, 1_000_000, 11_000_100, 11_000_200, 12_000_000],
         [1, 500_000, 1_000_000, 2_000_000, 2_000_100, 12_000_000],
     )
+    assert far_distance(table.source_position, table.variants.position) <= NEAR_BP
     with pytest.raises(ValueError, match="chromosome 1: liftover leaves holes in the Near Band"):
         drop_displaced("1", table, target=8_000_000, cap=0)
+
+
+def test_a_short_radius_with_a_complete_near_band_names_the_radius_and_target() -> None:
+    table = lifted([1, 500_000, 16_000_000, 16_000_100], [1, 500_000, 6_000_000, 6_000_100])
+    reached = far_distance(table.source_position, table.variants.position)
+    assert NEAR_BP < reached < 8_000_000
+    with pytest.raises(ValueError, match="short of target") as refusal:
+        drop_displaced("1", table, target=8_000_000, cap=0)
+    message = str(refusal.value)
+    assert "Near Band" not in message
+    assert f"chromosome 1: liftover reaches a complete radius of {reached}" in message
+    assert "target 8000000" in message
 
 
 def test_equal_segments_tie_drops_the_one_with_the_lowest_grch37_position() -> None:
