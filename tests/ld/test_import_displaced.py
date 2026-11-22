@@ -57,7 +57,7 @@ def test_plan_saves_only_kept_rows_and_counts_the_displaced(tmp_path, monkeypatc
     source = SimpleNamespace(
         rows=99, size=10, parts={(1, 1): "p11", (2, 2): "p22", (1, 2): "p12", (2, 1): "p21"}
     )
-    rows = [SimpleNamespace(index=0)]
+    rows = [SimpleNamespace(index=int(index)) for index in table.index]
     planned = run._plan_chromosome(plan_inputs(tmp_path), source, "1", rows)
     assert planned["parts"] == ["p11"]  # block 2 was needed only by the dropped rows
     saved = load_lifted(tmp_path / "work" / "1.lifted.npz")

@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from ogld.build import BuildInputs, build, build_genotypes
+from ogld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
 from ogld.format import FAR_BP, NEAR_BP, InputError, Refusal
-from ogld.format.import_policy import DISPLACED_CAP, FAR_TARGET_BP
 from ogld.identity import IdentityError
 from ogld.query import open as open_store
 from ogld.query.validation import validate_at

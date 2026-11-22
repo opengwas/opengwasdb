@@ -346,8 +346,8 @@ def _pick_extreme(source: IntArray, left: IntArray, right: IntArray, *, minimum:
 
 
 def _refuse_radius(name: str, radius: int, target: int) -> None:
-    """The Near Band text only when the Near Band really has a hole."""
-    if radius <= NEAR_BP:
+    """The Near Band text only when the Near Band really has a hole (far_bp is inclusive)."""
+    if radius < NEAR_BP:
         raise ValueError(f"chromosome {name}: liftover leaves holes in the Near Band")
     raise ValueError(
         f"chromosome {name}: liftover reaches a complete radius of {radius}, "

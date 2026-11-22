@@ -465,7 +465,8 @@ reads it.
   chromosome; the store records their minimum, and provenance records all
   radii. A radius no larger than the mandatory Near Band is refused.
 - Displaced liftover segments are dropped until every chromosome's radius
-  reaches `--far-target-bp` (default 8,000,000; must exceed the Near Band). The
+  reaches `--far-target-bp` (default 8,000,000; must be above `near_bp` and at most
+  `far_bp`'s maximum, 10,000,000, refused at parse time otherwise). The
   GRCh37−GRCh38 offset splits segments where it jumps by more than 100 kb; while
   a target-radius window spans more than the 10 Mb source band, the segment holding
   one extreme with fewer surviving variants is dropped (ties: the one with the lowest

@@ -137,6 +137,16 @@ def test_a_short_radius_with_a_complete_near_band_names_the_radius_and_target() 
     assert "target 8000000" in message
 
 
+def test_a_radius_of_exactly_the_near_band_is_a_complete_near_band_short_of_target() -> None:
+    # The first pair outside the source band is 3,000,001 apart: far_bp is inclusive.
+    table = lifted([1, 10_000_002], [1, 3_000_002])
+    assert far_distance(table.source_position, table.variants.position) == NEAR_BP
+    with pytest.raises(ValueError, match="short of target") as refusal:
+        drop_displaced("1", table, target=8_000_000, cap=0)
+    assert f"complete radius of {NEAR_BP}," in str(refusal.value)
+    assert "Near Band" not in str(refusal.value)
+
+
 def test_equal_segments_tie_drops_the_one_with_the_lowest_grch37_position() -> None:
     table = lifted([1, 500_000, 11_000_100, 11_000_200], [1, 500_000, 2_000_000, 2_000_100])
     assert far_distance(table.source_position, table.variants.position) < NEAR_BP

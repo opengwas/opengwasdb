@@ -1,6 +1,6 @@
 """The import's owner-ruled defaults, which the CLI and the importer both take (#99).
 
-Dependency-light on purpose: the CLI reads them without loading numpy or zarr.
+A module of constants beside `run`, so the CLI reads them without loading the importer.
 """
 
 from typing import Final

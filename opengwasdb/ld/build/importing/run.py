@@ -27,10 +27,10 @@ from ogld.build.importing.lift import (
     variant_chromosomes,
 )
 from ogld.build.importing.matrix import IntArray, MatrixSource, correlation, diagonal_mask
+from ogld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
 from ogld.build.record import sha256
 from ogld.format import NEAR_BP, Provenance, REncoding, Sourced
 from ogld.format.geometry import stop_within
-from ogld.format.import_policy import DISPLACED_CAP, FAR_TARGET_BP
 from ogld.identity import chromosome_rank
 from ogld.store import StoreWriter, Variants
 from ogld.version import __version__
