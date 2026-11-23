@@ -1,10 +1,12 @@
 """The query facade answers exactly what it answered before the Store Reader move (#464).
 
-`tests/golden/store_reader_digests.json` is what the code at `5d600a1d` -- before
-`opengwasdb.store_reader` existed -- answered on six fixture releases: Dense,
-Ragged and Hybrid, each Observed-Only and Reference-Completed
-(`store_reader_digests`). The pins were written by the old code, never by this
-one; a difference names the release, the question and the array.
+`tests/golden/store_reader_digests.json` is what the facade answers on six fixture
+releases: Dense, Ragged and Hybrid, each Observed-Only and Reference-Completed
+(`store_reader_digests`). The pins were first written by the code at `5d600a1d`,
+before `opengwasdb.store_reader` existed. They were regenerated at `826b36bb`, when
+every record gained `beta` and `pval` (ADR 0104). With those two dropped, every
+digest equalled the `5d600a1d` pins, and `log10_p` was within 9.7e-16. A
+difference names the release, the question and the array.
 """
 
 from __future__ import annotations
@@ -53,12 +55,6 @@ def test_the_pins_cover_every_layout_and_completion_state():
 @pytest.mark.parametrize("name", RELEASES)
 def test_every_answer_matches_the_code_before_the_move(releases: dict[str, Path], name: str):
     found = release_digests(releases[name])
-    # The pins predate beta and pval (ADR 0104): without them, nothing moved.
-    for kind in ("shapes", "resolved"):
-        for shape, digests in found[kind].items():
-            # A resolved answer of no rows has no columns to digest.
-            assert not digests or all(key in digests for key in DERIVED), (kind, shape)
-            found[kind][shape] = {k: v for k, v in digests.items() if k not in DERIVED}
     pinned = PINS[name]
     assert found["adapter"] == pinned["adapter"]
     assert found["variants_table"] == pinned["variants_table"]
