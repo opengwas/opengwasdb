@@ -433,11 +433,14 @@ NO_FREQUENCY_SKIP = {
     "message": "no frequencies",
 }
 
-#: What `00e91b1` printed in `warnings` for `dense_store_path` with one `+inf` se.
+#: What `00e91b1` printed in `warnings` for `dense_store_path` with one `+inf` se, its
+#: consequence restated when ADR 0104 made a query read `beta` and `pval` there as NaN
+#: (#473): the keys and the shape of the payload are `00e91b1`'s.
 INFINITE_SE_WARNING = (
     "1 cell(s) of data.zarr/se hold an infinite se: a source standard error above the "
-    "plane's range is stored as +inf, so beta = z * se reads as infinity although the "
-    "source value was finite (issue #338). The first Analyses holding one: 'a1'"
+    "plane's range is stored as +inf beside a finite z, although the source value was "
+    "finite, so a query reads beta and pval there as NaN (issue #338, ADR 0104). The "
+    "first Analyses holding one: 'a1'"
 )
 
 

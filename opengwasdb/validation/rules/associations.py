@@ -138,7 +138,8 @@ def infinite_se_message(
 
     An SE above a `float16` plane's range is narrowed to `+inf` beside a finite Z
     (issue #338). Spec §15 makes that cell present, so the release is valid -- but
-    `beta = z * se` reads as infinity, and nothing else in a Store says so (#337).
+    the source's finite SE is lost, a query reads `beta` and `pval` there as NaN (ADR
+    0104), and nothing else in a Store says so (#337).
     """
     counts = np.asarray(per_analysis)
     total = int(counts.sum())
@@ -146,8 +147,8 @@ def infinite_se_message(
         return None
     message = (
         f"{total} cell(s) of {label} hold an infinite se: a source standard error above "
-        "the plane's range is stored as +inf, so beta = z * se reads as infinity although "
-        "the source value was finite (issue #338)"
+        "the plane's range is stored as +inf beside a finite z, although the source value "
+        "was finite, so a query reads beta and pval there as NaN (issue #338, ADR 0104)"
     )
     named = _first_holding(counts, analyses_path)
     if named:
