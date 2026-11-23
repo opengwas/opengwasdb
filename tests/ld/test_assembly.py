@@ -26,6 +26,7 @@ import numpy.typing as npt
 import pytest
 import store_copies
 import zarr
+from partner_oracle import decoded_frames
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
@@ -221,17 +222,8 @@ def decoded_partners(
     held_bytes = int(held["frames"].shape[0])
     assert offsets[0] == 0
     assert offsets[-1] == held.attrs["frames_bytes"] == held_bytes
-    raw = np.asarray(held["frames"][:], dtype=np.uint8).tobytes()
     rows_of, partners, codes = [], [], []
-    for number in range(len(offsets) - 1):
-        first = number * per_frame
-        frame = frames.decode_frame(
-            raw[offsets[number] : offsets[number + 1]],
-            chrom=chrom,
-            number=number,
-            first=first,
-            rows=min(per_frame, rows - first),
-        )
+    for _, frame in decoded_frames(held, chrom):
         rows_of.append(np.diff(frame.indptr))
         partners.append(frame.partners.astype(np.int64))
         codes.append(frame.codes)
