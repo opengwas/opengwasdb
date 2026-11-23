@@ -301,7 +301,7 @@ class VariantTable:
         """
         found = self._found_rows(alids)
         for missed in np.flatnonzero(found < 0):
-            refuse_reference_first_indel(alids[int(missed)], f"the LD Store at {self.location}")
+            refuse_reference_first_indel(alids[int(missed)], f"the Store at {self.location}")
         return found
 
     def _found_rows(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
