@@ -11,8 +11,9 @@ pysam reads, and a Store built before the rsid index resolves rsids through
 `index.sqlite`'s `variant_aliases` table. Neither belongs in the Store Reader,
 which may import neither pysam nor sqlite3 (#464): the axis asks a
 `LegacyVariantTable` for those reads, and opengwasdb supplies one
-(`opengwasdb.variants.axis.LegacyVariantTable`). It is opened when the axis is,
-as it was before this seam existed; #465 makes it lazy, and #476 deletes it.
+(`opengwasdb.variants.legacy_table.TabixVariantTable`). It opens its files on
+first use (#465): an identifier a search index holds resolves, and every result
+resolves, without the table; #476 deletes it.
 """
 
 from __future__ import annotations
@@ -199,17 +200,35 @@ class VariantAxis:
         same choice the `variant_aliases` fallback below has always made
         (``ORDER BY variant_index LIMIT 1``). Callers that need every row an
         rsid names want `indices_by_identifiers`, which returns all of them.
+        A caller that needs only the row's index wants `index_of`, which reads
+        no Variant Table row.
+        """
+        index = self.index_of(identifier)
+        return None if index is None else self.by_index(index)
+
+    def index_of(self, identifier: str) -> int | None:
+        """The Store-local Variant Index one ALID or rsid names, or None.
+
+        What `by_identifier` resolves before it reads the row. An identifier a
+        search index holds is answered from the mmap'd index alone; only a long
+        ALID (over `ALID_WIDTH` bytes, in no index), or an rsid the rsid index
+        lacks and `variant_aliases` may name, reaches the legacy Variant Table.
         """
         parsed = parse_canonical_alid(identifier)
         if parsed is not None:
-            return self.by_alid(parsed)
+            return self._index_of_alid(parsed)
         indices = self.indices_by_alias(identifier)
         if len(indices):
-            return self.by_index(int(indices[0]))
-        index = self._legacy.alias_index(identifier)
-        if index is None:
-            return None
-        return self.by_index(index)
+            return int(indices[0])
+        return self._legacy.alias_index(identifier)
+
+    def alid_of(self, variant_index: int) -> str | None:
+        """The canonical ALID of one row, from the ALID index when it holds the row."""
+        identity = self.identity_by_indices(np.array([variant_index], dtype="int64"))
+        if identity is not None:
+            return str(identity["alid"][0])
+        record = self.by_index(variant_index)
+        return None if record is None else record.alid
 
     def indices_by_alias(self, alias: str) -> np.ndarray:
         """Every Store-local Variant Index the rsid `alias` names, ascending.
@@ -279,12 +298,16 @@ class VariantAxis:
             if len(matched):
                 indices.extend(int(index) for index in matched)
                 continue
-            record = self.by_identifier(identifier)
-            if record is not None:
-                indices.append(record.variant_index)
+            index = self._legacy.alias_index(identifier)
+            if index is not None:
+                indices.append(index)
         return indices
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
+        index = self._index_of_alid(parsed)
+        return None if index is None else self.by_index(index)
+
+    def _index_of_alid(self, parsed: ParsedAlid) -> int | None:
         alid = (
             f"{parsed.chromosome}:{parsed.position}:"
             f"{parsed.effect_allele}:{parsed.other_allele}"
@@ -296,14 +319,14 @@ class VariantAxis:
             query = np.array([alid], dtype=ALID_DTYPE)
             idx = int(np.searchsorted(self._alid_bytes, query[0]))
             if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
-                return self.by_index(int(self._alid_rows[idx]))
+                return int(self._alid_rows[idx])
             return None
         for record in self.range(parsed.chromosome, parsed.position, parsed.position):
             if (
                 record.effect_allele == parsed.effect_allele
                 and record.other_allele == parsed.other_allele
             ):
-                return record
+                return record.variant_index
         return None
 
     def range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:

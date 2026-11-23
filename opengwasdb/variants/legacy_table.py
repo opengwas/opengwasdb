@@ -7,17 +7,21 @@ pysam nor sqlite3 (#464): its Variant Axis asks a `LegacyVariantTable` (a
 Protocol in `opengwasdb.store_reader.variant_axis`) for these reads, and this
 module is the one implementation, and the only place opengwasdb reads that
 table: `TabixVariantTable`, its opener `open_legacy_variant_table`, and the
-whole-table scan `iter_variant_records`. #465 makes the table lazy; #476
-deletes this module with the 0.2.x table.
+whole-table scan `iter_variant_records`. Nothing is opened until a read needs
+it (#465): `pysam` and `sqlite3` are imported, and the tabix handle and the
+`index.sqlite` connection opened, on first use, so a query a search index
+answers never loads either. #476 deletes this module with the 0.2.x table.
 """
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pysam
+if TYPE_CHECKING:
+    import pysam
+    import sqlite3
 
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
@@ -40,6 +44,8 @@ def iter_variant_records(table_path: str | Path) -> Iterator[VariantRecord]:
 
 def _table_lines(table_path: str | Path) -> Iterator[str]:
     """A Store Variant Table's rows as text, header lines skipped."""
+    import pysam
+
     with pysam.BGZFile(str(table_path), "r", None) as handle:
         for raw_line in handle:
             line = raw_line.decode("utf-8")
@@ -53,10 +59,14 @@ class TabixVariantTable:
 
     Implements the Store Reader's `LegacyVariantTable` Protocol: the tabix range
     fetches, the BGZF seek per row, the whole-table scan and the SQLite rsid
-    fallback the Variant Axis used to make itself (#464). `aliases` is an open
-    `index.sqlite` connection, or None for a Store whose rsids are not looked up
-    there (a Ragged release); a connection this object opened (`owns_aliases`)
-    it closes with the table.
+    fallback the Variant Axis used to make itself (#464). Opened lazily (#465):
+    constructing one touches no file; the tabix handle opens on the first `fetch`
+    and the `index.sqlite` connection on the first `alias_index`.
+
+    `aliases` is an open `index.sqlite` connection the caller keeps; or
+    `aliases_path` names the file to open on first use (and close with the
+    table); or neither, for a Store whose rsids are not looked up there (a
+    Ragged release).
     """
 
     def __init__(
@@ -64,12 +74,22 @@ class TabixVariantTable:
         store_path: str | Path,
         aliases: sqlite3.Connection | None = None,
         *,
-        owns_aliases: bool = False,
+        aliases_path: Path | None = None,
     ) -> None:
+        if aliases is not None and aliases_path is not None:
+            raise ValueError("pass an open `aliases` connection or an `aliases_path`, not both")
         self.table_path = variant_table_path(store_path)
-        self._tabix = pysam.TabixFile(str(self.table_path))
+        self._tabix_handle: pysam.TabixFile | None = None
         self._aliases = aliases
-        self._owns_aliases = owns_aliases
+        self._aliases_path = aliases_path
+
+    @property
+    def _tabix(self) -> pysam.TabixFile:
+        if self._tabix_handle is None:
+            import pysam
+
+            self._tabix_handle = pysam.TabixFile(str(self.table_path))
+        return self._tabix_handle
 
     def fetch(self, chromosome: str, start: int, end: int) -> Iterable[str]:
         try:
@@ -78,6 +98,8 @@ class TabixVariantTable:
             return []
 
     def line_at(self, offset: int) -> str:
+        import pysam
+
         with pysam.BGZFile(str(self.table_path), "r", None) as handle:
             handle.seek(offset)
             line: str = handle.readline().decode("utf-8")
@@ -87,6 +109,11 @@ class TabixVariantTable:
         return _table_lines(self.table_path)
 
     def alias_index(self, alias: str) -> int | None:
+        if self._aliases is None and self._aliases_path is not None:
+            import sqlite3
+
+            self._aliases = sqlite3.connect(str(self._aliases_path))
+            self._aliases.row_factory = sqlite3.Row
         if self._aliases is None:
             return None
         row = self._aliases.execute(
@@ -102,16 +129,18 @@ class TabixVariantTable:
         return None if row is None else int(row["variant_index"])
 
     def close(self) -> None:
-        self._tabix.close()
-        if self._owns_aliases and self._aliases is not None:
+        if self._tabix_handle is not None:
+            self._tabix_handle.close()
+            self._tabix_handle = None
+        if self._aliases_path is not None and self._aliases is not None:
             self._aliases.close()
+            self._aliases = None
 
 
 def open_legacy_variant_table(store_path: Path, *, aliases: bool) -> TabixVariantTable:
     """The Store Reader's `LegacyTableOpener`: a Store's Variant Table, with its
-    `index.sqlite` opened for `variant_aliases` when `aliases` asks."""
-    connection = None
-    if aliases:
-        connection = sqlite3.connect(str(Path(store_path) / "index.sqlite"))
-        connection.row_factory = sqlite3.Row
-    return TabixVariantTable(store_path, connection, owns_aliases=True)
+    `index.sqlite` consulted for `variant_aliases` when `aliases` asks. Neither
+    file is opened until a read needs it."""
+    return TabixVariantTable(
+        store_path, aliases_path=Path(store_path) / "index.sqlite" if aliases else None
+    )

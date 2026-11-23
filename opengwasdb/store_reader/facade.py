@@ -336,12 +336,10 @@ class StoreQuery(_StoreQueryBase):
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> Associations:
         """Return one variant across all analyses."""
-        variant = self._variant_axis.by_identifier(identifier)
-        if variant is None:
+        index = self._variant_axis.index_of(identifier)
+        if index is None:
             return Associations.empty()
-        return self._grid.read(
-            Cells.variants([variant.variant_index]), observed_only=observed_only
-        )
+        return self._grid.read(Cells.variants([index]), observed_only=observed_only)
 
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
@@ -580,12 +578,10 @@ class RaggedStoreQuery(_StoreQueryBase):
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> Associations:
         """All analyses that have an association for a given variant identifier."""
-        variant = self._variant_axis.by_identifier(identifier)
-        if variant is None:
+        index = self._variant_axis.index_of(identifier)
+        if index is None:
             return self._empty()
-        return self._reader.read(
-            Cells.variants([variant.variant_index]), observed_only=observed_only
-        )
+        return self._reader.read(Cells.variants([index]), observed_only=observed_only)
 
     def top_hits(
         self, *, analysis_id: str | None = None, threshold: float = 5e-8,
@@ -687,12 +683,12 @@ class RaggedStoreQuery(_StoreQueryBase):
         Requested Analysis order and duplicates carry through; a request that
         resolves nothing yields the empty result.
         """
-        variants = [
-            v for id_ in identifiers if (v := self._variant_axis.by_identifier(id_)) is not None
+        found = [
+            i for id_ in identifiers if (i := self._variant_axis.index_of(id_)) is not None
         ]
-        if not variants:
+        if not found:
             return self._empty()
-        wanted = np.array(sorted({v.variant_index for v in variants}), dtype=np.int32)
+        wanted = np.array(sorted(set(found)), dtype=np.int32)
         analyses = [
             idx for aid in analysis_ids if (idx := self._resolve_analysis_id(aid)) is not None
         ]
@@ -849,14 +845,15 @@ class HybridStoreQuery(_StoreQueryBase):
         return Associations.concat([dense, overflow])
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> Associations:
-        variant = self._variant_axis.by_identifier(identifier)
-        if variant is None:
+        index = self._variant_axis.index_of(identifier)
+        if index is None:
             return Associations.empty()
-        if self._shared_is_on_panel(variant.variant_index):
-            return self._remap_dense(self._dense.phewas(variant.alid, observed_only=observed_only))
-        return self._overflow_read(
-            Cells.variants([variant.variant_index]), observed_only=observed_only
-        )
+        if self._shared_is_on_panel(index):
+            alid = self._variant_axis.alid_of(index)
+            if alid is None:
+                raise ValueError(f"the shared Variant Axis has no row {index}")
+            return self._remap_dense(self._dense.phewas(alid, observed_only=observed_only))
+        return self._overflow_read(Cells.variants([index]), observed_only=observed_only)
 
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
@@ -893,12 +890,12 @@ class HybridStoreQuery(_StoreQueryBase):
 
     def _off_panel_indices(self, identifiers: list[str]) -> list[int]:
         """The shared indices of the identifiers that resolve off the panel, ascending."""
-        records = [
-            rec for id_ in identifiers if (rec := self._variant_axis.by_identifier(id_)) is not None
+        found = [
+            i for id_ in identifiers if (i := self._variant_axis.index_of(id_)) is not None
         ]
-        if not records:
+        if not found:
             return []
-        shared = np.array([r.variant_index for r in records], dtype=np.int64)
+        shared = np.array(found, dtype=np.int64)
         return sorted({int(i) for i in shared[~self._on_panel_mask(shared)]})
 
     def _analysis_index(self, analysis_id: str) -> int | None:

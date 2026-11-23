@@ -14,13 +14,12 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import zarr
 
@@ -48,6 +47,9 @@ from opengwasdb.store_reader.release import (
     release_paths,
 )
 from opengwasdb.variants.legacy_table import open_legacy_variant_table
+
+if TYPE_CHECKING:
+    import sqlite3
 
 #: The first `format_version` whose `analyses.tsv` must record
 #: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the
@@ -490,6 +492,8 @@ class OpenGWASDBStore(StoreRelease):
 
     def index_connection(self) -> sqlite3.Connection:
         """Open a connection to this release's ``index.sqlite``."""
+        import sqlite3
+
         conn = sqlite3.connect(str(self.index_path))
         conn.row_factory = sqlite3.Row
         return conn
@@ -625,6 +629,8 @@ class StagedRelease(ReleasePaths):
         return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
+        import sqlite3
+
         conn = sqlite3.connect(str(self.index_path))
         conn.row_factory = sqlite3.Row
         return conn
