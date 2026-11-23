@@ -1,0 +1,24 @@
+{
+ "layout": "A",
+ "near_r": [
+  4096,
+  4194304
+ ],
+ "threads": 8,
+ "wall_seconds": 259.20416765799746,
+ "cpu_seconds": 555.878912,
+ "peak_rss_bytes": 2362916864,
+ "store_bytes": 1398264981,
+ "near_r_bytes": 1327224461,
+ "near_r_files": 279,
+ "load_before": [
+  40.58,
+  41.95,
+  38.17
+ ],
+ "load_after": [
+  38.83,
+  41.04,
+  38.8
+ ]
+}

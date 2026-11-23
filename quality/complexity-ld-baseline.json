@@ -1,0 +1,16 @@
+{
+ "provenance": {
+  "tool": "lizard",
+  "version": "1.24.0",
+  "config": "8cb7f5aed14e"
+ },
+ "entries": [
+  {
+   "file": "opengwasdb/ld/build/importing/run.py",
+   "text": "def _sourced(",
+   "line": 180,
+   "cc": 4,
+   "lines": 61
+  }
+ ]
+}

@@ -156,6 +156,54 @@ components:
     stages: [cross]
     summary: Representation-only repairs, the SE re-encode of existing Store Releases, and layout conversion.
     paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py]
+  # opengwasdb.ld, imported from opengwas/ogld whole (#455), is six components
+  # on the engine's layers (#459). Its own layering: format at the
+  # bottom, then store, genotypes, build and query, cli on top. build and query
+  # are both Use and check and must not import each other; the layers allow a
+  # same-layer import, so `independent` below forbids it (ogld's sibling rule).
+  # Variant identity is the engine's own `variants` (#456).
+  - id: ld-format
+    name: LD Store format
+    container: engine
+    layer: 0
+    stages: [cross]
+    summary: The LD Store encoding, geometry, semantics and provenance; the r scale, the near and far distances; the OPENGWASDB_LD_* environment reader.
+    paths: [opengwasdb/ld/format/, opengwasdb/ld/env.py]
+  - id: ld-store
+    name: LD Store reader and writer
+    container: engine
+    layer: 1
+    stages: [build, query]
+    summary: The LD Store's arrays, tables, variant axis and Partner Rows, and the code that reads, assembles, writes and validates them.
+    paths: [opengwasdb/ld/store/]
+  - id: ld-genotypes
+    name: Genotype Store
+    container: engine
+    layer: 2
+    stages: [build, query]
+    summary: The Genotype Store sidecar, its PC Adjustment, pgen reading and validation.
+    paths: [opengwasdb/ld/genotypes/]
+  - id: ld-build
+    name: LD Store build
+    container: engine
+    layer: 4
+    stages: [build]
+    summary: Building and importing an LD Store or Genotype Store (inputs, passes, tiles, the PC Check and the build record).
+    paths: [opengwasdb/ld/build/]
+  - id: ld-query
+    name: LD queries
+    container: engine
+    layer: 4
+    stages: [query]
+    summary: Matrix, region, proxies and clump requests over an LD Store or Genotype Store, and the validation of both.
+    paths: [opengwasdb/ld/query/]
+  - id: ld-cli
+    name: LD CLI
+    container: engine
+    layer: 5
+    stages: [cross]
+    summary: The ld command line, and the package's public surface in opengwasdb/ld/__init__.py.
+    paths: [opengwasdb/ld/cli/, opengwasdb/ld/__init__.py]
   - id: cli
     name: Engine CLI
     container: engine
@@ -163,3 +211,10 @@ components:
     stages: [cross]
     summary: The opengwasdb command line, the surface opengwasdb-stores and users call.
     paths: [opengwasdb/cli/, opengwasdb/__init__.py]
+
+# Components that must not import each other in either direction, whatever their
+# layers: the layering test allows a same-layer import, and these pairs are the
+# siblings the layers cannot keep apart. Checked by tests/test_architecture_layering.py;
+# nothing is baselined, so a pair here has no import between them today.
+independent:
+  - [ld-build, ld-query]

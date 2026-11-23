@@ -59,6 +59,22 @@ try:
     check("an exclude glob drops a file from the walk by name or by path",
           patterns.excluded("/x/src/a.test.py", ["*.test.py"]) and patterns.excluded("/x/fixtures/a.py", ["*/fixtures/*"])
           and not patterns.excluded("/x/src/a.py", ["*.test.py", "*/fixtures/*"]))
+    HEADER = "from __future__ import annotations\n\nimport json\nimport os\nimport shutil\nimport subprocess\nfrom pathlib import (\n    Path,\n    PurePath,\n)\nimport zarr\n\n"
+    d = os.path.join(tmp, "imports", "d.py")
+    e = os.path.join(tmp, "imports", "e.py")
+    write(d, HEADER + "def one():\n    return 1\n")
+    write(e, HEADER + "def two():\n    return 2\n")
+    check("two modules importing the same names are not a clone, a parenthesised import included",
+          duplication.find([d, e], tmp, min_lines=6) == [], str([(x.locations, x.lines) for x in duplication.find([d, e], tmp, min_lines=6)]))
+    check("and their import lines are not counted toward density", duplication.density([], [d, e], tmp) == (0, 4), str(duplication.density([], [d, e], tmp)))
+    write(e, HEADER + "def total_e(items):\n    total = 0\n" + BLOCK + "    return total\n")
+    write(d, HEADER + "def total_d(items):\n    total = 0\n" + BLOCK + "    return total\n")
+    found = duplication.find([d, e], tmp, min_lines=6)
+    check("code below a shared import block is still a clone, starting after the imports",
+          len(found) == 1 and found[0].lines == 10 and found[0].locations[0][1] == 14, str([(x.locations, x.lines) for x in found]))
+    write(d, "import json\nimport os\nimport shutil\n\ndef broken(:\n")
+    write(e, "import json\nimport os\nimport shutil\n\ndef broken(:\n")
+    check("a file Python cannot parse has every line compared", duplication.python_import_ranges(d, open(d).read()) == [])
     dup, total = duplication.density(clones, [a, b, c], repo)
     check("density counts the lines inside clones against every significant line", (dup, total) == (20, 27), str((dup, total)))
 

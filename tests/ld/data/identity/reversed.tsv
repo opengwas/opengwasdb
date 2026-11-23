@@ -1,0 +1,10 @@
+# opengwasdb 1ab2b09: answers from opengwasdb.variants.normalise; see make_fixture.py
+group	chrom	position	ref	alt	alid	a1_is_alt	kept
+bmi_irn	1	827587	G	GGGGCC	1:827587:G:GGGGCC	false	true
+bmi_irn	1	827587	GGGGCC	G	1:827587:G:GGGGCC	true	false
+v2_chr22	22	16029124	T	TA	22:16029124:T:TA	false	true
+v2_chr22	22	16029124	TA	T	22:16029124:T:TA	true	false
+deletion_kept	21	700	AT	T	21:700:AT:T	false	true
+deletion_kept	21	700	T	AT	21:700:AT:T	true	false
+lower_case	21	800	c	cag	21:800:C:CAG	false	true
+lower_case	21	800	CAG	C	21:800:C:CAG	true	false

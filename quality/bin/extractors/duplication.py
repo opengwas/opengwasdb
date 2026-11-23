@@ -8,7 +8,9 @@ a list of (repo-relative path, first line, last line), one per copy, and
 file's significant lines (whitespace collapsed; blank lines, lone braces and
 punctuation-only lines dropped) are hashed in windows of `min_lines`, and a
 window seen twice is the start of a clone that is extended as long as both
-sides keep matching. It is exact-match after normalisation — renamed
+sides keep matching. A Python file's import statements are not compared: two
+modules that need the same names must import them, and an import block has
+nothing in it to extract. It is exact-match after normalisation — renamed
 variables are not caught, which a token-based scanner does; for that, read
 its report instead. `from_jscpd()` reads jscpd's JSON report.
 
@@ -16,6 +18,7 @@ its report instead. `from_jscpd()` reads jscpd's JSON report.
 significant lines that sit inside some clone.
 """
 
+import ast
 import hashlib
 import os
 
@@ -54,10 +57,29 @@ def significant(text, skip_ranges=()):
     return out
 
 
+def python_import_ranges(path, text):
+    """[(first line, last line)] of every import statement in a Python file, a
+    parenthesised one across all its lines. A file Python cannot parse has none, so
+    every line of it is compared."""
+    if not path.endswith(".py"):
+        return []
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    return [(node.lineno, node.end_lineno) for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))]
+
+
 def significant_in(path, skip_rust_tests=True):
-    """The significant lines of a file, an inline Rust test module dropped when asked."""
+    """The significant lines of a file: its import statements dropped, and an inline
+    Rust test module dropped when asked."""
     with open(path, errors="replace") as handle:
-        return significant(handle.read(), patterns.rust_test_ranges(path) if skip_rust_tests else ())
+        text = handle.read()
+    skipped = python_import_ranges(path, text)
+    if skip_rust_tests:
+        skipped += patterns.rust_test_ranges(path)
+    return significant(text, skipped)
 
 
 def _windows(lines, min_lines):

@@ -47,20 +47,46 @@ dependencies = [
   "scikit-learn>=1.3",
   "pyliftover>=0.4",
   "threadpoolctl>=3.0",
+  # opengwasdb.ld opens an LD Store over HTTP(S) as well as from disk
+  # (docs/spec/ld-store.md §2, §10; opengwas/ogld#4). zarr opens a URL through
+  # fsspec, whose HTTP filesystem is async and imports aiohttp (#455).
+  "fsspec>=2024.12",
+  "aiohttp>=3.10",
 ]
 
 [project.optional-dependencies]
+# What opengwasdb.ld builds and imports with, carried over from ogld's `build`
+# and `import` extras (#455). pgenlib reads the pgen genotypes an LD Store build
+# starts from and the calls a Genotype Store request computes LD from. It is
+# imported inside those paths only, so `import opengwasdb.ld` and every LD Store
+# read work without it; a Genotype Store read refuses and names this extra.
+# ogld's extra also carried threadpoolctl, which caps BLAS's threads for a build;
+# here it is a dependency of the package itself (above), so the extra is
+# pgenlib alone and a build never lacks threadpoolctl.
+ld-build = ["pgenlib>=0.90"]
+# Importing a producer's LD (Pan-UKB's LD matrices, opengwasdb.ld.build.importing).
+# ogld's extra also carried pyliftover, which is a dependency of the package
+# itself here (above), so the extra is lz4 alone.
+ld-import = ["lz4>=4"]
 dev = [
   "pytest>=8",
   "pytest-xdist>=3.6",
   "ruff>=0.6",
   "mypy>=1.10",
   "lizard>=1.17",
-  # Same list as [tool.pixi.feature.dev.dependencies], which is how a contributor
-  # gets this environment; `pip install -e .[dev]` is the other way in, and it
-  # must not be a way in that lacks the one dependency the architecture model's
-  # check reads (docs/architecture/components.yaml, issue #358).
+  # Same list as the pixi `dev` feature ([tool.pixi.feature.dev.dependencies]
+  # and its pypi-dependencies), which is how a contributor gets this environment;
+  # `pip install -e .[dev]` is the other way in, and it must not be a way in that
+  # runs less of the suite. So it carries the one dependency the architecture
+  # model's check reads (docs/architecture/components.yaml, issue #358), and
+  # what tests/ld needs (#455): ogld's 5 s per-test timeout, its property tests,
+  # the Test Panel's pgen reader (the `ld-build` extra) and the import fixtures'
+  # decompressor (the `ld-import` extra), so nothing there skips or errors.
   "pyyaml>=6",
+  "pytest-timeout>=2.3",
+  "hypothesis>=6.100",
+  "pgenlib>=0.90",
+  "lz4>=4",
 ]
 
 [project.scripts]
@@ -127,8 +153,25 @@ local_scheme = "node-and-date"
 [tool.hatch.version.raw-options.scm.git]
 describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--abbrev=40", "--match", "v*"]
 
+# Test tiers and areas (#455, #459). `ld` is an area: every test under tests/ld/
+# carries it, by directory (tests/ld/conftest.py), so `-m ld` is opengwasdb.ld's
+# suite and `-m "not ld"` is the engine's. The default run is every test with
+# neither opt-in mark: `realdata` reads the HGDP+1kGP panels under
+# /data/opengwasdb/reference/ and runs only on the IEU compute nodes, through
+# `pixi run -e dev ld-test-realdata`; `acceptance` is the whole-panel runs of
+# `ld-acceptance-*`. The opt-in tiers are deselected in tests/conftest.py, not
+# by an `addopts` `-m`, because a command line's `-m` replaces that one and
+# `-m ld` would bring them back; `-m realdata` still asks for one. `--strict-markers`
+# makes a misspelt mark an error rather than a test that runs in no tier. ogld's
+# 5 s timeout and `xfail_strict` apply to tests/ld/ only, from tests/ld/conftest.py.
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+  "ld: an opengwasdb.ld test; added to every test under tests/ld/, so `-m ld` and `-m \"not ld\"` select the area",
+  "acceptance: an opengwasdb.ld acceptance run on a whole panel, slower than the realdata tier; run by `pixi run -e dev ld-acceptance-clump`, `ld-acceptance-stores` and `ld-acceptance-genotypes`",
+  "realdata: reads the HGDP+1kGP panels under /data/opengwasdb/reference/; IEU nodes only, run by `pixi run -e dev ld-test-realdata`",
+]
 
 [tool.ruff]
 line-length = 100
@@ -143,6 +186,11 @@ target-version = "py311"
 # pre-commit and editor integrations do.
 extend-exclude = ["quality"]
 force-exclude = true
+# opengwasdb.ld came from ogld (#455), which targeted py312 and uses its syntax
+# (`type` aliases, PEP 695 type parameters). The package requires 3.12, so the
+# syntax is sound; moving the whole project to py312 instead would add 22
+# UP046/UP047 findings in opengwasdb's own code.
+per-file-target-version = { "opengwasdb/ld/**" = "py312", "tests/ld/**" = "py312", "scripts/ld/**" = "py312" }
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -157,6 +205,11 @@ strict = true
 
 [[tool.mypy.overrides]]
 module = ["numcodecs", "pandas", "pysam", "zarr"]
+ignore_missing_imports = true
+
+# opengwasdb.ld's optional dependencies ship no stubs and no py.typed marker.
+[[tool.mypy.overrides]]
+module = ["pgenlib", "threadpoolctl", "lz4.*", "pyliftover"]
 ignore_missing_imports = true
 
 # zarr 2.18 shipped no `py.typed`, so mypy treated every `zarr.Array`/
@@ -216,6 +269,8 @@ pandas = ">=2.0"
 scikit-learn = ">=1.3"
 pyliftover = ">=0.4"
 threadpoolctl = ">=3.0"
+fsspec = ">=2024.12"  # opengwasdb.ld reads an LD Store over HTTP(S); see [project]
+aiohttp = ">=3.10"
 bcftools = "*"
 
 [tool.pixi.feature.dev.dependencies]
@@ -229,6 +284,16 @@ pytest-xdist = ">=3.6"
 # the model's check would break on a resolution that drops it, and the fix would
 # look like it belonged to that other package.
 pyyaml = "*"
+# opengwasdb.ld's tests (#455): ogld's 5 s per-test timeout, its property tests,
+# and the `ld-import` extra, so import fixture tests run rather than skip.
+pytest-timeout = ">=2.3"
+hypothesis = ">=6.100"
+lz4 = ">=4"
+
+# pgenlib is PyPI-only. The dev environment carries the `ld-build` extra so the
+# suite reads the Test Panel's pgen and never skips (#455).
+[tool.pixi.feature.dev.pypi-dependencies]
+pgenlib = ">=0.90"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting
@@ -254,3 +319,20 @@ test = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_
 lint = "ruff check ."
 typecheck = "mypy opengwasdb"
 benchmark-indexed-subset = "python benchmarks/benchmark_indexed_subset.py"
+# opengwasdb.ld's realdata tier: the IEU nodes only (#455; ogld's `test-realdata`).
+# run.sh names every suite it runs.
+ld-test-realdata = "env PYTHONNOUSERSITE=1 bash tests/ld/realdata/run.sh"
+# The whole-panel comparison of `clump` with plink2: about an hour.
+ld-acceptance-clump = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run.sh"
+# The five HGDP+1kGP LD Stores: every validation rule, and the provenance each records.
+ld-acceptance-stores = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run_stores.sh"
+# The whole-panel comparison of the Genotype Store with the LD Store, code for code.
+ld-acceptance-genotypes = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run_genotypes.sh"
+# ogld#8's read-latency benchmark, from local disk and over HTTP (docs/benchmarks/ld/latency.md):
+# `pixi run -e dev ld-bench-latency step1 --target local http0 http10 http50 --out …`. BLAS keeps one
+# thread and zarr's pool `--zarr-threads`, so a timing stays within the shared node's 8 threads.
+ld-bench-latency = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/ld/bench/latency.py"
+# ogld#9's serving measurements (docs/benchmarks/ld/serving.md): `pixi run -e dev ld-bench-serving memory
+# --out …`, `lag --out …`, and `tables docs/benchmarks/ld/results/9/*.jsonl.gz`. BLAS keeps one
+# thread, as for ld-bench-latency, and the records carry it.
+ld-bench-serving = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/ld/bench/serving.py"

@@ -2,7 +2,7 @@
  "provenance": {
   "tool": "lizard",
   "version": "1.24.0",
-  "config": "b4eb34c0029c"
+  "config": "b080903b9912"
  },
  "entries": [
   {
@@ -22,7 +22,7 @@
   {
    "file": "opengwasdb/variants/axis.py",
    "text": "def indices_by_identifiers(self, identifiers: Sequence[str]) -> np.ndarray:",
-   "line": 450,
+   "line": 457,
    "cc": 20,
    "lines": 64
   },
@@ -41,13 +41,6 @@
    "lines": 72
   },
   {
-   "file": "opengwasdb/layouts/dense/complete.py",
-   "text": "def _shard_checkpoint_fills_by_band(",
-   "line": 1038,
-   "cc": 15,
-   "lines": 98
-  },
-  {
    "file": "opengwasdb/ancestry/subset.py",
    "text": "def subset_catalogue(",
    "line": 53,
@@ -62,16 +55,9 @@
    "lines": 49
   },
   {
-   "file": "opengwasdb/layouts/hybrid/build.py",
-   "text": "def read_reference_panel_alids(panel_path: str | Path) -> set[str]:",
-   "line": 246,
-   "cc": 13,
-   "lines": 37
-  },
-  {
    "file": "opengwasdb/variants/axis.py",
    "text": "def write_variant_axis(",
-   "line": 248,
+   "line": 255,
    "cc": 12,
    "lines": 61
   },
@@ -85,14 +71,14 @@
   {
    "file": "opengwasdb/model/analyses.py",
    "text": "def validate_analyses(table: AnalysesTable) -> list[str]:",
-   "line": 250,
+   "line": 266,
    "cc": 11,
    "lines": 41
   },
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def calibrate_ancestry_command(",
-   "line": 1418,
+   "line": 1473,
    "cc": 10,
    "lines": 56
   },
@@ -113,14 +99,14 @@
   {
    "file": "opengwasdb/completion/ld_panel.py",
    "text": "def blocks_over_variants(",
-   "line": 166,
+   "line": 666,
    "cc": 10,
-   "lines": 52
+   "lines": 51
   },
   {
    "file": "opengwasdb/encoding/measure.py",
    "text": "def combine_eaf_measurements(parts: list[EafMeasurements]) -> EafMeasurements:",
-   "line": 415,
+   "line": 409,
    "cc": 10,
    "lines": 26
   },
@@ -132,13 +118,6 @@
    "lines": 26
   },
   {
-   "file": "opengwasdb/layouts/ragged/complete.py",
-   "text": "def complete_ragged_store(",
-   "line": 315,
-   "cc": 3,
-   "lines": 75
-  },
-  {
    "file": "scripts/compute_vcf_coverage.py",
    "text": "def _coverage(trait_id: str, file_path: str) -> tuple[str, int, int, float]:",
    "line": 27,
@@ -148,9 +127,16 @@
   {
    "file": "opengwasdb/layouts/dense/complete.py",
    "text": "def complete_dense_store(",
-   "line": 234,
+   "line": 290,
    "cc": 3,
    "lines": 74
+  },
+  {
+   "file": "opengwasdb/layouts/ragged/complete.py",
+   "text": "def complete_ragged_store(",
+   "line": 317,
+   "cc": 2,
+   "lines": 73
   },
   {
    "file": "opengwasdb/ancestry/mixture.py",
@@ -169,35 +155,28 @@
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def build_hybrid_from_catalogue_command(",
-   "line": 978,
+   "line": 1033,
    "cc": 1,
    "lines": 69
   },
   {
    "file": "opengwasdb/encoding/planes.py",
    "text": "def __init__(",
-   "line": 312,
+   "line": 313,
    "cc": 9,
    "lines": 37
   },
   {
    "file": "opengwasdb/query/facade.py",
    "text": "def rho(self, *ids: str) -> dict[str, np.ndarray]:",
-   "line": 382,
+   "line": 385,
    "cc": 9,
    "lines": 34
   },
   {
-   "file": "opengwasdb/layouts/dense/complete.py",
-   "text": "def _write_completed_bands(",
-   "line": 1617,
-   "cc": 3,
-   "lines": 66
-  },
-  {
    "file": "opengwasdb/encoding/codec.py",
    "text": "def encode_eaf(",
-   "line": 1262,
+   "line": 1431,
    "cc": 7,
    "lines": 65
   },
@@ -211,7 +190,7 @@
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def assign_ancestry_command(",
-   "line": 1050,
+   "line": 1105,
    "cc": 1,
    "lines": 63
   }
