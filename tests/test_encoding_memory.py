@@ -21,6 +21,7 @@ from opengwasdb.encoding.memory import (
     available_memory_bytes,
     memory_budget_bytes,
     pool_workers,
+    release_freed_heap,
     resident_bytes,
     workers_within_memory,
 )
@@ -255,3 +256,30 @@ def test_an_unreadable_resident_set_is_refused_not_counted_as_nothing(
         resident_bytes(status)
     assert str(status) in str(raised.value)
     assert why in str(raised.value)
+
+
+_MiB = 1024**2
+
+
+def test_freed_heap_kept_by_the_allocator_is_handed_back() -> None:
+    """A long-lived worker holds the high-water of every Analysis it has read
+    (#451): the reader's buffers are freed, but glibc keeps the pages, so each
+    worker of a 240-Analysis Pass 2 stepped up 4 GiB a large source and stayed
+    there. Freed pages under a live allocation cannot be returned by shrinking
+    the heap, and this is that shape: 200 MiB of 1 kB chunks, with one in 64
+    kept alive so the heap cannot shrink from its top."""
+    before = resident_bytes()
+    piece = b"x"
+    chunks = [piece * 1000 for _ in range(200_000)]
+    allocated = resident_bytes()
+    assert allocated - before > 150 * _MiB, "the fixture's chunks must be resident"
+    kept = chunks[::64]
+    del chunks
+    freed = resident_bytes()
+    assert allocated - freed < 50 * _MiB, (
+        "the allocator must keep the freed chunks, or there is nothing to hand back"
+    )
+
+    assert release_freed_heap() is True
+    assert freed - resident_bytes() > 100 * _MiB
+    assert len(kept) == 3125

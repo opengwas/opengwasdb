@@ -70,6 +70,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.memory import release_freed_heap
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.layouts.build_manifest import (
@@ -453,6 +454,9 @@ def _route_column(
             row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
         )
         _spill_hybrid_column(context.spill_dir, col_idx, *parts)
+    # The worker routes the next Analysis from here, so what this one freed is
+    # handed back rather than kept as the worker's high-water (#451).
+    release_freed_heap()
     return col_idx, left_out[0], left_out[1]
 
 
