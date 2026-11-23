@@ -8,14 +8,12 @@ and one missing an entry — because a reader that trusts it answers another var
 none, and the answers must not move.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 from store_copies import TEST_STORE, copy_store
-from zarr import Group, open_group
 
 from opengwasdb.ld.store import StoreReader, layout
 from opengwasdb.ld.store.variants import _index_pays
@@ -23,7 +21,7 @@ from opengwasdb.ld.store.variants import _index_pays
 
 def oracle(store: Path) -> dict[str, int]:
     """Each ALID the store holds, by its Variant Set row, from its variant table alone."""
-    recorded = np.asarray(open_group(store, mode="r")["variants/alid"][:]).tolist()
+    recorded = np.asarray(zarr.open_group(store, mode="r")["variants/alid"][:]).tolist()
     return {str(alid): row for row, alid in enumerate(recorded)}
 
 
@@ -70,7 +68,7 @@ def test_an_index_missing_an_entry_falls_back_to_the_scan(tmp_path: Path) -> Non
     # found by the exact scan at its position, as it was before the index.
     store = copy_store(tmp_path / "store")
     rows = oracle(store)
-    root = open_group(store, mode="r+")
+    root = zarr.open_group(store, mode="r+")
     keys = np.asarray(root[f"{layout.ALID_INDEX}/alid"][:]).reshape(-1, layout.ALID_INDEX_WIDTH)
     entries = np.asarray(root[f"{layout.ALID_INDEX}/row"][:])
     gone = sorted(rows)[40]
@@ -86,7 +84,7 @@ def test_an_index_missing_an_entry_falls_back_to_the_scan(tmp_path: Path) -> Non
 def test_an_unsorted_index_answers_the_same_rows(tmp_path: Path) -> None:
     store = copy_store(tmp_path / "store")
     rows = oracle(store)
-    root = open_group(store, mode="r+")
+    root = zarr.open_group(store, mode="r+")
     keys = np.asarray(root[f"{layout.ALID_INDEX}/alid"][:]).reshape(-1, layout.ALID_INDEX_WIDTH)
     entries = np.asarray(root[f"{layout.ALID_INDEX}/row"][:])
     order = np.random.default_rng(7).permutation(len(entries))
@@ -99,7 +97,7 @@ def test_an_unsorted_index_answers_the_same_rows(tmp_path: Path) -> None:
 def test_a_truncated_index_answers_the_same_rows(tmp_path: Path) -> None:
     store = copy_store(tmp_path / "store")
     rows = oracle(store)
-    root = open_group(store, mode="r+")
+    root = zarr.open_group(store, mode="r+")
     alids = sorted(rows)
     keys = np.array(alids, dtype=f"|S{layout.ALID_INDEX_WIDTH}")
     root[f"{layout.ALID_INDEX}/alid"][:] = keys.view(np.uint8).ravel()
@@ -151,9 +149,9 @@ def peak_lookup(tmp_path: Path, name: str, entries: int) -> tuple[int, int]:
 
     store = copy_store(tmp_path / name)
     keys, rows = fabricated_keys(entries)
-    root = open_group(store, mode="r+")
+    root = zarr.open_group(store, mode="r+")
     group = root[layout.ALID_INDEX]
-    assert isinstance(group, Group)
+    assert isinstance(group, zarr.Group)
     del group["alid"]
     del group["row"]
     layout.put_numbers(group, "alid", keys.reshape(-1), layout.ALID_KEY_FILL, layout.ALID_KEYS)

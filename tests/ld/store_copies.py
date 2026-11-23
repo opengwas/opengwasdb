@@ -229,8 +229,9 @@ def private_sidecar_copy(
     genotype_store: Path, tmp_path: Path
 ) -> tuple[Path, zarr.Group, dict[str, Any]]:
     """A private copy of a Genotype Store whose pins point at the original inputs (relative paths
-    survive the copy into another directory), its ALID companion dropped, with its root group and
-    its genotype record, whose edits the caller writes back."""
+    survive the copy into another directory), its ALID companion dropped (a store without one is
+    not a fixture for this), with its root group and its genotype record, whose edits the caller
+    writes back."""
     copy = tmp_path / "sidecar"
     shutil.copytree(genotype_store, copy)
     root = zarr.open_group(copy, mode="a")
@@ -241,8 +242,7 @@ def private_sidecar_copy(
             pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
     for pin in record["inputs"]:
         pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
-    if "alid_mmap" in root.attrs:
-        del root.attrs["alid_mmap"]
+    del root.attrs["alid_mmap"]
     return copy, root, record
 
 

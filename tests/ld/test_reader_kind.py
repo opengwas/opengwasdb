@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from contract.support import TEST_STORE
 
@@ -73,7 +74,6 @@ def test_a_store_closes_its_reader_and_its_pgen_handles(
     from contextlib import closing
 
     import build_fixtures
-    import numpy as np
     import testdata
 
     from opengwasdb.ld.genotypes.pgen import Genotypes

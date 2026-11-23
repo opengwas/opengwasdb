@@ -73,11 +73,23 @@ RESERVED = -32768
 
 #: The rules one pass over each chromosome's Near Band, Far Pairs and Partner Rows feeds
 #: (spec §12).
-SCANNED = (
-    "near.codes far.rows far.codes far.distance far.threshold "
-    "partners.frames partners.rows partners.codes partners.distance "
-    "partners.threshold partners.symmetric partners.near partners.far"
-).split()
+SCANNED = [
+    "near.codes",
+    *(f"far.{rule}" for rule in ("rows", "codes", "distance", "threshold")),
+    *(
+        f"partners.{rule}"
+        for rule in (
+            "frames",
+            "rows",
+            "codes",
+            "distance",
+            "threshold",
+            "symmetric",
+            "near",
+            "far",
+        )
+    ),
+]
 
 
 @cache
