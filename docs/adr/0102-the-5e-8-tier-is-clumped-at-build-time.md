@@ -7,7 +7,7 @@ with §2, §7a, §20 and §21. Amends [ADR 0032](0032-overview-html-is-a-single-
 beside it. It reads LD only through `opengwasdb.ld` (ADRs 0087–0101), and clumps exactly
 as `clump` does (ld-store §9, partner-rows §8.2). The terms are in `CONTEXT.md`.
 
-Three sources of decision, kept apart below:
+Each decision below names its source:
 
 - **The owner's**, on #62 on 23 Nov 2026 (the comment "Plan, 23 Nov 2026: store clumps of
   the 5e-8 tier, built from the merged LD engine",
@@ -16,11 +16,11 @@ Three sources of decision, kept apart below:
 - **#417's**, the decisions its body says this ADR must make explicitly: absent rows marked and
   counted, imputed rows not clumped, blank counts without an ancestry, the provenance, and
   |z| with ties by Store Variant Index.
-- **The orchestrator's**, 23 Nov 2026, in the brief for #417, taken on the code's evidence:
-  no default LD Store in the engine; several ancestries in one Store; r² read from the LD
-  Store; indels translated at lookup; `r` as the LD Store's own code.
+- **The evidence**, where a decision follows from the code, the layering rules or a
+  measurement, which the decision cites: no default LD Store in the engine; several ancestries
+  in one Store; r² read from the LD Store; `r` as the LD Store's own code; where the step runs.
 - **This ADR's own**, each with a recommendation the owner may overrule: which LD Store
-  clumped an Analysis, how an LD Store is identified, ties, the sentinels, and the format
+  clumped an Analysis, how an LD Store is identified, ties, the markers, and the format
   version.
 
 ## Context
@@ -39,12 +39,15 @@ Genotype Store at r² 0.0319 (its t_far) and kb 10,000, observed rows only, rank
 one process (the scripts time_clumps.py and store_clumps.py and their raw records, in
 `/data/opengwasdb/work/clump-62/` on the IEU node):
 
-| Store | Tier | Rows clumped | Clump time | Per Analysis median / p99 / max | Leads per Analysis |
+| Store | Tier | Rows clumped | Clump time | Per Analysis median / p99 / max | Leads per Analysis, mean / median |
 |---|---|---|---|---|---|
-| OGS-00009 (ukb-b) | 5e-8 | 5.49 M | 126 s | 23 ms / 1.0 s / 5.5 s | 63 |
-| OGS-00027 | 5e-8 | 7.83 M | 126 s | 5 ms / 40 ms / 0.6 s | 7 |
-| OGS-00009 | 5e-4 | 41.9 M | 19.8 min | 242 ms / 7.7 s / 26 s | 815 |
-| OGS-00027 | 5e-4 | 13.3 M | 3.6 min | 7 ms / 60 ms / 0.5 s | 14 |
+| OGS-00009 (ukb-b) | 5e-8 | 5.49 M | 126 s | 23 ms / 1.0 s / 5.5 s | 63 / 3 |
+| OGS-00027 | 5e-8 | 7.83 M | 126 s | 5 ms / 40 ms / 0.6 s | 7.1 / 4 |
+| OGS-00009 | 5e-4 | 41.9 M | 19.8 min | 242 ms / 7.7 s / 26 s | 815 / 503.5 |
+| OGS-00027 | 5e-4 | 13.3 M | 3.6 min | 7 ms / 60 ms / 0.5 s | 13.5 / 9 |
+
+The means and medians are over the Analyses in each run's records (`all-*.jsonl`,
+`all5e4-*.jsonl`): 1,219 and 15,785 at 5e-8, 2,514 and 18,452 at 5e-4.
 
 - **Storage.** Two arrays parallel to the tier, `lead` (int32) and `r` (int16), took 11.4 MB
   for OGS-00009's 5e-8 tier: 6.44 M rows, 1.8 B a row, against a 112 MB tier and a 58 GB Store.
@@ -70,12 +73,12 @@ clumped on the fly by the Top-Hit Query (#419). The stored configuration is name
 and it is the only name the format admits: a second stored configuration is a later decision
 and a change to the spec, not a convention.
 
-### 2. Each Analysis's Assigned Ancestry chooses its LD Store; the mapping is an input (owner; orchestrator)
+### 2. Each Analysis's Assigned Ancestry chooses its LD Store; the mapping is an input (owner; this ADR)
 
 The owner decided that each ancestry has one default LD Store, chosen by the Analysis's
 **Assigned Ancestry**, and that development uses the HGDP+1kGP EUR Genotype Store.
 
-**No default is hidden in the engine** (orchestrator). The step takes an explicit mapping from
+**No default is hidden in the engine** (this ADR). The step takes an explicit mapping from
 Assigned Ancestry to LD Store location; the registry, opengwas/opengwasdb-stores, holds each
 ancestry's default and passes it (opengwas/opengwasdb-stores#454). The default will change
 (Pan-UKB EUR is coming, ADR 0101) without an engine release, and the engine must never pick a
@@ -84,18 +87,18 @@ ancestry the mapping does not hold, is not clumped: its rows are marked (decisio
 counts are blank, never 0 (decision 8). 4,668 of the 38,221 published Analyses have no Assigned
 Ancestry (#417).
 
-**r² is the LD Store's own t_far, and the window is 10,000 kb** (owner; orchestrator). The owner
-set r² to the lowest the LD Store answers at the window, and the window to 10,000 kb. At 10 Mb
-that is the store's t_far, read from its provenance, never a constant in the engine: HGDP+1kGP
+**r² is the LD Store's own t_far, and the window is 10,000 kb** (owner). The owner set r² to
+the lowest the LD Store answers at the window, and the window to 10,000 kb. At 10 Mb that is,
+by the refusal table of ld-store §9 (`judge_partner_request`), the store's t_far, read from its provenance, never a constant in the engine: HGDP+1kGP
 EUR 0.0319, AMR 0.0632, UK Biobank EUR 0.001. ld-store §9 answers r2 = t_far exactly. A store
 that refuses the configuration, such as one whose recorded `far_bp` is under 10 Mb, fails the
 step, naming the store and its Refusal; the Analyses are not silently left unclumped. So does an
 LD Store whose Reference Assembly is not the Store's.
 
-### 3. Which LD Store clumped an Analysis: keyed by Assigned Ancestry in the group's attributes (orchestrator; this ADR)
+### 3. Which LD Store clumped an Analysis: keyed by Assigned Ancestry in the group's attributes (this ADR)
 
-A Store can hold several ancestries: OGS-00014 holds 850 AMR Analyses and 203 Unassigned
-(orchestrator). The stored configuration is therefore "each Analysis's ancestry's LD Store, at
+A Store can hold several ancestries: OGS-00014's `analyses.tsv` holds 850 AMR Analyses and 203
+Unassigned. The stored configuration is therefore "each Analysis's ancestry's LD Store, at
 that store's r² and kb", and a reader must be able to learn which LD Store clumped a given
 Analysis.
 
@@ -145,12 +148,21 @@ it cannot add an independent locus.
 The score is |z| (the tier's `abs_z`), never raw p, which underflows to 0 past |z| ≈ 38. Ties
 go to the lower Store Variant Index, the order the Top-Hit Index keeps its rows in (#417).
 `clump` breaks ties by the LD Store's row order instead, which is the Store's order for every
-variant except a reference-first indel translated to its sorted spelling (decision 6); so the
-step gives `clump` a score that already carries the Store's order and has no ties, such as each
-row's rank by (|z| descending, Store Variant Index ascending). `clump` uses a score only to
-order.
+variant except a reference-first indel translated to its sorted spelling (decision 6). `clump`
+leads with the **largest** score (`np.lexsort((rows, -score))` in `_component`,
+`opengwasdb/ld/query/clumping.py`), so the step passes a score that is larger for a stronger
+row and has no ties: n − rank, where rank 0 is the largest |z| and ties go by Store Variant
+Index ascending. The score enters only that ordering, so for distinct |z| the leads are those of
+plink2's greedy on |z| (strongest first, r̂² > r2, d < W). A score of the rank itself would lead
+with the weakest row.
 
-### 6. A reference-first indel is translated at lookup; a shared spelling is its own class (owner; orchestrator)
+In a Hybrid Store the two components' tiers index different axes: the Dense Component's
+`variant_index` is a row of its dense axis, the Ragged Overflow's a row of the shared Store
+Variant Table. Ties and identity use the shared index, so a Dense Component row is mapped
+through `dense_to_shared.npy` (`dense_to_shared_path`, `opengwasdb/layouts/hybrid/layout.py`)
+first.
+
+### 6. A reference-first indel is translated at lookup; a shared spelling is its own class (owner)
 
 The owner decided on #418 (23 Nov 2026) that the step translates a Store's reference-first indel
 ALIDs (format ≥ 0.2.2, ADR 0079) to the LD Store's sorted spelling at lookup, through
@@ -172,7 +184,7 @@ on both sides. The step counts the indel rows it looked up by a shared sorted sp
 Store (`indel_rows_by_sorted_spelling`), so the exposure is a number; #462's LD Store format
 removes it.
 
-### 7. Two arrays parallel to the tier; `r` is the LD Store's own code (owner; orchestrator; this ADR)
+### 7. Two arrays parallel to the tier; `r` is the LD Store's own code (owner; this ADR)
 
 Under `top_hits/p_5e_08/clumps/<configuration>/`, here `default/`, one entry per tier row
 (owner, as measured on #62, and #417):
@@ -184,7 +196,7 @@ Under `top_hits/p_5e_08/clumps/<configuration>/`, here `default/`, one entry per
   - −3 **ambiguous**: a reference-first indel sharing its sorted spelling (decision 6);
   - −4 **not clumped**: every row of an Analysis no LD Store was mapped for (decision 2).
 - `r` (int16): the row's signed r with its lead, **as the LD Store's own code**, signed to the
-  Store's A1 of both (orchestrator). The engine returns r = code / r_scale, which `REncoding`
+  Store's A1 of both. The engine returns r = code / r_scale, which `REncoding`
   quantises back to the same code exactly, so the stored code is a copy, never a second rounding
   (ADR 0097: every code is a copy). A lead holds +r_scale, r = 1. A marked row holds −32768, the
   LD Store's reserved code, which is never a correlation (ADR 0090). The scale is the LD Store's,
@@ -219,34 +231,49 @@ The Clumps component and its two columns are **derived, rebuildable data**: the 
 tier, clumped by a named LD Store, which #419's on-the-fly path reproduces row for row. Deleting
 them changes no existing query answer. That is the class ADR 0061 narrowed out of a version move
 for an Indexed Variant Subset, and the class spec §18 keeps for a tier's `eaf`: added in place,
-discovered by the manifest's `clumps` entry, no version move. ADR 0067's `n` plane is the same
-case.
+discovered by the manifest's `clumps` entry, no version move. One difference: a subset rebuilds
+from the Store alone, and Clumps from the Store and a named LD Store, which is why the LD Store's
+identity is recorded (decision 4).
 
 A version move cannot be honest here. A build stamps the lowest version its features use
 (spec §21.3), and the 0.2 versions are cumulative: 0.2.3 is 0.2.2 and the SE count, 0.2.2 is
 reference-first indels. A 0.2.4 that adds Clumps would declare reference-first indels and the
-count, yet the owner's plan clumps existing Stores in place (decision 10), and they are 0.2.0,
-0.2.1 and 0.2.2. Stamped 0.2.4, a 0.2.0 Store would tell every reader its indels are spelt
-reference first, `indels_reference_first` would believe it, and this step's own lookup would
-then translate ALIDs that are already sorted. That is a wrong answer that looks like a right one.
+count, yet the owner's plan clumps existing Stores in place (decision 10), and the published ones
+are 0.2.0 to 0.2.3 (and OGS-00008 0.1.0, converted first). Stamped 0.2.4, a 0.2.0 Store
+would tell every reader its indels are spelt reference first, `indels_reference_first` would
+believe it, and this step's own lookup would then translate ALIDs that are already sorted. That is a wrong answer that looks like a right one.
 Not stamped, a clumped 0.2.0 Store and a clumped new build would carry one feature under two
 regimes.
 
 What an older package does with a clumped Store: it reads every association and every column it
 knew, correctly, and ignores the two new columns (ADR 0034's superset rule). Its `validate` fails
-the Store on the arrays it does not register, as it fails ADR 0067's `n` plane, which is loud.
+the Store on the arrays it does not register, which is loud; that one behaviour is what an older
+package's `validate` also does with ADR 0067's `n` plane.
 Under ADR 0038's test that is not a breaking change: no reader misreads anything it knew.
 
-The owner gates a format version (CONTRIBUTING.md, Merging). If the owner prefers a version,
+This goes against #417's text, "A `format_version` bump". The owner gates a format version
+(CONTRIBUTING.md, Merging) and signs this decision off when epic #62's pull request merges. If
+the owner prefers a version,
 the alternative is a 0.2.4 written only on a release already at 0.2.3, with every older Store
 rebuilt before it is clumped; ukb-b alone takes 11 h 35 min to build.
 
-### 10. Written last by every build, and in place on an existing Store (owner)
+### 10. Written after every build and completion, and in place on an existing Store (owner; this ADR)
 
 The owner's plan (#62, 23 Nov 2026) is one step, run last by every build and in place on every
-published Store Release (#418, #420). The component and its columns add derived data and change
-no existing value, so they may be added in place, as an Indexed Variant Subset is (ADR 0061); the
-`release_id` does not change. The step writes the group, then `analyses.tsv` and `overview.html`,
+published Store Release (#418, #420). The step is the component `clumps`, in layer 4 beside
+`completion`, because it imports `opengwasdb.ld.query`; the builders are layer 3 and cannot call
+it. Its one entry is the CLI command `opengwasdb clump`, and "last by every build" means the
+Store Release Build in opengwas/opengwasdb-stores runs it after the build and after any
+completion, passing the mapping it holds (opengwas/opengwasdb-stores#454).
+
+**An exception to immutability, narrowed** (this ADR, on the owner's plan). ADR 0038 §4–§5 and
+spec §21.4 derive a new release for any change to Analytical Metadata, and ADR 0061 allows an
+in-place addition because it changes none. `n_loci_5e8` and `n_unclumped_5e8` are Analytical
+Metadata. The exception is exactly this: **a derived, rebuildable component and the count
+columns derived from it, recomputable from the Store and a named LD Store**, may be added to or
+replaced in an existing release in place. They change no existing value, and the `release_id`
+does not change. Anything else touching Analytical Metadata still derives a new release. ADRs
+0038 and 0061 carry a banner saying so. The step writes the group, then `analyses.tsv` and `overview.html`,
 then the manifest's `clumps` entry last: until that entry is written the Store does not declare
 the component, and `validate` fails a group it does not declare. Running the step again replaces
 all four.
@@ -256,8 +283,12 @@ Clumping needs a 0.2 Store: a 0.1.0 Store (Zarr v2, OGS-00008) is converted firs
 without either, naming it.
 
 A Reference Completion of a clumped Store rewrites the tier, so its release carries no Clumps
-component, no `clumps` entry and neither column; the build then runs the step last, as every build
-does.
+component, no `clumps` entry and neither column; the Store Release Build then runs the step again.
+Every completion rewrites its tiers through `top_hits.write_index`, which replaces each tier group
+whole (`create_group(replace=True)`, `opengwasdb/store/arrays.py`) and so deletes `clumps/` with
+it: Dense through `write_top_hit_indexes`, Ragged and a Hybrid's Overflow through
+`build_ragged_top_hit_indexes`, and a Hybrid's Dense Component through the Dense path. A
+`clumps` entry or columns a completion carried over without the group fail `clumps.declared`.
 
 ## Considered options
 
@@ -279,7 +310,7 @@ does.
 
 ## Consequences
 
-- **#418** writes the step (`opengwasdb clump`), its validation rules, the `clumps` manifest entry
+- **#418** writes the step (`opengwasdb clump`, component `clumps`), its validation rules, the `clumps` manifest entry
   and the two columns; it registers the two arrays with the tier's role and chunking
   (`ArrayRole.TOP_HIT_INDEX`, `TOP_HIT_CHUNK_SIZE`), so a clumped read touches the chunks the
   tier's read does. It does not move `CURRENT_FORMAT_VERSION` (decision 9). It measures how many
