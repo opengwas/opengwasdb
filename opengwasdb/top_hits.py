@@ -10,7 +10,8 @@ what differs between them is how the candidate cells are *harvested*, which stay
 in ``layouts/*/top_hits.py``. This module owns everything after the harvest, so
 the layouts cannot drift apart on the format; what a reader needs -- the tiers,
 their keys and rows, and the |z| a threshold cuts at -- is the Store Reader's
-(`opengwasdb.store_reader.top_hits` and `.stats`, #464), and is re-exported here.
+(`opengwasdb.store_reader.top_hits` and `.stats`, #464). Of those, only
+`z_critical` is re-exported here.
 
 The on-disk format is specified in ``docs/spec/store-format.md``; nothing here
 changes it.

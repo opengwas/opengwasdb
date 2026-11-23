@@ -1,7 +1,7 @@
 """What Admission guarantees of every cell a Store holds, and its checks.
 
 A present cell has a finite z and a finite, positive SE; z is missing exactly
-where SE is (spec §15, `opengwasdb.associations.record.states`); a frequency is
+where SE is (spec §15, `opengwasdb.store_reader.associations.record.states`); a frequency is
 NaN or inside (0, 1); and a cell is flagged imputed only when it is present.
 A builder's rows reach a Store through a `Gate`, which admits only such
 cells; completion's candidates are checked by `admissible`, and a writer
