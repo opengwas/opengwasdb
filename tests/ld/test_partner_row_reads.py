@@ -363,14 +363,22 @@ def test_four_threads_first_use_read_the_offsets_once(
     reader = StoreReader.open(TEST_STORE)
     held = reader._root.store
     seen: list[str] = []
-    original = held.get
+    original, original_sync = held.get, held.get_sync
 
     async def get(key: str, prototype: Any, byte_range: Any = None) -> Any:
         if "frames_idx/c/" in key:
             seen.append(key)
         return await original(key, prototype, byte_range)
 
+    # zarr's FusedCodecPipeline, which `import opengwasdb` selects for the whole process
+    # (opengwasdb/store/arrays.py), reads a local chunk with `get_sync`, not `get` (#455).
+    def get_sync(key: str, *args: Any, **kwargs: Any) -> Any:
+        if "frames_idx/c/" in key:
+            seen.append(key)
+        return original_sync(key, *args, **kwargs)
+
     monkeypatch.setattr(held, "get", get)
+    monkeypatch.setattr(held, "get_sync", get_sync)
     with ThreadPoolExecutor(max_workers=4) as pool:
         rows = list(pool.map(lambda _: reader.partner_row("22", 100), range(4)))
     assert len(seen) == 1, f"four first calls read the offsets chunk {len(seen)} times"
