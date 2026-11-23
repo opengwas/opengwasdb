@@ -161,8 +161,8 @@ components:
     container: engine
     layer: 4
     stages: [cross]
-    summary: Representation-only repairs, the SE re-encode of existing Store Releases, layout conversion, and the query digests that prove a derived release answers as its source.
-    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py, opengwasdb/store/query_digests.py]
+    summary: Representation-only repairs, the SE re-encode of existing Store Releases, layout conversion, and the rewrite to format 0.3.0 with the query digests that prove it.
+    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py, opengwasdb/store/query_digests.py, opengwasdb/store/rewrite.py]
   # opengwasdb.ld, imported from opengwas/ogld whole (#455), is six components
   # on the engine's layers (#459). Its own layering: format at the
   # bottom, then store, genotypes, build and query, cli on top. build and query

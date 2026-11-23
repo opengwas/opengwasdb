@@ -2030,6 +2030,23 @@ def regenerate_overview_command(store_path: Path) -> None:
     typer.echo(f"wrote {out_path}")
 
 
+@app.command("rewrite-release")
+def rewrite_release_command(source: Path, destination: Path) -> None:
+    """Derive a new 0.3.0 Store Release at DESTINATION from the 0.2.3 one at SOURCE.
+
+    The source is never written and DESTINATION must not exist. Before it publishes,
+    the rewrite asks both releases the same questions and refuses on any difference,
+    then validates the result (spec §21.4, ADR 0105).
+    """
+    from opengwasdb.store.rewrite import RewriteError, rewrite_release
+
+    try:
+        rewrite_release(source, destination)
+    except RewriteError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
 _FORMAT_OPTION = typer.Option(
     OutputFormat.tsv,
     "--format",
