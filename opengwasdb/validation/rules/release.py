@@ -28,20 +28,18 @@ from opengwasdb.store.open import (
     newer_than_written,
     newer_than_written_text,
 )
-from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES
+from opengwasdb.store_reader.alid_index import alid_index_kind
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
-    carries_alid_sidecar,
     indels_reference_first,
     split_format_version,
     zarr_format_for_version,
 )
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.variant_axis import (
-    variant_alid_bytes_path,
-    variant_alid_rows_path,
     variant_offsets_path,
     variant_tabix_path,
     variant_table_path,
@@ -206,18 +204,15 @@ def _rebuild_alid_index(name: str) -> str:
 
 
 def _alid_index_entries(target: Target, *, rebuild: bool = False) -> list[tuple[str, Path]]:
-    """The ALID index a release of its `format_version` carries: from 0.3.0 the
-    variable-length sidecar (ADR 0105), before it the fixed-width pair."""
+    """The ALID index a release of its `format_version` carries (`alid_index_kind`): from
+    0.3.0 the variable-length sidecar (ADR 0105), before it the fixed-width pair."""
+    kind = alid_index_kind(target.store.manifest.format_version)
     path = target.store.path
-    if carries_alid_sidecar(target.store.manifest.format_version):
-        return [(f"missing {name} (ALID sidecar)", path / name) for name in ALID_SIDECAR_FILENAMES]
-    pair = [
-        ("variant_alid_bytes.npy", variant_alid_bytes_path(path)),
-        ("variant_alid_rows.npy", variant_alid_rows_path(path)),
-    ]
+    if kind is AlidSidecar:
+        return [(f"missing {name} (ALID sidecar)", path / name) for name in kind.FILENAMES]
     return [
-        (_rebuild_alid_index(name) if rebuild else f"missing {name}", where)
-        for name, where in pair
+        (_rebuild_alid_index(name) if rebuild else f"missing {name}", path / name)
+        for name in kind.FILENAMES
     ]
 
 

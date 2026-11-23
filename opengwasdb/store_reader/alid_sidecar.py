@@ -18,16 +18,18 @@ ALID wider than its slot (115,043 on OGS-00010, #127) and resolved those by a sc
 of the Variant Table, which a 0.3.0 reader does not need.
 
 This module imports numpy and the standard library only, so the Store Reader, the
-writer (`opengwasdb.variants.axis.write_variant_axis`), the validator and the
-rewrite (`opengwasdb.store.rewrite`) share one statement of the layout.
+validator and every writer share one statement of the layout. `write_alid_sidecar` is
+the sidecar's one writer: a build reaches it through `write_variant_axis` (the axis's
+writer), and the rewrite to 0.3.0 (`opengwasdb.store.rewrite`) calls it directly.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
@@ -53,8 +55,12 @@ KEY_DTYPE = np.dtype(f"S{KEY_WIDTH}")
 OFFSET_DTYPE = np.dtype("<u8")
 ORDER_DTYPE = np.dtype("<i4")
 
-#: Rows a structural check reads at a time: 1,000,000 rows of 24-byte keys is 24 MB.
-_WINDOW = 1_000_000
+#: Rows a structural check reads at a time. `_keys_of` builds two `int64` arrays of
+#: rows x `KEY_WIDTH` (19 MB each at 100,000 rows) and a boolean one of 2.4 MB.
+_WINDOW = 100_000
+
+#: What `AlidSidecar.search` returns for an ALID the release does not hold.
+ABSENT = -1
 
 
 class DuplicateAlidError(ValueError):
@@ -84,15 +90,27 @@ def encode_alids(alids: Sequence[str]) -> EncodedAlids:
     np.cumsum(lengths, out=offsets[1:])
     utf8 = np.frombuffer(b"".join(encoded), dtype=np.uint8)
     # The cast truncates each ALID to its key, which is what a key is; the full bytes
-    # settle every tie below and every search (`AlidSidecar.rows_of`).
-    keys_by_row = np.array(encoded, dtype=KEY_DTYPE) if n_rows else np.empty(0, KEY_DTYPE)
+    # settle every tie (`_sorted_keys`) and every search (`AlidSidecar.rows_of`).
+    keys, order = _sorted_keys(encoded)
+    # Only equal keys can hide equal ALIDs, and each tied run is now in full-byte order.
+    repeated = next(_unrising_pairs(keys, lambda slot: encoded[int(order[slot])]), None)
+    if repeated is not None:
+        raise DuplicateAlidError(
+            f"ALID {repeated[0].decode('utf-8')!r} names more than one row; a Variant "
+            "Index holds each canonical variant once"
+        )
+    return EncodedAlids(utf8=utf8, offsets=offsets, keys=keys, order=order)
+
+
+def _sorted_keys(encoded: list[bytes]) -> tuple[np.ndarray, np.ndarray]:
+    """The keys in full-byte order, and each key's row: sorted by key, then each tied
+    run by its full bytes."""
+    keys_by_row = np.array(encoded, dtype=KEY_DTYPE) if encoded else np.empty(0, KEY_DTYPE)
     order = np.argsort(keys_by_row, kind="stable").astype(ORDER_DTYPE)
     keys = keys_by_row[order]
     for start, stop in _tied_runs(keys):
-        rows = sorted(order[start:stop].tolist(), key=encoded.__getitem__)
-        order[start:stop] = rows
-    _refuse_duplicates(keys, order, encoded)
-    return EncodedAlids(utf8=utf8, offsets=offsets, keys=keys, order=order)
+        order[start:stop] = sorted(order[start:stop].tolist(), key=encoded.__getitem__)
+    return keys, order
 
 
 def _tied_runs(keys: np.ndarray) -> Iterator[tuple[int, int]]:
@@ -109,16 +127,19 @@ def _tied_runs(keys: np.ndarray) -> Iterator[tuple[int, int]]:
         yield start, end + 2
 
 
-def _refuse_duplicates(keys: np.ndarray, order: np.ndarray, encoded: list[bytes]) -> None:
-    """Only equal keys can hide equal ALIDs, and a tied run is sorted by full bytes."""
+def _unrising_pairs(
+    keys: np.ndarray, full_at_slot: Callable[[int], bytes]
+) -> Iterator[tuple[bytes, bytes]]:
+    """Each pair of neighbours sharing a key whose full ALIDs do not strictly rise.
+
+    The one walk of the tied runs: the encoder reads a repeat in it as a duplicate it
+    refuses, and the structural check reads either fault in it as a sidecar it fails.
+    """
     for start, stop in _tied_runs(keys):
-        run = [encoded[row] for row in order[start:stop].tolist()]
+        run = [full_at_slot(slot) for slot in range(start, stop)]
         for before, after in zip(run, run[1:], strict=False):
-            if before == after:
-                raise DuplicateAlidError(
-                    f"ALID {before.decode('utf-8')!r} names more than one row; a Variant "
-                    "Index holds each canonical variant once"
-                )
+            if not before < after:
+                yield before, after
 
 
 def write_alid_sidecar(store_path: str | Path, alids: Sequence[str]) -> None:
@@ -131,7 +152,13 @@ def write_alid_sidecar(store_path: str | Path, alids: Sequence[str]) -> None:
 
 
 class AlidSidecar:
-    """A release's ALID sidecar, memory-mapped: each row's ALID, and each ALID's row."""
+    """A release's ALID sidecar, memory-mapped: each row's ALID, and each ALID's row.
+
+    One of the two ALID indexes a Variant Axis opens (`opengwasdb.store_reader.alid_index`);
+    it holds every ALID, so it never answers that one is unindexed.
+    """
+
+    FILENAMES: ClassVar[tuple[str, ...]] = ALID_SIDECAR_FILENAMES
 
     def __init__(
         self, utf8: np.ndarray, offsets: np.ndarray, keys: np.ndarray, order: np.ndarray
@@ -178,6 +205,14 @@ class AlidSidecar:
         out[:] = [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
         return out
 
+    def search(self, alids: Sequence[str]) -> np.ndarray:
+        """Each ALID's row, or `ABSENT`: the ALID index's question (`rows_of`)."""
+        return self.rows_of(alids)
+
+    def unindexed_rows(self, n_rows: int) -> np.ndarray:
+        """The rows the index leaves out: none."""
+        return np.empty(0, dtype=np.int64)
+
     def row_of(self, alid: str) -> int | None:
         """The row `alid` names, None when the release holds no such ALID."""
         row = int(self.rows_of([alid])[0])
@@ -185,7 +220,7 @@ class AlidSidecar:
 
     def rows_of(self, alids: Sequence[str]) -> np.ndarray:
         """Each ALID's row, ``-1`` where the release holds none, in `alids`' order."""
-        found = np.full(len(alids), -1, dtype=np.int64)
+        found = np.full(len(alids), ABSENT, dtype=np.int64)
         if not len(alids) or not len(self.keys):
             return found
         encoded = [alid.encode("utf-8") for alid in alids]
@@ -204,12 +239,13 @@ class AlidSidecar:
     def _row_in_run(self, lo: int, hi: int, query: bytes) -> int:
         """The row among slots ``[lo, hi)``, which share one key and run in full-byte
         order, whose ALID is `query`; -1 if none is."""
-        at = bisect_left(range(lo, hi), query, key=self._bytes_at_slot)
-        if at < hi - lo and self._bytes_at_slot(lo + at) == query:
+        at = bisect_left(range(lo, hi), query, key=self.alid_bytes_at_slot)
+        if at < hi - lo and self.alid_bytes_at_slot(lo + at) == query:
             return int(self.order[lo + at])
-        return -1
+        return ABSENT
 
-    def _bytes_at_slot(self, slot: int) -> bytes:
+    def alid_bytes_at_slot(self, slot: int) -> bytes:
+        """The full ALID, as bytes, of the key at `slot` of the sorted keys."""
         row = int(self.order[slot])
         return bytes(self._text[int(self.offsets[row]) : int(self.offsets[row + 1])])
 
@@ -295,13 +331,11 @@ def _unordered_keys(sidecar: AlidSidecar) -> Iterator[str]:
         if falling.size:
             yield f"variant_alid_keys.npy is not sorted at slot {int(falling[0]) + 1}"
             return
-    for start, stop in _tied_runs(np.asarray(keys)):
-        run = [sidecar._bytes_at_slot(slot) for slot in range(start, stop)]
-        for before, after in zip(run, run[1:], strict=False):
-            if not before < after:
-                word = "names more than one row" if before == after else "is out of order"
-                yield f"ALID {after.decode('utf-8', 'replace')!r} {word} in variant_alid_keys.npy"
-                return
+    fault = next(_unrising_pairs(np.asarray(keys), sidecar.alid_bytes_at_slot), None)
+    if fault is not None:
+        before, after = fault
+        word = "names more than one row" if before == after else "is out of order"
+        yield f"ALID {after.decode('utf-8', 'replace')!r} {word} in variant_alid_keys.npy"
 
 
 def _keys_of(sidecar: AlidSidecar, rows: np.ndarray) -> np.ndarray:

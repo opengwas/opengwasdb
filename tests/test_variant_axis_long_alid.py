@@ -14,9 +14,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from format_0_2_3 import with_fixed_width_alid_index
+from format_0_2_3 import as_0_2_3, with_fixed_width_alid_index
 
 from opengwasdb.store_reader.alid import ALID_WIDTH, is_indexable_alid
+from opengwasdb.store_reader.alid_index import FixedWidthAlidIndex
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
@@ -87,8 +88,9 @@ def test_variants_that_fit_the_slot_still_use_the_fast_index(tmp_path):
     try:
         assert is_indexable_alid(ordinary.alid)
         assert va.by_identifier(ordinary.alid).alid == ordinary.alid
+        assert isinstance(va.alid_index, FixedWidthAlidIndex)
         # The index holds only the indexable one; the wide pair is not truncated into it.
-        assert len(va._alid_bytes) == 1, "over-wide ALIDs must be left out, not truncated in"
+        assert len(va.alid_index.keys) == 1, "over-wide ALIDs must be left out, not truncated in"
     finally:
         va.close()
 
@@ -143,6 +145,7 @@ def test_validation_rejects_an_index_that_truncated_two_variants_together(dense_
 
     short, long_ = _shared_prefix_pair()
     write_variant_axis(dense_store_path, [short, long_], {})
+    as_0_2_3(dense_store_path)  # the fixed-width index is a 0.2 release's
 
     # Rebuild the index the old way: both wide ALIDs cast in, and so truncated
     # to the same key -- exactly what the published finngen-r13 release holds.

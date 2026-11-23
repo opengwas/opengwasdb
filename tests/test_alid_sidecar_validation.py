@@ -21,8 +21,8 @@ from opengwasdb.store_reader.alid_sidecar import (
     ALID_ORDER_FILENAME,
     ALID_UTF8_FILENAME,
     AlidSidecar,
-    EncodedAlids,
     encode_alids,
+    write_alid_sidecar,
 )
 from opengwasdb.validation import validate_store
 
@@ -39,16 +39,6 @@ def _save(store: Path, name: str, array: np.ndarray) -> None:
     np.save(store / name, array)
 
 
-def _save_encoded(store: Path, encoded: EncodedAlids) -> None:
-    for name, array in (
-        (ALID_UTF8_FILENAME, encoded.utf8),
-        (ALID_OFFSETS_FILENAME, encoded.offsets),
-        (ALID_KEYS_FILENAME, encoded.keys),
-        (ALID_ORDER_FILENAME, encoded.order),
-    ):
-        _save(store, name, array)
-
-
 def _two_rows_of_one_length(alids: list[str]) -> tuple[int, int]:
     seen: dict[int, int] = {}
     for row, alid in enumerate(alids):
@@ -63,8 +53,7 @@ def swap_two_rows(store: Path) -> None:
     alids = _alids(store)
     i, j = _two_rows_of_one_length(alids)
     alids[i], alids[j] = alids[j], alids[i]
-    encoded = encode_alids(alids)
-    _save_encoded(store, encoded)
+    write_alid_sidecar(store, alids)
 
 
 def offsets_that_fall(store: Path) -> None:
@@ -116,8 +105,7 @@ def one_alid_naming_two_rows(store: Path) -> None:
 
 
 def a_sidecar_one_row_short(store: Path) -> None:
-    encoded = encode_alids(_alids(store)[:-1])
-    _save_encoded(store, encoded)
+    write_alid_sidecar(store, _alids(store)[:-1])
 
 
 CORRUPTIONS: dict[str, tuple[Callable[[Path], None], str]] = {
@@ -149,7 +137,7 @@ def test_each_corruption_fails_the_rule(dense_store_path, corruption):
 
     result = validate_store(dense_store_path, rules={RULE})
 
-    assert RULE in result.failed(), result.errors
+    assert result.failed() == {RULE}, result.errors
     assert any(says in error for error in result.errors), result.errors
 
 
@@ -158,7 +146,7 @@ def test_the_rule_judges_every_layout(request, fixture):
     store = request.getfixturevalue(fixture)
     assert validate_store(store, rules={RULE}).ok
     a_key_that_is_not_its_alid(store)
-    assert RULE in validate_store(store, rules={RULE}).failed()
+    assert validate_store(store, rules={RULE}).failed() == {RULE}
 
 
 def test_a_0_2_release_is_not_judged(dense_store_path):

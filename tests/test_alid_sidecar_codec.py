@@ -130,3 +130,20 @@ def test_the_codec_imports_nothing_but_numpy_and_the_stdlib() -> None:
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "[]"
+
+
+@pytest.mark.parametrize("missing", sorted(alid_sidecar.ALID_SIDECAR_FILENAMES))
+def test_a_half_written_sidecar_is_refused_not_read_as_absent(tmp_path: Path, missing: str) -> None:
+    """Three of four files would answer some lookups and not others, which reads as absence."""
+    write_alid_sidecar(tmp_path, ALIDS)
+    (tmp_path / missing).unlink()
+    refused = f"ALID sidecar is incomplete, missing \\['{missing}'\\]"
+    with pytest.raises(FileNotFoundError, match=refused):
+        AlidSidecar.open(tmp_path)
+
+
+def test_search_answers_absent_and_leaves_no_row_out(tmp_path: Path) -> None:
+    """The ALID-index interface (`alid_index`): the sidecar never answers UNINDEXED."""
+    sidecar = _sidecar(tmp_path, ALIDS)
+    assert sidecar.search([VERY_LONG, "1:100:A:T"]).tolist() == [3, alid_sidecar.ABSENT]
+    assert sidecar.unindexed_rows(len(ALIDS)).tolist() == []

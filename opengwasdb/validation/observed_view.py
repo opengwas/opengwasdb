@@ -41,7 +41,7 @@ was checked, so there is no verdict to keep.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,12 +54,10 @@ from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
-from opengwasdb.store_reader.alid import ALID_DTYPE, ALID_WIDTH, is_indexable_alid
-from opengwasdb.store_reader.alid_sidecar import AlidSidecar
+from opengwasdb.store_reader.alid_index import UNINDEXED, open_alid_index
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
 from opengwasdb.variants.axis import VariantAxis
 
 __all__ = [
@@ -430,89 +428,90 @@ def _shard_rows(z_array: Any) -> int:
 # --- the exhaustive axis map ------------------------------------------------
 
 
-class _AlidIndex(NamedTuple):
-    """A Store's sorted ALID search index, which leaves out ALIDs wider than its key."""
+#: Source rows mapped at a time: their ALIDs are Python strings while they are mapped.
+_MAP_WINDOW = 1_000_000
 
-    alids: np.ndarray
-    rows: np.ndarray
 
-    @classmethod
-    def load(cls, store_path: Path) -> _AlidIndex:
-        sidecar = AlidSidecar.open(store_path)
-        if sidecar is not None:
-            return cls.from_sidecar(sidecar)
-        bytes_path = variant_alid_bytes_path(store_path)
-        rows_path = variant_alid_rows_path(store_path)
-        if not (bytes_path.exists() and rows_path.exists()):
-            # A Store built before the index existed: every row is resolved by scan.
-            return cls(np.empty(0, dtype=f"S{_CHROMOSOME_WIDTH}"), np.empty(0, dtype="int64"))
-        return cls(np.load(bytes_path, mmap_mode="r"), np.load(rows_path, mmap_mode="r"))
+class _AxisRows:
+    """One Store's axis, by ALID, exactly: its ALID index first, and its Variant Table
+    for the rows that index leaves out (a 0.2 ALID over 32 bytes, #127; every row of a
+    Store built before any index). Nothing is skipped, truncated or hashed."""
 
-    @classmethod
-    def from_sidecar(cls, sidecar: AlidSidecar) -> _AlidIndex:
-        """A 0.3.0 release's index, as the 0.2 pair would hold it: every ALID that fits
-        `ALID_WIDTH`, whole, in the sidecar's order, which is the full bytes' order. The
-        rest are read from the table, as on a 0.2 release (ADR 0105)."""
-        order = np.asarray(sidecar.order, dtype=np.int64)
-        offsets = np.asarray(sidecar.offsets, dtype=np.int64)
-        fits = (offsets[order + 1] - offsets[order]) <= ALID_WIDTH
-        rows = order[fits]
-        encoded = [alid.encode("utf-8") for alid in sidecar.alids(rows).tolist()]
-        return cls(np.array(encoded, dtype=ALID_DTYPE), rows)
+    def __init__(self, path: Path, n_rows: int) -> None:
+        self._path = path
+        self._index = open_alid_index(path)
+        self.unindexed = (
+            np.arange(n_rows, dtype=np.int64)
+            if self._index is None
+            else self._index.unindexed_rows(n_rows)
+        )
+        self._scanned: dict[int, str] | None = None
 
-    def unindexed_rows(self, n_rows: int) -> np.ndarray:
-        indexed = np.zeros(n_rows, dtype=bool)
-        indexed[np.asarray(self.rows, dtype="int64")] = True
-        return np.flatnonzero(~indexed)
+    def alids(self, rows: np.ndarray) -> np.ndarray:
+        """Each row's ALID: from the index, or from the table where the index has none."""
+        if self._index is None:
+            alids = np.full(len(rows), None, dtype=object)
+        else:
+            alids = self._index.alids(rows)
+        missing = [k for k, alid in enumerate(alids) if alid is None]
+        if missing:
+            scanned = self._scanned_alids()
+            alids[missing] = [scanned[int(rows[k])] for k in missing]
+        return alids
+
+    def rows_of(self, alids: Sequence[str | None]) -> np.ndarray:
+        """Each ALID's row, or -1 where this axis holds none (or the ALID is None)."""
+        found = np.full(len(alids), -1, dtype=np.int64)
+        named = [k for k, alid in enumerate(alids) if alid is not None]
+        if not named:
+            return found
+        asked = [str(alids[k]) for k in named]
+        found[np.asarray(named, dtype=np.int64)] = self._search(asked)
+        return found
+
+    def _search(self, asked: list[str]) -> np.ndarray:
+        """The index's answer, with each `UNINDEXED` ALID found in the table, or -1."""
+        if self._index is None:
+            rows = np.full(len(asked), UNINDEXED, dtype=np.int64)
+        else:
+            rows = self._index.search(asked)
+        unindexed = np.flatnonzero(rows == UNINDEXED).tolist()
+        if unindexed:
+            by_alid = {alid: row for row, alid in self._scanned_alids().items()}
+            for k in unindexed:
+                rows[k] = by_alid.get(asked[k], -1)
+        return np.maximum(rows, -1)
+
+    def _scanned_alids(self) -> dict[int, str]:
+        """The ALID of every row the index leaves out, read from the table once."""
+        if self._scanned is None:
+            self._scanned = {}
+            if self.unindexed.size:
+                with closing(VariantAxis(self._path)) as axis:
+                    records = axis.by_indices(self.unindexed.tolist())
+                self._scanned = {row: record.alid for row, record in records.items()}
+        return self._scanned
 
 
 def _map_axis(source_path: Path, target_path: Path, n_source: int, n_target: int) -> _AxisMap:
-    """Map every source row to its row in the completed axis, exactly.
-
-    The ALID index is a fast path, not the definition: it holds only ALIDs that
-    fit its fixed key, so a long indel is absent from it (#127). Rows the index
-    does not cover are read from the variant table, so a long-allele row is
-    mapped rather than reported unmapped, and a Store with no index at all is
-    still checkable. Nothing is skipped, truncated or hashed.
-    """
-    source_index, target_index = _AlidIndex.load(source_path), _AlidIndex.load(target_path)
-    source_loose = source_index.unindexed_rows(n_source)
-    target_loose = target_index.unindexed_rows(n_target)
+    """Map every source row to its row in the completed axis, exactly (`_AxisRows`)."""
+    source, target = _AxisRows(source_path, n_source), _AxisRows(target_path, n_target)
     mapped = np.full(n_source, -1, dtype="int64")
-    _map_through_index(mapped, source_index, target_index)
-    chromosome = _source_chromosomes(source_index, n_source)
-    source_alids: dict[int, str] = {}
-    if source_loose.size:
-        with closing(VariantAxis(source_path)) as axis:
-            for row, record in axis.by_indices(source_loose.tolist()).items():
-                source_alids[row] = record.alid
-                chromosome[row] = _chromosome_bytes(record.chromosome)
-    _map_residual(mapped, source_index, source_alids, target_index, target_path, target_loose)
+    chromosome = np.zeros(n_source, dtype=f"S{_CHROMOSOME_WIDTH}")
+    for start in range(0, n_source, _MAP_WINDOW):
+        rows = np.arange(start, min(start + _MAP_WINDOW, n_source), dtype=np.int64)
+        alids = source.alids(rows)
+        mapped[rows] = target.rows_of(alids.tolist())
+        chromosome[rows] = [_chromosome_bytes(alid.partition(":")[0]) for alid in alids]
     found = mapped >= 0
     return _AxisMap(
         source_to_target=mapped,
         chromosome=chromosome,
         unmapped=int((~found).sum()),
         order_preserved=bool(np.all(np.diff(mapped[found]) > 0)),
-        source_unindexed=int(source_loose.size),
-        target_unindexed=int(target_loose.size),
+        source_unindexed=int(source.unindexed.size),
+        target_unindexed=int(target.unindexed.size),
     )
-
-
-def _map_through_index(mapped: np.ndarray, source: _AlidIndex, target: _AlidIndex) -> None:
-    if not (source.alids.size and target.alids.size):
-        return
-    slot = np.minimum(np.searchsorted(target.alids, source.alids), target.alids.size - 1)
-    hit = target.alids[slot] == source.alids
-    mapped[np.asarray(source.rows, dtype="int64")[hit]] = np.asarray(target.rows)[slot[hit]]
-
-
-def _source_chromosomes(index: _AlidIndex, n_rows: int) -> np.ndarray:
-    chromosome = np.zeros(n_rows, dtype=f"S{_CHROMOSOME_WIDTH}")
-    if index.alids.size:
-        names = np.char.partition(index.alids, b":")[:, 0]
-        chromosome[np.asarray(index.rows, dtype="int64")] = names
-    return chromosome
 
 
 def _chromosome_bytes(name: str) -> bytes:
@@ -520,58 +519,6 @@ def _chromosome_bytes(name: str) -> bytes:
     if len(encoded) > _CHROMOSOME_WIDTH:
         raise ValueError(f"chromosome name {name!r} is wider than {_CHROMOSOME_WIDTH} bytes")
     return encoded
-
-
-def _map_residual(
-    mapped: np.ndarray,
-    source_index: _AlidIndex,
-    source_alids: dict[int, str],
-    target_index: _AlidIndex,
-    target_path: Path,
-    target_loose: np.ndarray,
-) -> None:
-    """Resolve, by ALID string, the rows the index fast path did not map.
-
-    A source ALID recovered by scanning can name a target row the target's index
-    covers *or* one it leaves out, so both are searched. Rows of an indexed source
-    that an indexed target does not contain are genuinely unmapped, so the
-    target's table is read only when a scanned source row or an unindexed target
-    row makes there something to find.
-    """
-    _map_scanned_through_index(mapped, source_alids, target_index)
-    residual = np.flatnonzero(mapped < 0)
-    if not (residual.size and target_loose.size):
-        return
-    alids = _unmapped_source_alids(mapped, source_index, source_alids)
-    with closing(VariantAxis(target_path)) as axis:
-        target_row_of = {r.alid: row for row, r in axis.by_indices(target_loose.tolist()).items()}
-    for row in residual.tolist():
-        if alids[row] in target_row_of:
-            mapped[row] = target_row_of[alids[row]]
-
-
-def _map_scanned_through_index(
-    mapped: np.ndarray, source_alids: dict[int, str], target: _AlidIndex
-) -> None:
-    rows = [row for row, alid in source_alids.items() if is_indexable_alid(alid)]
-    if not (rows and target.alids.size):
-        return
-    keys = np.array([source_alids[row].encode("utf-8") for row in rows], dtype=target.alids.dtype)
-    slot = np.minimum(np.searchsorted(target.alids, keys), target.alids.size - 1)
-    hit = target.alids[slot] == keys
-    mapped[np.asarray(rows, dtype="int64")[hit]] = np.asarray(target.rows)[slot[hit]]
-
-
-def _unmapped_source_alids(
-    mapped: np.ndarray, source_index: _AlidIndex, source_alids: dict[int, str]
-) -> dict[int, str]:
-    """The ALID of every source row still unmapped: scanned ones, then indexed ones."""
-    rows = np.asarray(source_index.rows, dtype="int64")
-    unfound = mapped[rows] < 0
-    alids = dict(source_alids)
-    for row, alid in zip(rows[unfound], source_index.alids[unfound], strict=True):
-        alids[int(row)] = bytes(alid).decode("utf-8")
-    return alids
 
 
 # --- the sample -------------------------------------------------------------

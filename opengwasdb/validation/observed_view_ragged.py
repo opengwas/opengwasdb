@@ -66,7 +66,6 @@ from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
-from opengwasdb.store_reader.alid import is_indexable_alid
 from opengwasdb.store_reader.associations import Cells, CsrReader, Inspection, State, Tally
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState
@@ -74,8 +73,8 @@ from opengwasdb.validation.observed_view import (
     SE_OUT_OF_RANGE_FAILING,
     ObservedViewRefused,
     ObservedViewVerdict,
-    _AlidIndex,
     _AxisMap,
+    _AxisRows,
     _Cells,
     _map_axis,
     _observed,
@@ -341,38 +340,6 @@ def _choose_analyses(
 # --- retained regions ---------------------------------------------------------
 
 
-class _TargetRows:
-    """Resolves ALIDs to rows of the completed axis, exactly (the index is a fast path)."""
-
-    def __init__(self, target_path: Path, n_rows: int) -> None:
-        self._index = _AlidIndex.load(target_path)
-        loose = self._index.unindexed_rows(n_rows)
-        self._loose: dict[str, int] = {}
-        if loose.size:
-            with closing(VariantAxis(target_path)) as axis:
-                self._loose = {r.alid: row for row, r in axis.by_indices(loose.tolist()).items()}
-
-    def aligned(self, alids: Sequence[str | None]) -> np.ndarray:
-        """Each ALID's completed-axis row, or -1 where the completed axis holds none."""
-        named = [(k, a) for k, a in enumerate(alids) if a is not None]
-        found = np.full(len(alids), -1, dtype=np.int64)
-        for k, a in named:
-            found[k] = self._loose.get(a, -1)
-        indexed = [(k, a) for k, a in named if is_indexable_alid(a)]
-        if indexed and self._index.alids.size:
-            at, rows = self._indexed_rows(indexed)
-            found[at] = rows
-        return found
-
-    def _indexed_rows(self, indexed: list[tuple[int, str]]) -> tuple[np.ndarray, np.ndarray]:
-        """The positions among `indexed` the index holds, and their rows."""
-        keys = np.array([a.encode("utf-8") for _k, a in indexed], dtype=self._index.alids.dtype)
-        slot = np.minimum(np.searchsorted(self._index.alids, keys), self._index.alids.size - 1)
-        hit = self._index.alids[slot] == keys
-        at = np.array([k for k, _a in indexed], dtype=np.int64)[hit]
-        return at, np.asarray(self._index.rows)[slot[hit]]
-
-
 @dataclass(frozen=True)
 class _Retained:
     """The sampled admitted Analyses' regions and the blocks those regions overlap."""
@@ -400,7 +367,7 @@ class _RegionRows:
     """The completed-axis rows of an Analysis's regions: the panel variants of the blocks
     they overlap that lie inside them, each block's rows and positions resolved once."""
 
-    def __init__(self, target_rows: _TargetRows) -> None:
+    def __init__(self, target_rows: _AxisRows) -> None:
         self._target_rows = target_rows
         self._by_block: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
@@ -409,7 +376,7 @@ class _RegionRows:
         for block in blocks:
             if block.block_id not in self._by_block:
                 self._by_block[block.block_id] = (
-                    self._target_rows.aligned(block.alids), panel_positions(block)
+                    self._target_rows.rows_of(block.alids), panel_positions(block)
                 )
             rows, positions = self._by_block[block.block_id]
             parts.append(rows[inside(regions, block.chrom, positions) & (rows >= 0)])
@@ -472,7 +439,7 @@ def _sample_and_compare(
     sample = _Sample(
         admitted=admitted,
         retained=_retained(source, sampled, admitted, panel),
-        rows=_RegionRows(_TargetRows(pair.target_path, pair.n_target_rows)),
+        rows=_RegionRows(_AxisRows(pair.target_path, pair.n_target_rows)),
         quality=_quality_blocks(pair.target),
     )
     totals = dict.fromkeys(_TOTAL_KEYS, 0)

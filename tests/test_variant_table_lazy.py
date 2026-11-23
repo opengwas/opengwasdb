@@ -133,4 +133,6 @@ def test_a_hybrid_phewas_names_the_panel_row_without_inverting_the_alid_index(
     with query_store(rsid_releases[name]) as q:
         for chosen in (on_panel, off_panel):
             assert len(q.phewas(chosen["alid"])["variant_index"]) > 0
-        assert q._variant_axis._alid_inverse is None
+        # The 0.3.0 sidecar names a row by two reads and has nothing to invert; a 0.2
+        # release's fixed-width index must not have built its inverse either.
+        assert getattr(q._variant_axis.alid_index, "_inverse", None) is None

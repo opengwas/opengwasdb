@@ -119,7 +119,9 @@ def write_variant_axis(
 ) -> None:
     """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
     row offsets, the ALID sidecar (`opengwasdb.store_reader.alid_sidecar`) and the rsid
-    index. The one writer of each: every build and completion path calls it.
+    index: the axis's one writer, which every build and completion path calls. The ALID
+    sidecar's own one writer is the codec's `write_alid_sidecar`, which this calls and
+    the rewrite to 0.3.0 calls directly.
 
     ``source_alids`` (optional, parallel to ``variants``) records the source-
     assembly canonical ALID that each row was lifted from — provenance back to

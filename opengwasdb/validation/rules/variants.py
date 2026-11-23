@@ -20,7 +20,8 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
-from opengwasdb.store_reader.alid_sidecar import sidecar_problems
+from opengwasdb.store_reader.alid_index import FixedWidthAlidIndex
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar, sidecar_problems
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import carries_alid_sidecar
 from opengwasdb.store_reader.identity import is_primary_contig
@@ -123,9 +124,10 @@ def _indexable(_target: Target, block: TableBlock) -> Counter[str]:
 
 def _judge_alid_index(target: Target, counts: Counter[str]) -> Iterator[str]:
     """The ALID search index covers exactly the indexable ALIDs, collision-free."""
-    keys = target.variant_axis._alid_bytes
-    if keys is None:
+    index = target.variant_axis.alid_index
+    if not isinstance(index, FixedWidthAlidIndex):
         return
+    keys = index.keys
     # One entry per *indexable* ALID, not per variant: an ALID too wide for the
     # slot is left out rather than truncated into a key it shares with another
     # variant (issue #127). Those resolve by exact scan.
@@ -161,7 +163,7 @@ class _SidecarRows:
 
 def _sidecar_rows(target: Target, block: TableBlock) -> _SidecarRows:
     """Each row's ALID in the sidecar against the table's, over the rows both hold."""
-    sidecar = target.variant_axis.alid_sidecar
+    sidecar = _sidecar(target)
     n_rows = len(block.records)
     if sidecar is None:
         return _SidecarRows(n_rows)
@@ -182,7 +184,7 @@ def _sidecar_rows(target: Target, block: TableBlock) -> _SidecarRows:
 
 def _judge_alid_sidecar(target: Target, total: _SidecarRows) -> Iterator[str]:
     """The ALID sidecar names every row's ALID and indexes every one (format 0.3.0, ADR 0105)."""
-    sidecar = target.variant_axis.alid_sidecar
+    sidecar = _sidecar(target)
     if sidecar is None:
         yield "a 0.3.0 release has no ALID sidecar (variant_alid_*.npy)"
         return
@@ -200,6 +202,11 @@ def _judge_alid_sidecar(target: Target, total: _SidecarRows) -> Iterator[str]:
             f"the ALID sidecar names {total.differing} row(s) by another ALID than "
             f"variants.tsv.gz does; first, {total.first}"
         )
+
+
+def _sidecar(target: Target) -> AlidSidecar | None:
+    index = target.variant_axis.alid_index
+    return index if isinstance(index, AlidSidecar) else None
 
 
 def _carries_alid_sidecar(target: Target) -> bool:

@@ -100,7 +100,7 @@ def test_falls_back_without_mmap_alid_index(tmp_path):
     variant_alid_rows_path(tmp_path).unlink()
     axis = VariantAxis(tmp_path, connection)
     try:
-        assert axis._alid_bytes is None  # confirms the fallback path is exercised
+        assert axis.alid_index is None  # confirms the fallback path is exercised
         indices = axis.indices_by_identifiers(["1:1000:A:G", "1:2000:C:T", "1:9999:A:G"])
         assert sorted(indices.tolist()) == [0, 1]
     finally:

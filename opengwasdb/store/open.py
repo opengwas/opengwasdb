@@ -25,7 +25,8 @@ import zarr
 
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
-from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES
+from opengwasdb.store_reader.alid_index import ALID_INDEX_FILENAMES, alid_index_kind
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 
 # The version tables and the read check are the Store Reader's (#464); what a writer
 # stamps and refuses builds on them. Re-exported: opengwasdb-stores probes
@@ -54,8 +55,6 @@ from opengwasdb.variants.legacy_table import open_legacy_variant_table
 if TYPE_CHECKING:
     import sqlite3
 
-#: The variable-length ALID sidecar's four files (format 0.3.0, ADR 0105).
-ALID_SIDECAR_ENTRIES: frozenset[str] = frozenset(ALID_SIDECAR_FILENAMES)
 
 #: The first `format_version` whose `analyses.tsv` must record
 #: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the
@@ -268,15 +267,7 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
         "variant_rsid_bytes.npy",
         "variant_rsid_rows.npy",
     }
-) | ALID_SIDECAR_ENTRIES
-
-#: The 0.2 series' fixed-width ALID index, which a 0.2 (or 0.1) release carries in
-#: place of the variable-length sidecar (`ALID_SIDECAR_ENTRIES`, format 0.3.0, ADR
-#: 0105). The envelope constants below are what this build writes; `envelope_at`
-#: gives a release of another version its own.
-FIXED_WIDTH_ALID_ENTRIES: frozenset[str] = frozenset(
-    {"variant_alid_bytes.npy", "variant_alid_rows.npy"}
-)
+) | set(AlidSidecar.FILENAMES)
 
 #: Dense Observed-Only/Reference-Completed (§10, §16).
 DENSE_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html"}
@@ -299,15 +290,14 @@ HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_sh
 
 
 def envelope_at(envelope: frozenset[str], format_version: str) -> frozenset[str]:
-    """`envelope`, one of the constants above, as a release of `format_version` carries it.
+    """`envelope`, one of the constants above, as a release of `format_version` carries it:
+    with the ALID index that version carries (`alid_index_kind`) and no other.
 
-    A 0.3.0 release indexes its ALIDs with the variable-length sidecar and carries no
-    fixed-width pair; an earlier one carries the pair and no sidecar. Either one
-    carrying the other's files is a release whose closed envelope fails (spec §1, §20).
+    The constants are what this build writes (0.3.0, the sidecar). A 0.2 release
+    carries the fixed-width pair instead, and either one carrying the other's files
+    fails its closed envelope (spec §1, §20).
     """
-    if carries_alid_sidecar(format_version):
-        return envelope
-    return (envelope - ALID_SIDECAR_ENTRIES) | FIXED_WIDTH_ALID_ENTRIES
+    return (envelope - ALID_INDEX_FILENAMES) | set(alid_index_kind(format_version).FILENAMES)
 
 
 @contextmanager

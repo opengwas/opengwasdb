@@ -27,8 +27,10 @@ from opengwasdb.cli.main import app
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.alid import ALID_WIDTH
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
-from opengwasdb.validation.observed_view import _AlidIndex, check_observed_view
+from opengwasdb.validation.observed_view import check_observed_view
 
 HEADER = tdc.SOURCE_HEADER + "\teaf"
 # The `test_dense_completion` source, one frequency per row. Five distinct variants
@@ -727,23 +729,28 @@ def _with_a_long_substitution(root: Path) -> tuple[Path, Path]:
 
 @pytest.mark.parametrize("form", ["sidecar", "fixed_width"])
 def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path, form):
-    """On a 0.3.0 pair the check takes the sidecar's ALIDs that fit `ALID_WIDTH` as its
-    index, and reads the rest from the table, as it does the 0.2 pair (ADR 0105)."""
+    """A 0.2 pair's fixed-width index leaves the long ALID out, and the check reads it
+    from the table; a 0.3.0 pair's sidecar holds it, and nothing is read from the table
+    (ADR 0105). Either way the row is mapped."""
     observed, completed = _with_a_long_substitution(tmp_path)
+    unindexed = 0
     if form == "fixed_width":
         for store in (observed, completed):
             with_fixed_width_alid_index(store)
         indexed = len(np.load(observed / "variant_alid_bytes.npy"))
+        assert indexed == N_PARENT, "fixture must leave the long ALID out of the index"
+        unindexed = 1
     else:
-        indexed = len(_AlidIndex.load(observed).alids)
-    assert indexed == N_PARENT, "fixture must leave the long ALID out of the index"
+        sidecar = AlidSidecar.open(observed)
+        assert sidecar is not None and sidecar.n_rows == N_PARENT + 1
+        assert max(len(a) for a in sidecar.alids(np.arange(sidecar.n_rows))) > ALID_WIDTH
 
     verdict = check_observed_view(observed, completed, seed=1).record
 
     assert verdict["axis"]["n_parent"] == N_PARENT + 1
     assert verdict["axis"]["parent_rows_unmapped"] == 0
-    assert verdict["axis"]["parent_rows_unindexed"] == 1
-    assert verdict["axis"]["child_rows_unindexed"] == 1
+    assert verdict["axis"]["parent_rows_unindexed"] == unindexed
+    assert verdict["axis"]["child_rows_unindexed"] == unindexed
     assert verdict["axis"]["order_preserved"] is True
     assert verdict["totals"]["parent_observed"] == N_OBSERVED + 1
     assert verdict["passed"], verdict["failures"]
