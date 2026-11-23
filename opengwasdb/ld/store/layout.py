@@ -32,6 +32,16 @@ SIDE: Final = (16_384, 1_048_576)
 #: The Near Band's `r`: layout C (spec §6; ADR 0006).
 NEAR_R: Final = (262_144, 67_108_864)
 
+
+def _create_array(group: zarr.Group, name: str, **spec: Any) -> zarr.Array[Any]:
+    """`group.create_array`, the one call every array here is made by, with how it is written
+    fixed: a chunk holding only the fill value is left out and reads as the fill value, as zarr's
+    default had it for every Store ogld built. `import opengwasdb` sets zarr's process-wide
+    `array.write_empty_chunks` to True for the GWAS Store (opengwasdb/store/arrays.py); an LD
+    Store or Genotype Store array does not inherit it (#455)."""
+    return group.create_array(name, config={"write_empty_chunks": False}, **spec)
+
+
 #: The ALID search index (spec §2, §6; ADR 0010): the variant table's ALIDs in one array a search
 #: can run over. A key is an ALID's UTF-8 bytes, NUL right-padded to `ALID_INDEX_WIDTH`; an ALID
 #: wider than that is left out of the index and found by an exact scan at its position, never
@@ -265,7 +275,8 @@ def new_frames_array(group: zarr.Group, length: int) -> zarr.Array[Any]:
     compressor, because its bytes are already zstd frames (partner-rows §5.1)."""
     if length < 1:
         raise ValueError("a Partner Rows' frames are at least one frame's bytes, never none")
-    return group.create_array(
+    return _create_array(
+        group,
         FRAMES,
         shape=(length,),
         dtype=np.uint8,
@@ -278,7 +289,8 @@ def new_frames_array(group: zarr.Group, length: int) -> zarr.Array[Any]:
 def new_frames_index(group: zarr.Group, length: int) -> zarr.Array[Any]:
     """The `frames_idx` array: the F + 1 uint64 byte offsets of the frames, one chunk of its
     whole length, little-endian in a `bytes` codec alone so the file is the offsets (§5.1)."""
-    return group.create_array(
+    return _create_array(
+        group,
         FRAMES_INDEX,
         shape=(length,),
         dtype=FRAMES_INDEX_DTYPE,
@@ -350,7 +362,8 @@ def new_numbers(
 ) -> zarr.Array[Any]:
     """A numeric array `name` of `length` with nothing written: every chunk reads `fill`."""
     inner, shard = clipped(length, *shape)
-    return group.create_array(
+    return _create_array(
+        group,
         name,
         shape=(length,),
         dtype=dtype,
@@ -364,7 +377,8 @@ def new_numbers(
 def put_strings(group: zarr.Group, name: str, data: npt.NDArray[np.str_]) -> zarr.Array[Any]:
     """Create the string array `name` (vlen-utf8, then zstd level 0) and write all of `data`."""
     inner, shard = clipped(len(data), *SIDE)
-    array = group.create_array(
+    array = _create_array(
+        group,
         name,
         shape=data.shape,
         dtype=str,
@@ -383,7 +397,8 @@ def new_r_array(
     """An `r` array of `length` in `encoding`'s dtype with nothing written: every chunk reads
     the encoding's reserved code (spec §3, §6)."""
     inner, shard = clipped(length, *shape)
-    return group.create_array(
+    return _create_array(
+        group,
         name,
         shape=(length,),
         dtype=encoding.dtype,
