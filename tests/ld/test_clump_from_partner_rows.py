@@ -26,10 +26,10 @@ from store_copies import PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_sto
 
 import opengwasdb.ld
 from opengwasdb.ld.format import InputError, Refusal, RefusalReason, t_far
-from opengwasdb.ld.identity import alid_locus
 from opengwasdb.ld.query import clumping
 from opengwasdb.ld.store import StoreReader
 from opengwasdb.ld.store.workers import COMPONENT_WORKERS_MAX
+from opengwasdb.variants.sorted_spelling import sorted_alid_locus
 
 #: The Test Store's rows, all of them: a clump of every variant, and a proxies query on each.
 ALL = np.arange(1056, dtype=np.int64)
@@ -90,7 +90,7 @@ def _subset(name: str, store: opengwasdb.ld.LDStore) -> tuple[list[str], npt.NDA
         return [present[0], "not-an-alid", present[1], "22:1:A:C"], ABSENT_SCORE
     if name == "chromosome-22":
         names = reader.alids_of(ALL).tolist()
-        keep = np.array([alid_locus(alid)[0] == "22" for alid in names])
+        keep = np.array([sorted_alid_locus(alid)[0] == "22" for alid in names])
         return [name for name, ok in zip(names, keep, strict=True) if ok], SCORE[keep]
     raise AssertionError(f"no subset {name}")
 
@@ -359,7 +359,7 @@ def test_a_store_without_partner_rows_is_refused_naming_the_component_and_the_wa
         with pytest.raises(InputError) as refused:
             _ask(old, query, names, score, r2=0.01, kb=3000)
         assert "Partner Rows" in str(refused.value)
-        assert "ogld derive-partners" in str(refused.value)
+        assert "opengwasdb ld derive-partners" in str(refused.value)
         assert str(where) in str(refused.value), "the store it refused is named"
     assert seen == [], f"a store without Partner Rows fell back to {seen}"
 

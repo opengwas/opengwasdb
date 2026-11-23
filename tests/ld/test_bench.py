@@ -297,7 +297,7 @@ def test_an_unknown_analysis_is_refused_not_dropped(
 ) -> None:
     for name in ("OGS-1__a", "OGS-1__b"):
         (tmp_path / name).mkdir()
-    monkeypatch.setenv("OGLD_403_ANALYSES", str(tmp_path))
+    monkeypatch.setenv("OPENGWASDB_LD_403_ANALYSES", str(tmp_path))
     assert latency.analyses(["OGS-1__b"]) == [tmp_path / "OGS-1__b"]
     args = argparse.Namespace(plan="step2", case=None, analyses=["OGS-1__a", "OGS-1__z"])
     with pytest.raises(SystemExit, match="OGS-1__z"):

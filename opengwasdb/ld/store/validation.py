@@ -56,11 +56,12 @@ from opengwasdb.ld.format.provenance import (
     release_of,
 )
 from opengwasdb.ld.format.semantics import InputError
-from opengwasdb.ld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
 from opengwasdb.ld.store.layout import chromosomes_listed, never_data, shown_fill
 from opengwasdb.ld.store.location import frame_source, open_group
+from opengwasdb.variants.normalise import VariantNormalisationError, chromosome_rank
+from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identity
 
 #: Elements of a Near Band a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
@@ -127,7 +128,8 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int) -> dict[str, list[Finding]]:
-    """`validate`, reading and checking blocks on `threads` threads (`ogld validate --threads`)."""
+    """`validate`, reading and checking blocks on `threads` threads
+    (`opengwasdb ld validate --threads`)."""
     root = open_group(location)
     return validate_group(root, root.attrs.get("ld_store"), threads=threads)
 
@@ -301,7 +303,9 @@ class _Store:
         record = listed.attrs.get("chromosomes") if isinstance(listed, zarr.Group) else None
         try:
             entries = chromosomes_listed(record)
-            canonical = all(alid_locus(f"{name}:1:A:C") is not None for name, _, _ in entries)
+            canonical = all(
+                sorted_alid_locus(f"{name}:1:A:C") is not None for name, _, _ in entries
+            )
         except ValueError:
             canonical = False
         if not canonical:
@@ -706,12 +710,14 @@ def _provenance_complete(store: _Store) -> _Problems:
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
-    `REncoding.of` (spec §3, §13). `ogld info` and every reader refuse a store with any other."""
+    `REncoding.of` (spec §3, §13). `opengwasdb ld info` and every reader refuse a store with any
+    other."""
     version = store.value("format_version")
     if version not in READABLE_FORMATS:
         yield (
             "format_version",
-            f"{version!r}: this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)",
+            f"{version!r}: this opengwasdb.ld reads {' and '.join(READABLE_FORMATS)} only "
+            "(spec §13)",
         )
     try:
         REncoding.of(store.value("encoding"))
@@ -878,8 +884,8 @@ def _variants_order(store: _Store) -> _Problems:
 
 def _engine_alid(chrom: str, position: int, a1: str, a2: str) -> tuple[str, str, str] | None:
     try:
-        o = orient(chrom, position, a1, a2)
-    except IdentityError:
+        o = sorted_identity(chrom, position, a1, a2)
+    except VariantNormalisationError:
         return None
     return o.alid, o.a1, o.a2
 

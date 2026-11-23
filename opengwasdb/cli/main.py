@@ -54,6 +54,7 @@ from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
+from opengwasdb.ld.cli import ld_app
 from opengwasdb.model.analyses import read_analyses, read_analysis_records
 from opengwasdb.model.enums import (
     COVERAGES_BY_LAYOUT,
@@ -91,6 +92,7 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 
 app = typer.Typer(no_args_is_help=True)
+app.add_typer(ld_app, name="ld")
 
 
 class OutputFormat(StrEnum):

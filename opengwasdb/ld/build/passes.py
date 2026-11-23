@@ -52,8 +52,8 @@ from opengwasdb.ld.format.geometry import (
     windows,
 )
 from opengwasdb.ld.genotypes import Covariates, Genotypes, covariates, prepare, r, residuals
-from opengwasdb.ld.identity import Orientation
 from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.variants.sorted_spelling import SortedIdentity
 
 STRINGS: Final = np.dtypes.StringDType()
 
@@ -146,7 +146,7 @@ def variants_table(chromosomes: list[Chromosome]) -> Variants:
     )
 
 
-def _strings(oriented: list[Orientation], name: str) -> npt.NDArray[np.str_]:
+def _strings(oriented: list[SortedIdentity], name: str) -> npt.NDArray[np.str_]:
     """One identity column as numpy's variable-width strings: a fixed-width array would give
     every one of millions of ALIDs the width of the longest, an indel of up to 1,000 bases."""
     column: npt.NDArray[np.str_] = np.array([getattr(o, name) for o in oriented], dtype=STRINGS)

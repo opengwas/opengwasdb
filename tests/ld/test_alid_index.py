@@ -30,9 +30,9 @@ import zarr
 from ld_script_modules import load_script
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
-from opengwasdb.ld.identity import orient
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, layout
 from opengwasdb.ld.store.validation import validate
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 DATA = Path(__file__).resolve().parent / "data" / "alid_index"
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -128,7 +128,7 @@ def test_the_index_is_the_variant_table_s_longer_entries() -> None:
 
 def table(rows: list[tuple[str, int, str, str]]) -> Variants:
     """A Variant Set from (chromosome, position, ref, alt) records, by the identity function."""
-    oriented = [orient(chrom, position, ref, alt) for chrom, position, ref, alt in rows]
+    oriented = [sorted_identity(chrom, position, ref, alt) for chrom, position, ref, alt in rows]
     columns: dict[str, npt.NDArray[np.generic]] = {
         name: np.array([getattr(o, name) for o in oriented])
         for name in ("chrom", "alid", "a1", "a2")
@@ -234,7 +234,7 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
     assert alid.dtype == np.dtype("uint8")
     assert alid.shape == ((len(WIDTH_ROWS) - 2) * layout.ALID_INDEX_WIDTH,)
     assert root[f"{layout.ALID_INDEX}/row"].dtype == np.dtype("int32")
-    keys, rows = layout.alid_index([orient(*r).alid for r in WIDTH_ROWS])
+    keys, rows = layout.alid_index([sorted_identity(*r).alid for r in WIDTH_ROWS])
     np.testing.assert_array_equal(np.asarray(alid[:]), keys.ravel())
     np.testing.assert_array_equal(np.asarray(root[f"{layout.ALID_INDEX}/row"][:]), rows)
     provenance = StoreReader.open(store).provenance

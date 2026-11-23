@@ -10,12 +10,12 @@ One pass over every record of every fileset, in pgen order, block by block:
    it); REF and ALT of A, C, G, T only; a chromosome in one fileset, contiguously.
 3. **Filters**, in order, each dropped record counted under the first it fails: FILTER `PASS` or
    `.`; MAC ≥ `mac_min` on the kept samples; INFO > `info_min` when it is set; nonzero variance.
-4. **Per chromosome:** the engine's identity (`opengwasdb.ld.identity.orient`), one record per ALID
-by the
-   engine's reversed-indel rule, and the engine's variant order (spec §2).
+4. **Per chromosome:** the engine's identity in the sorted spelling an LD Store keeps until #462
+   (`opengwasdb.variants.sorted_spelling.sorted_identity`), one record per ALID by that
+   spelling's reversed-indel rule, and the engine's variant order (spec §2).
 
 A record's REF and ALT are passed unchanged to the identity function, which neither trims nor
-left-aligns (ADR 0003).
+left-aligns (ADR 0089).
 """
 
 from __future__ import annotations
@@ -33,15 +33,17 @@ from opengwasdb.ld.build import pc_check
 from opengwasdb.ld.build.inputs import Fileset, Records, records
 from opengwasdb.ld.format import InputError
 from opengwasdb.ld.genotypes import Genotypes
-from opengwasdb.ld.identity import (
+from opengwasdb.variants.axis import alid_sort_key
+from opengwasdb.variants.normalise import (
     AUTOSOMES,
-    IdentityError,
-    Orientation,
+    VariantNormalisationError,
     chromosome_rank,
     normalise_chromosome,
-    orient,
-    resolve_reversed_indels,
-    variant_order_key,
+)
+from opengwasdb.variants.sorted_spelling import (
+    SortedIdentity,
+    resolve_sorted_reversed_indels,
+    sorted_identity,
 )
 
 PASSING_FILTERS: Final = ("PASS", ".")
@@ -73,7 +75,7 @@ class Chromosome:
     fileset: int
     rows: npt.NDArray[np.int64]
     ids: list[str]
-    oriented: list[Orientation]
+    oriented: list[SortedIdentity]
     a1_frequency: npt.NDArray[np.float64]
     position: npt.NDArray[np.int64] = field(init=False)
     a1_is_alt: npt.NDArray[np.bool_] = field(init=False)
@@ -200,7 +202,7 @@ def _chromosome(label: str, record: str, panel: str) -> str:
     """The engine's label of a record's chromosome, which must be an autosome (build-inputs §2)."""
     try:
         name = normalise_chromosome(label)
-    except IdentityError as refused:
+    except VariantNormalisationError as refused:
         raise InputError(f"panel {panel}: record {record}: {refused}") from refused
     if name not in AUTOSOMES:
         raise InputError(
@@ -357,7 +359,7 @@ def _close_pending(state: Pass) -> None:
         _orient(record, i, pending, state.panel) for i, record in enumerate(pending.alleles)
     ]
     kept = _one_per_alid(pending, oriented, state)
-    order = sorted(kept, key=lambda i: variant_order_key(oriented[i]))
+    order = sorted(kept, key=lambda i: alid_sort_key(oriented[i].alid))
     found = _chromosome_of(pending, oriented, order, state.samples)
     state.chromosomes.append(found)
     if state.settings.scan:
@@ -386,7 +388,7 @@ def _scan(state: Pass, pending: _Pending, found: Chromosome, order: list[int]) -
 
 
 def _chromosome_of(
-    pending: _Pending, oriented: list[Orientation], order: list[int], samples: int
+    pending: _Pending, oriented: list[SortedIdentity], order: list[int], samples: int
 ) -> Chromosome:
     """The records `order` picks, in that order, as a chromosome's Variant Set."""
     frequency = np.concatenate(pending.alt_sum)[order] / (2 * samples)
@@ -403,17 +405,18 @@ def _chromosome_of(
 
 def _orient(
     record: tuple[str, int, str, str], i: int, pending: _Pending, panel: str
-) -> Orientation:
+) -> SortedIdentity:
     try:
-        return orient(*record)
-    except IdentityError as refused:
+        return sorted_identity(*record)
+    except VariantNormalisationError as refused:
         raise InputError(f"panel {panel}: record {pending.ids[i]}: {refused}") from refused
 
 
-def _one_per_alid(pending: _Pending, oriented: list[Orientation], state: Pass) -> list[int]:
-    """The records kept when several share an ALID: of a reversed-indel pair, the one whose
-    REF the ALID spells first (the engine's rule, opengwas/opengwasdb ADR 0072; build-inputs §6),
-    the other counted as `duplicate_reversed_indel`. Any other sharing is refused, naming them."""
+def _one_per_alid(pending: _Pending, oriented: list[SortedIdentity], state: Pass) -> list[int]:
+    """The records kept when several share a sorted ALID: of a reversed-indel pair, the one
+    whose REF the ALID spells first (`resolve_sorted_reversed_indels`, the sorted spelling's rule;
+    build-inputs §6), the other counted as `duplicate_reversed_indel`. Any other sharing is
+    refused, naming them."""
     groups: dict[str, list[int]] = defaultdict(list)
     for i, o in enumerate(oriented):
         groups[o.alid].append(i)
@@ -424,10 +427,10 @@ def _one_per_alid(pending: _Pending, oriented: list[Orientation], state: Pass) -
 
 
 def _resolve(alid: str, members: list[int], pending: _Pending, state: Pass) -> list[int]:
-    """Which of `members`, records sharing `alid`, the engine's rule drops."""
+    """Which of `members`, records sharing `alid`, the sorted spelling's rule drops."""
     try:
-        _, lost = resolve_reversed_indels([pending.alleles[i] for i in members])
-    except IdentityError as refused:
+        _, lost = resolve_sorted_reversed_indels([pending.alleles[i] for i in members])
+    except VariantNormalisationError as refused:
         names = ", ".join(pending.ids[i] for i in members)
         raise InputError(
             f"panel {state.panel}: records {names} share ALID {alid} and are not a "

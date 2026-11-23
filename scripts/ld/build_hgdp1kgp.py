@@ -13,15 +13,16 @@ exits 0 and the fileset holds exactly the keep file's samples, so a conversion t
 was cut short, has none and is converted again. A conversion that finishes with other samples
 than the keep file's stops the run.
 
-`build` runs `ogld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0004) and `--t-partner`
-PANEL_T_PARTNER (ADR 0011), the panel's PC File,
-keep file and panel id, then `ogld validate`, each at `--threads` (16) threads, `--builds` (2)
-panels at once. It refuses a store that already exists. When a panel fails, panels not yet
+`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0004) and
+`--t-partner` PANEL_T_PARTNER (ADR 0011), the panel's PC File,
+keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) threads, `--builds`
+(2) panels at once. It refuses a store that already exists. When a panel fails, panels not yet
 started are cancelled and the one still running finishes; the run then stops with that failure.
 
-Where things live, each overridable and each in `scripts/test_panel/roots.py`: `$OGLD_PHASED_V2`,
-`$OGLD_PCS`, `$OGLD_KEEP`, `$OGLD_PLINK2`, and the recipe's `$OGLD_PGEN_V2` (the filesets),
-`$OGLD_STORES` and `$OGLD_SCRATCH` (the logs; each timing line carries `uptime`).
+Where things live, each overridable and each in `scripts/test_panel/roots.py`:
+`$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_PCS`, `$OPENGWASDB_LD_KEEP`, `$OPENGWASDB_LD_PLINK2`,
+and the recipe's `$OPENGWASDB_LD_PGEN_V2` (the filesets), `$OPENGWASDB_LD_STORES` and
+`$OPENGWASDB_LD_SCRATCH` (the logs; each timing line carries `uptime`).
 """
 
 from __future__ import annotations
@@ -62,11 +63,11 @@ TIME = "/usr/bin/time"
 
 
 def prefix(panel: str, chrom: int) -> Path:
-    return root("OGLD_PGEN_V2") / panel / f"chr{chrom}"
+    return root("OPENGWASDB_LD_PGEN_V2") / panel / f"chr{chrom}"
 
 
 def keep_file(panel: str) -> Path:
-    return root("OGLD_KEEP") / f"{panel}.keep"
+    return root("OPENGWASDB_LD_KEEP") / f"{panel}.keep"
 
 
 def panel_id(panel: str) -> str:
@@ -74,14 +75,15 @@ def panel_id(panel: str) -> str:
 
 
 def store_path(panel: str) -> Path:
-    return root("OGLD_STORES") / f"{panel_id(panel)}-k{K}.store"
+    return root("OPENGWASDB_LD_STORES") / f"{panel_id(panel)}-k{K}.store"
 
 
 def build_command(
     panel: str, pgens: list[Path], store: Path, keep: Path, pcs: Path, threads: int
 ) -> list[str]:
-    """`ogld build` for one panel: k = K, r scale PANEL_SCALE, the unrelated keep, its PC File."""
-    command = ["ogld", "build", str(store)]
+    """`opengwasdb ld build` for one panel: k = K, r scale PANEL_SCALE, the unrelated keep, its PC
+    File."""
+    command = ["opengwasdb", "ld", "build", str(store)]
     for pgen in pgens:
         command += ["--pgen", str(pgen)]
     return [
@@ -91,7 +93,7 @@ def build_command(
         "--pcs",
         str(pcs),
         "--pc-source",
-        f"ogld scripts/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
+        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
         "--panel-id",
         panel_id(panel),
         "--ancestry",
@@ -112,7 +114,7 @@ def build_command(
 
 
 def validate_command(store: Path, threads: int) -> list[str]:
-    return ["ogld", "validate", "--threads", str(threads), str(store)]
+    return ["opengwasdb", "ld", "validate", "--threads", str(threads), str(store)]
 
 
 def keep_iids(keep: Path) -> list[str]:
@@ -160,7 +162,7 @@ def check_fileset(name: str, out: Path, keep: Path) -> None:
 
 def convert_one(plink2: Path, panel: str, chrom: int, threads: int, memory_mb: int) -> str:
     out, keep = prefix(panel, chrom), keep_file(panel)
-    bcf = root("OGLD_PHASED_V2") / BCF.format(chrom=chrom)
+    bcf = root("OPENGWASDB_LD_PHASED_V2") / BCF.format(chrom=chrom)
     if not bcf.exists():
         raise SystemExit(f"{bcf}: missing")
     args = conversion_args(bcf, keep, out)
@@ -170,10 +172,11 @@ def convert_one(plink2: Path, panel: str, chrom: int, threads: int, memory_mb: i
         return f"{name}: skipped, stamp matches"
     Path(f"{out}.stamp.json").unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
-    timing = root("OGLD_SCRATCH") / "convert.log"
+    timing = root("OPENGWASDB_LD_SCRATCH") / "convert.log"
     log_line(timing, f"{name} start {uptime()}")
     try:
-        run_plink2(plink2, args, root("OGLD_SCRATCH") / "convert" / f"{panel}.chr{chrom}.log",
+        run_plink2(plink2, args,
+                   root("OPENGWASDB_LD_SCRATCH") / "convert" / f"{panel}.chr{chrom}.log",
                    threads, memory_mb)  # fmt: skip
     finally:
         log_line(timing, f"{name} end {uptime()}")
@@ -222,15 +225,17 @@ def timed(command: list[str], log: Path, stage: str) -> None:
 
 def build_one(panel: str, threads: int) -> str:
     keep, store = keep_file(panel), store_path(panel)
-    pcs = root("OGLD_PCS") / f"{panel}.eigenvec"
+    pcs = root("OPENGWASDB_LD_PCS") / f"{panel}.eigenvec"
     pgens = [Path(f"{prefix(panel, c)}.pgen") for c in CHROMS]
     missing = [str(p) for p in (keep, pcs, *pgens) if not p.exists()]
     if missing:
         raise SystemExit(f"{panel}: missing inputs: {', '.join(missing)}")
     if store.exists():
-        raise SystemExit(f"{store} exists; move it away or build under another $OGLD_STORES")
+        raise SystemExit(
+            f"{store} exists; move it away or build under another $OPENGWASDB_LD_STORES"
+        )
     store.parent.mkdir(parents=True, exist_ok=True)
-    log = root("OGLD_SCRATCH") / f"{panel}.log"
+    log = root("OPENGWASDB_LD_SCRATCH") / f"{panel}.log"
     timed(build_command(panel, pgens, store, keep, pcs, threads), log, "build")
     timed(validate_command(store, threads), log, "validate")
     return f"{panel}: built and validated, {store}"
