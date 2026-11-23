@@ -56,11 +56,12 @@ from opengwasdb.ld.format.provenance import (
     release_of,
 )
 from opengwasdb.ld.format.semantics import InputError
-from opengwasdb.ld.identity import IdentityError, alid_locus, chromosome_rank, orient
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
 from opengwasdb.ld.store.layout import chromosomes_listed, never_data, shown_fill
 from opengwasdb.ld.store.location import frame_source, open_group
+from opengwasdb.variants.normalise import VariantNormalisationError, chromosome_rank
+from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identity
 
 #: Elements of a Near Band a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
@@ -301,7 +302,9 @@ class _Store:
         record = listed.attrs.get("chromosomes") if isinstance(listed, zarr.Group) else None
         try:
             entries = chromosomes_listed(record)
-            canonical = all(alid_locus(f"{name}:1:A:C") is not None for name, _, _ in entries)
+            canonical = all(
+                sorted_alid_locus(f"{name}:1:A:C") is not None for name, _, _ in entries
+            )
         except ValueError:
             canonical = False
         if not canonical:
@@ -878,8 +881,8 @@ def _variants_order(store: _Store) -> _Problems:
 
 def _engine_alid(chrom: str, position: int, a1: str, a2: str) -> tuple[str, str, str] | None:
     try:
-        o = orient(chrom, position, a1, a2)
-    except IdentityError:
+        o = sorted_identity(chrom, position, a1, a2)
+    except VariantNormalisationError:
         return None
     return o.alid, o.a1, o.a2
 

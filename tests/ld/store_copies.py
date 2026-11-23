@@ -1,4 +1,5 @@
-"""Copies of the Test Store for tests that must change one: re-sharded, or with a piece lost.
+"""Copies of the Test Store for tests that must change one: re-sharded, or with a piece lost;
+and `snv_variants`, the Variant Set of a small store a test writes itself.
 
 No test writes into `tests/data/`; each works on a copy under its own `tmp_path`.
 """
@@ -17,6 +18,9 @@ import numpy.typing as npt
 import zarr
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore
+
+from opengwasdb.ld.store import Variants
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 #: The Test Store's encoding, r̂ = code / R_SCALE, as a literal: every test that needs the Test
@@ -39,6 +43,20 @@ FLOOR_K7 = 85
 #: the HGDP+1kGP panels, below every panel's t_far (partner-rows §3, §11).
 T_PARTNER = 0.01
 PARTNER_FLOOR = 52
+
+
+def snv_variants(chrom: list[str], position: npt.NDArray[np.int64]) -> Variants:
+    """An A/C SNV at each of `chrom` and `position`, identified as an LD build identifies a
+    record (`sorted_identity`), each A1 at frequency 0.3."""
+    oriented = [sorted_identity(c, int(p), "A", "C") for c, p in zip(chrom, position, strict=True)]
+    return Variants(
+        np.array(chrom),
+        position,
+        np.array([o.alid for o in oriented]),
+        np.array([o.a1 for o in oriented]),
+        np.array([o.a2 for o in oriented]),
+        np.full(len(oriented), 0.3),
+    )
 
 
 def codes_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.int64]:

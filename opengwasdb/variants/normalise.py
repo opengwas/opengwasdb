@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Final, Protocol
 
 import numpy as np
 
@@ -15,7 +15,9 @@ _ONE_BASE = frozenset("ACGTacgt")
 #: The spellings a source uses for a chromosome it does not report, compared
 #: upper-cased (issue #365).
 _MISSING_CHROMOSOMES = frozenset({"", ".", "NA", "NAN", "NONE"})
-_AUTOSOMES = frozenset(str(number) for number in range(1, 23))
+#: The autosomes, `1`-`22`, in the variant order (`chromosome_rank`).
+AUTOSOMES: Final = tuple(str(number) for number in range(1, 23))
+_AUTOSOMES = frozenset(AUTOSOMES)
 _CHROMOSOME_ALIASES = {
     "23": "X",
     "X": "X",
@@ -501,3 +503,23 @@ def chromosome_sort_key(chromosome: str) -> tuple[int, str]:
         return (int(chrom), chrom)
     special = {"X": 23, "Y": 24, "MT": 25}
     return (special.get(chrom.upper(), 1000), chrom)
+
+
+def chromosome_rank(chromosome: str) -> int:
+    """A chromosome's place in the variant order: `1`-`22`, then `X` 23, `Y` 24, `MT` 25.
+
+    The first field of `chromosome_sort_key`, for a caller that orders chromosomes, or ranges
+    of one, by it alone. A label passes through `normalise_chromosome`, so `chr1` ranks as
+    `1`. Unlike `chromosome_sort_key`, which sorts any other label last, a label off that list
+    -- a contig such as `HLA-A` -- has no rank and raises `VariantNormalisationError`.
+    """
+    rank, label = chromosome_sort_key(chromosome)
+    if rank not in _RANKED:
+        raise VariantNormalisationError(
+            f"chromosome {chromosome!r} ({label!r}) has no place in the variant order: "
+            "only 1-22, X, Y and MT are ranked"
+        )
+    return rank
+
+
+_RANKED: Final = frozenset(range(1, 26))

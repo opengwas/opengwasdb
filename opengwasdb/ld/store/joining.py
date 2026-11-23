@@ -13,10 +13,10 @@ import zarr
 
 from opengwasdb.ld.format import REncoding, Sourced
 from opengwasdb.ld.format.geometry import chromosome_ranges, chromosome_ranges_from_counts
-from opengwasdb.ld.identity import chromosome_rank
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.assembly import Cutter, Tally
 from opengwasdb.ld.store.reader import StoreReader
+from opengwasdb.variants.normalise import chromosome_rank
 
 
 def _compatible(first: dict[str, Any], record: dict[str, Any]) -> None:
