@@ -50,7 +50,6 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.associations import Cells, CsrReader, Inspection, State, Tally
 from opengwasdb.completion.block import panel_positions
 from opengwasdb.completion.ld_panel import (
     LDBlock,
@@ -63,12 +62,13 @@ from opengwasdb.completion.regions import (
     inside,
     region_blocks,
 )
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.alid import is_indexable_alid
+from opengwasdb.store_reader.associations import Cells, CsrReader, Inspection, State, Tally
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState
 from opengwasdb.validation.observed_view import (
     SE_OUT_OF_RANGE_FAILING,

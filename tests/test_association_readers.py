@@ -24,7 +24,14 @@ from store_reads import chunk_reads, duplicate_chunk_keys
 from test_indexed_subsets import _build, alid, build_rich_store
 from test_ragged_residual_completion import RaggedResidualScenario
 
-from opengwasdb.associations import (
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.encoding.codec import EAF_ABSENT, Z_MISSING
+from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.layouts.ragged.by_variant import build_variant_index
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.query import query_store
+from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.associations import (
     Associations,
     Cells,
     CsrReader,
@@ -33,15 +40,10 @@ from opengwasdb.associations import (
     State,
     SubsetReader,
 )
-from opengwasdb.encoding import StoreCodec
-from opengwasdb.encoding.codec import EAF_ABSENT, Z_MISSING
-from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
-from opengwasdb.layouts.ragged.by_variant import VariantIndexError, build_variant_index
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
-from opengwasdb.query import query_store
-from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.by_variant import VariantIndexError
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.variants import VariantAxis
 
@@ -259,7 +261,7 @@ def test_a_csr_reads_flat_positions_in_the_order_given(readers) -> None:
     ],
 )
 def test_positions_read_as_a_slice_only_when_they_are_one_ascending_run(positions, run) -> None:
-    from opengwasdb.associations.csr import _run
+    from opengwasdb.store_reader.associations.csr import _run
 
     assert _run(np.array(positions, dtype=np.int64)) == run
 

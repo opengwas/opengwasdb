@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import opengwasdb.associations as oa
+import opengwasdb.store_reader.associations as oa
 
 NAN = np.nan
 INF = np.inf

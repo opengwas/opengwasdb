@@ -23,11 +23,11 @@ import zarr
 from dense_sources import build_dense_fixture
 from store_assertions import replace_exception_table
 
-from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.associations import Cells, CsrReader
 from opengwasdb.store_reader.encoding.codec import Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE
 from opengwasdb.store_reader.encoding.plan import (
     Z_OVERFLOW,

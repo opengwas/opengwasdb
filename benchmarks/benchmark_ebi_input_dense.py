@@ -36,12 +36,14 @@ from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.query import query_store
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.validation import validate_store
-from opengwasdb.variants import (
-    VARIANT_AXIS_FORMAT,
+from opengwasdb.store_reader.variant_axis import (
     VARIANT_OFFSETS_FILENAME,
     VARIANT_TABIX_FILENAME,
     VARIANT_TABLE_FILENAME,
+)
+from opengwasdb.validation import validate_store
+from opengwasdb.variants import (
+    VARIANT_AXIS_FORMAT,
     CanonicalVariant,
     VariantAxis,
     chromosome_sort_key,

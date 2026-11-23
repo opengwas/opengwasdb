@@ -608,12 +608,12 @@ def test_the_folds_raw_key_spelling_is_the_packed_keys():
 
 
 def test_the_validation_rule_names_a_lifted_variant_on_an_alt_contig():
+    from opengwasdb.store_reader.variant_axis import VariantRecord
     from opengwasdb.validation.rules.variants import (
         TableBlock,
         _judge_lifted_off_primary,
         _lifted_off_primary,
     )
-    from opengwasdb.variants.axis import VariantRecord
 
     def record(index, alid, source_alid):
         chrom, pos, a1, a2 = alid.split(":")

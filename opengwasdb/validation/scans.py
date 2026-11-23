@@ -36,11 +36,11 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Tally, non_canonical
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits, band_rows, window_cells
 from opengwasdb.encoding.codec import StoreCodec
 from opengwasdb.store.arrays import SE_COEFFICIENTS
 from opengwasdb.store_reader.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.associations import Tally, non_canonical
 from opengwasdb.store_reader.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,

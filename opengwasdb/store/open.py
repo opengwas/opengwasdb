@@ -26,7 +26,6 @@ import zarr
 
 from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
-from opengwasdb.store_reader.enums import PrimaryStorageLayout
 
 # The version tables and the read check are the Store Reader's (#464); what a writer
 # stamps and refuses builds on them. Re-exported: opengwasdb-stores probes
@@ -41,6 +40,13 @@ from opengwasdb.store_reader.format import (
     parse_format_version,
     zarr_format_for_version,
 )
+from opengwasdb.store_reader.release import (
+    ReleasePaths,
+    StoreRelease,
+    open_release,
+    release_paths,
+)
+from opengwasdb.variants.axis import open_legacy_variant_table
 
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
@@ -257,57 +263,6 @@ HYBRID_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html", "dense"}
 HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_shared.npy"}
 
 
-def _release_paths(path: Path) -> dict[str, Path]:
-    return {
-        "manifest": path / "manifest.json",
-        "data": path / "data.zarr",
-        "index": path / "index.sqlite",
-        "analyses": path / "analyses.tsv",
-        "variant_table": path / "variants.tsv.gz",
-        "variant_tabix": path / "variants.tsv.gz.tbi",
-        "variant_offsets": path / "variant_offsets.npy",
-    }
-
-
-class _ReleasePaths:
-    """Artifact-path properties shared by an opened release and a staged one.
-
-    Both ``OpenGWASDBStore`` and ``StagedRelease`` set ``_paths`` (via
-    ``_release_paths()``) in ``__post_init__`` and inherit these instead of
-    each re-deriving the same suffixes off ``self.path``.
-    """
-
-    _paths: dict[str, Path]
-
-    @property
-    def manifest_path(self) -> Path:
-        return self._paths["manifest"]
-
-    @property
-    def data_path(self) -> Path:
-        return self._paths["data"]
-
-    @property
-    def index_path(self) -> Path:
-        return self._paths["index"]
-
-    @property
-    def analyses_path(self) -> Path:
-        return self._paths["analyses"]
-
-    @property
-    def variant_table_path(self) -> Path:
-        return self._paths["variant_table"]
-
-    @property
-    def variant_tabix_path(self) -> Path:
-        return self._paths["variant_tabix"]
-
-    @property
-    def variant_offsets_path(self) -> Path:
-        return self._paths["variant_offsets"]
-
-
 @contextmanager
 def directory_lock(directory: str | Path) -> Iterator[None]:
     """Hold an advisory exclusive ``flock`` on a directory's own inode.
@@ -503,20 +458,19 @@ def _staged_directory(
 
 
 @dataclass(frozen=True)
-class OpenGWASDBStore(_ReleasePaths):
+class OpenGWASDBStore(StoreRelease):
     """A local Store Release opened from an explicit path.
+
+    The Store Reader's read-only `StoreRelease` (#464), with what writes to a
+    release added: its arrays opened in any mode, its ``index.sqlite``,
+    provenance amendment and atomic staging. `open_store` opens one with
+    opengwasdb's reader of the 0.2.x Store Variant Table
+    (`open_legacy_variant_table`).
 
     Frozen: the manifest a caller holds never changes under them. In-place
     provenance amendment (``amend_provenance``) rebinds it to a fresh
     instance rather than mutating this one.
     """
-
-    path: Path
-    manifest: StoreManifest
-    _paths: dict[str, Path] = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_paths", _release_paths(self.path))
 
     # ---- opening -----------------------------------------------------------
 
@@ -526,17 +480,8 @@ class OpenGWASDBStore(_ReleasePaths):
         return open_store(path)
 
     def dense_component(self) -> OpenGWASDBStore:
-        """Open a Hybrid release's nested Dense Component release.
-
-        The Dense Component (ADR 0026) is a self-contained Dense Store
-        Release at ``<store>/dense``, built and completed by the unchanged
-        dense machinery -- it is opened the same way any release is.
-        """
-        if self.manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
-            raise ValueError(
-                "dense_component() is only valid for a Hybrid release "
-                f"(primary_layout={self.manifest.primary_layout})"
-            )
+        """`StoreRelease.dense_component`, opened as an `OpenGWASDBStore`."""
+        self._require_hybrid()
         return open_store(self.path / "dense")
 
     def query(self) -> StoreQuery:
@@ -582,7 +527,9 @@ class OpenGWASDBStore(_ReleasePaths):
         self.manifest_path.write_text(
             json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        return OpenGWASDBStore(path=self.path, manifest=StoreManifest.from_dict(data))
+        return OpenGWASDBStore(
+            path=self.path, manifest=StoreManifest.from_dict(data), legacy=self.legacy
+        )
 
     # ---- staging / atomic construction ----------------------------------
 
@@ -666,7 +613,7 @@ def staged_named_group(
 
 
 @dataclass(frozen=True)
-class StagedRelease(_ReleasePaths):
+class StagedRelease(ReleasePaths):
     """A release under construction in a ``.tmp`` staging directory.
 
     Offers the same path/array/table surface as an opened
@@ -679,7 +626,7 @@ class StagedRelease(_ReleasePaths):
     _paths: dict[str, Path] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_paths", _release_paths(self.path))
+        object.__setattr__(self, "_paths", release_paths(self.path))
 
     def arrays(self, mode: str = "w") -> zarr.Group:
         return open_group(self.data_path, mode)
@@ -701,10 +648,10 @@ def open_store(path: str | Path) -> OpenGWASDBStore:
     The function intentionally opens exactly the path supplied by the
     caller. Release discovery and default selection belong to a higher-level
     catalogue. Raises ``UnsupportedFormatVersion`` if the release declares a
-    format_version this build cannot interpret (ADR 0038 §2).
+    format_version this build cannot interpret (ADR 0038 §2). The manifest is
+    read, and the version checked, by the Store Reader's `open_release`.
     """
-
-    store_path = Path(path)
-    manifest = StoreManifest.load(store_path)
-    check_format_version(manifest.format_version, source=f"release at {store_path}")
-    return OpenGWASDBStore(path=store_path, manifest=manifest)
+    release = open_release(path)
+    return OpenGWASDBStore(
+        path=release.path, manifest=release.manifest, legacy=open_legacy_variant_table
+    )

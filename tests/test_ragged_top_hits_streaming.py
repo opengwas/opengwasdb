@@ -21,13 +21,14 @@ import zarr
 from numcodecs import Blosc
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Cells, CsrReader, Inspection
 from opengwasdb.encoding import write_eaf_reference
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.associations import Cells, CsrReader, Inspection
+from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS, threshold_key
 from opengwasdb.top_hits import read_top_hit_counts

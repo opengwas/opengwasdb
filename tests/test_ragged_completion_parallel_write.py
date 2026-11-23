@@ -41,11 +41,12 @@ from test_ragged_residual_completion import (
 import opengwasdb.encoding.memory as memory
 import opengwasdb.layouts.ragged.complete as complete_module
 import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
-import opengwasdb.store.arrays as store_arrays
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store, resume_ragged_completion
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.store_reader.manifest import StoreManifest
 from tests.ssf_builds import build_ragged_from_ssf
@@ -230,8 +231,8 @@ SHARD_CELLS = 500
 def _narrow_shards(patch: pytest.MonkeyPatch) -> None:
     """500-cell shards, each its own region: a region is otherwise at least
     `DEFAULT_FLUSH_REGION_CELLS`, which holds the whole fixture."""
-    patch.setattr(store_arrays, "RAGGED_SEQUENCE_SHARD_ELEMENTS", SHARD_CELLS)
-    patch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", 100)
+    patch.setattr(store_layout, "RAGGED_SEQUENCE_SHARD_ELEMENTS", SHARD_CELLS)
+    patch.setattr(store_layout, "ASSOCIATION_SEQUENCE_CHUNK", 100)
     patch.setattr(zarr_csr, "sequence_region_step", lambda _total, _cells: SHARD_CELLS)
 
 

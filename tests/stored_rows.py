@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from opengwasdb.associations import Cells, CsrReader, Inspection
+from opengwasdb.store_reader.associations import Cells, CsrReader, Inspection
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 
 

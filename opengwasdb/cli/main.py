@@ -35,7 +35,6 @@ from opengwasdb.layouts.dense.complete import (
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
-    IndexedSubsetError,
     OverflowOnlyPolicy,
     build_indexed_subset,
 )
@@ -66,6 +65,7 @@ from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
+from opengwasdb.store_reader.indexed import IndexedSubsetError
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -1845,7 +1845,8 @@ def build_variant_index_command(
     not carry one answers every query through the scan it replaces, so this is
     an acceleration, not a repair: a `0.1.0` release is converted first.
     """
-    from opengwasdb.layouts.ragged.by_variant import VariantIndexError, add_variant_index
+    from opengwasdb.layouts.ragged.by_variant import add_variant_index
+    from opengwasdb.store_reader.by_variant import VariantIndexError
 
     try:
         result = add_variant_index(store_path, force=force, spill_dir=spill_dir)

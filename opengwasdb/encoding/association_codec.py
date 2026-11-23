@@ -212,7 +212,7 @@ def _refuse_odd_markers(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
     the markers a reader and `validate` refuse.
     """
     from opengwasdb.admission.cells import NotAdmitted
-    from opengwasdb.associations.record import non_canonical
+    from opengwasdb.store_reader.associations.record import non_canonical
 
     odd = non_canonical(z) | non_canonical(se)
     if not odd.any():

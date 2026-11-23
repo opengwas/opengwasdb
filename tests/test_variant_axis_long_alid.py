@@ -125,8 +125,8 @@ def test_validation_rejects_an_index_that_truncated_two_variants_together(dense_
     """
     import numpy as np
 
+    from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
     from opengwasdb.validation import validate_store
-    from opengwasdb.variants.axis import variant_alid_bytes_path, variant_alid_rows_path
 
     short, long_ = _shared_prefix_pair()
     write_variant_axis(dense_store_path, [short, long_], {})

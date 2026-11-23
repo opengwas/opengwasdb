@@ -16,7 +16,6 @@ from ld_blocks import write_ld_block
 
 from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.admission import NotAdmitted
-from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
@@ -43,6 +42,7 @@ from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import Cells, InvalidAssociations
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
 from opengwasdb.validation.validate import validate_store

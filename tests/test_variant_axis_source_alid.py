@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from opengwasdb.store_reader.variant_axis import parse_variant_line as _parse_variant_line
 from opengwasdb.variants import VariantAxis
-from opengwasdb.variants.axis import _parse_variant_line, write_variant_axis
+from opengwasdb.variants.axis import write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
 

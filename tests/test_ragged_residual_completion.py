@@ -47,8 +47,8 @@ from stored_rows import stored_rows
 
 from opengwasdb import open_store
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis

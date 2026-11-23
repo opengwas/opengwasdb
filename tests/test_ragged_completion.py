@@ -17,9 +17,9 @@ from stored_rows import stored_rows
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation.validate import validate_store
 
@@ -730,8 +730,8 @@ class TestObservedAlidMapsRecord:
     the field assertions cannot pass on a swapped or missing map."""
 
     def test_each_field_is_its_own_statistics_alid_keyed_map(self):
-        from opengwasdb.associations import Associations
         from opengwasdb.layouts.ragged.complete import _observed_alid_maps, _ObservedAlidMaps
+        from opengwasdb.store_reader.associations import Associations
 
         src_alids = ["1:100:A:G", "1:200:C:T", "1:300:A:C"]
         obs = Associations.from_decoded(
@@ -755,8 +755,8 @@ class TestObservedAlidMapsRecord:
         assert maps.eaf_by_alid == {"1:100:A:G": 0.25, "1:200:C:T": 0.5, "1:300:A:C": 0.75}
 
     def test_an_empty_analysis_yields_all_three_maps(self):
-        from opengwasdb.associations import Associations
         from opengwasdb.layouts.ragged.complete import _observed_alid_maps
+        from opengwasdb.store_reader.associations import Associations
 
         obs = Associations.from_decoded(
             variant_index=np.empty(0, dtype=np.int32),
@@ -1863,7 +1863,7 @@ class TestObservedDuplicates:
 
     @staticmethod
     def _observed():
-        from opengwasdb.associations import Associations
+        from opengwasdb.store_reader.associations import Associations
 
         # Variant 0 twice, agreeing on z and SE but not on EAF; variant 1
         # twice, disagreeing; variant 2 once.
@@ -1919,8 +1919,8 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(obs
     An Analysis no completable block touches is carried through as it stands,
     so its half-missing cell is refused rather than written: the Association
     Reader the source is read through refuses it."""
-    from opengwasdb.associations import CsrReader, InvalidAssociations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.store_reader.associations import CsrReader, InvalidAssociations
     from opengwasdb.store_reader.manifest import StoreManifest
     from opengwasdb.variants import VariantAxis
 
@@ -2015,8 +2015,8 @@ def _completed_from_fills(alids: list[str], blocks: dict[float, list[tuple[str, 
     block's ``(alid, z, se)`` fills per entry, in block order."""
     from types import SimpleNamespace
 
-    from opengwasdb.associations import Associations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.store_reader.associations import Associations
 
     nothing = Associations.from_decoded(
         variant_index=np.empty(0, dtype=np.int32),
@@ -2056,8 +2056,8 @@ def test_every_observed_row_completion_drops_is_logged(caplog):
     variants that disagree are all named, not a sample of them."""
     from types import SimpleNamespace
 
-    from opengwasdb.associations import Associations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.store_reader.associations import Associations
 
     observed = Associations.from_decoded(
         variant_index=np.tile(np.arange(6, dtype=np.int32), 2),

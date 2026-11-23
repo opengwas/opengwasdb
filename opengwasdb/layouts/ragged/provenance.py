@@ -15,11 +15,8 @@ from typing import Any
 
 from opengwasdb.layouts.ragged.by_variant import with_variant_index
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
-from opengwasdb.variants.axis import (
-    VARIANT_AXIS_FORMAT,
-    VARIANT_TABIX_FILENAME,
-    VARIANT_TABLE_FILENAME,
-)
+from opengwasdb.store_reader.variant_axis import VARIANT_TABIX_FILENAME, VARIANT_TABLE_FILENAME
+from opengwasdb.variants.axis import VARIANT_AXIS_FORMAT
 
 
 def ragged_provenance(staged_path: str | Path, encoding: StoreEncoding) -> dict[str, Any]:

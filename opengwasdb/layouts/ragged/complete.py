@@ -43,7 +43,6 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
@@ -79,7 +78,6 @@ from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
-    RAGGED_ZARR_PATH,
     RaggedCSRWriter,
     ReferenceCompletion,
     SeExceptionCounts,
@@ -100,14 +98,13 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
+from opengwasdb.store_reader.associations import Associations, Cells, CsrReader
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
 from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants.axis import (
-    VariantAxis,
-    VariantRecord,
-    write_variant_axis,
-)
+from opengwasdb.store_reader.variant_axis import VariantRecord
+from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 

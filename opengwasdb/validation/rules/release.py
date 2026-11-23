@@ -36,14 +36,14 @@ from opengwasdb.store_reader.format import (
     zarr_format_for_version,
 )
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
-from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
-from opengwasdb.variants import (
+from opengwasdb.store_reader.variant_axis import (
     variant_alid_bytes_path,
     variant_alid_rows_path,
     variant_offsets_path,
     variant_tabix_path,
     variant_table_path,
 )
+from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
 
 #: The rule every rule that opens a release's entries runs after.
 REQUIRED = "envelope.required"

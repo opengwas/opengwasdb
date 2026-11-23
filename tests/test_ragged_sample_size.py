@@ -259,7 +259,7 @@ def _n_by_pair(result: dict[str, np.ndarray]) -> dict[tuple[int, int], float]:
 
 
 def _csr_n_by_pair(store: Path) -> dict[tuple[int, int], float]:
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     csr = RaggedCSRReader(store)
     offsets = np.asarray(csr._offsets[:], dtype=np.int64)
@@ -311,7 +311,7 @@ def test_an_empty_result_from_a_sampled_release_still_names_n(sampled: Path) -> 
 
 
 def test_the_by_variant_copy_holds_the_csr_codes(sampled: Path) -> None:
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
 
     reader = ByVariantReader(sampled)
     first, last = reader.rows_for_variant_range(0, 3)

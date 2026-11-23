@@ -54,10 +54,10 @@ def stored_shards(array_path: Path) -> list[Path]:
 
 def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, int]:
     """Write the slice's decoded `se` and `eaf` as float32 planes; returns (group, finite SE)."""
-    from opengwasdb.associations import Cells, DenseGridReader
     from opengwasdb.store import arrays
     from opengwasdb.store.arrays import ArrayRole
     from opengwasdb.store.open import open_store
+    from opengwasdb.store_reader.associations import Cells, DenseGridReader
 
     release = open_store(store)
     grid = DenseGridReader.open(release.arrays(mode="r"), release.manifest.encoding)

@@ -31,7 +31,6 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Cells, DenseGridReader
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, read_as_planned, run_block
@@ -114,6 +113,7 @@ from opengwasdb.store.open import (
 )
 from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import Cells, DenseGridReader
 from opengwasdb.store_reader.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
@@ -124,11 +124,11 @@ from opengwasdb.store_reader.encoding.codec import (
 from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
-    VariantRecord,
     chromosome_sort_key,
     write_variant_axis,
 )

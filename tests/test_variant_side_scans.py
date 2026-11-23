@@ -44,13 +44,14 @@ from test_hybrid_completion import (
 from test_ragged_completion import _RESULT_KEYS
 from test_ragged_residual_completion import RaggedResidualScenario
 
-from opengwasdb.associations import Cells
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.layouts.ragged.by_variant import VariantIndexError
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.query import query_store
-from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.associations import Cells
+from opengwasdb.store_reader.by_variant import VariantIndexError
+from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.encoding.planes import EafRead
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
@@ -524,7 +525,7 @@ def wide_small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
     filtered, manifest = _prepare_wide_sources(root)
     out = root / "small.opengwasdb"
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", _SMALL_CHUNK)
+        patch.setattr(store_layout, "ASSOCIATION_SEQUENCE_CHUNK", _SMALL_CHUNK)
         build_ragged_from_ssf(
             manifest, filtered, out, store_id="small", release_id="small",
             allow_unverified_eaf=True, association_coverage="cis_and_signals",

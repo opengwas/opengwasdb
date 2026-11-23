@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from opengwasdb.associations.record import State, states
+from opengwasdb.store_reader.associations.record import State, states
 
 __all__ = ["NotAdmitted", "admissible", "require_admitted"]
 

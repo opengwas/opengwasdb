@@ -7,8 +7,8 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations.cells import Cells, require_within, window_region
-from opengwasdb.associations.record import (
+from opengwasdb.store_reader.associations.cells import Cells, require_within, window_region
+from opengwasdb.store_reader.associations.record import (
     Associations,
     Inspection,
     InvalidAssociations,

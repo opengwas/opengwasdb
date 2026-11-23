@@ -73,26 +73,26 @@ from typing import NoReturn, Self
 
 import numpy as np
 
-from opengwasdb.associations import (
+from opengwasdb.query.resolve import resolve_rows
+from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.analyses import AnalysesIndex
+from opengwasdb.store_reader.associations import (
     Associations,
     Cells,
     CsrReader,
     DenseGridReader,
     SubsetReader,
 )
-from opengwasdb.layouts.dense.indexed_subsets import (
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
     IndexedSubsetLayoutError,
     rescope_indexed_subset_error,
 )
-from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.query.resolve import resolve_rows
-from opengwasdb.store.open import OpenGWASDBStore, open_store
-from opengwasdb.store_reader import stats as reader_stats
-from opengwasdb.store_reader.analyses import AnalysesIndex
-from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
 from opengwasdb.variants import VariantAxis
 

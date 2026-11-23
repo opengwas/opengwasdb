@@ -588,10 +588,10 @@ def _small_chunked_pair(
     from dense_sources import build_dense_fixture
 
     import opengwasdb.layouts.dense.complete as complete_module
-    import opengwasdb.store.arrays as arrays_module
+    import opengwasdb.store_reader.layout as layout_module
 
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
-    monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
+    monkeypatch.setattr(layout_module, "DENSE_SHARD_SHAPE", (4, 2))
+    monkeypatch.setattr(layout_module, "DENSE_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
     rows = [

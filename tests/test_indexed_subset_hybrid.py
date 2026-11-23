@@ -50,16 +50,11 @@ from typer.testing import CliRunner
 # Project imports.
 from opengwasdb.cli.main import app
 from opengwasdb.layouts.dense.indexed_subsets import (
-    INDEXED_SUBSETS_GROUP,
-    IndexedSubsetError,
     IndexedSubsetExistsError,
-    IndexedSubsetLayoutError,
-    IndexedSubsetStaleError,
     OverflowOnlyPolicy,
     build_indexed_subset,
     indexed_subset_namespace_path,
     list_indexed_subsets,
-    open_indexed_subset,
     remove_indexed_subset,
     resolve_variant_list,
 )
@@ -70,6 +65,13 @@ from opengwasdb.query import query_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.indexed import (
+    INDEXED_SUBSETS_GROUP,
+    IndexedSubsetError,
+    IndexedSubsetLayoutError,
+    IndexedSubsetStaleError,
+    open_indexed_subset,
+)
 from opengwasdb.validation import validate_store
 
 #: On-panel ALIDs of the ``_hybrid`` fixture (its reference panel).
@@ -526,7 +528,7 @@ def test_hybrid_indexed_query_never_reads_the_primary_planes_or_the_overflow(
     monkeypatch.setattr(DenseZPlane, "column", boom)
     monkeypatch.setattr(DenseSePlane, "column", boom)
     monkeypatch.setattr(DenseEafPlane, "read_column", boom)
-    from opengwasdb.associations import CsrReader
+    from opengwasdb.store_reader.associations import CsrReader
 
     monkeypatch.setattr(CsrReader, "read", boom)
     result = _analyse(indexed_root, "trait_a", indexed_subset="hm3")

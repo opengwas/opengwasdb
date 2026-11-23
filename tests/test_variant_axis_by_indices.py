@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from opengwasdb.variants import VariantAxis
-from opengwasdb.variants.axis import (
+from opengwasdb.store_reader.variant_axis import (
     _BULK_SCAN_FRACTION,
     variant_alid_bytes_path,
     variant_alid_rows_path,
-    write_variant_axis,
 )
+from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
 N_VARIANTS = 1000  # threshold = N_VARIANTS * _BULK_SCAN_FRACTION = 10

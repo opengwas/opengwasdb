@@ -49,7 +49,6 @@ from typing import Any, NamedTuple, assert_never
 
 import numpy as np
 
-from opengwasdb.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
 from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
@@ -57,8 +56,10 @@ from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
 from opengwasdb.store_reader.alid import is_indexable_alid
 from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.variants import VariantAxis, variant_alid_bytes_path, variant_alid_rows_path
+from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
+from opengwasdb.variants import VariantAxis
 
 __all__ = [
     "FAILING_COUNTERS",

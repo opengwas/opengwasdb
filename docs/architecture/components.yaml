@@ -148,14 +148,14 @@ components:
     layer: 4
     stages: [query]
     summary: The layout-independent query facade, result resolution and association reads.
-    paths: [opengwasdb/query/, opengwasdb/associations/]
+    paths: [opengwasdb/query/]
   - id: model
     name: Store contract model
     container: engine
     layer: 0
     stages: [cross]
     summary: analyses.tsv, manifest and enum contracts; the presence rule and statistic helpers shared by builders, validators and queries.
-    paths: [opengwasdb/model/, opengwasdb/associations/record.py, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/lazy_exports.py, opengwasdb/build/ordered_pool.py]
+    paths: [opengwasdb/model/, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/lazy_exports.py, opengwasdb/build/ordered_pool.py]
   - id: maintenance
     name: Repair and re-encode
     container: engine

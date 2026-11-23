@@ -18,11 +18,11 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.associations import Tally
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.associations import Tally
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import VALUE_KINDS, grid_counts, tally, value_fold
 from opengwasdb.validation.rules.csr import is_overflow

@@ -46,15 +46,15 @@ from test_ragged_build_ssf import _make_fixture
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.layouts.dense.indexed_subsets import (
+from opengwasdb.layouts.dense.indexed_subsets import list_indexed_subsets
+from opengwasdb.query import query_store
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.indexed import (
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
     IndexedSubsetLayoutError,
-    list_indexed_subsets,
     open_indexed_subset,
 )
-from opengwasdb.query import query_store
-from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.stats import p_value_from_z
 from tests.ssf_builds import build_ragged_from_ssf
 

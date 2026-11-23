@@ -50,6 +50,7 @@ from opengwasdb.store.arrays import (
     sharded_compressor,
     write_shard_cells,
 )
+from opengwasdb.store_reader import layout as store_layout
 
 #: A plane small enough to build in a test but with **two** shards on the
 #: Analysis axis and two on the variant axis, so an unaligned selection is
@@ -205,10 +206,10 @@ def test_a_dense_vcf_build_writes_whole_shards(
     """
     import test_dense_vcf_build as tdv
 
-    import opengwasdb.store.arrays as arrays_module
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (8, 4))
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (8, 4))
+
     entries = []
     for a in range(4):
         rows = [
@@ -250,11 +251,10 @@ def test_a_dense_completion_writes_whole_shards(
     from dense_sources import build_dense_fixture
 
     import opengwasdb.layouts.dense.complete as complete_module
-    import opengwasdb.store.arrays as arrays_module
     from opengwasdb.layouts.dense.complete import complete_dense_store
 
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
-    monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+    monkeypatch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
 
@@ -348,12 +348,11 @@ def test_builder_and_converter_agree_on_a_tail_shard(
     from dense_sources import build_dense_fixture
     from legacy_fixtures import relayout_as_0_1_0
 
-    import opengwasdb.store.arrays as arrays_module
     import opengwasdb.store.convert as convert_module
     from opengwasdb.store.convert import convert_release
 
-    monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
+    monkeypatch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
     monkeypatch.setattr(convert_module, "DENSE_CHUNK_SHAPE", (2, 1))
 
     header = (
@@ -579,7 +578,7 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
     from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 
     monkeypatch.setattr(
-        store_arrays,
+        store_layout,
         "RAGGED_SEQUENCE_SHARD_ELEMENTS",
         4 * store_arrays.ASSOCIATION_SEQUENCE_CHUNK,
     )

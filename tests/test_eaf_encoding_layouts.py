@@ -962,7 +962,7 @@ def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
     # The pair-resolving read shape too (top hits go through it), which has its
     # own short circuit on "this component stores no eaf array" -- true here,
     # and not the same question as "this component has a frequency to report".
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     reader = RaggedCSRReader(out)
     pairs = [

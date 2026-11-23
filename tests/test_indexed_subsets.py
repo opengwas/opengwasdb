@@ -38,11 +38,7 @@ from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
     EXHAUSTIVE_VALIDATION_BAND_CELLS,
-    INDEXED_SUBSETS_GROUP,
-    IndexedSubsetError,
     IndexedSubsetExistsError,
-    IndexedSubsetNameError,
-    IndexedSubsetStaleError,
     VariantListError,
     _analysis_tiles,
     _ensure_indexed_subset_namespace,
@@ -51,8 +47,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     _validation_sample,
     build_indexed_subset,
     list_indexed_subsets,
-    open_indexed_subset,
-    parse_indexed_subset_name,
     read_variant_list,
     remove_indexed_subset,
     resolve_variant_list,
@@ -62,8 +56,17 @@ from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ConsolidatedMetadataError
 from opengwasdb.store.open import destination_lock, directory_lock
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.format import zarr_format_for_version
+from opengwasdb.store_reader.indexed import (
+    INDEXED_SUBSETS_GROUP,
+    IndexedSubsetError,
+    IndexedSubsetNameError,
+    IndexedSubsetStaleError,
+    open_indexed_subset,
+    parse_indexed_subset_name,
+)
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
@@ -810,7 +813,7 @@ def test_index_plane_splits_into_multiple_shards(
 ) -> None:
     # One inner chunk per shard, so the 65,600-variant row needs two shards.
     monkeypatch.setattr(
-        store_arrays, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+        store_layout, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
     )
     store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
     _build(store, "big", _big_variant_list(tmp_path))
@@ -1403,7 +1406,7 @@ def test_validation_refuses_corruption_outside_a_small_sample(
     statistic; the exhaustive publication gate must refuse it.
     """
     monkeypatch.setattr(
-        store_arrays, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+        store_layout, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
     )
     store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
     _build(store, "big", _big_variant_list(tmp_path))

@@ -43,17 +43,15 @@ from test_indexed_subsets import (
 from opengwasdb.encoding import banding
 from opengwasdb.encoding import codec as codec_module
 from opengwasdb.layouts.dense import indexed_subsets
-from opengwasdb.layouts.dense.indexed_subsets import (
-    INDEXED_SUBSETS_GROUP,
-    validate_indexed_subsets,
-)
-from opengwasdb.store import arrays as store_arrays
+from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader.encoding.codec import (
     EAF_EXCEPTION_INDEX,
     EAF_EXCEPTION_VALUE,
     WindowedExactTable,
 )
+from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Kind, Target
@@ -95,7 +93,7 @@ def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
     for the run that judges it: a table in a single chunk cannot tell a rule's read
     from zarr's own granularity, and this file is about which reads a rule makes.
     """
-    monkeypatch.setattr(store_arrays, "EXCEPTION_TABLE_CHUNK", 64)
+    monkeypatch.setattr(store_layout, "EXCEPTION_TABLE_CHUNK", 64)
     monkeypatch.setattr(codec_module, "EXACT_TABLE_CHUNK", 64)
     store = build_table_store(tmp_path / "store.opengwasdb", SMALL_VARIANTS, "eaf-chunked")
     listing = tmp_path / "hm3.alid.txt"

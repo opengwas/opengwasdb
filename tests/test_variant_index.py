@@ -40,16 +40,16 @@ from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.layouts.ragged import by_variant
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.by_variant import (
-    BY_VARIANT_GROUP,
-    ByVariantReader,
-    VariantIndexError,
-    add_variant_index,
-    has_variant_index,
-)
+from opengwasdb.layouts.ragged.by_variant import add_variant_index
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store import open_store
+from opengwasdb.store_reader.by_variant import (
+    BY_VARIANT_GROUP,
+    ByVariantReader,
+    VariantIndexError,
+    has_variant_index,
+)
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import by_variant as by_variant_rules
 from tests.ssf_builds import build_ragged_from_ssf
@@ -616,7 +616,7 @@ def _ragged(store: Path) -> Path:
 
 def test_reader_refuses_a_missing_required_array(tmp_path: Path) -> None:
     """A missing `by_variant/z` is a named error, not a bare KeyError later."""
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
 
     store = _build_ssf_store(tmp_path / "missing-array", store_id="idx")
     root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
@@ -627,7 +627,7 @@ def test_reader_refuses_a_missing_required_array(tmp_path: Path) -> None:
 
 def test_reader_refuses_a_stale_index_at_open(tmp_path: Path) -> None:
     """`offsets[-1]` must equal the component's row count, or the index is stale."""
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
 
     store = _build_ssf_store(tmp_path / "stale-at-open", store_id="idx")
     root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
@@ -642,7 +642,7 @@ def test_reader_refuses_a_missing_imputed_mask_on_reference_eaf(
     residual: RaggedResidualScenario, tmp_path: Path
 ) -> None:
     """A reference-EAF release without the index's mask must raise, not read zeros."""
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
     from opengwasdb.store_reader.encoding.plan import EafBaselineError
 
     # A copy, so the destructive edit does not damage the module-scoped fixture

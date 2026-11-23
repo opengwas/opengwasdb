@@ -22,6 +22,7 @@ from opengwasdb.encoding.codec import StoreCodec
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import OverflowCellBatches, optimise_dense_se_joint
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader.encoding.plan import (
     EafEncoding,
     EncodingMeasurements,
@@ -271,8 +272,8 @@ def test_flush_writes_the_same_arrays_whatever_the_region_size(
     monkeypatched small so the cut flush really is several regions, and the
     region count is asserted before anything is compared (#249 review round 1).
     """
-    monkeypatch.setattr(store_arrays, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 2000)
-    monkeypatch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", 500)
+    monkeypatch.setattr(store_layout, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 2000)
+    monkeypatch.setattr(store_layout, "ASSOCIATION_SEQUENCE_CHUNK", 500)
     # Every Analysis carries enough cells to fit: `fit_se` declares the whole
     # plane ineligible unless every Analysis's coefficients come out finite, so
     # a one-cell Analysis would silently take the float16 branch and leave the
@@ -319,8 +320,8 @@ def test_flush_peak_memory_does_not_follow_the_cell_count(tmp_path, monkeypatch)
     chunk are monkeypatched small so the step is a bounded whole shard (#249
     review round 1).
     """
-    monkeypatch.setattr(store_arrays, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 500)
-    monkeypatch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", 100)
+    monkeypatch.setattr(store_layout, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 500)
+    monkeypatch.setattr(store_layout, "ASSOCIATION_SEQUENCE_CHUNK", 100)
     region = 500
     small = _model_writer([500] * 4, seed=1)
     large = _model_writer([2000] * 4, seed=1)

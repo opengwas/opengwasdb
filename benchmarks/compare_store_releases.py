@@ -339,8 +339,8 @@ _OPEN: dict[str, Any] = {}
 def _dense_reader(path: str) -> Any:
     """A Dense grid reader for `path`, opened once per process (after any fork)."""
     if path not in _OPEN:
-        from opengwasdb.associations import DenseGridReader
         from opengwasdb.store.open import open_store
+        from opengwasdb.store_reader.associations import DenseGridReader
 
         store = open_store(path)
         root = store.arrays(mode="r")
@@ -353,7 +353,7 @@ def _dense_reader(path: str) -> Any:
 
 def _decoded(path: str, rows: np.ndarray) -> dict[str, np.ndarray]:
     """Every cell of `rows` (ascending) by every Analysis, decoded, as `rows × analyses`."""
-    from opengwasdb.associations import Cells
+    from opengwasdb.store_reader.associations import Cells
 
     reader, n_analyses = _dense_reader(path)
     found = reader.inspect(Cells.variants(rows))

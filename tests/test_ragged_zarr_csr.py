@@ -5,8 +5,9 @@ import pytest
 from stored_rows import stored_rows
 
 from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.store.arrays import ArrayRole, open_group, shard_layout
+from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.encoding.plan import (
     EafEncoding,
     EncodingMeasurements,
@@ -215,7 +216,7 @@ def test_a_marker_other_than_the_canonical_nan_is_refused_before_it_is_narrowed(
     caller hands over. Narrowed to float32 first, a float64 NaN with a payload
     in its low bits came out canonical and was stored as a missing row."""
     from opengwasdb.admission import NotAdmitted
-    from opengwasdb.associations import non_canonical
+    from opengwasdb.store_reader.associations import non_canonical
 
     z = np.array([1.0, np.nan, 2.0])
     se = np.array([0.1, np.nan, 0.2])

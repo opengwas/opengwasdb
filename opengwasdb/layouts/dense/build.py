@@ -48,12 +48,14 @@ from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
-from opengwasdb.top_hits import add_hit_counts
-from opengwasdb.variants import (
-    VARIANT_AXIS_FORMAT,
+from opengwasdb.store_reader.variant_axis import (
     VARIANT_OFFSETS_FILENAME,
     VARIANT_TABIX_FILENAME,
     VARIANT_TABLE_FILENAME,
+)
+from opengwasdb.top_hits import add_hit_counts
+from opengwasdb.variants import (
+    VARIANT_AXIS_FORMAT,
     CanonicalVariant,
     chromosome_sort_key,
     write_variant_axis,

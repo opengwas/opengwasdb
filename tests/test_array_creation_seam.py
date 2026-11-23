@@ -61,6 +61,10 @@ LD_ENGINE = PACKAGE_ROOT / "ld"
 #: The seam's own module path, whose creation helpers other modules import.
 _SEAM_MODULE = "opengwasdb.store.arrays"
 
+#: The read side's module (#464), whose one API name is its read-only `open_group`:
+#: it refuses every mode but ``r`` at run time (`test_the_read_seam_refuses_a_write_mode`).
+_READ_SEAM_MODULE = "opengwasdb.store_reader.arrays"
+
 #: The seam's own creation/open API: the only names other modules may use.
 _SEAM_API = frozenset(
     {"create_array", "create_group", "require_group", "open_group", "open_group_for_write"}
@@ -312,6 +316,8 @@ def _call_violation(
         base = _module_of(func.value, modules, names)
         if base == _SEAM_MODULE and attr in _SEAM_API:
             return None  # the seam's own API, e.g. `store_arrays.create_array(...)`
+        if base == _READ_SEAM_MODULE and attr == "open_group":
+            return None  # the read side's read-only open
         if base is not None and (_is_zarr(base) or _is_numcodecs(base)):
             return f"{base}.{attr}("
         if base is not None and _is_numpy(base):
@@ -327,6 +333,8 @@ def _call_violation(
         if canonical is not None:
             module, _, attr = canonical.rpartition(".")
             if module == _SEAM_MODULE and attr in _SEAM_API:
+                return None
+            if module == _READ_SEAM_MODULE and attr == "open_group":
                 return None
             if _is_zarr(module) or _is_numcodecs(module):
                 return f"{module}.{attr}("
@@ -685,6 +693,15 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     assert scanned > 50, f"only {scanned} modules scanned; the glob is wrong"
     assert _violations(SEAM.read_text(encoding="utf-8")), "the scanner missed the seam's own calls"
     assert offenders == [], "direct Zarr/Blosc creation outside the seam:\n" + "\n".join(offenders)
+
+
+def test_the_read_seam_refuses_a_write_mode(tmp_path: Path) -> None:
+    from opengwasdb.store_reader.arrays import open_group
+
+    for mode in ("r+", "a", "w", "w-"):
+        with pytest.raises(ValueError, match="read-only"):
+            open_group(tmp_path / "data.zarr", mode)
+    assert not (tmp_path / "data.zarr").exists()
 
 
 def test_the_read_seam_only_opens_a_group_read_only() -> None:

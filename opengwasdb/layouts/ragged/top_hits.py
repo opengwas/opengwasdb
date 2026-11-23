@@ -10,11 +10,11 @@ import numpy as np
 
 from opengwasdb import top_hits
 from opengwasdb.encoding.timing import log_phase
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.arrays import (
     open_group_for_write,
 )
 from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 

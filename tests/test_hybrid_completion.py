@@ -23,13 +23,13 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 from store_digest import store_digest
 
 from benchmarks.compare_top_hits import compare_top_hits
-from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import InvalidAssociations
+from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.top_hits import read_top_hit_counts
@@ -648,7 +648,7 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     assert z == pytest.approx(-4.0, rel=5e-3)
 
     # The overflow no longer carries this association for any analysis.
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     ragged = RaggedCSRReader(dst)
     overflow_alids_after = {alid_by_index[int(v)] for v in np.unique(ragged._variant_index[:])}

@@ -18,11 +18,11 @@ from liftover_fixtures import (
 from sd_scaling import require_not_rescaling, require_rescaling
 from stored_rows import stored_rows
 
-from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.associations import Cells, CsrReader
+from opengwasdb.store_reader.csr import RaggedCSRReader
 
 # ── Synthetic BESD fixture ────────────────────────────────────────────────────
 
