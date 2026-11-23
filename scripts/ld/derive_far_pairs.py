@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Give an LD Store written before ADR 0093 its Far Pairs, derived from its own Proxy Index.
 
-    pixi run -e dev python scripts/derive_far_pairs.py STORE [STORE ...] [--threads 8]
+    pixi run -e dev python scripts/ld/derive_far_pairs.py STORE [STORE ...] [--threads 8]
 
 ogld#7 wrote the five HGDP+1kGP stores before the owner brought the Far Pairs back beside the
 Proxy Index (ADR 0093, 12 November 2026). A store's Far Pairs are its index's entries beyond

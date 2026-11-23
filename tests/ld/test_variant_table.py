@@ -116,7 +116,7 @@ def test_a_variant_table_gives_the_same_answers_as_the_reader_it_leaves_out(stor
 def test_a_replaced_chunk_cache_reaches_every_variant_read() -> None:
     """The chunk cache has one owner, so a replaced cache is the one both halves read through.
 
-    `tests/test_bench.py` and `scripts/bench/latency.py` replace `reader._cache` to measure what
+    `tests/ld/test_bench.py` and `scripts/ld/bench/latency.py` replace `reader._cache` to measure what
     a read holds, and a variant read that kept the cache it was constructed with would be measured
     against the wrong budget — and one reader would keep its positions and its pairs in two caches
     under two budgets (ld-store §10). So the test replaces it exactly as the bench does.

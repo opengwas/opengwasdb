@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Make the inputs of `tests/realdata/test_query_panel.py` (opengwas/ogld#6).
+"""Make the inputs of `tests/ld/realdata/test_query_panel.py` (opengwas/ogld#6).
 
 The test compares `clump` on a k = 0 HGDP+1kGP EUR LD Store with `plink2 --clump` for the 37 EUR
 Analyses of opengwas/opengwasdb#403, at r² 0.01 and 0.001, 3,000 kb, on each Analysis's 5e-8 tier.
 Four steps, each a subcommand; the first two need only the standard library plus, for `extract`,
 the opengwasdb package, so run `extract` with that repository's interpreter:
 
-    OUT=/data/opengwasdb/work/ogld/realdata; S=scripts/realdata/make_403_inputs.py
+    OUT=/data/opengwasdb/work/ogld/realdata; S=scripts/ld/realdata/make_403_inputs.py
     python3 $S select  --out $OUT
     ~/repo/opengwasdb/.pixi/envs/default/bin/python $S extract --out $OUT
     pixi run -e dev python $S prepare --out $OUT --store $OUT/EUR-k0.store

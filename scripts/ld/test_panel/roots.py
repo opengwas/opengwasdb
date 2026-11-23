@@ -5,22 +5,22 @@ variable plus the rest of its path, and by hash, so no host path is committed.
 
 - `OGLD_PHASED_V2`, default `/data/opengwasdb/work/ogld/phased_v2`: the phased HGDP+1kGP v2
   BCFs, each with its `.complete` record (ADR 0088);
-- `OGLD_PCS`, default `/data/opengwasdb/work/ogld/pcs`: `scripts/make_pcs.py`'s PC Files and
+- `OGLD_PCS`, default `/data/opengwasdb/work/ogld/pcs`: `scripts/ld/make_pcs.py`'s PC Files and
   reports;
 - `OGLD_REFERENCE`, default `/data/opengwasdb/reference`: the panels' members files and gnomAD's
   sample metadata (`META_NAME` under it);
-- `OGLD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/make_keeps.py`'s keep files,
+- `OGLD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/ld/make_keeps.py`'s keep files,
   each panel's unrelated samples (ADR 0088);
-- `OGLD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`: `scripts/build_hgdp1kgp.py`'s
+- `OGLD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`: `scripts/ld/build_hgdp1kgp.py`'s
   conversions, one directory per panel (ogld#7);
 - `OGLD_STORES`, default `/data/opengwasdb/work/ogld/stores`: the five HGDP+1kGP LD Stores, staged
   there until ogld#9 chooses where they are published;
 - `OGLD_SCRATCH`, default `/data/opengwasdb/work/ogld/scratch/7`: that script's logs and timings;
 - `OGLD_403_ANALYSES`, default `/data/opengwasdb/work/ogld/realdata/403-analyses`: opengwasdb#403's
-  37 EUR Analyses, `scripts/realdata/make_403_inputs.py`'s output, which the realdata tier, the
-  acceptance run and `scripts/bench/latency.py` read (ogld#6, ogld#8);
+  37 EUR Analyses, `scripts/ld/realdata/make_403_inputs.py`'s output, which the realdata tier, the
+  acceptance run and `scripts/ld/bench/latency.py` read (ogld#6, ogld#8);
 - `OGLD_LAYOUTS`, default `/data/opengwasdb/work/ogld/scratch/8/layouts`: EUR chr22 built once
-  per Near Band layout by `scripts/bench/build_layouts.py`, which `scripts/bench/latency.py`
+  per Near Band layout by `scripts/ld/bench/build_layouts.py`, which `scripts/ld/bench/latency.py`
   times (ogld#8);
 - `OGLD_PLINK2`, `OGLD_BCFTOOLS`, `OGLD_BGZIP`, default the program on `PATH`: the tools.
 """

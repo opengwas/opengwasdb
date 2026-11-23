@@ -12,7 +12,7 @@ t_far for n = 771 and the k it was written at (ld-store §4, §5), the Partner R
 holds no Proxy Index: #72 removed the component (ADR 0097). It is "import a
 precomputed r" in miniature. It is deterministic: the same inputs write the same bytes.
 
-    pixi run -e dev python scripts/make_test_store.py --r-scale=<scale> --t-partner=<r²> \
+    pixi run -e dev python scripts/ld/make_test_store.py --r-scale=<scale> --t-partner=<r²> \
         [--k 10] [--force] [out]
 
 `write_test_store(k, out, r_scale, t_partner)` writes the store at either k the Test Panel holds a
@@ -68,7 +68,7 @@ class VariantSet:
 
 
 def panel_data() -> ModuleType:
-    """The Test Panel's loader, `tests/testdata.py`: the one way to read the panel's files."""
+    """The Test Panel's loader, `tests/ld/testdata.py`: the one way to read the panel's files."""
     tests = str(ROOT / "tests" / "ld")
     if tests not in sys.path:
         sys.path.insert(0, tests)

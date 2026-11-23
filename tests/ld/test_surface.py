@@ -30,7 +30,7 @@ import testdata
 import opengwasdb.ld
 from opengwasdb.ld import cli, identity
 
-#: The committed Test Store (tests/contract/support.py), written by the walking skeleton.
+#: The committed Test Store (tests/ld/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 
 SURFACE: dict[str, tuple[Callable[..., Any], str]] = {

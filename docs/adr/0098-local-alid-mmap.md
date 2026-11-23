@@ -38,7 +38,7 @@ descriptor table for assembly and validation; row widths follow the recorded dty
 metadata, so a companion copied from a Store with identical metadata but different keys could
 change answers. Before any mapped byte is trusted, schema 2 verifies canonical content pins
 and payload hashes. Schema 1 refuses naming the Store and manifest, with an instruction to
-re-derive using `scripts/derive_alid_mmap.py`. Remove the old pointer/generation only on an
+re-derive using `scripts/ld/derive_alid_mmap.py`. Remove the old pointer/generation only on an
 isolated private Store before re-deriving; never repair a live reader's generation in place.
 
 The optional root attribute is exactly `{"generation":"<64 lowercase hex digits>"}`.
@@ -50,7 +50,7 @@ ones, and refuses conflicting or corrupt ones. Old generations remain for existi
 Derive only on isolated/quiescent local Stores; do not mutate canonical files during reading.
 
 `StoreWriter.finish` validates the canonical Store, records provenance, then calls
-`assembly.derive_alid_mmap`; `scripts/derive_alid_mmap.py` calls that same helper. A failed
+`assembly.derive_alid_mmap`; `scripts/ld/derive_alid_mmap.py` calls that same helper. A failed
 companion creation leaves either a valid Store without a pointer or a complete publication.
 The helper first applies the canonical index's existing four validation rules. Before writing
 the root pointer, both publication paths then call `validation.require_alid_mmap` on the new

@@ -86,7 +86,7 @@ A build reads PLINK 2 pgen filesets only (ADR 0088, decision 1).
 ## 3. Converting to pgen
 
 Every conversion MUST use these plink2 flags, which the Test Panel's own conversion exercises
-(`tests/data/test-panel/manifest.json`, `conversion_command`). plink2 v2.0.0-a.6.9 cannot split a
+(`tests/ld/data/test-panel/manifest.json`, `conversion_command`). plink2 v2.0.0-a.6.9 cannot split a
 multi-allelic record while importing, so a source with multi-allelic records is split first.
 
 | flag | why |
@@ -309,7 +309,7 @@ records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` 
 `k` = 0 no PC Check runs: `pc_file`, `pc_check` and `k_min` are null, and `k_target` = k = 0.
 
 **What it found on the HGDP+1kGP PC Files** (the JSON report beside each PC File in
-`/data/opengwasdb/work/ogld/pcs/` on the IEU nodes, each naming the commit that made it: `scripts/make_pcs.py` at `bb38fbb`, run whole on all
+`/data/opengwasdb/work/ogld/pcs/` on the IEU nodes, each naming the commit that made it: `scripts/ld/make_pcs.py` at `bb38fbb`, run whole on all
 five panels on 10 November 2026 with the adopted `opengwasdb.ld.build.pc_check`, which selects the MAF ≥
 0.05 variants itself. It wrote the five PC Files again byte for byte, and its scans equal the
 earlier `--scan-only` reports, `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json` and
@@ -352,8 +352,8 @@ PC1–PC9 and scanned as if each were a PC: they are what a PC that tracks an in
 - **Two implementations agree** on the shares: the prototype's `proto/1-build-inputs@28b5380:prototypes/build-inputs/m10_local_pc_rule.py`, written
   separately, gives the same windows, window shares and rest shares on EUR as lane 2d's reference
   to every printed digit. ogld#5 adopted that reference as `opengwasdb/ld/build/pc_check.py`, the one
-  implementation: the builder, `scripts/make_pcs.py` and the Test Panel's script all run it, and
-  it selects the MAF ≥ 0.05 variants itself. `tests/test_pc_check.py` holds it to the three real
+  implementation: the builder, `scripts/ld/make_pcs.py` and the Test Panel's script all run it, and
+  it selects the MAF ≥ 0.05 variants itself. `tests/ld/test_pc_check.py` holds it to the three real
   verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept), and to the Test Panel's
   scan as the reference made it before the adoption (its manifest's `pc_check`), to 10⁻¹².
 
@@ -367,7 +367,7 @@ rest of the genome explains the PC, and keeps it.
 
 ## 9. Long-Range LD Regions
 
-[`opengwasdb/ld/build/long-range-ld-regions-grch38.tsv`](../../ogld/build/long-range-ld-regions-grch38.tsv),
+[`opengwasdb/ld/build/long-range-ld-regions-grch38.tsv`](../../opengwasdb/ld/build/long-range-ld-regions-grch38.tsv),
 data of the package, which owns it, lists the regions in
 GRCh38, 1-based inclusive, each with its source and its source coordinates:
 
@@ -389,7 +389,7 @@ missing (both read 7 November 2026).
 No endpoint fell in a chain gap. Price's LCT region, chr2:134.5–138 Mb in GRCh37, is
 chr2:133,742,429–137,242,430.
 
-`scripts/make_pcs.py` excludes every region widened by 2 Mb on each side. The margin is measured:
+`scripts/ld/make_pcs.py` excludes every region widened by 2 Mb on each side. The margin is measured:
 outside LCT and the MHC, mean r² with gnomAD's EUR PC2 per 250 kb bin stays raised to 1.5 Mb past
 an edge (0.0079 against 0.0031 more than 4 Mb away), and no further
 (`proto/1-build-inputs@fb3f26c:…/results/margin_EUR_pc2.tsv`); 2 Mb covers that and one 500 kb
@@ -407,22 +407,22 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
 - **Samples:** the members files under `/data/opengwasdb/reference/hgdp1kgp-hg38*/members/`; the
   v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0088 lists the five absent).
   These are the PC Files' samples (below).
-- **Keep files:** `scripts/make_keeps.py` writes `/data/opengwasdb/work/ogld/keep/<panel>.keep`
+- **Keep files:** `scripts/ld/make_keeps.py` writes `/data/opengwasdb/work/ogld/keep/<panel>.keep`
   (`$OGLD_KEEP`), plink2's `#IID` layout: each panel's PC File samples that gnomAD v3.1.2's sample
   metadata does not mark related (`relatedness_inference.related` false, its maximal set of
   unrelated samples), in the PC File's order. A sample the metadata lacks is refused. EUR 665,
   AFR 608, EAS 724, SAS 672, AMR 341. A build reads these (§4); the members files are the PC
   Files' input only.
-- **PC Files:** `scripts/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
+- **PC Files:** `scripts/ld/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
   (`$OGLD_PCS`) and, beside it, the PC Check's JSON report, which names that file by its root
-  variable and its SHA-256; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
+  variable and its SHA-256; declared source "ogld scripts/ld/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 
 ## 11. The Test Panel
 
 The Test Panel, `tests/data/test-panel/`, is v2 chr21 and chr22 for the 771 EUR samples, with the
 EUR PC File and independent reference answers. Its README lists what it holds, where each edge case
-is, and how `scripts/make_test_panel.py` regenerates it; `tests/testdata.py` is the only way a test
+is, and how `scripts/ld/make_test_panel.py` regenerates it; `tests/ld/testdata.py` is the only way a test
 reads it.
 
 - **Reference r** at k = 0 equals `plink2 --r-unphased` to 1.0×10⁻¹⁴ on every pair. At k = 0 and
@@ -446,7 +446,7 @@ reads it.
   `maybeFiltered`, `partFiles`). Native Hail 0.2.64 parts are decoded, never
   interpreting an unallocated block as a measured zero.
 - `--variants` is a plain or gzip/BGZF TSV exported once with
-  `scripts/export_panukb_variants.py`, outside the package. Required columns
+  `scripts/ld/export_panukb_variants.py`, outside the package. Required columns
   are `locus` (`chrom:position`, 1-based GRCh37), `alleles` (JSON REF/ALT),
   `AF` (ALT frequency) and `idx` (the existing global matrix row index).
   Chromosomes are contiguous, as in Hail's locus-keyed export, so planning

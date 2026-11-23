@@ -24,7 +24,7 @@ The numbers that chose the layout and the codec come from prototypes run on real
 chr22 genotypes. They are on the prototype branch `proto/1-ld-store-layout`, and each is cited as
 `proto/1-ld-store-layout@65f94ca:<path>`, so a citation stays fixed if the branch moves.
 
-The semantics of §3, §8 and §9 are implemented in `opengwasdb/ld/format/`, and `tests/test_format.py`
+The semantics of §3, §8 and §9 are implemented in `opengwasdb/ld/format/`, and `tests/ld/test_format.py`
 holds that code to this document's tables.
 
 Normative language:
@@ -265,7 +265,7 @@ Panel keeps all 771 EUR members (owner's ruling), so the Test Store has a row of
 method is the prototype's
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv`, on the
 gnomAD v3.1.2 counts, at × 32767); each value was computed in 50-digit decimal arithmetic outside
-ogld, and `tests/test_format.py` holds the code to every row.
+ogld, and `tests/ld/test_format.py` holds the code to every row.
 
 | LD Store | scale | n | k | t_far | √t_far × s | far code floor | a pair at exactly t_far | true r² cut |
 |---|---|---|---|---|---|---|---|---|
@@ -288,7 +288,7 @@ AMR it reads as the Bound: a true r² up to 0.0320627 on EUR, 0.0349273 on AFR, 
 and 0.0632360 on AMR reads "r² < t_far". On UK Biobank EUR a pair at exactly t_far is stored, and
 so is one down to 0.0009929. At × 32767 the same rule gives floors of 1037 (UK Biobank EUR) and
 5850 (HGDP+1kGP EUR, k = 10, which the × 32767 chr22 build of §6 records), and cuts within
-8×10⁻⁶ of t_far; `tests/test_format.py` keeps those floors too. The walkthrough "A pair at
+8×10⁻⁶ of t_far; `tests/ld/test_format.py` keeps those floors too. The walkthrough "A pair at
 exactly t_far" in `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps
 through these cases at × 32767 on the gnomAD v3.1.2 counts.
 
@@ -876,7 +876,7 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
 - **`clump`.** Greedy, strongest score first. The score is |z| or −log10 p, never raw p, which
   underflows to 0 for |z| over 38. Ties go to genomic order, then ALID. Each variant joins the
   strongest lead it reaches. plink2 compares r² with `>` and the window with `<` (checked on plink2 v2.0.0-a.6.9LM and
-  recorded beside the equality test, `tests/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
+  recorded beside the equality test, `tests/ld/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
   and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
 
 `opengwasdb.ld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
@@ -884,7 +884,7 @@ called through `opengwasdb.ld.query.requests.window_of`, and it names the store 
 the store's `t_partner` within `near_bp` is answered with the r2 asked for, the `t_partner`
 recorded, and the two ways out — ask at or above that `t_partner`, or read a store derived at a
 lower one. `opengwasdb.ld.format.judge_request` is that table without the Partner Threshold's row — the
-0.1.0 table, which a call through `ogld` no longer reaches — and `opengwasdb.ld.format.judge_window` is the
+0.1.0 table, which a call through `opengwasdb.ld` no longer reaches — and `opengwasdb.ld.format.judge_window` is the
 same rule for a window already in bp; `opengwasdb.ld.format.judge_region` judges a region. All but
 one of them are the judge's: a `clump` score that is not one finite, non-negative number per ALID
 is refused as `invalid` by `opengwasdb.ld.query.clumping._checked_score`, because it depends on the score,
@@ -963,14 +963,14 @@ or allele frequencies it never returns.
 
 `clump` reads one Partner Rows row per lead — 3,869 for GCST90476460's whole input — and `proxies`
 one per present query variant; neither reads a Near Band element, and neither
-resolves a square among the hits (§9). `tests/test_partner_reads.py` holds the one row a lead, and
+resolves a square among the hits (§9). `tests/ld/test_partner_reads.py` holds the one row a lead, and
 `proxies` reading no string column but the ALIDs it returns. Neither query reads any array under
 `near/`: their positions and ALIDs come from `variants/`, their LD from
 `partners/<chrom>/`, and the chromosome ranges from the store's record (#71). `matrix`, `region`
 and `pair_r` still read a chromosome's `near/<c>/indptr`, and its Far Pairs' `indptr` when their
 pairs reach beyond `near_bp`, as below.
 
-What the reads hold, measured with tracemalloc and held by `tests/test_partner_reads.py`:
+What the reads hold, measured with tracemalloc and held by `tests/ld/test_partner_reads.py`:
 
 - `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
   that step's Far Pairs rows. One row against many is never copied out to a full list.
@@ -1197,7 +1197,7 @@ index and then for the chunks.
 
 **The Proxy Index is gone** (#72; ADR 0097, D1). The Partner Rows (§5) hold every entry it held,
 `clump` and `proxies` read them, a build writes no array of `index/`, and no query or validation
-reads one. One exception is kept deliberately: `derive_far_pairs` (§12, `scripts/derive_far_pairs.py`)
+reads one. One exception is kept deliberately: `derive_far_pairs` (§12, `scripts/ld/derive_far_pairs.py`)
 reads a 0.1.0 store's index to derive its Far Pairs, for a store built before ADR 0093 whose Far
 Pairs are missing — `realdata/EUR-k0.store` is one, and #73 derives it before its Partner Rows. This
 section keeps the record: the measurements that decided the component, **settled** by the owner on 7 November
@@ -1251,7 +1251,7 @@ refusals:
 - a pair beyond it is a Far Pair exactly when its |code| ≥ `far_code_floor`, the rule that put it
   in either component, so it reads the same Stored r or the same Bound (§8);
 - the refusals depend only on r2, the window, t_far and the distances (§9), none of which the
-  merge touches. `tests/test_format.py` holds the answer and refusal tables, and they do not
+  merge touches. `tests/ld/test_format.py` holds the answer and refusal tables, and they do not
   change with the layout.
 
 The trade-off as the owner weighed it on 8 November, on the prototype's numbers at k = 0, with the
@@ -1358,7 +1358,7 @@ No rule checks the chunk shapes, shards or codecs of §6's arrays; the Partner R
 chunk each by construction (§5.1), which a reader's one range request per frame depends on, and
 `partners.files` holds them to it. No rule can check that every Far Pair was found: that needs the
 genotypes, and ogld#5's tests check it against an independent reference on the Test Panel. Each rule has a store that breaks it, in
-`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 30.
+`tests/ld/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 30.
 
 **An `index/`, of either version, is neither read nor validated.** No rule names it: it is not an
 array §1 lists, `envelope.arrays` checks the arrays in §1's tree, `envelope.fill` walks those
@@ -1366,7 +1366,7 @@ arrays, and not one of the 30 reads a path under `index/`. It holds for a **0.2.
 derived its Partner Rows before #72 without `--drop-index` — the derivation removes nothing it is
 not asked to — and for a **0.1.0** store, whose format describes the component but whose rules went
 with it in #72. Such a store validates exactly as one without it, and a reader answers exactly as
-it does (`tests/test_far_pairs.py`, `tests/test_proxy_index_removed.py`); a 0.1.0 store with every
+it does (`tests/ld/test_far_pairs.py`, `tests/ld/test_proxy_index_removed.py`); a 0.1.0 store with every
 index chunk lost still passes all 30 and still answers `matrix` and `region`. This is not silent
 damage: no query and no rule this package ships reads an index, so a reader or a validation has
 nothing to get wrong. Two paths do read one, both deliberately: `derive_far_pairs` (§11), for a
@@ -1547,13 +1547,13 @@ index file (array metadata and all chunk/shard files), not just array metadata. 
 follows shard-directory links and refuses cycles, repeated directories, walk errors and
 nonregular sources rather than trusting an incomplete file set. Schema 1
 refuses with the Store/generation/manifest and an instruction to re-derive using
-`scripts/derive_alid_mmap.py`. A mismatched source pin also names the concrete canonical file.
+`scripts/ld/derive_alid_mmap.py`. A mismatched source pin also names the concrete canonical file.
 An absent root `alid_mmap` attribute means no companion.
 A present attribute is exactly `{"generation":"<manifest SHA-256>"}` and names complete,
 immutable files. Publication fsyncs a private partial, renames its generation directory,
 then atomically replaces root metadata last. An abandoned partial is unpublished and a
 retry replaces it; a complete generation is validated and reused, never overwritten.
-`StoreWriter.finish` and `scripts/derive_alid_mmap.py` use the same assembly helper from the
+`StoreWriter.finish` and `scripts/ld/derive_alid_mmap.py` use the same assembly helper from the
 Store's validated canonical index. Both paths MUST run the exact canonical correspondence
 check on the new generation's payloads before publishing its root pointer, including entry
 count and full payload lengths. They call the same bounded comparison as `alid_index.count`;

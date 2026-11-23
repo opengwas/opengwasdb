@@ -63,7 +63,7 @@ def long_range_ld_regions_file() -> Traversable:
 def long_range_ld_regions() -> tuple[tuple[str, str, int, int], ...]:
     """The Long-Range LD Regions, GRCh38, 1-based inclusive: (name, chromosome, start, end), in
     the table's order. The one reader of the table: the build's PC diagnostic, the PC Files'
-    recipe (`scripts/make_pcs.py`) and the Test Store's script all call it."""
+    recipe (`scripts/ld/make_pcs.py`) and the Test Store's script all call it."""
     lines = long_range_ld_regions_file().read_text().splitlines()
     rows = [line.split("\t") for line in lines if line and not line.startswith("#")][1:]
     return tuple((row[0], row[1], int(row[2]), int(row[3])) for row in rows)

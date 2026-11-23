@@ -19,12 +19,12 @@ proves nothing, so every one asserts its answer is non-empty (or, for the delibe
 requests, exactly what emptiness it expects) before comparing. An input that is unset or missing
 fails the run; it never skips.
 
-Environment (`tests/acceptance/run_genotypes.sh` sets the defaults):
+Environment (`tests/ld/acceptance/run_genotypes.sh` sets the defaults):
 
 - `OGLD_GENOTYPE_STORE`: the sidecar `opengwasdb ld build --genotypes` wrote.
 - `OGLD_81_EUR_STORE`: the k = 10, × 511 whole-panel LD Store over the same panel.
 - `OGLD_403_ANALYSES`: #403's 37 Analyses, each with `hits.tsv` (ALID, z), as
-  `scripts/realdata/make_403_inputs.py` writes them.
+  `scripts/ld/realdata/make_403_inputs.py` writes them.
 """
 
 from __future__ import annotations

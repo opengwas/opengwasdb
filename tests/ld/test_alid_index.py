@@ -139,7 +139,7 @@ def table(rows: list[tuple[str, int, str, str]]) -> Variants:
 
 
 LONG = "ACGT" * 6
-#: The Test Store's producer keys, for a store this file writes (tests/test_assembly.py does the
+#: The Test Store's producer keys, for a store this file writes (tests/ld/test_assembly.py does the
 #: same): what only a producer knows, with nothing the store derives.
 SOURCED: dict[str, Any] = {
     key: value
@@ -316,7 +316,7 @@ def test_a_lost_chunk_of_the_index_is_refused(tmp_path: Path) -> None:
 def rebuild(store: Path, alids: list[str]) -> None:
     """Write `store`'s index over again from `alids`, its entries in no order: validation fails it
     (`alid_index.order`) and its misses a reader still scans. The truncated index is not here: it
-    is `alid_index.keys`' breaker in `tests/contract/test_store.py`."""
+    is `alid_index.keys`' breaker in `tests/ld/contract/test_store.py`."""
     kept = [row for row, alid in enumerate(alids) if len(alid.encode()) <= 32]
     keys = np.array([alids[row] for row in kept], dtype=f"|S{layout.ALID_INDEX_WIDTH}")
     rows = np.array(kept, dtype=np.int32)
@@ -400,7 +400,7 @@ def test_the_index_is_read_only_for_an_alid_it_could_hold(tmp_path: Path) -> Non
 
 
 def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path) -> None:
-    # `scripts/derive_alid_index.py` adds the index to a store written before it: the arrays go
+    # `scripts/ld/derive_alid_index.py` adds the index to a store written before it: the arrays go
     # under a group a reader ignores, and it takes the real name only when the count matches.
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")

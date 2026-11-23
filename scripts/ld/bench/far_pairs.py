@@ -15,7 +15,7 @@ chunks the index. Far Pairs cluster in a few rows (long-range LD), and a row wit
 no chunk, so the saving in chunks is set by how many listed rows hold any, not by the average a
 row.
 
-    pixi run -e dev python scripts/bench/far_pairs.py [--out far_pairs.json] [--chrom 6 11]
+    pixi run -e dev python scripts/ld/bench/far_pairs.py [--out far_pairs.json] [--chrom 6 11]
 
 It reads every chromosome's `index/<c>/partner` once, a block of rows at a time.
 

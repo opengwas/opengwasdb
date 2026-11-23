@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render `latency.py`'s records as the tables of `docs/benchmarks/latency-tables.md` (ogld#8).
 
-    pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/*.jsonl.gz \
+    pixi run -e dev python scripts/ld/bench/report.py docs/benchmarks/results/*.jsonl.gz \
         --layouts /data/opengwasdb/work/ogld/scratch/8/layouts > docs/benchmarks/latency-tables.md
 
 Every number in the tables is a record's, aggregated as each table says: a sum over the 37
@@ -326,7 +326,7 @@ def step1(records: list[Record]) -> list[str]:
 
 def step1_tables(records: list[Record]) -> list[str]:
     """Step 1's table of each read, without the summary, whose rows are ogld#8's reader's: what
-    `scripts/bench/serving.py` renders a later run's step-1 records with (ogld#9)."""
+    `scripts/ld/bench/serving.py` renders a later run's step-1 records with (ogld#9)."""
     of = grouped(records, "case")
     out = ["### Clumping #403's 37 Analyses, 5e-8 tier, 3 Mb window", ""]
     out += [table(CLUMP_HEADER, clump_rows(of.get(("clump",), []))), ""]

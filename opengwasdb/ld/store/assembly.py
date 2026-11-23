@@ -771,7 +771,7 @@ def derive_far_pairs(
     caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
     holds an index and no `far/`, and #73 derives its Far Pairs before its Partner Rows. A store
     this package writes never needs it, and no other code path names the component's arrays
-    (`tests/test_proxy_index_removed.py`).
+    (`tests/ld/test_proxy_index_removed.py`).
     """
     indptr = _whole(index, "indptr")
     stream = FarPairsStream(far, len(indptr) - 1, encoding)

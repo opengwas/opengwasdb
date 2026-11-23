@@ -3,10 +3,10 @@ read as ALIDs and as reference matrices.
 
 The contract tests are epic #1's tickets written as tests before the tickets started, one module
 a ticket. Every ticket has landed, so each test now holds its ticket's behaviour as an ordinary
-test, with no mark, and none may change a public signature (tests/test_surface.py).
+test, with no mark, and none may change a public signature (tests/ld/test_surface.py).
 
 Every test calls the ogld function it is about before it reads the Test Panel through lane
-2d's loader, `tests/testdata.py`. A build is given the Test Panel's paths, `PANEL`, which
+2d's loader, `tests/ld/testdata.py`. A build is given the Test Panel's paths, `PANEL`, which
 need no loader; `check_panel_paths` holds them to the loader's once the call has returned.
 So a failing call surfaces as itself, never as a missing loader or file.
 The Test Store is written from `reference_r(10)` by the walking skeleton's script into

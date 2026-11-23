@@ -9,7 +9,7 @@ them to adjust for, by the PC Check. It imports `opengwasdb.ld.store`, `opengwas
 
 pgenlib, the pgen reader, is imported inside the build's read path only, never at module
 import: `import ogld` and every reader must work on an install without it
-(tests/test_surface.py holds this).
+(tests/ld/test_surface.py holds this).
 """
 
 from __future__ import annotations

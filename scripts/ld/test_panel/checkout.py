@@ -1,6 +1,6 @@
 """Whether a checkout can be cited as the code that ran: the one guard for evidence.
 
-An LD Store records the installed ogld's version (ld-store §7), and `scripts/make_pcs.py`'s reports
+An LD Store records the installed opengwasdb's version (ld-store §7), and `scripts/ld/make_pcs.py`'s reports
 record the commit that made them (build-inputs §8). Either is true only when the code that ran
 is that commit's: the editable install's version names HEAD (CLAUDE.md: it is frozen when it is
 built), and nothing under `opengwasdb/ld/` or `scripts/` differs from HEAD, tracked or not. The realdata
@@ -18,7 +18,7 @@ CODE = ("opengwasdb", "scripts")
 
 
 def names_head(version: str, head: str, tags: list[str]) -> bool:
-    """Whether an installed ogld `version` names the checkout at commit `head` (tagged `tags`).
+    """Whether an installed opengwasdb `version` names the checkout at commit `head` (tagged `tags`).
 
     A development version names its commit, `0.0.1.dev71+g95e5f3e7f` (and `.d<date>` when the
     install was built from a changed tree); a release, `0.2.0`, names the commit tagged

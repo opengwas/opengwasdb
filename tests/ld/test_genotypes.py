@@ -68,7 +68,7 @@ def test_codes_are_identical_in_two_block_sizes_and_one_row_at_a_time(k: int, sc
     """One BLAS thread: the whole matrix in two block sizes, and a row at a time, agree.
 
     Multi-threaded BLAS is held in the realdata tier
-    (`tests/realdata/test_genotype_threads.py`): a small CI runner runs many xdist workers at
+    (`tests/ld/realdata/test_genotype_threads.py`): a small CI runner runs many xdist workers at
     once, and eight or even four OpenBLAS threads in each oversubscribe its CPUs and spin until
     the test times out.
     """

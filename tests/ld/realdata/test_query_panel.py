@@ -11,13 +11,13 @@ CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
 - clump each of the 37 Analyses' hits on it that the store holds, at r² 0.01 — the build's
   Partner Threshold, below which a 0.2.0 store refuses within 3 Mb (#71) — and run
   `plink2 --clump` on the same hits and the same genotypes;
-- where the leads differ, `scripts/realdata/clump_rule.py` finds every pair the store and plink2
+- where the leads differ, `scripts/ld/realdata/clump_rule.py` finds every pair the store and plink2
   judge on opposite sides of r2 (plink2's unphased r² against the store's r̂²), requires each to
   lie within the encoding's band, |r̂² − r2| ≤ 2|r̂|·e + e², and replays the greedy: on the
   store's joins it must give our leads, and with exactly those pairs flipped, plink2's.
 
 The input `OGLD_403_ANALYSES` holds one directory per Analysis with `hits.all.tsv` (ALID, z,
-chromosome, position; the 5e-8 tier), which `scripts/realdata/make_403_inputs.py` makes.
+chromosome, position; the 5e-8 tier), which `scripts/ld/realdata/make_403_inputs.py` makes.
 """
 
 from __future__ import annotations

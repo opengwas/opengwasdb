@@ -1,7 +1,7 @@
 """ogld#5's contract: the builder, on the Test Panel, against the independent reference r.
 
 The Test Panel's `reference_r(k)` is a short numpy computation in lane 2d's script, checked
-against plink2's `--r-unphased` at k = 0 by tests/test_testdata.py. The builder must match it
+against plink2's `--r-unphased` at k = 0 by tests/ld/test_testdata.py. The builder must match it
 within the quantisation step: in the Near Band pair by pair, and in which pairs beyond 3 Mb
 it keeps, except where a pair's code lies on the far code floor's rounding edge.
 
@@ -72,7 +72,7 @@ def built(
     k: int, tmp_path_factory: pytest.TempPathFactory
 ) -> tuple[opengwasdb.ld.Provenance, Path]:
     """The Test Panel built at k, once per worker and shared with ogld#5's own tests
-    (tests/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
+    (tests/ld/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
     found = build_fixtures.test_panel_build(k, tmp_path_factory)
     check_panel_paths()
     return found
@@ -102,7 +102,7 @@ def test_the_near_band_at_k10_matches_the_reference(
 def test_the_near_band_at_k0_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    # The reference at k = 0 is held to plink2 --r-unphased by tests/test_testdata.py.
+    # The reference at k = 0 is held to plink2 --r-unphased by tests/ld/test_testdata.py.
     _, out = built(0, tmp_path_factory)
     assert near_band_matches(opengwasdb.ld.open(out), 0) > 1000
 

@@ -33,7 +33,7 @@ made it (a checkout that is not that commit's code is refused, `test_panel.check
 Files hold one row per sample, so they are individual-level and never committed. `--scan-only`
 adds the scan to PC Files that already exist, naming its commit as `pc_check_commit`.
 
-    pixi run -e dev python scripts/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
+    pixi run -e dev python scripts/ld/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
 """
 
 from __future__ import annotations

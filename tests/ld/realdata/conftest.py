@@ -26,7 +26,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def the_installed_ogld_names_this_checkout() -> None:
-    """Every realdata test fails, naming both, when the installed ogld's version does not name
+    """Every realdata test fails, naming both, when the installed opengwasdb's version does not name
     the checkout's HEAD: the stores it builds record software.ogld (ogld#5's review)."""
     mismatch = installed_mismatch()
     if mismatch:

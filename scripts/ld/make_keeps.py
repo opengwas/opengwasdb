@@ -8,14 +8,14 @@ predicts; without the relatives it is 1.07x. Every panel uses gnomAD v3.1.2's ma
 unrelated samples (`relatedness_inference.related` false in its sample metadata), which leaves
 no first- or second-degree pair.
 
-A panel's samples are the ones `scripts/make_pcs.py` made its PC File for, the members present
+A panel's samples are the ones `scripts/ld/make_pcs.py` made its PC File for, the members present
 in v2, read from that PC File by the build's own reader (`opengwasdb.ld.build.inputs.pc_file_iids`,
 so a
 missing or empty one is refused); the keep file is those that are unrelated, in the PC File's
 order, under plink2's `#IID` header. A sample the metadata lacks is refused, naming it. The
 same inputs write the same bytes. Expected counts: EUR 665, AFR 608, EAS 724, SAS 672, AMR 341.
 
-    pixi run -e dev python scripts/make_keeps.py [--panel EUR ...]
+    pixi run -e dev python scripts/ld/make_keeps.py [--panel EUR ...]
 
 Writes `<out>/<panel>.keep` (default `$OGLD_KEEP`, `/data/opengwasdb/work/ogld/keep`). The PC
 Files are not changed: they were computed on unrelated samples with the relatives projected.

@@ -1,7 +1,7 @@
 """The walking skeleton's contract: the thinnest real path, and the Test Store it writes.
 
 pgen → r at k = 0 → the Near Band → write → read → one pair answered. The skeleton's script,
-`scripts/make_test_store.py`, writes the Test Store from the Test Panel's `reference_r(10)`
+`scripts/ld/make_test_store.py`, writes the Test Store from the Test Panel's `reference_r(10)`
 into `tests/data/test-panel/store/`; the ticket runs it, and no test writes there. Its
 `write_test_store(k, out)` also gives ogld#6 a k = 0 store. From then on ogld#4–#6 build
 against real data in the format.

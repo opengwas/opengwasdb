@@ -119,7 +119,7 @@ is what they need.
 - **A smaller inner chunk for the index.** Rejected: 500 rows would still touch about 890
   chunks, each smaller, and a request each over HTTP; and `proxies` would read more chunks per
   row.
-- **Rebuilding the five HGDP+1kGP stores** with `scripts/build_hgdp1kgp.py`, about 3.5 hours of
+- **Rebuilding the five HGDP+1kGP stores** with `scripts/ld/build_hgdp1kgp.py`, about 3.5 hours of
   two 16-thread builds, after deleting them. Not done: their Far Pairs were derived in place
   from each store's own index (below), which writes only new files, so the stores stayed
   readable throughout by the work reading them then (ogld#32, a review of ogld#8). The ticket
@@ -155,7 +155,7 @@ is what they need.
   sparse; at chr11's 45–55 Mb its rows' 68.75 M Far Pairs are 203 MB read against the index
   rows' 709 MB, and the region took 12 s locally where it took 30 s.
 - **The five HGDP+1kGP stores gained their Far Pairs in place** (12–13 November 2026), with
-  `scripts/derive_far_pairs.py`: 628,713,731 in all, 1.46 GB, 0.27% of the 532 GB (EUR 0.32 GB,
+  `scripts/ld/derive_far_pairs.py`: 628,713,731 in all, 1.46 GB, 0.27% of the 532 GB (EUR 0.32 GB,
   AFR 0.49, EAS 0.19, SAS 0.29, AMR 0.16; raw, at 6 bytes a pair, 0.53–1.15 GB, EUR's 0.80 GB
   about 1% of its store). Each store's count equals the `counts.far_pairs` it recorded when built,
   and none of its other files changed. The derivation writes them from each store's own index

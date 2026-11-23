@@ -4,7 +4,7 @@ The engine's rule (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_): ALID i
 `chr:pos:A1:A2`, A1 the alphabetically first allele after upper-casing. These are literals of
 that rule. The engine's code does not trim or left-align, though its glossary says it does
 (ADR 0089). The conformance test against the engine's own answers is
-`tests/test_identity_conformance.py`.
+`tests/ld/test_identity_conformance.py`.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 on each, each records what a reader of its provenance needs, and the direct decoder returns the
 same bytes as zarr on each (ogld#40, ADR 0095).
 
-The stores are the ones `scripts/build_hgdp1kgp.py build` writes under `$OGLD_STORES`; its
+The stores are the ones `scripts/ld/build_hgdp1kgp.py build` writes under `$OGLD_STORES`; its
 constants and paths (`recipe`) say the scale, k, names and roots, and `$OGLD_STORE_<ANC>` names one
 elsewhere. `$OGLD_KEEP` holds the keep files, so n is checked against the unrelated samples, not
 against what the store says of itself. Each store must hold chromosomes 1 to 22.
@@ -28,7 +28,7 @@ from opengwasdb.ld.store.layout import chromosomes_listed
 from opengwasdb.ld.store.location import ChunkCache, open_group
 from opengwasdb.ld.store.validation import validate_at
 
-#: ADR 0088, decision 11: each panel's unrelated samples (`scripts/make_keeps.py`).
+#: ADR 0088, decision 11: each panel's unrelated samples (`scripts/ld/make_keeps.py`).
 PANELS = {"EUR": 665, "AFR": 608, "EAS": 724, "SAS": 672, "AMR": 341}
 K_MIN = 5  # build-inputs §1's default `k_min`
 AUTOSOMES = [str(c) for c in recipe.CHROMS]

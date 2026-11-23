@@ -1,4 +1,4 @@
-"""The `ogld` command: `opengwasdb ld build`, `opengwasdb ld validate`, `opengwasdb ld info`, `opengwasdb ld derive-partners`
+"""The `opengwasdb ld` commands: `opengwasdb ld build`, `opengwasdb ld validate`, `opengwasdb ld info`, `opengwasdb ld derive-partners`
 (layer 3).
 
 A thin shell over the public functions, so a job and a person run exactly what a caller
@@ -276,7 +276,7 @@ def _derive(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run one `ogld` command and return its exit status."""
+    """Run one `opengwasdb ld` command and return its exit status."""
     args = _parser().parse_args(argv)
     run = {
         "build": _build,

@@ -27,7 +27,7 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
 Where things are comes from their owners, never from here: the published EUR store is
 `build_hgdp1kgp.store_path("EUR")` under `$OGLD_STORES`, #403's Analyses are under
 `$OGLD_403_ANALYSES` and the layouts' builds under `$OGLD_LAYOUTS`, each with its default in
-`scripts/test_panel/roots.py`. Each run's first record says which commit's code ran and, through
+`scripts/ld/test_panel/roots.py`. Each run's first record says which commit's code ran and, through
 `test_panel.checkout.problem`, whether the checkout could be cited as that code.
 
 Threads: zarr's pool is `--zarr-threads` (6), BLAS 1; the static host and the proxy run one
@@ -658,7 +658,7 @@ def hosted(root: Path, target: Target) -> Iterator[Host | None]:
 def code_state(installed: str) -> dict[str, Any]:
     """Which commit's code a run ran, and why the checkout cannot be cited as that code ("" when
     it can): `test_panel.checkout.problem`, the one guard `make_pcs.py` and the realdata tier
-    also use. It refuses an installed ogld that does not name HEAD, a changed tracked file under
+    also use. It refuses an installed opengwasdb that does not name HEAD, a changed tracked file under
     `opengwasdb/ld/` or `scripts/`, and an untracked `.py` there."""
     repository = SCRIPTS.parent
     commit = subprocess.run(

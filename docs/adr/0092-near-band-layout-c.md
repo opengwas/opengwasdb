@@ -29,10 +29,10 @@ then took away (§11). §6 left the choice to ogld#8, because B read 2.5–7× f
 reads, which could matter to a client limited by bandwidth rather than by requests.
 
 ogld#8 built HGDP+1kGP EUR chr22 three times by `opengwasdb ld build` (× 511, k = 10, the published
-store's inputs; `scripts/bench/build_layouts.py`), once in each layout. The three decode to the
+store's inputs; `scripts/ld/bench/build_layouts.py`), once in each layout. The three decode to the
 same arrays, and C's shards are byte-identical to the published store's chr22. It timed each read
 that differs, locally and over HTTP from a static host on loopback with 0, 10 and 50 ms added to
-every request (`scripts/bench/latency.py`), with ogld's reader and with a prototype that fetches a
+every request (`scripts/ld/bench/latency.py`), with ogld's reader and with a prototype that fetches a
 read's runs of chunks together.
 
 ## Decision

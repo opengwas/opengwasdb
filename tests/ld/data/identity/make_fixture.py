@@ -1,4 +1,4 @@
-"""Regenerate the conformance fixture from the engine's own identity functions (ADR 0089).
+"""Regenerate the conformance fixture from the engine's own identity functions (ADR 0003).
 
 Run it with the engine's interpreter, never ogld's, so the answers come from the engine:
 
@@ -44,7 +44,7 @@ ORIENT_CASES: list[tuple[str, int | str, str, str]] = [
     ("22", 300, "CAG", "C"),
     ("22", 300, "C", "CAG"),
     ("22", 300, "cag", "c"),
-    # not trimmed or left aligned: the engine keeps these as spelt (ADR 0089)
+    # not trimmed or left aligned: the engine keeps these as spelt (ADR 0003)
     ("22", 400, "CAA", "CA"),
     ("22", 400, "CA", "CAA"),
     ("22", 401, "TCA", "TGA"),

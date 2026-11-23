@@ -1,4 +1,4 @@
-"""Regenerate the ALID index conformance fixture from the engine's own writer (ADR 0096).
+"""Regenerate the ALID index conformance fixture from the engine's own writer (ADR 0010).
 
 Run it with the engine's interpreter, never ogld's, so the answers come from the engine:
 

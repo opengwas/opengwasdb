@@ -3,7 +3,7 @@
 Expected proxies come from the Test Panel's reference r, quantised and judged on r̂² as the
 spec says. Expected clumps are plink2's leads at k = 0 (lane 2d's `clump_leads`), made with
 `--clump-unphased` and the settings `clump_params()` gives (p1 = p2 = 5e-8, 3,000 kb), against a
-k = 0 store the walking skeleton's `scripts/make_test_store.py` writes from `reference_r(0)`.
+k = 0 store the walking skeleton's `scripts/ld/make_test_store.py` writes from `reference_r(0)`.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from support import alids, panel_data, passing_rows, reference
 import opengwasdb.ld
 from opengwasdb.ld.format import RefusalReason
 
-#: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md) are
+#: plink2's unphased leads at r² 0.001 on the Test Panel (tests/ld/data/test-panel/README.md) are
 #: held there, but a 0.2.0 store refuses r² 0.001 within 3 Mb: its t_partner is 0.01, so the
 #: comparison that used them is answered at r² 0.01 only (ld-store §9; the refusal is tested below).
 
@@ -206,7 +206,7 @@ def test_the_pairs_the_store_s_step_moves_across_r2_are_listed_and_within_it(r2:
 def test_proxies_are_plink2_s_r_outside_the_band_of_the_store_s_step(
     r2: float, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    # k = 0's reference r is plink2's --r-unphased (tests/test_testdata.py). The proxies within
+    # k = 0's reference r is plink2's --r-unphased (tests/ld/test_testdata.py). The proxies within
     # 3 Mb of the comparison's candidates, judged on plink2's r², differ from the store's only by
     # pairs within 2|r| × half a step of r2.
     opengwasdb.ld.open(support.TEST_STORE)

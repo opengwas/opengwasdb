@@ -13,12 +13,12 @@ clump on this store is a Refusal, not an answer to compare. The comparison is ma
 threshold the store supports; a panel whose t_partner were 0.001 — UK Biobank EUR's — could
 compare at 0.001, and none of the HGDP+1kGP stores can.
 
-Two inputs, named by environment variables that `tests/acceptance/run.sh` passes on:
+Two inputs, named by environment variables that `tests/ld/acceptance/run.sh` passes on:
 
 - `OGLD_EUR_K0_STORE`: the k = 0 EUR LD Store.
 - `OGLD_403_ANALYSES`: one directory per Analysis, each holding `hits.tsv` (a header, then
   ALID and z per row: the 5e-8 tier) and `leads_r2_0.01.txt` (plink2's index variants, one ALID
-  per line, from the same genotypes at k = 0). `scripts/realdata/make_403_inputs.py` makes them,
+  per line, from the same genotypes at k = 0). `scripts/ld/realdata/make_403_inputs.py` makes them,
   and `prepare` then `clump` write the pins that name the store they were made from.
 
 Every lead that differs is listed in `explained_differences.json` with the pairs that explain it

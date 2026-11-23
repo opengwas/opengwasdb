@@ -1,7 +1,7 @@
 """The PC Check: the owner's local-PC rule (7 November 2026; ADR 0088, decision 5).
 
 `docs/spec/build-inputs.md` §8 is the authority, and this is its one implementation: the
-builder runs it on every PC File, and `scripts/make_pcs.py` and the Test Panel's script import
+builder runs it on every PC File, and `scripts/ld/make_pcs.py` and the Test Panel's script import
 it (ogld#5 adopted lane 2d's reference, `scripts/test_panel/pc_check.py`, rather than keep two).
 
 A PC is **local**, and dropped from the covariates, when all three hold: one 4 Mb window
@@ -94,7 +94,7 @@ class Checked:
         return len(self.covariates)
 
     def report(self) -> dict[str, object]:
-        """The record and the choice as one JSON object, as `scripts/make_pcs.py` reports it
+        """The record and the choice as one JSON object, as `scripts/ld/make_pcs.py` reports it
         and the Test Panel's manifest holds it (`pc_check`)."""
         r = self.record
         return {

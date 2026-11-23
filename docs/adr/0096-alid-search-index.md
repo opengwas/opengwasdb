@@ -43,7 +43,7 @@ ALIDs whose UTF-8 form is at most 32 bytes, which is the engine's rule and its w
 which pads with NUL and keeps ties in row order. A wider ALID is left out and counted in
 `counts.alids_left_out`, never cast into the slot. `tests/data/alid_index/` holds the engine's
 own answers for five Variant Sets, made by `make_fixture.py` from the engine's
-`write_variant_axis` and the two sidecars it writes, and `tests/test_alid_index.py` holds the
+`write_variant_axis` and the two sidecars it writes, and `tests/ld/test_alid_index.py` holds the
 index to them: an ALID at the slot's width, one a byte wider that agrees with it over all 32, two
 indels at one position, and a repeated ALID for the stable sort.
 
@@ -87,7 +87,7 @@ supplies or orders one and a store written before the index gets the same one (A
 - An ALID the index does not hold — absent, too wide, or one a broken build left out — takes the
   exact scan at its own position, which is what found it before. So a miss, an unsorted index and
   an index with an entry dropped all answer as before; only a hit can be faster.
-- Every answer is therefore byte-identical, and `tests/test_alid_index.py` holds that against an
+- Every answer is therefore byte-identical, and `tests/ld/test_alid_index.py` holds that against an
   index rebuilt out of order, whose misses the scan answers; a truncated index is `alid_index.keys`'
   breaker, because it is a store validation refuses rather than one a reader second-guesses.
 
@@ -123,7 +123,7 @@ the phase table, the chunk-size measurements and the list-length crossover.
 
 ## The stores
 
-The five HGDP+1kGP stores are derived in place by `scripts/derive_alid_index.py`, which writes
+The five HGDP+1kGP stores are derived in place by `scripts/ld/derive_alid_index.py`, which writes
 `variants/alid_index-partial/` from each store's own ALID column, renames it into place, and only
 then records the count in the provenance — a new document renamed over the old one. So a run that
 fails leaves a store that validation refuses and a second run repairs, and a store already derived

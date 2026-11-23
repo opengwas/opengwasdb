@@ -251,7 +251,7 @@ class REncoding:
         already-split groups' boundary: `near_bp` for the Near Band's codes, every one of which
         is within `near_bp`, and `far_bp` for the Far Pairs, every one of which is beyond
         `near_bp` and within `far_bp`. The answer is the same for every such pair, and
-        `tests/test_pair_masks.py` holds the emitter's bytes to this rule, pair by pair.
+        `tests/ld/test_pair_masks.py` holds the emitter's bytes to this rule, pair by pair.
         """
         gap = np.abs(np.asarray(distance, dtype=np.int64))
         magnitude = np.abs(np.asarray(codes, dtype=np.int32))

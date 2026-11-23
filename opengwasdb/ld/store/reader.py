@@ -413,7 +413,7 @@ class StoreReader(ComponentWorkers):
         Memory: the result, 8 bytes a pair, and one step of at most `_PAIRS_PER_STEP` pairs
         at a time, about 60 bytes each (58 measured), with the Far Pairs rows of that step's
         earlier variants. The broadcast is never copied, so one row against many holds its
-        result and one step. `tests/test_partner_reads.py` holds the bound.
+        result and one step. `tests/ld/test_partner_reads.py` holds the bound.
         """
         # Views of the broadcast, never copies: one row against many is one row, repeated by a
         # stride of 0, and each step reads its own slice of them.

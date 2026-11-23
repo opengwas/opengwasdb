@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Give an LD Store written before ADR 0096 its ALID search index, from its own variant table.
 
-    pixi run -e dev python scripts/derive_alid_index.py STORE [STORE ...]
+    pixi run -e dev python scripts/ld/derive_alid_index.py STORE [STORE ...]
 
 ogld#7 wrote the five HGDP+1kGP stores before the owner's 15 November 2026 decision to carry the
 engine's ALID index beside the variant table (ADR 0096). A store's index is its own `variants/alid`

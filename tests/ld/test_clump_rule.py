@@ -1,4 +1,4 @@
-"""`scripts/realdata/clump_rule.py`: the rule that explains a disagreement with plink2 (ogld#6).
+"""`scripts/ld/realdata/clump_rule.py`: the rule that explains a disagreement with plink2 (ogld#6).
 
 The realdata tier and the acceptance run call it on real stores; these tests give it small
 matrices whose answer is known, and the ones that must fail are watched failing: a pair outside

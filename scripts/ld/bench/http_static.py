@@ -7,8 +7,8 @@ each request, to stand in for a network's round trip. It is loopback with inject
 a real WAN: there is no bandwidth limit, no loss, and no extra round trip to open a connection,
 which a real client pays once per connection (and more for TLS) and then reuses.
 
-    python scripts/bench/http_static.py static ROOT   # prints "ready PORT"
-    python scripts/bench/http_static.py proxy UPSTREAM  # prints "ready PORT"
+    python scripts/ld/bench/http_static.py static ROOT   # prints "ready PORT"
+    python scripts/ld/bench/http_static.py proxy UPSTREAM  # prints "ready PORT"
 
 The static host is aiohttp's `FileResponse`, which honours one byte range, a suffix range
 included, and sends with sendfile. The proxy streams each response through and counts what

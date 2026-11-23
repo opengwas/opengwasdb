@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Final, TextIO
 
 # The read benchmark beside this script: where the stores and Analyses are, its queries, and its
-# tables (scripts/bench/latency.py and report.py).
+# tables (scripts/ld/bench/latency.py and report.py).
 import latency
 import report
 

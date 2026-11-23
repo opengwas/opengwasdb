@@ -96,7 +96,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    t_far = max(0.001, 20.84 / (n − k − 1)) on the v2 sample count (ADR 0087, decision 3).
 4. **PCs are precomputed and supplied in a PC File; ogld runs no PCA.** For all five HGDP+1kGP
    panels they are **our own**, from the same v2 genotypes, by one recipe script,
-   `scripts/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
+   `scripts/ld/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
    relateds projected; SNVs with AF 5–95%; LD-pruned at r² < 0.1 in 500 kb), excluding the
    Long-Range LD Regions of `opengwasdb/ld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
@@ -136,7 +136,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
 7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
    EUR samples, with the EUR PC File and independent reference answers
-   ([`tests/data/test-panel/README.md`](../../tests/data/test-panel/README.md)). The owner approved
+   ([`tests/ld/data/test-panel/README.md`](../../tests/data/test-panel/README.md)). The owner approved
    committing this public slice on 7 November 2026. ADR 0087's decision 5, "Genotypes never leave
    the host they are built on", still holds for every non-public Source Panel, such as UK Biobank.
    It does not hold for HGDP+1kGP, whose genotypes are already public under gnomAD's CC0 terms.
@@ -180,7 +180,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    predicts on all 771 EUR, and 1.07 times on the 665 unrelated. Every HGDP+1kGP panel therefore
    uses gnomAD v3.1.2's maximal set of unrelated samples (`relatedness_inference.related` false),
    which leaves no first- or second-degree pair: EUR 665, AFR 608, EAS 724, SAS 672, AMR 341.
-   `scripts/make_keeps.py` makes the keep files from gnomAD's sample metadata
+   `scripts/ld/make_keeps.py` makes the keep files from gnomAD's sample metadata
    (`build-inputs.md` §10). Unchanged: the PC Files, already computed on the unrelated samples with
    the relatives projected; the Test Panel, which stays at 771 as committed test data whose
    provenance says so; and #5's whole-panel cost evidence, built on 771. UK Biobank (#10) needs

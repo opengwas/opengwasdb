@@ -12,21 +12,21 @@ every r is signed to the **ALT** allele; a builder re-signs it to the engine A1.
 ## Source, terms and the owner's decisions
 
 - **Genotypes:** the phased HGDP+1kGP v2 callset (Koenig et al. 2024, Genome Research), the
-  owner's choice of genotype source (7 November 2026, epic opengwas/ogld#1; ADR 0088):
+  owner's choice of genotype source (7 November 2026, epic opengwas/ogld#1; ADR 0002):
   `gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chr{21,22}.filtered.SNV_INDEL.phased.shapeit5.bcf`,
   downloaded and checked against the bucket's CRC32C. All 771 members of
   `/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep` are in it. It has no missing
   calls, so no imputation is involved: the build input rule is that genotypes are complete.
 - **PCs:** our own 20 PCs, from gnomAD's subcontinental recipe run on v2 with the Long-Range LD
   Regions excluded (`scripts/make_pcs.py`): the PCs the EUR build uses. Declared source:
-  "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0088)".
+  "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)".
 - **Terms:** gnomAD's primary data "are available free of restrictions under the Creative Commons
   Zero Public Domain Dedication", and "All users of gnomAD data agree to not attempt to reidentify
   participants" (gnomAD Terms of Use, https://gnomad.broadinstitute.org/terms, read 7 November
   2026). The paper's Data access says "All data from this study are freely available".
 - **Committing it:** the owner approved committing this public slice on 7 November 2026, choosing
-  a real committed subset over a synthetic generator (ADR 0088). "Genotypes never leave the host"
-  (ADR 0087) is about panels whose genotypes may not be published, such as UK Biobank.
+  a real committed subset over a synthetic generator (ADR 0002). "Genotypes never leave the host"
+  (ADR 0001) is about panels whose genotypes may not be published, such as UK Biobank.
 
 ## Settings
 
@@ -86,7 +86,7 @@ plink2 --vcf <work>/test_panel.vcf.gz --keep $OGLD_REFERENCE/hgdp1kgp-hg38/membe
 
 1061 rows; **1056 pass** (chr21 468, chr22 588). Dropped, by the first filter failed: FILTER 0, MAC 5, zero variance 0. The reference holds 146,593 pairs.
 
-**Not in v2, so built by hand in unit tests** (ADR 0088): a record that fails FILTER (v2's FILTER
+**Not in v2, so built by hand in unit tests** (ADR 0002): a record that fails FILTER (v2's FILTER
 column is empty), a missing call (v2 has none, and a build refuses one), and a site with no
 genotype variance that passes MAC >= 20 (none on chr21 or chr22 in EUR). The builder's unit
 tests (ogld#5) make each one.

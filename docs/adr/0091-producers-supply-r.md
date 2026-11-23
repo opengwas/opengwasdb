@@ -29,8 +29,8 @@ PC Check pass moves to ogld#25.
 ## Context
 
 Every producer implemented what goes in a store, and the writer only checked it.
-- **Three producers each did the store's work.** The builder, `scripts/make_test_store.py` and
-  `tests/test_walking_path.py` each quantised, thresholded at the far code floor, mirrored every
+- **Three producers each did the store's work.** The builder, `scripts/ld/make_test_store.py` and
+  `tests/ld/test_walking_path.py` each quantised, thresholded at the far code floor, mirrored every
   pair into both rows of the Proxy Index, counted the pairs, and computed provenance a store
   derives from itself.
 - **The writer kept whole chromosomes.** It held a chromosome's Near Band, and copied it, before
@@ -122,7 +122,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
   creates the writer with the `far_bp` its lift to GRCh38 leaves whole, its N, and its source's
   count of covariates as k (15 for Pan-UKB). It finishes with `source.kind = "ld_matrix"`.
 - **A store written in any blocks, on any number of threads, holds the same arrays.**
-  `tests/test_assembly.py` holds every array to a brute force over pairs, written in blocks of 1
+  `tests/ld/test_assembly.py` holds every array to a brute force over pairs, written in blocks of 1
   to 100,000 rows on 1 to 4 threads.
 - **The PC Check pass was not bounded when this was decided.** It held a chromosome's genotypes
   before tiling: 6.1 GB on chr6 at k = 10, growing with rows × n, and the 10.4 GB peak

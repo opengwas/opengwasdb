@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Convert, build and validate the five HGDP+1kGP LD Stores (ogld#7; spec build-inputs §3, §10).
 
-    pixi run -e dev python scripts/build_hgdp1kgp.py convert  [--panel AFR ...] [--jobs 8]
-    pixi run -e dev python scripts/build_hgdp1kgp.py build    [--panel AFR ...] [--builds 2]
+    pixi run -e dev python scripts/ld/build_hgdp1kgp.py convert  [--panel AFR ...] [--jobs 8]
+    pixi run -e dev python scripts/ld/build_hgdp1kgp.py build    [--panel AFR ...] [--builds 2]
 
 `convert` turns each panel's 22 phased v2 BCFs into one pgen fileset per chromosome. The command
 is `test_panel.tools.conversion_args`, build-inputs §3's, with the panel's unrelated keep file
@@ -19,7 +19,7 @@ keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) 
 panels at once. It refuses a store that already exists. When a panel fails, panels not yet
 started are cancelled and the one still running finishes; the run then stops with that failure.
 
-Where things live, each overridable and each in `scripts/test_panel/roots.py`: `$OGLD_PHASED_V2`,
+Where things live, each overridable and each in `scripts/ld/test_panel/roots.py`: `$OGLD_PHASED_V2`,
 `$OGLD_PCS`, `$OGLD_KEEP`, `$OGLD_PLINK2`, and the recipe's `$OGLD_PGEN_V2` (the filesets),
 `$OGLD_STORES` and `$OGLD_SCRATCH` (the logs; each timing line carries `uptime`).
 """

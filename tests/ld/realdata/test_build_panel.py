@@ -5,7 +5,7 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
 - The builds read the phased HGDP+1kGP v2 callset, which has no missing calls (owner,
   7 November 2026; ADR 0088). `OGLD_V2_EUR_CHR22` names its chr22 BCF
   (`docs/spec/build-inputs.md` §10), and the suite converts chr22:20–32 Mb once, with §3's flags,
-  for EUR's 665 unrelated samples: `OGLD_EUR_KEEP` names the keep file `scripts/make_keeps.py`
+  for EUR's 665 unrelated samples: `OGLD_EUR_KEEP` names the keep file `scripts/ld/make_keeps.py`
   writes (ADR 0088, decision 11). On 20–23 Mb of it, the k = 0 Near Band matches
   `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants compared
   include every choice build-inputs §6's reversed-indel rule makes there (both records at MAC >=
@@ -14,7 +14,7 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
   k = 0 to k = 10, and each of the provenance's five quantiles of that change is its own
   computation over every such pair, from the two stores' Near Bands. 12 Mb, not 3, because the
   PC Check scans the build's own input and needs windows apart from the best one.
-  `OGLD_EUR_PC_FILE` names EUR's PC File from `scripts/make_pcs.py` (§10).
+  `OGLD_EUR_PC_FILE` names EUR's PC File from `scripts/ld/make_pcs.py` (§10).
 - The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
   11,725 of the 15,272 variants of chr22:20–23 Mb. The builder refuses them.
 

@@ -114,7 +114,7 @@ class PreadSource:
 
     The descriptor is opened by the first read and kept for the reader's life, so a frame is one
     `os.pread` and no zarr call: a local store pays no event-loop hop a frame
-    (`scripts/bench/frame_read.py` measures both paths on one file). Opening it lazily is what keeps
+    (`scripts/ld/bench/frame_read.py` measures both paths on one file). Opening it lazily is what keeps
     a refusal's context: a file that is missing or unopenable refuses the read that needed it,
     naming the chromosome and the frame the caller asked for, as a remote store's empty Range does.
 

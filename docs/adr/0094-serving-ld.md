@@ -23,7 +23,7 @@ record had left open: ogdb-api's live server runs on this IEU node, app-dc3-ogws
 
 ## The questions
 
-1. **The serving route.** (a) ogdb-api runs `ogld` as a library in its job workers, which
+1. **The serving route.** (a) ogdb-api runs `opengwasdb.ld` as a library in its job workers, which
    already run queries as jobs; or (b) a separate service in `opengwas/ogld-api`.
 2. **Static Zarr.** Whether the LD Stores are also served as static Zarr that clients read
    themselves with `opengwasdb.ld.open("https://…")`.
@@ -104,7 +104,7 @@ bandwidth, so they leave out what the bytes cost on a real link (48.6 GB is 6.5 
 
 ### 1. Route (b): LD queries are served by a separate service, `opengwas/ogld-api`
 
-ogld-api runs `ogld` as a library against the LD Stores on local disk and answers LD queries
+ogld-api runs `opengwasdb.ld` as a library against the LD Stores on local disk and answers LD queries
 (`clump`, `matrix`, `region`, `proxies`, and a presence lookup for ieugwasr's `reflookup`). Its
 epic, drafted in ogld#9's report, is filed in `opengwas/ogld-api` as
 [opengwas/ogld-api#1](https://github.com/opengwas/ogld-api/issues/1) and placed in the LD

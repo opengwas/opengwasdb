@@ -6,7 +6,7 @@ the Far Pairs' later rows, the Partner Floor at t_partner 0.01, and every kept p
 variants' rows. The emitter's selection is never called, so a second layout of the same codes is
 held to the codes, not to itself.
 
-The store is the committed one, which the writer wrote (`scripts/make_test_store.py --t-partner
+The store is the committed one, which the writer wrote (`scripts/ld/make_test_store.py --t-partner
 0.01`); nothing here writes into `tests/data/`.
 """
 

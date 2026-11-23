@@ -30,11 +30,11 @@ export OGLD_PLINK2
 V2=/data/opengwasdb/work/ogld/phased_v2
 export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-$V2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf}"
 export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-/data/opengwasdb/work/ogld/pcs/EUR.eigenvec}"
-# EUR's 665 unrelated samples, which scripts/make_keeps.py writes (ADR 0088, decision 11).
+# EUR's 665 unrelated samples, which scripts/ld/make_keeps.py writes (ADR 0088, decision 11).
 export OGLD_EUR_KEEP="${OGLD_EUR_KEEP:-/data/opengwasdb/work/ogld/keep/EUR.keep}"
-# #403's 37 Analyses' hits, which scripts/realdata/make_403_inputs.py makes (tests/realdata/
+# #403's 37 Analyses' hits, which scripts/ld/realdata/make_403_inputs.py makes (tests/realdata/
 # test_query_panel.py says the layout). A test whose input is unset, or names nothing, stops as an
-# expected failure naming it (tests/realdata/realdata_inputs.py): a missing input is not a defect
+# expected failure naming it (tests/ld/realdata/realdata_inputs.py): a missing input is not a defect
 # of ogld. `-rfEx` prints every such reason.
 export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-/data/opengwasdb/work/ogld/realdata/403-analyses}"
 

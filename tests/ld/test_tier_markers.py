@@ -1,7 +1,7 @@
 """A test marked `realdata` or `acceptance` outside its directory is refused (CONTRIBUTING.md).
 
 Both marks are deselected by the default tier, and the directories' conftests add them by
-location, so a test that carries one anywhere else runs in no tier. `tests/tier_markers.py`
+location, so a test that carries one anywhere else runs in no tier. `tests/ld/tier_markers.py`
 finds such a test and `tests/conftest.py` makes it a collection error."""
 
 from __future__ import annotations

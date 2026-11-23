@@ -134,8 +134,8 @@ EUR store (#65, zarr-python 3.4.2): `zarr.open_group`, `opengwasdb.ld.open` and 
 rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is not recognized as a
 component of a Zarr hierarchy.` The single-chunk form below removes that warning. The committed
 Test Store is that check since #67: `partners/` is a node of its hierarchy, `members()` lists it
-with no warning (`tests/test_partner_rows.py`), and the reader and the ten rules resolve each
-chunk file from the array's own metadata (`tests/test_partner_row_reads.py`).
+with no warning (`tests/ld/test_partner_rows.py`), and the reader and the ten rules resolve each
+chunk file from the array's own metadata (`tests/ld/test_partner_row_reads.py`).
 
 Both arrays have **one chunk each**, of the whole array, and no shard index. The `frames` array's
 codec chain is `bytes` alone, with **no compressor**, because the bytes it holds are already zstd
@@ -202,7 +202,7 @@ not failed for it (ld-store §7, §12).
   `os.pread(fd, length, offset)` on a descriptor the reader opens once for the chromosome and keeps
   until it is closed, which costs no store call and no event loop: 10.8 µs a 25,600-byte read on a
   512 MiB file, against 1,257 µs through the store's own path on the same file and page cache
-  (`scripts/bench/frame_read.py`). An HTTP store's frames are one Range request through the store's
+  (`scripts/ld/bench/frame_read.py`). An HTTP store's frames are one Range request through the store's
   interface, which is one event-loop hop and one round trip.
 - **Corruption is loud.** A missing or short `frames` chunk file, a frame whose checksum fails,
   or a payload of the wrong length is refused, naming the chromosome and the frame. It is never
@@ -232,7 +232,7 @@ before #72 removed it (`ld-store.md` §6, "How a store is written"):
    not a chromosome sort. On the Test Store written in blocks of 16 rows, the emitter's peak carry
    is 5,235 pairs — 52,350 bytes at 10 bytes a pair — and 5,277 pairs in blocks of one row, against
    0 written whole, as the committed store is (`pixi run -e dev python
-   scripts/bench/partner_carry.py`).
+   scripts/ld/bench/partner_carry.py`).
 
 Its two producers:
 
@@ -502,7 +502,7 @@ without the < 1 s target.
 
 These rules replaced the six `index.*` rules and `far.index` in `ld-store.md` §12, which #68 added
 beside them and #72 removed, leaving the ten below. Each reads frames in bounded blocks, never a whole chromosome. Each
-has a breaker in `tests/contract/test_store.py`.
+has a breaker in `tests/ld/contract/test_store.py`.
 
 | rule | checks |
 |---|---|

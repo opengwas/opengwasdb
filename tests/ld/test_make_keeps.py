@@ -1,4 +1,4 @@
-"""`scripts/make_keeps.py`: each HGDP+1kGP panel's keep file is its unrelated samples (owner,
+"""`scripts/ld/make_keeps.py`: each HGDP+1kGP panel's keep file is its unrelated samples (owner,
 10 November 2026; ADR 0088, decision 11), on literal rows of gnomAD v3.1.2's sample metadata.
 """
 

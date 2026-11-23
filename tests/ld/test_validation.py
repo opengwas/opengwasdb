@@ -1,7 +1,7 @@
 """The validation rules beyond the contract (ld-store §12; ogld#4): read in small windows, on write,
 on stores that are not LD Stores, and through the CLI.
 
-The contract (tests/contract/test_store.py) breaks each rule once at the default window, which
+The contract (tests/ld/contract/test_store.py) breaks each rule once at the default window, which
 reads the Test Store's arrays in one piece. Here the windows are small, so a rule's state must
 carry across them, and each breaker must still fail its rule.
 """

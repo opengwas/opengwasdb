@@ -39,7 +39,7 @@ from opengwasdb.ld.format import InputError
 from opengwasdb.ld.store import frames, location
 from opengwasdb.ld.store.reader import StoreReader
 
-#: The Test Store's distances (ld-store §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
+#: The Test Store's distances (ld-store §7). Its scale and Partner Floor are `tests/ld/store_copies.py`'s,
 #: the one independent owner of its encoding (ownership.md, "Test oracles"), so the reconstruction
 #: below still depends on nothing in `frames.py`.
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000

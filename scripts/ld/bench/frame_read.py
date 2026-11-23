@@ -6,7 +6,7 @@ this disk, and `RangeSource` through the array's own store path, which over HTTP
 request. The difference is the whole of a local read's cost, so this measures both on the same
 file, warmed:
 
-    pixi run -e dev python scripts/bench/frame_read.py [--bytes 64M] [--reads 4000] [--uptime]
+    pixi run -e dev python scripts/ld/bench/frame_read.py [--bytes 64M] [--reads 4000] [--uptime]
 
 It builds a temporary one-chunk `uint8` array whose chunk file is `--bytes` long and whose frames
 are `--frame-bytes` each (25,600 by default: 20 KiB compressed is EUR chr22's median frame), then

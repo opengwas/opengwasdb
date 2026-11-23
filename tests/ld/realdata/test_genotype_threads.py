@@ -5,7 +5,7 @@ criterion
 names one and eight (four is the widest the default tier ever held). Any count above one inside
 each of many parallel workers oversubscribes a small CI runner's CPUs and spins until the test
 times out, so the tier that runs on the IEU compute nodes holds them instead
-(`pixi run -e dev test-realdata`, which `tests/realdata/run.sh` names); the default tier holds the
+(`pixi run -e dev test-realdata`, which `tests/ld/realdata/run.sh` names); the default tier holds the
 one-thread check, its block sizes and single rows.
 
 Nothing here reads the panels: the fixture is the committed Test Panel, and the assertion is the

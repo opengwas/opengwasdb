@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ogld#32's reads against ogld#8's: requests and seconds per read, before and after.
 
-    pixi run -e dev python scripts/bench/deltas.py \
+    pixi run -e dev python scripts/ld/bench/deltas.py \
         --before docs/benchmarks/results/step1-*.jsonl.gz \
         --after docs/benchmarks/results/32/step1-*.jsonl.gz \
         --levers docs/benchmarks/results/32/lever-*.jsonl.gz > docs/benchmarks/fast-reader-tables.md

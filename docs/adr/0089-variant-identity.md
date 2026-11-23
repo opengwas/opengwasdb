@@ -26,10 +26,10 @@ the engine.
   label.
 - A copy can drift, and drift is silent: it flips the sign of r for some variants. The fixture
   prevents it. `orient.tsv`, `chromosomes.tsv` and `reversed.tsv` were written by
-  `tests/data/identity/make_fixture.py` running the engine's functions from the engine's pixi
+  `tests/ld/data/identity/make_fixture.py` running the engine's functions from the engine's pixi
   environment. The script refuses an engine checkout that is dirty, or that is not the one
   `opengwasdb` was imported from, and each file names the engine commit on its first line.
-  `tests/test_identity_conformance.py` needs no engine at test time.
+  `tests/ld/test_identity_conformance.py` needs no engine at test time.
 - Refusals are held to the engine's message and `reason`, and the fixture has rows with two
   faults, so the engine's order is tested: the chromosome, then **ALT before REF** (the engine's
   effect allele is the ALT), then the position, then identical alleles. Moving any check fails a

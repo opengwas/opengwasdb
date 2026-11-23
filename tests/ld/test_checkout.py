@@ -1,4 +1,4 @@
-"""`scripts/test_panel/checkout.py`: the one guard the realdata tier and `scripts/make_pcs.py` use
+"""`scripts/ld/test_panel/checkout.py`: the one guard the realdata tier and `scripts/ld/make_pcs.py` use
 before they record what ran (review round 2 of ogld#5). On a throwaway git repository."""
 
 from __future__ import annotations
