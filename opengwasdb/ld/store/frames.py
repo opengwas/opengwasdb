@@ -219,7 +219,7 @@ def _checked(first: int, lengths: npt.NDArray[np.uint32], partners: npt.NDArray[
     ):
         at = np.flatnonzero(found)
         if at.size:
-            raise ValueError(f"row {int(row[at[0]])} holds {what} (ld-store §3, §5.2)")
+            raise ValueError(f"row {int(row[at[0]])} holds {what} (ld-store §3, partner-rows §5.2)")
 
 
 def _deltas(
@@ -332,7 +332,8 @@ def _counted(payload: bytes, where: str, rows: int) -> tuple[int, npt.NDArray[np
         raise ValueError(f"{where} holds {k} rows, not the {rows} it is due (partner-rows §5.2)")
     if len(payload) < 4 + 4 * k:
         raise ValueError(
-            f"{where} holds {len(payload)} bytes: too few for k = {k} rows' lengths (partner-rows §5.2)"
+            f"{where} holds {len(payload)} bytes: too few for k = {k} rows' lengths "
+            "(partner-rows §5.2)"
         )
     lengths = np.frombuffer(payload, _LITTLE_ROW, k, 4).astype(np.int64)
     entries = int(lengths.sum())
@@ -845,7 +846,8 @@ def open_partner_frames(root: zarr.Group, chrom: str, cache: FrameCache) -> Part
 
 def _beside(root: zarr.Group, container: Path | None) -> Path:
     """The directory a chromosome's group is built in and published into: `container`, or the
-    store's own `partners/` group, which this makes a node of its hierarchy (ld-store §1, §5.1).
+    store's own `partners/` group, which this makes a node of its hierarchy (ld-store §1,
+    partner-rows §5.1).
 
     A derivation supplies a plain directory and makes it a node only once every chromosome is in
     place, so a run killed part-way leaves the store it was (opengwas/ogld#69)."""

@@ -27,7 +27,7 @@ The design baseline lives in:
 
 - [CONTEXT.md](./CONTEXT.md) — domain glossary; the authority on vocabulary
 - [docs/spec/store-format.md](./docs/spec/store-format.md) — the store contract
-- [docs/spec/ld-store.md](./docs/spec/ld-store.md) — the LD Store contract (`opengwasdb ld`)
+- [docs/spec/ld-store.md](./docs/spec/ld-store.md) — the LD Store contract
 - [docs/adr/](./docs/adr/) — decisions and their consequences
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how work moves through the repository
 
@@ -52,7 +52,7 @@ pixi run -e dev lint        # ruff check .
 pixi run -e dev typecheck   # mypy opengwasdb
 ```
 
-For a script or REPL, use `pixi run -e dev python`.
+For a script or REPL, use `pixi run -e dev python` rather than invoking a bare interpreter.
 
 `pip install -e ".[dev]"` also works, without `bcftools`. The version comes
 from the `v*` tags; clone with them.

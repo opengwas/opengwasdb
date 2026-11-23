@@ -239,7 +239,7 @@ _Avoid_: error string, pass — a finding carries the rule that found it, and a 
 
 ## LD Stores
 
-An LD Store holds linkage disequilibrium (LD) per ancestry, in a form that can be published without the genotypes it came from and read in pieces. Clumping, proxy lookup and LD matrices read only that. The language separates what is stored, what a reader is told about a pair, and when a request is refused. It reuses the variant vocabulary above: **Variant Identity** (ALID, A1) and **Reference Assembly** mean exactly what they mean there. The code that builds and reads LD Stores is `opengwasdb.ld`, and its decisions are ADRs 0087–0101 (formerly ogld's own numbering).
+An LD Store holds linkage disequilibrium (LD) per ancestry, in a form that can be published without the genotypes it came from and read in pieces. Clumping, proxy lookup and LD matrices read only that. The language separates what is stored, what a reader is told about a pair, and when a request is refused. It reuses the variant vocabulary above: **Variant Identity** (ALID, A1) and **Reference Assembly** mean exactly what they mean there. The code that builds and reads LD Stores is `opengwasdb.ld`, and its decisions are ADRs 0087–0101 (formerly ogld's own numbering). _ogld_ is the name `opengwasdb.ld` had before the merge (epic #453); older prose, ADRs and benchmark records use it, and `opengwas/ogld#N` is an issue in that repository.
 
 ### The store
 
@@ -248,17 +248,11 @@ The published LD of one **Source Panel** on one **Reference Assembly**, after **
 _Avoid_: LD panel, LD Reference Panel — the engine's **LD Reference Panel** is the resource reference completion reads to impute, which an LD Store is not; LD matrix, which is one read of an LD Store.
 
 **Genotype Store**:
-A public Source Panel's existing pgen filesets plus a local sidecar holding its Variant Set,
-PC-adjustment data and provenance. LD is computed on the host with the same Pair Answers and
-Refusals as an LD Store; publishing the genotypes is a separate decision (owner, #18,
-20–21 November 2026; ADR 0100).
+A public Source Panel's existing pgen filesets plus a local sidecar holding its Variant Set, PC-adjustment data and provenance. LD is computed on the host with the same Pair Answers and Refusals as an LD Store; publishing the genotypes is a separate decision (owner, opengwas/ogld#18, 20–21 November 2026; ADR 0100).
 _Avoid_: genotype cache — decoded calls are not retained.
 
 **Source Panel**:
-The individual-level genotypes an LD Store is built from, such as HGDP+1kGP EUR (n = 665, its unrelated samples; ADR 0088, decision 11) or Pan-UKB's UK Biobank EUR (n = 420,542, imported after adjustment for 15
-named covariates; ADR 0101): one ancestry's samples and their sample count n. Restricted genotypes never leave their host; only their LD Store is published. Public panels
-may also answer through a local **Genotype Store**, without a publishing decision. The public
-**Test Panel** slice is committed with the owner's approval (ADR 0087, clarification; ADR 0088, decision 7).
+The individual-level genotypes an LD Store is built from, such as HGDP+1kGP EUR (n = 665, its unrelated samples; ADR 0088, decision 11) or Pan-UKB's UK Biobank EUR (n = 420,542, imported after adjustment for 15 named covariates; ADR 0101): one ancestry's samples and their sample count n. Restricted genotypes never leave their host; only their LD Store is published. Public panels may also answer through a local **Genotype Store**, without a publishing decision. The public **Test Panel** slice is committed with the owner's approval (ADR 0087, clarification; ADR 0088, decision 7).
 _Avoid_: reference panel, LD panel (both collide with the engine's **LD Reference Panel**); cohort, which names a study.
 
 **Variant Set**:
@@ -274,11 +268,11 @@ Every pair of Variant Set variants on one chromosome at most 3 Mb apart, each wi
 _Avoid_: window — a window is what a request asks for; LD block — blocks partition a chromosome, and the band does not.
 
 **Far Pairs**:
-The pairs on one chromosome more than 3 Mb and at most 10 Mb apart whose r² reaches the **Far Threshold**, each with its r, once each in its earlier variant's row, so a matrix reads them (ADR 0093). They were the **Proxy Index**'s entries beyond 3 Mb, and a matrix read them without the index; the index is gone (#72), and they stand as they were. Any other pair 3–10 Mb apart has the **Bound**, not a 0.
+The pairs on one chromosome more than 3 Mb and at most 10 Mb apart whose r² reaches the **Far Threshold**, each with its r, once each in its earlier variant's row, so a matrix reads them (ADR 0093). They were the **Proxy Index**'s entries beyond 3 Mb, and a matrix read them without the index; the index is gone (opengwas/ogld#72), and they stand as they were. Any other pair 3–10 Mb apart has the **Bound**, not a 0.
 _Avoid_: long-range LD — that names the **Long-Range LD Regions**; sparse LD, which hides the rule that decides membership.
 
 **Proxy Index**:
-Retired (#72; ADR 0097). Per variant, every partner within the LD Store's far distance (10 Mb), on either side, whose r² reaches the **Far Threshold**, kept in both variants' rows so a variant's proxies were one read. It held every **Far Pair** and the Near Band's pairs at r² ≥ t_far again (owner, 7 November 2026; ld-store §11), and a 0.1.0 reader answered `proxies` and `clump` from it; from 0.2.0 they read the **Partner Rows**. A build writes no index, but an older store may still hold one, which nothing reads but the migration that derives a missing Far Pairs from it (`derive_far_pairs`, ld-store §11). The term stays for reading a 0.1.0 store and for the record.
+Retired (opengwas/ogld#72; ADR 0097). Per variant, every partner within the LD Store's far distance (10 Mb), on either side, whose r² reaches the **Far Threshold**, kept in both variants' rows so a variant's proxies were one read. It held every **Far Pair** and the Near Band's pairs at r² ≥ t_far again (owner, 7 November 2026; ld-store §11), and a 0.1.0 reader answered `proxies` and `clump` from it; from 0.2.0 they read the **Partner Rows**. A build writes no index, but an older store may still hold one, which nothing reads but the migration that derives a missing Far Pairs from it (`derive_far_pairs`, ld-store §11). The term stays for reading a 0.1.0 store and for the record.
 _Avoid_: far index, LD index; sparse band, which suggests no threshold.
 
 **Frame**:
@@ -290,11 +284,11 @@ The r² a pair within 3 Mb must reach to be in a store's **Partner Rows** (below
 _Avoid_: clumping threshold, r² threshold, r² floor, all of which name a request's r2; t_far, which rules the 3–10 Mb pairs.
 
 **Partner Floor** (`partner_code_floor`):
-The code a store's **Partner Threshold** cuts at, by `ld-store.md` §3's floor rule. From format 0.2.0 each store records it, and every Near Band code within 3 Mb at or above it is an entry in its **Partner Rows** (below).
+The code a store's **Partner Threshold** cuts at, by ld-store §3's floor rule. From format 0.2.0 each store records it, and every Near Band code within 3 Mb at or above it is an entry in its **Partner Rows** (below).
 _Avoid_: far code floor, which is the same rule at t_far; cutoff, floor, unqualified.
 
 **Partner Rows**:
-Per variant, every partner within 10 Mb on either side whose r² reaches the **Partner Threshold** within 3 Mb and t_far beyond it, with its code, in both variants' rows so one variant's partners are one **Frame** read. They hold every entry the retired **Proxy Index** held, since the Partner Threshold is never above t_far; from format 0.2.0 `clump` and `proxies` read them and nothing else, and they replaced the index (#72; ADR 0097; `docs/spec/partner-rows.md`).
+Per variant, every partner within 10 Mb on either side whose r² reaches the **Partner Threshold** within 3 Mb and t_far beyond it, with its code, in both variants' rows so one variant's partners are one **Frame** read. They hold every entry the retired **Proxy Index** held, since the Partner Threshold is never above t_far; from format 0.2.0 `clump` and `proxies` read them and nothing else, and they replaced the index (opengwas/ogld#72; ADR 0097; `docs/spec/partner-rows.md`).
 _Avoid_: sparse band, row index, clump index; "Proxy Index" for the new component, which holds more than the index does.
 
 **Far Threshold** (t_far):
@@ -326,10 +320,7 @@ An LD Store's record of what PC Adjustment did to chance LD: on one seeded set o
 _Avoid_: QC metric, unqualified.
 
 **Published LD Source**:
-A published pre-computed matrix and its indexed variant TSV from which an LD Store
-is imported. Pan-UKB EUR's Hail BlockMatrix holds residual covariance; import
-normalises its diagonal to correlation, lifts GRCh37 to GRCh38, checks alleles and
-orients to engine A1. Provenance pins the inputs and counts losses (ADR 0101).
+A published pre-computed matrix and its indexed variant TSV from which an LD Store is imported. Pan-UKB EUR's Hail BlockMatrix holds residual covariance; import normalises its diagonal to correlation, lifts GRCh37 to GRCh38, checks alleles and orients to engine A1. Provenance pins the inputs and counts losses (ADR 0101).
 _Avoid_: genotype panel — the import never reads individual-level data.
 
 **Source Kind**:

@@ -2033,8 +2033,8 @@ def _partners_files(store: _Store) -> _Problems:
         yield (
             layout.PARTNERS,
             "is not a group of the store's hierarchy: a 0.2.0 store's Partner Rows are a node of "
-            "it, listed by `members()` with both arrays of every chromosome (ld-store §1, §5.1; "
-            "partner-rows §5.1)",
+            "it, listed by `members()` with both arrays of every chromosome "
+            "(ld-store §1, partner-rows §5.1; partner-rows §5.1)",
         )
     for chrom, start, stop in store.chromosomes():
         yield from _partner_files(store, chrom, stop - start)
@@ -2122,7 +2122,8 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
         yield (
             where,
             (
-                f"holds bytes past the {expected:,} its metadata and hash name (partner-rows §5.1, §5.3)"
+                f"holds bytes past the {expected:,} its metadata and hash name "
+                "(partner-rows §5.1, §5.3)"
             ),
         )
 
@@ -2333,7 +2334,7 @@ class _PartnerRows(_PartnerRule):
             yield (
                 self.where,
                 f"records {frames.entries:,} entries, but its frames hold {self.seen:,} "
-                "(ld-store §5.3, §10)",
+                "(partner-rows §5.3, ld-store §10)",
             )
 
 

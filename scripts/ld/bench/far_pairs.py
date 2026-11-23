@@ -54,11 +54,11 @@ def refuse_on_this_checkout(store: Path) -> None:
     reader that could, and that is the only place they can be made again.
     """
     raise SystemExit(
-        f"scripts/ld/bench/far_pairs.py reads a Proxy Index, which this checkout's reader no longer "
-        f"opens (opengwas/ogld#72): {store} may still hold index/, but no code here reads it. "
-        f"Its recorded results, docs/benchmarks/ld/results/far_pairs.json, are made again from a "
-        f"checkout of {INDEX_READER}, with PYTHONPATH naming it, as docs/benchmarks/ld/far-pairs.md "
-        f"ran them"
+        f"scripts/ld/bench/far_pairs.py reads a Proxy Index, which this checkout's reader "
+        f"no longer opens (opengwas/ogld#72): {store} may still hold index/, but no code "
+        f"here reads it. Its recorded results, docs/benchmarks/ld/results/far_pairs.json, "
+        f"are made again from a checkout of {INDEX_READER}, with PYTHONPATH naming it, "
+        f"as docs/benchmarks/ld/far-pairs.md ran them"
     )
 
 

@@ -80,7 +80,7 @@ queries, not become the only place the data can be used" (`docs/opengwas-roadmap
 (Horizon 4). It has no ADR on serving over HTTP or on where Stores are hosted: the engine's ADR 0018 puts
 remote querying and store discovery in "a separate catalogue or deployment layer", and its Stores
 live under `/data/opengwasdb/stores/OGS-*` on the same node, listed by opengwasdb-stores' Analysis
-Catalog (the engine's ADR 0039), which records no path.
+Catalog (opengwasdb-stores ADR 0039), which records no path.
 
 **What the reads cost**, on the published EUR store, from local disk and over HTTP with a wait
 added to every request. "Now" is the reader with ogld#31's Far Pairs and ogld#32's changes, timed

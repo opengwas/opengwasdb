@@ -5,5 +5,5 @@
   `CONTEXT.md` gains an *LD Stores* section. `Variant Identity` now says what the
   code does (no left alignment; indels reference-first in GWAS Stores, sorted in LD
   Stores until #462), `ALID Search Index` is a defined term, and
-  `CONTRIBUTING.md` documents the LD test tiers. Prose that named the `ogld`
+  `CONTRIBUTING.md` documents the LD test tiers. Error messages that cited `spec §N` now cite `ld-store §N` or `partner-rows §N`, and ones that cited a bare ogld issue `#N` cite `opengwas/ogld#N`. Prose that named the `ogld`
   package, CLI or extras names `opengwasdb.ld`, `opengwasdb ld` and `opengwasdb[ld-build]`.
