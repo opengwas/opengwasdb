@@ -339,7 +339,8 @@ def _parent(args: argparse.Namespace) -> None:
     from benchmarks.benchmark_store_comparison import result_digests
     from opengwasdb.query import query_store
 
-    selection = json.loads(Path(args.selection).read_text())
+    args.selection = Path(args.selection).resolve()  # children run from the scratch directory
+    selection = json.loads(args.selection.read_text())
     runs = []
     for spec in args.run:
         name, _, rest = spec.partition("=")
