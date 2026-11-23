@@ -58,7 +58,6 @@ from opengwasdb.store_reader.alid_index import UNINDEXED, open_alid_index
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.variants.axis import VariantAxis
 
 __all__ = [
     "FAILING_COUNTERS",
@@ -382,7 +381,7 @@ _STATE_NAMES = {
 
 def _refuse_if_incoherent(path: Path, planes: _Planes, role: str) -> None:
     """A Store whose planes and variant axis disagree cannot be mapped row for row."""
-    with closing(VariantAxis(path)) as axis:
+    with closing(open_store(path).variant_axis(aliases=False)) as axis:
         n_axis = axis.n_variants
     if n_axis != planes.n_rows:
         raise ObservedViewRefused(
@@ -487,7 +486,7 @@ class _AxisRows:
         if self._scanned is None:
             self._scanned = {}
             if self.unindexed.size:
-                with closing(VariantAxis(self._path)) as axis:
+                with closing(open_store(self._path).variant_axis(aliases=False)) as axis:
                     records = axis.by_indices(self.unindexed.tolist())
                 self._scanned = {row: record.alid for row, record in records.items()}
         return self._scanned

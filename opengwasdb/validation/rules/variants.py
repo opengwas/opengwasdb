@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
 from opengwasdb.store_reader.alid_index import FixedWidthAlidIndex
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar, sidecar_problems
@@ -28,12 +29,10 @@ from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
     variant_alid_bytes_path,
-    variant_table_path,
 )
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED, current_builders_wrote, severity_owed
-from opengwasdb.variants.legacy_table import iter_variant_records
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.
@@ -86,7 +85,7 @@ def _blocks(target: Target) -> Iterator[TableBlock]:
     previous: VariantRecord | None = None
     start = 0
     records: list[VariantRecord] = []
-    for record in iter_variant_records(variant_table_path(target.store.path)):
+    for record in target.variant_axis.records():
         records.append(record)
         if start + len(records) >= limit[1]:
             yield TableBlock(start, records, previous)
@@ -489,16 +488,15 @@ def variant_aliases(target: Target) -> Iterator[str]:
     against `index.sqlite`; a release whose index has no alias table has nothing
     for it to check, which is not the same as passing it.
     """
-    with target.store.index_connection() as connection:
-        tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master")}
-        if "variant_aliases" not in tables:
+    with ReleaseIndex(target.store.path) as index:
+        if "variant_aliases" not in index.names(tables_only=False):
             raise Skip("index.sqlite has no variant_aliases table")
-        rows = connection.execute("SELECT alias, variant_index FROM variant_aliases").fetchall()
+        rows = index.variant_aliases()
     n_variants = target.variant_axis.n_variants
-    for row in rows:
-        variant_index = int(row["variant_index"])
+    for alias, stored_index in rows:
+        variant_index = int(stored_index)
         if variant_index < 0 or variant_index >= n_variants:
-            yield f"alias {row['alias']!r} points to missing variant {variant_index}"
+            yield f"alias {alias!r} points to missing variant {variant_index}"
 
 
 RULES: tuple[Rule, ...] = (

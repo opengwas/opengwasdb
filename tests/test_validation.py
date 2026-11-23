@@ -447,10 +447,10 @@ def _as_written_before_0_2_3(store: Path) -> None:
 def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
     """An SE above float16's range is `+inf` beside a finite Z: a warning, not an error.
 
-    `beta = z * se` reads as infinity although the source value was finite (issue
-    #338), and nothing else in a Store says so. The cell is present under spec §15,
-    so the release stays valid and the warning names the count and the Analysis
-    (issue #337).
+    The source's finite SE is lost and a query reads `beta` and `pval` there as NaN
+    (issue #338, ADR 0104), and nothing else in a Store says so. The cell is present
+    under spec §15, so the release stays valid and the warning names the count and the
+    Analysis (issue #337).
 
     Mutation that makes this fail: count nothing in `associations.se_infinite`'s
     measure, or stop judging its total.

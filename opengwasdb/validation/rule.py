@@ -23,12 +23,13 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 from opengwasdb.admission.rules import Reason
-from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.variants.axis import VariantAxis
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.stored import sequence_arrays
+from opengwasdb.store_reader.variant_axis import VariantAxis
 
 #: What one scan yields: a block of the data it reads.
 B = TypeVar("B")
@@ -165,31 +166,27 @@ class Target:
     def group(self) -> Any:
         """The Zarr group this target's arrays are in, opened on first use.
 
-        A grid's is its release's `data.zarr`; a sequence's, `data.zarr/ragged`.
+        A grid's is its release's `data.zarr`; a sequence's, its Association
+        Sequence group (`data.zarr/ragged`). The Store Reader opens either
+        (`opengwasdb.store_reader.stored`): the rules that judge the storage
+        itself read the stored arrays, and read them only through it (#473).
         """
         if self._group is None:
-            path = self.group_path
-            assert path is not None
-            self._group = open_group(path)
+            self._group = self._open_group()
         return self._group
 
     def reopen(self) -> Any:
         """Open `group` again, in this process, and read through the new handle from now
         on: a forked worker's own (issue #315). A group handed in cannot be reopened."""
-        path = self.group_path
-        if path is None:
+        if self._given_group:
             raise RuntimeError(f"target {self.label!r} holds a group no other process can open")
-        self._group = open_group(path)
+        self._group = self._open_group()
         return self._group
 
-    @property
-    def group_path(self) -> Path | None:
-        """Where `group` is opened from, so a forked worker can open its own handle;
-        None for a group handed in, which only this process holds."""
-        if self._given_group:
-            return None
-        path = self.store.data_path
-        return path / "ragged" if self.kind is Kind.CSR else path
+    def _open_group(self) -> Any:
+        if self.kind is Kind.CSR:
+            return sequence_arrays(self.store.path)
+        return release_arrays(self.store.path)
 
     def remember(self, key: str, read: Callable[[], T], *, until: str | None = None) -> T:
         """`read()`, once per target: what two rules read about it is read once.
@@ -224,8 +221,8 @@ class Target:
 
     @cached_property
     def variant_axis(self) -> VariantAxis:
-        """The release's Store Variant Table, opened on first use and closed by `close`."""
-        return VariantAxis(self.store.path)
+        """The release's Variant Axis, opened on first use and closed by `close`."""
+        return self.store.variant_axis(aliases=False)
 
     def close(self) -> None:
         """Release what this target opened for its rules."""

@@ -40,7 +40,6 @@ records the seed, the sample and the counts, so a pass is a measured zero; a ref
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from contextlib import closing
@@ -62,13 +61,13 @@ from opengwasdb.completion.regions import (
     inside,
     region_blocks,
 )
+from opengwasdb.index.release_index import QUALITY_BLOCKS, ReleaseIndex, UnreadableIndex
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
-from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.associations import Cells, CsrReader, Inspection, State, Tally
-from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState
+from opengwasdb.store_reader.stored import sequence_arrays
 from opengwasdb.validation.observed_view import (
     SE_OUT_OF_RANGE_FAILING,
     ObservedViewRefused,
@@ -86,7 +85,6 @@ from opengwasdb.validation.observed_view import (
     leaves_out,
     se_out_of_range_accounting,
 )
-from opengwasdb.variants.axis import VariantAxis
 
 __all__ = ["FAILING_COUNTERS", "STRATA", "check_ragged"]
 
@@ -200,8 +198,8 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
     if "imputed" not in _open_group(target_path, "target"):
         raise ObservedViewRefused(f"target store {target_path} has no `imputed` mask to check")
     rows = []
-    for path in (source_path, target_path):
-        with closing(VariantAxis(path)) as axis:
+    for path, store in ((source_path, source), (target_path, target)):
+        with closing(store.variant_axis(aliases=False)) as axis:
             rows.append(axis.n_variants)
         if rows[-1] == 0:
             raise ObservedViewRefused(f"store {path} has no variants to check")
@@ -214,7 +212,7 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
 def _open_group(path: Path, role: str) -> Any:
     """The Store's Ragged array group; whatever stops it opening is a refusal."""
     try:
-        return store_arrays.open_group(path / RAGGED_ZARR_PATH)
+        return sequence_arrays(path)
     except Exception as exc:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
@@ -386,15 +384,15 @@ class _RegionRows:
 def _quality_blocks(target: OpenGWASDBStore) -> dict[int, set[str]]:
     """The blocks `completion_quality` records, per Analysis."""
     blocks: dict[int, set[str]] = {}
-    with closing(target.index_connection()) as db:
+    with ReleaseIndex(target.path) as index:
         try:
-            rows = db.execute("SELECT analysis_index, block_id FROM completion_quality")
-            for analysis_index, block_id in rows:
-                blocks.setdefault(int(analysis_index), set()).add(str(block_id))
-        except sqlite3.OperationalError as exc:
+            rows = index.completion_quality(QUALITY_BLOCKS)
+        except UnreadableIndex as exc:
             raise ObservedViewRefused(
                 f"target store has no completion_quality table: {exc}"
             ) from exc
+    for analysis_index, block_id in rows:
+        blocks.setdefault(int(analysis_index), set()).add(str(block_id))
     return blocks
 
 
@@ -413,8 +411,7 @@ def _admitted(pair: _Pair, panel: _Panel) -> np.ndarray:
 
 
 def _flat_offsets(path: Path) -> np.ndarray:
-    group = store_arrays.open_group(path / RAGGED_ZARR_PATH)
-    return np.asarray(group["offsets"][:], dtype=np.int64)
+    return np.asarray(sequence_arrays(path)["offsets"][:], dtype=np.int64)
 
 
 @dataclass(frozen=True)

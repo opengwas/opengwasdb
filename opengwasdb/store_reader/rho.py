@@ -9,6 +9,15 @@ import numpy as np
 import zarr
 
 
+def packed_rho(group: zarr.Group) -> tuple[np.ndarray, np.ndarray]:
+    """The stored packed lower triangle: each pair's rho (float32) and its null
+    support, `n_null` (int64), in pair order, as stored (#473)."""
+    return (
+        np.asarray(group["rho"][:], dtype=np.float32),
+        np.asarray(group["n_null"][:], dtype=np.int64),
+    )
+
+
 class DenseRhoReader:
     """Unpack a stored packed strict-lower-triangle Rho Matrix into symmetric
     form. The packed arrays are tiny at any supported scale (PRD "Storage" /
@@ -18,8 +27,7 @@ class DenseRhoReader:
     def __init__(self, group: zarr.Group, n_analyses: int):
         self.group = group
         self.n_analyses = n_analyses
-        self._packed_rho = np.asarray(group["rho"][:], dtype=np.float32)
-        self._packed_n_null = np.asarray(group["n_null"][:], dtype=np.int64)
+        self._packed_rho, self._packed_n_null = packed_rho(group)
         self._full_rho: np.ndarray | None = None
         self._full_n_null: np.ndarray | None = None
 

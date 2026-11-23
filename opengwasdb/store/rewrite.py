@@ -47,7 +47,7 @@ from opengwasdb.store.convert import (
     refuse_destination,
     require_valid_staged_release,
 )
-from opengwasdb.store.open import OpenGWASDBStore
+from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store.query_digests import differences, release_digests
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
 from opengwasdb.store_reader.analyses import read_analyses
@@ -62,10 +62,8 @@ from opengwasdb.store_reader.format import (
 from opengwasdb.store_reader.variant_axis import (
     variant_alid_bytes_path,
     variant_alid_rows_path,
-    variant_offsets_path,
     variant_table_path,
 )
-from opengwasdb.variants.legacy_table import iter_variant_records
 
 #: The one `format_version` this rewrite reads: every other is refused (module docstring).
 SOURCE_FORMAT_VERSION = LAST_0_2_FORMAT_VERSION
@@ -157,21 +155,24 @@ def _require_every_alid_resolves(directory: Path, alids: list[str]) -> None:
 
 
 def _alids_in_row_order(directory: Path) -> Iterator[str]:
-    import numpy as np
+    """Every row's ALID, read through the Store Reader's Variant Axis, in row order."""
+    from contextlib import closing
 
-    n_rows = len(np.load(variant_offsets_path(directory), mmap_mode="r"))
-    row = -1
-    for row, record in enumerate(iter_variant_records(variant_table_path(directory))):
-        if record.variant_index != row:
-            raise RewriteError(
-                f"{variant_table_path(directory)}: row {row} has variant_index "
-                f"{record.variant_index}; a table out of order is not rewritten"
-            )
-        yield record.alid
+    table = variant_table_path(directory)
+    with closing(open_store(directory).variant_axis(aliases=False)) as axis:
+        n_rows = axis.n_variants
+        row = -1
+        for row, record in enumerate(axis.records()):
+            if record.variant_index != row:
+                raise RewriteError(
+                    f"{table}: row {row} has variant_index {record.variant_index}; a table "
+                    "out of order is not rewritten"
+                )
+            yield record.alid
     if row + 1 != n_rows:
         raise RewriteError(
-            f"{variant_table_path(directory)} has {row + 1} rows but variant_offsets.npy "
-            f"has {n_rows}; a table that disagrees with its offsets is not rewritten"
+            f"{table} has {row + 1} rows but variant_offsets.npy has {n_rows}; a table that "
+            "disagrees with its offsets is not rewritten"
         )
 
 

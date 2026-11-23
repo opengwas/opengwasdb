@@ -4,7 +4,7 @@ A Top-Hit Index is a `top_hits/` group of one tier per significance threshold
 (`p_5e_08`, ...). A tier holds the associations whose two-sided p clears that
 threshold, as parallel arrays ordered by ``(analysis_index, variant_index)`` with
 an ``analysis_offsets`` array addressing one Analysis's slice (spec, "Top-Hit
-Index"). Writing, counting and checking a tier are `opengwasdb.top_hits`'s; the
+Index"). Writing and checking a tier are `opengwasdb.top_hits`'s; the
 |z| a threshold cuts at is `opengwasdb.store_reader.stats.z_critical`.
 """
 
@@ -52,6 +52,55 @@ def has_index(root: Any) -> bool:
 def index_group(root: Any) -> Any:
     """The Top-Hit Index group of a Store's data group, one tier per key."""
     return root[TOP_HIT_GROUP]
+
+
+def analysis_hit_counts(root: Any, threshold: float, n_analyses: int) -> list[int]:
+    """How many associations the `threshold` tier holds for each Analysis, in
+    ``analysis_index`` order.
+
+    Read from the tier's ``analysis_offsets``. An index that predates that array
+    (ukb-b, and other stores built before issue #22) is counted from its
+    ``analysis_index`` array instead, over `n_analyses` Analyses. A store with no
+    Top-Hit Index, or no tier for `threshold`, is a KeyError, not a zero count.
+    """
+    group = index_group(root)[threshold_key(threshold)]
+    if "analysis_offsets" in group:
+        offsets = np.asarray(group["analysis_offsets"], dtype=np.int64)
+        counts: list[int] = (offsets[1:] - offsets[:-1]).tolist()
+        return counts
+    analysis_index = np.asarray(group["analysis_index"], dtype=np.int64)
+    counted: list[int] = np.bincount(analysis_index, minlength=n_analyses)[:n_analyses].tolist()
+    return counted
+
+
+def tier_arrays(group: Any) -> dict[str, Any]:
+    """One tier's index arrays, in their compact contract dtypes.
+
+    ``Array[:]`` already returns an ndarray. ``np.asarray`` therefore avoids
+    ``astype``'s unconditional full-size copy on a valid tier while retaining
+    the coercion that lets the validation logic diagnose malformed contents.
+    Keeping the uint32 coordinates compact is material: OGS-00010's nominal
+    tier alone has 45.7 million hits (issue #254). The tier must not be missing
+    any of `opengwasdb.top_hits.TOP_HIT_TIER_ARRAYS` (see its `missing_arrays`).
+
+    What the validator's Top-Hit rules read: they check the tier's structure and
+    cross-check its values against the planes, so they want every array as stored,
+    in these dtypes, rather than `TopHitTier.read`'s rows (#473).
+    """
+    return {
+        "rows": np.asarray(group["variant_index"][:], dtype=np.uint32),
+        "cols": np.asarray(group["analysis_index"][:], dtype=np.uint32),
+        "z_values": np.asarray(group["z"][:], dtype=np.float32),
+        "se_values": np.asarray(group["se"][:], dtype=np.float32),
+        "abs_z": np.asarray(group["abs_z"][:], dtype=np.float32),
+        "offsets": np.asarray(group["analysis_offsets"][:], dtype=np.uint64),
+        "imputed_values": (
+            np.asarray(group["imputed"][:], dtype=np.uint8) if "imputed" in group else None
+        ),
+        "eaf_values": (
+            np.asarray(group["eaf"][:], dtype=np.float32) if "eaf" in group else None
+        ),
+    }
 
 
 class TierRows(NamedTuple):

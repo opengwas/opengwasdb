@@ -64,6 +64,7 @@ from opengwasdb.store_reader.encoding.codec import (
     Z_OVERFLOW_VALUE,
 )
 from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.stored import sequence_arrays
 
 log = logging.getLogger(__name__)
 
@@ -580,8 +581,7 @@ def recorded_provenance(store_path: str | Path) -> dict[str, Any] | None:
     """
     if not has_variant_index(store_path):
         return None
-    root = store_arrays.open_group(Path(store_path) / RAGGED_ZARR_PATH)
-    offsets = root[BY_VARIANT_GROUP]["offsets"]
+    offsets = sequence_arrays(store_path)[BY_VARIANT_GROUP]["offsets"]
     return {
         "group": BY_VARIANT_GROUP,
         "n_axis": array_length(offsets) - 1,
@@ -605,9 +605,9 @@ def component_n_axis(store_path: str | Path) -> int:
     a Hybrid Overflow indexes the **shared** axis, not an off-axis rank
     (ADR 0060).
     """
-    from opengwasdb.variants.axis import VariantAxis
+    from opengwasdb.store.open import open_store
 
-    axis = VariantAxis(store_path)
+    axis = open_store(store_path).variant_axis(aliases=False)
     try:
         return int(axis.n_variants)
     finally:

@@ -177,9 +177,13 @@ def check_writable_zarr_layout(version: str, *, source: str = "release") -> int:
 log = logging.getLogger(__name__)
 
 
-def _connect_index(path: Path) -> sqlite3.Connection:
+def connect_index(path: Path) -> sqlite3.Connection:
     """An `index.sqlite` connection with named columns; `sqlite3` is imported here, on use,
-    so opening a Store Release does not load it (#465)."""
+    so opening a Store Release does not load it (#465).
+
+    Read-write, for the writers (`index_connection`), so it creates an index that
+    is not there. Every read of a release's index opens it read-only instead,
+    through `opengwasdb.variants.legacy_table.open_index_read_only` (#473)."""
     import sqlite3
 
     conn = sqlite3.connect(str(path))
@@ -529,7 +533,7 @@ class OpenGWASDBStore(StoreRelease):
 
     def index_connection(self) -> sqlite3.Connection:
         """Open a connection to this release's ``index.sqlite``."""
-        return _connect_index(self.index_path)
+        return connect_index(self.index_path)
 
     # ---- provenance amendment -------------------------------------------
 
@@ -662,7 +666,7 @@ class StagedRelease(ReleasePaths):
         return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
-        return _connect_index(self.index_path)
+        return connect_index(self.index_path)
 
     def write_manifest(self, manifest: StoreManifest) -> None:
         self.manifest_path.write_text(
