@@ -9,7 +9,9 @@ every variant question a query asks from them.
 
 In format 0.2.x the table itself is a BGZF file with a tabix index, which only
 pysam reads, and a Store built before the rsid index resolves rsids through
-`index.sqlite`'s `variant_aliases` table. Neither belongs in the Store Reader,
+`index.sqlite`'s `variant_aliases` table. A 0.3.0 release has no `variant_aliases`
+(ADR 0102, #471): an rsID its rsID index lacks is a miss there, and the axis never
+asks for the table. Neither belongs in the Store Reader,
 which may import neither pysam nor sqlite3 (#464): the axis asks a
 `LegacyVariantTable` for those reads, and opengwasdb supplies one
 (`opengwasdb.variants.legacy_table.TabixVariantTable`). It opens its files on
@@ -33,6 +35,7 @@ from opengwasdb.store_reader.alid import (
     parse_canonical_alid,
 )
 from opengwasdb.store_reader.alid_index import ABSENT, UNINDEXED, AlidIndex, open_alid_index
+from opengwasdb.store_reader.format import index_holds_provenance_only
 from opengwasdb.store_reader.identity import normalise_chromosome
 
 VARIANT_TABLE_FILENAME = "variants.tsv.gz"
@@ -166,6 +169,9 @@ class VariantAxis:
         # (`open_alid_index`): format 0.3.0's sidecar or the 0.2 series' fixed-width pair.
         # A release missing it is refused here, never read by scanning the table.
         self._alid_index = open_alid_index(self.store_path, format_version)
+        # A 0.2 release may name an rsID only in `index.sqlite`'s `variant_aliases`; a
+        # 0.3.0 release carries no such table, and its rsID index is the whole answer.
+        self._consults_variant_aliases = not index_holds_provenance_only(format_version)
         # mmap'd rsid search index — present on stores built after issue #109.
         # Absent on older stores, where rsid lookups find nothing (as they did
         # before that index existed).
@@ -245,8 +251,8 @@ class VariantAxis:
 
         Canonical ALIDs are resolved with a single vectorised `searchsorted`
         over the mmap'd ALID index; rsids through the equivalent rsid index
-        (issue #109), falling back to the `variant_aliases` SQLite table for
-        stores built before it. Unlike `by_identifier`, an rsid contributes
+        (issue #109), falling back, on a 0.2 release, to the `variant_aliases`
+        SQLite table for stores built before it. Unlike `by_identifier`, an rsid contributes
         *every* row it names, not only the lowest-indexed one. Identifiers that
         don't resolve are dropped, matching `by_identifier()`'s None-on-miss
         semantics.
@@ -285,15 +291,18 @@ class VariantAxis:
         """Every row each rsid names, not just the first: a phewas over rs123 at
         a multi-allelic site wants both stored rows.
 
-        That holds for an rsid the sidecar rsid index holds. On a release without
-        that index (built before issue #109) the `variant_aliases` fallback
-        answers, and it is `LIMIT 1`: one row, the lowest.
+        That holds for an rsid the sidecar rsid index holds. On a 0.2 release
+        without that index (built before issue #109) the `variant_aliases` fallback
+        answers, and it is `LIMIT 1`: one row, the lowest. A 0.3.0 release has no
+        fallback: an rsID its index lacks names no row (ADR 0102).
         """
         indices: list[int] = []
         for identifier in aliases:
             matched = self.indices_by_alias(identifier)
             if len(matched):
                 indices.extend(int(index) for index in matched)
+                continue
+            if not self._consults_variant_aliases:
                 continue
             index = self._legacy.alias_index(identifier)
             if index is not None:

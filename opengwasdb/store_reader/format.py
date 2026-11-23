@@ -146,6 +146,33 @@ def carries_alid_sidecar(version: str) -> bool:
     return parse_format_version(version) >= ALID_SIDECAR_SINCE
 
 
+#: The first `format_version` that ships nothing only the validator read and could
+#: recompute, and nothing nobody read (ADR 0102, #471): 0.3.0, with the sidecar.
+DERIVED_COMPONENTS_DROPPED_SINCE = ALID_SIDECAR_SINCE
+
+
+def index_holds_provenance_only(version: str) -> bool:
+    """Whether a Store of ``version`` keeps `index.sqlite` for `completion_quality` alone.
+
+    From 0.3.0 (ADR 0102, #471) the `metadata` table and `variant_aliases` are gone:
+    `index.sqlite` ships only in a Reference-Completed release, a Hybrid's in its Dense
+    Component, and holds only that provenance. The Store Reader never opens it, and an
+    rsID the rsID index lacks is a miss. Before 0.3.0 every release carries one, and a
+    Dense or Hybrid query consults its `variant_aliases` for such an rsID (#476 retires
+    that).
+    """
+    return parse_format_version(version) >= DERIVED_COMPONENTS_DROPPED_SINCE
+
+
+def tiers_store_p_value(version: str) -> bool:
+    """Whether a Store of ``version``'s Top-Hit tiers store `abs_z` and `p_value`.
+
+    Before 0.3.0 they do; from 0.3.0 they store `z`, from which the validator
+    recomputes both through `opengwasdb.store_reader.stats` (ADR 0102, #471).
+    """
+    return parse_format_version(version) < DERIVED_COMPONENTS_DROPPED_SINCE
+
+
 def zarr_format_for_version(version: str, *, source: str = "release") -> int:
     """The Zarr on-disk format a readable ``format_version`` is stored in.
 
