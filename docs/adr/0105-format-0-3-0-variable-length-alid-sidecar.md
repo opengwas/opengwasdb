@@ -62,8 +62,11 @@ The key is a search aid, never an identity. 24 bytes because ALID length is mean
 18-21 across the pilots and the three releases measured; 0.13-0.5% of their ALIDs reach 24 bytes,
 so nearly every search ends at the key.
 
-`write_variant_axis`, which every build and completion path already calls, is the one writer. The
-Hybrid's nested Dense Component writes its own sidecar through it; #472 makes it share the root's.
+The codec's `write_alid_sidecar` is the sidecar's one writer. A build or a completion reaches it
+through `write_variant_axis`, the axis's one writer, which every build and completion path already
+calls; the rewrite (§3) calls it directly, as it rewrites the ALID index and nothing else of the
+axis. The Hybrid's nested Dense Component writes its own sidecar through `write_variant_axis`; #472
+makes it share the root's.
 
 ### 2. Format 0.3.0, a new series
 
@@ -111,7 +114,14 @@ a 0.3.0 Staged Release from a 0.2.3 one:
    - the top hits at five thresholds, overall and per Analysis;
    - all of these both Observed-Only and with imputed cells;
    - the `variants_table()` and `analyses_table()`, column by column;
-   - the resolved rows of the lookup, the range and the widest top hits.
+   - the resolved rows of the lookup, the range and the widest top hits;
+   - the **ALID probes**: a PheWAS of each of the release's 3 longest ALIDs and of the first ALID at
+     each of 23, 24, 25, 32 and 33 bytes, where an index changes how it searches, and one lookup of
+     them all. Spread variants are short (the longest asked on OGS-00007 is 15 bytes), so without
+     the probes no question reaches the sidecar's full-byte compare.
+
+   The step also searches for every ALID it wrote and refuses unless each names its own row, so
+   a search fault the questions miss still stops the rewrite.
 
    That code moved from `tests/store_reader_digests.py` into production. The golden-digest test
    calls it, so the proof and the test have one owner.
@@ -127,6 +137,23 @@ allele of a sorted indel is not in the release, and a 0.2.2 release may hold SEs
 0.2.3 leaves out. Such a release is rebuilt. This matters for the backfill
 (opengwasdb-stores#498): no hosted release is 0.2.3 today (see Consequences).
 
+**What the rewrite is for (the owner, 23 Nov 2026, in the #450 run; opengwas/opengwasdb-stores#498).**
+Hosted releases are not rewritten. Once every 0.3.0 format change (#467-#472) is in, every Store is
+rebuilt from source at 0.3.0. The rewrite stays a 0.2.3-only tool: the digest-equality proof that
+each format step changes no answer, run on the fixture releases and on small real ones, and the
+frame #468-#472 extend.
+
+**The proof is sized for fixtures and small releases.** Its questions are bounded in Analyses and
+variants, not in rows, and on a large Dense release some cannot run. Measured on OGS-00016 (Dense,
+27.9 M variants, 1,691 Analyses):
+- each `analysis` call takes 57 s and 1 GB, and the set asks 16 per side;
+- `range_phewas` covers chromosome 1 from 48,327 to 50,802,392: 499,400 variants by 1,691
+  Analyses, 844 M cells, each resolved to a row. That is infeasible;
+- `variants_table()` would need about 17 GB, extrapolated from OGS-00025.
+
+No bounded variant of the proof is built: under the owner's decision no large release is
+rewritten.
+
 ### 4. Validation
 
 `variant_table.alid_sidecar` (spec §20.0) judges a 0.3.0 release from the one streamed read of its
@@ -138,8 +165,18 @@ Variant Table. It checks five things:
 - each key is the first 24 bytes of its row's ALID;
 - the keys run in the strict order of the full ALID bytes, so no ALID names two rows.
 
-A missing sidecar file fails `envelope.required`. `check-observed-view` builds its fixed-width
-lookup from the sidecar and reads the longer ALIDs from the table, as it does on a 0.2 release.
+A missing sidecar file fails `envelope.required`.
+
+### 5. One ALID index, two implementations
+
+`opengwasdb.store_reader.alid_index` is the one place that knows there are two ALID indexes. Both
+answer one interface: `search` (each ALID's row, `ABSENT`, or `UNINDEXED` for an ALID the 0.2 slot
+cannot hold), `alids` (each row's ALID, None where the index has none) and `unindexed_rows`.
+`open_alid_index` opens whichever one a release carries, and `alid_index_kind` names the one a
+`format_version` carries, for the envelope and its required entries. The Variant Axis and
+`check-observed-view` ask the interface and fall back to the Variant Table only for `UNINDEXED`
+ALIDs or a release without any index; on 0.3.0 neither reads the table to resolve an ALID. #476
+deletes `FixedWidthAlidIndex` and its entry in `ALID_INDEX_KINDS`.
 
 ## Consequences
 
@@ -149,21 +186,19 @@ lookup from the sidecar and reads the longer ALIDs from the table, as it does on
 - **Size.** The sidecar holds every ALID whole, so it is about 40% larger than the pair it
   replaces. On OGS-00024 (7.07 M rows) the pair is 254 MB and the sidecar 359 MB, of which 57 MB
   is the 8-byte offsets. #469 drops `variant_offsets.npy`, 8 bytes per row.
-- **Nothing hosted is rewritable yet.** Of the 21 hosted releases under `/data/opengwasdb/stores`:
+- **Nothing hosted is rewritten.** Of the 20 hosted releases under `/data/opengwasdb/stores`:
   - 11 are 0.2.0;
   - 5 are 0.2.1;
   - 3 are 0.2.2;
   - 1 is 0.1.0;
   - none is 0.2.3.
 
-  The backfill must rebuild them, or a later decision must let a rewrite carry an earlier
-  release's features. (#467's report puts that question to the owner.)
-- **Cost of the proof.** The question set is bounded in Analyses and variants but not in rows: the
-  0.2 top hits, the range PheWAS and each Analysis's associations are whole answers. A small
-  Ragged release (OGS-00007) is proved in seconds. A Dense release of 28 M variants and 1,691
-  Analyses would decode several planes in full. The backfill may need a narrower set for those
-  releases, as a decision, not an accident.
-- **Tests build 0.2.3 releases** by turning a 0.3.0 build back (`tests/format_0_2_3.py`). The six
+  By the owner's decision (§3), all of them are rebuilt from source at 0.3.0
+  (opengwas/opengwasdb-stores#498).
+- **Cost of the proof.** A small Ragged release is proved in seconds (OGS-00007, 171,006 variants:
+  21 s in all); OGS-00025 (1.18 M variants, 1,038 Analyses) in 2 × 72 s. A large Dense release is
+  out of its reach (§3).
+- **Tests build 0.2.3 releases** by turning a 0.3.0 build back (`tests/format_0_2_3.py`). The nine
   completion pins, turned back so, match their previous pins in every entry but the Dense
   `overview.html`, which lists the files.
 
@@ -173,9 +208,10 @@ lookup from the sidecar and reads the longer ALIDs from the table, as it does on
   87 bytes, and the fixture indel here is 607), and it costs the width on every row.
 - **Hash long ALIDs into the slot.** A hash names no row on its own, so row to ALID would still
   need the table, and a collision is a wrong answer that looks right.
-- **Keys of 16 or 32 bytes.** 16 bytes ties every ALID on a chromosome-10+ position above 10⁷ at
-  the key and pushes many searches to the full-byte compare. 32 bytes costs 8 bytes a row for a
-  fraction of a percent fewer compares.
+- **Keys of 16 or 32 bytes.** A 16-byte key is the whole ALID only for an ALID under 16 bytes; every
+  ALID of 16 bytes or more is confirmed on its full bytes. That is 5.4% of OGS-00007's ALIDs and
+  7.4% of OGS-00025's, against 0.50% and 0.13% at 24 bytes. A 32-byte key costs 8 bytes a row more
+  to send 0.15% and 0.03% to that compare.
 - **Arrow or Parquet.** A dependency the Store Reader does not otherwise need, for two arrays.
 - **Rewrite in place.** ADR 0038 makes a release immutable. A derived release can be proved
   against its source, and an in-place edit cannot.

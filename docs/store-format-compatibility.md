@@ -165,7 +165,10 @@ existing 0.2.3 release reaches 0.3.0 by `ogdb rewrite-release SOURCE DESTINATION
 which derives a new release and proves before publishing that it answers every
 question of a fixed set exactly as its source did (spec §21.4). A release before
 0.2.3 is not rewritten: it lacks 0.2.3's features, which no rewrite can add, so it is
-rebuilt. A 0.2.4 Store is still newer than this package writes in its series, and
+rebuilt. No hosted Store is rewritten either: once #467-#472 are in, every Store is
+rebuilt from source at 0.3.0 (the owner, 23 Nov 2026; opengwas/opengwasdb-stores#498),
+and the rewrite is the proof, on fixture and small releases, that each format step
+changes no answer. A 0.2.4 Store is still newer than this package writes in its series, and
 its stamp is not judged.
 
 ## Keeping this page true
