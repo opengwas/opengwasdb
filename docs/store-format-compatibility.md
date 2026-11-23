@@ -148,6 +148,23 @@ fix is again to upgrade, not to re-stamp. This package's `validate` keeps #337's
 warning for a Store before 0.2.3 holding `+inf` -- OGS-00011 holds 8 such cells
 until opengwasdb-stores#403 -- and fails a 0.2.3 Store holding any SE above 65,504.
 
+**#417 adds the Clumps of the 5e-8 tier without moving `format_version` (ADR 0102 §9,
+spec §21.1).** A release clumped by #418's step carries `top_hits/p_5e_08/clumps/default/`
+in each component with a 5e-8 tier, declares it in `manifest.json` as `"clumps": {"tier":
+"p_5e_08", "configuration": "default"}`, and has two more `analyses.tsv` columns,
+`n_loci_5e8` and `n_unclumped_5e8` (§2, §7a, §18.1). The table above is unchanged: no
+package writes or reads a different version for them. They are derived and rebuildable from the
+release and a named LD Store, and are added in place to the published releases, which are 0.2.0
+to 0.2.3 (#420; spec §21.4 lists this in-place case), so a version move would mis-stamp them: 0.2
+versions are cumulative, so a 0.2.0 release stamped past 0.2.3 would declare reference-first
+indels and an SE count it does not hold. A 0.1.0
+release is converted before it is clumped. A package that predates them reads a clumped release's
+associations and every column it knew as before, and ignores the two columns; its `validate`
+fails the arrays it does not register, which is how it also treats #302's `n` plane. What its completion does with a
+clumped source, whose tier it rewrites, is #418's to measure and record here; this package's
+completion rewrites every tier through `top_hits.write_index`, which replaces the tier group and
+`clumps/` with it, and drops the columns, and the Store Release Build clumps the release again.
+
 ## Keeping this page true
 
 A pull request that moves `format_version`, or changes which formats the
