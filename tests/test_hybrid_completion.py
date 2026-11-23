@@ -189,7 +189,7 @@ def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     from opengwasdb.store_reader.format import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
-    assert StoreManifest.load(src).format_version == "0.2.3"
+    assert StoreManifest.load(src).format_version == "0.3.0"
     edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
     dst = tmp_path / "restamped-dst.opengwasdb"
 

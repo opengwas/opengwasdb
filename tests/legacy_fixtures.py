@@ -171,6 +171,9 @@ def _rewrite_manifest(manifest_path: Path, z_chunk: tuple[int, ...] | None) -> N
             provenance[key] = _downgrade_recording(block, z_chunk)
     data["provenance"] = provenance
     manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    from format_0_2_3 import follow_stamp
+
+    follow_stamp(manifest_path.parent)
 
 
 def _rewrite_index(index_path: Path, z_chunk: tuple[int, ...] | None) -> None:

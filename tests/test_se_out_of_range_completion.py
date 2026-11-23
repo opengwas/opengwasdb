@@ -28,6 +28,7 @@ import test_dense_completion as tdc
 import test_hybrid_completion as thc
 import test_ragged_completion as trc
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from stored_rows import stored_rows
 from test_check_observed_view import HEADER, ROWS
 
@@ -100,6 +101,7 @@ def _stamp_0_2_2(store: Path) -> None:
         manifest_path.write_text(
             json.dumps({**manifest, "format_version": "0.2.2"}), encoding="utf-8"
         )
+        follow_stamp(release)
         table = read_analyses(release / "analyses.tsv")
         fields = tuple(f for f in table.fieldnames if f != N_MISSING_SE_OUT_OF_RANGE)
         rows = tuple({k: v for k, v in row.items() if k in fields} for row in table.rows)
@@ -211,7 +213,7 @@ def test_a_dense_completion_leaves_out_a_source_cell_above_the_bound(dense_pair)
 
     z, se_value, imputed = _dense_cell(completed, *OVER_CELL)
     assert np.isnan(z) and np.isnan(se_value) and imputed == 0
-    assert open_store(completed).manifest.format_version == "0.2.3"
+    assert open_store(completed).manifest.format_version == "0.3.0"
     assert _recorded(completed) == ["1", "0"]
     assert _parts(completed) == {"observed": [1, 0], "imputed": [0, 0]}
     _validates_cleanly(completed)
@@ -298,6 +300,7 @@ def test_a_completion_before_0_2_3_must_leave_nothing_out(tmp_path, dense_pair) 
     edited = shutil.copytree(completed, tmp_path / "edited.opengwasdb")
     manifest = json.loads((edited / "manifest.json").read_text(encoding="utf-8"))
     (edited / "manifest.json").write_text(json.dumps({**manifest, "format_version": "0.2.2"}))
+    follow_stamp(edited)
 
     record = _check(observed, edited)
 

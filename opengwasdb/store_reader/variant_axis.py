@@ -3,7 +3,8 @@
 A Store's variants are its Store Variant Table, one row per Store-local Variant
 Index, and the mmap'd search indexes beside it: `variant_offsets.npy` (each row's
 place in the table, which also fixes how many variants the Store holds), the
-sorted ALID index and the sorted rsid index (#109, #127). `VariantAxis` answers
+ALID index (`opengwasdb.store_reader.alid_index`: format 0.3.0's sidecar or the 0.2
+series' fixed-width pair) and the sorted rsid index (#109, #127). `VariantAxis` answers
 every variant question a query asks from them.
 
 In format 0.2.x the table itself is a BGZF file with a tabix index, which only
@@ -26,13 +27,12 @@ from typing import Any, Protocol
 import numpy as np
 
 from opengwasdb.store_reader.alid import (
-    ALID_DTYPE,
     RSID_DTYPE,
     ParsedAlid,
-    is_indexable_alid,
     is_indexable_rsid,
     parse_canonical_alid,
 )
+from opengwasdb.store_reader.alid_index import ABSENT, UNINDEXED, AlidIndex, open_alid_index
 from opengwasdb.store_reader.identity import normalise_chromosome
 
 VARIANT_TABLE_FILENAME = "variants.tsv.gz"
@@ -153,23 +153,19 @@ def variant_rsid_rows_path(store_path: str | Path) -> Path:
 class VariantAxis:
     """Read a Store's variants: its search indexes here, its Variant Table through `legacy`."""
 
-    def __init__(self, store_path: str | Path, legacy: LegacyVariantTable):
+    def __init__(
+        self, store_path: str | Path, legacy: LegacyVariantTable, *, format_version: str
+    ):
         self.store_path = Path(store_path)
         self.table_path = variant_table_path(self.store_path)
         self.tabix_path = variant_tabix_path(self.store_path)
         self.offsets_path = variant_offsets_path(self.store_path)
         self._offsets = np.load(self.offsets_path, mmap_mode="r")
         self._legacy = legacy
-        # mmap'd ALID search index — present on stores built after issue 029.
-        # Falls back gracefully to tabix-per-call if absent (older stores).
-        _bytes_path = variant_alid_bytes_path(self.store_path)
-        _rows_path = variant_alid_rows_path(self.store_path)
-        if _bytes_path.exists() and _rows_path.exists():
-            self._alid_bytes: np.ndarray | None = np.load(_bytes_path, mmap_mode="r")
-            self._alid_rows: np.ndarray | None = np.load(_rows_path, mmap_mode="r")
-        else:
-            self._alid_bytes = None
-            self._alid_rows = None
+        # The ALID index the release's `format_version` carries, and no other
+        # (`open_alid_index`): format 0.3.0's sidecar or the 0.2 series' fixed-width pair.
+        # A release missing it is refused here, never read by scanning the table.
+        self._alid_index = open_alid_index(self.store_path, format_version)
         # mmap'd rsid search index — present on stores built after issue #109.
         # Absent on older stores, where rsid lookups find nothing (as they did
         # before that index existed).
@@ -181,11 +177,15 @@ class VariantAxis:
         else:
             self._rsid_bytes = None
             self._rsid_rows = None
-        self._alid_inverse: np.ndarray | None = None  # built lazily, see identity_by_indices()
 
     @property
     def n_variants(self) -> int:
         return int(len(self._offsets))
+
+    @property
+    def alid_index(self) -> AlidIndex:
+        """The release's ALID index (`opengwasdb.store_reader.alid_index`)."""
+        return self._alid_index
 
     def close(self) -> None:
         self._legacy.close()
@@ -249,8 +249,12 @@ class VariantAxis:
         stores built before it. Unlike `by_identifier`, an rsid contributes
         *every* row it names, not only the lowest-indexed one. Identifiers that
         don't resolve are dropped, matching `by_identifier()`'s None-on-miss
-        semantics. The returned order is not guaranteed to match the input
-        order.
+        semantics.
+
+        The order: the ALIDs' rows first, in the order the ALIDs were asked, then
+        the rsids' rows, each rsid's rows ascending, in the order the rsids were
+        asked. A Dense `lookup` keeps this order; a Ragged or Hybrid `lookup`
+        returns its associations in row order whatever it was asked.
         """
         parsed_pairs, alias_identifiers = _split_identifiers(identifiers)
         indices = self._indices_of_alids(parsed_pairs)
@@ -258,22 +262,23 @@ class VariantAxis:
         return np.array(indices, dtype="int32")
 
     def _indices_of_alids(self, parsed_pairs: list[tuple[str, ParsedAlid]]) -> list[int]:
-        """The rows the ALIDs name: the mmap'd index first, the exact scan otherwise."""
-        alid_bytes, alid_rows = self._alid_bytes, self._alid_rows
+        """The rows the ALIDs name, in the order asked: the ALID index first, the exact
+        scan for any it cannot be asked about (one too wide for the 0.2 series' slot,
+        #127).
+
+        In the order asked on either index: a 0.2 release's scanned rows once came after
+        its indexed ones, so a Dense lookup naming a long ALID listed its rows in another
+        order than the same lookup of the 0.3.0 release rewritten from it (#467).
+        """
+        rows = self._alid_index.search([query for query, _ in parsed_pairs])
         indices: list[int] = []
-        if alid_bytes is not None and alid_rows is not None:
-            # Over-wide ALIDs are not in the index and must not be cast into a
-            # query against it: the cast truncates, and a truncated query
-            # matches a different variant's key (issue #127). They take the
-            # exact scan, the same split `by_alid` makes for one identifier.
-            indexable, scanned = _by_indexability(parsed_pairs)
-            indices.extend(_indexed_rows(alid_bytes, alid_rows, indexable))
-        else:
-            scanned = [p for _, p in parsed_pairs]
-        for parsed in scanned:
-            record = self._scanned_record(parsed)
-            if record is not None:
-                indices.append(record.variant_index)
+        for (_, parsed), row in zip(parsed_pairs, rows.tolist(), strict=True):
+            if row >= 0:
+                indices.append(int(row))
+            elif row == UNINDEXED:
+                record = self._scanned_record(parsed)
+                if record is not None:
+                    indices.append(record.variant_index)
         return indices
 
     def _indices_of_aliases(self, aliases: list[str]) -> list[int]:
@@ -296,31 +301,10 @@ class VariantAxis:
         return indices
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
-        if not self._alid_is_indexable(parsed):
+        row = int(self._alid_index.search([_canonical(parsed)])[0])
+        if row == UNINDEXED:
             return self._scanned_record(parsed)
-        index = self._indexed_row(parsed)
-        return None if index is None else self.by_index(index)
-
-    def _alid_is_indexable(self, parsed: ParsedAlid) -> bool:
-        """Whether the ALID index can be asked about `parsed`: it exists, and holds ALIDs that wide.
-
-        Only ask the index about ALIDs it could hold. A wider one was never
-        indexed (issue #127), and casting it to the slot width to ask would
-        match a *different* variant's truncated key -- the defect itself.
-        """
-        return self._alid_bytes is not None and is_indexable_alid(_canonical(parsed))
-
-    def _indexed_row(self, parsed: ParsedAlid) -> int | None:
-        """The row the ALID index names, None if it lacks the ALID.
-
-        Only for an ALID `_alid_is_indexable`; the index is asked nothing else.
-        """
-        assert self._alid_bytes is not None and self._alid_rows is not None
-        query = np.array([_canonical(parsed)], dtype=ALID_DTYPE)
-        idx = int(np.searchsorted(self._alid_bytes, query[0]))
-        if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
-            return int(self._alid_rows[idx])
-        return None
+        return None if row == ABSENT else self.by_index(row)
 
     def _scanned_record(self, parsed: ParsedAlid) -> VariantRecord | None:
         """The exact scan of the table at the ALID's position, for one the index lacks."""
@@ -390,85 +374,27 @@ class VariantAxis:
                 records[index] = record
         return records
 
-    def _alids_by_indices(self, positions: np.ndarray, vi: np.ndarray) -> np.ndarray:
-        """Decode the ALIDs of requested rows from the mmap'd index.
-
-        `positions` is each row's slot in the sorted index, or -1 for rows
-        whose long-allele ALID was left out of it (#127); those few are
-        sought from the table by `by_index()`, so the fallback is correct
-        and bounded by how many unindexed rows a query actually returns.
-        """
-        alid_bytes = np.asarray(self._alid_bytes)
-        indexed = positions >= 0
-        if indexed.all():
-            return np.array(
-                [b.decode("utf-8") for b in alid_bytes[positions]], dtype=object
-            )
-        alids: np.ndarray = np.empty(vi.size, dtype=object)
-        alids[indexed] = [b.decode("utf-8") for b in alid_bytes[positions[indexed]]]
-        for slot in np.flatnonzero(~indexed):
-            record = self.by_index(int(vi[slot]))
-            if record is None:
-                raise ValueError(f"no variant row at index {int(vi[slot])}")
-            alids[slot] = record.alid
-        return alids
-
-    def identity_by_indices(self, variant_index: np.ndarray) -> dict[str, np.ndarray] | None:
+    def identity_by_indices(self, variant_index: np.ndarray) -> dict[str, np.ndarray]:
         """chromosome/position/effect_allele/other_allele/alid for `variant_index`,
         resolved without a table scan.
 
         An ALID *is* `chromosome:position:effect_allele:other_allele`
-        (`parse_canonical_alid`), and the mmap'd ALID search index
-        (`_alid_bytes`/`_alid_rows`, already loaded at construction for
-        `by_alid()`) already holds the reverse of what's needed here:
-        `_alid_rows[k]` is the variant_index of the k-th alid in sorted
-        order. Inverting it once (cached on this instance) gives
-        `variant_index -> sorted position` and, from there, alid-by-index
-        via pure numpy fancy indexing. When the index covers every row
-        (issue 029 stores whose ALIDs all fit the fixed width), that is the
-        whole resolution: zero `by_index()`/`by_indices()` seeks or scans.
-
-        It is not the whole resolution when ALIDs exceed the fixed index
-        width (#127): those rows are absent from the index — a *partial*
-        permutation — and are recovered one seek per row via `by_index()`.
-        A production store can carry 100k+ such rows (OGS-00010 carries
-        115,043 long-allele ALIDs); an earlier revision of this method
-        assumed fullness and raised `ValueError: shape mismatch` for any
-        request spanning an unindexed row.
-        `rsid` is the one identity field this can't produce: it isn't part
-        of the alid, so it's the only reason a caller still needs
-        `by_indices()`.
-
-        Returns `None` when the mmap'd ALID index isn't present (stores
-        built before issue 029) -- callers should fall back to
-        `by_indices()` there.
+        (`parse_canonical_alid`), so the ALID index's row -> ALID answers all five.
+        On 0.3.0 the sidecar names every row by two reads. On a 0.2 release the
+        fixed-width index inverts its permutation once and leaves out each ALID
+        wider than its slot (#127: OGS-00010 carries 115,043); those rows are
+        sought one at a time with `by_index()`, bounded by how many a query
+        returns. `rsid` is the one identity field this can't produce: it isn't
+        part of the ALID, so it's the only reason a caller still needs `by_indices()`.
         """
-        if self._alid_bytes is None or self._alid_rows is None:
-            return None
         vi = np.asarray(variant_index, dtype="int64")
-        if vi.size == 0:
-            empty = np.empty(0, dtype=object)
-            return {
-                "chromosome": empty,
-                "position": np.empty(0, dtype="int64"),
-                "effect_allele": empty,
-                "other_allele": empty,
-                "alid": empty,
-            }
-        if self._alid_inverse is None:
-            rows = np.asarray(self._alid_rows, dtype="int64")
-            inverse = np.full(self.n_variants, -1, dtype="int64")
-            inverse[rows] = np.arange(rows.size, dtype="int64")
-            self._alid_inverse = inverse
-        alids = self._alids_by_indices(self._alid_inverse[vi], vi)
-        parts = np.array([a.split(":") for a in alids], dtype=object)
-        return {
-            "chromosome": parts[:, 0],
-            "position": parts[:, 1].astype("int64"),
-            "effect_allele": parts[:, 2],
-            "other_allele": parts[:, 3],
-            "alid": alids,
-        }
+        alids = self._alid_index.alids(vi)
+        for slot in [k for k, alid in enumerate(alids) if alid is None]:
+            record = self.by_index(int(vi[slot]))
+            if record is None:
+                raise ValueError(f"no variant row at index {int(vi[slot])}")
+            alids[slot] = record.alid
+        return _identity_of(alids)
 
     def all(self) -> list[VariantRecord]:
         return list(self.records())
@@ -542,6 +468,27 @@ def parse_variant_line(line: str) -> VariantRecord:
     )
 
 
+def _identity_of(alids: np.ndarray) -> dict[str, np.ndarray]:
+    """The four identity fields an ALID spells, and the ALID itself, per row."""
+    if not alids.size:
+        empty = np.empty(0, dtype=object)
+        return {
+            "chromosome": empty,
+            "position": np.empty(0, dtype="int64"),
+            "effect_allele": empty,
+            "other_allele": empty,
+            "alid": empty,
+        }
+    parts = np.array([a.split(":") for a in alids], dtype=object)
+    return {
+        "chromosome": parts[:, 0],
+        "position": parts[:, 1].astype("int64"),
+        "effect_allele": parts[:, 2],
+        "other_allele": parts[:, 3],
+        "alid": alids,
+    }
+
+
 def _canonical(parsed: ParsedAlid) -> str:
     """The ALID as the table and the indexes spell it."""
     return f"{parsed.chromosome}:{parsed.position}:{parsed.effect_allele}:{parsed.other_allele}"
@@ -565,24 +512,3 @@ def _split_identifiers(
             )
             parsed_pairs.append((query, parsed))
     return parsed_pairs, alias_identifiers
-
-
-def _indexed_rows(alid_bytes: np.ndarray, alid_rows: np.ndarray, queries: list[str]) -> list[int]:
-    """The rows of the queries the sorted ALID index holds, by one vectorised search."""
-    if not queries:
-        return []
-    keys = np.array(queries, dtype=ALID_DTYPE)
-    positions = np.searchsorted(alid_bytes, keys)
-    in_bounds = positions < len(alid_bytes)
-    hit = np.zeros(len(keys), dtype=bool)
-    hit[in_bounds] = alid_bytes[positions[in_bounds]] == keys[in_bounds]
-    return [int(row) for row in alid_rows[positions[hit]]]
-
-
-def _by_indexability(
-    parsed_pairs: list[tuple[str, ParsedAlid]],
-) -> tuple[list[str], list[ParsedAlid]]:
-    """The ALIDs the fixed-width index can hold, and the rest, which take the exact scan."""
-    indexable = [query for query, _ in parsed_pairs if is_indexable_alid(query)]
-    scanned = [parsed for query, parsed in parsed_pairs if not is_indexable_alid(query)]
-    return indexable, scanned

@@ -220,6 +220,10 @@ _FILE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "variant_offsets.npy": ("internal", "Variant axis row-offset index."),
     "variant_alid_bytes.npy": ("internal", "Variant axis identifier index."),
     "variant_alid_rows.npy": ("internal", "Variant axis identifier index."),
+    "variant_alid_utf8.npy": ("internal", "Every variant's ALID, in row order (ALID sidecar)."),
+    "variant_alid_offsets.npy": ("internal", "Where each row's ALID starts (ALID sidecar)."),
+    "variant_alid_keys.npy": ("internal", "Sorted ALID search keys (ALID sidecar)."),
+    "variant_alid_order.npy": ("internal", "The row of each sorted ALID key (ALID sidecar)."),
     "data.zarr": (
         "internal",
         "Association statistics (Z/SE) and top-hit indexes, chunked and compressed. "

@@ -6,6 +6,7 @@ import pytest
 from opengwasdb.index import connect, get_metadata
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.validation import validate_store
@@ -45,8 +46,10 @@ def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
     assert (dense_store_path / "variants.tsv.gz").exists()
     assert (dense_store_path / "variants.tsv.gz.tbi").exists()
     assert (dense_store_path / "variant_offsets.npy").exists()
-    assert (dense_store_path / "variant_alid_bytes.npy").exists()
-    assert (dense_store_path / "variant_alid_rows.npy").exists()
+    for name in ALID_SIDECAR_FILENAMES:  # format 0.3.0's ALID index (ADR 0105)
+        assert (dense_store_path / name).exists(), name
+    assert not (dense_store_path / "variant_alid_bytes.npy").exists()
+    assert not (dense_store_path / "variant_alid_rows.npy").exists()
 
     result = validate_store(dense_store_path)
     assert result.ok, result.errors

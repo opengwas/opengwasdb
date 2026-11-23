@@ -9,6 +9,7 @@ opengwasdb-stores) that constructs an axis from a Store path.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
@@ -19,16 +20,14 @@ import pysam
 
 from opengwasdb.store_reader import variant_axis as reader_axis
 from opengwasdb.store_reader.alid import (
-    ALID_DTYPE,
-    ALID_WIDTH,
     RSID_DTYPE,
     RSID_WIDTH,
-    is_indexable_alid,
     is_indexable_rsid,
 )
 
 # Re-exported: opengwasdb-stores imports it from here.
 from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
+from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
 from opengwasdb.store_reader.identity import normalise_chromosome
 
 # Re-exported: opengwasdb-stores imports these three from here.
@@ -119,7 +118,11 @@ def write_variant_axis(
     rsid_by_alid: Mapping[str, str],
     source_alids: Sequence[str | None] | None = None,
 ) -> None:
-    """Write the Store Variant Table, row-offset sidecar, and tabix index.
+    """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
+    row offsets, the ALID sidecar (`opengwasdb.store_reader.alid_sidecar`) and the rsid
+    index: the axis's one writer, which every build and completion path calls. The ALID
+    sidecar's own one writer is the codec's `write_alid_sidecar`, which this calls and
+    the rewrite to 0.3.0 calls directly.
 
     ``source_alids`` (optional, parallel to ``variants``) records the source-
     assembly canonical ALID that each row was lifted from — provenance back to
@@ -157,22 +160,11 @@ def write_variant_axis(
         zerobased=False,
         force=True,
     )
-    # Write mmap'd ALID search index: two parallel arrays sorted by ALID bytes.
-    # Over-wide ALIDs are left out rather than truncated in -- see `ALID_WIDTH`.
-    indexable = [(v.alid, i) for i, v in enumerate(variants) if is_indexable_alid(v.alid)]
-    n_too_long = len(variants) - len(indexable)
-    if n_too_long:
-        log.warning(
-            "%d ALID(s) longer than %d bytes left out of the ALID search index: "
-            "they resolve by exact scan instead, which is slower and correct",
-            n_too_long,
-            ALID_WIDTH,
-        )
-    alid_bytes = np.array([alid for alid, _ in indexable], dtype=ALID_DTYPE)
-    row_indices = np.array([i for _, i in indexable], dtype="int32")
-    sort_order = np.argsort(alid_bytes, kind="stable")
-    np.save(variant_alid_bytes_path(store), alid_bytes[sort_order])
-    np.save(variant_alid_rows_path(store), row_indices[sort_order])
+    # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
+    # however long, by row and by search. The 0.2 series' fixed-width pair
+    # (`variant_alid_bytes.npy`/`variant_alid_rows.npy`) left out each ALID wider than
+    # 32 bytes and is no longer written.
+    write_alid_sidecar(store, [variant.alid for variant in variants])
     _write_rsid_index(store, variants, rsid_by_alid)
 
 
@@ -230,7 +222,33 @@ class VariantAxis(reader_axis.VariantAxis):
     validation, opengwasdb-stores' audit -- writes ``VariantAxis(path)`` as it
     always has. `aliases` is an open `index.sqlite` connection the caller keeps,
     for a Store whose rsids may only be named in `variant_aliases`.
+
+    The ALID index it opens is the one the release's `format_version` carries
+    (`alid_index_kind`), read from its `manifest.json`. A directory with no manifest
+    -- an axis a test or a build step has just written -- must say which version it
+    is in `format_version`; nothing is guessed from the files present.
     """
 
-    def __init__(self, store_path: str | Path, aliases: sqlite3.Connection | None = None):
-        super().__init__(store_path, TabixVariantTable(store_path, aliases))
+    def __init__(
+        self,
+        store_path: str | Path,
+        aliases: sqlite3.Connection | None = None,
+        *,
+        format_version: str | None = None,
+    ):
+        super().__init__(
+            store_path,
+            TabixVariantTable(store_path, aliases),
+            format_version=format_version or _declared_format_version(Path(store_path)),
+        )
+
+
+def _declared_format_version(store: Path) -> str:
+    """The `format_version` `store`'s manifest declares; refused when it has none."""
+    manifest = store / "manifest.json"
+    if not manifest.exists():
+        raise ValueError(
+            f"{store} has no manifest.json to say which ALID index it carries; "
+            "pass format_version= for a bare Variant Axis directory"
+        )
+    return str(json.loads(manifest.read_text(encoding="utf-8"))["format_version"])

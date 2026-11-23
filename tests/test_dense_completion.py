@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 from completion_releases import assert_same_release
 from dense_sources import build_dense_fixture, write_dense_manifest
+from format_0_2_3 import follow_stamp
 from ld_blocks import write_ld_block
 
 from benchmarks.compare_top_hits import compare_top_hits
@@ -525,6 +526,7 @@ class TestValidation:
         manifest_path = completed_store / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest_path.write_text(json.dumps({**manifest, "format_version": "0.2.2"}))
+        follow_stamp(completed_store)
         root = open_store(completed_store).arrays(mode="r+")
         on_panel_rows = np.where(root["on_panel"][:] == 1)[0]
         se = root["se"][:]

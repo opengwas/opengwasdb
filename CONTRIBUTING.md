@@ -276,8 +276,7 @@ of idle BLAS threads.
 
 The default run is every test except two opt-in tiers: `realdata` (reads the
 HGDP+1kGP panels, IEU nodes only: `pixi run -e dev ld-test-realdata`) and
-`acceptance` (whole-panel runs: `ld-acceptance-*`), and the migration checks an
-epic keeps only while it moves code (run with their variable set, below). `ld` is an area, applied to
+`acceptance` (whole-panel runs: `ld-acceptance-*`). `ld` is an area, applied to
 every test under `tests/ld/`, so `-m ld` and `-m "not ld"` split the suite in
 two. A tier is run only when the `-m` expression *needs* it: `tests/conftest.py`
 evaluates the expression with the tier's mark removed, and if it still selects
@@ -293,7 +292,6 @@ Each tier has a budget and a time to run it:
 |---|---|---|---|
 | default | every test without a tier mark, `tests/ld` included | everywhere, with `pixi run -e dev test` | `tests/ld` ≤ 30 s as a directory (27 s at #455) and 5 s a test, by `tests/ld/conftest.py` |
 | `realdata` | `tests/ld/realdata/`: reads the HGDP+1kGP panels under `/data/opengwasdb/reference/` | IEU compute nodes only, before a change that reads a panel is claimed to work; CI has no panels | ≤ 5 minutes |
-| migration checks | `tests/test_engine_read_pins.py` (#473): what the code before epic #450's read move reported and wrote, pinned | with `OGDB_MIGRATION_PINS=1 pixi run -e dev test`, when a change to the read path merges; `tests/conftest.py` deselects it otherwise, and it is removed when #450 ends | about a minute |
 | `acceptance` | `tests/ld/acceptance/`: a whole-panel comparison an epic needs | IEU compute nodes, on demand, before the ticket that owns it merges and when a change could alter its answer; the time and every difference go on the ticket | up to about an hour |
 
 ### A test that cannot fail is worse than no test

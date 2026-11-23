@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gzip
-import os
 from pathlib import Path
 from shutil import copytree
 from typing import TYPE_CHECKING
@@ -74,16 +73,28 @@ def dense_fixture_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def rsid_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """The six `store_reader_digests` fixture releases, built once per session, each row
-    naming an rsID (`rsid_releases.with_rsids`). Never written to: copy one to change it."""
-    from rsid_releases import with_rsids
+def digest_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """The six `store_reader_digests` fixture releases -- Dense, Ragged and Hybrid, each
+    Observed-Only and Reference-Completed -- built once per session and shared by every
+    module that asks them questions. Never written to: copy one to change it."""
     from store_reader_digests import build_releases
 
-    built = build_releases(tmp_path_factory.mktemp("rsid-releases"))
-    for path in built.values():
+    return build_releases(tmp_path_factory.mktemp("digest-releases"))
+
+
+@pytest.fixture(scope="session")
+def rsid_releases(
+    digest_releases: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, Path]:
+    """`digest_releases`, copied once per session, each row naming an rsID
+    (`rsid_releases.with_rsids`). Never written to: copy one to change it."""
+    from rsid_releases import with_rsids
+
+    root = tmp_path_factory.mktemp("rsid-releases")
+    copies = {name: Path(copytree(path, root / name)) for name, path in digest_releases.items()}
+    for path in copies.values():
         with_rsids(path)
-    return built
+    return copies
 
 
 @pytest.fixture
@@ -312,30 +323,14 @@ def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return store
 
 
-#: Migration checks a run takes only when their variable is set to 1: each pins what code from
-#: before a move answered, so it holds only until the epic that made the move ends (CONTRIBUTING,
-#: "Test tiers").
-MIGRATION_CHECKS = {"test_engine_read_pins.py": "OGDB_MIGRATION_PINS"}
-
-
-def _unasked_migrations(items: list[pytest.Item]) -> list[pytest.Item]:
-    return [
-        item
-        for item in items
-        if (variable := MIGRATION_CHECKS.get(Path(item.path).name)) is not None
-        and os.environ.get(variable) != "1"
-    ]
-
-
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Keep the opt-in tiers (`realdata`, `acceptance`) out of any run that does not name them,
-    and the migration checks out of any run that does not set their variable.
+    """Keep the opt-in tiers (`realdata`, `acceptance`) out of any run that does not name them.
 
     A command line's `-m` replaces an `addopts` one, so a default written there is lost to
     `-m ld`, which would run the HGDP+1kGP tier on a machine without the panels. The deselection
     is here instead, after every conftest has added its marks, and `-m realdata` still asks."""
-    dropped = unasked(items, config.getoption("markexpr") or "") + _unasked_migrations(items)
+    dropped = unasked(items, config.getoption("markexpr") or "")
     if dropped:
         items[:] = [item for item in items if item not in dropped]
         config.hook.pytest_deselected(items=dropped)

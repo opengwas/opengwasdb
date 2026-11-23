@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from legacy_fixtures import relayout_dense_as_0_1_0
 
 from benchmarks import _query_shapes
@@ -519,8 +520,18 @@ def _fake_release(root: Path, **manifest: object) -> Path:
 
 
 def test_source_and_destination_may_not_be_the_same_path(dense_source: Path):
-    with pytest.raises(ConversionError, match="same path"):
+    with pytest.raises(ConversionError, match="source and --into are the same path"):
         convert_release(dense_source, dense_source)
+
+
+def test_a_destination_inside_the_source_is_refused_before_anything_is_written(
+    dense_source: Path,
+):
+    """A derived release never writes inside its source (spec §21.4, #467)."""
+    before = sorted(p.relative_to(dense_source) for p in dense_source.rglob("*"))
+    with pytest.raises(ConversionError, match="lies inside the source release"):
+        convert_release(dense_source, dense_source / "converted.opengwasdb")
+    assert sorted(p.relative_to(dense_source) for p in dense_source.rglob("*")) == before
 
 
 def test_an_existing_destination_is_refused(
@@ -604,6 +615,7 @@ def _set_format_version(root: Path, version: str) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     data["format_version"] = version
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    follow_stamp(root)
 
 
 def _set_dense_chunk_shape(root: Path, chunk_shape: list[int]) -> None:

@@ -567,7 +567,7 @@ def test_a_build_given_a_table_differs_from_one_without_only_by_regions_tsv(tmp_
     assert tabled["files"] == sorted([*bare["files"], "regions.tsv"])
     assert "regions" not in bare["manifest.json"]
     assert (bare["manifest.json"]["format_version"], tabled["manifest.json"]["format_version"]) == (
-        "0.2.3", "0.2.3"
+        "0.3.0", "0.3.0"
     )
     assert {
         k: v for k, v in tabled["manifest.json"].items() if k != "regions"
@@ -598,16 +598,18 @@ def _format_version(store: Path) -> str:
 def test_a_build_is_stamped_the_lowest_format_version_its_features_use(tabled, cis_only):
     """0.2.1 adds only the optional `regions.tsv`, 0.2.2 an indel spelt reference first,
     and 0.2.3 the count of associations left out for an SE above 65,504, each of which
-    every build of this package does (spec §21.3, ADR 0079, ADR 0068): a build is 0.2.3
-    whether or not it carries the table."""
-    assert _format_version(tabled[0]) == "0.2.3"
-    assert _format_version(cis_only[0]) == "0.2.3"
+    every build of this package does (spec §21.3, ADR 0079, ADR 0068), and 0.3.0 the
+    variable-length ALID sidecar (ADR 0105): a build is 0.3.0 whether or not it carries
+    the table."""
+    assert _format_version(tabled[0]) == "0.3.0"
+    assert _format_version(cis_only[0]) == "0.3.0"
 
 
 def test_a_completion_keeps_its_sources_format_version(tabled, cis_only):
-    """It carries the source's `regions.tsv`, or carries none, and so its version."""
-    assert _format_version(tabled[1]) == "0.2.3"
-    assert _format_version(cis_only[1]) == "0.2.3"
+    """It carries the source's `regions.tsv`, or carries none; a 0.3.0 source completes
+    to 0.3.0 either way."""
+    assert _format_version(tabled[1]) == "0.3.0"
+    assert _format_version(cis_only[1]) == "0.3.0"
 
 
 def _as_0_9_0_wrote_it(store: Path, tmp_path: Path) -> Path:
@@ -639,7 +641,7 @@ def test_validate_accepts_this_builds_stores_and_0_9_0s(tmp_path, tabled, cis_on
         result = validate_store(store)
         assert result.ok, (store, result.errors)
     assert sorted(_format_version(store) for store in stores) == [
-        "0.2.0", "0.2.1", "0.2.3", "0.2.3", "0.2.3", "0.2.3"
+        "0.2.0", "0.2.1", "0.3.0", "0.3.0", "0.3.0", "0.3.0"
     ]
 
 

@@ -96,7 +96,13 @@ def with_regions(store: Path, rows: Iterable[Row]) -> Path:
 
 
 def edit_manifest(store: Path, edit: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
-    """Rewrite `store`'s `manifest.json` as `edit` returns it, as a build writes one."""
+    """Rewrite `store`'s `manifest.json` as `edit` returns it, as a build writes one.
+
+    A `format_version` restamped before 0.3.0 gets the ALID index that version
+    carries (`format_0_2_3.follow_stamp`)."""
+    from format_0_2_3 import follow_stamp
+
     path = store / "manifest.json"
     edited = edit(json.loads(path.read_text(encoding="utf-8")))
     path.write_text(json.dumps(edited, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    follow_stamp(store)

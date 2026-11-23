@@ -105,9 +105,14 @@ def test_the_readable_formats_are_the_two_the_epic_carries():
     """Two series: 0.1 (Zarr v2) and 0.2 (Zarr v3 with sharding, since #245). The 0.2
     series reads to 0.2.3: 0.2.1 adds a Ragged release's optional `regions.tsv` (#430),
     0.2.2 spells an indel's ALID reference first (#381, ADR 0079), and 0.2.3 records
-    `n_missing_se_out_of_range` (#338, ADR 0068). Another entry is a decision, not an
+    `n_missing_se_out_of_range` (#338, ADR 0068). The 0.3 series (#467, ADR 0105) is
+    0.2.3 with the variable-length ALID sidecar. Another entry is a decision, not an
     accident."""
-    assert dict(store_format.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (3,)}
+    assert dict(store_format.SUPPORTED_FORMAT_VERSIONS) == {
+        (0, 1): (0,),
+        (0, 2): (3,),
+        (0, 3): (0,),
+    }
 
 
 def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
@@ -120,19 +125,35 @@ def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
     stamp = store_format.format_version_for
     for counts in (False, True):
         assert stamp(
-            carries_regions=False, reference_first_indels=False, records_se_out_of_range=counts
+            carries_regions=False, reference_first_indels=False, records_se_out_of_range=counts,
+            alid_sidecar=False,
         ) == "0.2.0"
         assert stamp(
-            carries_regions=True, reference_first_indels=False, records_se_out_of_range=counts
+            carries_regions=True, reference_first_indels=False, records_se_out_of_range=counts,
+            alid_sidecar=False,
         ) == "0.2.1"
     for regions in (False, True):
         assert stamp(
-            carries_regions=regions, reference_first_indels=True, records_se_out_of_range=False
+            carries_regions=regions, reference_first_indels=True, records_se_out_of_range=False,
+            alid_sidecar=False,
         ) == "0.2.2"
         assert stamp(
-            carries_regions=regions, reference_first_indels=True, records_se_out_of_range=True
+            carries_regions=regions, reference_first_indels=True, records_se_out_of_range=True,
+            alid_sidecar=False,
         ) == "0.2.3"
-    assert store_format.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
+        # 0.3.0 is 0.2.3 with the variable-length ALID sidecar (#467, ADR 0105).
+        assert stamp(carries_regions=regions, reference_first_indels=True) == "0.3.0"
+    assert store_format.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.3.0")
+
+
+def test_a_sidecar_without_0_2_3_s_features_is_no_version():
+    """0.3.0 carries every 0.2.3 feature; a sidecar on sorted indels, or without the SE
+    count, is a release no version describes, and is refused rather than stamped."""
+    stamp = store_format.format_version_for
+    with pytest.raises(ValueError, match="reference first"):
+        stamp(carries_regions=False, reference_first_indels=False)
+    with pytest.raises(ValueError, match="counts the SEs"):
+        stamp(carries_regions=False, reference_first_indels=True, records_se_out_of_range=False)
 
 
 def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature():
@@ -143,7 +164,7 @@ def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature
     assert CURRENT_FORMAT_VERSION == store_format.format_version_for(
         carries_regions=False, reference_first_indels=True
     )
-    assert CURRENT_FORMAT_VERSION == "0.2.3"
+    assert CURRENT_FORMAT_VERSION == "0.3.0"
 
 
 def test_each_readable_series_has_one_zarr_on_disk_format():
@@ -151,7 +172,7 @@ def test_each_readable_series_has_one_zarr_on_disk_format():
     does not pattern-match a version string to guess it (#264 review)."""
     assert store_format.zarr_format_for_version("0.1.0") == 2
     assert store_format.zarr_format_for_version(CURRENT_FORMAT_VERSION) == 3
-    assert dict(store_format.ZARR_FORMAT_BY_SERIES) == {(0, 1): 2, (0, 2): 3}
+    assert dict(store_format.ZARR_FORMAT_BY_SERIES) == {(0, 1): 2, (0, 2): 3, (0, 3): 3}
 
 
 def test_an_unreadable_version_has_no_zarr_layout():
@@ -160,8 +181,8 @@ def test_an_unreadable_version_has_no_zarr_layout():
 
 
 def test_an_unknown_series_is_rejected():
-    """A breaking change moves the series, and this build reads two of them."""
-    for version in ("0.3.0", "1.0.0", "9.9.9"):
+    """A breaking change moves the series, and this build reads three of them."""
+    for version in ("0.4.0", "1.0.0", "9.9.9"):
         with pytest.raises(store_format.UnsupportedFormatVersion, match="release series"):
             store_format.check_format_version(version)
 
@@ -345,3 +366,29 @@ def test_a_writer_reads_the_layout_from_the_series_not_the_current_version():
         store_open.check_writable_zarr_layout("0.1.0", source="release at /tmp/x")
     with pytest.raises(store_format.UnsupportedFormatVersion, match="Zarr format 2"):
         store_open.check_writable_zarr_layout("0.1.7")
+
+
+#: The version tables as they were before #467: the package that does not know 0.3.
+_BEFORE_0_3 = {(0, 1): (0,), (0, 2): (3,)}
+
+
+def test_a_package_without_the_0_3_series_refuses_a_0_3_0_release_by_name(
+    dense_store_path, monkeypatch
+):
+    """ADR 0041: a series this build does not implement is refused, and says which
+    version it was. A 0.3.0 release carries no fixed-width ALID index, so a 0.2 reader
+    that opened it would find none and answer ALID lookups wrongly (ADR 0105)."""
+    from types import MappingProxyType
+
+    from opengwasdb.query import query_store
+
+    assert store_open.open_store(dense_store_path).manifest.format_version == "0.3.0"
+    monkeypatch.setattr(store_format, "SUPPORTED_FORMAT_VERSIONS", MappingProxyType(_BEFORE_0_3))
+
+    with pytest.raises(store_format.UnsupportedFormatVersion) as refused:
+        query_store(dense_store_path)
+
+    message = str(refused.value)
+    assert "format_version='0.3.0'" in message, message
+    assert "a release series this build does not implement" in message, message
+    assert "readable series: ['0.1', '0.2']" in message, message

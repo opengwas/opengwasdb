@@ -137,7 +137,11 @@ class StoreRelease(ReleasePaths):
                 "(a 0.2.x BGZF/tabix file); open it with opengwasdb.store.open.open_store, "
                 "or pass open_release(..., legacy=...)"
             )
-        return VariantAxis(self.path, self.legacy(self.path, aliases=aliases))
+        return VariantAxis(
+            self.path,
+            self.legacy(self.path, aliases=aliases),
+            format_version=self.manifest.format_version,
+        )
 
     def query(self) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
         """The query facade over this release, by its layout (ADR 0033)."""

@@ -15,6 +15,8 @@ import numpy as np
 import pytest
 import zarr
 
+from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stored import (
     eaf_baseline,
@@ -23,7 +25,7 @@ from opengwasdb.store_reader.stored import (
     stored_attributes,
 )
 from opengwasdb.store_reader.top_hits import analysis_hit_counts
-from opengwasdb.store_reader.variant_axis import VariantAxis
+from opengwasdb.store_reader.variant_axis import VariantAxis, parse_variant_line
 
 
 class _Table:
@@ -53,8 +55,9 @@ class _Table:
 
 def _axis(tmp_path: Path, rows: list[str]) -> tuple[VariantAxis, _Table]:
     np.save(tmp_path / "variant_offsets.npy", np.arange(len(rows), dtype=np.int64))
+    write_alid_sidecar(tmp_path, [parse_variant_line(row).alid for row in rows])
     table = _Table(rows)
-    return VariantAxis(tmp_path, table), table
+    return VariantAxis(tmp_path, table, format_version=CURRENT_FORMAT_VERSION), table
 
 
 def _row(index: int, source_alid: str | None) -> str:

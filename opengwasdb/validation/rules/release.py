@@ -24,9 +24,11 @@ from opengwasdb.store.open import (
     HYBRID_ENVELOPE,
     RAGGED_ENVELOPE,
     check_format_version_stamp,
+    envelope_at,
     newer_than_written,
     newer_than_written_text,
 )
+from opengwasdb.store_reader.alid_index import alid_index_kind
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
@@ -37,8 +39,6 @@ from opengwasdb.store_reader.format import (
 )
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.variant_axis import (
-    variant_alid_bytes_path,
-    variant_alid_rows_path,
     variant_offsets_path,
     variant_tabix_path,
     variant_table_path,
@@ -202,6 +202,18 @@ def _rebuild_alid_index(name: str) -> str:
     return f"missing {name} — rebuild the store to generate the ALID search index"
 
 
+def _alid_index_entries(target: Target, *, rebuild: bool = False) -> list[tuple[str, Path]]:
+    """The files of the ALID index a release of its `format_version` carries
+    (`alid_index_kind`): from 0.3.0 the variable-length sidecar (ADR 0105), before it the
+    fixed-width pair."""
+    kind = alid_index_kind(target.store.manifest.format_version)
+    path = target.store.path
+    return [
+        (_rebuild_alid_index(name) if rebuild else f"missing {name}", path / name)
+        for name in kind.FILENAMES
+    ]
+
+
 def _dense_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
@@ -212,8 +224,7 @@ def _dense_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
         ("missing variant_offsets.npy", variant_offsets_path(path)),
-        (_rebuild_alid_index("variant_alid_bytes.npy"), path / "variant_alid_bytes.npy"),
-        (_rebuild_alid_index("variant_alid_rows.npy"), path / "variant_alid_rows.npy"),
+        *_alid_index_entries(target, rebuild=True),
     ]
 
 
@@ -226,8 +237,7 @@ def _ragged_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing data.zarr/ragged", store.data_path / "ragged"),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
-        ("missing variant_alid_bytes.npy", variant_alid_bytes_path(path)),
-        ("missing variant_alid_rows.npy", variant_alid_rows_path(path)),
+        *_alid_index_entries(target),
         ("missing analyses.tsv", store.analyses_path),
     ]
 
@@ -242,8 +252,7 @@ def _hybrid_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing index.sqlite", path / "index.sqlite"),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
-        ("missing variant_alid_bytes.npy", variant_alid_bytes_path(path)),
-        ("missing variant_alid_rows.npy", variant_alid_rows_path(path)),
+        *_alid_index_entries(target),
         ("missing data.zarr/ragged (Ragged Overflow)", path / "data.zarr" / "ragged"),
     ]
 
@@ -270,12 +279,14 @@ def _envelope(target: Target) -> frozenset[str]:
     if target.parent is not None:
         # A Hybrid release's Dense Component additionally carries dense_to_shared.npy,
         # which a standalone Dense release never does.
-        return HYBRID_DENSE_COMPONENT_ENVELOPE
-    return {
-        PrimaryStorageLayout.DENSE: DENSE_ENVELOPE,
-        PrimaryStorageLayout.RAGGED: RAGGED_ENVELOPE,
-        PrimaryStorageLayout.HYBRID: HYBRID_ENVELOPE,
-    }[target.layout]
+        envelope = HYBRID_DENSE_COMPONENT_ENVELOPE
+    else:
+        envelope = {
+            PrimaryStorageLayout.DENSE: DENSE_ENVELOPE,
+            PrimaryStorageLayout.RAGGED: RAGGED_ENVELOPE,
+            PrimaryStorageLayout.HYBRID: HYBRID_ENVELOPE,
+        }[target.layout]
+    return envelope_at(envelope, target.store.manifest.format_version)
 
 
 def closed_envelope(target: Target) -> list[str]:

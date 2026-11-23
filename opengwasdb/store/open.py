@@ -25,6 +25,8 @@ import zarr
 
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
+from opengwasdb.store_reader.alid_index import ALID_INDEX_FILENAMES, alid_index_kind
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 
 # The version tables and the read check are the Store Reader's (#464); what a writer
 # stamps and refuses builds on them. Re-exported: opengwasdb-stores probes
@@ -33,10 +35,12 @@ from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION as CURRENT_FOR
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
+    carries_alid_sidecar,
     check_format_version,
     format_version_for,
     indels_reference_first,
     parse_format_version,
+    split_format_version,
     zarr_format_for_version,
 )
 from opengwasdb.store_reader.manifest import StoreManifest
@@ -50,6 +54,7 @@ from opengwasdb.variants.legacy_table import open_legacy_variant_table
 
 if TYPE_CHECKING:
     import sqlite3
+
 
 #: The first `format_version` whose `analyses.tsv` must record
 #: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the
@@ -69,7 +74,9 @@ def completed_format_version(source_version: str, *, carries_regions: bool) -> s
 
     A completion writes into its source's arrays, so it keeps every feature its
     source's stamp declares (ADR 0038 §4), and adds `n_missing_se_out_of_range`,
-    which it counts as it writes (issue #338): a 0.2.2 source completes to 0.2.3.
+    which it counts as it writes (issue #338), and the variable-length ALID sidecar,
+    which `write_variant_axis` writes for the completed axis (#467): a 0.2.2 or 0.2.3
+    source completes to 0.3.0.
     The source must already be one this build completes (`check_writable_format_version`).
     """
     check_format_version_stamp(source_version, carries_regions=carries_regions)
@@ -104,6 +111,7 @@ def check_format_version_stamp(
         carries_regions=carries_regions,
         reference_first_indels=indels_reference_first(version),
         records_se_out_of_range=records_se_out_of_range(version),
+        alid_sidecar=carries_alid_sidecar(version),
     )
     if version != stamp:
         carried = "regions.tsv" if carries_regions else "no region table"
@@ -115,16 +123,26 @@ def check_format_version_stamp(
 
 
 def newer_than_written(version: str) -> bool:
-    """Whether `version` is newer than every `format_version` this build writes: a
-    newer remainder of a series it reads (ADR 0041 §2), which a later package writes."""
-    return parse_format_version(version) > parse_format_version(WRITTEN_FORMAT_VERSIONS[-1])
+    """Whether `version` is newer than every `format_version` this build writes in its
+    series: a newer remainder of a series it reads (ADR 0041 §2), which a later package
+    writes. A 0.2.4 release is one, though this build writes 0.3.0: what 0.2.4 adds to
+    the 0.2 series is that package's, not 0.3.0's."""
+    newest = _newest_written_in_series(version)
+    return newest is not None and parse_format_version(version) > parse_format_version(newest)
+
+
+def _newest_written_in_series(version: str) -> str | None:
+    series = split_format_version(version)[0]
+    written = [v for v in WRITTEN_FORMAT_VERSIONS if split_format_version(v)[0] == series]
+    return written[-1] if written else None
 
 
 def newer_than_written_text(version: str, *, source: str = "release") -> str:
     """What this build says of a release newer than it writes: upgrade, not re-stamp."""
     return (
         f"{source} is stamped {version}, newer than any format_version this build writes "
-        f"({WRITTEN_FORMAT_VERSIONS[-1]}), so which stamp its features give is the rule of "
+        f"in its series ({_newest_written_in_series(version)}), so which stamp its features "
+        "give is the rule of "
         "the package that wrote it. Upgrade opengwasdb to judge its stamp or to complete "
         "it; do not re-stamp the release (spec §21.3)."
     )
@@ -247,15 +265,13 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
         "variants.tsv.gz",
         "variants.tsv.gz.tbi",
         "variant_offsets.npy",
-        "variant_alid_bytes.npy",
-        "variant_alid_rows.npy",
         # rsid search index (issue #109). Every layout writes it, empty when the
         # source names no variants, so it belongs in the base envelope rather than
         # being optional per layout.
         "variant_rsid_bytes.npy",
         "variant_rsid_rows.npy",
     }
-)
+) | set(AlidSidecar.FILENAMES)
 
 #: Dense Observed-Only/Reference-Completed (§10, §16).
 DENSE_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html"}
@@ -275,6 +291,17 @@ HYBRID_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html", "dense"}
 #: index map only a Dense Component (never a standalone Dense release)
 #: carries.
 HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_shared.npy"}
+
+
+def envelope_at(envelope: frozenset[str], format_version: str) -> frozenset[str]:
+    """`envelope`, one of the constants above, as a release of `format_version` carries it:
+    with the ALID index that version carries (`alid_index_kind`) and no other.
+
+    The constants are what this build writes (0.3.0, the sidecar). A 0.2 release
+    carries the fixed-width pair instead, and either one carrying the other's files
+    fails its closed envelope (spec §1, §20).
+    """
+    return (envelope - ALID_INDEX_FILENAMES) | set(alid_index_kind(format_version).FILENAMES)
 
 
 @contextmanager

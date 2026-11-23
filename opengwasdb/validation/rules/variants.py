@@ -15,17 +15,16 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.format import carries_alid_sidecar
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
-    variant_alid_bytes_path,
 )
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
@@ -119,46 +118,63 @@ def _indexable(_target: Target, block: TableBlock) -> Counter[str]:
 
 
 def _judge_alid_index(target: Target, counts: Counter[str]) -> Iterator[str]:
-    """The ALID search index covers exactly the indexable ALIDs, collision-free."""
-    keys = target.variant_axis._alid_bytes
-    if keys is None:
-        return
-    # One entry per *indexable* ALID, not per variant: an ALID too wide for the
-    # slot is left out rather than truncated into a key it shares with another
-    # variant (issue #127). Those resolve by exact scan.
-    if len(keys) != counts["indexable"]:
-        yield (
-            f"variant_alid_bytes.npy has {len(keys)} entries but "
-            f"variants.tsv.gz has {counts['indexable']} ALID(s) narrow enough to index "
-            f"(of {counts['rows']} rows)"
-        )
-    collisions = _adjacent_repeats(variant_alid_bytes_path(target.store.path))
-    if collisions:
-        yield (
-            f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
-            "one variant: a lookup by one variant's ALID returns another's row. "
-            "This is what silently truncating an over-wide ALID produced before "
-            "issue #127 — rebuild the store"
+    """The 0.2 series' ALID index covers exactly the indexable ALIDs, collision-free."""
+    index = target.variant_axis.alid_index
+    yield from index.problems(counts["rows"], counts["indexable"])
+
+
+@dataclass(frozen=True)
+class _SidecarRows:
+    """How many table rows a block held, and the first whose sidecar ALID differs."""
+
+    rows: int = 0
+    differing: int = 0
+    first: str = ""
+
+    def __add__(self, other: _SidecarRows) -> _SidecarRows:
+        return _SidecarRows(
+            self.rows + other.rows, self.differing + other.differing, self.first or other.first
         )
 
 
-#: Keys one collision window compares: 1,000,000 32-byte keys is 32 MB.
-_KEY_WINDOW = 1_000_000
+def _sidecar_rows(target: Target, block: TableBlock) -> _SidecarRows:
+    """Each row's ALID in the index against the table's; a row past the index's end
+    names none, and is counted by its row count (`_judge_alid_sidecar`)."""
+    n_rows = len(block.records)
+    rows = np.arange(block.start, block.start + n_rows, dtype=np.int64)
+    named = target.variant_axis.alid_index.alids(rows)
+    differing = [
+        k
+        for k in range(n_rows)
+        if named[k] is not None and named[k] != block.records[k].alid
+    ]
+    first = ""
+    if differing:
+        k = differing[0]
+        first = (
+            f"row {block.start + k}: the sidecar names {named[k]!r}, "
+            f"variants.tsv.gz {block.records[k].alid!r}"
+        )
+    return _SidecarRows(n_rows, len(differing), first)
 
 
-def _adjacent_repeats(path: Path) -> int:
-    """How many keys of the sorted ALID index equal the key before them.
+def _judge_alid_sidecar(target: Target, total: _SidecarRows) -> Iterator[str]:
+    """The ALID sidecar names every row's ALID and indexes every one (format 0.3.0, ADR 0105)."""
+    problems = list(target.variant_axis.alid_index.problems(total.rows, total.rows))
+    yield from problems
+    if not problems and total.differing:
+        yield (
+            f"the ALID sidecar names {total.differing} row(s) by another ALID than "
+            f"variants.tsv.gz does; first, {total.first}"
+        )
 
-    Read a window at a time, each window mapped and released on its own, so the
-    index -- 387 MB on OGS-00006 -- is never held whole; one key of overlap carries
-    the comparison across a window boundary.
-    """
-    n_keys = len(np.load(path, mmap_mode="r"))
-    repeats = 0
-    for lo in range(0, max(n_keys - 1, 0), _KEY_WINDOW):
-        window = np.array(np.load(path, mmap_mode="r")[lo : lo + _KEY_WINDOW + 1])
-        repeats += int(np.count_nonzero(window[1:] == window[:-1]))
-    return repeats
+
+def _carries_alid_sidecar(target: Target) -> bool:
+    return carries_alid_sidecar(target.store.manifest.format_version)
+
+
+def _carries_fixed_width_alid_index(target: Target) -> bool:
+    return not _carries_alid_sidecar(target)
 
 
 def _named_rsids(_target: Target, block: TableBlock) -> int:
@@ -443,10 +459,21 @@ RULES: tuple[Rule, ...] = (
         name="variant_table.alid_index",
         kinds=Kind.RELEASE,
         after=(REQUIRED,),
+        when=_carries_fixed_width_alid_index,
         scan=VARIANT_TABLE,
         zero=Counter[str](),
         measure=_indexable,
         judge=_judge_alid_index,
+    ),
+    Fold(
+        name="variant_table.alid_sidecar",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_carries_alid_sidecar,
+        scan=VARIANT_TABLE,
+        zero=_SidecarRows(),
+        measure=_sidecar_rows,
+        judge=_judge_alid_sidecar,
     ),
     Fold(
         name="variant_table.rsid_index",

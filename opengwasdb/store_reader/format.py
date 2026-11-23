@@ -26,8 +26,14 @@ log = logging.getLogger(__name__)
 #: reference first (ADR 0079), `0.2.3` #338's `n_missing_se_out_of_range` (ADR
 #: 0068). The four pre-reset versions are not in it and are not readable -- see
 #: `PRE_RESET_FORMAT_VERSIONS`.
+#:
+#: `0.3` since #467: 0.2.3's features, with the variable-length ALID sidecar in place
+#: of the fixed-width `|S32` index (ADR 0105). A reader of the 0.2 series would find
+#: no ALID index and misread every ALID lookup, so 0.3.0 is a new series that an
+#: older package refuses by name (ADR 0041). It is in development on the epic #450
+#: branch, and released once #468-#472 are in.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,), (0, 2): (3,)}
+    {(0, 1): (0,), (0, 2): (3,), (0, 3): (0,)}
 )
 
 #: The format_versions this build writes, oldest first. A build stamps each release
@@ -46,10 +52,21 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: first rather than sorted (ADR 0079), `regions.tsv` still optional. `0.2.3`
 #: since #338: 0.2.2 whose `analyses.tsv` records `n_missing_se_out_of_range` on
 #: every row, and which holds no association whose SE is above 65,504 (ADR 0068).
-#: Package v0.9.0 wrote 0.2.0 and 0.2.1 with sorted indels; this build writes 0.2.3
-#: for every release it builds or completes, and 0.2.0 for one it converts from
-#: 0.1.0 (`opengwasdb.store.convert`), whose indels it cannot re-spell.
-WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
+#: Package v0.9.0 wrote 0.2.0 and 0.2.1 with sorted indels. `0.3.0` since #467: 0.2.3
+#: with the variable-length ALID sidecar (ADR 0105). This build writes 0.3.0 for every
+#: release it builds, completes or rewrites from 0.2.3 (`opengwasdb.store.rewrite`),
+#: and 0.2.0 for one it converts from 0.1.0 (`opengwasdb.store.convert`), whose
+#: indels it cannot re-spell. The 0.2 versions stay in this table because a pass
+#: that adds arrays to a 0.2 release (`ogdb build-by-variant`) writes them, and a
+#: 0.2.2 or 0.2.3 source is completed.
+WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.3.0")
+
+#: The last 0.2 version: 0.2.2's reference-first indels with 0.2.3's SE count, every
+#: feature 0.3.0 keeps. The one version `ogdb rewrite-release` derives 0.3.0 from.
+LAST_0_2_FORMAT_VERSION = WRITTEN_FORMAT_VERSIONS[3]
+
+#: The first version whose ALID index is the variable-length sidecar (ADR 0105).
+ALID_SIDECAR_FORMAT_VERSION = WRITTEN_FORMAT_VERSIONS[4]
 
 #: The first `format_version` whose indel ALIDs spell the reference allele first
 #: (ADR 0079). Every earlier one sorts an indel's alleles, so its deletion reads
@@ -72,6 +89,7 @@ def format_version_for(
     carries_regions: bool,
     reference_first_indels: bool,
     records_se_out_of_range: bool = True,
+    alid_sidecar: bool = True,
 ) -> str:
     """The `format_version` a release this build writes is stamped: the lowest whose
     features it uses (spec §21.3). The one rule every writer stamps by -- the builders,
@@ -86,7 +104,21 @@ def format_version_for(
     associations left out for an SE above 65,504, which 0.2.3 adds (ADR 0068). Every
     release this build builds or completes does. 0.2.3 is 0.2.2 and the count, so a
     release whose indels are sorted is stamped by its indels, whatever it counts.
+    `alid_sidecar`: it carries the variable-length ALID sidecar rather than the
+    fixed-width index, which 0.3.0 adds (ADR 0105) on all of 0.2.3's features. Every
+    release this build builds, completes or rewrites does; one it converts from 0.1.0
+    does not. A release with the sidecar and without one of 0.2.3's features is no
+    version, and is refused rather than stamped.
     """
+    if alid_sidecar:
+        if not (reference_first_indels and records_se_out_of_range):
+            raise ValueError(
+                "a release carrying the variable-length ALID sidecar is 0.3.0, which also "
+                "spells its indels reference first and counts the SEs left out (ADR 0105); "
+                f"this one does not (reference_first_indels={reference_first_indels}, "
+                f"records_se_out_of_range={records_se_out_of_range})"
+            )
+        return ALID_SIDECAR_FORMAT_VERSION
     if reference_first_indels:
         return WRITTEN_FORMAT_VERSIONS[3 if records_se_out_of_range else 2]
     return WRITTEN_FORMAT_VERSIONS[1] if carries_regions else WRITTEN_FORMAT_VERSIONS[0]
@@ -101,8 +133,17 @@ CURRENT_FORMAT_VERSION = format_version_for(carries_regions=False, reference_fir
 #: series-to-layout coupling is part of the format contract, so it lives beside
 #: the version tables rather than in each caller that needs it (#264 review).
 ZARR_FORMAT_BY_SERIES: Mapping[tuple[int, ...], int] = MappingProxyType(
-    {(0, 1): 2, (0, 2): 3}
+    {(0, 1): 2, (0, 2): 3, (0, 3): 3}
 )
+
+#: The first `format_version` whose ALID index is the variable-length sidecar
+#: (`opengwasdb.store_reader.alid_sidecar`, ADR 0105) and not the fixed-width pair.
+ALID_SIDECAR_SINCE = tuple(int(part) for part in ALID_SIDECAR_FORMAT_VERSION.split("."))
+
+
+def carries_alid_sidecar(version: str) -> bool:
+    """Whether a Store of ``version`` indexes its ALIDs with the variable-length sidecar."""
+    return parse_format_version(version) >= ALID_SIDECAR_SINCE
 
 
 def zarr_format_for_version(version: str, *, source: str = "release") -> int:
