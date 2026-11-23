@@ -42,12 +42,10 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Cells, CsrReader, DenseGridReader, Status
 from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
 from opengwasdb.completion.schema import completion_quality_rollup
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
-from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
     CellValues,
@@ -62,20 +60,10 @@ from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import write_variant_table
-from opengwasdb.layouts.hybrid.layout import (
-    DENSE_SUBDIR,
-    dense_component_path,
-    dense_to_shared_path,
-)
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_out_of_range
-from opengwasdb.model.enums import (
-    CompletionState,
-    PrimaryStorageLayout,
-)
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import check_format_version_stamp, completed_format_version
 from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.store.open import (
@@ -84,8 +72,15 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
-from opengwasdb.variants import VariantAxis, VariantRecord
-from opengwasdb.variants.axis import sorted_alids
+from opengwasdb.store_reader.associations import Cells, CsrReader, DenseGridReader, Status
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.variant_axis import VariantRecord
+from opengwasdb.variants.axis import VariantAxis, sorted_alids
 
 log = logging.getLogger(__name__)
 

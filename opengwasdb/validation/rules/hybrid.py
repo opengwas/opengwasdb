@@ -16,8 +16,8 @@ from collections.abc import Iterator
 
 import numpy as np
 
-from opengwasdb.layouts.hybrid.layout import dense_to_shared_path
-from opengwasdb.model.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_to_shared_path
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.rules.variants import representative_variant_indices

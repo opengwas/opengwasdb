@@ -27,8 +27,8 @@ from test_hybrid_shared_se_plan_e2e import (
     panel_alid,
 )
 
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
 
 
 @pytest.fixture(scope="module")

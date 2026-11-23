@@ -21,7 +21,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from opengwasdb.variants.normalise import canonical_alid, identity_allele, identity_alleles
+from opengwasdb.store_reader.identity import identity_allele
+from opengwasdb.variants.normalise import canonical_alid, identity_alleles
 
 #: A source's own variant identity, exactly as a SourceReader streams it.
 SourceKey = tuple[str, int, str, str]

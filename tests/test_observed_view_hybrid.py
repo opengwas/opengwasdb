@@ -57,16 +57,7 @@ from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
 
 import opengwasdb.layouts.dense.complete as dense_complete
-import opengwasdb.store.arrays as arrays_module
-from opengwasdb.encoding import (
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    EafExceptionBuilder,
-    StoreCodec,
-    positions_pairs,
-)
-from opengwasdb.encoding.plan import Z_MISSING
+from opengwasdb.encoding import EafExceptionBuilder, StoreCodec
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
@@ -74,8 +65,12 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.encoding.codec import positions_pairs
+from opengwasdb.store_reader.encoding.plan import Z_MISSING
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 ANALYSES = ("trait_a", "trait_b", "trait_c")
 PANEL_POSITIONS = [1000 * (i + 1) for i in range(12)]
@@ -172,8 +167,8 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     # The geometry of `test_check_observed_view._small_chunked_pair`. The Stores carry it
     # once written, so it is patched only while they are built.
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
-        patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
+        patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+        patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "DEFAULT_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "_BAND_ROWS", 6)
         observed = _build_observed(root, chunk_shape=(2, 1))

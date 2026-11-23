@@ -42,17 +42,14 @@ import numpy as np
 import zarr
 
 from benchmarks._artifact import artifact_header, host_load, write_artifact
-from opengwasdb.encoding import (
-    EafExceptionTable,
-    StoreCodec,
-    StoreEncoding,
-    positions_row_band,
-)
+from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.dense.build_vcf import (
     _eaf_row_band,
     _EafBandContext,
     _encode_eaf_band,
 )
+from opengwasdb.store_reader.encoding.codec import EafExceptionTable, positions_row_band
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 
 #: Rows of the second band, as a fraction of the production band.
 _SMALLER_BAND_FRACTION = 10

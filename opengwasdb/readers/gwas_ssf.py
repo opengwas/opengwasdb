@@ -129,14 +129,13 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import FrequencyTally
+from opengwasdb.store_reader.identity import normalise_allele, normalise_chromosome
 from opengwasdb.variants.normalise import (
     HmCodeIndel,
     HmColumnsIndel,
     IdentityFaults,
     Orientation,
     UnharmonisedIndel,
-    normalise_allele,
-    normalise_chromosome,
     orient_or_drop,
 )
 from opengwasdb.variants.rsid import normalise_rsid

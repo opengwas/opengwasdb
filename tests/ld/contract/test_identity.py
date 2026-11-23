@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from support import panel_data
 
-from opengwasdb.variants.normalise import normalise_chromosome
+from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identity
 
 

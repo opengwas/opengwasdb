@@ -13,11 +13,10 @@ import pytest
 
 from opengwasdb.admission.rules import LOGGED, Reason
 from opengwasdb.readers.tabular import NO_REFERENCE
+from opengwasdb.store_reader.identity import MalformedIdentity, VariantNormalisationError
 from opengwasdb.variants.normalise import (
     IdentityFaults,
-    MalformedIdentity,
     UndeclaredReference,
-    VariantNormalisationError,
     canonical_alid,
     identity_fault,
     orient_or_drop,
@@ -359,7 +358,7 @@ DELETION_AT_950000 = "1:950000:GGGGCC:G"
 
 
 def _alids_at_950000(store) -> list[str]:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     return [
         r.alid for r in iter_variant_records(store / "variants.tsv.gz")
@@ -387,7 +386,7 @@ def test_completion_adds_no_second_spelling_of_an_observed_deletion(tmp_path, ca
 
     from opengwasdb.query import query_store
     from opengwasdb.validation.validate import validate_store
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     with caplog.at_level(logging.WARNING, logger="opengwasdb.completion.ld_panel"):
         observed, completed = _complete_an_observed_deletion(tmp_path, reference=None)

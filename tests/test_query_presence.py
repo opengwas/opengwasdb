@@ -26,13 +26,13 @@ from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _make_manifest
 from test_query_metadata_reads import _BUILDERS
 from test_ragged_residual_completion import RaggedResidualScenario
 
-from opengwasdb.associations import Associations, InvalidAssociations
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
-from opengwasdb.top_hits import TopHitTier
+from opengwasdb.store_reader.associations import Associations, InvalidAssociations
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import TopHitTier
 
 
 @pytest.fixture(scope="module")

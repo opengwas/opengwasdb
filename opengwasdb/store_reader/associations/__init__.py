@@ -10,10 +10,10 @@ the panel substitution, then SE) and its routing. Presence is `states()`, in
 `record`, and nowhere else (ADR 0070).
 """
 
-from opengwasdb.associations.cells import Cells
-from opengwasdb.associations.csr import CsrReader
-from opengwasdb.associations.dense import DenseGridReader
-from opengwasdb.associations.record import (
+from opengwasdb.store_reader.associations.cells import Cells
+from opengwasdb.store_reader.associations.csr import CsrReader
+from opengwasdb.store_reader.associations.dense import DenseGridReader
+from opengwasdb.store_reader.associations.record import (
     STATUS_LABELS,
     Associations,
     Inspection,
@@ -26,7 +26,7 @@ from opengwasdb.associations.record import (
     present,
     states,
 )
-from opengwasdb.associations.subset import SubsetReader
+from opengwasdb.store_reader.associations.subset import SubsetReader
 
 __all__ = [
     "STATUS_LABELS",

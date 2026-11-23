@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from opengwasdb.readers.gwas_vcf import project_lifted_alleles
-from opengwasdb.variants.axis import parse_canonical_alid
+from opengwasdb.store_reader.alid import parse_canonical_alid
+
+# Re-exported: opengwasdb-stores imports `normalise_build` from here.
+from opengwasdb.store_reader.assembly import normalise_build as normalise_build
 from opengwasdb.variants.normalise import canonical_alid, ref_is_a1
 from opengwasdb.variants.reference import iter_reference_alids
 
@@ -32,11 +35,6 @@ log = logging.getLogger(__name__)
 #: The other-strand spelling of an allele, for reading a reference's variant
 #: as the same variant on the opposite strand.
 _COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
-
-_BUILD_ALIASES: dict[str, str] = {
-    "hg19": "hg19", "grch37": "hg19", "b37": "hg19", "37": "hg19",
-    "hg38": "hg38", "grch38": "hg38", "b38": "hg38", "38": "hg38",
-}
 
 #: A source variant as the lift is given it: ``(chrom, pos, ref, alt)``.
 SourceVariantKey = tuple[str, int, str, str]
@@ -54,16 +52,6 @@ class LiftedAlleleMismatchError(ValueError):
     means the lift produced a variant that does not exist -- the shape of
     failure #284 was, at every reverse-strand SNP.
     """
-
-
-def normalise_build(build: str) -> str:
-    canonical = _BUILD_ALIASES.get(build.lower().strip())
-    if canonical is None:
-        raise ValueError(
-            f"Unknown genome build {build!r}. "
-            "Use hg19/hg38 or aliases GRCh37/GRCh38, b37/b38, 37/38."
-        )
-    return canonical
 
 
 @dataclass(frozen=True)

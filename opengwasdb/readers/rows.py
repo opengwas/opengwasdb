@@ -37,7 +37,7 @@ from opengwasdb.readers.interface import (
     SourceVariant,
 )
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
-from opengwasdb.variants.normalise import normalise_chromosome
+from opengwasdb.store_reader.identity import normalise_chromosome
 
 __all__ = [
     "DEFAULT_CHUNK_ROWS",

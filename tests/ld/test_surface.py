@@ -29,7 +29,8 @@ import testdata
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.variants import normalise, sorted_spelling
+from opengwasdb.store_reader import identity
+from opengwasdb.variants import sorted_spelling
 
 #: The committed Test Store (tests/ld/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -115,8 +116,8 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
         sorted_spelling.sorted_identity,
         "(chrom: 'str', position: 'int', ref: 'str', alt: 'str') -> 'SortedIdentity'",
     ),
-    "opengwasdb.variants.normalise.normalise_chromosome": (
-        normalise.normalise_chromosome,
+    "opengwasdb.store_reader.identity.normalise_chromosome": (
+        identity.normalise_chromosome,
         "(chromosome: 'str') -> 'str'",
     ),
     "opengwasdb.variants.sorted_spelling.sorted_alid_locus": (

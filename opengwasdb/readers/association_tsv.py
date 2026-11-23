@@ -53,13 +53,9 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import parse_af
-from opengwasdb.variants import VariantNormalisationError, orient_to_canonical
-from opengwasdb.variants.normalise import (
-    MalformedIdentity,
-    Orientation,
-    UndeclaredReference,
-    identity_fault,
-)
+from opengwasdb.store_reader.identity import MalformedIdentity, VariantNormalisationError
+from opengwasdb.variants import orient_to_canonical
+from opengwasdb.variants.normalise import Orientation, UndeclaredReference, identity_fault
 
 __all__ = ["ASSOCIATION_TSV_CAPABILITY", "AssociationTsvReader", "SourceRowError"]
 

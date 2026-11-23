@@ -79,7 +79,7 @@ def test_axis_without_an_rsid_index_still_opens(tmp_path: Path):
     """Stores built before this index exists must keep working -- alid lookups
     unaffected, rsid lookups simply find nothing (the pre-#109 behaviour)."""
     axis = _axis(tmp_path)
-    from opengwasdb.variants.axis import variant_rsid_bytes_path, variant_rsid_rows_path
+    from opengwasdb.store_reader.variant_axis import variant_rsid_bytes_path, variant_rsid_rows_path
 
     axis.close()
     variant_rsid_bytes_path(tmp_path).unlink()

@@ -275,8 +275,8 @@ def _region_accounting(
     """Each completed Analysis's significant regions and the cells completion added it,
     read back from the two Stores: an added cell is a completed row whose ALID the
     source does not hold for that Analysis."""
-    from opengwasdb.associations import Cells, CsrReader
     from opengwasdb.completion.ld_panel import list_chromosomes
+    from opengwasdb.store_reader.associations import Cells, CsrReader
 
     regions = _table_regions(table)
     on_panel = set(list_chromosomes(ld_dir, ancestry))
@@ -389,7 +389,7 @@ def regions_projection(args: argparse.Namespace) -> None:
     does not observe. On a run's panel, checked against what that run added, Analysis by
     Analysis; on the full panel, the full Store's cells, split into imputed and missing by
     the run's measured share."""
-    from opengwasdb.associations import Cells, CsrReader
+    from opengwasdb.store_reader.associations import Cells, CsrReader
 
     regions = _table_regions(args.source / REGIONS_FILE)
     analyses = sorted(

@@ -2249,7 +2249,7 @@ Top-hit results from Reference-Completed releases include imputed associations b
 
 ## 19. Query result contract
 
-A query returns an association record (`opengwasdb.associations.Associations`):
+A query returns an association record (`opengwasdb.store_reader.associations.Associations`):
 parallel arrays read as a mapping, keyed `variant_index`, `analysis_index`, `z`,
 `se`, `eaf`, `n` (below) and `association_status` (ADR 0020, ADR 0070). A
 Dense grid stores no association at a missing cell, so a Dense result omits

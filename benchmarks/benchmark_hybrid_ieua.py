@@ -335,7 +335,7 @@ def main() -> None:
     }
 
     # Storage split.
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
     hyb_manifest = StoreManifest.load(stores["hybrid_completed"])
     hyb = hyb_manifest.provenance.get("hybrid", {})
     storage = {

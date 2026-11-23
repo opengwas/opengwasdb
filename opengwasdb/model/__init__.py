@@ -2,12 +2,10 @@
 
 from opengwasdb.model.analyses import (
     ANALYSIS_COLUMNS,
-    AnalysesTable,
     Analysis,
     ColumnClass,
     analyses_table_from_records,
     classify_column,
-    read_analyses,
     read_analysis_records,
     to_json_schema,
     validate_analyses,
@@ -17,18 +15,14 @@ from opengwasdb.model.analyses import (
 from opengwasdb.model.enums import (
     COVERAGES_BY_LAYOUT,
     AncestryAssignmentMethod,
-    AssociationCoverage,
-    CompletionState,
     EafScope,
     InfoScope,
     OriginalSdMethod,
-    PrimaryStorageLayout,
     SampleSizeKind,
     SampleSizeScope,
     StoredEffectScale,
     coverage_for_layout,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
     MANIFEST_COLUMN_ALIASES,
     ManifestColumns,
@@ -39,6 +33,9 @@ from opengwasdb.model.manifest_columns import (
     required_manifest_column,
     resolve_manifest_columns,
 )
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import StoreManifest
 
 __all__ = [
     "ANALYSIS_COLUMNS",

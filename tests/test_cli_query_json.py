@@ -17,8 +17,8 @@ from test_ragged_residual_completion import RaggedResidualScenario
 from typer.testing import CliRunner
 
 import opengwasdb.cli.main as cli
-from opengwasdb.associations import Associations
 from opengwasdb.cli.main import _emit_json, app
+from opengwasdb.store_reader.associations import Associations
 
 #: A row is the record's mapping, key by key (spec §19).
 JSON_KEYS = {"variant_index", "analysis_index", "z", "se", "eaf", "association_status"}

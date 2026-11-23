@@ -25,7 +25,7 @@ from opengwasdb.build.liftover import (
     enforce_liftover_threshold,
     lifted_positions,
 )
-from opengwasdb.variants.normalise import VariantNormalisationError, normalise_chromosome
+from opengwasdb.store_reader.identity import VariantNormalisationError, normalise_chromosome
 
 __all__ = ["LiftedTraitPositions", "lift_trait_positions", "write_unlifted"]
 

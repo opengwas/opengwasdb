@@ -27,7 +27,8 @@ import pytest
 
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.store import open as store_open
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, PRE_RESET_FORMAT_VERSIONS
+from opengwasdb.store_reader import format as store_format
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION, PRE_RESET_FORMAT_VERSIONS
 
 
 def _set_version(store: Path, version: str) -> None:
@@ -41,8 +42,8 @@ def _set_version(store: Path, version: str) -> None:
 
 
 def test_version_parses_as_major_minor_patch():
-    assert store_open.parse_format_version("0.1.0") == (0, 1, 0)
-    assert store_open.parse_format_version("12.34.56") == (12, 34, 56)
+    assert store_format.parse_format_version("0.1.0") == (0, 1, 0)
+    assert store_format.parse_format_version("12.34.56") == (12, 34, 56)
 
 
 @pytest.mark.parametrize("version", sorted(PRE_RESET_FORMAT_VERSIONS))
@@ -51,8 +52,8 @@ def test_a_pre_reset_version_is_refused_with_an_instruction(version):
     it published anything. None is readable, and the message says what to do
     about it rather than complaining about punctuation: those stores are
     rebuilt, not migrated."""
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
-        store_open.parse_format_version(version)
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Rebuild the release"):
+        store_format.parse_format_version(version)
 
 
 def test_the_pre_reset_versions_are_the_two_component_ones():
@@ -70,10 +71,10 @@ def test_the_pre_reset_versions_are_the_two_component_ones():
 def test_a_version_that_is_not_major_minor_patch_is_refused(version):
     """Refused, not coerced. To a caller deciding whether it can read a
     release, an unparseable version and a future one are the same answer."""
-    with pytest.raises(store_open.MalformedFormatVersion):
-        store_open.parse_format_version(version)
+    with pytest.raises(store_format.MalformedFormatVersion):
+        store_format.parse_format_version(version)
     # And it stops a read, not merely a parse.
-    assert issubclass(store_open.MalformedFormatVersion, store_open.UnsupportedFormatVersion)
+    assert issubclass(store_format.MalformedFormatVersion, store_format.UnsupportedFormatVersion)
 
 
 # --- which component carries an incompatible change ------------------------
@@ -83,11 +84,11 @@ def test_the_leftmost_non_zero_component_is_the_breaking_one():
     """Semantic versioning's own rule (ADR 0041 §1). Below 1.0.0 a format
     declares itself unsettled, so MINOR carries a breaking change; from 1.0.0
     it is MAJOR, and MINOR joins the compatible remainder."""
-    assert store_open.split_format_version("0.1.0") == ((0, 1), (0,))
-    assert store_open.split_format_version("0.1.7") == ((0, 1), (7,))
-    assert store_open.split_format_version("0.2.0") == ((0, 2), (0,))
-    assert store_open.split_format_version("1.4.2") == ((1,), (4, 2))
-    assert store_open.split_format_version("1.0.0") == ((1,), (0, 0))
+    assert store_format.split_format_version("0.1.0") == ((0, 1), (0,))
+    assert store_format.split_format_version("0.1.7") == ((0, 1), (7,))
+    assert store_format.split_format_version("0.2.0") == ((0, 2), (0,))
+    assert store_format.split_format_version("1.4.2") == ((1,), (4, 2))
+    assert store_format.split_format_version("1.0.0") == ((1,), (0, 0))
 
 
 # --- the reader contract ---------------------------------------------------
@@ -95,9 +96,9 @@ def test_the_leftmost_non_zero_component_is_the_breaking_one():
 
 def test_the_version_this_build_writes_is_one_it_can_read():
     """Otherwise the build could not open what it had just produced."""
-    store_open.check_format_version(CURRENT_FORMAT_VERSION)
-    series, remainder = store_open.split_format_version(CURRENT_FORMAT_VERSION)
-    assert store_open.SUPPORTED_FORMAT_VERSIONS[series] >= remainder
+    store_format.check_format_version(CURRENT_FORMAT_VERSION)
+    series, remainder = store_format.split_format_version(CURRENT_FORMAT_VERSION)
+    assert store_format.SUPPORTED_FORMAT_VERSIONS[series] >= remainder
 
 
 def test_the_readable_formats_are_the_two_the_epic_carries():
@@ -106,7 +107,7 @@ def test_the_readable_formats_are_the_two_the_epic_carries():
     0.2.2 spells an indel's ALID reference first (#381, ADR 0079), and 0.2.3 records
     `n_missing_se_out_of_range` (#338, ADR 0068). Another entry is a decision, not an
     accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (3,)}
+    assert dict(store_format.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (3,)}
 
 
 def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
@@ -116,7 +117,7 @@ def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
     release is stamped the lowest of the three whose features it uses. 0.2.3 is 0.2.2
     whose `analyses.tsv` records `n_missing_se_out_of_range` (issue #338), so a release
     whose indels are sorted is stamped by them, whatever it counts."""
-    stamp = store_open.format_version_for
+    stamp = store_format.format_version_for
     for counts in (False, True):
         assert stamp(
             carries_regions=False, reference_first_indels=False, records_se_out_of_range=counts
@@ -131,7 +132,7 @@ def test_a_release_is_stamped_the_lowest_version_whose_features_it_uses():
         assert stamp(
             carries_regions=regions, reference_first_indels=True, records_se_out_of_range=True
         ) == "0.2.3"
-    assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
+    assert store_format.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
 
 
 def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature():
@@ -139,7 +140,7 @@ def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature
     since every build spells an indel reference first, and what opengwasdb-stores'
     engine update probes (`ogstores.engine_update`) and compares with its
     `REQUIRED_FORMAT_VERSION`."""
-    assert CURRENT_FORMAT_VERSION == store_open.format_version_for(
+    assert CURRENT_FORMAT_VERSION == store_format.format_version_for(
         carries_regions=False, reference_first_indels=True
     )
     assert CURRENT_FORMAT_VERSION == "0.2.3"
@@ -148,21 +149,21 @@ def test_the_current_version_is_the_stamp_of_a_release_using_no_optional_feature
 def test_each_readable_series_has_one_zarr_on_disk_format():
     """The version-to-layout rule lives beside the version tables, so a caller
     does not pattern-match a version string to guess it (#264 review)."""
-    assert store_open.zarr_format_for_version("0.1.0") == 2
-    assert store_open.zarr_format_for_version(CURRENT_FORMAT_VERSION) == 3
-    assert dict(store_open.ZARR_FORMAT_BY_SERIES) == {(0, 1): 2, (0, 2): 3}
+    assert store_format.zarr_format_for_version("0.1.0") == 2
+    assert store_format.zarr_format_for_version(CURRENT_FORMAT_VERSION) == 3
+    assert dict(store_format.ZARR_FORMAT_BY_SERIES) == {(0, 1): 2, (0, 2): 3}
 
 
 def test_an_unreadable_version_has_no_zarr_layout():
-    with pytest.raises(store_open.UnsupportedFormatVersion):
-        store_open.zarr_format_for_version("9.9.9")
+    with pytest.raises(store_format.UnsupportedFormatVersion):
+        store_format.zarr_format_for_version("9.9.9")
 
 
 def test_an_unknown_series_is_rejected():
     """A breaking change moves the series, and this build reads two of them."""
     for version in ("0.3.0", "1.0.0", "9.9.9"):
-        with pytest.raises(store_open.UnsupportedFormatVersion, match="release series"):
-            store_open.check_format_version(version)
+        with pytest.raises(store_format.UnsupportedFormatVersion, match="release series"):
+            store_format.check_format_version(version)
 
 
 def test_a_newer_compatible_version_is_read_but_warned_about(caplog):
@@ -170,7 +171,7 @@ def test_a_newer_compatible_version_is_read_but_warned_about(caplog):
     one misclassified as compatible becomes visible instead of silently losing
     data."""
     with caplog.at_level("WARNING"):
-        store_open.check_format_version("0.1.7")
+        store_format.check_format_version("0.1.7")
 
     assert "0.1.7" in caplog.text
     assert "not visible here" in caplog.text
@@ -186,14 +187,14 @@ def test_open_store_refuses_a_pre_reset_release(dense_store_path):
     does not try to tell the two apart."""
     _set_version(dense_store_path, "3.0")
 
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Rebuild the release"):
         store_open.open_store(dense_store_path)
 
 
 def test_open_store_rejects_an_unknown_series(dense_store_path):
     _set_version(dense_store_path, "1.0.0")
 
-    with pytest.raises(store_open.UnsupportedFormatVersion):
+    with pytest.raises(store_format.UnsupportedFormatVersion):
         store_open.open_store(dense_store_path)
 
 
@@ -228,7 +229,7 @@ def test_the_converter_stamps_by_the_builders_rule_and_keeps_sorted_indels():
     """
     from opengwasdb.store import convert
 
-    assert convert.format_version_for is store_open.format_version_for
+    assert convert.format_version_for is store_format.format_version_for
     assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
 
 
@@ -239,7 +240,7 @@ def test_the_converter_stamps_by_the_builders_rule_and_keeps_sorted_indels():
 def test_a_store_spells_its_indels_reference_first_from_0_2_2(version, reference_first):
     """0.2.1 is package 0.9.0's region table, its indels still sorted; #381's reference-
     first spelling is 0.2.2 (ADR 0079)."""
-    assert store_open.indels_reference_first(version) is reference_first
+    assert store_format.indels_reference_first(version) is reference_first
 
 
 @pytest.mark.parametrize("version", ["0.1.0", "0.2.0", "0.2.1"])
@@ -251,8 +252,8 @@ def test_a_store_that_sorts_its_indels_is_readable_but_not_writable(version):
     panel ALIDs spelt reference first beside them, so the remedy is a rebuild:
     a conversion keeps the sorted spelling (ADR 0079).
     """
-    store_open.check_format_version(version)
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+    store_format.check_format_version(version)
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Rebuild the release"):
         store_open.check_writable_format_version(version, source="source release X")
 
 
@@ -260,8 +261,8 @@ def test_a_readable_but_unwritable_version_is_refused():
     """A newer remainder of a known series is read, with a warning (§21.2), but not
     written: 0.2.4 spells its indels as 0.2.3 does and is still refused, since this
     build does not know what else it adds."""
-    store_open.check_format_version("0.2.4")  # still readable, logged as newer
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
+    store_format.check_format_version("0.2.4")  # still readable, logged as newer
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="reads but cannot write"):
         store_open.check_writable_format_version("0.2.4", source="source release X")
 
 
@@ -271,7 +272,7 @@ def test_a_newer_stamp_is_not_judged_by_this_builds_rule(carries_regions):
     that package's rule. This build says to upgrade, never that the stamp is wrong,
     since re-stamping it 0.2.3 would let this build complete a format it does not
     know -- as package 0.9.0 tells a 0.2.2 Store it "is 0.2.1"."""
-    with pytest.raises(store_open.UnsupportedFormatVersion) as refused:
+    with pytest.raises(store_format.UnsupportedFormatVersion) as refused:
         store_open.check_format_version_stamp("0.2.4", carries_regions=carries_regions)
     message = str(refused.value)
     assert "Upgrade opengwasdb" in message and "do not re-stamp" in message, message
@@ -290,7 +291,7 @@ def test_completion_refuses_a_source_that_sorts_its_indels(tmp_path, dense_store
     _set_version(dense_store_path, version)
     out = tmp_path / "completed.opengwasdb"
 
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="sorts an indel's alleles"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="sorts an indel's alleles"):
         complete_dense_store(
             dense_store_path,
             out,
@@ -315,7 +316,7 @@ def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(
     _set_version(dense_store_path, "2.0")
     out = tmp_path / "completed.opengwasdb"
 
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Rebuild the release"):
         complete_dense_store(
             dense_store_path,
             out,
@@ -340,7 +341,7 @@ def test_a_writer_reads_the_layout_from_the_series_not_the_current_version():
     assert store_open.check_writable_zarr_layout("0.2.0") == 3
     assert store_open.check_writable_zarr_layout("0.2.1") == 3
     assert store_open.check_writable_zarr_layout("0.2.2") == 3
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
         store_open.check_writable_zarr_layout("0.1.0", source="release at /tmp/x")
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Zarr format 2"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Zarr format 2"):
         store_open.check_writable_zarr_layout("0.1.7")

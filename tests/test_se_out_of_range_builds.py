@@ -25,7 +25,7 @@ from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf
 
 #: An SE no float16 plane holds: above 65,504 and below 65,520, so a narrowing

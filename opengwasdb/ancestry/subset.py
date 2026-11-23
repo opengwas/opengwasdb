@@ -29,9 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.ancestry.catalogue import UNASSIGNED
-from opengwasdb.model.enums import AncestryAssignmentMethod, AssociationCoverage
+from opengwasdb.model.enums import AncestryAssignmentMethod
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.enums import AssociationCoverage
 
 log = logging.getLogger(__name__)
 

@@ -8,13 +8,17 @@ change it -- the switch to Zarr v3 sharding (#247) and the converter that has
 to reproduce the same layout (#245) -- cannot disagree about how an array is
 laid out.
 
-The seam owns five things:
+The seam owns what follows. The layout facts it creates arrays on -- each
+`ArrayRole`'s inner chunk and shard, and their clipping -- are the format's, and
+live in `opengwasdb.store_reader.layout` (#464), which readers check them
+against; this module applies them at creation.
 
 * **the compressor**, `compressor()`, one Blosc zstd / clevel 3 / bitshuffle
   configuration described by `COMPRESSOR_RECORD`.  The record is the same dict
   the manifest and `index.sqlite` publish, so the bytes a plane is stored with
   and the bytes the manifest claims it was stored with cannot drift apart.
-* **the chunk layout**, through the role -> policy table `_LAYOUTS`.  A caller
+* **the chunk layout**, through the role -> policy table
+  (`opengwasdb.store_reader.layout._LAYOUTS`).  A caller
   names its array's `ArrayRole`; the role, the array's shape and -- for the one
   role that depends on a sibling, `PER_VARIANT` -- the component plane's
   variant-axis chunk fix the default chunks.  The component chunk is an
@@ -32,33 +36,31 @@ The seam owns five things:
   seam is the only code that hands it to Zarr.  Omitting `fill_value` means
   "the dtype's default", which is *not* the same as `fill_value=None` and is
   what several whole-array writes rely on.
-* **zarr's process-wide runtime configuration** (the section after the
-  imports): chunks that are all fill value are still written, Blosc decodes
-  with its internal threads, and every array goes through zarr's fused codec
-  pipeline with one worker.  zarr-python 3 holds these in runtime config
-  rather than array metadata, so they are set once, when this module is
-  imported (#244).
+* **zarr's process-wide runtime configuration**: chunks that are all fill
+  value are still written, Blosc decodes with its internal threads, and every
+  array goes through zarr's fused codec pipeline with one worker.  zarr-python
+  3 holds these in runtime config rather than array metadata, so they are set
+  once, on import, by the read side of this seam,
+  `opengwasdb.store_reader.arrays`, which this module imports (#244, #464;
+  ADR 0056).  That module also opens a group read-only; this one opens it in
+  every other mode.
 
-The role -> layout policy is one table in this module (`_LAYOUTS`) and nothing
-else chooses chunks.  A role that does not fit an existing entry gets a new
+The role -> layout policy is one table (`opengwasdb.store_reader.layout`, #464)
+and nothing else chooses chunks.  A role that does not fit an existing entry gets a new
 one rather than a call site that passes `chunks=` by hand.
 """
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Literal
 
-import numcodecs
 import numpy as np
 import zarr
 from numcodecs import Blosc
@@ -67,138 +69,33 @@ from zarr.core.buffer import Buffer
 from zarr.core.sync import sync as zarr_sync
 from zarr.storage import LocalStore
 
-# The module whose import switches Blosc's threads off.  ``import zarr`` loads
-# it today; importing it by name makes sure it has run before the setting below
-# turns them back on, should zarr ever load it lazily.  (`importlib` rather than
-# an import statement so mypy does not follow into zarr's sources.)
-importlib.import_module("zarr.codecs.blosc")
+# The read side of the seam: importing it sets zarr's runtime configuration
+# (ADR 0056), so no array is created here without it. `array_length` and
+# `open_group`'s read mode are its; `array_length` is re-exported because
+# opengwasdb-stores imports it from here.
+from opengwasdb.store_reader import arrays as reader_arrays
+from opengwasdb.store_reader.arrays import array_length as array_length
+from opengwasdb.store_reader.arrays import inner_chunk_of
 
-# ── zarr runtime configuration ───────────────────────────────────────────────
-#
-# zarr-python 3 keeps three behaviours in process-wide runtime config rather
-# than in array metadata.  They are set here, once, in the module every Store
-# array is created and opened through, so every array the package touches gets
-# them and none can be opened without them.  ADR 0056 records why each is set,
-# what was rejected and what it costs.
-
-#: zarr 2 wrote every chunk, including one that is entirely the fill value: its
-#: ``write_empty_chunks`` default was True.  zarr-python 3 defaults it to False,
-#: which would silently drop those chunk files from a built store and change
-#: the file set a release holds.  The setting is *runtime* config, not stored
-#: metadata, so pinning it per array only covers the object `create_array`
-#: returns -- every ``group[name]`` reopens with the default.  It is therefore
-#: set once, here, the module that owns the Store's physical layout; every
-#: array this package creates or reopens then writes empty chunks as zarr 2
-#: did.  #247 must revisit this when builders move to Zarr v3 shards.
-zarr.config.set({"array.write_empty_chunks": True})
-
-#: Blosc's internal threads, back on (#244).  ``import zarr`` runs
-#: ``numcodecs.blosc.use_threads = False`` for the whole process, and zarr 3
-#: decodes on worker threads where numcodecs' adaptive default would say no
-#: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~0.6 ms with
-#: Blosc's 8 threads, for a ``[1000, 1000]`` int16 chunk of OGS-00009
-#: (``benchmarks/zarr3_blosc_decode.py``).  zarr 2.18 decoded on the main
-#: thread with 8 Blosc threads; this restores that.
-#:
-#: On its own, under zarr's default pipeline, it is not a speed-up: decodes
-#: issued concurrently from zarr's pool queue on numcodecs' lock (below), so
-#: one Analysis genome-wide went from 76 s to 88 s and random lookups slowed by
-#: 21-41%, while phewas went from 50 ms to 34 ms (medians of three fresh
-#: processes).  It pays off with the one-worker fused pipeline below, which
-#: decodes one chunk at a time with all of Blosc's threads.
-#:
-#: It is safe, from numcodecs 0.17 (the pinned floor) and its c-blosc 1.21.7:
-#:
-#: * threads: a threaded call uses Blosc's one global context, and numcodecs
-#:   serialises every such call -- compress and decompress -- under a module
-#:   ``threading.Lock``, with the GIL released inside it.  Concurrent decodes
-#:   queue rather than race.  (0.16 did not take the lock on decompress.)
-#: * forks: a forked process never uses the global context, because numcodecs
-#:   compares the pid with the importing process's and runs single-threaded
-#:   context functions in a child whatever ``use_threads`` says; it also
-#:   re-creates its lock in the child, and c-blosc discards the inherited global
-#:   context in its own ``pthread_atfork`` child handler.
-#:
-#: It is global because the flag is: numcodecs has no per-call or per-thread
-#: form, so a "query-only" switch could only mean "on from the first query
-#: onwards", a mode that depends on what a process did earlier.  The cost
-#: falls on builds, and it is the one zarr 2.18 already had: a chunk of at
-#: least two Blosc blocks (256 KiB uncompressed at zstd clevel 3, so every
-#: ``[1000, 1000]`` Dense chunk) compressed in the parent writes its blocks in
-#: completion order, so its bytes differ run to run while its decoded values
-#: and its compressed size do not.  Compare built stores byte for byte under
-#: ``BLOSC_NTHREADS=1``, as #243 did.  The SE plan reads compressed sizes only,
-#: and forked workers stay single-threaded.
-if not hasattr(numcodecs.blosc, "use_threads"):
-    raise ImportError(
-        "numcodecs.blosc no longer has `use_threads`; the seam cannot restore threaded "
-        "Blosc decoding, and setting the old name would silently do nothing (#244)"
-    )
-numcodecs.blosc.use_threads = True
-
-#: Every array reads and writes through zarr's ``FusedCodecPipeline`` (opt-in
-#: from zarr 3.3), with one worker (#244).  The default ``BatchedCodecPipeline``
-#: schedules each chunk's fetch and decode as separate event-loop tasks; the
-#: fused one fetches, decodes and scatters a whole selection in one hop to a
-#: worker thread.  On OGS-00009 with Blosc threads on it took one Analysis
-#: genome-wide from 88 s to 24 s (zarr 2.18: 26 s), random lookups from 186 ms
-#: and 1,051 ms to 103 ms and 575 ms, and phewas from 34 ms to 23 ms (medians
-#: of three fresh processes each).
-#:
-#: ``max_workers = 1`` is the measured choice, and the fork-safe one:
-#:
-#: * With Blosc threads on, chunk decodes queue on numcodecs' lock anyway, so a
-#:   pool of workers adds contention, not decode throughput: with its default
-#:   pool (224 workers here) the same read took 41-46 s, and random lookups
-#:   were 23-42% slower; only the one-window read (4,241,966 associations)
-#:   gained, by ~7%.
-#: * With more than one worker the pipeline keeps a module-level
-#:   ``ThreadPoolExecutor``, and zarr 3.4's after-fork reset clears its event
-#:   loop and executor but not that pool (zarr-developers/zarr-python#4478).
-#:   A forked build worker inherits the pool without its threads.  A read there
-#:   of more than one chunk, but of no more chunks than the idle permits the
-#:   parent's pool left, queues work that nothing runs and never returns --
-#:   reproduced with the package's own ``ordered_map`` and on OGS-00009's
-#:   top-hit gather.  A single-chunk read never uses the pool, so one-chunk
-#:   fixtures cannot show it.  With one worker the pool is never created; do
-#:   not raise ``max_workers`` (ADR 0056).
-#:
-#: Writes take the same path: a band write encodes its chunks one at a time
-#: (multi-threaded inside Blosc), as zarr 2.18 did.  A forked worker decodes
-#: single-threaded and now also one chunk at a time.
-_FUSED_PIPELINE = "zarr.core.codec_pipeline.FusedCodecPipeline"
-if not hasattr(importlib.import_module("zarr.core.codec_pipeline"), "FusedCodecPipeline"):
-    raise ImportError(
-        f"{_FUSED_PIPELINE} is gone; the seam's read path and its fork guard were "
-        "written for it (#244)"
-    )
-zarr.config.set({"codec_pipeline.path": _FUSED_PIPELINE, "codec_pipeline.max_workers": 1})
+# The format's physical layout -- each role's inner chunk and shard -- is the Store
+# Reader's (`opengwasdb.store_reader.layout`, #464); arrays are created on it here.
+from opengwasdb.store_reader.layout import (
+    ArrayRole,
+    chunk_layout,
+    component_chunk_size,
+    require_shard_multiple,
+    shard_layout,
+)
 
 __all__ = [
-    "ASSOCIATION_OFFSETS_CHUNK",
-    "ASSOCIATION_SEQUENCE_CHUNK",
     "BY_VARIANT_OFFSETS_CHUNK",
     "COMPRESSOR_RECORD",
-    "DENSE_CHUNK_SHAPE",
-    "DENSE_SHARD_SHAPE",
-    "EXCEPTION_TABLE_CHUNK",
-    "INDEXED_SUBSET_CHUNK",
-    "INDEXED_SUBSET_SHARD",
-    "PER_VARIANT_CHUNK",
-    "RAGGED_SEQUENCE_SHARD_ELEMENTS",
-    "RAGGED_SIDE_SHARD_ELEMENTS",
-    "RHO_CHUNK_ROWS",
     "SE_COEFFICIENTS",
-    "SE_COEFFICIENTS_ROWS",
     "PartialShardWriteError",
     "SHARDED_COMPRESSOR_RECORD",
     "SHARDED_STORE_ZARR_FORMAT",
     "STORE_ZARR_FORMAT",
-    "TOP_HIT_CHUNK_SIZE",
-    "ArrayRole",
     "array_length",
-    "chunk_layout",
-    "component_chunk_size",
     "component_variant_chunk",
     "compressor",
     "compressor_of",
@@ -217,7 +114,6 @@ __all__ = [
     "require_whole_shard_write",
     "require_whole_shard_writes",
     "role_for_array_path",
-    "shard_layout",
     "sharded_compressor",
     "write_shard_cells",
 ]
@@ -257,27 +153,6 @@ def compressor() -> Blosc:
     )
 
 
-def array_length(array: Any) -> int:
-    """The leading dimension of an array -- what zarr 2's ``len(array)`` meant.
-
-    zarr-python 3 removed ``Array.__len__``, so ``len(array)`` now raises
-    ``TypeError``; the leading axis is the length every call site wanted.  A
-    2-D top-hit tier reads the same way as a 1-D CSR plane.
-    """
-    return int(array.shape[0])
-
-
-def inner_chunk_of(array: Any) -> tuple[int, ...]:
-    """The *inner* chunk of a Store array, sharded or not.
-
-    zarr-python 3's ``Array.chunks`` is the inner chunk for a sharded array and
-    ``Array.shards`` is the outer shard -- the reverse of what a reader might
-    assume from the v2 spelling.  Every rule about the unit a query reads (the
-    per-variant chunk rule, issue #135; the recorded-layout rule, #245) must
-    use this, never ``shards``, or it would judge the file unit instead of the
-    read unit.  A store with one chunk per shard has ``chunks == shards``.
-    """
-    return tuple(int(size) for size in array.chunks)
 
 
 def compressor_of(array: Any) -> Any:
@@ -340,14 +215,6 @@ _new_compressor = compressor
 
 # ── chunk-layout policy ──────────────────────────────────────────────────────
 
-#: Length-indexed flat arrays (Ragged CSR association sequences): one chunk of
-#: this many cells, never clipped -- a short array keeps the same declared chunk
-#: as a long one so the chunk size does not encode the component's size.
-ASSOCIATION_SEQUENCE_CHUNK = 200_000
-
-#: The per-Analysis offset array that indexes an association sequence.
-ASSOCIATION_OFFSETS_CHUNK = 10_000
-
 #: The inner chunk of a `ragged/by_variant/offsets` array (ADR 0060).  The
 #: index's offset array is read at a single variant, so one 8 KiB inner chunk
 #: per variant is the right read unit -- unlike `ASSOCIATION_OFFSETS_CHUNK`'s
@@ -357,255 +224,6 @@ ASSOCIATION_OFFSETS_CHUNK = 10_000
 #: the converter, the legacy relayout and the augment command) must derive the
 #: same hint from the path -- see `inner_chunk_hint_for_path`.
 BY_VARIANT_OFFSETS_CHUNK = 1_000
-
-#: Ceiling for a per-variant side array (EAF baseline/reference).  The policy
-#: follows the chunk of a sibling variant-axis array when the group has one, so
-#: a side array is read in the same tiles as the plane it serves.
-PER_VARIANT_CHUNK = 200_000
-
-#: Row count of the two SE decode coefficients per Analysis.
-SE_COEFFICIENTS_ROWS = 1024
-
-#: Row count of a Rho Matrix array.
-RHO_CHUNK_ROWS = 1_000_000
-
-#: The default inner chunk of a Dense grid: 1,000 variant rows and 64 Analyses.
-#: This is `DEFAULT_CHUNK_SHAPE` in the Dense constants module, and the one
-#: definition: the Dense module imports *this* name, so the converter and the
-#: Dense builders cannot disagree about the default grid layout.  The Analysis
-#: axis narrowed from 1,000 to 64 in format 0.2.0, decided by #246 and recorded
-#: in ADR 0058; the 1,000-row variant axis is unchanged.
-DENSE_CHUNK_SHAPE = (1000, 64)
-
-#: One flat array of a top-hit threshold tier, when a caller supplies no
-#: override.  `top_hits.TOP_HIT_CHUNK_SIZE` is this value.
-TOP_HIT_CHUNK_SIZE = 16_384
-
-#: One half of an exact-value exception/overflow table, when a caller supplies
-#: no override.  `encoding/codec.EXACT_TABLE_CHUNK` is this value.
-EXCEPTION_TABLE_CHUNK = 200_000
-
-#: An Indexed Variant Subset's variant-axis inner chunk.  The subset planes are
-#: Analysis-major (`n_analyses x n_subset_variants`), so the *Analysis* axis is
-#: the row of one variant, and an inner chunk of one row by this many variants
-#: makes a single-Analysis read a contiguous run of chunks rather than a
-#: genome-wide gather (ADR 0061; prototype `CACHE_ROWS`).
-INDEXED_SUBSET_CHUNK = 65_536
-
-#: An Indexed Variant Subset plane's variant-axis shard: 16 inner chunks.  The
-#: shard is bounded along the variant axis only, so one shard never spans two
-#: Analyses -- reading one Analysis never decompresses another's cells.
-INDEXED_SUBSET_SHARD = 16 * INDEXED_SUBSET_CHUNK
-
-
-class ArrayRole(StrEnum):
-    """What an array *is*, which is what fixes its chunk layout.
-
-    The role is about the array's part in the store, not its dtype: `z` and
-    `se` are both `DENSE_STATISTIC_PLANE` and are stored as different dtypes.
-    """
-
-    #: A 2-D variant x Analysis Dense statistic grid (`z`, `se`, `eaf`) or the
-    #: float32 scratch plane a builder stages before the encoding is decided.
-    DENSE_STATISTIC_PLANE = "dense_statistic_plane"
-    #: The 2-D `uint8` imputed mask that accompanies a completed Dense grid.
-    DENSE_IMPUTED_MASK = "dense_imputed_mask"
-    #: The 1-D per-variant `uint8` `on_panel` mask of a completed Dense grid.
-    DENSE_ON_PANEL = "dense_on_panel"
-    #: A 1-D Ragged CSR association sequence: `z`, `se`, `eaf`, `variant_index`,
-    #: `imputed`, or an empty plane to be filled region by region.
-    ASSOCIATION_SEQUENCE = "association_sequence"
-    #: The per-Analysis offset array of a Ragged CSR component.
-    ASSOCIATION_OFFSETS = "association_offsets"
-    #: A 1-D per-variant side array: `eaf_baseline`, `eaf_reference`.
-    PER_VARIANT = "per_variant"
-    #: A Ragged group's 1-D per-variant side array (`ragged/eaf_baseline`,
-    #: `ragged/eaf_reference`).  The same plane as `PER_VARIANT` but a distinct
-    #: role because #248 sizes a Ragged side array's *shard* differently from a
-    #: Dense one, and #246 owns the Dense decision.
-    RAGGED_PER_VARIANT = "ragged_per_variant"
-    #: A Ragged group's exact-value exception/overflow table
-    #: (`ragged/z_overflow_index`, `ragged/eaf_exception_index`, ...).  Distinct
-    #: from the Dense `EXCEPTION_TABLE` for the same reason as
-    #: `RAGGED_PER_VARIANT`: #248 bounds its shard so a Ragged overflow table is
-    #: not one multi-hundred-MB file, without changing #246's Dense shapes.
-    RAGGED_EXCEPTION_TABLE = "ragged_exception_table"
-    #: One flat array of a top-hit threshold tier (`variant_index`, `abs_z`,
-    #: `z`, `se`, `p_value`, `imputed`, `eaf`).
-    TOP_HIT_INDEX = "top_hit_index"
-    #: The per-Analysis `analysis_offsets` array of a top-hit threshold tier.
-    TOP_HIT_ANALYSIS_OFFSETS = "top_hit_analysis_offsets"
-    #: One half of a plane's exact-value exception/overflow table.
-    EXCEPTION_TABLE = "exception_table"
-    #: The two SE decode coefficients per Analysis.
-    SE_COEFFICIENTS = "se_coefficients"
-    #: One array of the Rho Matrix group (`rho`, `n_null`, `variant_index`).
-    RHO_ARRAY = "rho_array"
-    #: One statistic plane of an Indexed Variant Subset (`z`, `se`, `eaf`).
-    #: Analysis-major (`n_analyses x n_subset_variants`) and chunked for narrow
-    #: single-Analysis reads; a distinct role because neither axis's layout is
-    #: the Dense grid's (ADR 0061, #264).
-    INDEXED_SUBSET_PLANE = "indexed_subset_plane"
-    #: An Indexed Variant Subset's sorted Store Variant Indices.
-    INDEXED_SUBSET_VARIANT_INDEX = "indexed_subset_variant_index"
-
-
-@dataclass(frozen=True)
-class _LayoutContext:
-    """Everything a layout policy is allowed to depend on.
-
-    `component_chunk` is the variant-axis chunk of the component plane a
-    per-variant side array serves.  It is a caller-supplied fact, not something
-    the policy sniffs from a group: the converter (#245) has the plane's chunk
-    and must be able to derive the same side-array layout the builder wrote
-    (spec §6).
-    """
-
-    shape: tuple[int, ...]
-    hint: Any
-    component_chunk: int | None
-
-
-def _dense_grid(ctx: _LayoutContext) -> tuple[int, ...]:
-    """A 2-D Dense grid, clipped to its own dimensions (ADR 0021)."""
-    hint = ctx.hint if ctx.hint is not None else DENSE_CHUNK_SHAPE
-    return (min(int(hint[0]), ctx.shape[0]), min(int(hint[1]), ctx.shape[1]))
-
-
-def _dense_on_panel(ctx: _LayoutContext) -> tuple[int, ...]:
-    """The per-variant Dense mask, on the grid's row chunk."""
-    hint = ctx.hint if ctx.hint is not None else DENSE_CHUNK_SHAPE
-    return (min(int(hint[0]), ctx.shape[0]),)
-
-
-def _association_sequence(ctx: _LayoutContext) -> tuple[int, ...]:
-    """A flat CSR sequence: the declared chunk, or an explicit override.
-
-    The declared chunk is fixed, not clipped to the component's length -- a
-    short component keeps the same chunk as a long one.  A caller that passes
-    an explicit `chunks=(...)` gets exactly that, as it did before the seam.
-    """
-    if ctx.hint is not None:
-        return tuple(int(size) for size in ctx.hint)
-    return (ASSOCIATION_SEQUENCE_CHUNK,)
-
-
-def _association_offsets(ctx: _LayoutContext) -> tuple[int, ...]:
-    """The CSR per-Analysis offset array, or an explicit override."""
-    if ctx.hint is not None:
-        return tuple(int(size) for size in ctx.hint)
-    return (ASSOCIATION_OFFSETS_CHUNK,)
-
-
-def _per_variant(ctx: _LayoutContext) -> tuple[int, ...]:
-    """A per-variant side array, following the plane it serves.
-
-    The component plane's variant-axis chunk (spec §6: the side array must be
-    no coarser than the plane) comes in as `component_chunk`.  An explicit
-    `hint` -- the `chunk` override the writers accept -- wins over it, clipped
-    to the array length as before.
-    """
-    length = ctx.shape[0]
-    if ctx.hint is not None:
-        return (max(1, min(int(ctx.hint), max(length, 1))),)
-    return (component_chunk_size(ctx.component_chunk, length),)
-
-
-def _length_clipped(ctx: _LayoutContext, default: int) -> tuple[int, ...]:
-    """A flat array whose chunk is an override (or `default`) clipped to length."""
-    hint = default if ctx.hint is None else int(ctx.hint)
-    return (max(1, min(ctx.shape[0], hint)),)
-
-
-def _top_hit_index(ctx: _LayoutContext) -> tuple[int, ...]:
-    """One top-hit tier's flat column, whole-array default clipped to its hits."""
-    return _length_clipped(ctx, TOP_HIT_CHUNK_SIZE)
-
-
-def _exception_table(ctx: _LayoutContext) -> tuple[int, ...]:
-    """One half of a plane's exception table."""
-    return _length_clipped(ctx, EXCEPTION_TABLE_CHUNK)
-
-
-def _top_hit_analysis_offsets(ctx: _LayoutContext) -> tuple[int, ...]:
-    """One top-hit tier's per-Analysis offsets, whole in one chunk."""
-    return (max(1, ctx.shape[0]),)
-
-
-def _se_coefficients(ctx: _LayoutContext) -> tuple[int, ...]:
-    """The (n_analyses, 2) coefficient table."""
-    return (max(1, min(ctx.shape[0], SE_COEFFICIENTS_ROWS)), ctx.shape[1])
-
-
-def _rho_array(ctx: _LayoutContext) -> tuple[int, ...]:
-    """One Rho Matrix array."""
-    return (max(1, min(ctx.shape[0], RHO_CHUNK_ROWS)),)
-
-
-def _indexed_subset_plane(ctx: _LayoutContext) -> tuple[int, ...]:
-    """An Indexed Variant Subset statistic plane, one Analysis per chunk row.
-
-    Analysis-major, so the row is one Analysis and the column is a subset
-    variant.  The default inner chunk is `(1, INDEXED_SUBSET_CHUNK)`, clipped
-    to the array, which is what makes a single-Analysis query a sequential
-    read; a caller's `hint` overrides it (the writer passes the same shape).
-    """
-    hint = ctx.hint if ctx.hint is not None else (1, INDEXED_SUBSET_CHUNK)
-    return (
-        max(1, min(int(hint[0]), ctx.shape[0])),
-        max(1, min(int(hint[1]), ctx.shape[1])),
-    )
-
-
-def _indexed_subset_variant_index(ctx: _LayoutContext) -> tuple[int, ...]:
-    """An Indexed Variant Subset's sorted Variant Index array."""
-    return _length_clipped(ctx, INDEXED_SUBSET_CHUNK)
-
-
-#: The role -> physical-layout policy.  One entry per role; later tickets that
-#: change the layout (Zarr v3 sharding, #247) change this table, and the
-#: converter (#245) reads the same table so builders and converter agree.  Each
-#: policy is a function of `role + shape + component_chunk` (the last used only
-#: by `PER_VARIANT`, and `None` for every other role and for a component with no
-#: plane); a caller's `hint` is an override the policy honours.
-_LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = MappingProxyType(
-    {
-        ArrayRole.DENSE_STATISTIC_PLANE: _dense_grid,
-        ArrayRole.DENSE_IMPUTED_MASK: _dense_grid,
-        ArrayRole.DENSE_ON_PANEL: _dense_on_panel,
-        ArrayRole.ASSOCIATION_SEQUENCE: _association_sequence,
-        ArrayRole.ASSOCIATION_OFFSETS: _association_offsets,
-        ArrayRole.PER_VARIANT: _per_variant,
-        ArrayRole.RAGGED_PER_VARIANT: _per_variant,
-        ArrayRole.RAGGED_EXCEPTION_TABLE: _exception_table,
-        ArrayRole.TOP_HIT_INDEX: _top_hit_index,
-        ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: _top_hit_analysis_offsets,
-        ArrayRole.EXCEPTION_TABLE: _exception_table,
-        ArrayRole.SE_COEFFICIENTS: _se_coefficients,
-        ArrayRole.RHO_ARRAY: _rho_array,
-        ArrayRole.INDEXED_SUBSET_PLANE: _indexed_subset_plane,
-        ArrayRole.INDEXED_SUBSET_VARIANT_INDEX: _indexed_subset_variant_index,
-    }
-)
-
-
-def component_chunk_size(component_chunk: int | None, length: int) -> int:
-    """The per-variant chunk for a component plane's variant-axis chunk.
-
-    The explicit-component-chunk helper the `PER_VARIANT` policy and the
-    converter (#245) use.  A side array must be no coarser than the plane it
-    serves (spec §6), so a component chunk smaller than `PER_VARIANT_CHUNK`
-    bounds the result; a component with no plane (`component_chunk=None`, e.g. a
-    tiny synthetic group) falls back to `PER_VARIANT_CHUNK`.  The result is
-    clipped to the array's own length.
-    """
-    cap = (
-        PER_VARIANT_CHUNK
-        if component_chunk is None
-        else min(int(component_chunk), PER_VARIANT_CHUNK)
-    )
-    return min(cap, max(length, 1))
-
 
 def per_variant_chunk_size(group: Any, length: int) -> int:
     """The per-variant chunk for a group's component plane (legacy signature).
@@ -634,32 +252,6 @@ def component_variant_chunk(group: Any) -> int | None:
     return None
 
 
-def chunk_layout(
-    role: ArrayRole,
-    shape: tuple[int, ...],
-    *,
-    hint: Any = None,
-    component_chunk: int | None = None,
-) -> tuple[int, ...]:
-    """The chunks `role` requires for an array of `shape`.
-
-    With no `hint` this is the role's **default** physical layout, derivable
-    from `role + shape`, plus -- for `PER_VARIANT` only -- the component
-    plane's `component_chunk`.  Every other role ignores `component_chunk`: the
-    one role whose layout depends on a sibling is `PER_VARIANT` (spec §6), and
-    making that dependency an argument is what lets the store converter (#245)
-    reproduce the layout without the builder's group.  `hint` is the caller's
-    explicit override (the Dense `chunk_shape`, the top-hit `chunk_size`, a
-    `chunks=(...)` passed to a CSR writer); each policy decides whether it clips
-    the override or takes it whole.
-    """
-    if role not in _LAYOUTS:
-        raise ValueError(f"no chunk layout is registered for role {role!r}")
-    return _LAYOUTS[role](
-        _LayoutContext(shape=shape, hint=hint, component_chunk=component_chunk)
-    )
-
-
 # ── v3 sharded physical layout ───────────────────────────────────────────────
 #
 # Format 0.2.0 (issue #245) stores every array as Zarr v3 with the sharding
@@ -672,45 +264,6 @@ def chunk_layout(
 # The shard is always a whole multiple of the inner chunk on every axis, which
 # zarr enforces as well; the duplicate check here fails with the role in the
 # message rather than a bare zarr error naming only the sizes.
-
-#: The default shard for a Dense statistic grid, in (variant rows, Analyses)
-#: units.  Decided by #246 and recorded in ADR 0058; the converter still takes
-#: it as a parameter and this is the value its default and the builders both
-#: use.  The Analysis axis must be bounded: the Dense VCF builder writes
-#: `[all variants x band]` column bands, so a shard spanning every Analysis
-#: would never be written whole (#240, ADR 0057).  `100000 x 1024` int16 is
-#: 205 MB uncompressed, the largest unit a conversion worker holds.
-DENSE_SHARD_SHAPE = (100_000, 1_024)
-
-#: One shard of a per-variant or flat index array, in *elements*: rounded down
-#: to a whole number of inner chunks, then clipped to the array.  These arrays
-#: are 1-D, so a shard of about a million elements is about 4 MB per dtype.
-SHARD_ELEMENT_CAP = 1_000_000
-
-#: One shard of a Ragged association sequence (`ragged/z`, `se`,
-#: `variant_index`, `eaf`, `imputed`), in *elements* (#248).  50,000,000 is 250
-#: inner chunks of the sequence policy (200,000), so on OGS-00011's overflow
-#: sequences (3,085,080,783 entries) it is 62 shard files per array instead of
-#: 3,086 at the old one-million cap.  The widest sequence dtype is 4 bytes
-#: (`variant_index`, a residual `eaf`), so one shard is at most about 200 MB
-#: uncompressed -- the same per-worker ceiling the Dense plane shard
-#: (`100000 x 1024` int16, 205 MB) sets.  Every shard is a whole multiple of
-#: the inner chunk, so a reader still decodes only the chunks it selects.
-RAGGED_SEQUENCE_SHARD_ELEMENTS = 50_000_000
-
-#: One shard of a Ragged 1-D side array, in *elements* (#248): a
-#: `RAGGED_PER_VARIANT` frequency or a `RAGGED_EXCEPTION_TABLE`.  These are
-#: read whole or at a single position rather than streamed by Analysis, so the
-#: shard exists only to bound the file and the converter worker's block: ten
-#: million elements is 80 MB for an `int64` exception index and 40 MB for a
-#: `float32` value, and 19 files for OGS-00011's 180,396,687-entry Ragged
-#: `eaf_exception_index` -- tens of MB each rather than one 1.4 GB file the
-#: whole-array policy would have produced.
-RAGGED_SIDE_SHARD_ELEMENTS = 10_000_000
-
-#: A top-hit tier's flat column keeps today's 16,384 inner chunk and shards 64
-#: of them (about a million elements), the seed of a bounded point read.
-TOP_HIT_SHARD_CHUNKS = 64
 
 #: The v3 codec chain, as `COMPRESSOR_RECORD` is for v2 -- the same Blosc
 #: zstd / clevel 3 / bitshuffle, expressed as zarr's own `BloscCodec` because a
@@ -737,275 +290,6 @@ def sharded_compressor() -> BloscCodec:
         clevel=COMPRESSOR_RECORD["clevel"],
         shuffle=COMPRESSOR_RECORD["shuffle"],
     )
-
-
-@dataclass(frozen=True)
-class _ShardContext:
-    """Everything a shard policy may depend on: role, shape, inner chunk, params.
-
-    `top_hit_shard_chunks` is the converter's `--top-hit-shard-chunks` (#246):
-    how many top-hit inner chunks one shard holds.  It applies to
-    `TOP_HIT_INDEX` alone.  `None` means the default, `TOP_HIT_SHARD_CHUNKS`;
-    `1` makes the shard one inner chunk, the "effectively unsharded" variant
-    #246 measures the top-hit query against.  The array is still a v3 sharded
-    array either way -- it is never written without the sharding codec.
-    """
-
-    shape: tuple[int, ...]
-    inner_chunk: tuple[int, ...]
-    dense_shard: tuple[int, int] | None
-    top_hit_shard_chunks: int | None = None
-
-
-def _covering_shard(inner: int, dim: int) -> int:
-    """The smallest whole number of inner chunks that covers `dim`."""
-    if inner <= 0:
-        raise ValueError(f"inner chunk {inner} is not a positive length")
-    return max(-(-max(dim, 1) // inner), 1) * inner
-
-
-def _clip_shard_to_multiple(requested: int, inner: int, dim: int) -> int:
-    """`requested` rounded to a whole number of inner chunks that covers `dim`.
-
-    A shard must be a whole multiple of the inner chunk (zarr refuses one that
-    is not), and clipping it to the array means the largest whole number of
-    inner chunks no larger than the request *or* than the array needs -- so a
-    small array gets one shard of one inner chunk rather than a shard wider
-    than the array.
-    """
-    covering = _covering_shard(inner, dim)
-    chunks = min(max(requested // inner, 1), covering // inner)
-    return chunks * inner
-
-
-def _divisors(value: int) -> list[int]:
-    """Every divisor of `value`, ascending."""
-    return [d for d in range(1, value + 1) if value % d == 0]
-
-
-def _allowed_inner_chunks(wanted: int) -> str:
-    """The inner chunks that tile a decided shard axis, for an error message."""
-    divisors = _divisors(wanted)
-    if len(divisors) <= 12:
-        return ", ".join(str(d) for d in divisors)
-    return f"any divisor of {wanted}"
-
-
-def _require_dense_shard_multiple(
-    request: tuple[int, int], inner_chunk: tuple[int, ...], shape: tuple[int, ...]
-) -> None:
-    """Refuse a Dense inner chunk that does not tile the decided shard.
-
-    A build does not choose its shard: the Dense planes are stored as the decided
-    `DENSE_SHARD_SHAPE`, clipped only when the array itself is smaller than the
-    shard (ADR 0058).  An inner chunk that does not tile the shard axis would
-    silently produce a **different** shard — e.g. `[100000, 1024]` rounded down
-    to `[100000, 1000]` for a 1,000-Analysis inner chunk — which is the layout
-    divergence #249 exists to catch but a reader cannot see.  Such an inner chunk
-    is refused here, naming the values that tile the axis.
-
-    An axis whose array is shorter than the requested shard is the one allowed
-    exception: the shard is the array's own extent (one whole-array shard), so
-    the inner chunk's divisibility is moot and the shard clips to cover the
-    array.  This applies to the *default* shard and to an explicit one alike.
-    """
-    for axis, (wanted, inner, dim) in enumerate(zip(request, inner_chunk, shape, strict=True)):
-        wanted = int(wanted)
-        if dim < wanted:
-            continue
-        if wanted % inner:
-            axis_name = "variant" if axis == 0 else "Analysis"
-            raise ValueError(
-                f"the Dense {axis_name}-axis inner chunk {inner} does not tile the "
-                f"decided shard axis {wanted} (shard {tuple(int(size) for size in request)!r}); "
-                "a build writes the format's shard, not one it chose. Allowed "
-                f"{axis_name}-axis inner chunks: {_allowed_inner_chunks(wanted)}"
-            )
-
-
-def _shard_dense_grid(ctx: _ShardContext) -> tuple[int, ...]:
-    """A Dense plane's `(V_s, A_s)` shard, from the conversion parameters."""
-    request = DENSE_SHARD_SHAPE if ctx.dense_shard is None else ctx.dense_shard
-    if len(request) != len(ctx.inner_chunk):
-        raise ValueError(
-            f"dense shard {tuple(request)!r} does not match the {len(ctx.inner_chunk)}-D "
-            f"inner chunk {ctx.inner_chunk!r}"
-        )
-    _require_dense_shard_multiple(
-        (int(request[0]), int(request[1])), ctx.inner_chunk, ctx.shape
-    )
-    return tuple(
-        _clip_shard_to_multiple(int(wanted), inner, dim)
-        for wanted, inner, dim in zip(request, ctx.inner_chunk, ctx.shape, strict=True)
-    )
-
-
-def _shard_element_cap(ctx: _ShardContext) -> tuple[int, ...]:
-    """One shard of a 1-D array is about `SHARD_ELEMENT_CAP` elements."""
-    inner = ctx.inner_chunk[0]
-    return (_clip_shard_to_multiple(SHARD_ELEMENT_CAP, inner, ctx.shape[0]),)
-
-
-def _shard_ragged_sequence(ctx: _ShardContext) -> tuple[int, ...]:
-    """One shard of a Ragged association sequence (#248).
-
-    A fixed element count, a whole number of inner chunks: the sequence is
-    Analysis-sorted but its cells are not Analysis-aligned, so a shard bounded
-    by cells (rather than by one Analysis's run) is the shape a future
-    per-variant index beside it can be added to without re-sharding.  See
-    `RAGGED_SEQUENCE_SHARD_ELEMENTS`.
-    """
-    inner = ctx.inner_chunk[0]
-    return (_clip_shard_to_multiple(RAGGED_SEQUENCE_SHARD_ELEMENTS, inner, ctx.shape[0]),)
-
-
-def _shard_ragged_side(ctx: _ShardContext) -> tuple[int, ...]:
-    """One shard of a Ragged 1-D side array (#248), bounded by elements."""
-    inner = ctx.inner_chunk[0]
-    return (_clip_shard_to_multiple(RAGGED_SIDE_SHARD_ELEMENTS, inner, ctx.shape[0]),)
-
-
-def _shard_top_hit_index(ctx: _ShardContext) -> tuple[int, ...]:
-    """A top-hit tier's flat column: its `top_hit_shard_chunks` inner chunks.
-
-    The default is the seam's `TOP_HIT_SHARD_CHUNKS`.  The converter passes an
-    override for #246's "sharded against effectively unsharded" measurement;
-    the override is validated here rather than left to zarr, so a bad value
-    fails with the role in the message.
-    """
-    count = (
-        TOP_HIT_SHARD_CHUNKS
-        if ctx.top_hit_shard_chunks is None
-        else int(ctx.top_hit_shard_chunks)
-    )
-    if count < 1:
-        raise ValueError(
-            f"top-hit shard must hold at least one inner chunk, got {count}"
-        )
-    return tuple(
-        _clip_shard_to_multiple(count * inner, inner, dim)
-        for inner, dim in zip(ctx.inner_chunk, ctx.shape, strict=True)
-    )
-
-
-def _shard_indexed_subset_plane(ctx: _ShardContext) -> tuple[int, ...]:
-    """An Indexed Variant Subset plane's shard: one Analysis row, bounded.
-
-    The Analysis axis shard is one row, so a single-Analysis read never touches
-    another Analysis's cells; the variant axis is `INDEXED_SUBSET_SHARD`
-    rounded to a whole number of inner chunks and clipped to the array.
-    """
-    return (
-        _clip_shard_to_multiple(1, ctx.inner_chunk[0], ctx.shape[0]),
-        _clip_shard_to_multiple(INDEXED_SUBSET_SHARD, ctx.inner_chunk[1], ctx.shape[1]),
-    )
-
-
-def _shard_indexed_subset_variant_index(ctx: _ShardContext) -> tuple[int, ...]:
-    """An Indexed Variant Subset's Variant Index array, sharded by element cap."""
-    return _shard_element_cap(ctx)
-
-
-def _shard_whole_array(ctx: _ShardContext) -> tuple[int, ...]:
-    """One shard holds the whole array, so a small side array is one file.
-
-    Used for the exact-value exception/overflow tables, the SE coefficient
-    table, the top-hit per-Analysis offsets and the CSR offset array: each is
-    read whole or at a single Analysis, so a shard split only adds files.
-    """
-    return tuple(
-        _covering_shard(inner, dim)
-        for inner, dim in zip(ctx.inner_chunk, ctx.shape, strict=True)
-    )
-
-
-#: The role -> shard policy, the companion of `_LAYOUTS`.  #247 reads this same
-#: table; the converter must not keep a private copy (issue #245).
-_SHARD_LAYOUTS: Mapping[ArrayRole, Callable[[_ShardContext], tuple[int, ...]]] = (
-    MappingProxyType(
-        {
-            ArrayRole.DENSE_STATISTIC_PLANE: _shard_dense_grid,
-            ArrayRole.DENSE_IMPUTED_MASK: _shard_dense_grid,
-            ArrayRole.DENSE_ON_PANEL: _shard_element_cap,
-            ArrayRole.ASSOCIATION_SEQUENCE: _shard_ragged_sequence,
-            ArrayRole.ASSOCIATION_OFFSETS: _shard_whole_array,
-            ArrayRole.PER_VARIANT: _shard_element_cap,
-            ArrayRole.RAGGED_PER_VARIANT: _shard_ragged_side,
-            ArrayRole.RAGGED_EXCEPTION_TABLE: _shard_ragged_side,
-            ArrayRole.TOP_HIT_INDEX: _shard_top_hit_index,
-            ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: _shard_whole_array,
-            ArrayRole.EXCEPTION_TABLE: _shard_whole_array,
-            ArrayRole.SE_COEFFICIENTS: _shard_whole_array,
-            ArrayRole.RHO_ARRAY: _shard_element_cap,
-            ArrayRole.INDEXED_SUBSET_PLANE: _shard_indexed_subset_plane,
-            ArrayRole.INDEXED_SUBSET_VARIANT_INDEX: _shard_indexed_subset_variant_index,
-        }
-    )
-)
-
-
-def _require_shard_multiple(
-    role: ArrayRole, inner: tuple[int, ...], shard: tuple[int, ...]
-) -> None:
-    """Fail loudly unless `shard` is a whole multiple of `inner` on every axis."""
-    if len(shard) != len(inner):
-        raise ValueError(
-            f"role {role!r}: shard {shard!r} has {len(shard)} dimensions but the inner "
-            f"chunk {inner!r} has {len(inner)}"
-        )
-    for axis, (outer, inner_axis) in enumerate(zip(shard, inner, strict=True)):
-        if inner_axis <= 0 or outer <= 0 or outer % inner_axis:
-            raise ValueError(
-                f"role {role!r}: shard {shard!r} is not a whole multiple of the inner "
-                f"chunk {inner!r} (axis {axis}: {outer} is not a multiple of {inner_axis})"
-            )
-
-
-def shard_layout(
-    role: ArrayRole,
-    shape: tuple[int, ...],
-    *,
-    inner_chunk: tuple[int, ...] | None = None,
-    dense_shard: tuple[int, int] | None = None,
-    component_chunk: int | None = None,
-    top_hit_shard_chunks: int | None = None,
-) -> tuple[int, ...]:
-    """The shard shape `role` requires for an array of `shape`.
-
-    `inner_chunk` is the array's inner chunk, normally from `chunk_layout`; when
-    omitted it is derived from `role + shape` (with `component_chunk` for
-    `PER_VARIANT`).  `dense_shard` is the `(V_s, A_s)` conversion parameter and
-    applies only to the Dense grid roles; every other role's shard is fixed by
-    its policy.  `top_hit_shard_chunks` is the converter's override for
-    `TOP_HIT_INDEX` (#246); it is ignored by every other role.
-
-    The result is always a whole multiple of `inner_chunk` -- the presence of a
-    shard that is not is a corrupt layout, so this refuses rather than passing
-    it to zarr to fail with a message that names only two sizes.
-    """
-    if role not in _SHARD_LAYOUTS:
-        raise ValueError(f"no shard layout is registered for role {role!r}")
-    resolved = (
-        chunk_layout(role, shape, component_chunk=component_chunk)
-        if inner_chunk is None
-        else tuple(int(size) for size in inner_chunk)
-    )
-    if len(resolved) != len(shape):
-        raise ValueError(
-            f"role {role!r}: inner chunk {resolved!r} does not match shape {tuple(shape)!r}"
-        )
-    shard = _SHARD_LAYOUTS[role](
-        _ShardContext(
-            shape=tuple(int(size) for size in shape),
-            inner_chunk=resolved,
-            dense_shard=(
-                None if dense_shard is None else (int(dense_shard[0]), int(dense_shard[1]))
-            ),
-            top_hit_shard_chunks=top_hit_shard_chunks,
-        )
-    )
-    _require_shard_multiple(role, resolved, shard)
-    return shard
 
 
 # ── whole-shard writes ───────────────────────────────────────────────────────
@@ -1444,9 +728,9 @@ if os.environ.get(_ENFORCE_WHOLE_SHARD_WRITES_ENV) == "1":
 
 
 #: The array a residual `se` plan's per-Analysis fit lives in, as its path
-#: spells it. `ArrayRole.SE_COEFFICIENTS` is the role; this is the key, and the
-#: one place the string is spelled: the role maps below and `encoding.codec`
-#: (lower-level modules cannot define it without an upward import) read it.
+#: spells it. `ArrayRole.SE_COEFFICIENTS` is the role; this is the key, spelled
+#: once, by the Store Reader's codec (`SE_COEFFICIENTS_KEY`), whose decoded
+#: planes read it (#464); the role maps below read it here.
 SE_COEFFICIENTS = ArrayRole.SE_COEFFICIENTS.value
 
 #: The Dense roles, by array path, for a Dense Observed-Only or
@@ -1894,7 +1178,7 @@ def _creation_layout(
             if shards is None
             else tuple(int(size) for size in shards)
         )
-        _require_shard_multiple(role, chunks, resolved_shards)
+        require_shard_multiple(role, chunks, resolved_shards)
         resolved_compressor = (
             sharded_compressor() if compressor is _SEAM_COMPRESSOR else _v3_compressor(compressor)
         )
@@ -2221,22 +1505,25 @@ def _open_group_format(mode: str, zarr_format: int | None = None) -> Literal[2, 
 def open_group(
     path: str | Path, mode: str = "r", *, zarr_format: int | None = None
 ) -> Any:
-    """Open a Zarr group, read-only by default.
+    """Open a Zarr group in any mode, read-only by default.
 
-    The one place `zarr.open_group` is called, so the Store format is declared
-    once.  `mode` may be a creating mode here; `open_group_for_write` is the
-    named entry point for those, and this general form exists for `r`/`r+` and
-    for the release-envelope ``arrays(mode=...)`` methods that forward their
-    mode.  A creating mode is pinned to `STORE_ZARR_FORMAT` unless `zarr_format`
-    overrides it (the converter's v3 output, #245); a read mode leaves the
-    format to the stored metadata.  Any mode but ``r`` refuses a group that
-    consolidated metadata describes (`refuse_under_consolidated_metadata`).
+    Mode ``r`` is a forwarder: it calls the Store Reader's read-only open,
+    `opengwasdb.store_reader.arrays.open_group`. Every other mode opens here,
+    the one place outside it that calls `zarr.open_group`, so the Store format
+    is declared in two places only. `open_group_for_write` is the named entry
+    point for a creating mode; this general form exists for ``r+`` and for the
+    release-envelope ``arrays(mode=...)`` methods that forward their mode. A
+    creating mode is pinned to `STORE_ZARR_FORMAT` unless `zarr_format`
+    overrides it (the converter's v3 output, #245). Any mode but ``r`` refuses a
+    group that consolidated metadata describes
+    (`refuse_under_consolidated_metadata`).
     """
     zarr_mode = _zarr_mode(mode)
-    if zarr_mode != "r":
-        refuse_under_consolidated_metadata(
-            Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
-        )
+    if zarr_mode == "r":
+        return reader_arrays.open_group(path)
+    refuse_under_consolidated_metadata(
+        Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
+    )
     store = _open_local_store(path, zarr_mode)
     return zarr.open_group(
         store, mode=zarr_mode, zarr_format=_open_group_format(mode, zarr_format)

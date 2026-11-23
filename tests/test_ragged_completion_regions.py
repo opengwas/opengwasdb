@@ -409,7 +409,7 @@ def _completion_record(store: Path) -> dict:
 
 
 def _alids_at(store: Path, chromosome: str, bp: int) -> list[str]:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     return [
         r.alid for r in iter_variant_records(store / "variants.tsv.gz")
@@ -615,7 +615,7 @@ def _as_0_9_0_wrote_it(store: Path, tmp_path: Path) -> Path:
     0.2.0 without. These fixtures hold no indel, so their ALIDs are 0.9.0's too."""
     import shutil
 
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     assert not any(
         len(r.effect_allele) != len(r.other_allele)
@@ -665,7 +665,7 @@ def test_a_completion_refuses_a_source_stamped_other_than_its_features(tmp_path,
     also claims sorted indels, which completion refuses first (ADR 0079)."""
     import shutil
 
-    from opengwasdb.store.open import UnsupportedFormatVersion
+    from opengwasdb.store_reader.format import UnsupportedFormatVersion
 
     source = shutil.copytree(cis_only[0], tmp_path / "restamped.opengwasdb")
     edit_manifest(source, lambda m: {**m, "format_version": "0.2.1"})

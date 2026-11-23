@@ -5,10 +5,13 @@ builders that read allele frequency -- because three copies of it is three
 chances for one to drift (ADR 0036). `Z_975` and the
 `inverse_normal_denominator(s)` pair are shared by exactly two readers,
 `readers/effect_source.py` and `readers/tabular.py`, which derive a standard
-error from an effect and a p-value. `p_value_from_z` has one caller, the
-validator, and `log10_p_two_sided` one, the query resolver; they live here
-rather than beside that caller so the scalar and array forms of one rule stay
-in one file.
+error from an effect and a p-value.
+
+The p-value a stored z implies -- `p_value_from_z` and `log10_p_two_sided`, the
+scalar and array forms of one rule -- is the Store Reader's
+(`opengwasdb.store_reader.stats`, #464), which computes it without scipy; they
+are re-exported here. Result resolution is the one caller of
+`log10_p_two_sided` in the package; `p_value_from_z` has none, only a test.
 """
 
 from __future__ import annotations
@@ -19,7 +22,9 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import stats as _scipy_stats
 
-_LN10 = math.log(10.0)
+# Re-exported: the Store Reader owns the rule (#464).
+from opengwasdb.store_reader.stats import log10_p_two_sided as log10_p_two_sided
+from opengwasdb.store_reader.stats import p_value_from_z as p_value_from_z
 
 #: `Φ⁻¹(0.975)`, the quantile a reported 95% confidence interval's half-width is
 #: `z` standard errors behind. A literal rather than a call, so the row-wise rule
@@ -87,12 +92,6 @@ def parse_af(value: str | float | None, tally: FrequencyTally | None = None) -> 
     return None
 
 
-def p_value_from_z(z: float) -> float:
-    """Return the two-sided normal p-value implied by a Z score."""
-
-    return math.erfc(abs(z) / math.sqrt(2.0))
-
-
 def inverse_normal_denominator(p_value: float) -> float:
     """`-Φ⁻¹(p / 2)`, the divisor a two-sided p-value's effect size divides by.
 
@@ -113,16 +112,3 @@ def inverse_normal_denominators(p_values: np.ndarray) -> np.ndarray:
     """
     denominators: np.ndarray = -_scipy_stats.norm.ppf(p_values / 2.0)
     return denominators
-
-
-def log10_p_two_sided(z: np.ndarray) -> np.ndarray:
-    """Vectorised log10 of `p_value_from_z`, stable past the point the plain
-    erfc-based p itself underflows to 0.0 in float64 (|z| >~ 38) -- e.g. the
-    FADS1/FADS2 window's |z| = 47.8 (issue #104). Computed in log-space via
-    `scipy.stats.norm.logsf` rather than `log(p_value_from_z(z))`, which
-    would already have lost the value to underflow before the log is taken.
-    """
-
-    abs_z = np.abs(np.asarray(z, dtype="float64"))
-    result: np.ndarray = (math.log(2.0) + _scipy_stats.norm.logsf(abs_z)) / _LN10
-    return result

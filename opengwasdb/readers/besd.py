@@ -33,11 +33,10 @@ from opengwasdb.readers.gwas_vcf import oriented_variant
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap
 from opengwasdb.readers.rows import MetricsChunk, ReaderBatch
 from opengwasdb.stats import parse_af
+from opengwasdb.store_reader.identity import MalformedIdentity, normalise_chromosome
 from opengwasdb.variants.normalise import (
-    MalformedIdentity,
     allele_fault,
     chromosome_fault,
-    normalise_chromosome,
     oriented_alid,
     undeclared_reference,
 )

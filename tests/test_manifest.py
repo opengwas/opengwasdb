@@ -2,13 +2,9 @@ import json
 
 import pytest
 
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    CompletionState,
-    PrimaryStorageLayout,
-)
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import open_store
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import StoreManifest
 
 
 def _write_manifest(tmp_path, **overrides):

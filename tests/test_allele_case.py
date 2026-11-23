@@ -26,9 +26,10 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.query import query_store
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+from opengwasdb.store_reader.identity import identity_allele
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
-from opengwasdb.variants.normalise import identity_allele, identity_alleles, identity_base
+from opengwasdb.variants.normalise import identity_alleles, identity_base
 from opengwasdb.variants.reference import read_variant_reference
 from tests.ssf_builds import build_ragged_from_ssf
 

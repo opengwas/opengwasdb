@@ -15,8 +15,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from opengwasdb.variants import VariantAxis
-from opengwasdb.variants.axis import _ALID_WIDTH, is_indexable_alid, write_variant_axis
+from opengwasdb.store_reader.alid import ALID_WIDTH, is_indexable_alid
+from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
 
@@ -40,8 +40,8 @@ def _shared_prefix_pair(pos: int = 1_175_982) -> tuple[CanonicalVariant, Canonic
 def test_the_fixture_alids_are_wider_than_the_index_slot():
     """Meaningfulness: a pair that fits the slot would never collide."""
     short, long_ = _shared_prefix_pair()
-    assert len(short.alid) > _ALID_WIDTH, (short.alid, _ALID_WIDTH)
-    assert short.alid[:_ALID_WIDTH] == long_.alid[:_ALID_WIDTH], "the pair must share a full slot"
+    assert len(short.alid) > ALID_WIDTH, (short.alid, ALID_WIDTH)
+    assert short.alid[:ALID_WIDTH] == long_.alid[:ALID_WIDTH], "the pair must share a full slot"
     assert not is_indexable_alid(short.alid)
     assert not is_indexable_alid(long_.alid)
 
@@ -124,15 +124,15 @@ def test_validation_rejects_an_index_that_truncated_two_variants_together(dense_
     """
     import numpy as np
 
+    from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
     from opengwasdb.validation import validate_store
-    from opengwasdb.variants.axis import variant_alid_bytes_path, variant_alid_rows_path
 
     short, long_ = _shared_prefix_pair()
     write_variant_axis(dense_store_path, [short, long_], {})
 
     # Rebuild the index the old way: both wide ALIDs cast in, and so truncated
     # to the same key -- exactly what the published finngen-r13 release holds.
-    keys = np.array([short.alid, long_.alid], dtype=f"|S{_ALID_WIDTH}")
+    keys = np.array([short.alid, long_.alid], dtype=f"|S{ALID_WIDTH}")
     np.save(variant_alid_bytes_path(dense_store_path), keys)
     np.save(variant_alid_rows_path(dense_store_path), np.array([0, 1], dtype="int32"))
     assert keys[0] == keys[1], "fixture must actually collide, or nothing is under test"

@@ -153,7 +153,7 @@ def select(out: Path) -> list[dict[str, Any]]:
 
 def extract(out: Path) -> None:
     """Each Analysis's Observed Associations at 5e-8, as `hits.all.tsv`."""
-    from opengwasdb.query.facade import query_store  # the opengwasdb interpreter's package
+    from opengwasdb.query import query_store  # the opengwasdb interpreter's package
 
     for entry in json.loads((out / "selection.json").read_text())["analyses"]:
         store, analysis_id = entry["store"], entry["analysis_id"]
@@ -259,7 +259,7 @@ def records_by_alid(pvar: Path, alids: set[str]) -> tuple[dict[str, list[Record]
     """The pvar records whose ALID the store holds, by ALID, and how many records have no ALID
     (an allele the engine refuses, `VariantNormalisationError`): the store can hold none of
     those, so they are counted, and the caller reports the count."""
-    from opengwasdb.variants.normalise import VariantNormalisationError
+    from opengwasdb.store_reader.identity import VariantNormalisationError
     from opengwasdb.variants.sorted_spelling import sorted_identity
 
     found: dict[str, list[Record]] = {}
