@@ -95,7 +95,7 @@ def _child(args: argparse.Namespace) -> None:
     else:
         zarrs_version = None
     from benchmarks.benchmark_store_comparison import result_digests
-    from opengwasdb.associations.cells import Cells
+    from opengwasdb.store_reader.associations.cells import Cells
     from opengwasdb.query import query_store
 
     selection = json.loads(Path(args.selection).read_text())
@@ -172,7 +172,7 @@ def _run_cmd(cmd: list[str], cwd: str, env: dict[str, str] | None = None) -> tup
 
 
 def _rust_arrays_to_result(measurement: dict[str, Any]) -> dict[str, np.ndarray]:
-    from opengwasdb.associations.record import STATUS_LABELS
+    from opengwasdb.store_reader.associations.record import STATUS_LABELS
 
     dtypes = {"int32": "<i4", "float32": "<f4", "int8": "i1"}
     out: dict[str, np.ndarray] = {}
