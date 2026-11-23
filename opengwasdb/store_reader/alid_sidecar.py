@@ -264,6 +264,15 @@ def _order_problems(sidecar: AlidSidecar) -> Iterator[str]:
 
 
 def _key_problems(sidecar: AlidSidecar, order: np.ndarray) -> Iterator[str]:
+    wrong = next(_wrong_keys(sidecar, order), None)
+    if wrong is not None:
+        yield wrong
+        return
+    yield from _unordered_keys(sidecar)
+
+
+def _wrong_keys(sidecar: AlidSidecar, order: np.ndarray) -> Iterator[str]:
+    """Each window's first key that is not its row's ALID's start, if any."""
     keys = sidecar.keys
     for start in range(0, len(order), _WINDOW):
         rows = order[start : start + _WINDOW]
@@ -276,7 +285,11 @@ def _key_problems(sidecar: AlidSidecar, order: np.ndarray) -> Iterator[str]:
                 f"its ALID {sidecar.alid(row)!r} ({wrong.size} such key(s) in rows "
                 f"{start}..{start + len(rows) - 1})"
             )
-            return
+
+
+def _unordered_keys(sidecar: AlidSidecar) -> Iterator[str]:
+    """The first place the keys, or the full ALIDs sharing one key, are not strictly rising."""
+    keys = sidecar.keys
     if len(keys) > 1:
         falling = np.flatnonzero(np.asarray(keys[1:]) < np.asarray(keys[:-1]))
         if falling.size:

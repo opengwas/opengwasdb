@@ -21,6 +21,7 @@ from opengwasdb.store_reader.alid_sidecar import (
     ALID_ORDER_FILENAME,
     ALID_UTF8_FILENAME,
     AlidSidecar,
+    EncodedAlids,
     encode_alids,
 )
 from opengwasdb.validation import validate_store
@@ -38,6 +39,16 @@ def _save(store: Path, name: str, array: np.ndarray) -> None:
     np.save(store / name, array)
 
 
+def _save_encoded(store: Path, encoded: EncodedAlids) -> None:
+    for name, array in (
+        (ALID_UTF8_FILENAME, encoded.utf8),
+        (ALID_OFFSETS_FILENAME, encoded.offsets),
+        (ALID_KEYS_FILENAME, encoded.keys),
+        (ALID_ORDER_FILENAME, encoded.order),
+    ):
+        _save(store, name, array)
+
+
 def _two_rows_of_one_length(alids: list[str]) -> tuple[int, int]:
     seen: dict[int, int] = {}
     for row, alid in enumerate(alids):
@@ -53,13 +64,7 @@ def swap_two_rows(store: Path) -> None:
     i, j = _two_rows_of_one_length(alids)
     alids[i], alids[j] = alids[j], alids[i]
     encoded = encode_alids(alids)
-    for name, array in (
-        (ALID_UTF8_FILENAME, encoded.utf8),
-        (ALID_OFFSETS_FILENAME, encoded.offsets),
-        (ALID_KEYS_FILENAME, encoded.keys),
-        (ALID_ORDER_FILENAME, encoded.order),
-    ):
-        _save(store, name, array)
+    _save_encoded(store, encoded)
 
 
 def offsets_that_fall(store: Path) -> None:
@@ -112,13 +117,7 @@ def one_alid_naming_two_rows(store: Path) -> None:
 
 def a_sidecar_one_row_short(store: Path) -> None:
     encoded = encode_alids(_alids(store)[:-1])
-    for name, array in (
-        (ALID_UTF8_FILENAME, encoded.utf8),
-        (ALID_OFFSETS_FILENAME, encoded.offsets),
-        (ALID_KEYS_FILENAME, encoded.keys),
-        (ALID_ORDER_FILENAME, encoded.order),
-    ):
-        _save(store, name, array)
+    _save_encoded(store, encoded)
 
 
 CORRUPTIONS: dict[str, tuple[Callable[[Path], None], str]] = {

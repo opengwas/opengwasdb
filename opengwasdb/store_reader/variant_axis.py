@@ -271,6 +271,13 @@ class VariantAxis:
         if self._alid_sidecar is not None:
             rows = self._alid_sidecar.rows_of([query for query, _ in parsed_pairs])
             return [int(row) for row in rows if row >= 0]
+        return self._indices_of_alids_fixed_width(parsed_pairs)
+
+    def _indices_of_alids_fixed_width(
+        self, parsed_pairs: list[tuple[str, ParsedAlid]]
+    ) -> list[int]:
+        """A 0.2 release's rows: the fixed-width index for the ALIDs it holds, the
+        exact scan for the rest."""
         alid_bytes, alid_rows = self._alid_bytes, self._alid_rows
         indices: list[int] = []
         if alid_bytes is not None and alid_rows is not None:

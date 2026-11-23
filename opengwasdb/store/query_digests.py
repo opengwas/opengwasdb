@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -130,50 +131,65 @@ def query_shapes(
     analyses = q.analyses_table()
     ids = _spread([row["analysis_id"] for _, row in sorted(analyses.items())], N_ANALYSES_ASKED)
     records = [variants[key] for key in sorted(variants)]
-    asked = _spread(records, N_VARIANTS_ASKED)
-    alids = [record["alid"] for record in asked]
-    rsids = [record["rsid"] for record in asked if record["rsid"]]
-    first, last = records[0], records[-1]
+    identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
     shapes: dict[str, Callable[[], Any]] = {}
-    for observed_only in (False, True):
-        flag = "observed_only" if observed_only else "all"
-        for analysis_id in ids:
-            shapes[f"analysis/{analysis_id}/{flag}"] = partial(
-                q.analysis, analysis_id, observed_only=observed_only
-            )
-        for identifier in [*alids, *rsids, *ABSENT_IDENTIFIERS]:
-            shapes[f"phewas/{identifier}/{flag}"] = partial(
-                q.phewas, identifier, observed_only=observed_only
-            )
-        shapes[f"range_phewas/{flag}"] = partial(
-            q.range_phewas,
-            first["chromosome"],
-            first["position"],
-            last["position"],
-            observed_only=observed_only,
-        )
-        shapes[f"lookup/{flag}"] = partial(
-            q.lookup, [*alids, *rsids], ids, observed_only=observed_only
-        )
-        for threshold in THRESHOLDS:
-            shapes[f"top_hits/{threshold}/{flag}"] = partial(
-                q.top_hits, threshold=threshold, observed_only=observed_only
-            )
-            for analysis_id in ids:
-                shapes[f"top_hits/{threshold}/{analysis_id}/{flag}"] = partial(
-                    q.top_hits,
-                    analysis_id=analysis_id,
-                    threshold=threshold,
-                    observed_only=observed_only,
-                )
-        shapes[f"top_hits/limit/{flag}"] = partial(
-            q.top_hits, threshold=0.2, limit=3, observed_only=observed_only
-        )
-        if hasattr(q, "range_by_analysis"):
-            shapes[f"range_by_analysis/{flag}"] = partial(
-                q.range_by_analysis, first["chromosome"], 1, 10**9, observed_only=observed_only
-            )
+    for observed_only, flag in ((False, "all"), (True, "observed_only")):
+        asking = _Asking(q, ids, identifiers, records[0], records[-1], observed_only)
+        shapes.update({f"{name}/{flag}": shape for name, shape in asking.shapes().items()})
     return shapes
+
+
+def _identifiers(asked: list[dict[str, Any]]) -> list[str]:
+    """The asked variants' ALIDs, then the rsIDs of those that carry one."""
+    return [r["alid"] for r in asked] + [r["rsid"] for r in asked if r["rsid"]]
+
+
+@dataclass(frozen=True)
+class _Asking:
+    """The questions asked of one release with one `observed_only` flag."""
+
+    q: Any
+    ids: list[str]
+    identifiers: list[str]
+    first: dict[str, Any]
+    last: dict[str, Any]
+    observed_only: bool
+
+    def shapes(self) -> dict[str, Callable[[], Any]]:
+        q, o = self.q, self.observed_only
+        shapes: dict[str, Callable[[], Any]] = {
+            f"analysis/{a}": partial(q.analysis, a, observed_only=o) for a in self.ids
+        }
+        for identifier in [*self.identifiers, *ABSENT_IDENTIFIERS]:
+            shapes[f"phewas/{identifier}"] = partial(q.phewas, identifier, observed_only=o)
+        shapes["range_phewas"] = partial(
+            q.range_phewas,
+            self.first["chromosome"],
+            self.first["position"],
+            self.last["position"],
+            observed_only=o,
+        )
+        shapes["lookup"] = partial(q.lookup, self.identifiers, self.ids, observed_only=o)
+        shapes.update(self._top_hits())
+        if hasattr(q, "range_by_analysis"):
+            shapes["range_by_analysis"] = partial(
+                q.range_by_analysis, self.first["chromosome"], 1, 10**9, observed_only=o
+            )
+        return shapes
+
+    def _top_hits(self) -> dict[str, Callable[[], Any]]:
+        q, o = self.q, self.observed_only
+        shapes: dict[str, Callable[[], Any]] = {}
+        for threshold in THRESHOLDS:
+            shapes[f"top_hits/{threshold}"] = partial(
+                q.top_hits, threshold=threshold, observed_only=o
+            )
+            for a in self.ids:
+                shapes[f"top_hits/{threshold}/{a}"] = partial(
+                    q.top_hits, analysis_id=a, threshold=threshold, observed_only=o
+                )
+        shapes["top_hits/limit"] = partial(q.top_hits, threshold=0.2, limit=3, observed_only=o)
+        return shapes
 
 
 #: The shapes whose answers are also resolved to rows.
@@ -226,13 +242,24 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
     for section in ("shapes", "resolved"):
-        ours, theirs = reference[section], candidate[section]
-        for shape in sorted(set(ours) | set(theirs)):
-            found += [
-                f"{section}/{shape}/{n}"
-                for n in _differing(ours.get(shape, {}), theirs.get(shape, {}))
-            ]
-    ours, theirs = reference["log10_p"], candidate["log10_p"]
+        found += _shape_differences(section, reference[section], candidate[section])
+    return found + _log10_p_differences(reference["log10_p"], candidate["log10_p"])
+
+
+def _shape_differences(
+    section: str, ours: dict[str, dict[str, str]], theirs: dict[str, dict[str, str]]
+) -> list[str]:
+    return [
+        f"{section}/{shape}/{name}"
+        for shape in sorted(set(ours) | set(theirs))
+        for name in _differing(ours.get(shape, {}), theirs.get(shape, {}))
+    ]
+
+
+def _log10_p_differences(
+    ours: dict[str, list[float]], theirs: dict[str, list[float]]
+) -> list[str]:
+    found = []
     for shape in sorted(set(ours) | set(theirs)):
         a = np.asarray(ours.get(shape, []), dtype=np.float64)
         b = np.asarray(theirs.get(shape, []), dtype=np.float64)
