@@ -216,7 +216,12 @@ def _parent(args: argparse.Namespace) -> None:
         alids, analyses = _selection_for(selection, shape)
         rows = [int(x) for x in q._variant_axis.indices_by_identifiers(alids)]
         cols = [i for aid in analyses if (i := q._analysis_index(aid)) is not None]
-        axis_cache[name] = {"alids": alids, "analyses": analyses, "rows": rows, "cols": cols}
+        wide = [a for a in alids if len(a.encode()) > 32]
+        wide_rows = [int(q._variant_axis.indices_by_identifiers([a])[0]) for a in wide]
+        axis_cache[name] = {
+            "alids": alids, "analyses": analyses, "rows": rows, "cols": cols,
+            "wide_rows": wide_rows,
+        }
     q.close()
 
     zarrs_python = args.zarrs_python
@@ -263,6 +268,7 @@ def _parent(args: argparse.Namespace) -> None:
                         "analysis_ids": ax["analyses"],
                         "rows": ax["rows"],
                         "cols": ax["cols"],
+                        "wide_rows": ax["wide_rows"],
                         "z_scale": float(manifest["z"]["scale"]),
                         "se_step": float(manifest["se"]["residual_range"]) / 127.0,
                         "eaf_step": float(manifest["eaf"]["residual_range"]) / 127.0,
@@ -282,6 +288,7 @@ def _parent(args: argparse.Namespace) -> None:
                     column["process_wall_ms"] = {"cold": cold_wall, "warm": warm_wall}
                     column["result_count"] = warm_m["result_count"]
                     column["zarrs_crate"] = warm_m["zarrs_crate"]
+                    column["wide_alid_fallback"] = warm_m["wide_alid_fallback"]
                     column["codec_pipeline"] = "zarrs crate"
                     if stage == "axis_resolution":
                         digests: dict[str, str] | None = None

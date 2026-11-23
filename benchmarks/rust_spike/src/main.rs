@@ -29,6 +29,10 @@ struct Request {
     analysis_ids: Vec<String>,
     rows: Vec<u64>,
     cols: Vec<u64>,
+    /// Rows of ALIDs wider than the 32-byte index slot, resolved by the caller
+    /// (the Python reader scans the variant table for these; not ported).
+    #[serde(default)]
+    wide_rows: Vec<u64>,
     z_scale: f32,
     se_step: f64,
     eaf_step: f64,
@@ -51,6 +55,7 @@ struct Measurement {
     result_count: Option<usize>,
     arrays: BTreeMap<String, EncodedArray>,
     zarrs_crate: &'static str,
+    wide_alid_fallback: usize,
 }
 
 #[derive(Serialize)]
@@ -284,9 +289,18 @@ impl Reader {
 
     fn resolve(&self, request: &Request) -> Result<(Vec<u64>, Vec<u64>), Box<dyn Error>> {
         let mut rows = Vec::with_capacity(request.alids.len());
+        let mut wide = 0usize;
         for alid in &request.alids {
-            rows.push(self.variants.row(alid)?);
+            if alid.len() > 32 {
+                wide += 1;
+            } else {
+                rows.push(self.variants.row(alid)?);
+            }
         }
+        if wide != request.wide_rows.len() {
+            return Err(format!("{wide} wide ALIDs but {} wide_rows supplied", request.wide_rows.len()).into());
+        }
+        rows.extend_from_slice(&request.wide_rows);
         let mut cols = Vec::with_capacity(request.analysis_ids.len());
         for id in &request.analysis_ids {
             cols.push(*self.analyses.by_id.get(id).ok_or("unknown Analysis")?);
@@ -579,6 +593,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         _ => return Err(format!("unknown stage {}", request.stage).into()),
     }
+    let wide_count = request.wide_rows.len();
     let measurement = Measurement {
         candidate: "rust-zarrs",
         shape: request.shape,
@@ -589,6 +604,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         result_count,
         arrays,
         zarrs_crate: "0.23.14",
+        wide_alid_fallback: wide_count,
     };
     println!("{}", serde_json::to_string(&measurement)?);
     Ok(())
