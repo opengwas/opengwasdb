@@ -156,26 +156,19 @@ components:
     stages: [cross]
     summary: Representation-only repairs, the SE re-encode of existing Store Releases, and layout conversion.
     paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py]
-  # opengwasdb.ld, imported from opengwas/ogld whole (#455), is seven components
-  # on the engine's layers (#459). Its own layering: identity and format at the
+  # opengwasdb.ld, imported from opengwas/ogld whole (#455), is six components
+  # on the engine's layers (#459). Its own layering: format at the
   # bottom, then store, genotypes, build and query, cli on top. build and query
   # are both Use and check and must not import each other; the layers allow a
   # same-layer import, so `independent` below forbids it (ogld's sibling rule).
-  # `opengwasdb/ld/identity/` goes when #456 folds it into Variant Identity.
-  - id: ld-identity
-    name: LD Variant Identity
-    container: engine
-    layer: 0
-    stages: [build, query]
-    summary: The identity an LD Store keys a variant by, until it folds into Variant Identity (#456).
-    paths: [opengwasdb/ld/identity/]
+  # Variant identity is the engine's own `variants` (#456).
   - id: ld-format
     name: LD Store format
     container: engine
     layer: 0
     stages: [cross]
-    summary: The LD Store encoding, geometry, semantics and provenance; the r scale, the near and far distances.
-    paths: [opengwasdb/ld/format/]
+    summary: The LD Store encoding, geometry, semantics and provenance; the r scale, the near and far distances; the OPENGWASDB_LD_* environment reader.
+    paths: [opengwasdb/ld/format/, opengwasdb/ld/env.py]
   - id: ld-store
     name: LD Store reader and writer
     container: engine
