@@ -12,7 +12,7 @@ every r is signed to the **ALT** allele; a builder re-signs it to the engine A1.
 ## Source, terms and the owner's decisions
 
 - **Genotypes:** the phased HGDP+1kGP v2 callset (Koenig et al. 2024, Genome Research), the
-  owner's choice of genotype source (7 November 2026, epic opengwas/ogld#1; ADR 0002):
+  owner's choice of genotype source (7 November 2026, epic opengwas/ogld#1; ADR 0088):
   `gs://gcp-public-data--gnomad/resources/hgdp_1kg/phased_haplotypes_v2/hgdp1kgp_chr{21,22}.filtered.SNV_INDEL.phased.shapeit5.bcf`,
   downloaded and checked against the bucket's CRC32C. All 771 members of
   `/data/opengwasdb/reference/hgdp1kgp-hg38/members/EUR.keep` are in it. It has no missing
@@ -25,8 +25,8 @@ every r is signed to the **ALT** allele; a builder re-signs it to the engine A1.
   participants" (gnomAD Terms of Use, https://gnomad.broadinstitute.org/terms, read 7 November
   2026). The paper's Data access says "All data from this study are freely available".
 - **Committing it:** the owner approved committing this public slice on 7 November 2026, choosing
-  a real committed subset over a synthetic generator (ADR 0002). "Genotypes never leave the host"
-  (ADR 0001) is about panels whose genotypes may not be published, such as UK Biobank.
+  a real committed subset over a synthetic generator (ADR 0088). "Genotypes never leave the host"
+  (ADR 0087) is about panels whose genotypes may not be published, such as UK Biobank.
 
 ## Settings
 
@@ -87,7 +87,7 @@ plink2 --vcf <work>/test_panel.vcf.gz --keep $OPENGWASDB_LD_REFERENCE/hgdp1kgp-h
 
 1061 rows; **1056 pass** (chr21 468, chr22 588). Dropped, by the first filter failed: FILTER 0, MAC 5, zero variance 0. The reference holds 146,593 pairs.
 
-**Not in v2, so built by hand in unit tests** (ADR 0002): a record that fails FILTER (v2's FILTER
+**Not in v2, so built by hand in unit tests** (ADR 0088): a record that fails FILTER (v2's FILTER
 column is empty), a missing call (v2 has none, and a build refuses one), and a site with no
 genotype variance that passes MAC >= 20 (none on chr21 or chr22 in EUR). The builder's unit
 tests (ogld#5) make each one.

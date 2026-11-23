@@ -33,7 +33,9 @@ class Params:
     keep: Path
     # The PC File, `#IID PC1 ... PC20`: make_pcs.py's for EUR.
     pcs: Path
-    pcs_source: str = "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0088)"
+    # Recorded data: the committed Test Store and `manifest.json` hold this exact string, so a
+    # rebuild must reproduce it. "ADR 0002" is ogld's numbering (now ADR 0088, build inputs).
+    pcs_source: str = "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
     chromosomes: tuple[str, ...] = ("21", "22")
     # Variant filters (docs/spec/build-inputs.md). Genotypes must be complete: a missing call is
     # refused, never imputed.
