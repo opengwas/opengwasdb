@@ -13,12 +13,11 @@ from pathlib import Path
 import numpy as np
 import zarr
 from dense_sources import build_dense_from_records
+from store_assertions import write_exception_table
 
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
-from opengwasdb.store.arrays import create_array
 from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
-from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.variants import CanonicalVariant
 
 #: The subset every one of these releases publishes.
@@ -77,15 +76,4 @@ def publish_every_variant(store: Path, variants: int) -> Path:
 def rewrite_primary_table(store: Path, positions: np.ndarray, values: np.ndarray) -> None:
     """Replace the release's own exception table, through the array seam."""
     root = zarr.open_group(str(store / "data.zarr"), mode="r+")
-    for name, data, dtype in (
-        (EAF_EXCEPTION_INDEX, positions, "int64"),
-        (EAF_EXCEPTION_VALUE, values, "float32"),
-    ):
-        del root[name]
-        create_array(
-            root,
-            name,
-            ArrayRole.EXCEPTION_TABLE,
-            data=np.asarray(data, dtype=dtype),
-            compressor=None,
-        )
+    write_exception_table(root, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, positions, values)
