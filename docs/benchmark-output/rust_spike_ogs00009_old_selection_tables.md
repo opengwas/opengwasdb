@@ -41,7 +41,7 @@ The ALID-to-row step against the whole lookup, same reference run (warm medians)
 
 ## Matched comparisons (end to end, warm; ratio per round, median and range)
 
-Python candidate / Rust candidate on the same store; above 1 means Rust is faster. The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), not a bound on what Python can do.
+Python candidate / Rust candidate on the same store; above 1 means Rust is faster. `python-zarr-pool16` is not paired: it ran with Blosc threads on, a set-up `store_reader/arrays.py:107-110` records as queueing on numcodecs' lock. The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), not a bound on what Python can do.
 
 | shape | store chunk | threads | Python candidate | Rust candidate | ratio |
 |---|---|---|---|---|---|
@@ -56,4 +56,4 @@ Python candidate / Rust candidate on the same store; above 1 means Rust is faste
 
 ## Agreement
 
-30 of 30 digested measurements equal the reference's first-call digests (Python: first and last call; Rust: cold and warm process). every digested process (cold and warm, Rust and Python) equals python-fused-1000's first call for the same shape and stage; otherwise the run aborts and writes nothing further
+30 of 30 digested measurements equal the reference's first-call digests (Python: first call and last timed call; Rust: cold call and the untimed warm-up call). every digested process (cold and warm, Rust and Python) equals python-fused-1000's first call for the same shape and stage; otherwise the run aborts and writes nothing further

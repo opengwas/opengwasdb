@@ -7,13 +7,12 @@ Candidate kinds
                           (``store_reader/arrays.py``).
 ``python-zarrs``          the same reader under ``zarrs.ZarrsCodecPipeline`` (zarrs-python).
 ``python-zarr-pool16``    the fused pipeline with zarr's own pool at 16 workers, Blosc threads on.
-``python-threadpool16``   the reader's ``grid.read`` called per chunk group (the groups
-                          ``main.rs`` reads)
-                          on a 16-thread ``ThreadPoolExecutor``, numcodecs' Blosc threads off.
-``rust:N``                ``benchmarks/rust_spike`` (the ``zarrs`` crate) with the chunk groups
-                          on N threads;
-                          zarrs' own codec concurrency is capped at 1 and ``RAYON_NUM_THREADS``
-                          set to N.
+``python-threadpool16``   the reader's ``grid.read`` over up to 16 row partitions on a 16-thread
+                          ``ThreadPoolExecutor`` (the same inner chunks ``main.rs`` reads),
+                          numcodecs' Blosc threads off.
+``rust:N``                ``benchmarks/rust_spike`` (the ``zarrs`` crate) with the chunk groups on
+                          N threads; zarrs' own codec concurrency is capped at 1 and
+                          ``RAYON_NUM_THREADS`` set to N (both recorded as set, not read back).
 
 What runs is asserted, not assumed.  A child sets its zarr/numcodecs configuration *after* importing
 the Store Reader (whose array seam sets the configuration at import), reads the effective pipeline
@@ -24,23 +23,23 @@ Measurement
 -----------
 Every measurement is a fresh process: its first call is the *cold* call (interpreter new, arrays
 just opened, nothing decoded yet; the OS page cache stays warm and cannot be dropped without
-root, so
-"cold" is not a first-touch disk read), followed by ``--warm`` warm calls.  Rounds are interleaved:
+root, so "cold" is not a first-touch disk read), followed by ``--warm`` warm calls.
+Rounds are interleaved:
 for each (shape, stage), round r runs every candidate once before round r+1 starts, so a change in
 host load lands on all candidates alike.  Stages separate the ALID-to-row step
 (``axis_resolution``) from the decode (``decode``: the cell read with rows and columns given)
-and the
-whole ``lookup`` (``end_to_end``).  The other harness shapes run end to end only.
+and the whole ``lookup`` (``end_to_end``).  The other harness shapes run end to end only.
 
 Agreement: the reference is the first ``python-fused`` run, which must be listed first; every
 other run's first-call digests (and, for Rust, its cold process's too) must equal the reference's
-for the same shape and stage, or the run aborts.
+for the same shape and stage, or the run aborts.  A Python process digests its first and its
+last (timed) call; a Rust process digests its cold call and its untimed warm-up call.
 
 Commands
 --------
 See ``docs/benchmark-output/rust_spike_ogs00009.md`` for the exact ``cargo build``,
-``rechunk.py`` and
-``--run`` commands.  ``summarise_spike.py`` turns this script's JSON into the tables.  The selection
+``rechunk.py`` and ``--run`` commands.  ``summarise_spike.py`` turns this script's JSON into
+the tables.  The selection
 file is committed beside the JSON (``docs/benchmark-output/rust_spike_selection.json``).
 """
 

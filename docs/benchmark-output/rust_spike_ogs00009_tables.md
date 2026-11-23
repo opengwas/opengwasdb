@@ -95,18 +95,16 @@ The ALID-to-row step against the whole lookup, same reference run (warm medians)
 
 ## Matched comparisons (end to end, warm; ratio per round, median and range)
 
-Python candidate / Rust candidate on the same store; above 1 means Rust is faster. The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), not a bound on what Python can do.
+Python candidate / Rust candidate on the same store; above 1 means Rust is faster. `python-zarr-pool16` is not paired: it ran with Blosc threads on, a set-up `store_reader/arrays.py:107-110` records as queueing on numcodecs' lock. The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), not a bound on what Python can do.
 
 | shape | store chunk | threads | Python candidate | Rust candidate | ratio |
 |---|---|---|---|---|---|
 | 10_variants_100_analyses | 1000 | 1 vs 1 | python-fused-1000 | rust-1thread-1000 | 1.13x (1.00-1.18) |
 | 10_variants_100_analyses | 1000 | 16 vs 16 | python-threadpool16-1000 | rust-16thread-1000 | 8.65x (6.05-10.16) |
-| 10_variants_100_analyses | 1000 | 16 vs 16 | python-zarr-pool16-1000 | rust-16thread-1000 | 13.77x (12.67-17.81) |
 | 10_variants_100_analyses | 100 | 1 vs 1 | python-fused-100 | rust-1thread-100 | 0.84x (0.72-0.86) |
 | 10_variants_100_analyses | 100 | 16 vs 16 | python-threadpool16-100 | rust-16thread-100 | 8.78x (6.17-10.12) |
 | 100_variants_10_analyses | 1000 | 1 vs 1 | python-fused-1000 | rust-1thread-1000 | 1.65x (1.42-1.67) |
 | 100_variants_10_analyses | 1000 | 16 vs 16 | python-threadpool16-1000 | rust-16thread-1000 | 26.27x (19.06-29.01) |
-| 100_variants_10_analyses | 1000 | 16 vs 16 | python-zarr-pool16-1000 | rust-16thread-1000 | 27.21x (19.18-28.14) |
 | 100_variants_10_analyses | 100 | 1 vs 1 | python-fused-100 | rust-1thread-100 | 1.49x (1.44-1.65) |
 | 100_variants_10_analyses | 100 | 16 vs 16 | python-threadpool16-100 | rust-16thread-100 | 28.24x (24.50-30.98) |
 
@@ -115,15 +113,15 @@ Python candidate / Rust candidate on the same store; above 1 means Rust is faste
 | run | codec pipeline class | zarr max_workers | Blosc threads | other |
 |---|---|---|---|---|
 | python-fused-1000 | FusedCodecPipeline | 1 | True | threadpool=None, zarrs-python=None |
-| python-zarrs-1000 | ZarrsCodecPipeline | 1 | True | threadpool=None, zarrs-python=0.2.3 |
-| python-zarr-pool16-1000 | FusedCodecPipeline | 16 | True | threadpool=None, zarrs-python=None |
+| python-zarrs-1000 | ZarrsCodecPipeline | n/a (not used by zarrs) | n/a (not used by zarrs) | threadpool=None, zarrs-python=0.2.3; zarrs-python's own concurrency is not recorded |
+| python-zarr-pool16-1000 | FusedCodecPipeline | 16 | True | threadpool=None, zarrs-python=None; Blosc threads on: queues on numcodecs' lock (`arrays.py:107-110`) |
 | python-threadpool16-1000 | FusedCodecPipeline | 1 | False | threadpool=16, zarrs-python=None |
-| rust-1thread-1000 | zarrs crate 0.23.14 | n/a | n/a | threads=1, codec_concurrent_target=1, RAYON_NUM_THREADS=1, wide ALIDs via caller=0 |
-| rust-16thread-1000 | zarrs crate 0.23.14 | n/a | n/a | threads=16, codec_concurrent_target=1, RAYON_NUM_THREADS=16, wide ALIDs via caller=0 |
+| rust-1thread-1000 | zarrs crate 0.23.14 | n/a | n/a | threads=1 and codec_concurrent_target=1 (both as set by the binary, not read back), RAYON_NUM_THREADS=1, wide ALIDs via caller=0 |
+| rust-16thread-1000 | zarrs crate 0.23.14 | n/a | n/a | threads=16 and codec_concurrent_target=1 (both as set by the binary, not read back), RAYON_NUM_THREADS=16, wide ALIDs via caller=0 |
 | python-fused-100 | FusedCodecPipeline | 1 | True | threadpool=None, zarrs-python=None |
 | python-threadpool16-100 | FusedCodecPipeline | 1 | False | threadpool=16, zarrs-python=None |
-| rust-1thread-100 | zarrs crate 0.23.14 | n/a | n/a | threads=1, codec_concurrent_target=1, RAYON_NUM_THREADS=1, wide ALIDs via caller=0 |
-| rust-16thread-100 | zarrs crate 0.23.14 | n/a | n/a | threads=16, codec_concurrent_target=1, RAYON_NUM_THREADS=16, wide ALIDs via caller=0 |
+| rust-1thread-100 | zarrs crate 0.23.14 | n/a | n/a | threads=1 and codec_concurrent_target=1 (both as set by the binary, not read back), RAYON_NUM_THREADS=1, wide ALIDs via caller=0 |
+| rust-16thread-100 | zarrs crate 0.23.14 | n/a | n/a | threads=16 and codec_concurrent_target=1 (both as set by the binary, not read back), RAYON_NUM_THREADS=16, wide ALIDs via caller=0 |
 
 ## Store sizes (apparent bytes of the arrays the lookup reads)
 
@@ -143,17 +141,17 @@ Python candidate / Rust candidate on the same store; above 1 means Rust is faste
 
 Ratio = original chunking / smaller chunk within the same round (above 1: the smaller chunk is faster).
 
-| shape | run | warm ms (median, min-max) | cold ms (median, min-max) | ratio original/smaller |
-|---|---|---|---|---|
-| bulk | python-fused-1000 | 12401.5 (10040.9-13794.5) | 13823.2 (13286.4-17253.9) |  |
-| bulk | python-fused-100 | 35330.3 (26356.9-36320.1) | 33977.2 (33507.1-41487.7) | 0.35x (0.28-0.49) |
-| phewas | python-fused-1000 | 71.8 (64.3-90.3) | 105.9 (95.0-140.4) |  |
-| phewas | python-fused-100 | 38.4 (35.1-55.1) | 107.5 (64.3-117.3) | 1.68x (1.45-2.20) |
-| regional | python-fused-1000 | 1633.0 (1360.8-1976.6) | 1827.4 (1761.4-1888.6) |  |
-| regional | python-fused-100 | 2172.5 (1589.4-2904.2) | 2188.9 (1977.1-2403.5) | 0.86x (0.56-0.94) |
-| regional_one_analysis | python-fused-1000 | 51.8 (42.5-53.5) | 78.2 (70.7-87.5) |  |
-| regional_one_analysis | python-fused-100 | 67.1 (55.9-70.3) | 96.4 (82.9-99.5) | 0.75x (0.63-0.96) |
+| shape | run | warm ms (median, min-max) | cold ms (median, min-max) | warm ratio original/smaller | cold ratio |
+|---|---|---|---|---|---|
+| bulk | python-fused-1000 | 12401.5 (10040.9-13794.5) | 13823.2 (13286.4-17253.9) |  |  |
+| bulk | python-fused-100 | 35330.3 (26356.9-36320.1) | 33977.2 (33507.1-41487.7) | 0.35x (0.28-0.49) | 0.40x (0.40-0.42) |
+| phewas | python-fused-1000 | 71.8 (64.3-90.3) | 105.9 (95.0-140.4) |  |  |
+| phewas | python-fused-100 | 38.4 (35.1-55.1) | 107.5 (64.3-117.3) | 1.68x (1.45-2.20) | 1.31x (0.84-1.94) |
+| regional | python-fused-1000 | 1633.0 (1360.8-1976.6) | 1827.4 (1761.4-1888.6) |  |  |
+| regional | python-fused-100 | 2172.5 (1589.4-2904.2) | 2188.9 (1977.1-2403.5) | 0.86x (0.56-0.94) | 0.85x (0.79-0.92) |
+| regional_one_analysis | python-fused-1000 | 51.8 (42.5-53.5) | 78.2 (70.7-87.5) |  |  |
+| regional_one_analysis | python-fused-100 | 67.1 (55.9-70.3) | 96.4 (82.9-99.5) | 0.75x (0.63-0.96) | 0.85x (0.74-0.91) |
 
 ## Agreement
 
-404 of 404 digested measurements equal the reference's first-call digests (Python: first and last call; Rust: cold and warm process). every digested process (cold and warm, Rust and Python) equals python-fused-1000's first call for the same shape and stage; otherwise the run aborts and writes nothing further
+404 of 404 digested measurements equal the reference's first-call digests (Python: first call and last timed call; Rust: cold call and the untimed warm-up call). every digested process (cold and warm, Rust and Python) equals python-fused-1000's first call for the same shape and stage; otherwise the run aborts and writes nothing further

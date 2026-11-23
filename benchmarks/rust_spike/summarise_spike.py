@@ -2,13 +2,16 @@
 """Turn `run_spike.py`'s JSON into the markdown tables and every number the ADR quotes.
 
     pixi run -e dev python benchmarks/rust_spike/summarise_spike.py \\
-        docs/benchmark-output/rust_spike_ogs00009.json >
-        docs/benchmark-output/rust_spike_ogs00009_tables.md
+        docs/benchmark-output/rust_spike_ogs00009.json \\
+        > docs/benchmark-output/rust_spike_ogs00009_tables.md
 
 Nothing is typed in by hand: ratios are computed per round (the reference's warm median over the
 candidate's, from the same interleaved round) and reported as a range across rounds and as the
-median
-of the per-round ratios.  A ratio above 1 means the candidate is faster.
+median of the per-round ratios.  A ratio above 1 means the candidate is faster.
+
+An incomplete JSON is refused: one without the driver's final ``agreement`` record (a run that
+stopped part-way writes the file after every column), with a column missing, or with a different
+number of rounds in one column than in the others.
 """
 
 from __future__ import annotations
@@ -41,8 +44,47 @@ def _ratio_text(ratios: list[float]) -> str:
     return f"{statistics.median(ratios):.2f}x ({min(ratios):.2f}-{max(ratios):.2f})"
 
 
+def _validate(data: dict[str, Any]) -> None:
+    """Refuse a JSON the driver did not finish writing, rather than summarise part of it."""
+    if "agreement" not in data:
+        raise SystemExit("no 'agreement' record: the run did not finish; refusing to summarise")
+    cols = data["columns"]
+    reference = data["reference_run"]
+    lookup_shapes = list(
+        dict.fromkeys(c["shape"] for c in cols if c["shape"].startswith("random_lookup"))
+    )
+    runs = list(dict.fromkeys(c["run"] for c in cols if c["shape"] in lookup_shapes))
+    kinds = {c["run"]: c["kind"] for c in cols}
+    stages = ("axis_resolution", "decode", "end_to_end")
+    seen = {(c["shape"], c["stage"], c["run"]): c for c in cols}
+    if len(seen) != len(cols):
+        raise SystemExit("a (shape, stage, run) column appears twice")
+    for shape in lookup_shapes:
+        for stage in stages:
+            for run in runs:
+                column = seen.get((shape, stage, run))
+                if column is None:
+                    raise SystemExit(f"column missing: {shape} / {stage} / {run}")
+                if len(column["rounds"]) != data["rounds"]:
+                    raise SystemExit(
+                        f"{shape}/{stage}/{run} has {len(column['rounds'])} rounds, "
+                        f"expected {data['rounds']}"
+                    )
+    extra = [s for s in dict.fromkeys(c["shape"] for c in cols) if s not in lookup_shapes]
+    for shape in extra:
+        group = [c for c in cols if c["shape"] == shape]
+        expected = [r for r in runs if kinds[r] == "python-fused"]
+        if sorted(c["run"] for c in group) != sorted(expected):
+            raise SystemExit(f"{shape}: expected the python-fused runs {expected}")
+        if len({len(c["rounds"]) for c in group}) != 1:
+            raise SystemExit(f"{shape}: the runs have different numbers of rounds")
+    if reference not in runs:
+        raise SystemExit(f"reference run {reference} has no columns")
+
+
 def main(path: Path) -> None:
     data = json.loads(path.read_text())
+    _validate(data)
     cols = data["columns"]
     reference = data["reference_run"]
     by_key = {(c["shape"], c["stage"], c["run"]): c for c in cols}
@@ -121,6 +163,8 @@ def main(path: Path) -> None:
     w("")
     w(
         "Python candidate / Rust candidate on the same store; above 1 means Rust is faster. "
+        "`python-zarr-pool16` is not paired: it ran with Blosc threads on, a set-up "
+        "`store_reader/arrays.py:107-110` records as queueing on numcodecs' lock. "
         "The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), "
         "not a bound on what Python can do."
     )
@@ -130,7 +174,6 @@ def main(path: Path) -> None:
     pairs = [
         ("1000", "1 vs 1", "python-fused-1000", "rust-1thread-1000"),
         ("1000", "16 vs 16", "python-threadpool16-1000", "rust-16thread-1000"),
-        ("1000", "16 vs 16", "python-zarr-pool16-1000", "rust-16thread-1000"),
         ("100", "1 vs 1", "python-fused-100", "rust-1thread-100"),
         ("100", "16 vs 16", "python-threadpool16-100", "rust-16thread-100"),
     ]
@@ -158,15 +201,21 @@ def main(path: Path) -> None:
         if "array_pipeline_class" in cfg:
             versions = c["rounds"][0]["versions"]
             other = f"threadpool={versions['threadpool']}, zarrs-python={versions['zarrs_python']}"
-            w(
-                f"| {c['run']} | {cfg['array_pipeline_class']} | {cfg['config_max_workers']} | "
-                f"{cfg['blosc_use_threads']} | {other} |"
-            )
+            workers: Any = cfg["config_max_workers"]
+            blosc: Any = cfg["blosc_use_threads"]
+            if cfg["array_pipeline_class"] == "ZarrsCodecPipeline":
+                workers = "n/a (not used by zarrs)"
+                blosc = "n/a (not used by zarrs)"
+                other += "; zarrs-python's own concurrency is not recorded"
+            if c["run"].startswith("python-zarr-pool16"):
+                other += "; Blosc threads on: queues on numcodecs' lock (`arrays.py:107-110`)"
+            w(f"| {c['run']} | {cfg['array_pipeline_class']} | {workers} | {blosc} | {other} |")
         else:
             w(
                 f"| {c['run']} | zarrs crate {data['zarrs_crate']} | n/a | n/a | "
-                f"threads={cfg['threads']}, "
-                f"codec_concurrent_target={cfg['zarrs_codec_concurrent_target']}, "
+                f"threads={cfg['threads']} and codec_concurrent_target="
+                f"{cfg['zarrs_codec_concurrent_target']} (both as set by the binary, "
+                f"not read back), "
                 f"RAYON_NUM_THREADS={cfg['rayon_num_threads_env']}, wide ALIDs via "
                 f"caller={cfg['wide_alid_fallback']} |"
             )
@@ -208,10 +257,10 @@ def main(path: Path) -> None:
         )
         w("")
         w(
-            "| shape | run | warm ms (median, min-max) | cold ms (median, min-max) | ratio "
-            "original/smaller |"
+            "| shape | run | warm ms (median, min-max) | cold ms (median, min-max) | "
+            "warm ratio original/smaller | cold ratio |"
         )
-        w("|---|---|---|---|---|")
+        w("|---|---|---|---|---|---|")
         py_runs = [r for r in runs if r.startswith(reference.rsplit("-", 1)[0])]
         for shape in extra_shapes:
             ref = by_key[(shape, "end_to_end", reference)]
@@ -222,10 +271,11 @@ def main(path: Path) -> None:
                 warm_all = [x for r in col["rounds"] for x in r["warm_ms"]]
                 cold = [r["cold_ms"] for r in col["rounds"]]
                 ratio = "" if run == reference else _ratio_text(_ratio(ref, col, "warm"))
+                cratio = "" if run == reference else _ratio_text(_ratio(ref, col, "cold"))
                 w(
                     f"| {shape} | {run} | {statistics.median(_warm(r) for r in col['rounds']):.1f} "
                     f"({_range(warm_all)}) | {statistics.median(cold):.1f} ({_range(cold)}) | "
-                    f"{ratio} |"
+                    f"{ratio} | {cratio} |"
                 )
         w("")
 
@@ -237,9 +287,12 @@ def main(path: Path) -> None:
         for c in cols
         if not (c["kind"].startswith("rust") and c["stage"] == "axis_resolution")
     )
+    if n != total:
+        raise SystemExit(f"{n} of {total} digested measurements agree; refusing to summarise")
     w(
         f"{n} of {total} digested measurements equal the reference's first-call digests "
-        f"(Python: first and last call; Rust: cold and warm process). {data.get('agreement', '')}"
+        f"(Python: first call and last timed call; Rust: cold call and the untimed warm-up "
+        f"call). {data['agreement']}"
     )
     print("\n".join(out))
 

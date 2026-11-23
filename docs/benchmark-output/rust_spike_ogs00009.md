@@ -31,13 +31,39 @@ first `python-fused` run is the reference and the run aborts on any difference, 
 * The Rust spike is Dense only, reads the planes the Python lookup reads, and takes the row of an ALID wider than the
   32-byte index slot from the caller (the Python reader scans the variant table for it). It is not a reader. It
   also reads whole exception tables per call, which is unoptimised.
-* The Python thread pool is one design; it does not show what Python can or cannot do.
-* The baseline here is slower than the figures in `store_reader/arrays.py:103-105` (the seam's 103 / 575 ms). The
-  comparison runs below exclude two causes (the selection; host load) and leave the third untested: the seam's
-  figures come from the earlier OGS-00009 (9,847,701 variants x 2,024 Analyses, observed-only, format 0.1.0, per
-  `opengwasdb_store_comparison_ogs00009_zarr3.json`), which no longer exists to re-time.
-  `rust_spike_ogs00009_old_selection.json` times the Python reader on that artifact's own selection against the
-  current store ([tables](rust_spike_ogs00009_old_selection_tables.md)).
+* The Python thread pool is one design; it does not show what Python can or cannot do, or why it was slower.
+* The baseline here is slower than the figures in `store_reader/arrays.py:103-105` (103 / 575 ms), and the
+  committed facts account for most of the gap. Those figures come from the earlier OGS-00009 (9,847,701 variants x
+  2,024 Analyses, observed-only, **format 0.1.0**; `opengwasdb_store_comparison_ogs00009_zarr3.json`, which ran at
+  load 2.9). ADR 0058 (lines 340-341) measured the 0.1.0 to 0.2.0 move on OGS-00009 as 2.80x and 1.82x slower on
+  these two shapes, which takes 103 / 575 ms to about 288 / 1047 ms. That earlier store no longer exists to re-time.
+  `rust_spike_ogs00009_old_selection.json` ([tables](rust_spike_ogs00009_old_selection_tables.md)) times the Python
+  reader on that artifact's own selection against the current store; it is a separate run, and its absolute times are
+  not compared with the main run's.
+* Rounds: the two lookup shapes had 7 rounds, each a fresh process with 1 cold call and 3 warm calls; the harness's
+  other shapes (whole Analysis, phewas, regional, regional one Analysis) had 5 rounds of 1 cold call and 1 warm call;
+  the old-selection run had 5 rounds of 1 cold and 3 warm.
+* "1 vs 1" means one decode worker with numcodecs' Blosc threads as the shipped reader leaves them on. That is
+  moot for a [1000, 64] chunk: `store_reader/arrays.py` notes a chunk under 256 KiB uncompressed is a single Blosc
+  block, so internal threads have nothing to split (z is 125 KiB, se, eaf and imputed 62.5 KiB). It was not measured
+  separately.
+* Agreement digests: a Python process digests its first and last (timed) call; a Rust process digests its cold call
+  and its untimed warm-up call, not a timed warm call. The Rust thread count and zarrs codec concurrency are
+  recorded as the binary set them, not read back from zarrs. The `python-zarrs` rows record zarr settings that zarrs
+  ignores; zarrs-python's own concurrency is not recorded.
+* `python-zarr-pool16` ran with Blosc threads on, a set-up `store_reader/arrays.py:107-110` records as queueing on
+  numcodecs' lock. It is kept as measured and is not compared with Rust.
+
+## Provenance
+
+The main run started at commit `07a46faf` (17:15 UTC) and ran for about two hours. Commit `d348d949` (17:20 UTC)
+changed `run_spike.py` while it was running, to satisfy the escapes gate: four `lambda` assignments became nested
+functions with the same bodies. It is behaviour-identical, so every child spawned after 17:20 ran the function
+version; the JSON records the commit the run started from (`07a46faf`, `tree_clean: true`). The old-selection JSON
+records `d348d949` with `tree_clean: false` because `summarise_spike.py` (the matched-comparison section) was edited
+and not yet committed when it ran (it was committed in `34d220ed`); `run_spike.py` was the committed `d348d949`
+version. The scripts were later reformatted (`0561acda`) and this round changed the docstrings and the summariser;
+the measurements were not repeated.
 
 ## Commands
 
