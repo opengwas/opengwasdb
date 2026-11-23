@@ -127,7 +127,8 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int) -> dict[str, list[Finding]]:
-    """`validate`, reading and checking blocks on `threads` threads (`opengwasdb ld validate --threads`)."""
+    """`validate`, reading and checking blocks on `threads` threads
+    (`opengwasdb ld validate --threads`)."""
     root = open_group(location)
     return validate_group(root, root.attrs.get("ld_store"), threads=threads)
 
