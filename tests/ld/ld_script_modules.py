@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "ld"
 
 
 def load_script(name: str) -> ModuleType:

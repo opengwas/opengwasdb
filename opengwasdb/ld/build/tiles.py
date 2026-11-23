@@ -1,7 +1,7 @@
 """One chromosome's r, tile by tile, from a window of prepared genotypes (ADR 0013).
 
 A tile is a block of rows against every later variant within `far_bp`, computed by
-`ogld.genotypes.r`. The build hands the product to the store, `StoreWriter.cut`,
+`opengwasdb.ld.genotypes.r`. The build hands the product to the store, `StoreWriter.cut`,
 which quantises, thresholds and counts (ogld#17). The build keeps only its own diagnostic, the
 change in r from PC Adjustment within `change_bp`. Tiles are computed on `threads` worker
 threads and written in row order, so the store is the same for any thread count.
@@ -22,14 +22,14 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
-from ogld.genotypes import Block, r
-from ogld.store import Cut
+from opengwasdb.ld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
+from opengwasdb.ld.genotypes import Block, r
+from opengwasdb.ld.store import Cut
 
 #: Rows a tile computes: a tile is TILE_ROWS × (variants within far_bp) float64.
 TILE_ROWS: Final = 256
 #: Rows of genotypes read and adjusted at a time into the genotype window: 8,192 rows of
-#: 665 samples are 44 MB, where `ogld.build.inputs.CHUNK_RECORDS` rows would be 350 MB.
+#: 665 samples are 44 MB, where `opengwasdb.ld.build.inputs.CHUNK_RECORDS` rows would be 350 MB.
 BLOCK_ROWS: Final = 8_192
 
 _RMatrix = npt.NDArray[np.float64]
@@ -41,7 +41,7 @@ GenotypeBlock = tuple[int, Block, Block | None]
 class Band:
     """One chromosome's geometry for the build: for each local row l, the first row past far_bp
     and past `change_bp` (exclusive stops), and how many later rows lie within `change_bp`, all
-    from `ogld.format.geometry` (spec §5; §7's change in r)."""
+    from `opengwasdb.ld.format.geometry` (spec §5; §7's change in r)."""
 
     change_length: npt.NDArray[np.int64]
     far_stop: npt.NDArray[np.int64]

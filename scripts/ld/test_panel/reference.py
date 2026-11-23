@@ -10,7 +10,7 @@ re-signing is the builder's job.
 build, store and queries are tested against, so it must not share their code, or an off-by-one
 in an owner would be in the answer too. `pairs` therefore writes the far_bp edge out itself
 (at most far_bp apart is within), as a second computation of the rule
-`ogld.format.geometry` owns; the ownership page lists it under "Test oracles"
+`opengwasdb.ld.format.geometry` owns; the ownership page lists it under "Test oracles"
 (`docs/architecture/ownership.md`).
 """
 

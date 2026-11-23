@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 import zarr
 
-import ogld
-from ogld.build.importing.run import ImportInputs, import_panukb
+import opengwasdb.ld
+from opengwasdb.ld.build.importing.run import ImportInputs, import_panukb
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 
@@ -59,7 +59,7 @@ def test_restart_does_not_fetch_closed_deleted_chromosome(complete_import, tmp_p
         for chrom in (1, 2)
         for position, alleles in ((1, "A:C"), (2, "A:G"), (4000001, "A:G"))
     ]
-    with ogld.open(out) as resumed, ogld.open(complete) as uninterrupted:
+    with opengwasdb.ld.open(out) as resumed, opengwasdb.ld.open(complete) as uninterrupted:
         np.testing.assert_array_equal(resumed.matrix(alids).r, uninterrupted.matrix(alids).r)
         assert resumed.provenance["counts"] == uninterrupted.provenance["counts"]
         assert (
@@ -98,7 +98,7 @@ def test_restart_rebuilds_chromosome_interrupted_before_root_metadata(
     assert not (unfinished / "zarr.json").exists()
     out = tmp_path / "resumed.store"
     import_panukb(replace(original, work=work), out)
-    with ogld.open(out) as store:
+    with opengwasdb.ld.open(out) as store:
         assert store.provenance["n_variants"] == 6
 
 

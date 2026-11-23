@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from store_copies import TEST_STORE, unpartnered
 
-from ogld.store.assembly import derive_partners
+from opengwasdb.ld.store.assembly import derive_partners
 
 #: The tests directory, which holds `store_copies`: a realdata module is imported by path, so its
 #: own directory is on `sys.path` and the tier's parent is not.

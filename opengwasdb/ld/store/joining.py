@@ -11,12 +11,12 @@ from typing import Any, cast
 import numpy as np
 import zarr
 
-from ogld.format import REncoding, Sourced
-from ogld.format.geometry import chromosome_ranges, chromosome_ranges_from_counts
-from ogld.identity import chromosome_rank
-from ogld.store import layout
-from ogld.store.assembly import Cutter, Tally
-from ogld.store.reader import StoreReader
+from opengwasdb.ld.format import REncoding, Sourced
+from opengwasdb.ld.format.geometry import chromosome_ranges, chromosome_ranges_from_counts
+from opengwasdb.ld.identity import chromosome_rank
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.assembly import Cutter, Tally
+from opengwasdb.ld.store.reader import StoreReader
 
 
 def _compatible(first: dict[str, Any], record: dict[str, Any]) -> None:
@@ -42,7 +42,7 @@ def joined(
     first = records[0][3]
     _source_matches(sourced, records)
     # Import here avoids a writer/joining import cycle; all public entry is StoreWriter.join.
-    from ogld.store.writer import write_variant_table
+    from opengwasdb.ld.store.writer import write_variant_table
 
     with StoreReader.open(records[0][1]) as reader:
         variants = reader.variants(np.arange(reader.provenance["n_variants"], dtype=np.int64))

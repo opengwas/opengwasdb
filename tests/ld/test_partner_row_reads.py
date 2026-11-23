@@ -35,9 +35,9 @@ from contract.support import RangeHandler
 from store_copies import PARTNER_FLOOR, TEST_STORE
 from zarr.abc.store import RangeByteRequest
 
-from ogld.format import InputError
-from ogld.store import frames, location
-from ogld.store.reader import StoreReader
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.store import frames, location
+from opengwasdb.ld.store.reader import StoreReader
 
 #: The Test Store's distances (spec §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
 #: the one independent owner of its encoding (ownership.md, "Test oracles"), so the reconstruction
@@ -426,7 +426,7 @@ def test_a_first_use_racing_close_publishes_nothing_the_reader_keeps(
         assert resume.wait(5), "the test never let the first use finish"
         return original(*args, **kwargs)
 
-    monkeypatch.setattr("ogld.store.reader.open_partner_frames", slow)
+    monkeypatch.setattr("opengwasdb.ld.store.reader.open_partner_frames", slow)
     closed: list[int] = []
     original_close = os.close
     monkeypatch.setattr(os, "close", lambda fd: closed.append(fd) or original_close(fd))

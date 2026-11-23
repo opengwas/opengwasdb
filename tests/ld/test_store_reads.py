@@ -35,12 +35,12 @@ from zarr.abc.store import SuffixByteRequest
 from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import FsspecStore, LocalStore
 
-import ogld
-from ogld.format import InputError
-from ogld.query import clumping
-from ogld.query import proxies as proxies_query
-from ogld.store import StoreReader, decoding, location, reader, variants
-from ogld.store.validation import validate_group
+import opengwasdb.ld
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.query import clumping
+from opengwasdb.ld.query import proxies as proxies_query
+from opengwasdb.ld.store import StoreReader, decoding, location, reader, variants
+from opengwasdb.ld.store.validation import validate_group
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.
 INNER, PER_SHARD = 512, 4
@@ -104,8 +104,8 @@ def small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return resharded(tmp_path_factory.mktemp("resharded") / "store", INNER, PER_SHARD)
 
 
-def whole(location: Path | str) -> ogld.LDMatrix:
-    store = ogld.open(location)
+def whole(location: Path | str) -> opengwasdb.ld.LDMatrix:
+    store = opengwasdb.ld.open(location)
     rows = np.arange(store.provenance["n_variants"])
     return store.matrix(list(StoreReader.open(location).variants(rows).alid))
 
@@ -422,11 +422,11 @@ def test_a_lost_shard_refuses_the_pairs_it_held_and_no_others(
     shutil.copytree(small_chunks, copy)
     lost = shards(copy, "near/22/r")[-1]
     lost.unlink()
-    store, chr22 = ogld.open(copy), StoreReader.open(copy).rows_in("22", 0, 10**9)
+    store, chr22 = opengwasdb.ld.open(copy), StoreReader.open(copy).rows_in("22", 0, 10**9)
     names = list(StoreReader.open(copy).variants(chr22).alid)
     # The first rows' codes sit in the first shard: answered, as the committed store answers.
     np.testing.assert_array_equal(
-        store.matrix(names[:20]).r, ogld.open(TEST_STORE).matrix(names[:20]).r
+        store.matrix(names[:20]).r, opengwasdb.ld.open(TEST_STORE).matrix(names[:20]).r
     )
     with pytest.raises(ValueError, match=r"near/22/r read \d+ element\(s\) .* -32768"):
         store.matrix(names[-20:])
@@ -456,13 +456,13 @@ def test_a_lost_chunk_of_any_array_is_refused_never_read_as_data(
     for shard in sorted((copy / path / "c").iterdir()):
         shard.unlink()
     message = rf"{path} read \d+ element\(s\) no LD Store holds there, as its fill value {fill} is"
-    store = ogld.open(copy)
+    store = opengwasdb.ld.open(copy)
     read = partial(store.matrix, every) if query == "matrix" else partial(store.proxies, every)
     with pytest.raises(ValueError, match=message):
         read()
 
 
-def fill_findings(store: Path) -> list[ogld.Finding]:
+def fill_findings(store: Path) -> list[opengwasdb.ld.Finding]:
     root = zarr.open_group(store, mode="r")
     return validate_group(root, root.attrs["ld_store"], ["envelope.fill"])["envelope.fill"]
 
@@ -524,7 +524,7 @@ def test_an_array_whose_fill_valid_data_can_hold_is_refused(
     copy = copy_store(tmp_path / "store")
     set_fill(copy, path, fill)
     with pytest.raises(ValueError, match=rf"{path} has the fill value"):
-        ogld.open(copy).region("22", 30_000_000, 1_000_000)
+        opengwasdb.ld.open(copy).region("22", 30_000_000, 1_000_000)
     assert fill_findings(copy), "validate fails what open refuses"
 
 
@@ -533,9 +533,11 @@ def test_an_r_array_whose_lost_chunk_would_read_as_a_number_is_refused(tmp_path:
     meta = copy / "near" / "22" / "r" / "zarr.json"
     meta.write_text(meta.read_text().replace('"fill_value": -32768', '"fill_value": 0'))
     with pytest.raises(ValueError, match=r"near/22/r has the fill value 0, which valid data"):
-        ogld.open(copy).region("22", 30_000_000, 100_000)
+        opengwasdb.ld.open(copy).region("22", 30_000_000, 100_000)
     chr21 = StoreReader.open(copy).variants(np.array([100])).position[0]
-    assert ogld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, "chr21 is intact"
+    assert opengwasdb.ld.open(copy).region("21", int(chr21), 1_000_000).r.size > 1, (
+        "chr21 is intact"
+    )
 
 
 async def reached(event: threading.Event) -> None:
@@ -802,10 +804,10 @@ def test_a_few_pairs_over_http_fetch_a_small_part_of_the_near_band(
     served: Served, small_chunks: Path
 ) -> None:
     url, sent = served
-    store = ogld.open(url)
+    store = opengwasdb.ld.open(url)
     names = list(StoreReader.open(small_chunks).variants(np.array([500, 520, 900])).alid)
     got = store.matrix(names)
-    np.testing.assert_array_equal(got.r, ogld.open(TEST_STORE).matrix(names).r)
+    np.testing.assert_array_equal(got.r, opengwasdb.ld.open(TEST_STORE).matrix(names).r)
     near = sum(p.stat().st_size for p in (small_chunks / "near" / "22" / "r").rglob("*"))
     assert len(shards(small_chunks, "near/22/r")) > 20, "the Near Band must span many shards"
     read = sum(length for path, length in sent if path.startswith("/near/22/r/c/"))
@@ -819,7 +821,7 @@ def test_a_repeated_read_fetches_its_chunks_once(
     # Clumping reads a few pairs per lead, many times over: each chunk is fetched once and kept,
     # by a reader opened with room for them. One opened with none fetches them again.
     url, sent = served
-    store = ogld.open(url, cache_bytes=budget)
+    store = opengwasdb.ld.open(url, cache_bytes=budget)
     names = list(StoreReader.open(small_chunks).variants(np.arange(500, 540, 4)).alid)
 
     def near_bytes() -> int:
@@ -906,13 +908,13 @@ def test_a_local_shard_index_is_read_once_and_kept(
 def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: Any) -> None:
     # A caller's value, whatever it is: an untyped caller can pass any of these.
     with pytest.raises(InputError, match="cache_bytes"):
-        ogld.open(TEST_STORE, cache_bytes=size)
+        opengwasdb.ld.open(TEST_STORE, cache_bytes=size)
 
 
 def test_a_store_keeps_4_gib_of_its_chunks_unless_told_otherwise() -> None:
     # The owner's default (ogld#32), at which #8 measured repeated reads warm.
-    assert ogld.open(TEST_STORE)._reader.cache_bytes == 4 << 30
-    assert ogld.open(TEST_STORE, cache_bytes=12_345)._reader.cache_bytes == 12_345
+    assert opengwasdb.ld.open(TEST_STORE)._reader.cache_bytes == 4 << 30
+    assert opengwasdb.ld.open(TEST_STORE, cache_bytes=12_345)._reader.cache_bytes == 12_345
 
 
 @pytest.mark.parametrize("query", ["clump", "proxies"])
@@ -943,7 +945,7 @@ def test_the_test_store_passes_every_rule_over_http() -> None:
     # (RFC 9110 §15.5.17): an unsatisfiable range says the file ends there, and a store must not be
     # refused for it (spec §5.1, §5.3). This store passed only when the probe read an empty 206.
     with serving(TEST_STORE) as (url, sent):
-        found = ogld.validate(url)
+        found = opengwasdb.ld.validate(url)
     assert not any(found.values()), {rule: f for rule, f in found.items() if f}
     assert any(path.startswith("/far/22/partner/c/") for path, _ in sent), "read over HTTP"
     assert 416 in sent.statuses, sorted(set(sent.statuses))
@@ -954,24 +956,24 @@ def test_a_url_with_no_store_is_an_input_error(
 ) -> None:
     url, _ = served
     with pytest.raises(InputError, match="no LD Store"):
-        ogld.open(url + "nothing/")
+        opengwasdb.ld.open(url + "nothing/")
 
 
 def test_a_zarr_v2_hierarchy_is_not_read_as_a_store(tmp_path: Path) -> None:
     zarr.open_group(tmp_path / "v2", mode="w", zarr_format=2)
     with pytest.raises(InputError, match="Zarr v2"):
-        ogld.open(tmp_path / "v2")
+        opengwasdb.ld.open(tmp_path / "v2")
 
 
 def test_a_region_takes_the_chr_prefix_a_query_may_carry() -> None:
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     plain = store.region("22", 30_000_000, 1_000_000)
     assert len(plain.variants) > 3, "the region must hold variants"
     np.testing.assert_array_equal(store.region("chr22", 30_000_000, 1_000_000).r, plain.r)
 
 
 def test_a_repeated_alid_is_a_repeated_row_and_an_empty_request_an_empty_matrix() -> None:
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     one = list(StoreReader.open(TEST_STORE).variants(np.array([3])).alid)
     twice = store.matrix(one * 2)
     np.testing.assert_array_equal(twice.r, np.ones((2, 2)))
@@ -982,7 +984,7 @@ def test_a_repeated_alid_is_a_repeated_row_and_an_empty_request_an_empty_matrix(
 
 
 def test_a_fill_of_zero_is_the_caller_s_and_fills_only_the_unstored_cells() -> None:
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     rows = np.arange(0, 1056, 5)
     names = list(StoreReader.open(TEST_STORE).variants(rows).alid)
     plain, zero = store.matrix(names), store.matrix(names, fill=0)
@@ -1017,14 +1019,14 @@ def test_oversized_sparse_read_streams_without_pinning_a_chromosome(
 
 def test_a_cache_budget_does_not_change_the_answer(tmp_path: Path) -> None:
     root = resharded(tmp_path / "store", 512, 4)
-    store = ogld.open(root)
+    store = opengwasdb.ld.open(root)
     rows = np.r_[np.arange(0, 50, 5), np.arange(500, 550, 5)]
     names = store._reader.alids_of(rows).tolist()
     score = np.random.default_rng(40).random(len(rows))
     expected = store.clump(names, score, r2=0.01, kb=3000)
     assert (expected.lead != expected.alid).any(), "the fixture must have joined members"
     for budget in [0, 4096]:
-        got = ogld.open(root, cache_bytes=budget).clump(names, score, r2=0.01, kb=3000)
+        got = opengwasdb.ld.open(root, cache_bytes=budget).clump(names, score, r2=0.01, kb=3000)
         for name, column in expected.columns().items():
             np.testing.assert_array_equal(got.columns()[name], column)
 

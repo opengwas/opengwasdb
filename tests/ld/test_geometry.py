@@ -8,8 +8,8 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from ogld.format import FAR_BP, NEAR_BP
-from ogld.format.geometry import (
+from opengwasdb.ld.format import FAR_BP, NEAR_BP
+from opengwasdb.ld.format.geometry import (
     blocks,
     chromosome_index,
     chromosome_ranges,

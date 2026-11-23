@@ -2,13 +2,14 @@
 
 The semantics core of `docs/spec/ld-store.md`, implemented and complete: a store's encoding
 of r, `REncoding`, which owns quantisation and the far code floor (§3; ADR 0004), t_far (§3),
-the row and band geometry (§2, §4, §5, in `ogld.format.geometry`), the answer kind of a pair
+the row and band geometry (§2, §4, §5, in `opengwasdb.ld.format.geometry`), the answer kind of a
+pair
 (§8) and the decision for a request (§9). It also names the provenance types (§7) and the
 validation rules (§12). Every other layer takes these from here, so no component rounds,
 thresholds or refuses by a rule of its own. It imports nothing else from ogld.
 """
 
-from ogld.format.encoding import (
+from opengwasdb.ld.format.encoding import (
     FAR_BP,
     NEAR_BP,
     T_FAR_MIN,
@@ -17,8 +18,8 @@ from ogld.format.encoding import (
     REncoding,
     t_far,
 )
-from ogld.format.geometry import near_row_lengths
-from ogld.format.provenance import (
+from opengwasdb.ld.format.geometry import near_row_lengths
+from opengwasdb.ld.format.provenance import (
     FORMAT_VERSION,
     PARTNER_ROWS_SINCE,
     READABLE_FORMATS,
@@ -42,7 +43,7 @@ from ogld.format.provenance import (
     claims_partner_rows,
     release_of,
 )
-from ogld.format.semantics import (
+from opengwasdb.ld.format.semantics import (
     AnswerKind,
     Decision,
     InputError,

@@ -9,12 +9,13 @@ has one owner (owner, on epic #18, 21 November 2026; ogld#94). `rows_of`, `rows_
 `chromosome_range`, `alids_of`, `loci_of` and `variants` are that owner's reads.
 
 A table opens no store: its reader opens the group, refuses what it cannot read (spec §13) and
-hands the table the `ogld.store.location.OpenedStore` both halves hold — the group, the location
+hands the table the `opengwasdb.ld.store.location.OpenedStore` both halves hold — the group, the
+location
 that names the store in a refusal, the recorded provenance and the one chunk cache every read goes
 through. So one store is opened once however many halves read it, a replaced cache is replaced for
 both, and only the companion's mapping is the table's own to release (`close`). A caller that
 wants the table and nothing else opens it with the store layer's own opener,
-`ogld.store.reader.open_variant_table` (#94).
+`opengwasdb.ld.store.reader.open_variant_table` (#94).
 """
 
 from __future__ import annotations
@@ -30,8 +31,8 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import InputError, Provenance
-from ogld.format.geometry import (
+from opengwasdb.ld.format import InputError, Provenance
+from opengwasdb.ld.format.geometry import (
     chromosome_index,
     global_rows,
     local_rows,
@@ -39,11 +40,11 @@ from ogld.format.geometry import (
     position_rows,
     spans,
 )
-from ogld.identity import alid_locus
-from ogld.store import layout
-from ogld.store.layout import chromosomes_listed, refused_if_lost
-from ogld.store.location import OpenedStore, elements_of, kept_array, runs_of
-from ogld.store.tables import Variants
+from opengwasdb.ld.identity import alid_locus
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.layout import chromosomes_listed, refused_if_lost
+from opengwasdb.ld.store.location import OpenedStore, elements_of, kept_array, runs_of
+from opengwasdb.ld.store.tables import Variants
 
 #: The variant table's columns (spec §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")

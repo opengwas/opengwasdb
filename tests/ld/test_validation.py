@@ -37,11 +37,11 @@ from store_copies import (
     copy_store,
 )
 
-import ogld
-from ogld import cli
-from ogld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding, Sourced
-from ogld.store import StoreReader, StoreWriter, Variants, layout, validation
-from ogld.store.validation import ValidationFailed, validate_group
+import opengwasdb.ld
+from opengwasdb.ld import cli
+from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding, Sourced
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout, validation
+from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
 #: The Partner Rows' ten rules (spec §12; partner-rows §10): the component's, and the provenance
 #: key that describes its threshold.
@@ -113,7 +113,9 @@ def small_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(validation, "_FRAMES_PER_BLOCK", 4)
 
 
-def findings(store: Path, rules: list[str], threads: int = 1) -> dict[str, list[ogld.Finding]]:
+def findings(
+    store: Path, rules: list[str], threads: int = 1
+) -> dict[str, list[opengwasdb.ld.Finding]]:
     root = zarr.open_group(store, mode="r")
     return validate_group(root, root.attrs["ld_store"], rules, threads=threads)
 
@@ -564,7 +566,7 @@ def test_a_corrupt_chunk_is_a_finding_of_each_rule_that_reads_it(
 ) -> None:
     copy = copy_store(tmp_path / "store")
     corrupt(copy, path)
-    found = ogld.validate(copy)
+    found = opengwasdb.ld.validate(copy)
     for rule in needs:
         assert any(f.where == path and f.message.startswith(said) for f in found[rule]), (
             rule,
@@ -585,7 +587,7 @@ def test_a_corrupt_metadata_document_is_a_finding_not_a_crash(
 ) -> None:
     copy = copy_store(tmp_path / "store")
     (copy / node / "zarr.json").write_text("{ not json")
-    found = ogld.validate(copy)
+    found = opengwasdb.ld.validate(copy)
     for rule in needs:
         assert any(
             f.where == node and f.message.startswith("cannot be read: JSONDecodeError")
@@ -600,7 +602,7 @@ def test_a_corrupt_root_document_is_an_input_error(
     copy = copy_store(tmp_path / "store")
     (copy / "zarr.json").write_text("{ not json")
     with pytest.raises(InputError, match="metadata cannot be read"):
-        ogld.validate(copy)
+        opengwasdb.ld.validate(copy)
     assert cli.main(["validate", str(copy)]) == 2
     assert "metadata cannot be read" in capsys.readouterr().err
 
@@ -666,7 +668,7 @@ def test_every_code_and_entry_is_read_once_by_all_the_rules_together(
     }
     assert {"far/21/partner", "far/22/r"} <= set(held), "the Far Pairs must be counted"
     read = counted_reads(monkeypatch)
-    assert not any(ogld.validate(TEST_STORE).values())
+    assert not any(opengwasdb.ld.validate(TEST_STORE).values())
     assert {path: n for path, n in read.items() if not path.startswith("thread")} == held
 
 
@@ -799,7 +801,7 @@ def test_an_indptr_that_ends_past_its_array_is_a_finding_not_a_crash(
     write_array(path, slice(-1, None), 10**9)(copy)
     tracemalloc.start()
     try:
-        found = ogld.validate(copy)
+        found = opengwasdb.ld.validate(copy)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -816,7 +818,7 @@ def test_a_finding_names_five_elements_and_counts_the_rest(tmp_path: Path) -> No
     copy = copy_store(tmp_path / "store")
     frequency = zarr.open_array(copy / "variants" / "a1_frequency", mode="r+")
     frequency[100:112] = np.float32(1.0)
-    (found,) = ogld.validate(copy)["variants.frequency"]
+    (found,) = opengwasdb.ld.validate(copy)["variants.frequency"]
     assert found.message.endswith("at 100, 101, 102, 103, 104 and 7 more")
 
 
@@ -825,7 +827,7 @@ def test_a_store_without_provenance_cannot_pass_a_rule_that_needs_it(tmp_path: P
     doc = json.loads((copy / "zarr.json").read_text())
     del doc["attributes"]["ld_store"]
     (copy / "zarr.json").write_text(json.dumps(doc))
-    found = ogld.validate(copy)
+    found = opengwasdb.ld.validate(copy)
     assert "no ld_store provenance" in found["provenance.complete"][0].message
     assert found["near.rows"][0].message.startswith("cannot be checked")
     # near.codes needs the store's scale since ogld#16: without it, it cannot say a code is r.
@@ -835,13 +837,13 @@ def test_a_store_without_provenance_cannot_pass_a_rule_that_needs_it(tmp_path: P
 
 def test_a_location_with_no_zarr_group_is_an_input_error(tmp_path: Path) -> None:
     with pytest.raises(InputError, match="no LD Store"):
-        ogld.validate(tmp_path / "nothing")
+        opengwasdb.ld.validate(tmp_path / "nothing")
     assert cli.main(["validate", str(tmp_path / "nothing")]) == 2
 
 
 def test_a_zarr_v2_hierarchy_fails_envelope_arrays(tmp_path: Path) -> None:
     zarr.open_group(tmp_path / "v2", mode="w", zarr_format=2)
-    found = ogld.validate(tmp_path / "v2")
+    found = opengwasdb.ld.validate(tmp_path / "v2")
     assert found["envelope.arrays"][0].message == "the hierarchy is Zarr v2, not v3 (spec §1)"
 
 
@@ -921,8 +923,8 @@ def sourced(**changes: Any) -> Sourced:
 def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path: Path) -> None:
     written = four_rows(tmp_path, "good").finish(sourced(), threads=2)
     assert written["n_variants"] == 4
-    assert not any(ogld.validate(tmp_path / "good").values())
-    store = ogld.open(tmp_path / "good")
+    assert not any(opengwasdb.ld.validate(tmp_path / "good").values())
+    store = opengwasdb.ld.open(tmp_path / "good")
     first = store.matrix(list(StoreReader.open(tmp_path / "good").variants(np.arange(4)).alid))
     np.testing.assert_array_equal(first.r[0, 1:], np.array([10, -20, 30]) / R_SCALE)
 

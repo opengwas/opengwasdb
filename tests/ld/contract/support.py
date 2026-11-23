@@ -41,8 +41,8 @@ from store_copies import T_PARTNER as T_PARTNER
 from store_copies import codes_at as codes_at
 from store_copies import stored_at as stored_at
 
-from ogld.format import t_far
-from ogld.identity import orient
+from opengwasdb.ld.format import t_far
+from opengwasdb.ld.identity import orient
 
 TESTS = Path(__file__).resolve().parents[1]
 TEST_PANEL = TESTS / "data" / "test-panel"

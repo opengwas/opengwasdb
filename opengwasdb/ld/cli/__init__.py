@@ -17,14 +17,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ogld.build import BuildInputs, build, build_genotypes
-from ogld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
-from ogld.format import FAR_BP, NEAR_BP, InputError, Refusal
-from ogld.identity import IdentityError
-from ogld.query import open as open_store
-from ogld.query.validation import validate_at
-from ogld.store import Finding
-from ogld.store.assembly import derive_partners
+from opengwasdb.ld.build import BuildInputs, build, build_genotypes
+from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, InputError, Refusal
+from opengwasdb.ld.identity import IdentityError
+from opengwasdb.ld.query import open as open_store
+from opengwasdb.ld.query.validation import validate_at
+from opengwasdb.ld.store import Finding
+from opengwasdb.ld.store.assembly import derive_partners
 
 
 def _optional_float(text: str) -> float | None:
@@ -141,7 +141,7 @@ def _displaced_cap(text: str) -> int:
 
 def _import(args: argparse.Namespace) -> int:
     # Optional dependencies are loaded only on this path, never when opening an LD Store.
-    from ogld.build.importing.run import ImportInputs, import_panukb
+    from opengwasdb.ld.build.importing.run import ImportInputs, import_panukb
 
     inputs = ImportInputs(
         **_given(

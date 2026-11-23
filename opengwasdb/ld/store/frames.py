@@ -48,10 +48,10 @@ from zarr.core.buffer import default_buffer_prototype
 from zarr.core.sync import sync
 from zarr.storage import LocalStore
 
-from ogld.format import Codes, InputError, REncoding
-from ogld.format.geometry import indptr_of, owners
-from ogld.store import layout
-from ogld.store.location import FrameSource, frame_source
+from opengwasdb.ld.format import Codes, InputError, REncoding
+from opengwasdb.ld.format.geometry import indptr_of, owners
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.location import FrameSource, frame_source
 
 #: Rows a frame holds (partner-rows §1, §5.2: G = 16, the smallest G of those equally fast). A
 #: reader takes it from the group's `rows_per_frame` attribute, never from here.

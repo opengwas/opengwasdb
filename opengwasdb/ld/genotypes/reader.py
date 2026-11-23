@@ -1,6 +1,7 @@
 """On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0014).
 
-`GenotypeReader` satisfies `ogld.query.reader.Reader` structurally, as `StoreReader` does: it
+`GenotypeReader` satisfies `opengwasdb.ld.query.reader.Reader` structurally, as `StoreReader` does:
+it
 composes the same `OpenedStore` and `VariantTable` and holds its own computed-LD half, rather
 than inheriting the LD Store reader's.
 No decoded calls survive a request. Adjustment arrays are read-only mmaps, shared by worker
@@ -20,15 +21,15 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import Codes, InputError, Provenance, REncoding
-from ogld.format.geometry import global_rows, local_rows, position_rows
-from ogld.genotypes.adjust import Block, r
-from ogld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
-from ogld.genotypes.pgen import Genotypes, import_pgenlib
-from ogld.store.location import ChunkCache, OpenedStore, open_group
-from ogld.store.tables import Variants
-from ogld.store.variants import VariantTable
-from ogld.store.workers import ComponentWorkers
+from opengwasdb.ld.format import Codes, InputError, Provenance, REncoding
+from opengwasdb.ld.format.geometry import global_rows, local_rows, position_rows
+from opengwasdb.ld.genotypes.adjust import Block, r
+from opengwasdb.ld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
+from opengwasdb.ld.genotypes.pgen import Genotypes, import_pgenlib
+from opengwasdb.ld.store.location import ChunkCache, OpenedStore, open_group
+from opengwasdb.ld.store.tables import Variants
+from opengwasdb.ld.store.variants import VariantTable
+from opengwasdb.ld.store.workers import ComponentWorkers
 
 _READ_ROWS = 8192
 _BLAS_LOCK = threading.Lock()
@@ -43,7 +44,7 @@ def _limit_blas() -> AbstractContextManager[object]:
     except ImportError as missing:
         raise InputError(
             "genotype requests need threadpoolctl, which ogld installs with the build extra: "
-            "pip install 'ogld[build]'"
+            "pip install 'opengwasdb[ld-build]'"
         ) from missing
     control: AbstractContextManager[object] = threadpool_limits(limits=1, user_api="blas")
     control.__enter__()
@@ -222,7 +223,7 @@ class GenotypeReader(ComponentWorkers):
 
     # ------------------------------------------------------- the variant table's reads
     #
-    # As in `StoreReader`, their one owner is `ogld.store.VariantTable` (#94): both readers
+    # As in `StoreReader`, their one owner is `opengwasdb.ld.store.VariantTable` (#94): both readers
     # answer through the table they compose, so neither drifts on an ALID, a region or a locus.
 
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:

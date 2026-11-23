@@ -27,10 +27,10 @@ import pytest
 import zarr
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
 
-from ogld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
-from ogld.format.geometry import near_row_lengths
-from ogld.identity import orient
-from ogld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
+from opengwasdb.ld.format.geometry import near_row_lengths
+from opengwasdb.ld.identity import orient
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
 
 N_SAMPLES, K = 771, 10
 #: t_far for the Test Store's n and k, spec §3: q / (n − k − 1) with q = 20.84.
@@ -606,7 +606,7 @@ def test_a_writer_whose_chromosome_failed_never_finishes(
 def test_a_near_band_closed_short_of_its_codes_is_refused(tmp_path: Path) -> None:
     # The writer closes a chromosome only when its last row's cut arrives, so this is a store
     # assembly fault, refused rather than written with a run of fill values.
-    from ogld.store.assembly import NearBandStream
+    from opengwasdb.ld.store.assembly import NearBandStream
 
     group = zarr.open_group(tmp_path / "g", mode="w")
     stream = NearBandStream(group, np.array([2, 1, 0]), REncoding(R_SCALE))

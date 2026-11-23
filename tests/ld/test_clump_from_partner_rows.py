@@ -24,12 +24,12 @@ import numpy.typing as npt
 import pytest
 from store_copies import PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store, store_reads
 
-import ogld
-from ogld.format import InputError, Refusal, RefusalReason, t_far
-from ogld.identity import alid_locus
-from ogld.query import clumping
-from ogld.store import StoreReader
-from ogld.store.workers import COMPONENT_WORKERS_MAX
+import opengwasdb.ld
+from opengwasdb.ld.format import InputError, Refusal, RefusalReason, t_far
+from opengwasdb.ld.identity import alid_locus
+from opengwasdb.ld.query import clumping
+from opengwasdb.ld.store import StoreReader
+from opengwasdb.ld.store.workers import COMPONENT_WORKERS_MAX
 
 #: The Test Store's rows, all of them: a clump of every variant, and a proxies query on each.
 ALL = np.arange(1056, dtype=np.int64)
@@ -72,7 +72,7 @@ CASES: list[tuple[str, str, str, float, float]] = [
 ]
 
 
-def _subset(name: str, store: ogld.LDStore) -> tuple[list[str], npt.NDArray[np.float64]]:
+def _subset(name: str, store: opengwasdb.ld.LDStore) -> tuple[list[str], npt.NDArray[np.float64]]:
     """One case's ALIDs and scores, from the Test Store's own rows."""
     reader = store._reader
     if name == "all":
@@ -113,7 +113,7 @@ def _digest(columns: dict[str, Any]) -> str:
     return hasher.hexdigest()
 
 
-def fingerprint(store: ogld.LDStore, name: str) -> str:
+def fingerprint(store: opengwasdb.ld.LDStore, name: str) -> str:
     """One case's answer on `store`, digested: the frozen answers were recorded with this."""
     case = {case[0]: case for case in CASES}[name]
     _, kind, subset, r2, kb = case
@@ -226,16 +226,16 @@ FROZEN: dict[str, str] = {
 @pytest.mark.parametrize("name", [case[0] for case in CASES])
 def test_every_answer_is_the_previous_reader_s(name: str) -> None:
     assert name in FROZEN, f"{name} was never frozen from the previous reader"
-    assert fingerprint(ogld.open(TEST_STORE), name) == FROZEN[name]
+    assert fingerprint(opengwasdb.ld.open(TEST_STORE), name) == FROZEN[name]
 
 
 def test_both_queries_read_nothing_of_the_near_band_or_the_proxy_index() -> None:
     """Their one LD read is the Partner Rows: the ALID index, the positions and the frames, but no
     `near/<c>/indptr`, no Near Band code, no Proxy Index array and none of their metadata
     (partner-rows §8.1, §8.4; ld-store §10)."""
-    names, score = _subset("small", ogld.open(TEST_STORE))
+    names, score = _subset("small", opengwasdb.ld.open(TEST_STORE))
     for query in ("clump", "proxies"):
-        store = ogld.open(TEST_STORE)
+        store = opengwasdb.ld.open(TEST_STORE)
         with store_reads() as keys:
             _ask(store, query, names, score, r2=0.01, kb=3000)
         offending = [key for key in keys if key.startswith(("near/", "index/"))]
@@ -247,7 +247,7 @@ def test_both_queries_read_nothing_of_the_near_band_or_the_proxy_index() -> None
 
 
 def _ask(
-    store: ogld.LDStore,
+    store: opengwasdb.ld.LDStore,
     query: str,
     names: list[str],
     score: npt.NDArray[np.float64],
@@ -264,7 +264,7 @@ def _ask(
 def test_a_threshold_one_code_step_below_the_partner_floor_is_refused() -> None:
     """At the Partner Floor's own code the request is answered; one code step below it is
     refused, W ≤ near_bp, for both queries (spec §9; partner-rows §8.1)."""
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     floor = PARTNER_FLOOR
     assert store.provenance["partner_code_floor"] == floor
     assert (floor / R_SCALE) ** 2 >= T_PARTNER, "the floor's code reaches t_partner"
@@ -285,7 +285,7 @@ def test_the_t_partner_refusal_names_the_store_both_thresholds_and_the_way_out()
     """A refusal is actionable: it names the request's r2, the t_partner the store records and
     the store it is, and what to do — ask at or above the store's t_partner, or read a store
     derived at a lower one (spec §9; partner-rows §8.1; ogld#64)."""
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     names, score = _subset("small", store)
     asked = 0.001
     with pytest.raises(Refusal) as caught:
@@ -321,7 +321,7 @@ def _nothing_read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_the_refusal_is_decided_before_any_read(monkeypatch: pytest.MonkeyPatch) -> None:
     """No ALID is resolved and no frame is fetched for a refused request: the judge runs first
     (partner-rows §8.2, step 2)."""
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     names, score = _subset("small", store)
     below = ((PARTNER_FLOOR - 1) / R_SCALE) ** 2
     seen = _nothing_read(monkeypatch)
@@ -352,7 +352,7 @@ def test_a_store_without_partner_rows_is_refused_naming_the_component_and_the_wa
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     where = _without_partner_rows(tmp_path)
-    old = ogld.open(where)
+    old = opengwasdb.ld.open(where)
     names, score = _subset("small", old)
     seen = _nothing_read(monkeypatch)
     for query in ("clump", "proxies"):
@@ -434,7 +434,7 @@ def test_a_gap_of_exactly_w_cuts_and_one_of_w_minus_one_does_not(
 def test_one_two_and_eight_requested_workers_give_one_answer() -> None:
     """The answer does not depend on the pool, and eight requested workers are four
     (partner-rows §9.2; #65's measurement)."""
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     names, score = _subset("all", store)
     answers = {}
     for requested in (1, 2, 8):
@@ -466,7 +466,7 @@ def test_a_saturated_pool_still_progresses_and_never_overruns_its_workers(
     """More components than threads: every task runs, exactly `workers` at once and never more —
     eight requested is four (partner-rows §9.2) — and the answer is the serial one."""
     assert COMPONENT_WORKERS_MAX == 4, "the cap #65's measurement fixed"
-    names, score = _subset("all", ogld.open(TEST_STORE))
+    names, score = _subset("all", opengwasdb.ld.open(TEST_STORE))
     once = StoreReader.open(TEST_STORE)
     once._set_query_workers(1)
     serial = clumping.clump(once, names, score, r2=0.01, kb=100)
@@ -508,7 +508,7 @@ def test_a_damaged_frame_fails_the_whole_request_with_no_partial_result(
 ) -> None:
     """One frame's checksum fails: the request is refused naming it, and no clumps are returned
     from the tasks that finished (partner-rows §9.2)."""
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     reader = store._reader
     chr22 = reader.chromosome_range("22")[0]
     # The first hit is chromosome-local row 80, which is frame 5's first row: as the strongest hit

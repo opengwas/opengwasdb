@@ -9,7 +9,8 @@ entries more than near_bp apart in their earlier row, would save, and its output
 figures can be made again. Per chromosome it counts the Far Pairs from the Proxy Index by the
 store's own rule (`_beyond_near`, which `far/` is written by), and for the benchmark's
 500-variant draws (`latency.Sample`, seeds 8–10) the distinct chunks of one array each would
-read: the index's as the store chunks it, and a Far Pairs array chunked as `ogld.store.layout`
+read: the index's as the store chunks it, and a Far Pairs array chunked as
+`opengwasdb.ld.store.layout`
 chunks the index. Far Pairs cluster in a few rows (long-range LD), and a row with none touches
 no chunk, so the saving in chunks is set by how many listed rows hold any, not by the average a
 row.
@@ -34,9 +35,9 @@ from typing import Any, Final
 import latency
 import numpy as np
 
-from ogld.format.geometry import indptr_of, owners, spans
-from ogld.store.assembly import _beyond_near
-from ogld.store.layout import SIDE
+from opengwasdb.ld.format.geometry import indptr_of, owners, spans
+from opengwasdb.ld.store.assembly import _beyond_near
+from opengwasdb.ld.store.layout import SIDE
 
 #: Index entries read at a time.
 _BLOCK = 1 << 25

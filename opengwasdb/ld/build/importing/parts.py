@@ -15,7 +15,7 @@ from typing import Any, BinaryIO, cast
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import InputError
+from opengwasdb.ld.format import InputError
 
 
 def optional_module(name: str) -> Any:
@@ -23,7 +23,7 @@ def optional_module(name: str) -> Any:
     try:
         return importlib.import_module(name)
     except ImportError as missing:
-        raise InputError(f"{name} is required: install ogld[import]") from missing
+        raise InputError(f"{name} is required: install opengwasdb[ld-import]") from missing
 
 
 def _block(stream: BinaryIO, lz4: Any) -> bytes | None:

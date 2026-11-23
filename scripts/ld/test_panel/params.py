@@ -12,8 +12,8 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ogld.format import FAR_BP, T_FAR_Q
-from ogld.format import t_far as format_t_far
+from opengwasdb.ld.format import FAR_BP, T_FAR_Q
+from opengwasdb.ld.format import t_far as format_t_far
 from test_panel.roots import root, tool
 
 V2_NAME = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
@@ -41,7 +41,7 @@ class Params:
     mac_min: int = 20
     ks: tuple[int, ...] = (0, 10)
     far_bp: int = FAR_BP
-    # Recorded in the manifest; t_far itself is ogld.format's.
+    # Recorded in the manifest; t_far itself is opengwasdb.ld.format's.
     t_far_q: float = T_FAR_Q
     # The r scale the far-pair selection judges Stored r at: × 32767, the one encoding there was
     # when the committed panel was made. The Test Store is × 511 (ogld#16, ADR 0004); the panel's
@@ -86,14 +86,14 @@ class Params:
     memory_mb: int = 32000
 
     def t_far(self, n: int, k: int) -> float:
-        """t_far = max(0.001, q / (n - k - 1)) (ADR 0001), as ogld.format has it."""
+        """t_far = max(0.001, q / (n - k - 1)) (ADR 0001), as opengwasdb.ld.format has it."""
         return format_t_far(n, k)
 
 
 def parse(argv: list[str] | None = None) -> Params:
     """Command-line settings over the defaults above."""
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--out", type=Path, default=Path("tests/data/test-panel"))
+    p.add_argument("--out", type=Path, default=Path("tests/ld/data/test-panel"))
     p.add_argument(
         "--work",
         type=Path,

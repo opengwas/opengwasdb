@@ -21,16 +21,16 @@ from typing import Any
 import numpy as np
 import pytest
 import zarr
-from script_modules import load_script
+from ld_script_modules import load_script
 from store_copies import R_SCALE, TEST_STORE
 
-import ogld
-from ogld import cli
-from ogld.format import RefusalReason, REncoding
-from ogld.store import layout
+import opengwasdb.ld
+from opengwasdb.ld import cli
+from opengwasdb.ld.format import RefusalReason, REncoding
+from opengwasdb.ld.store import layout
 
 CONTRACT = Path(__file__).resolve().parent / "contract"
-REPOSITORY = Path(__file__).resolve().parents[1]
+REPOSITORY = Path(__file__).resolve().parents[2]
 SCALES = (511, 2047, 32767)
 #: The far code floor at the Test Panel's t_far(771, 10) = 0.0274211, per scale (spec §3; the
 #: Test Panel keeps all 771 EUR members by the owner's ruling).
@@ -61,11 +61,13 @@ def store_at(scale: int, factory: pytest.TempPathFactory) -> Path:
 
 
 @cache
-def every_pair(location: Path) -> tuple[ogld.LDMatrix, np.ndarray]:
+def every_pair(location: Path) -> tuple[opengwasdb.ld.LDMatrix, np.ndarray]:
     """The matrix of every variant of a store at `location`, and the reference r it holds."""
     support = contract("support")
     rows = tuple(int(row) for row in support.passing_rows())
-    return ogld.open(location).matrix(support.alids(rows)), support.reference_matrix(10, rows)
+    return opengwasdb.ld.open(location).matrix(support.alids(rows)), support.reference_matrix(
+        10, rows
+    )
 
 
 # ------------------------------------------------------------------ the round trip
@@ -98,8 +100,8 @@ def test_one_process_answers_from_a_511_store_and_a_2047_store(
 ) -> None:
     support = contract("support")
     hgdp, ukb = (
-        ogld.open(store_at(511, tmp_path_factory)),
-        ogld.open(store_at(2047, tmp_path_factory)),
+        opengwasdb.ld.open(store_at(511, tmp_path_factory)),
+        opengwasdb.ld.open(store_at(2047, tmp_path_factory)),
     )
     rows = support.passing_rows()[400:520]
     ref = support.reference_matrix(10, tuple(int(row) for row in rows))
@@ -145,8 +147,8 @@ def test_an_encoding_the_reader_does_not_implement_is_refused_at_open_naming_it(
     recorded: dict[str, Any] = doc["attributes"]["ld_store"]["encoding"]
     recorded.update(UNIMPLEMENTED[case])
     meta.write_text(json.dumps(doc))
-    with pytest.raises(ogld.InputError) as refused:
-        ogld.open(copy)
+    with pytest.raises(opengwasdb.ld.InputError) as refused:
+        opengwasdb.ld.open(copy)
     assert repr(recorded) in str(refused.value), refused.value
     assert str(copy) in str(refused.value)
     assert cli.main(["info", str(copy)]) == 2
@@ -162,7 +164,7 @@ def test_the_far_pairs_and_the_bound_follow_the_store_s_own_floor(
 ) -> None:
     location = store_at(scale, tmp_path_factory)
     support = contract("support")
-    assert ogld.open(location).provenance["far_code_floor"] == FLOORS[scale]
+    assert opengwasdb.ld.open(location).provenance["far_code_floor"] == FLOORS[scale]
     m, ref = every_pair(location)
     pos = m.variants.position
     gap = np.abs(pos[:, None] - pos[None, :])
@@ -214,7 +216,7 @@ def test_a_partner_threshold_above_t_far_is_refused_naming_both() -> None:
 def test_every_refusal_holds_at_each_scale(
     scale: int, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    store = ogld.open(store_at(scale, tmp_path_factory))
+    store = opengwasdb.ld.open(store_at(scale, tmp_path_factory))
     lead = contract("support").alids(contract("support").passing_rows()[:1])
     below = store.t_far / 2
     refusals = [
@@ -224,7 +226,7 @@ def test_every_refusal_holds_at_each_scale(
         lambda: store.region("22", 30_000_000, 5_000_001),
     ]
     for refused in refusals:
-        with pytest.raises(ogld.Refusal) as raised:
+        with pytest.raises(opengwasdb.ld.Refusal) as raised:
             refused()
         assert raised.value.reason in set(RefusalReason)
 
@@ -236,16 +238,16 @@ def test_every_refusal_holds_at_each_scale(
 def test_every_rule_passes_a_store_of_each_scale(
     scale: int, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    found = ogld.validate(store_at(scale, tmp_path_factory))
-    assert tuple(found) == ogld.format.VALIDATION_RULES
+    found = opengwasdb.ld.validate(store_at(scale, tmp_path_factory))
+    assert tuple(found) == opengwasdb.ld.format.VALIDATION_RULES
     assert {rule: f for rule, f in found.items() if f} == {}
 
 
 def failing(store: Path) -> set[str]:
-    return {rule for rule, found in ogld.validate(store).items() if found}
+    return {rule for rule, found in opengwasdb.ld.validate(store).items() if found}
 
 
-@pytest.mark.parametrize("rule", ogld.format.VALIDATION_RULES)
+@pytest.mark.parametrize("rule", opengwasdb.ld.format.VALIDATION_RULES)
 def test_a_breaker_fails_the_same_rules_at_another_scale(
     rule: str, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -276,12 +278,12 @@ def test_validation_judges_codes_at_the_store_s_scale(
         copy = shutil.copytree(store_at(scale, tmp_path_factory), tmp_path / f"x{scale}")
         band = zarr.open_array(copy / "near" / "22" / "r", mode="r+")
         band[7] = 600
-        found = ogld.validate(copy)
+        found = opengwasdb.ld.validate(copy)
         assert (not found["near.codes"]) is passes, found["near.codes"]
         if not passes:
             assert "a code past the scale, |code| > 511 at 7" in found["near.codes"][0].message
             with pytest.raises(ValueError, match="600"):
-                ogld.open(copy).matrix(contract("support").alids(_chr22_rows()[:20]))
+                opengwasdb.ld.open(copy).matrix(contract("support").alids(_chr22_rows()[:20]))
 
 
 def _chr22_rows() -> np.ndarray:
@@ -303,21 +305,21 @@ OWNED = re.compile(
     r"|['\"](?:r_scale|r_dtype|r_reserved_code|rounding)['\"]"
 )
 #: The encoding's owner (spec §3; docs/architecture/ownership.md).
-OWNER = "ogld/format/encoding.py"
+OWNER = "opengwasdb/ld/format/encoding.py"
 #: The phrases that name a scale on purpose, per file: the scale the Test Panel's selection judged
 #: Stored r at, and the Test Store script's documentation of the scale it is run at. A literal is
 #: let through only inside one of these phrases on its line; any other, such as a code written as
 #: `r * 511`, fails.
 NAMED_ON_PURPOSE = {
-    "scripts/test_panel/params.py": (
+    "scripts/ld/test_panel/params.py": (
         "× 32767, the one encoding there was",
         "The Test Store is × 511 (ogld#16, ADR 0004)",
         "r_scale: int = 32767",
     ),
-    "scripts/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),
-    "ogld/build/importing/run.py": ("PANUKB_SCALE: Final = 2047",),
-    "scripts/bench/partner_carry.py": ("T_PARTNER, SCALE = 0.01, 511",),
-    "scripts/make_test_store.py": (
+    "scripts/ld/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),
+    "opengwasdb/ld/build/importing/run.py": ("PANUKB_SCALE: Final = 2047",),
+    "scripts/ld/bench/partner_carry.py": ("T_PARTNER, SCALE = 0.01, 511",),
+    "scripts/ld/make_test_store.py": (
         "quantised at × 511, HGDP+1kGP EUR's encoding",
         "the committed Test Store is × 511, and tests write",
         "× 32767 stores beside it.",
@@ -341,7 +343,9 @@ def on_purpose(name: str, line: str, match: re.Match[str]) -> bool:
 def test_no_module_outside_the_encoding_names_a_scale_a_dtype_or_a_reserved_code() -> None:
     # Every Python file of the package and of scripts/, docstrings and comments included.
     found = []
-    for path in sorted([*REPOSITORY.glob("ogld/**/*.py"), *REPOSITORY.glob("scripts/**/*.py")]):
+    for path in sorted(
+        [*REPOSITORY.glob("opengwasdb/ld/**/*.py"), *REPOSITORY.glob("scripts/ld/**/*.py")]
+    ):
         name = str(path.relative_to(REPOSITORY))
         if name == OWNER:
             continue

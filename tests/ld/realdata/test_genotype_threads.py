@@ -1,6 +1,7 @@
 """The genotype code equality at eight BLAS threads, on the Test Panel (ogld#90).
 
-`ogld.genotypes.r` must give one set of Stored codes at any BLAS thread count, and #90's criterion
+`opengwasdb.ld.genotypes.r` must give one set of Stored codes at any BLAS thread count, and #90's
+criterion
 names one and eight (four is the widest the default tier ever held). Any count above one inside
 each of many parallel workers oversubscribes a small CI runner's CPUs and spins until the test
 times out, so the tier that runs on the IEU compute nodes holds them instead

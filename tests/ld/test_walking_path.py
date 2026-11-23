@@ -1,7 +1,9 @@
-"""The whole path, once: Test Panel pgen → k = 0 r → `StoreWriter` → `ogld.open` → one pair.
+"""The whole path, once: Test Panel pgen → k = 0 r → `StoreWriter` → `opengwasdb.ld.open` → one
+pair.
 
 Nothing in it comes from `reference_r` except the expected value. The r the store is made from was
-computed from the pgen's genotypes, read by `ogld.genotypes.Genotypes`, by this file's own plain
+computed from the pgen's genotypes, read by `opengwasdb.ld.genotypes.Genotypes`, by this file's own
+plain
 k = 0 product (`k0_r`), not by the builder's tiles. The store makes its Near Band and Proxy
 Index from it (ogld#17); no index is built here.
 """
@@ -15,17 +17,17 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import testdata
-from script_modules import load_script
+from ld_script_modules import load_script
 from store_copies import HALF_STEP, R_SCALE
 
-import ogld
-from ogld.format import FAR_BP, NEAR_BP, REncoding
-from ogld.store import StoreReader, StoreWriter, Variants
+import opengwasdb.ld
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants
 
 
 def k0_r(alt: npt.NDArray[np.int8], a1_is_alt: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
     """The k = 0 r of every pair, signed to A1, written out plainly from standardised A1 dosages:
-    this test's own computation of what `ogld.build` tiles."""
+    this test's own computation of what `opengwasdb.ld.build` tiles."""
     z = alt - alt.mean(axis=1, keepdims=True)
     z /= np.sqrt((z * z).sum(axis=1, keepdims=True))
     z[~a1_is_alt] *= -1
@@ -70,7 +72,7 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     written = writer.finish(script.sourced(0, sub, diagnostic, script.build_record(0.0)))
     assert written["counts"]["far_pairs"] > 0, "the store found Far Pairs in the r it was given"
 
-    store = ogld.open(out)
+    store = opengwasdb.ld.open(out)
     ref = testdata.reference_r(0)
     sign = np.full(len(testdata.variants()), 0.0)
     sign[vs.panel_rows] = vs.sign
@@ -99,7 +101,7 @@ def test_the_test_store_script_refuses_a_missing_call_rather_than_average_it(
     calls = fx.hard_calls()[rows].copy()
     calls[2, 7] = -9
     pgen = fx.write_fileset(tmp_path / "gappy", rows, genotypes=calls)
-    with pytest.raises(ogld.InputError, match="missing call"):
+    with pytest.raises(opengwasdb.ld.InputError, match="missing call"):
         script.alt_counts(rows, pgen)
     np.testing.assert_array_equal(script.alt_counts(rows[:2], pgen), calls[:2][:, _kept()])
 

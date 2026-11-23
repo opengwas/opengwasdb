@@ -39,8 +39,8 @@ import zarr
 from zarr.core.sync import sync
 from zarr.storage import LocalStore
 
-from ogld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, Codes, REncoding, t_far
-from ogld.format.geometry import (
+from opengwasdb.ld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, Codes, REncoding, t_far
+from opengwasdb.ld.format.geometry import (
     blocks,
     near_address,
     near_pair_of,
@@ -49,18 +49,18 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.format.provenance import (
+from opengwasdb.ld.format.provenance import (
     READABLE_FORMATS,
     VALIDATION_RULES,
     claims_partner_rows,
     release_of,
 )
-from ogld.format.semantics import InputError
-from ogld.identity import IdentityError, alid_locus, chromosome_rank, orient
-from ogld.store import layout
-from ogld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
-from ogld.store.layout import chromosomes_listed, never_data, shown_fill
-from ogld.store.location import frame_source, open_group
+from opengwasdb.ld.format.semantics import InputError
+from opengwasdb.ld.identity import IdentityError, alid_locus, chromosome_rank, orient
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
+from opengwasdb.ld.store.layout import chromosomes_listed, never_data, shown_fill
+from opengwasdb.ld.store.location import frame_source, open_group
 
 #: Elements of a Near Band a rule reads at once: 8 Mi codes are 16 MiB.
 _WINDOW: Final = 1 << 23
@@ -117,7 +117,7 @@ class ValidationFailed(Exception):
 
 
 def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
-    """Every rule of `ogld.format.VALIDATION_RULES` against the store at `location`.
+    """Every rule of `opengwasdb.ld.format.VALIDATION_RULES` against the store at `location`.
 
     The result has one key per rule, in the spec's order, whose list is empty when the
     store passes it. Each rule reads in bounded windows and never loads a whole Near

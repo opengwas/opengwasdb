@@ -29,9 +29,9 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build import tiles
-from ogld.format import FAR_BP, InputError, PcDiagnostic
-from ogld.format.geometry import windows
+from opengwasdb.ld.build import tiles
+from opengwasdb.ld.format import FAR_BP, InputError, PcDiagnostic
+from opengwasdb.ld.format.geometry import windows
 
 SEED: Final = 405
 MAX_VARIANTS: Final = 3_000
@@ -56,7 +56,7 @@ REGIONS_FILE: Final = "long-range-ld-regions-grch38.tsv"
 
 def long_range_ld_regions_file() -> Traversable:
     """The table's file: tab-separated, a `#` comment, a header, one region a row."""
-    return importlib.resources.files("ogld.build").joinpath(REGIONS_FILE)
+    return importlib.resources.files("opengwasdb.ld.build").joinpath(REGIONS_FILE)
 
 
 @functools.cache

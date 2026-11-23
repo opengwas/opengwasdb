@@ -8,11 +8,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import ogld
-from ogld.build.importing import run
-from ogld.cli import main
-from ogld.format import REQUIRED_KEYS
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld.build.importing import run
+from opengwasdb.ld.cli import main
+from opengwasdb.ld.format import REQUIRED_KEYS
+from opengwasdb.ld.store import StoreReader
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 
@@ -87,7 +87,7 @@ def joined_store(tmp_path_factory):
 
 
 def test_joined_chromosome_two_has_literal_signed_codes(joined_store) -> None:
-    with ogld.open(joined_store) as store:
+    with opengwasdb.ld.open(joined_store) as store:
         result = store.matrix(["2:1:A:C", "2:2:A:G", "2:4000001:A:G"])
         np.testing.assert_array_equal(
             result.r * 2047,
@@ -96,7 +96,7 @@ def test_joined_chromosome_two_has_literal_signed_codes(joined_store) -> None:
 
 
 def test_joined_cross_chromosome_pairs_are_not_measured(joined_store) -> None:
-    with ogld.open(joined_store) as store:
+    with opengwasdb.ld.open(joined_store) as store:
         result = store.matrix(["1:1:A:C", "2:2:A:G"])
         np.testing.assert_array_equal(result.r, [[1, np.nan], [np.nan, 1]])
         np.testing.assert_array_equal(
@@ -114,7 +114,7 @@ def test_joined_alid_lookups_name_literal_global_rows_on_both_chromosomes(joined
 
 
 def test_joined_component_counts_are_literal_sums(joined_store) -> None:
-    with ogld.open(joined_store) as store:
+    with opengwasdb.ld.open(joined_store) as store:
         # Per chromosome: one Near Band pair, two far candidates/pairs, six directed partners.
         assert store.provenance["counts"] == {
             "near_pairs": 2,
@@ -161,7 +161,7 @@ def test_cli_import_writes_literal_signed_codes_and_complete_provenance(tmp_path
     out = tmp_path / "import.store"
     assert main(import_args(out, tmp_path / "work")) == 0
     assert main(["validate", str(out)]) == 0
-    with ogld.open(out) as store:
+    with opengwasdb.ld.open(out) as store:
         assert store.provenance["n_variants"] == 6
         got = store.matrix(["1:1:A:C", "1:2:A:G", "1:4000001:A:G"]).r
         np.testing.assert_array_equal(

@@ -3,7 +3,7 @@
 A missing input is not a defect of ogld. A test that needs one asks `required` first, before it
 calls ogld or runs plink2. Unset, or naming nothing on disk, the test stops there as an
 expected failure whose reason names the variable and what it is for; `run.sh` prints those
-reasons (`-rfEx`). So it never reaches `ogld.open("")`, where a refusal would read as a
+reasons (`-rfEx`). So it never reaches `opengwasdb.ld.open("")`, where a refusal would read as a
 defect, and it never counts as a pass. It is an expected failure, not a skip, because the
 escapes gate counts every `pytest.skip` site in the tree (quality.json, `escapes`).
 """
@@ -35,9 +35,9 @@ def installed_mismatch() -> str:
     import sys
     from importlib.metadata import version
 
-    root = Path(__file__).resolve().parents[2]
-    if str(root / "scripts") not in sys.path:
-        sys.path.insert(0, str(root / "scripts"))
+    root = Path(__file__).resolve().parents[3]
+    if str(root / "scripts" / "ld") not in sys.path:
+        sys.path.insert(0, str(root / "scripts" / "ld"))
     checkout = importlib.import_module("test_panel.checkout")
-    found: str = checkout.problem(root, version("ogld"))
+    found: str = checkout.problem(root, version("opengwasdb"))
     return found

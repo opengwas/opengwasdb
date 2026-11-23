@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ogld.build.importing.parts import read_part
-from ogld.format import InputError
+from opengwasdb.ld.build.importing.parts import read_part
+from opengwasdb.ld.format import InputError
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 
@@ -41,7 +41,7 @@ def test_corrupt_part_is_refused_by_name(tmp_path: Path, payload: bytes) -> None
 
 def test_missing_import_dependency_is_a_named_extra_refusal(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "lz4.block", None)
-    with pytest.raises(InputError, match=r"lz4.block.*ogld\[import\]"):
+    with pytest.raises(InputError, match=r"lz4.block.*opengwasdb\[ld-import\]"):
         read_part(FIXTURE / "part-0")
 
 

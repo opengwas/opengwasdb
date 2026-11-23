@@ -98,7 +98,7 @@ def r(rows: Block, span: Block) -> npt.NDArray[np.float64]:
     For complete hard calls the float64 BLAS raw dot is exact: every partial sum is a
     whole number at most 4n. Only the (k + 1)-term correction and normalisation round.
     Dosage inputs use the same formula, without the integer exactness claim (ADR 0013).
-    Quantise the result only through `ogld.format.REncoding`.
+    Quantise the result only through `opengwasdb.ld.format.REncoding`.
     """
     out = rows.calls @ span.calls.T
     out -= rows.projection @ span.projection.T

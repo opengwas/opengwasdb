@@ -25,14 +25,14 @@ import pytest
 import zarr
 from store_copies import FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store, store_reads
 
-import ogld
-from ogld.format import VALIDATION_RULES, InputError, Refusal, REncoding
-from ogld.identity import orient
-from ogld.store import StoreReader, StoreWriter, Variants, layout
-from ogld.store.validation import validate_group
+import opengwasdb.ld
+from opengwasdb.ld.format import VALIDATION_RULES, InputError, Refusal, REncoding
+from opengwasdb.ld.identity import orient
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout
+from opengwasdb.ld.store.validation import validate_group
 
 #: The package whose source must not name the component.
-PACKAGE = Path(ogld.__file__).resolve().parent
+PACKAGE = Path(opengwasdb.ld.__file__).resolve().parent
 #: The names the component had: its writer, the reader's warmer, and its seven rule names.
 FORBIDDEN_NAMES = frozenset({"ProxyIndexStream", "clump_warmer"})
 FORBIDDEN_RULES = frozenset(
@@ -110,7 +110,7 @@ def index_paths(source: Path) -> list[tuple[int, str]]:
 
 def test_the_only_source_that_names_the_component_s_directory_is_its_removal() -> None:
     # A spelling guard, not a proof: the transport test below is what shows no read happens.
-    # `ogld/store/assembly.py` is where `--drop-index` removes the directory; the migration
+    # `opengwasdb/ld/store/assembly.py` is where `--drop-index` removes the directory; the migration
     # helper (`derive_far_pairs`) takes the group as an argument and names no path.
     found = {
         str(path.relative_to(PACKAGE)): index_paths(path) for path in sources() if index_paths(path)
@@ -192,9 +192,9 @@ def write_a_leftover_index(store: Path) -> None:
 def answers(store: Path) -> dict[str, np.ndarray]:
     reader = StoreReader.open(store)
     names = list(reader.variants(np.arange(reader.provenance["n_variants"])).alid)
-    found: dict[str, np.ndarray] = {"matrix": ogld.open(store).matrix(names).r}
+    found: dict[str, np.ndarray] = {"matrix": opengwasdb.ld.open(store).matrix(names).r}
     for chrom in ("21", "22"):
-        found[f"region-{chrom}"] = ogld.open(store).region(chrom, 30_000_000, 5_000_000).r
+        found[f"region-{chrom}"] = opengwasdb.ld.open(store).region(chrom, 30_000_000, 5_000_000).r
     return found
 
 
@@ -212,7 +212,7 @@ def test_a_leftover_index_answers_exactly_as_a_store_without_one(tmp_path: Path)
 def every_query(store_path: Path) -> None:
     """Every read the package makes of a store: one of each query family, and the pair reads
     behind them. A read under `index/` anywhere here is a read of the component."""
-    store = ogld.open(store_path)
+    store = opengwasdb.ld.open(store_path)
     reader = StoreReader.open(store_path)
     rows = np.arange(reader.provenance["n_variants"])
     names = list(reader.variants(rows).alid)
@@ -284,9 +284,9 @@ def a_0_1_0_store(to: Path) -> Path:
 
 def _clump_or_proxies(query: str, store: Path, names: list[str], scores: np.ndarray) -> None:
     if query == "clump":
-        ogld.open(store).clump(names, scores, r2=0.01, kb=3000)
+        opengwasdb.ld.open(store).clump(names, scores, r2=0.01, kb=3000)
     else:
-        ogld.open(store).proxies(names, r2=0.5, kb=3000)
+        opengwasdb.ld.open(store).proxies(names, r2=0.5, kb=3000)
 
 
 def test_a_0_1_0_store_opens_and_answers_matrix_and_region(tmp_path: Path) -> None:

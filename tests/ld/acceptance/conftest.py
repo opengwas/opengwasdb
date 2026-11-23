@@ -15,9 +15,9 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 # The run imports the scripts it exercises (`clump_rule`, `make_403_inputs`) by name.
-sys.path.insert(0, str(HERE.parents[1] / "scripts" / "realdata"))
+sys.path.insert(0, str(HERE.parents[2] / "scripts" / "ld" / "realdata"))
 # The stores' acceptance reads the recipe's constants and paths (`build_hgdp1kgp`), not copies.
-sys.path.insert(0, str(HERE.parents[1] / "scripts"))
+sys.path.insert(0, str(HERE.parents[2] / "scripts" / "ld"))
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

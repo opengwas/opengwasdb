@@ -5,7 +5,7 @@
 
 ogld#7 wrote the five HGDP+1kGP stores before the owner's 15 November 2026 decision to carry the
 engine's ALID index beside the variant table (ADR 0010). A store's index is its own `variants/alid`
-column, padded and sorted (`ogld.store.assembly.derive_alid_index`, the function
+column, padded and sorted (`opengwasdb.ld.store.assembly.derive_alid_index`, the function
 `StoreWriter.finish` calls), so it is derived rather than rebuilt. On HGDP+1kGP EUR chr22 the
 derived index was byte-identical, file for file, to a rebuild's (ogld#42).
 
@@ -39,8 +39,8 @@ from typing import Any
 import numpy as np
 import zarr
 
-from ogld.store import layout
-from ogld.store.assembly import ALID_ROWS, derive_alid_index
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.assembly import ALID_ROWS, derive_alid_index
 
 #: Where the index is written until every entry is, and counted: then it is renamed `alid_index`.
 #: A reader ignores it (spec §1), and no other writer makes it.

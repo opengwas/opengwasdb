@@ -31,9 +31,9 @@ import pytest
 from realdata_inputs import required
 from test_build_panel import HGDP_SCALE, eur_keep, inputs, v2_slice
 
-import ogld
-from ogld.format import REncoding
-from ogld.identity import alid_locus, order_key
+import opengwasdb.ld
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.identity import alid_locus, order_key
 
 KB = 3000
 #: Fewest Analyses with hits on the slice for the comparison to mean anything.
@@ -41,21 +41,23 @@ MIN_ANALYSES = 20
 
 
 @pytest.fixture(scope="module")
-def chr22(tmp_path_factory: pytest.TempPathFactory) -> tuple[ogld.LDStore, Path]:
+def chr22(tmp_path_factory: pytest.TempPathFactory) -> tuple[opengwasdb.ld.LDStore, Path]:
     """The k = 0, × 511 store of the v2 EUR chr22:20–32 Mb slice, and plink2's pgen of the same
     records with the ALIDs as IDs, which a clump of plink2's reads."""
     slice_ = v2_slice("wide", tmp_path_factory)
     root = tmp_path_factory.mktemp("clump-chr22")
-    ogld.build(inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-32 Mb", HGDP_SCALE), root / "s")
-    from ogld.store import StoreReader
+    opengwasdb.ld.build(
+        inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-32 Mb", HGDP_SCALE), root / "s"
+    )
+    from opengwasdb.ld.store import StoreReader
 
     reader = StoreReader.open(root / "s")
     stored = maker.store_chromosome(reader, "22")
     maker.prepare_chromosome(slice_, eur_keep(), root / "pgen", "22", stored)
-    return ogld.open(root / "s"), root / "pgen" / "chr22"
+    return opengwasdb.ld.open(root / "s"), root / "pgen" / "chr22"
 
 
-def hits_on_the_store(directory: Path, store: ogld.LDStore) -> list[tuple[str, float]]:
+def hits_on_the_store(directory: Path, store: opengwasdb.ld.LDStore) -> list[tuple[str, float]]:
     """(ALID, |z|) of an Analysis's chr22 hits that the store holds."""
     rows = maker.read_hits(directory / "hits.all.tsv")
     on_chr22 = [(a, z) for a, z, c in rows if c == "22"]
@@ -64,7 +66,7 @@ def hits_on_the_store(directory: Path, store: ogld.LDStore) -> list[tuple[str, f
 
 
 def explained(
-    store: ogld.LDStore,
+    store: opengwasdb.ld.LDStore,
     pfile: Path,
     work: Path,
     hits: list[tuple[str, float]],
@@ -100,7 +102,7 @@ def explained(
 #: #71): the tier compares at 0.01 only, and the refusal is the contract tests' to hold.
 @pytest.mark.parametrize("r2", [0.01])
 def test_leads_equal_plink2_s_on_403_s_37_analyses_on_chr22(
-    r2: float, chr22: tuple[ogld.LDStore, Path], tmp_path: Path
+    r2: float, chr22: tuple[opengwasdb.ld.LDStore, Path], tmp_path: Path
 ) -> None:
     store, pfile = chr22
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"

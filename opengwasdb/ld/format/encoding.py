@@ -20,8 +20,8 @@ from typing import Any, ClassVar, Final, TypeGuard
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format.provenance import Encoding
-from ogld.format.semantics import InputError
+from opengwasdb.ld.format.provenance import Encoding
+from opengwasdb.ld.format.semantics import InputError
 
 #: The χ²₁ upper quantile at p = 5×10⁻⁶ in t_far = max(0.001, q / (n − k − 1)) (ADR 0001).
 T_FAR_Q: Final = 20.84

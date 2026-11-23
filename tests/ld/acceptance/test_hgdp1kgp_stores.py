@@ -22,11 +22,11 @@ import build_hgdp1kgp as recipe
 import numpy as np
 import pytest
 
-import ogld
-from ogld.format import VALIDATION_RULES
-from ogld.store.layout import chromosomes_listed
-from ogld.store.location import ChunkCache, open_group
-from ogld.store.validation import validate_at
+import opengwasdb.ld
+from opengwasdb.ld.format import VALIDATION_RULES
+from opengwasdb.ld.store.layout import chromosomes_listed
+from opengwasdb.ld.store.location import ChunkCache, open_group
+from opengwasdb.ld.store.validation import validate_at
 
 #: ADR 0002, decision 11: each panel's unrelated samples (`scripts/make_keeps.py`).
 PANELS = {"EUR": 665, "AFR": 608, "EAS": 724, "SAS": 672, "AMR": 341}
@@ -82,7 +82,7 @@ def test_every_rule_passes(panel: str) -> None:
 
 @pytest.mark.parametrize("panel", PANELS)
 def test_provenance_records_what_a_reader_needs(panel: str) -> None:
-    p = ogld.open(store_path(panel)).provenance
+    p = opengwasdb.ld.open(store_path(panel)).provenance
     assert p["panel"]["id"] == recipe.panel_id(panel)
     assert p["panel"]["ancestry"] == panel
     assert p["panel"]["n"] == PANELS[panel] == keep_count(panel)
@@ -106,14 +106,14 @@ def test_provenance_records_what_a_reader_needs(panel: str) -> None:
 
 @pytest.mark.parametrize("panel", PANELS)
 def test_the_pc_check_and_its_diagnostic_are_recorded(panel: str) -> None:
-    adjustment = ogld.open(store_path(panel)).provenance["adjustment"]
+    adjustment = opengwasdb.ld.open(store_path(panel)).provenance["adjustment"]
     assert adjustment["k_target"] == recipe.K
     assert adjustment["k_min"] == K_MIN
     dropped = adjustment["pc_check"]["dropped"]
     assert isinstance(dropped, list), "the PC Check's dropped PCs are recorded, even when none"
     assert K_MIN <= adjustment["k"] <= recipe.K, f"{panel} kept {adjustment['k']} PCs"
     assert len(adjustment["covariates"]) == adjustment["k"]
-    diagnostic = ogld.open(store_path(panel)).provenance["pc_diagnostic"]
+    diagnostic = opengwasdb.ld.open(store_path(panel)).provenance["pc_diagnostic"]
     assert diagnostic["pairs"]["n_pairs"] > 0
     for rate in (
         "rate_r2_ge_0_01_unadjusted",

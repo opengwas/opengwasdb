@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from threadpoolctl import threadpool_info
 
-import ogld
-from ogld.genotypes import reader
+import opengwasdb.ld
+from opengwasdb.ld.genotypes import reader
 
 
 def blas_threads() -> list[int]:
@@ -18,7 +18,7 @@ def blas_threads() -> list[int]:
 
 
 def main(path: str) -> None:
-    store = ogld.open(path)
+    store = opengwasdb.ld.open(path)
     rows = store._reader.rows_in("22", 19000000, 21000000)[:10]
     names = store._reader.alids_of(rows).tolist()
     assert len(names) == 10

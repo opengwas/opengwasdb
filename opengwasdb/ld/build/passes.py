@@ -1,7 +1,9 @@
-"""The build's passes over the genotypes, between `ogld.build.build` and the modules it uses.
+"""The build's passes over the genotypes, between `opengwasdb.ld.build.build` and the modules it
+uses.
 
 1. `plan`: the samples, the filesets and the PC File, each refused if unusable.
-2. `ogld.build.variant_set`: every record, once; the Variant Set and the PC Check's windows.
+2. `opengwasdb.ld.build.variant_set`: every record, once; the Variant Set and the PC Check's
+windows.
 3. `choose`: the PC Check, and the covariates it keeps (k > 0).
 4. `drop_flat`: the variants with no variance left after PC Adjustment, dropped and counted
    (build-inputs §6, filter 4). It needs the covariates, which need every chromosome's windows,
@@ -21,8 +23,8 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build import pc_check, tiles
-from ogld.build.diagnostic import (
+from opengwasdb.ld.build import pc_check, tiles
+from opengwasdb.ld.build.diagnostic import (
     CHANGE_BP,
     ChanceRates,
     ChangeHistogram,
@@ -31,7 +33,7 @@ from ogld.build.diagnostic import (
     draw_variants,
     outside_regions,
 )
-from ogld.build.inputs import (
+from opengwasdb.ld.build.inputs import (
     CHUNK_RECORDS,
     Fileset,
     PcFile,
@@ -41,17 +43,17 @@ from ogld.build.inputs import (
     read_keep,
     read_pc_file,
 )
-from ogld.build.variant_set import Chromosome, Pass
-from ogld.format import InputError
-from ogld.format.geometry import (
+from opengwasdb.ld.build.variant_set import Chromosome, Pass
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.format.geometry import (
     chromosome_index,
     chromosome_ranges,
     local_rows,
     windows,
 )
-from ogld.genotypes import Covariates, Genotypes, covariates, prepare, r, residuals
-from ogld.identity import Orientation
-from ogld.store import StoreWriter, Variants
+from opengwasdb.ld.genotypes import Covariates, Genotypes, covariates, prepare, r, residuals
+from opengwasdb.ld.identity import Orientation
+from opengwasdb.ld.store import StoreWriter, Variants
 
 STRINGS: Final = np.dtypes.StringDType()
 
@@ -157,7 +159,7 @@ def _labels(chromosomes: list[Chromosome]) -> npt.NDArray[np.str_]:
 
 
 def chance(the_plan: Plan, chromosomes: list[Chromosome], chosen: Covariates) -> ChanceRates:
-    """#405's chance-LD rates over the Variant Set (`ogld.build.diagnostic`)."""
+    """#405's chance-LD rates over the Variant Set (`opengwasdb.ld.build.diagnostic`)."""
     labels = _labels(chromosomes)
     if len(set(labels.tolist())) < 2:
         return ChanceRates(0, None, None)

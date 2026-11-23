@@ -12,14 +12,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from script_modules import SCRIPTS, load_script
+from ld_script_modules import SCRIPTS, load_script
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 make_pcs = load_script("make_pcs")
 
 N = 100
-ROOT = SCRIPTS.parent
+ROOT = SCRIPTS.parents[1]
 
 
 def settings(tmp_path: Path) -> object:
@@ -96,8 +96,10 @@ def head() -> str:
 def test_the_report_names_the_commit_and_a_dirty_checkout_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(make_pcs.checkout, "problem", lambda root, installed: "a change: ogld/x.py")
-    with pytest.raises(SystemExit, match=r"a change: ogld/x\.py"):
+    monkeypatch.setattr(
+        make_pcs.checkout, "problem", lambda root, installed: "a change: opengwasdb/ld/x.py"
+    )
+    with pytest.raises(SystemExit, match=r"a change: opengwasdb/ld/x\.py"):
         make_pcs._commit()
     monkeypatch.setattr(make_pcs.checkout, "problem", lambda root, installed: "")
     # main re-executes itself with one BLAS thread when its environment lacks it: not here.

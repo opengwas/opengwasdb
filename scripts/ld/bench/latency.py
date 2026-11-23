@@ -199,7 +199,7 @@ def _counted_per_string(chunk: np.ndarray) -> int:
     bytes, one string at a time, by the same rule and constants."""
     import math
 
-    from ogld.store import location
+    from opengwasdb.ld.store import location
 
     if chunk.dtype.kind != "T":
         return int(chunk.nbytes)
@@ -223,7 +223,7 @@ def _index_passed_sync(
 def without(levers: list[str], cache_mib: int | None, patch: Patch = setattr) -> int | None:
     """Turn `levers` off, each as it was before ogld#32, from outside `ogld/`: the cache's
     budget in MiB that leaves, None for ogld's default."""
-    from ogld.store import location
+    from opengwasdb.ld.store import location
 
     if "concurrency" in levers:
         patch(location.ChunkCache, "_chunks", _sequential_chunks)
@@ -243,10 +243,10 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     import zarr
     from zarr.storage import FsspecStore, LocalStore
 
-    from ogld.query import clumping
-    from ogld.store import location
-    from ogld.store.location import ChunkCache
-    from ogld.store.reader import StoreReader
+    from opengwasdb.ld.query import clumping
+    from opengwasdb.ld.store import location
+    from opengwasdb.ld.store.location import ChunkCache
+    from opengwasdb.ld.store.reader import StoreReader
 
     if zarr_threads is not None:
         zarr.config.set({"threading.max_workers": zarr_threads})
@@ -419,9 +419,9 @@ class Bench:
 
 def opened(location: str | Path) -> Any:
     """The LD Store at `location`, opened as a caller opens one."""
-    import ogld
+    import opengwasdb.ld
 
-    return ogld.open(location)
+    return opengwasdb.ld.open(location)
 
 
 def published() -> Path:
@@ -508,7 +508,7 @@ class Sample:
     def near_pairs(self, count: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
         """`count` chr22 pairs within the store's near_bp: a random row, and a random later
         row within it, by the Near Band's own stop (`geometry.stop_within`, spec §4)."""
-        from ogld.format.geometry import stop_within
+        from opengwasdb.ld.format.geometry import stop_within
 
         reader = opened(self.store)._reader
         c = reader._chromosome("22")
@@ -675,9 +675,9 @@ def environment(args: argparse.Namespace) -> dict[str, Any]:
     import fsspec
     import zarr
 
-    import ogld
+    import opengwasdb.ld
 
-    code = code_state(ogld.__version__)
+    code = code_state(opengwasdb.ld.__version__)
     return {
         "kind": "environment",
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -686,9 +686,9 @@ def environment(args: argparse.Namespace) -> dict[str, Any]:
         "code": code,
         # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as #31
         # timed the tip's reader beside its own.
-        "ogld_source": str(Path(ogld.__file__).resolve().parent),
+        "ogld_source": str(Path(opengwasdb.ld.__file__).resolve().parent),
         "versions": {
-            "ogld": ogld.__version__,
+            "ogld": opengwasdb.ld.__version__,
             "zarr": zarr.__version__,
             "numpy": np.__version__,
             "fsspec": fsspec.__version__,

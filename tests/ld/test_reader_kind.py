@@ -10,11 +10,11 @@ import pytest
 import testdata
 from contract.support import TEST_STORE
 
-import ogld
-from ogld.genotypes.reader import GenotypeReader
-from ogld.store import StoreReader
-from ogld.store import location as open_module
-from ogld.store.variants import VariantTable
+import opengwasdb.ld
+from opengwasdb.ld.genotypes.reader import GenotypeReader
+from opengwasdb.ld.store import StoreReader
+from opengwasdb.ld.store import location as open_module
+from opengwasdb.ld.store.variants import VariantTable
 
 
 def count_root_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
@@ -34,10 +34,10 @@ def test_an_open_and_a_validate_read_an_ld_store_s_root_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reads = count_root_reads(monkeypatch)
-    ogld.open(TEST_STORE)
+    opengwasdb.ld.open(TEST_STORE)
     assert len(reads) == 1, f"an LD Store open reads its root metadata {len(reads)} times"
     reads.clear()
-    assert not any(ogld.validate(TEST_STORE).values())
+    assert not any(opengwasdb.ld.validate(TEST_STORE).values())
     assert len(reads) == 1, f"an LD Store validate reads its root metadata {len(reads)} times"
 
 
@@ -45,17 +45,17 @@ def test_an_open_and_a_validate_read_a_genotype_store_s_root_once(
     genotype_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reads = count_root_reads(monkeypatch)
-    ogld.open(genotype_store)
+    opengwasdb.ld.open(genotype_store)
     assert len(reads) == 1, f"a Genotype Store open reads its root metadata {len(reads)} times"
     reads.clear()
-    assert not any(ogld.validate(genotype_store).values())
+    assert not any(opengwasdb.ld.validate(genotype_store).values())
     assert len(reads) == 1, f"a Genotype Store validate reads its root {len(reads)} times"
 
 
 def test_the_genotype_reader_composes_the_variant_table_and_store(genotype_store: Path) -> None:
-    from ogld.query.reader import Reader
+    from opengwasdb.ld.query.reader import Reader
 
-    reader = ogld.open(genotype_store)._reader
+    reader = opengwasdb.ld.open(genotype_store)._reader
     assert isinstance(reader, GenotypeReader)
     assert isinstance(reader, Reader)
     assert not isinstance(reader, StoreReader), "a genotype reader is not an LD Store reader"
@@ -75,7 +75,7 @@ def test_a_store_closes_its_reader_and_its_pgen_handles(
 ) -> None:
     from contextlib import closing
 
-    from ogld.genotypes.pgen import Genotypes
+    from opengwasdb.ld.genotypes.pgen import Genotypes
 
     closed: list[object] = []
     original_close = Genotypes.close
@@ -86,7 +86,7 @@ def test_a_store_closes_its_reader_and_its_pgen_handles(
 
     monkeypatch.setattr(Genotypes, "close", counted_close)
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[:10])
-    store = ogld.open(genotype_store)
+    store = opengwasdb.ld.open(genotype_store)
     store.matrix(names)
     reader = store._reader
     handles = len(reader._handles._idle)
@@ -95,7 +95,7 @@ def test_a_store_closes_its_reader_and_its_pgen_handles(
     assert reader._closed
     assert reader._handles._idle == [], "a closed store keeps no idle pgen handle"
     assert len(closed) == handles, "close() closes every handle the reader kept"
-    with pytest.raises(ogld.InputError):
+    with pytest.raises(opengwasdb.ld.InputError):
         store.matrix(names)
-    with closing(ogld.open(TEST_STORE)) as ld:
+    with closing(opengwasdb.ld.open(TEST_STORE)) as ld:
         assert ld.provenance["format_version"]

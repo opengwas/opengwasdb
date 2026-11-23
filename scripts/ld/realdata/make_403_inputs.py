@@ -24,7 +24,8 @@ Sources, all read-only:
   `/data/opengwasdb/stores/` as the sweep's `read_tier` does: `top_hits(threshold=5e-8,
   observed_only=True)` then `resolve`. Imputed rows are not clumped, on either side.
 - **The genotypes.** #5's v2 EUR conversions (`--genotypes`), the pgens the store is built from. A
-  record's ALID is `ogld.identity.orient(chrom, pos, ref, alt).alid`; a record is kept when that
+  record's ALID is `opengwasdb.ld.identity.orient(chrom, pos, ref, alt).alid`; a record is kept when
+  that
   ALID is in the store's Variant Set, and where an insertion and a deletion share an ALID, the one
   whose REF the ALID spells first (the Variant Set's own rule, spec §2). `prepare` writes those
   records to `<out>/EUR-k0.plink2/chr<N>` with `--keep` EUR, the ID renamed to the ALID.
@@ -194,7 +195,7 @@ def sha256_of(path: Path) -> str:
 def keep_sha256(keep: Path) -> str:
     """The builder's `panel.samples_sha256` of a keep file (spec §7), through its own reader and
     `Samples`, so a keep file the builder refuses is refused here."""
-    from ogld.build.inputs import Samples, read_keep
+    from opengwasdb.ld.build.inputs import Samples, read_keep
 
     return Samples(tuple(read_keep(keep, keep.stem))).sha256()
 
@@ -248,7 +249,7 @@ def records_by_alid(pvar: Path, alids: set[str]) -> tuple[dict[str, list[Record]
     """The pvar records whose ALID the store holds, by ALID, and how many records have no ALID
     (an allele ogld refuses, `IdentityError`): the store can hold none of those, so they are
     counted, and the caller reports the count."""
-    from ogld.identity import IdentityError, orient
+    from opengwasdb.ld.identity import IdentityError, orient
 
     found: dict[str, list[Record]] = {}
     skipped = 0
@@ -302,12 +303,13 @@ def pick(
     """The pvar id of the record the Variant Set holds for `alid`.
 
     One record is that one. Of an insertion and a deletion of one site, the rule keeps the record
-    whose REF is A1 (`ogld.identity.resolve_reversed_indels`), unless the builder's filters had
+    whose REF is A1 (`opengwasdb.ld.identity.resolve_reversed_indels`), unless the builder's filters
+    had
     dropped it; the store says which it held: the record whose A1 frequency is the store's
     `a1_frequency` (within the five digits plink2's counts and the store's float32 share). If the
     rule's record is one, it is taken; if neither is, the store holds neither and this stops.
     """
-    from ogld.identity import resolve_reversed_indels
+    from opengwasdb.ld.identity import resolve_reversed_indels
 
     if len(records) == 1:
         return records[0].name
@@ -385,7 +387,7 @@ def prepare_chromosome(
 
 
 def prepare(out: Path, store: Path, jobs: int) -> dict[str, str]:
-    from ogld.store import StoreReader
+    from opengwasdb.ld.store import StoreReader
 
     reader = StoreReader.open(store)
     pins = check_pins(reader.provenance, GENOTYPES, KEEP)
@@ -497,7 +499,7 @@ def clump_analysis(
 
 
 def clump(out: Path, store: Path, jobs: int) -> None:
-    from ogld.store import StoreReader
+    from opengwasdb.ld.store import StoreReader
 
     reader = StoreReader.open(store)
     present = {a for c in map(str, range(1, 23)) for a in store_chromosome(reader, c)}

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ogld.build import pc_check
+from opengwasdb.ld.build import pc_check
 from test_panel import reference
 from test_panel.assemble import Panel
 from test_panel.params import Params

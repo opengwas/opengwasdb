@@ -20,19 +20,19 @@ import numpy as np
 import pytest
 import testdata
 
-import ogld
-from ogld import genotypes as adjust
-from ogld.build import diagnostic, record
-from ogld.format import InputError
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld import genotypes as adjust
+from opengwasdb.ld.build import diagnostic, record
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.store import StoreReader
 
 
 @pytest.fixture(scope="module")
-def k10(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance:
+def k10(tmp_path_factory: pytest.TempPathFactory) -> opengwasdb.ld.Provenance:
     return made.test_panel_build(10, tmp_path_factory)[0]
 
 
-def test_the_change_within_100kb_is_the_reference_s(k10: ogld.Provenance) -> None:
+def test_the_change_within_100kb_is_the_reference_s(k10: opengwasdb.ld.Provenance) -> None:
     i, j, before = made.reference_pairs(0)
     _, _, after = made.reference_pairs(10)
     pos = testdata.variants().pos
@@ -59,7 +59,7 @@ def numpy_r(rows: np.ndarray, k: int) -> np.ndarray:
     return np.corrcoef(resid.T)
 
 
-def test_the_chance_rates_are_numpy_s_on_405_s_pairs(k10: ogld.Provenance) -> None:
+def test_the_chance_rates_are_numpy_s_on_405_s_pairs(k10: opengwasdb.ld.Provenance) -> None:
     # The Test Panel's PC File lists the samples in its psam's order, so numpy_r's are aligned.
     assert testdata.pcs().iids[:3] == tuple(
         line.split("\t")[0] for line in testdata.panel().psam.read_text().splitlines()[1:4]
@@ -96,7 +96,7 @@ def test_405_s_draws_are_seeded() -> None:
 def test_one_chromosome_has_no_chance_rate(tmp_path: Path) -> None:
     on22 = np.flatnonzero(testdata.variants().chrom == "22")
     pgen = made.write_fileset(tmp_path / "chr22", on22)
-    provenance = ogld.build(made.inputs(pgen), tmp_path / "store")
+    provenance = opengwasdb.ld.build(made.inputs(pgen), tmp_path / "store")
     d = provenance["pc_diagnostic"]
     assert d is not None
     assert d["pairs"]["n_pairs"] == 0
@@ -126,7 +126,7 @@ def test_dosages_give_pearson_r_of_the_dosages(tmp_path: Path) -> None:
     reader.read_dosages_range(0, len(rows), held)
     reader.close()
     assert np.abs(held - np.rint(held)).max() > 0.1, "the fixture must hold fractional dosages"
-    ogld.build(made.inputs(pgen), tmp_path / "store")
+    opengwasdb.ld.build(made.inputs(pgen), tmp_path / "store")
     sign = made.a1_signs()[rows]
     expected = np.corrcoef(held) * sign[:, None] * sign[None, :]
     ours = made.stored_r(tmp_path / "store", rows)
@@ -154,7 +154,7 @@ def test_a_variant_the_covariates_span_has_no_variance_left() -> None:
 
 
 def test_the_package_owns_the_long_range_ld_regions() -> None:
-    # The table is package data (ogld/build/long-range-ld-regions-grch38.tsv), read once by
+    # The table is package data (opengwasdb/ld/build/long-range-ld-regions-grch38.tsv), read once by
     # diagnostic.long_range_ld_regions, which the build and both scripts call. Held here to
     # build-inputs §9's own numbers.
     table = diagnostic.long_range_ld_regions()
@@ -220,7 +220,7 @@ def test_a_variant_set_inside_the_long_range_regions_is_refused_before_a_write(
     )
     pgen = made.write_fileset(tmp_path / "mhc", on22, lines=lines)
     with pytest.raises(InputError, match=rf"panel {made.PANEL_ID}.*100 kb.*Long-Range LD Regions"):
-        ogld.build(made.inputs(pgen), tmp_path / "store")
+        opengwasdb.ld.build(made.inputs(pgen), tmp_path / "store")
     assert not (tmp_path / "store").exists(), "nothing is written"
 
 
@@ -249,7 +249,9 @@ def test_a_variant_the_covariates_span_is_dropped_and_counted(tmp_path: Path) ->
     assert passing[row]
     twins = (made.hard_calls()[passing] == made.hard_calls()[row]).all(axis=1).sum()
     assert twins == 1, "no other variant shares its genotypes, so exactly one is flat"
-    provenance = ogld.build(made.inputs(testdata.panel().pgen, 10, pcs=pc_file), tmp_path / "s")
+    provenance = opengwasdb.ld.build(
+        made.inputs(testdata.panel().pgen, 10, pcs=pc_file), tmp_path / "s"
+    )
     assert provenance["adjustment"]["covariates"][-1] == "PC10", "the PC Check keeps the mix"
     assert provenance["variants_dropped"]["zero_variance"] == 1
     assert provenance["n_variants"] == int(passing.sum()) - 1

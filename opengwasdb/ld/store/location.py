@@ -45,11 +45,11 @@ from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
 from zarr.core.sync import sync
 from zarr.storage import LocalStore, StorePath, WrapperStore
 
-from ogld.format import InputError, Provenance
-from ogld.format.geometry import spans
-from ogld.store import layout
-from ogld.store.decoding import DecodedChunk, NumericDecoder, on_pool
-from ogld.store.layout import never_data, refused_if_lost, shown_fill
+from opengwasdb.ld.format import InputError, Provenance
+from opengwasdb.ld.format.geometry import spans
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.decoding import DecodedChunk, NumericDecoder, on_pool
+from opengwasdb.ld.store.layout import never_data, refused_if_lost, shown_fill
 
 #: The decoded inner chunks and shard indexes a reader keeps unless its caller says otherwise,
 #: in bytes: 8,192 of layout C's 512 KiB Near Band chunks. ogld#8 measured repeated reads
@@ -156,7 +156,8 @@ class PreadSource:
         except OSError as failed:
             raise ValueError(f"{self._path} cannot be opened: {failed}") from failed
         self._descriptor = descriptor
-        # A reader dropped without being closed still releases its descriptor: `ogld.open` has no
+        # A reader dropped without being closed still releases its descriptor: `opengwasdb.ld.open`
+        # has no
         # close of its own, so a caller that opens a store per request would otherwise leak one.
         self._finalizer = weakref.finalize(self, _closed, descriptor)
         return descriptor

@@ -9,10 +9,10 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import VALIDATION_RULES, REncoding
-from ogld.genotypes.layout import ARRAYS, VERSION, check_input, mapped_arrays
-from ogld.store import Finding, layout
-from ogld.store.validation import validate_group
+from opengwasdb.ld.format import VALIDATION_RULES, REncoding
+from opengwasdb.ld.genotypes.layout import ARRAYS, VERSION, check_input, mapped_arrays
+from opengwasdb.ld.store import Finding, layout
+from opengwasdb.ld.store.validation import validate_group
 
 _VARIANT_RULES = tuple(
     name

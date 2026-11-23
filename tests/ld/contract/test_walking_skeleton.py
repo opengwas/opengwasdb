@@ -17,11 +17,11 @@ from pathlib import Path
 import numpy as np
 import support
 import zarr
-from script_modules import load_script
+from ld_script_modules import load_script
 from support import alids, panel_data, passing_rows, reference
 
-import ogld
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld.store import StoreReader
 
 
 def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:
@@ -34,7 +34,7 @@ def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:
 
 
 def test_the_test_store_opens_through_ogld_open() -> None:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     assert (store.t_far, store.near_bp, store.far_bp) == (support.T_FAR, 3_000_000, 10_000_000)
 
 

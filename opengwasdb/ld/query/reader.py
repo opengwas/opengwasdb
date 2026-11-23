@@ -1,6 +1,7 @@
 """The reader interface the four queries name (#91).
 
-`ogld.store.StoreReader` and `ogld.genotypes.GenotypeReader` both satisfy it structurally: one
+`opengwasdb.ld.store.StoreReader` and `opengwasdb.ld.genotypes.GenotypeReader` both satisfy it
+structurally: one
 reads materialised arrays, the other computes the same answers from pinned pgens. The queries
 depend on this seam only, so neither reader has to be the other's base class.
 """
@@ -14,8 +15,8 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import Codes, Provenance, REncoding
-from ogld.store.tables import Variants
+from opengwasdb.ld.format import Codes, Provenance, REncoding
+from opengwasdb.ld.store.tables import Variants
 
 
 @runtime_checkable

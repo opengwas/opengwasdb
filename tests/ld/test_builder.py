@@ -1,7 +1,7 @@
 """ogld#5's builder against the Test Panel's independent reference r, read back through the store
-layer (`ogld.store.StoreReader`), and the inputs that must not change what it builds.
+layer (`opengwasdb.ld.store.StoreReader`), and the inputs that must not change what it builds.
 
-The contract tests (tests/contract/test_build.py) read through `ogld.LDStore.matrix`, which
+The contract tests (tests/contract/test_build.py) read through `opengwasdb.ld.LDStore.matrix`, which
 ogld#4 builds; these read through the reader the walking skeleton built, so they hold the
 builder to the reference whether or not ogld#4 has landed.
 
@@ -26,7 +26,7 @@ import testdata
 from contract import support
 from store_copies import FLOOR, codes_at
 
-import ogld
+import opengwasdb.ld
 
 N, K = 771, 10
 
@@ -96,7 +96,7 @@ def test_the_pc_file_s_row_order_does_not_matter(built: Built, tmp_path: Path) -
     lines = testdata.panel().pcs.read_text().splitlines()
     shuffled = tmp_path / "pcs.eigenvec"
     shuffled.write_text("\n".join([lines[0], *reversed(lines[1:])]) + "\n")
-    ogld.build(fixtures.inputs(testdata.panel().pgen, K, pcs=shuffled), tmp_path / "store")
+    opengwasdb.ld.build(fixtures.inputs(testdata.panel().pgen, K, pcs=shuffled), tmp_path / "store")
     fixtures.same_store(built[K], tmp_path / "store")
 
 
@@ -108,12 +108,12 @@ def test_two_filesets_in_two_sample_orders_build_one_store(built: Built, tmp_pat
     first = fixtures.write_fileset(tmp_path / "chr21", on21)
     backwards = np.arange(N)[::-1]
     second = fixtures.write_fileset(tmp_path / "chr22", on22, samples=backwards)
-    ogld.build(fixtures.inputs(first, K, pgen=(first, second)), tmp_path / "store")
+    opengwasdb.ld.build(fixtures.inputs(first, K, pgen=(first, second)), tmp_path / "store")
     fixtures.same_store(built[K], tmp_path / "store")
 
 
 def test_the_thread_count_does_not_change_the_store(built: Built, tmp_path: Path) -> None:
-    provenance = ogld.build(
+    provenance = opengwasdb.ld.build(
         fixtures.inputs(testdata.panel().pgen, K), tmp_path / "store", threads=3
     )
     assert provenance["build"]["threads"] == 3
@@ -122,7 +122,7 @@ def test_the_thread_count_does_not_change_the_store(built: Built, tmp_path: Path
 
 def test_a_copied_fileset_is_the_same_input(built: Built, tmp_path: Path) -> None:
     # The store names its genotype files by name and hash, not by where they were read.
-    provenance = ogld.build(
+    provenance = opengwasdb.ld.build(
         fixtures.inputs(fixtures.copy_panel(tmp_path / "copy"), 0), tmp_path / "store"
     )
     assert set(provenance["source"]["sha256"]) == {
@@ -142,7 +142,7 @@ def test_blas_runs_one_thread_in_each_worker_while_tiling(
     # Inside a build BLAS runs one thread, so `threads` workers are `threads` threads.
     from threadpoolctl import threadpool_info, threadpool_limits
 
-    from ogld.build import tiles
+    from opengwasdb.ld.build import tiles
 
     seen: list[int] = []
     real = tiles._tile
@@ -158,7 +158,7 @@ def test_blas_runs_one_thread_in_each_worker_while_tiling(
     )
     with threadpool_limits(limits=8, user_api="blas"):
         assert max(p["num_threads"] for p in threadpool_info() if p["user_api"] == "blas") == 8
-        provenance = ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=2)
+        provenance = opengwasdb.ld.build(fixtures.inputs(pgen), tmp_path / "store", threads=2)
     assert seen, "the spy must see the build's tiles"
     assert max(seen) == 1 <= provenance["build"]["threads"]
 
@@ -169,12 +169,14 @@ def test_the_store_is_validated_on_the_build_s_threads(
     # Orchestrator note 6: StoreWriter.finish validates on threads (#4's follow-up, c862ea1), and
     # the build passes it its own, which bound it: the whole EUR panel's validation took 1 h 58 min
     # on one thread and about 11 min on 16.
-    from ogld.store import StoreWriter
+    from opengwasdb.ld.store import StoreWriter
 
     seen: list[int] = []
     real = StoreWriter.finish
 
-    def spy(self: StoreWriter, provenance: ogld.Provenance, *, threads: int = 1) -> ogld.Provenance:
+    def spy(
+        self: StoreWriter, provenance: opengwasdb.ld.Provenance, *, threads: int = 1
+    ) -> opengwasdb.ld.Provenance:
         seen.append(threads)
         return real(self, provenance, threads=threads)
 
@@ -182,7 +184,7 @@ def test_the_store_is_validated_on_the_build_s_threads(
     pgen = fixtures.write_fileset(
         tmp_path / "chr22", np.flatnonzero(testdata.variants().chrom == "22")
     )
-    ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
+    opengwasdb.ld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
     assert seen == [3]
 
 
@@ -194,7 +196,7 @@ def test_zarr_s_pool_is_held_to_the_build_s_threads_and_released(
     # and the caller's own setting is back when the build returns.
     import zarr
 
-    from ogld.store import Cut, StoreWriter
+    from opengwasdb.ld.store import Cut, StoreWriter
 
     seen: list[object] = []
     real = StoreWriter.write
@@ -208,7 +210,7 @@ def test_zarr_s_pool_is_held_to_the_build_s_threads_and_released(
     pgen = fixtures.write_fileset(
         tmp_path / "chr22", np.flatnonzero(testdata.variants().chrom == "22")
     )
-    ogld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
+    opengwasdb.ld.build(fixtures.inputs(pgen), tmp_path / "store", threads=3)
     assert len(seen) > 1, "the spy must see every cut the build writes"
     assert set(seen) == {3}
     assert zarr.config.get("threading.max_workers") == before
@@ -222,7 +224,7 @@ def window_blocks(firsts: range | list[int] = range(0, 64, 8)) -> Iterator[tuple
     """WINDOW_SOURCE as the build reads it, 8 rows a block, starting at each of `firsts`."""
     for first in firsts:
         rows = WINDOW_SOURCE[first : first + 8]
-        from ogld.genotypes import Block
+        from opengwasdb.ld.genotypes import Block
 
         yield (
             first,
@@ -235,7 +237,7 @@ def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_til
     # The builder holds a window of a chromosome's unit vectors, never the chromosome (ogld#17).
     # When its array is full, the rows from the oldest tile in flight on move to a new one; a tile
     # still reading the old array must see it unchanged.
-    from ogld.build import tiles
+    from opengwasdb.ld.build import tiles
 
     source = WINDOW_SOURCE
     window = tiles.Window(window_blocks(), capacity=20)
@@ -259,7 +261,7 @@ def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_til
 def test_the_window_refuses_rows_it_does_not_hold(first: int, stop: int) -> None:
     # Review of #17 (standards a5): an assert guarded this, which `python -O` drops, and the
     # wrong rows of the array would then be read as unit vectors: plausible r, never a refusal.
-    from ogld.build import tiles
+    from opengwasdb.ld.build import tiles
 
     window = tiles.Window(window_blocks(), capacity=20)
     window.reach(10, keep=0)
@@ -272,7 +274,7 @@ def test_the_window_refuses_rows_it_does_not_hold(first: int, stop: int) -> None
 def test_the_window_refuses_a_block_that_does_not_start_where_the_last_ended() -> None:
     # A gap would leave rows of the array unwritten, and an overlap would write rows twice; either
     # way some tile would read rows that are not the chromosome's.
-    from ogld.build import tiles
+    from opengwasdb.ld.build import tiles
 
     window = tiles.Window(window_blocks([0, 8, 24]), capacity=40)
     window.reach(16, keep=0)
@@ -293,7 +295,7 @@ def one_chromosome(tmp_path_factory: pytest.TempPathFactory, k: int) -> tuple[Pa
         out = tmp_path_factory.mktemp(f"chr22-k{k}")
         rows = np.flatnonzero(testdata.variants().chrom == "22").astype(np.int64)
         pgen = fixtures.write_fileset(out / "chr22", rows)
-        ogld.build(fixtures.inputs(pgen, k), out / "store")
+        opengwasdb.ld.build(fixtures.inputs(pgen, k), out / "store")
         _ONE_CHROMOSOME[k] = (pgen, out / "store")
     return _ONE_CHROMOSOME[k]
 
@@ -310,7 +312,7 @@ def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
     # 593 rows, and its arrays must be the shared panel build's, which never moved. One thread:
     # with four, the window's reach-ahead makes its single move cover the chromosome — that
     # threads do not change a store is `test_the_thread_count_does_not_change_the_store`'s.
-    from ogld.build import tiles
+    from opengwasdb.ld.build import tiles
 
     pgen, reference = one_chromosome(tmp_path_factory, k)
     moves: list[int] = []
@@ -323,6 +325,6 @@ def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
     monkeypatch.setattr(tiles, "TILE_ROWS", 4)
     monkeypatch.setattr(tiles, "BLOCK_ROWS", 8)
     monkeypatch.setattr(tiles.Window, "_move", spy)
-    ogld.build(fixtures.inputs(pgen, k), tmp_path / "store")
+    opengwasdb.ld.build(fixtures.inputs(pgen, k), tmp_path / "store")
     assert len(moves) >= 2, f"the window must move more than once, not {len(moves)} time(s)"
     fixtures.same_store(reference, tmp_path / "store")

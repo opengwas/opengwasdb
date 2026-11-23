@@ -1,6 +1,6 @@
 """The spec's tables and the code's constants say the same thing.
 
-`docs/spec/ld-store.md` is the authority. `ogld.format` carries its provenance keys (§7)
+`docs/spec/ld-store.md` is the authority. `opengwasdb.ld.format` carries its provenance keys (§7)
 and validation rules (§12) as data, and these tests read both tables out of the spec, so
 a rule added to one and not the other fails here instead of drifting.
 """
@@ -10,9 +10,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import ogld.format as fmt
+import opengwasdb.ld.format as fmt
 
-SPEC = Path(__file__).resolve().parent.parent / "docs" / "spec" / "ld-store.md"
+SPEC = Path(__file__).resolve().parents[2] / "docs" / "spec" / "ld-store.md"
 
 
 def section(number: int) -> str:

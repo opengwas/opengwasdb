@@ -10,7 +10,8 @@ One pass over every record of every fileset, in pgen order, block by block:
    it); REF and ALT of A, C, G, T only; a chromosome in one fileset, contiguously.
 3. **Filters**, in order, each dropped record counted under the first it fails: FILTER `PASS` or
    `.`; MAC ≥ `mac_min` on the kept samples; INFO > `info_min` when it is set; nonzero variance.
-4. **Per chromosome:** the engine's identity (`ogld.identity.orient`), one record per ALID by the
+4. **Per chromosome:** the engine's identity (`opengwasdb.ld.identity.orient`), one record per ALID
+by the
    engine's reversed-indel rule, and the engine's variant order (spec §2).
 
 A record's REF and ALT are passed unchanged to the identity function, which neither trims nor
@@ -28,11 +29,11 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build import pc_check
-from ogld.build.inputs import Fileset, Records, records
-from ogld.format import InputError
-from ogld.genotypes import Genotypes
-from ogld.identity import (
+from opengwasdb.ld.build import pc_check
+from opengwasdb.ld.build.inputs import Fileset, Records, records
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.genotypes import Genotypes
+from opengwasdb.ld.identity import (
     AUTOSOMES,
     IdentityError,
     Orientation,

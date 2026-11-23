@@ -6,7 +6,8 @@
 ogld#7 wrote the five HGDP+1kGP stores before the owner brought the Far Pairs back beside the
 Proxy Index (ADR 0007, 12 November 2026). A store's Far Pairs are its index's entries beyond
 near_bp in each pair's earlier row (spec §5), so each chromosome's are derived from its own
-index by the store assembly (`ogld.store.assembly.derive_far_pairs`), which writes them through
+index by the store assembly (`opengwasdb.ld.store.assembly.derive_far_pairs`), which writes them
+through
 the stream a build writes them through. On HGDP+1kGP EUR chr22 the derived `far/` was
 byte-identical, file for file, to a rebuild's (ogld#31).
 
@@ -32,9 +33,9 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from ogld.store import StoreReader
-from ogld.store.assembly import derive_far_pairs
-from ogld.store.layout import chromosomes_listed
+from opengwasdb.ld.store import StoreReader
+from opengwasdb.ld.store.assembly import derive_far_pairs
+from opengwasdb.ld.store.layout import chromosomes_listed
 
 #: Where the Far Pairs are written until every chromosome's are, and counted: then it is renamed
 #: `far/`. A reader ignores it (spec §1), and no other writer makes it.

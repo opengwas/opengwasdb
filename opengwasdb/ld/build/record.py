@@ -20,8 +20,8 @@ from typing import Final
 import numpy as np
 import zarr
 
-from ogld.build.variant_set import PASSING_FILTERS
-from ogld.format import (
+from opengwasdb.ld.build.variant_set import PASSING_FILTERS
+from opengwasdb.ld.format import (
     Adjustment,
     Build,
     Panel,
@@ -31,7 +31,7 @@ from ogld.format import (
     Sourced,
     VariantFilters,
 )
-from ogld.version import __version__
+from opengwasdb.version import __version__
 
 _STATUS: Final = Path("/proc/self/status")
 _CLEAR_REFS: Final = Path("/proc/self/clear_refs")

@@ -4,8 +4,8 @@ The builder runs where the genotypes are and writes only the LD Store (ADR 0001,
 decision 5). Its inputs are specified in `docs/spec/build-inputs.md` (ADR 0002): a PLINK
 2 pgen with complete genotypes, a keep file and a PC File. ogld runs no PCA: the PCs are
 computed outside the library by a recipe script, and the builder only chooses which of
-them to adjust for, by the PC Check. It imports `ogld.store`, `ogld.format` and
-`ogld.identity`, never `ogld.query`.
+them to adjust for, by the PC Check. It imports `opengwasdb.ld.store`, `opengwasdb.ld.format` and
+`opengwasdb.ld.identity`, never `opengwasdb.ld.query`.
 
 pgenlib, the pgen reader, is imported inside the build's read path only, never at module
 import: `import ogld` and every reader must work on an install without it
@@ -21,9 +21,9 @@ from pathlib import Path
 
 import zarr
 
-from ogld.build import diagnostic, passes, pc_check, record
-from ogld.build.variant_set import Chromosome, Pass, Settings, variant_set
-from ogld.format import (
+from opengwasdb.ld.build import diagnostic, passes, pc_check, record
+from opengwasdb.ld.build.variant_set import Chromosome, Pass, Settings, variant_set
+from opengwasdb.ld.format import (
     FAR_BP,
     NEAR_BP,
     Adjustment,
@@ -31,7 +31,7 @@ from ogld.format import (
     Provenance,
     REncoding,
 )
-from ogld.store import StoreWriter
+from opengwasdb.ld.store import StoreWriter
 
 
 def bounded(threads: int) -> AbstractContextManager[object]:
@@ -48,7 +48,7 @@ def bounded(threads: int) -> AbstractContextManager[object]:
     except ImportError as missing:
         raise InputError(
             "a build bounds its threads with threadpoolctl, which ogld installs with the build "
-            "extra: pip install 'ogld[build]'"
+            "extra: pip install 'opengwasdb[ld-build]'"
         ) from missing
     stack = ExitStack()
     stack.enter_context(threadpool_limits(limits=1, user_api="blas"))
@@ -75,7 +75,7 @@ class BuildInputs:
     - `panel_id`, `ancestry`: the Source Panel, as provenance names it.
     - `genotype_source`: what the genotypes are, such as the release and its files.
     - `r_scale`: the scale of the store's encoding, r̂ = code / r_scale, any whole number
-      `ogld.format.REncoding` admits (spec §3). ADR 0004 sets each Source Panel's (owner,
+      `opengwasdb.ld.format.REncoding` admits (spec §3). ADR 0004 sets each Source Panel's (owner,
       10 November 2026). There is no default, so no build falls back on a scale it was not
       given; provenance records it in `encoding`.
     - `t_partner`: the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
@@ -269,9 +269,9 @@ def build_genotypes(
     The PC Diagnostic is null: computing the entire Near Band only for its diagnostic would
     defeat the sidecar's purpose; the selected covariates and PC Check remain recorded.
     """
-    from ogld.genotypes import Genotypes, prepare
-    from ogld.genotypes.layout import fileset_record, input_pin
-    from ogld.genotypes.sidecar import SidecarWriter
+    from opengwasdb.ld.genotypes import Genotypes, prepare
+    from opengwasdb.ld.genotypes.layout import fileset_record, input_pin
+    from opengwasdb.ld.genotypes.sidecar import SidecarWriter
 
     target = _target(out, threads=threads)
     cost = record.Cost.start()

@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 #: Where code that runs lives: a change here, committed or not, changes what ran.
-CODE = ("ogld", "scripts")
+CODE = ("opengwasdb", "scripts")
 
 
 def names_head(version: str, head: str, tags: list[str]) -> bool:
@@ -50,8 +50,8 @@ def _install_problem(root: Path, installed: str, head: str) -> str:
     if names_head(installed, head, _git(root, "tag", "--points-at", "HEAD").split()):
         return ""
     return (
-        f"the installed ogld is {installed}, which does not name this checkout's HEAD "
-        f"{head[:12]}: refresh it with pixi reinstall --locked -e dev ogld"
+        f"the installed opengwasdb is {installed}, which does not name this checkout's HEAD "
+        f"{head[:12]}: refresh it with pixi reinstall --locked -e dev opengwasdb"
     )
 
 

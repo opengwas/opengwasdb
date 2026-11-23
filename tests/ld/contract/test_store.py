@@ -23,14 +23,14 @@ import support
 import zarr
 from support import alids, panel_data, passing_rows, reference, reference_matrix
 
-import ogld
-from ogld import cli
-from ogld.format import VALIDATION_RULES, RefusalReason, REncoding, t_far
-from ogld.store import StoreWriter, layout
-from ogld.store.frames import decode_frame, encode_frame
+import opengwasdb.ld
+from opengwasdb.ld import cli
+from opengwasdb.ld.format import VALIDATION_RULES, RefusalReason, REncoding, t_far
+from opengwasdb.ld.store import StoreWriter, layout
+from opengwasdb.ld.store.frames import decode_frame, encode_frame
 
 
-def two(store: ogld.LDStore, i: int, j: int) -> tuple[float, str]:
+def two(store: opengwasdb.ld.LDStore, i: int, j: int) -> tuple[float, str]:
     """The store's r and answer kind for Test Panel rows i and j."""
     m = store.matrix(alids([i, j]))
     assert m.absent == ()
@@ -38,12 +38,12 @@ def two(store: ogld.LDStore, i: int, j: int) -> tuple[float, str]:
 
 
 @cache
-def opened() -> ogld.LDStore:
-    return ogld.open(support.TEST_STORE)
+def opened() -> opengwasdb.ld.LDStore:
+    return opengwasdb.ld.open(support.TEST_STORE)
 
 
 @cache
-def whole_store(fill: float | None = None) -> ogld.LDMatrix:
+def whole_store(fill: float | None = None) -> opengwasdb.ld.LDMatrix:
     """Every Test Store variant's matrix, both chromosomes, in Test Panel order."""
     store = opened()
     return store.matrix(alids(passing_rows()), fill=fill)
@@ -96,7 +96,7 @@ def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path)
         p["format_version"] = "9.0.0"
 
     with pytest.raises(ValueError, match=r"9\.0\.0"):
-        ogld.open(with_provenance(tmp_path, future))
+        opengwasdb.ld.open(with_provenance(tmp_path, future))
 
 
 def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path) -> None:
@@ -107,7 +107,7 @@ def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path)
 
     location = with_provenance(tmp_path, earlier)
     shutil.rmtree(location / "partners")
-    opened_early = ogld.open(location)
+    opened_early = opengwasdb.ld.open(location)
     assert opened_early.provenance["format_version"] == "0.1.0"
     rows = alids(passing_rows()[:20])
     assert opened_early.matrix(rows).r.shape == (20, 20)
@@ -115,14 +115,14 @@ def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path)
 
 def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
     # Spec §1: a local path or an HTTP(S) URL. A static Range-serving server, as #9 may use.
-    remote = ogld.open(served_store)
+    remote = opengwasdb.ld.open(served_store)
     assert remote.provenance == opened().provenance
     some = alids(passing_rows()[:40])
     np.testing.assert_array_equal(remote.matrix(some).r, opened().matrix(some).r)
 
 
 def test_every_array_decodes_as_zarr_over_http(served_store: str) -> None:
-    from ogld.store.location import ChunkCache, open_group
+    from opengwasdb.ld.store.location import ChunkCache, open_group
 
     cache = ChunkCache()
     remote = open_group(served_store, cache=cache)
@@ -282,10 +282,10 @@ def test_a_region_is_the_matrix_of_its_variants_in_genomic_order() -> None:
 def test_a_region_is_at_most_10_mb_wide() -> None:
     store = opened()
     store.region("22", 30_000_000, 5_000_000)
-    with pytest.raises(ogld.Refusal) as wide:
+    with pytest.raises(opengwasdb.ld.Refusal) as wide:
         store.region("22", 30_000_000, 5_000_001)
     assert wide.value.reason is RefusalReason.REGION_OVER_FAR
-    with pytest.raises(ogld.Refusal) as negative:
+    with pytest.raises(opengwasdb.ld.Refusal) as negative:
         store.region("22", 30_000_000, -1)
     assert negative.value.reason is RefusalReason.INVALID
 
@@ -303,7 +303,7 @@ def test_a_lost_chunk_is_refused_never_read_as_zero(tmp_path: Path) -> None:
     v = panel_data().variants()
     rows = passing_rows()[v.chrom[passing_rows()] == "22"]
     with pytest.raises(ValueError, match=r"-32768|reserved"):
-        ogld.open(copy).matrix(alids(rows[:50]))
+        opengwasdb.ld.open(copy).matrix(alids(rows[:50]))
 
 
 def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
@@ -330,9 +330,9 @@ def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
 
 
 @cache
-def committed_findings() -> dict[str, list[ogld.Finding]]:
+def committed_findings() -> dict[str, list[opengwasdb.ld.Finding]]:
     """The committed Test Store validated, once per worker: every test below starts from it."""
-    return ogld.validate(support.TEST_STORE)
+    return opengwasdb.ld.validate(support.TEST_STORE)
 
 
 def test_the_test_store_passes_every_rule() -> None:
@@ -951,7 +951,7 @@ def test_the_provenance_count_is_a_breaker_of_its_own_rule(tmp_path: Path) -> No
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
     edit_provenance(lambda p: p["counts"].update(alids_left_out=0))(copy)
-    failing = {name for name, found in ogld.validate(copy).items() if found}
+    failing = {name for name, found in opengwasdb.ld.validate(copy).items() if found}
     assert failing == {"alid_index.count"}, failing
 
 
@@ -966,7 +966,7 @@ def test_a_store_that_breaks_a_rule_fails_that_rule(rule: str, tmp_path: Path) -
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
     BREAKERS[rule](copy)
-    findings = ogld.validate(copy)
+    findings = opengwasdb.ld.validate(copy)
     assert findings[rule], f"{rule} passed a store built to break it"
 
 
@@ -979,7 +979,7 @@ def test_an_index_rule_s_breaker_fails_only_that_rule(rule: str, tmp_path: Path)
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
     BREAKERS[rule](copy)
-    found = ogld.validate(copy)
+    found = opengwasdb.ld.validate(copy)
     assert found[rule], f"{rule} passed a store built to break it"
     for name, findings in found.items():
         if name == rule or not name.startswith("alid_index."):
@@ -1010,7 +1010,7 @@ def test_the_review_s_reproductions_are_caught(case: str, tmp_path: Path) -> Non
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
     breaker(copy)
-    failing = {name for name, found in ogld.validate(copy).items() if found}
+    failing = {name for name, found in opengwasdb.ld.validate(copy).items() if found}
     assert failing == expected, failing
 
 
@@ -1054,7 +1054,7 @@ def test_provenance_threshold_holds_k_min_and_k_target_to_the_source(
 ) -> None:
     assert not committed_findings()["provenance.threshold"]
     edit, passes = K_RECORDS[case]
-    findings = ogld.validate(with_provenance(tmp_path, edit))["provenance.threshold"]
+    findings = opengwasdb.ld.validate(with_provenance(tmp_path, edit))["provenance.threshold"]
     assert (not findings) is passes, f"{case}: {findings}"
 
 

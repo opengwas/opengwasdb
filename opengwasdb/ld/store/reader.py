@@ -2,11 +2,13 @@
 
 `StoreReader` is the store layer's whole read interface. It hides Zarr, the chunk and
 shard shapes, chromosome-local rows and the codes, which it decodes at the scale the store
-records (`ogld.format.REncoding`; ADR 0004): callers pass and receive global Variant Set rows
+records (`opengwasdb.ld.format.REncoding`; ADR 0004): callers pass and receive global Variant Set
+rows
 and Stored r as float64. Every unstored pair it reports is NaN, never a
-number, and the meaning of a NaN is the format's to say (`ogld.format.answer_kinds`).
+number, and the meaning of a NaN is the format's to say (`opengwasdb.ld.format.answer_kinds`).
 
-The variant half is `VariantTable`'s (`ogld/store/variants.py`), which this reader composes and
+The variant half is `VariantTable`'s (`opengwasdb/ld/store/variants.py`), which this reader composes
+and
 delegates to: the rows of a list of ALIDs, a region's rows, a chromosome's range, the columns at
 some rows, and the loci a query orders and measures by (#94). One class owns ALID lookup, so a
 second reader composes the same one and #87's change to `rows_of` lands once for both (owner, on
@@ -47,7 +49,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import (
+from opengwasdb.ld.format import (
     READABLE_FORMATS,
     Codes,
     InputError,
@@ -55,7 +57,7 @@ from ogld.format import (
     REncoding,
     claims_partner_rows,
 )
-from ogld.format.geometry import (
+from opengwasdb.ld.format.geometry import (
     blocks,
     chromosome_index,
     indptr_of,
@@ -69,9 +71,9 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.store import layout
-from ogld.store.frames import FrameCache, PartnerFrames, open_partner_frames
-from ogld.store.location import (
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.frames import FrameCache, PartnerFrames, open_partner_frames
+from opengwasdb.ld.store.location import (
     ChunkCache,
     OpenedStore,
     array_indptr,
@@ -80,9 +82,9 @@ from ogld.store.location import (
     open_group,
     runs_of,
 )
-from ogld.store.tables import Variants
-from ogld.store.variants import VariantTable
-from ogld.store.workers import COMPONENT_WORKERS_MAX, ComponentWorkers
+from opengwasdb.ld.store.tables import Variants
+from opengwasdb.ld.store.variants import VariantTable
+from opengwasdb.ld.store.workers import COMPONENT_WORKERS_MAX, ComponentWorkers
 
 #: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
 #: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
@@ -321,7 +323,8 @@ class StoreReader(ComponentWorkers):
     # ------------------------------------------------------- the variant table's reads
     #
     # These are the read interface a query names (owner, 10 November 2026), and their one owner is
-    # `ogld.store.VariantTable` (#94): the reader answers them through the table it composes, so a
+    # `opengwasdb.ld.store.VariantTable` (#94): the reader answers them through the table it
+    # composes, so a
     # second reader and this one cannot drift apart on what an ALID, a region or a chromosome means.
 
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
@@ -494,7 +497,8 @@ class StoreReader(ComponentWorkers):
     @property
     def has_partner_rows(self) -> bool:
         """Whether the store's provenance claims Partner Rows, which is
-        `ogld.format.claims_partner_rows`: the recorded format version is 0.2.0 or later **and**
+        `opengwasdb.ld.format.claims_partner_rows`: the recorded format version is 0.2.0 or later
+        **and**
         the Partner Threshold is recorded, which is what a derivation writes in its one claim
         (partner-rows §6.2; spec §13). The reader, validation and the derivation ask that one
         rule, so a store one of them calls claimed is one they all do.
@@ -775,7 +779,7 @@ def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> 
 def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore:
     """`OpenedStore` for an already opened root, checked as an LD Store (spec §1, §7, §13).
 
-    The kind dispatcher (`ogld.query.kind`) opens a root once and hands it here or to the
+    The kind dispatcher (`opengwasdb.ld.query.kind`) opens a root once and hands it here or to the
     Genotype Store reader, so one open is one metadata read whichever kind it holds (#91).
     """
     if root.metadata.zarr_format != 3:

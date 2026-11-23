@@ -13,7 +13,8 @@ It follows gnomAD v3.1.2's subcontinental recipe (atgu/hgdp_tgp `pca_subcont.ipy
    unrelated ones too, is projected, so all are on one scale. A keep-file sample absent from v2
    is named in the report and has no row.
 2. **Variants.** SNVs with MAF >= 0.05 on the unrelated samples (AF 5-95%), outside every
-   Long-Range LD Region (`ogld.build.diagnostic.long_range_ld_regions`, the package's table,
+   Long-Range LD Region (`opengwasdb.ld.build.diagnostic.long_range_ld_regions`, the package's
+   table,
    build-inputs §9) widened by `--margin-bp` on each
    side. v2 has no missing calls and already applied its pooled HWE, F_MISSING and ExcHet
    filters, so gnomAD's call-rate and PASS steps have nothing left to remove.
@@ -22,7 +23,7 @@ It follows gnomAD v3.1.2's subcontinental recipe (atgu/hgdp_tgp `pca_subcont.ipy
 4. **PCA.** `plink2 --pca 20 allele-wts` on the unrelated samples, then `--score
    variance-standardize` for every sample.
 
-Then it runs the PC Check (`ogld.build.pc_check`, the one implementation of the rule
+Then it runs the PC Check (`opengwasdb.ld.build.pc_check`, the one implementation of the rule
 `docs/spec/build-inputs.md` gives, which a build runs too) on each PC File over the panel's
 genome-wide variants, of which the module scans the common ones, and records the scan.
 
@@ -65,10 +66,14 @@ from test_panel.tools import (
     write_stamp,
 )
 
-from ogld.build import pc_check
-from ogld.build.diagnostic import REGIONS_FILE, long_range_ld_regions, long_range_ld_regions_file
+from opengwasdb.ld.build import pc_check
+from opengwasdb.ld.build.diagnostic import (
+    REGIONS_FILE,
+    long_range_ld_regions,
+    long_range_ld_regions_file,
+)
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
 N_PCS = 20
 MAF_MIN = 0.05
@@ -325,7 +330,7 @@ def _panel_pcs(
         "maf_min": MAF_MIN,
         "prune": PRUNE,
         "margin_bp": s.margin_bp,
-        "regions": f"ogld/build/{REGIONS_FILE}",
+        "regions": f"opengwasdb/ld/build/{REGIONS_FILE}",
         "regions_sha256": hashlib.sha256(long_range_ld_regions_file().read_bytes()).hexdigest(),
         "n_regions": len(regions),
         "per_chromosome": per_chr,
@@ -421,7 +426,7 @@ def _commit() -> str:
     """The checkout's commit, which the report names so a citation of it holds (build-inputs
     §8). A checkout that is not that commit's code is refused (`test_panel.checkout`, the guard
     the realdata tier uses too): the report would name code that did not run."""
-    found = checkout.problem(ROOT, metadata.version("ogld"))
+    found = checkout.problem(ROOT, metadata.version("opengwasdb"))
     if found:
         raise SystemExit(f"{ROOT}: {found}")
     return subprocess.run(

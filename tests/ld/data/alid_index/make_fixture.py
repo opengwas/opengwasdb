@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+
 import opengwasdb
 from opengwasdb.variants.axis import write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant

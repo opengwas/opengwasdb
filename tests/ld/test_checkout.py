@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from script_modules import SCRIPTS
+from ld_script_modules import SCRIPTS
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -26,7 +26,7 @@ def git(root: Path, *args: str) -> str:
 @pytest.fixture
 def repo(tmp_path: Path) -> tuple[Path, str]:
     """A repository with ogld/, scripts/ and docs/, one commit; the version naming it."""
-    for name in ("ogld/__init__.py", "scripts/make.py", "docs/notes.md"):
+    for name in ("opengwasdb/ld/__init__.py", "scripts/make.py", "docs/notes.md"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text("x = 1\n")
     git(tmp_path, "init", "-q")
@@ -56,7 +56,7 @@ def test_an_installed_version_names_the_head_or_does_not(
 def test_a_clean_checkout_with_its_own_install_passes(repo: tuple[Path, str]) -> None:
     root, version = repo
     (root / "docs" / "notes.md").write_text("changed, but not code\n")
-    (root / "ogld" / "data.tsv").write_text("untracked, but not Python\n")
+    (root / "opengwasdb" / "ld" / "data.tsv").write_text("untracked, but not Python\n")
     assert checkout.problem(root, version) == ""
 
 
@@ -65,10 +65,10 @@ def test_an_install_that_does_not_name_head_is_refused(repo: tuple[Path, str]) -
     message = checkout.problem(root, "0.0.1.dev1+g000000000")
     assert "0.0.1.dev1+g000000000" in message
     assert git(root, "rev-parse", "HEAD")[:12] in message
-    assert "pixi reinstall --locked -e dev ogld" in message
+    assert "pixi reinstall --locked -e dev opengwasdb" in message
 
 
-@pytest.mark.parametrize("path", ["ogld/__init__.py", "scripts/make.py"])
+@pytest.mark.parametrize("path", ["opengwasdb/ld/__init__.py", "scripts/make.py"])
 def test_a_changed_tracked_file_under_the_code_is_refused(
     repo: tuple[Path, str], path: str
 ) -> None:

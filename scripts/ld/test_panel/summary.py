@@ -1,7 +1,8 @@
 """Where each edge case is: the rows and values the README lists and the tests check.
 
 Which pairs are Far Pairs, Bound or beyond far_bp is the store's rule, so it is called rather
-than copied: the band's edges are `ogld.format.geometry.within`, and a Far Pair is a code that
+than copied: the band's edges are `opengwasdb.ld.format.geometry.within`, and a Far Pair is a code
+that
 reaches the encoding's far code floor (`docs/architecture/ownership.md`). The r they are
 judged on is the reference's own (`test_panel.reference`), independent of ogld by design.
 """
@@ -10,8 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from ogld.format import NEAR_BP, REncoding
-from ogld.format.geometry import within
+from opengwasdb.ld.format import NEAR_BP, REncoding
+from opengwasdb.ld.format.geometry import within
 from test_panel.answers import Answers
 from test_panel.assemble import Panel
 from test_panel.params import Params

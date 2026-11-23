@@ -20,8 +20,8 @@ import store_copies
 import testdata
 from contract import support
 
-import ogld
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld.store import StoreReader
 
 #: The Test Panel is built at the Test Store's scale, so a build compares with it code for code.
 R_SCALE: Final = store_copies.R_SCALE
@@ -34,7 +34,7 @@ PANEL_ID: Final = "test-panel-hgdp1kgp-EUR"
 T_PARTNER: Final = 0.01
 
 
-def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
+def inputs(fileset: Path, k: int = 0, **overrides: Any) -> opengwasdb.ld.BuildInputs:
     """BuildInputs for `fileset` (a .pgen), and the Test Panel's keep file and PC File."""
     panel = testdata.panel()
     fields: dict[str, Any] = {
@@ -50,19 +50,21 @@ def inputs(fileset: Path, k: int = 0, **overrides: Any) -> ogld.BuildInputs:
         "pcs": panel.pcs if k else None,
         "pc_source": "tests/data/test-panel/pcs.eigenvec" if k else None,
     }
-    return ogld.BuildInputs(**{**fields, **overrides})
+    return opengwasdb.ld.BuildInputs(**{**fields, **overrides})
 
 
-_BUILDS: dict[int, tuple[ogld.Provenance, Path]] = {}
+_BUILDS: dict[int, tuple[opengwasdb.ld.Provenance, Path]] = {}
 
 
-def test_panel_build(k: int, factory: pytest.TempPathFactory) -> tuple[ogld.Provenance, Path]:
+def test_panel_build(
+    k: int, factory: pytest.TempPathFactory
+) -> tuple[opengwasdb.ld.Provenance, Path]:
     """The Test Panel built at k, once per test process and shared by every module that reads
     one: tests/contract/test_build.py, test_builder.py, test_build_diagnostic.py and
     test_walking_path.py. Each would otherwise build its own."""
     if k not in _BUILDS:
         out = factory.mktemp(f"test-panel-k{k}") / "store"
-        _BUILDS[k] = (ogld.build(inputs(testdata.panel().pgen, k), out), out)
+        _BUILDS[k] = (opengwasdb.ld.build(inputs(testdata.panel().pgen, k), out), out)
     return _BUILDS[k]
 
 

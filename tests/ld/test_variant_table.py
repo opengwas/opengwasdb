@@ -20,12 +20,12 @@ import pytest
 import zarr
 from store_copies import TEST_STORE, copy_store
 
-from ogld.store import StoreReader
-from ogld.store.assembly import derive_alid_mmap
-from ogld.store.layout import ALID_INDEX_WIDTH
-from ogld.store.location import ChunkCache
-from ogld.store.reader import open_variant_table
-from ogld.store.variants import VariantTable
+from opengwasdb.ld.store import StoreReader
+from opengwasdb.ld.store.assembly import derive_alid_mmap
+from opengwasdb.ld.store.layout import ALID_INDEX_WIDTH
+from opengwasdb.ld.store.location import ChunkCache
+from opengwasdb.ld.store.reader import open_variant_table
+from opengwasdb.ld.store.variants import VariantTable
 
 
 class Counting(ChunkCache):

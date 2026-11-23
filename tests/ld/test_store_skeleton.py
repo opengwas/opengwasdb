@@ -1,7 +1,8 @@
 """Seams 2 and 3 of the walking skeleton: `StoreWriter` → `StoreReader`, and the Test Store script.
 
 The Test Store is written once per module (about a second) from the Test Panel's `reference_r(10)`;
-every expected value here is the reference r, quantised and signed to A1 by `ogld.identity.orient`,
+every expected value here is the reference r, quantised and signed to A1 by
+`opengwasdb.ld.identity.orient`,
 or a literal from spec §6.
 """
 
@@ -17,12 +18,12 @@ import pytest
 import testdata
 import zarr
 from contract import support
-from script_modules import load_script
+from ld_script_modules import load_script
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, codes_at
 
-from ogld.format import NEAR_BP, InputError, REncoding
-from ogld.identity import orient
-from ogld.store import StoreReader, StoreWriter, layout
+from opengwasdb.ld.format import NEAR_BP, InputError, REncoding
+from opengwasdb.ld.identity import orient
+from opengwasdb.ld.store import StoreReader, StoreWriter, layout
 
 K = 10
 #: The Test Store's encoding, which the stores written here share.
@@ -301,14 +302,14 @@ def test_a_store_that_is_not_one_this_ogld_reads_is_an_input_error(
 def test_the_build_cost_is_measured_and_the_version_is_real(written: Path) -> None:
     import datetime
 
-    import ogld
+    import opengwasdb.ld
 
     p = StoreReader.open(written).provenance
     made = datetime.datetime.strptime(p["build"]["created_at"], "%Y-%m-%dT%H:%M:%SZ")
     assert datetime.datetime(2026, 11, 8) <= made <= datetime.datetime.now(), "a real time"
     assert p["build"]["wall_seconds"] > 0
     assert p["build"]["peak_memory_bytes"] > 10_000_000
-    assert p["software"]["ogld"] == ogld.__version__
+    assert p["software"]["ogld"] == opengwasdb.ld.__version__
 
 
 def test_the_pc_diagnostic_is_measured_on_the_test_panel_s_cross_chromosome_pairs(

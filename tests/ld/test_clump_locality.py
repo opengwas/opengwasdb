@@ -9,12 +9,12 @@ import numpy as np
 import pytest
 from store_copies import TEST_STORE
 
-import ogld
+import opengwasdb.ld
 
 
 @pytest.mark.parametrize("r2", [0.01, 0.1, 1])
 def test_interleaved_chromosomes_keep_request_order_and_answers(r2: float) -> None:
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     reader = store._reader
     rows = np.array([500, 4, 700, 0, 500, 7, 701, 4])
     names = reader.alids_of(rows).tolist()
@@ -39,7 +39,7 @@ def test_clump_reads_only_returned_columns_and_one_partner_row_per_lead(
 ) -> None:
     """A clump reads the Position and ALID columns clump returns, no allele column, and one
     Partner Rows row per lead: never a row of a hit a stronger lead took (partner-rows §8.2)."""
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     reader = store._reader
     rows = np.arange(store.provenance["n_variants"])
     names = reader.alids_of(rows).tolist()

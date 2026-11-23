@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from support import panel_data
 
-from ogld.identity import alid_locus, normalise_chromosome, orient
+from opengwasdb.ld.identity import alid_locus, normalise_chromosome, orient
 
 
 @pytest.mark.parametrize(

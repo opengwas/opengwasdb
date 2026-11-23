@@ -17,7 +17,7 @@ from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
-from ogld.build.record import sha256
+from opengwasdb.ld.build.record import sha256
 
 BUCKET = "https://pan-ukb-us-east-1.s3.us-east-1.amazonaws.com/"
 PREFIX = "ld_release/UKBB.EUR.ldadj.bm/parts/"

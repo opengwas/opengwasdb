@@ -21,11 +21,11 @@ from contract import support
 from contract.support import alids, panel_data, passing_rows
 from store_copies import TEST_STORE, store_reads
 
-import ogld
-from ogld.query import clumping, matrices
-from ogld.query import proxies as proxies_query
-from ogld.store import StoreReader, location
-from ogld.store import reader as reader_module
+import opengwasdb.ld
+from opengwasdb.ld.query import clumping, matrices
+from opengwasdb.ld.query import proxies as proxies_query
+from opengwasdb.ld.store import StoreReader, location
+from opengwasdb.ld.store import reader as reader_module
 
 
 class Counting(location.ChunkCache):
@@ -241,7 +241,7 @@ def test_proxies_read_the_partner_rows_and_nothing_of_near_or_index(
     """`rows_of` answers from the ALID index, and from 0.2.0 a variant's proxies are its Partner
     Rows row: no `near/` array of any kind, and none of its metadata (partner-rows §8.3, §8.4;
     ld-store §10). The frames are the one chunk file it reads."""
-    names = ogld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
+    names = opengwasdb.ld.open(TEST_STORE)._reader.alids_of(np.array([500, 520])).tolist()
     preads: list[int] = []
     original = os.pread
 
@@ -250,7 +250,7 @@ def test_proxies_read_the_partner_rows_and_nothing_of_near_or_index(
         return original(fd, length, offset)
 
     monkeypatch.setattr(os, "pread", recording_pread)
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     with store_reads() as keys:
         assert (store._reader.rows_of(names) >= 0).all()
         store.proxies(names, r2=0.8, kb=3000)

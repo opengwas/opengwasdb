@@ -1,6 +1,7 @@
 """The code equality the thread tests hold: one set of Stored codes at any BLAS thread count.
 
-`ogld.genotypes.r` is the same arithmetic whatever BLAS runs it on, and a tile's product must
+`opengwasdb.ld.genotypes.r` is the same arithmetic whatever BLAS runs it on, and a tile's product
+must
 equal the same rows' products taken singly and in blocks of another size. A test that holds this
 runs the matrix at each thread count, at two block sizes and a row at a time, and asserts every
 code equals the first count's (ogld#90).
@@ -15,13 +16,13 @@ import numpy as np
 import testdata
 from threadpoolctl import threadpool_limits
 
-from ogld.format import REncoding
+from opengwasdb.ld.format import REncoding
 
 
 def assert_codes_identical(threads: Sequence[int], k: int, scale: int) -> None:
     """Assert the Test Panel's codes equal at each of `threads` BLAS threads, two block sizes
     and one row at a time, at the covariates `k` and the encoding `scale`."""
-    from ogld.genotypes import covariates, prepare, r
+    from opengwasdb.ld.genotypes import covariates, prepare, r
 
     rows = np.flatnonzero(testdata.variants().passes_filters)
     calls = made.hard_calls()[rows].astype(np.float64)

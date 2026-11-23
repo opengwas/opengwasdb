@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from script_modules import SCRIPTS, load_script
+from ld_script_modules import SCRIPTS, load_script
 
 # The script imports the scripts' shared helpers (`test_panel`), as it does when run from there.
 if str(SCRIPTS) not in sys.path:

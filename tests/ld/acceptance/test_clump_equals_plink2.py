@@ -41,9 +41,9 @@ import make_403_inputs as maker
 import numpy as np
 import pytest
 
-import ogld
-from ogld.format import REncoding
-from ogld.identity import alid_locus
+import opengwasdb.ld
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.identity import alid_locus
 
 EXPLAINED_FILE = Path(__file__).with_name("explained_differences.json")
 KB = 3000
@@ -70,7 +70,7 @@ def distance(alid: str, other: str) -> float:
     return abs(here[1] - there[1]) if here[0] == there[0] else math.inf
 
 
-def check_pair(store: ogld.LDStore, case: dict, pair: dict, differing: set[str]) -> None:
+def check_pair(store: opengwasdb.ld.LDStore, case: dict, pair: dict, differing: set[str]) -> None:
     """A listed pair is tied to its difference and to the store, not taken on trust."""
     a, b, r2 = pair["a"], pair["b"], case["r2"]
     where = f"{case['analysis']} at {r2}: {pair}"
@@ -88,7 +88,7 @@ def check_pair(store: ogld.LDStore, case: dict, pair: dict, differing: set[str])
 def test_the_inputs_say_which_store_and_keep_file_they_were_made_from() -> None:
     """The pins `make_403_inputs.py` writes are read here: inputs without them, or made from
     another store, keep file, or plink2, are refused, not compared."""
-    store = ogld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
+    store = opengwasdb.ld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
     root = named("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
     manifest = json.loads((root / "manifest.json").read_text())
     for key in ("opengwasdb_sha", "plink2_version", "provenance_sha256", "keep_sha256"):
@@ -104,7 +104,7 @@ def test_the_inputs_say_which_store_and_keep_file_they_were_made_from() -> None:
 
 
 def test_leads_equal_plink2_s_on_403_s_37_analyses() -> None:
-    store = ogld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
+    store = opengwasdb.ld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
     root = named("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
     snapshot = json.loads(EXPLAINED_FILE.read_text())

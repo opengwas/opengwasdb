@@ -16,10 +16,10 @@ import sys
 import time
 
 import pytest
-from script_modules import SCRIPTS
+from ld_script_modules import SCRIPTS
 from testdata import TEST_PANEL
 
-import ogld
+import opengwasdb.ld
 
 for _path in (SCRIPTS / "bench", SCRIPTS):
     if str(_path) not in sys.path:
@@ -27,7 +27,7 @@ for _path in (SCRIPTS / "bench", SCRIPTS):
 serving = importlib.import_module("serving")
 
 TEST_STORE = TEST_PANEL / "store"
-RESULTS = SCRIPTS.parent / "docs" / "benchmarks" / "results" / "9"
+RESULTS = SCRIPTS.parents[1] / "docs" / "benchmarks" / "ld" / "results" / "9"
 
 
 # ------------------------------------------------------------------ what a record reads
@@ -95,7 +95,7 @@ def test_ticking_for_a_time_stops_when_it_is_up() -> None:
 
 
 def test_fill_refuses_to_record_a_cache_short_of_full() -> None:
-    store = ogld.open(TEST_STORE)
+    store = opengwasdb.ld.open(TEST_STORE)
     places = serving.centres(store)
     assert len(places) == 4, "the Test Store's two chromosomes must give regions to read"
     with pytest.raises(SystemExit, match="ran out of regions after 4"):
@@ -104,12 +104,12 @@ def test_fill_refuses_to_record_a_cache_short_of_full() -> None:
 
 
 def test_fill_stops_once_the_cache_holds_its_budget() -> None:
-    first = ogld.open(TEST_STORE)
+    first = opengwasdb.ld.open(TEST_STORE)
     place = serving.centres(first)[0]
     first.region(place[0], place[1], serving.FILL_RADIUS)
     one_region = serving.held(first)
     assert one_region > 0, "one region must keep chunks for this to mean anything"
-    store = ogld.open(TEST_STORE, cache_bytes=one_region)
+    store = opengwasdb.ld.open(TEST_STORE, cache_bytes=one_region)
     assert serving.fill(store, serving.centres(store)) == 1
     assert serving.held(store) >= serving.FULL * store._reader.cache_bytes
 

@@ -19,7 +19,7 @@ from zarr.abc.store import RangeByteRequest, SuffixByteRequest
 from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec, ZstdCodec
 from zarr.core.metadata.v3 import RectilinearChunkGridMetadata
 
-from ogld.store import decoding, location
+from opengwasdb.ld.store import decoding, location
 
 
 @pytest.mark.parametrize("endian", ["little", "big"])
@@ -235,10 +235,10 @@ def test_noncontiguous_physical_offsets_equal_zarr(tmp_path: Path) -> None:
 
 
 def test_an_elided_near_band_inner_chunk_is_refused(tmp_path: Path) -> None:
-    import ogld
+    import opengwasdb.ld
 
     path = resharded(tmp_path / "store", 512, 4)
-    store = ogld.open(path)
+    store = opengwasdb.ld.open(path)
     start, _ = store._reader._variant_table.ranges["22"]
     names = store._reader.alids_of(np.array([start, start + 1])).tolist()
     assert np.isfinite(store.matrix(names).r).all()
@@ -246,7 +246,7 @@ def test_an_elided_near_band_inner_chunk_is_refused(tmp_path: Path) -> None:
     array[:512] = array.fill_value
     assert (path / "near/22/r/c/0").exists(), "the shard must still hold its other chunks"
     with pytest.raises(ValueError, match="chunk the store lost"):
-        ogld.open(path).matrix(names)
+        opengwasdb.ld.open(path).matrix(names)
 
 
 def test_an_empty_inner_chunk_reads_the_fill_value(tmp_path: Path) -> None:

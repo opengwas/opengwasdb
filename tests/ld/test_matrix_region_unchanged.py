@@ -26,8 +26,8 @@ import pytest
 import zarr
 from store_copies import TEST_STORE
 
-import ogld
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld.store import StoreReader
 
 #: The Test Store's rows, and the samples the cases read.
 ALL = np.arange(1056, dtype=np.int64)
@@ -54,7 +54,7 @@ def fingerprint(columns: dict[str, Any]) -> str:
     return hasher.hexdigest()
 
 
-def matrix(store: ogld.LDStore, rows: np.ndarray, *, fill: float | None = None) -> str:
+def matrix(store: opengwasdb.ld.LDStore, rows: np.ndarray, *, fill: float | None = None) -> str:
     names = list(store._reader.alids_of(rows))
     got = store.matrix(names, fill=fill)
     if fill is not None:
@@ -114,7 +114,7 @@ def ladder() -> tuple[np.ndarray, np.ndarray]:
     return first, first + np.tile(np.arange(1, 41, dtype=np.int64), len(first) // 40)
 
 
-def ages(store: ogld.LDStore, reader: StoreReader, rows: np.ndarray) -> dict[str, str]:
+def ages(store: opengwasdb.ld.LDStore, reader: StoreReader, rows: np.ndarray) -> dict[str, str]:
     """Every case's answer, keyed as `FROZEN` is."""
     found: dict[str, str] = {}
     for name, subset in {"all": ALL, "sample": SAMPLE, "small": SMALL, "chr22": SLICE}.items():
@@ -150,7 +150,7 @@ def ages(store: ogld.LDStore, reader: StoreReader, rows: np.ndarray) -> dict[str
     return found
 
 
-def region_fingerprint(got: ogld.LDMatrix) -> str:
+def region_fingerprint(got: opengwasdb.ld.LDMatrix) -> str:
     return fingerprint(
         {
             "r": got.r,
@@ -222,7 +222,7 @@ FROZEN: dict[str, str] = {
 @pytest.fixture(scope="module")
 def found() -> dict[str, str]:
     """Every case's answer on the committed Test Store, read once for the module."""
-    return ages(ogld.open(TEST_STORE), StoreReader.open(TEST_STORE), ALL)
+    return ages(opengwasdb.ld.open(TEST_STORE), StoreReader.open(TEST_STORE), ALL)
 
 
 def test_the_frozen_answers_cover_every_case(found: dict[str, str]) -> None:

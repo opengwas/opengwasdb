@@ -14,11 +14,11 @@ from functools import cache
 import numpy as np
 import pytest
 import support
-from script_modules import load_script
+from ld_script_modules import load_script
 from support import alids, panel_data, passing_rows, reference
 
-import ogld
-from ogld.format import RefusalReason
+import opengwasdb.ld
+from opengwasdb.ld.format import RefusalReason
 
 #: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md) are
 #: held there, but a 0.2.0 store refuses r² 0.001 within 3 Mb: its t_partner is 0.01, so the
@@ -61,7 +61,7 @@ def busiest_query(r2: float, window: float) -> int:
 
 
 def test_proxies_default_to_r2_0_8_within_10_mb() -> None:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     query = busiest_query(0.8, 10_000_000)
     found = store.proxies(alids([query]))
     assert (found.r2_min, found.window_bp, found.t_far) == (0.8, 10_000_000, support.T_FAR)
@@ -72,7 +72,7 @@ def test_proxies_default_to_r2_0_8_within_10_mb() -> None:
 
 
 def test_proxies_return_signed_r() -> None:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     rows = passing_rows()
     sample = rows[:: max(1, len(rows) // 100)]
     found = store.proxies(alids(sample), r2=0.5, kb=3000)
@@ -88,7 +88,7 @@ def test_proxies_return_signed_r() -> None:
 
 
 def test_proxies_are_ordered_and_never_the_query_itself() -> None:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     query = busiest_query(0.5, 3_000_000)
     found = store.proxies(alids([query]), r2=0.5, kb=3000)
     assert alids([query])[0] not in set(found.proxy)
@@ -98,7 +98,7 @@ def test_proxies_are_ordered_and_never_the_query_itself() -> None:
 
 def test_proxies_below_t_far_within_3_mb_read_the_near_band() -> None:
     # r2 = 0.01 < t_far is answered within 3 Mb: every pair there is stored (spec §9).
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     query = busiest_query(0.01, 3_000_000)
     found = store.proxies(alids([query]), r2=0.01, kb=3000)
     expected = expected_proxies(query, 0.01, 3_000_000)
@@ -109,7 +109,7 @@ def test_proxies_below_t_far_within_3_mb_read_the_near_band() -> None:
 
 
 def test_proxies_list_absent_queries() -> None:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     found = store.proxies(["not-an-alid", *alids(passing_rows()[:1])])
     assert found.absent == ("not-an-alid",)
 
@@ -125,8 +125,8 @@ def test_proxies_list_absent_queries() -> None:
     ],
 )
 def test_each_proxies_refusal(r2: float, kb: float, reason: RefusalReason) -> None:
-    store = ogld.open(support.TEST_STORE)
-    with pytest.raises(ogld.Refusal) as refused:
+    store = opengwasdb.ld.open(support.TEST_STORE)
+    with pytest.raises(opengwasdb.ld.Refusal) as refused:
         store.proxies(alids(passing_rows()[:1]), r2=r2, kb=kb)
     assert refused.value.reason is reason
 
@@ -147,16 +147,16 @@ def candidates(p_max: float) -> tuple[list[str], np.ndarray, np.ndarray]:
     return alids(keep), np.abs(z[keep]), keep
 
 
-_K0: list[ogld.LDStore] = []
+_K0: list[opengwasdb.ld.LDStore] = []
 
 
-def k0_store(tmp_path_factory: pytest.TempPathFactory) -> ogld.LDStore:
+def k0_store(tmp_path_factory: pytest.TempPathFactory) -> opengwasdb.ld.LDStore:
     """A k = 0 store written from reference_r(0), once per worker."""
     if not _K0:
         out = tmp_path_factory.mktemp("k0") / "store"
         script = load_script("make_test_store")
         made = script.write_test_store(0, out, support.R_SCALE, 0.01)
-        _K0.append(ogld.open(made))
+        _K0.append(opengwasdb.ld.open(made))
     return _K0[0]
 
 
@@ -169,7 +169,7 @@ def test_clump_leads_equal_plink2_s_at_k0(
     and so does `clump` (owner, 10 November 2026); `proxies` keeps ≥ and ≤. No candidate pair of
     the Test Panel sits on either edge, so the leads are the same under both; the edges are
     tested in test_query_edges.py."""
-    ogld.open(support.TEST_STORE)
+    opengwasdb.ld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     params = panel_data().clump_params()
     assert params.p1 == params.p2, "with p2 = p1, plink2's leads depend only on the p1 set"
@@ -188,7 +188,7 @@ def test_the_pairs_the_store_s_step_moves_across_r2_are_listed_and_within_it(r2:
     # thresholds, though a 0.2.0 store answers only the first (spec §9).
     # Every pair of the Test Panel the step moves across r2 lies within 2|r| × half a step of it;
     # among the plink2 comparison's candidates they are exactly CROSSING's.
-    ogld.open(support.TEST_STORE)
+    opengwasdb.ld.open(support.TEST_STORE)
     ref = reference(0)
     params = panel_data().clump_params()
     *_, rows = candidates(params.p1)
@@ -209,7 +209,7 @@ def test_proxies_are_plink2_s_r_outside_the_band_of_the_store_s_step(
     # k = 0's reference r is plink2's --r-unphased (tests/test_testdata.py). The proxies within
     # 3 Mb of the comparison's candidates, judged on plink2's r², differ from the store's only by
     # pairs within 2|r| × half a step of r2.
-    ogld.open(support.TEST_STORE)
+    opengwasdb.ld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     ref = reference(0)
     *_, rows = candidates(panel_data().clump_params().p1)
@@ -233,7 +233,7 @@ def test_proxies_are_plink2_s_r_outside_the_band_of_the_store_s_step(
 def test_every_member_reaches_its_lead_and_every_lead_leads_itself(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    ogld.open(support.TEST_STORE)
+    opengwasdb.ld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     names, score, _ = candidates(1e-4)
     clumps = store.clump(names, score, r2=0.01, kb=3000)
@@ -252,7 +252,7 @@ def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
 ) -> None:
     # ogld#6: the leads at p ≤ p1 (5e-8) are the leads at p ≤ 1e-4 with p ≤ p1, so the engine
     # can store one clumping per configuration.
-    ogld.open(support.TEST_STORE)
+    opengwasdb.ld.open(support.TEST_STORE)
     store = k0_store(tmp_path_factory)
     loose_names, loose_score, _ = candidates(1e-4)
     strict_names, strict_score, _ = candidates(panel_data().clump_params().p1)
@@ -273,9 +273,9 @@ def test_a_stricter_threshold_gives_a_prefix_of_the_leads(
     ],
 )
 def test_each_clump_refusal(r2: float, kb: float, reason: RefusalReason) -> None:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     names = alids(passing_rows()[:3])
-    with pytest.raises(ogld.Refusal) as refused:
+    with pytest.raises(opengwasdb.ld.Refusal) as refused:
         store.clump(names, np.array([6.0, 5.0, 4.0]), r2=r2, kb=kb)
     assert refused.value.reason is reason
 
@@ -284,7 +284,7 @@ def test_each_clump_refusal(r2: float, kb: float, reason: RefusalReason) -> None
 def test_a_score_that_is_not_one_per_alid_finite_and_non_negative_is_invalid(
     score: list[float],
 ) -> None:
-    store = ogld.open(support.TEST_STORE)
-    with pytest.raises(ogld.Refusal) as refused:
+    store = opengwasdb.ld.open(support.TEST_STORE)
+    with pytest.raises(opengwasdb.ld.Refusal) as refused:
         store.clump(alids(passing_rows()[:3]), np.array(score), r2=0.1, kb=1000)
     assert refused.value.reason is RefusalReason.INVALID

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from ogld.build.importing.matrix import correlation, diagonal_mask
+from opengwasdb.ld.build.importing.matrix import correlation, diagonal_mask
 
 
 def test_covariance_becomes_a1_signed_correlation() -> None:

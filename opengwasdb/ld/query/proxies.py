@@ -7,18 +7,19 @@ from collections.abc import Sequence
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import Codes
-from ogld.format.geometry import global_rows, local_rows, owners
-from ogld.query.reader import Reader
-from ogld.query.requests import window_of
-from ogld.query.results import Proxies
+from opengwasdb.ld.format import Codes
+from opengwasdb.ld.format.geometry import global_rows, local_rows, owners
+from opengwasdb.ld.query.reader import Reader
+from opengwasdb.ld.query.requests import window_of
+from opengwasdb.ld.query.results import Proxies
 
 
 def proxies(reader: Reader, alids: Sequence[str], *, r2: float, kb: float) -> Proxies:
     """Every partner of each present ALID within kb × 1,000 bp with r̂² ≥ r2 (ogld#6).
 
-    Judged by `ogld.query.requests.window_of` first, which asks
-    `ogld.format.judge_partner_request`: it refuses a store that holds no Partner Rows and a
+    Judged by `opengwasdb.ld.query.requests.window_of` first, which asks
+    `opengwasdb.ld.format.judge_partner_request`: it refuses a store that holds no Partner Rows and
+    a
     threshold below the store's own t_partner within `near_bp`, naming the store and both numbers,
     before any frame is read. Each present ALID's
     proxies are its Partner Rows row — one frame read, both sides, every distance — filtered to

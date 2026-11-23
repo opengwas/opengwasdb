@@ -11,7 +11,7 @@ window that the rest of the genome also explains, and uses the first up to 10 PC
 refusing with fewer than 5 (owner, 7 November 2026; ADR 0002). The hand-built PCs use the
 Test Panel's 771 samples: the ratio cannot drop any PC below about 100.
 
-Every test calls `ogld.build` before it reads the Test Panel: a build is given `PANEL`'s
+Every test calls `opengwasdb.ld.build` before it reads the Test Panel: a build is given `PANEL`'s
 paths, which need no loader, and each k is built once per worker (`built`), as is the one
 build from a PC File with a Local PC (`with_a_local_pc`) that two tests read. The tests that
 make their own pgen or PC File read and write pgen with pgenlib, which ogld#5 adds, after
@@ -42,15 +42,15 @@ from support import (
     reference_matrix,
 )
 
-import ogld
-from ogld import cli
-from ogld.format import t_far
+import opengwasdb.ld
+from opengwasdb.ld import cli
+from opengwasdb.ld.format import t_far
 
 PANEL_ID = "test-panel-hgdp1kgp-EUR"
-_WITH_A_LOCAL_PC: list[ogld.Provenance] = []
+_WITH_A_LOCAL_PC: list[opengwasdb.ld.Provenance] = []
 
 
-def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
+def inputs(k: int = support.K, **overrides: Any) -> opengwasdb.ld.BuildInputs:
     """The Test Panel as BuildInputs, from paths alone: nothing here reads a file."""
     fields: dict[str, Any] = {
         "pgen": (PANEL.pgen,),
@@ -65,10 +65,12 @@ def inputs(k: int = support.K, **overrides: Any) -> ogld.BuildInputs:
         "k": k,
         "info_min": None,
     }
-    return ogld.BuildInputs(**{**fields, **overrides})
+    return opengwasdb.ld.BuildInputs(**{**fields, **overrides})
 
 
-def built(k: int, tmp_path_factory: pytest.TempPathFactory) -> tuple[ogld.Provenance, Path]:
+def built(
+    k: int, tmp_path_factory: pytest.TempPathFactory
+) -> tuple[opengwasdb.ld.Provenance, Path]:
     """The Test Panel built at k, once per worker and shared with ogld#5's own tests
     (tests/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
     found = build_fixtures.test_panel_build(k, tmp_path_factory)
@@ -76,7 +78,7 @@ def built(k: int, tmp_path_factory: pytest.TempPathFactory) -> tuple[ogld.Proven
     return found
 
 
-def near_band_matches(store: ogld.LDStore, k: int) -> int:
+def near_band_matches(store: opengwasdb.ld.LDStore, k: int) -> int:
     """Assert every reference pair within 3 Mb reads back within half a step; return how many."""
     rows = tuple(int(row) for row in passing_rows())
     m = store.matrix(alids(rows))
@@ -94,7 +96,7 @@ def test_the_near_band_at_k10_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     _, out = built(10, tmp_path_factory)
-    assert near_band_matches(ogld.open(out), 10) > 1000
+    assert near_band_matches(opengwasdb.ld.open(out), 10) > 1000
 
 
 def test_the_near_band_at_k0_matches_the_reference(
@@ -102,7 +104,7 @@ def test_the_near_band_at_k0_matches_the_reference(
 ) -> None:
     # The reference at k = 0 is held to plink2 --r-unphased by tests/test_testdata.py.
     _, out = built(0, tmp_path_factory)
-    assert near_band_matches(ogld.open(out), 0) > 1000
+    assert near_band_matches(opengwasdb.ld.open(out), 0) > 1000
 
 
 def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPathFactory) -> None:
@@ -110,7 +112,7 @@ def test_the_far_pairs_kept_are_the_reference_s(tmp_path_factory: pytest.TempPat
     ref = reference(10)
     far = ref.where((ref.distance > 3_000_000) & (ref.distance <= 10_000_000), "3–10 Mb pairs")
     rows = tuple(int(row) for row in passing_rows())
-    m = ogld.open(out).matrix(alids(rows))
+    m = opengwasdb.ld.open(out).matrix(alids(rows))
     where = np.full(int(max(rows)) + 1, -1)
     where[list(rows)] = np.arange(len(rows))
     kept = ~np.isnan(m.r[where[far.row_i], where[far.row_j]])
@@ -202,14 +204,14 @@ def test_the_variant_set_is_the_test_panel_s_passing_rows(
     v = panel_data().variants()
     failing = np.flatnonzero(~v.passes_filters)
     assert len(failing), "the Test Panel must hold variants the filters remove"
-    m = ogld.open(out).matrix(alids(np.arange(len(v.pos))))
+    m = opengwasdb.ld.open(out).matrix(alids(np.arange(len(v.pos))))
     assert set(m.absent) == set(alids(failing))
 
 
 def test_a_pgen_without_info_refuses_an_info_floor(tmp_path: Path) -> None:
     # A sequenced panel has no INFO: info_min must be None, said on purpose, not skipped.
-    with pytest.raises(ogld.InputError, match="INFO"):
-        ogld.build(inputs(10, info_min=0.8), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="INFO"):
+        opengwasdb.ld.build(inputs(10, info_min=0.8), tmp_path / "store")
 
 
 def test_a_build_whose_partner_threshold_is_above_t_far_is_refused_naming_both(
@@ -220,8 +222,8 @@ def test_a_build_whose_partner_threshold_is_above_t_far_is_refused_naming_both(
     above = 0.5
     assert above > support.T_FAR, "the fixture must be above the panel's t_far to mean anything"
     out = tmp_path / "store"
-    with pytest.raises(ogld.InputError) as refused:
-        ogld.build(inputs(support.K, t_partner=above), out)
+    with pytest.raises(opengwasdb.ld.InputError) as refused:
+        opengwasdb.ld.build(inputs(support.K, t_partner=above), out)
     assert str(above) in str(refused.value), refused.value
     assert str(support.T_FAR) in str(refused.value), refused.value
     assert not out.exists(), "nothing is written before the refusal"
@@ -234,7 +236,7 @@ def test_ogld_build_writes_a_store_that_validates(tmp_path: Path) -> None:
     argv += ["--panel-id", PANEL_ID, "--ancestry", "EUR", "--genotype-source", "Test Panel"]
     argv += ["--r-scale", str(support.R_SCALE), "--t-partner", "0.01"]
     assert cli.main([*argv, "--info-min", "none"]) == 0
-    assert not any(ogld.validate(out).values())
+    assert not any(opengwasdb.ld.validate(out).values())
 
 
 # ------------------------------------------------------------- complete genotypes, local PCs
@@ -316,7 +318,7 @@ def pc_file(tmp_path: Path, columns: list[npt.NDArray[np.float64]]) -> Path:
     return out
 
 
-def scan_of(provenance: ogld.Provenance) -> tuple[dict[str, dict[str, Any]], list[str]]:
+def scan_of(provenance: opengwasdb.ld.Provenance) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """The PC Check's scan by PC, and its dropped PCs, each held to the owner's rule."""
     check = provenance["adjustment"]["pc_check"]
     assert check is not None
@@ -337,7 +339,7 @@ def scan_of(provenance: ogld.Provenance) -> tuple[dict[str, dict[str, Any]], lis
     return {scan["pc"]: dict(scan) for scan in check["scan"]}, list(check["dropped"])
 
 
-def with_a_local_pc(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance:
+def with_a_local_pc(tmp_path_factory: pytest.TempPathFactory) -> opengwasdb.ld.Provenance:
     """One build, once per worker, from a PC File whose PC1 is local and whose other 7 survive.
 
     PC1 is one stretch's axis: its window explains most of it, the rest only by chance. PC2 is
@@ -360,7 +362,7 @@ def with_a_local_pc(tmp_path_factory: pytest.TempPathFactory) -> ogld.Provenance
         # axis would lie in their span and be regressed out after all.
         out = tmp_path_factory.mktemp("with-a-local-pc")
         pcs = pc_file(out, [axis, mixed, *ancestry_pcs(7)[1:]])
-        _WITH_A_LOCAL_PC.append(ogld.build(inputs(10, pcs=pcs), out / "store"))
+        _WITH_A_LOCAL_PC.append(opengwasdb.ld.build(inputs(10, pcs=pcs), out / "store"))
     return _WITH_A_LOCAL_PC[0]
 
 
@@ -373,8 +375,8 @@ def test_an_input_with_a_missing_call_is_refused(
     row = int(passing_rows()[0])
     genotypes[row, 0] = -9
     pgen = write_pgen(genotypes, tmp_path / "one-missing")
-    with pytest.raises(ogld.InputError, match="missing") as refused:
-        ogld.build(inputs(0, pgen=(pgen,)), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="missing") as refused:
+        opengwasdb.ld.build(inputs(0, pgen=(pgen,)), tmp_path / "store")
     assert str(panel_data().variants().id[row]) in str(refused.value), "it names the variant"
     assert PANEL_ID in str(refused.value), "it names the panel"
 
@@ -400,11 +402,11 @@ def test_a_reversed_indel_pair_keeps_the_record_whose_ref_the_alid_spells_first(
     pgen = write_pgen(read_genotypes(PANEL.pgen), prefix)
     pgen.with_suffix(".pvar").write_text("\n".join(lines) + "\n")
     out = tmp_path / "store"
-    provenance = ogld.build(inputs(0, pgen=(pgen,)), out)
+    provenance = opengwasdb.ld.build(inputs(0, pgen=(pgen,)), out)
     assert provenance["variants_dropped"]["duplicate_reversed_indel"] == 1
     assert provenance["n_variants"] == len(passing_rows()) - 1
     kept = f"{fields[0]}:{position}:T:TA"
-    store = ogld.open(out)
+    store = opengwasdb.ld.open(out)
     assert store.matrix([kept]).absent == (), "the insertion, REF = A1, is in the Variant Set"
 
 
@@ -443,8 +445,8 @@ def test_fewer_than_five_surviving_pcs_are_refused(
 ) -> None:
     built(10, tmp_path_factory)
     pcs = pc_file(tmp_path, [local_axis(), *ancestry_pcs(4)])
-    with pytest.raises(ogld.InputError, match=r"\b4\b") as refused:
-        ogld.build(inputs(10, pcs=pcs), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match=r"\b4\b") as refused:
+        opengwasdb.ld.build(inputs(10, pcs=pcs), tmp_path / "store")
     message = str(refused.value)
     # PC5 is in this PC File and kept, so a bare "5" would pass on its name alone.
     assert re.search(r"\b5\b", message), "it names the minimum it needed"

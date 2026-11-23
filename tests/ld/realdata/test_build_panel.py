@@ -36,11 +36,11 @@ import pytest
 import zarr
 from realdata_inputs import required
 
-import ogld
-from ogld.build.diagnostic import outside_regions
-from ogld.identity import Orientation, orient
+import opengwasdb.ld
+from opengwasdb.ld.build.diagnostic import outside_regions
+from opengwasdb.ld.identity import Orientation, orient
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "ld"
 PANELS = Path("/data/opengwasdb/reference/hgdp1kgp-hg38")
 SHIPPED_EUR_CHR22 = PANELS / "pgen" / "EUR" / "chr22"
 NARROW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
@@ -97,8 +97,10 @@ def pvar_rows(path: Path) -> list[list[str]]:
     return [line.split("\t") for line in lines if not line.startswith("#")]
 
 
-def inputs(pgen: Path, source: str, r_scale: int, pcs: Path | None = None) -> ogld.BuildInputs:
-    return ogld.BuildInputs(
+def inputs(
+    pgen: Path, source: str, r_scale: int, pcs: Path | None = None
+) -> opengwasdb.ld.BuildInputs:
+    return opengwasdb.ld.BuildInputs(
         pgen=(pgen,),
         keep=eur_keep(),
         pcs=pcs,
@@ -129,8 +131,8 @@ def test_the_builder_refuses_the_shipped_pgen_for_its_missing_calls(tmp_path: Pa
     plink2("--pfile", slice_, "--missing", "variant-only", "--out", tmp_path / "missing")
     counts = np.loadtxt(tmp_path / "missing.vmiss", usecols=2, skiprows=1, dtype=np.int64)
     assert (counts > 0).any(), "the shipped slice must have missing calls for this to mean anything"
-    with pytest.raises(ogld.InputError, match="missing"):
-        ogld.build(
+    with pytest.raises(opengwasdb.ld.InputError, match="missing"):
+        opengwasdb.ld.build(
             inputs(tmp_path / "shipped.pgen", "gnomAD v3.1.2, shipped pgen", HGDP_SCALE),
             tmp_path / "store",
         )
@@ -169,8 +171,8 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
 ) -> None:
     slice_ = v2_slice("narrow", tmp_path_factory)
     narrow = inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-23 Mb", HGDP_SCALE)
-    ogld.build(narrow, tmp_path / "store")
-    store = ogld.open(tmp_path / "store")
+    opengwasdb.ld.build(narrow, tmp_path / "store")
+    store = opengwasdb.ld.open(tmp_path / "store")
 
     rows = pvar_rows(slice_.with_suffix(".pvar"))
     found = [orient(r[0], int(r[1]), r[3], r[4]) for r in rows]
@@ -233,8 +235,10 @@ def test_real_ld_survives_pc_adjustment(
     pcs = required("OGLD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
     pgen = slice_.with_suffix(".pgen")
-    ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE), tmp_path / "k0")
-    adjusted = ogld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE, pcs), tmp_path / "k10")
+    opengwasdb.ld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE), tmp_path / "k0")
+    adjusted = opengwasdb.ld.build(
+        inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE, pcs), tmp_path / "k10"
+    )
     held = [zarr.open_group(str(tmp_path / s), mode="r")["variants"] for s in ("k0", "k10")]
     assert list(held[0]["alid"][:]) == list(held[1]["alid"][:]), "one Variant Set, both builds"
     assert outside_regions("22", np.asarray(held[0]["position"][:]).astype(np.int64)).all()

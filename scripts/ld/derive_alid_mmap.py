@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from ogld.store.assembly import derive_alid_mmap as derive
+from opengwasdb.ld.store.assembly import derive_alid_mmap as derive
 
 
 def main() -> None:

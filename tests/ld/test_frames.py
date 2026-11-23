@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 import zarr
 
-from ogld.format import REncoding
-from ogld.store import frames
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.store import frames
 
 #: The frame's decompressed payload, field by field (spec §5.2), little-endian:
 #: k = 2, lengths (2, 1), then the partner deltas (−2, 4, 2) and the codes (52, −90, 120),

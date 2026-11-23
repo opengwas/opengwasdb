@@ -39,8 +39,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-import ogld
-from ogld.identity import alid_locus
+import opengwasdb.ld
+from opengwasdb.ld.identity import alid_locus
 
 TARGET = "OGS-00012__GCST90476460"
 KB = 3000
@@ -60,9 +60,11 @@ def named(variable: str, what: str) -> Path:
 
 
 @pytest.fixture(scope="session")
-def stores() -> tuple[ogld.LDStore, ogld.LDStore]:
-    genotype = ogld.open(named("OGLD_GENOTYPE_STORE", "the Genotype Store sidecar"))
-    ld = ogld.open(named("OGLD_81_EUR_STORE", "the k = 10 EUR LD Store over the same panel"))
+def stores() -> tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore]:
+    genotype = opengwasdb.ld.open(named("OGLD_GENOTYPE_STORE", "the Genotype Store sidecar"))
+    ld = opengwasdb.ld.open(
+        named("OGLD_81_EUR_STORE", "the k = 10 EUR LD Store over the same panel")
+    )
     assert ld.provenance["adjustment"]["k"] == 10, "the two stores must be built alike"
     assert genotype.provenance["adjustment"]["k"] == 10
     return genotype, ld
@@ -92,11 +94,11 @@ def frozen() -> dict[str, Any]:
     return spec
 
 
-def outcome(store: ogld.LDStore, method: str, *args: Any, **kwargs: Any) -> Any:
+def outcome(store: opengwasdb.ld.LDStore, method: str, *args: Any, **kwargs: Any) -> Any:
     """A query's answer, or its refusal by reason: a refusal is an answer to compare too."""
     try:
         return getattr(store, method)(*args, **kwargs)
-    except ogld.Refusal as refused:
+    except opengwasdb.ld.Refusal as refused:
         return ("refusal", refused.reason)
 
 
@@ -131,8 +133,8 @@ def assert_equal(actual: Any, expected: Any, label: str) -> None:
 
 
 def compare(
-    genotype: ogld.LDStore,
-    ld: ogld.LDStore,
+    genotype: opengwasdb.ld.LDStore,
+    ld: opengwasdb.ld.LDStore,
     method: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -165,7 +167,7 @@ def chr22(alids: list[str]) -> list[int]:
 
 
 def held(
-    store: ogld.LDStore, alids: list[str], scores: np.ndarray, keep: list[int]
+    store: opengwasdb.ld.LDStore, alids: list[str], scores: np.ndarray, keep: list[int]
 ) -> tuple[list[str], np.ndarray]:
     """The kept ALIDs the store holds, and their scores, in request order."""
     names = [alids[i] for i in keep]
@@ -175,7 +177,7 @@ def held(
 
 
 def test_the_chr22_clumps_and_the_target_equal_the_ld_store(
-    stores: tuple[ogld.LDStore, ogld.LDStore],
+    stores: tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore],
     analyses: list[tuple[str, list[str], np.ndarray]],
 ) -> None:
     genotype, ld = stores
@@ -204,7 +206,7 @@ def test_the_chr22_clumps_and_the_target_equal_the_ld_store(
 
 
 def test_the_37_analyses_equal_the_ld_store_at_both_thresholds(
-    stores: tuple[ogld.LDStore, ogld.LDStore],
+    stores: tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore],
     analyses: list[tuple[str, list[str], np.ndarray]],
 ) -> None:
     genotype, ld = stores
@@ -226,7 +228,7 @@ def test_the_37_analyses_equal_the_ld_store_at_both_thresholds(
 
 
 def test_19_s_fifty_chr22_requests_equal_the_ld_store(
-    stores: tuple[ogld.LDStore, ogld.LDStore],
+    stores: tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore],
     analyses: list[tuple[str, list[str], np.ndarray]],
     frozen: dict[str, Any],
 ) -> None:
@@ -317,7 +319,7 @@ def test_19_s_fifty_chr22_requests_equal_the_ld_store(
 
 
 def test_each_chromosome_s_region_and_a_whole_genome_matrix_equal_the_ld_store(
-    stores: tuple[ogld.LDStore, ogld.LDStore],
+    stores: tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore],
 ) -> None:
     genotype, ld = stores
     provenance = ld.provenance

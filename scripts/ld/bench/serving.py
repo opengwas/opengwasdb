@@ -143,13 +143,13 @@ def fill(store: Any, places: Iterable[tuple[str, int]], radius: int = FILL_RADIU
 
 
 def memory(args: argparse.Namespace, out: TextIO) -> None:
-    import ogld
+    import opengwasdb.ld
 
     stores: dict[str, Any] = {}
     write(out, memory_record("imported", stores))
     for panel in args.panels:
         started = time.perf_counter()
-        stores[panel] = ogld.open(latency.recipe.store_path(panel))
+        stores[panel] = opengwasdb.ld.open(latency.recipe.store_path(panel))
         write(out, memory_record("opened", stores, panel=panel, seconds=elapsed(started)))
     for panel, store in stores.items():
         started = time.perf_counter()
@@ -226,7 +226,7 @@ def lag_queries() -> dict[str, latency.Query]:
 def lag(args: argparse.Namespace, out: TextIO) -> None:
     """Each query, cold: the store's pages evicted (ogld#8's `evict`) and the store opened
     inside the timing, on the worker thread, as a job opens it."""
-    import ogld
+    import opengwasdb.ld
 
     idle = asyncio.run(lags_while(for_seconds(5.0)))
     write(out, {"measurement": "lag", "query": "idle", **summary(idle), **context(args)})
@@ -235,7 +235,7 @@ def lag(args: argparse.Namespace, out: TextIO) -> None:
     for repeat in range(args.repeats):
         for name in args.queries:
             latency.evict(path)
-            record = asyncio.run(lag_of(lambda name=name: queries[name](ogld.open(path))))
+            record = asyncio.run(lag_of(lambda name=name: queries[name](opengwasdb.ld.open(path))))
             write(
                 out,
                 {"measurement": "lag", "query": name, "repeat": repeat, **record, **context(args)},

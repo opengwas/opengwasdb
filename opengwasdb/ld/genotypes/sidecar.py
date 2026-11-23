@@ -9,22 +9,22 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import InputError, Provenance, REncoding, Sourced
-from ogld.format.geometry import chromosome_ranges
-from ogld.genotypes.adjust import Block, Covariates
-from ogld.genotypes.layout import ARRAYS, KEY, VERSION
-from ogld.genotypes.validation import validate_sidecar
-from ogld.store import layout
-from ogld.store.assembly import (
+from opengwasdb.ld.format import InputError, Provenance, REncoding, Sourced
+from opengwasdb.ld.format.geometry import chromosome_ranges
+from opengwasdb.ld.genotypes.adjust import Block, Covariates
+from opengwasdb.ld.genotypes.layout import ARRAYS, KEY, VERSION
+from opengwasdb.ld.genotypes.validation import validate_sidecar
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.assembly import (
     Cutter,
     Tally,
     derive_alid_index,
     derive_variant_companion,
     provenance,
 )
-from ogld.store.tables import Variants
-from ogld.store.validation import ValidationFailed
-from ogld.store.writer import write_variant_table
+from opengwasdb.ld.store.tables import Variants
+from opengwasdb.ld.store.validation import ValidationFailed
+from opengwasdb.ld.store.writer import write_variant_table
 
 
 class SidecarWriter:

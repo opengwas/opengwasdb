@@ -24,12 +24,17 @@ import pytest
 import zarr
 from store_copies import TEST_STORE, copy_store, unpartnered
 
-import ogld
-from ogld import cli
-from ogld.format import InputError
-from ogld.store import assembly
-from ogld.store.assembly import derive_partners
-from ogld.store.validation import PARTNER_RULES, ValidationFailed, validate_at, validate_group
+import opengwasdb.ld
+from opengwasdb.ld import cli
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.store import assembly
+from opengwasdb.ld.store.assembly import derive_partners
+from opengwasdb.ld.store.validation import (
+    PARTNER_RULES,
+    ValidationFailed,
+    validate_at,
+    validate_group,
+)
 
 #: The Test Store's chromosomes, and the Partner Threshold its writer used (partner-rows §3).
 CHROMOSOMES = ("21", "22")
@@ -181,14 +186,14 @@ def test_drop_index_removes_nothing_from_a_store_whose_component_fails(tmp_path:
 #: published.
 KILLED = """
 import os, signal
-from ogld.store import frames
+from opengwasdb.ld.store import frames
 appended = frames.FramesGroup._append
 def append(self):
     appended(self)
     self._file.flush()
     os.kill(os.getpid(), signal.SIGKILL)
 frames.FramesGroup._append = append
-from ogld.cli import main
+from opengwasdb.ld.cli import main
 raise SystemExit(main())
 """
 
@@ -333,11 +338,11 @@ def test_a_worker_that_finds_a_lost_chunk_fails_the_run(tmp_path: Path) -> None:
 #: left is a 0.1.0 one whose `partners/` no provenance names (ogld#69).
 UNCLAIMED = """
 import os, signal
-from ogld.store import assembly
+from opengwasdb.ld.store import assembly
 def record(root, made):
     os.kill(os.getpid(), signal.SIGKILL)
 assembly._record = record
-from ogld.cli import main
+from opengwasdb.ld.cli import main
 raise SystemExit(main())
 """
 
@@ -380,7 +385,7 @@ def test_a_kill_before_the_claim_leaves_an_unclaimed_component(unclaimed: Path) 
     ld-store §12)."""
     assert [rule for rule, found in validate_at(unclaimed, threads=1).items() if found] == []
     with pytest.raises(InputError, match=r"no Partner Rows"):
-        ogld.open(unclaimed).clump([first_alid(unclaimed)], [1.0], r2=0.01, kb=1000)
+        opengwasdb.ld.open(unclaimed).clump([first_alid(unclaimed)], [1.0], r2=0.01, kb=1000)
 
 
 def test_a_rerun_claims_an_unclaimed_component_once_the_rules_accept_it(unclaimed: Path) -> None:
@@ -418,7 +423,7 @@ def test_a_0_1_0_store_that_keeps_the_keys_is_settled_not_refused(tmp_path: Path
     store = unclaimed_keeping_keys(tmp_path / "store")
     alid = first_alid(store)
     with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
-        ogld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000)
+        opengwasdb.ld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000)
     made = derive_partners(store, t_partner=T_PARTNER)
     assert made is not None, "the residue is settled and the provenance claims it"
     assert made["format_version"] == "0.2.0"
@@ -429,8 +434,8 @@ def test_a_0_1_0_store_that_keeps_the_keys_is_settled_not_refused(tmp_path: Path
     assert isinstance(alids, zarr.Array)
     kept = [str(a) for a in alids[:40]]
     score = np.linspace(1.0, 6.0, len(kept))
-    settled = ogld.open(store).clump(kept, score, r2=T_PARTNER, kb=1000)
-    built = ogld.open(TEST_STORE).clump(kept, score, r2=T_PARTNER, kb=1000)
+    settled = opengwasdb.ld.open(store).clump(kept, score, r2=T_PARTNER, kb=1000)
+    built = opengwasdb.ld.open(TEST_STORE).clump(kept, score, r2=T_PARTNER, kb=1000)
     assert len(settled) == len(built), "the same variants are present in both"
     np.testing.assert_array_equal(settled.lead, built.lead)
     np.testing.assert_array_equal(settled.r, built.r)
@@ -536,8 +541,8 @@ def test_a_0_1_0_store_that_keeps_the_keys_answers_no_partner_read(tmp_path: Pat
     assert [rule for rule, found in validate_at(store, threads=1).items() if found] == []
     alid = first_alid(store)
     for refused in (
-        lambda: ogld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000),
-        lambda: ogld.open(store).proxies([alid], r2=T_PARTNER, kb=1000),
+        lambda: opengwasdb.ld.open(store).clump([alid], [1.0], r2=T_PARTNER, kb=1000),
+        lambda: opengwasdb.ld.open(store).proxies([alid], r2=T_PARTNER, kb=1000),
     ):
         with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows") as caught:
             refused()

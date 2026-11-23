@@ -17,7 +17,7 @@ from typing import Any
 
 import latency
 
-from ogld.store.location import ChunkCache
+from opengwasdb.ld.store.location import ChunkCache
 
 CHUNKS: Counter[tuple[str, int]] = Counter()
 

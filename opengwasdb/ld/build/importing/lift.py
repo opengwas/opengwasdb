@@ -15,11 +15,11 @@ from typing import Any, Final, TextIO
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build.importing.matrix import IntArray
-from ogld.build.importing.parts import optional_module
-from ogld.format import NEAR_BP
-from ogld.identity import AUTOSOMES, IdentityError, order_key, orient
-from ogld.store import Variants
+from opengwasdb.ld.build.importing.matrix import IntArray
+from opengwasdb.ld.build.importing.parts import optional_module
+from opengwasdb.ld.format import NEAR_BP
+from opengwasdb.ld.identity import AUTOSOMES, IdentityError, order_key, orient
+from opengwasdb.ld.store import Variants
 
 # The published Pan-UKB LD band: pairs further apart than this in GRCh37 are not measured.
 SOURCE_BAND_BP: Final = 10_000_000

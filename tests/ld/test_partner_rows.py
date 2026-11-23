@@ -21,7 +21,7 @@ import pytest
 import zarr
 from store_copies import FLOOR, TEST_STORE
 
-from ogld.store import frames
+from opengwasdb.ld.store import frames
 
 #: The Test Store's distances (spec §7).
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000

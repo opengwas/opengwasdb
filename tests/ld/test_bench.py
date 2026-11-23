@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from script_modules import SCRIPTS
+from ld_script_modules import SCRIPTS
 from testdata import TEST_PANEL
 
 for _path in (SCRIPTS / "bench", SCRIPTS):
@@ -39,7 +39,7 @@ report = importlib.import_module("report")
 deltas = importlib.import_module("deltas")
 
 TEST_STORE = TEST_PANEL / "store"
-RESULTS = SCRIPTS.parent / "docs" / "benchmarks" / "results"
+RESULTS = SCRIPTS.parents[1] / "docs" / "benchmarks" / "ld" / "results"
 #: What a record measured, rather than which read it was.
 MEASURED = {"seconds", "load_before", "load_after", "client", "wire", "result", "latency_ms"}
 
@@ -307,7 +307,7 @@ def test_an_unknown_analysis_is_refused_not_dropped(
 def test_a_record_names_the_budget_of_the_cache_the_store_read_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ogld.store.location import ChunkCache
+    from opengwasdb.ld.store.location import ChunkCache
 
     latency.instrument(None, 3, patch=monkeypatch.setattr)
     assert latency.opened(TEST_STORE)._reader.cache_bytes == 3 << 20, "--cache-mib sets it"
@@ -370,7 +370,7 @@ def test_every_lever_off_reads_as_before_ogld_32_and_answers_the_same(
 ) -> None:
     # `--without` measures ogld#32's levers one at a time against the reader ogld#8 measured:
     # each lever off is that reader's code, and no lever changes an answer.
-    from ogld.store import location
+    from opengwasdb.ld.store import location
 
     rows = np.arange(0, 1056, 9)
     alids = [str(a) for a in latency.opened(TEST_STORE)._reader.alids_of(rows)]
@@ -413,7 +413,7 @@ def test_the_count_before_ogld_32_is_the_cache_s_rule_one_string_at_a_time() -> 
     # Both count an ASCII string's bytes exactly, so they agree on ALIDs short and long.
     from numpy.dtypes import StringDType
 
-    from ogld.store import location
+    from opengwasdb.ld.store import location
 
     alids = [f"22:{i}:A:" + "C" * (i % 40) for i in range(2000)]
     chunk = np.array(alids, dtype=StringDType())

@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ogld.store.assembly import PAIR_BYTES, PartnerRowsStream
+from opengwasdb.ld.store.assembly import PAIR_BYTES, PartnerRowsStream
 
 #: `scripts/`, where the Test Store's own writer lives.
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -41,8 +41,8 @@ T_PARTNER, SCALE = 0.01, 511
 
 def written(out: Path, block_rows: int) -> None:
     """The Test Store at `out`, each chromosome's rows cut in blocks of `block_rows`."""
-    from ogld.format.geometry import chromosome_ranges, stop_within
-    from ogld.store import StoreWriter
+    from opengwasdb.ld.format.geometry import chromosome_ranges, stop_within
+    from opengwasdb.ld.store import StoreWriter
 
     vs = make_test_store.variant_set()
     ranges = chromosome_ranges(vs.variants.chrom)

@@ -17,8 +17,15 @@ from typing import Any, Final, cast
 import numpy as np
 import zarr
 
-from ogld.build.importing.download import BUCKET, Fetch, Parts, PinnedHttps, atomic_json, inventory
-from ogld.build.importing.lift import (
+from opengwasdb.ld.build.importing.download import (
+    BUCKET,
+    Fetch,
+    Parts,
+    PinnedHttps,
+    atomic_json,
+    inventory,
+)
+from opengwasdb.ld.build.importing.lift import (
     Lifted,
     SourceVariant,
     drop_displaced,
@@ -26,14 +33,14 @@ from ogld.build.importing.lift import (
     lift_variants,
     variant_chromosomes,
 )
-from ogld.build.importing.matrix import IntArray, MatrixSource, correlation, diagonal_mask
-from ogld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
-from ogld.build.record import sha256
-from ogld.format import NEAR_BP, Provenance, REncoding, Sourced
-from ogld.format.geometry import stop_within
-from ogld.identity import chromosome_rank
-from ogld.store import StoreWriter, Variants
-from ogld.version import __version__
+from opengwasdb.ld.build.importing.matrix import IntArray, MatrixSource, correlation, diagonal_mask
+from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
+from opengwasdb.ld.build.record import sha256
+from opengwasdb.ld.format import NEAR_BP, Provenance, REncoding, Sourced
+from opengwasdb.ld.format.geometry import stop_within
+from opengwasdb.ld.identity import chromosome_rank
+from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.version import __version__
 
 # The source policy, not an encoding default (owner #88; ADR 0015).
 PANUKB_SCALE: Final = 2047

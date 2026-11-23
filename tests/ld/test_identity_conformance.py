@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from ogld.identity import (
+from opengwasdb.ld.identity import (
     IdentityError,
     alid_locus,
     normalise_chromosome,
@@ -189,7 +189,7 @@ def test_a_record_the_engine_refuses_is_refused_here_too() -> None:
 def test_the_cli_exits_2_for_an_identity_error_not_a_traceback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from ogld import cli
+    from opengwasdb.ld import cli
 
     def refuse(location: str) -> None:
         normalise_chromosome("27")

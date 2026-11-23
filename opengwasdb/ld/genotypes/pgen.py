@@ -18,7 +18,7 @@ from typing import Any, Protocol, TypeVar
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import InputError
+from opengwasdb.ld.format import InputError
 
 T = TypeVar("T")
 D = TypeVar("D", np.float64, np.int8)
@@ -53,7 +53,7 @@ def import_pgenlib() -> Any:
     except ImportError as missing:
         raise InputError(
             "reading a pgen needs pgenlib, which ogld installs with the build extra: "
-            "pip install 'ogld[build]'"
+            "pip install 'opengwasdb[ld-build]'"
         ) from missing
     return pgenlib
 

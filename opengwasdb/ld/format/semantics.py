@@ -14,7 +14,7 @@ from enum import StrEnum
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format.geometry import within
+from opengwasdb.ld.format.geometry import within
 
 
 class AnswerKind(StrEnum):

@@ -3,7 +3,7 @@
 Every expected value is independent of the code under test. They are literals from the
 spec's tables (`docs/spec/ld-store.md` §3, §8, §9), from the epic's t_far table, and from
 the walkthroughs of `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html`,
-which computed them in JavaScript. None is recomputed the way `ogld.format` computes it.
+which computed them in JavaScript. None is recomputed the way `opengwasdb.ld.format` computes it.
 Hypothesis holds the properties: the round-trip bound, sign symmetry, and monotonicity at
 the boundaries.
 """
@@ -17,7 +17,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-import ogld.format as fmt
+import opengwasdb.ld.format as fmt
 
 # r in the closed interval the format stores.
 R = st.floats(min_value=-1.0, max_value=1.0, allow_nan=False)

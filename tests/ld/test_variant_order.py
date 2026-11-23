@@ -1,11 +1,12 @@
-"""The engine's variant order, as `ogld.identity.order_key` and `variant_order_key` sort it, and
+"""The engine's variant order, as `opengwasdb.ld.identity.order_key` and `variant_order_key` sort
+it, and
 a chromosome's place in it, `chromosome_rank` (spec §2)."""
 
 from __future__ import annotations
 
 import pytest
 
-from ogld.identity import AUTOSOMES, chromosome_rank, order_key, orient, variant_order_key
+from opengwasdb.ld.identity import AUTOSOMES, chromosome_rank, order_key, orient, variant_order_key
 
 RECORDS = [
     ("X", 5, "A", "C"),

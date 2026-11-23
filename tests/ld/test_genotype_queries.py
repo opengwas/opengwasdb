@@ -12,10 +12,10 @@ import pytest
 import testdata
 from contract.support import TEST_STORE
 
-import ogld
-from ogld.genotypes import reader as genotype_reader
-from ogld.genotypes.pgen import Genotypes, PgenFileset
-from ogld.genotypes.reader import GenotypeReader
+import opengwasdb.ld
+from opengwasdb.ld.genotypes import reader as genotype_reader
+from opengwasdb.ld.genotypes.pgen import Genotypes, PgenFileset
+from opengwasdb.ld.genotypes.reader import GenotypeReader
 
 
 def _equal(actual: object, expected: object) -> None:
@@ -35,8 +35,8 @@ def _equal(actual: object, expected: object) -> None:
 def test_regions_equal_the_test_store(
     genotype_store: Path, fill: float | None, centre: int
 ) -> None:
-    actual = ogld.open(genotype_store).region("chr22", centre, 1500000, fill=fill)
-    expected = ogld.open(TEST_STORE).region("22", centre, 1500000, fill=fill)
+    actual = opengwasdb.ld.open(genotype_store).region("chr22", centre, 1500000, fill=fill)
+    expected = opengwasdb.ld.open(TEST_STORE).region("22", centre, 1500000, fill=fill)
     assert len(actual.r) > 10
     _equal(actual, expected)
 
@@ -48,8 +48,8 @@ def test_parallel_pgen_reads_preserve_codes_and_duplicates(
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters))
     assert len(names) > 256
     names = [*names[::-1], names[0]]
-    actual = ogld.open(genotype_store).matrix(names)
-    expected = ogld.open(TEST_STORE).matrix(names)
+    actual = opengwasdb.ld.open(genotype_store).matrix(names)
+    expected = opengwasdb.ld.open(TEST_STORE).matrix(names)
     _equal(actual, expected)
 
 
@@ -61,11 +61,11 @@ def test_failed_parallel_pgen_read_refuses_the_entire_query(
     assert len(names) > 256
 
     def broken(self, rows, out):
-        raise ogld.InputError("panel.pgen: injected native read failure")
+        raise opengwasdb.ld.InputError("panel.pgen: injected native read failure")
 
     monkeypatch.setattr(Genotypes, "rows_into", broken)
-    with pytest.raises(ogld.InputError, match=r"panel\.pgen"):
-        ogld.open(genotype_store).matrix(names)
+    with pytest.raises(opengwasdb.ld.InputError, match=r"panel\.pgen"):
+        opengwasdb.ld.open(genotype_store).matrix(names)
 
 
 def test_concurrent_requests_keep_one_blas_thread_until_both_finish(genotype_store: Path) -> None:
@@ -83,8 +83,8 @@ def test_proxies_equal_the_test_store(genotype_store: Path) -> None:
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[::11])
     assert len(names) > 10
     _equal(
-        ogld.open(genotype_store).proxies([*names, "absent"], r2=0.01, kb=3000),
-        ogld.open(TEST_STORE).proxies([*names, "absent"], r2=0.01, kb=3000),
+        opengwasdb.ld.open(genotype_store).proxies([*names, "absent"], r2=0.01, kb=3000),
+        opengwasdb.ld.open(TEST_STORE).proxies([*names, "absent"], r2=0.01, kb=3000),
     )
 
 
@@ -94,7 +94,7 @@ def test_clump_computes_only_hit_rows(
     rows = np.flatnonzero(testdata.variants().passes_filters)[::7]
     names = build_fixtures.alids(rows)
     assert len(names) > 20
-    store = ogld.open(genotype_store)
+    store = opengwasdb.ld.open(genotype_store)
     hits = set(store._reader.rows_of(names).tolist())
     computed = []
     original = GenotypeReader._data
@@ -106,7 +106,9 @@ def test_clump_computes_only_hit_rows(
     monkeypatch.setattr(GenotypeReader, "_data", counted)
     scores = np.arange(len(names), dtype=float)
     actual = store.clump([*names, "absent"], [*scores, 0], r2=0.01, kb=3000)
-    expected = ogld.open(TEST_STORE).clump([*names, "absent"], [*scores, 0], r2=0.01, kb=3000)
+    expected = opengwasdb.ld.open(TEST_STORE).clump(
+        [*names, "absent"], [*scores, 0], r2=0.01, kb=3000
+    )
     _equal(actual, expected)
     assert computed
     assert set(computed) <= hits
@@ -130,7 +132,7 @@ def test_each_request_enters_the_blas_guard_once(
     monkeypatch.setattr(genotype_reader, "_one_blas_thread", counted)
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[::9])
     assert len(names) > 20, "the fixture must span enough leads for a per-row guard to show"
-    store = ogld.open(genotype_store)
+    store = opengwasdb.ld.open(genotype_store)
     scores = np.arange(len(names), dtype=float)
     checks = [
         ("matrix", lambda: store.matrix(names)),
@@ -165,7 +167,7 @@ def test_a_long_lived_reader_reuses_and_closes_its_pgen_handles(
     monkeypatch.setattr(Genotypes, "__init__", counted_open)
     monkeypatch.setattr(Genotypes, "close", counted_close, raising=False)
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[::9])
-    store = ogld.open(genotype_store)
+    store = opengwasdb.ld.open(genotype_store)
     store.matrix(names)
     first = len(opened)
     assert first >= 1, "the fixture must decode at least one fileset"
@@ -179,7 +181,7 @@ def test_a_long_lived_reader_reuses_and_closes_its_pgen_handles(
 def test_the_handle_bound_evicts_and_closes(
     genotype_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reader = ogld.open(genotype_store)._reader
+    reader = opengwasdb.ld.open(genotype_store)._reader
     filesets = [reader._filesets[0]] * 3  # three pool entries, each a real fileset to open
     pool = genotype_reader._PgenHandles(filesets, keep=2)
     opened: list[int] = []
@@ -205,7 +207,7 @@ def test_the_handle_bound_evicts_and_closes(
 
 
 def test_a_lead_outside_its_window_is_refused_by_name(genotype_store: Path) -> None:
-    store = ogld.open(genotype_store)
+    store = opengwasdb.ld.open(genotype_store)
     reader = store._reader
     rows = np.flatnonzero(testdata.variants().passes_filters)[:5]
     names = build_fixtures.alids(rows)
@@ -217,6 +219,6 @@ def test_a_lead_outside_its_window_is_refused_by_name(genotype_store: Path) -> N
     alid = str(reader.alids_of(np.array([start + absent], dtype=np.int64))[0])
     with (
         reader.clump_rows(chrom, local, 3000.0) as partners,
-        pytest.raises(ogld.InputError, match=alid),
+        pytest.raises(opengwasdb.ld.InputError, match=alid),
     ):
         partners(absent)

@@ -4,7 +4,7 @@ Every rule is deterministic: windows and anchors are parameters, and every choic
 candidates takes the first by position (or the strongest, then the first). A component maps
 to the converted chromosome's record rows, so the README can say where each edge case is.
 
-A Far Pair chosen here is one a store keeps: its stops are `ogld.format.geometry`'s and its
+A Far Pair chosen here is one a store keeps: its stops are `opengwasdb.ld.format.geometry`'s and its
 threshold the encoding's far code floor, called rather than copied
 (`docs/architecture/ownership.md`). The r it is judged on is the reference's own
 (`test_panel.reference`), which is independent of ogld by design.
@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ogld.format import NEAR_BP, REncoding
-from ogld.format.geometry import stop_within
+from opengwasdb.ld.format import NEAR_BP, REncoding
+from opengwasdb.ld.format.geometry import stop_within
 from test_panel import pcs as pc_file
 from test_panel import reference
 from test_panel.params import Params

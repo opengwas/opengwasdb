@@ -12,10 +12,10 @@ import pytest
 import zarr
 from test_alid_index import written
 
-from ogld.format import InputError
-from ogld.store import StoreReader, layout
-from ogld.store import variants as variants_module
-from ogld.store.variants import _MappedAlids
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.store import StoreReader, layout
+from opengwasdb.ld.store import variants as variants_module
+from opengwasdb.ld.store.variants import _MappedAlids
 
 
 class ObservedLock:

@@ -9,7 +9,8 @@ unrelated samples (`relatedness_inference.related` false in its sample metadata)
 no first- or second-degree pair.
 
 A panel's samples are the ones `scripts/make_pcs.py` made its PC File for, the members present
-in v2, read from that PC File by the build's own reader (`ogld.build.inputs.pc_file_iids`, so a
+in v2, read from that PC File by the build's own reader (`opengwasdb.ld.build.inputs.pc_file_iids`,
+so a
 missing or empty one is refused); the keep file is those that are unrelated, in the PC File's
 order, under plink2's `#IID` header. A sample the metadata lacks is refused, naming it. The
 same inputs write the same bytes. Expected counts: EUR 665, AFR 608, EAS 724, SAS 672, AMR 341.
@@ -28,8 +29,8 @@ from pathlib import Path
 from test_panel.roots import META_NAME, root
 from test_panel.tools import relatedness
 
-from ogld.build.inputs import pc_file_iids
-from ogld.format import InputError
+from opengwasdb.ld.build.inputs import pc_file_iids
+from opengwasdb.ld.format import InputError
 
 PANELS = ("EUR", "AFR", "EAS", "SAS", "AMR")
 

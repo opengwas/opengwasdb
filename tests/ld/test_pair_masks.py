@@ -11,9 +11,9 @@ import pytest
 import testdata
 from contract.support import TEST_STORE
 
-import ogld
-from ogld.format import REncoding
-from ogld.format.encoding import FAR_BP, NEAR_BP
+import opengwasdb.ld
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.format.encoding import FAR_BP, NEAR_BP
 
 SCALE = 511
 
@@ -71,8 +71,8 @@ def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
     monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
     monkeypatch.setattr(REncoding, "partner_mask", counted_partner)
     out = tmp_path / "store"
-    ogld.build(build_fixtures.inputs(testdata.panel().pgen), out)
-    assert not any(ogld.validate(out).values())
+    opengwasdb.ld.build(build_fixtures.inputs(testdata.panel().pgen), out)
+    assert not any(opengwasdb.ld.validate(out).values())
     assert calls["stored"], calls
     assert calls["partner"], calls
 
@@ -94,7 +94,7 @@ def test_the_genotype_reader_calls_the_masks(
     monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
     monkeypatch.setattr(REncoding, "partner_mask", counted_partner)
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[:20])
-    store = ogld.open(genotype_store)
+    store = opengwasdb.ld.open(genotype_store)
     assert store.matrix(names).r.shape == (len(names), len(names))
     assert store.proxies([names[0]], r2=0.01, kb=3000) is not None
     assert calls == {"stored": 1, "partner": 1}, calls
@@ -104,12 +104,12 @@ def test_the_emitter_keeps_each_partner_at_its_real_distance(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """The Partner Rows emitter's boundary distances equal the per-pair rule, pair by pair."""
-    from ogld.store import StoreReader
+    from opengwasdb.ld.store import StoreReader
 
     _, built = build_fixtures.test_panel_build(10, tmp_path_factory)
     reader = StoreReader.open(built)
     provenance = reader.provenance
-    oracle = ogld.open(TEST_STORE)
+    oracle = opengwasdb.ld.open(TEST_STORE)
     rows = np.flatnonzero(testdata.variants().passes_filters)
     names = build_fixtures.alids(rows)
     # The built store's rows are the passing panel rows in the same order, so its row of a

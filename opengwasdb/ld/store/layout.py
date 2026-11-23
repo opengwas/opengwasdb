@@ -25,7 +25,7 @@ import zarr
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore, StorePath, WrapperStore
 
-from ogld.format import InputError, REncoding
+from opengwasdb.ld.format import InputError, REncoding
 
 #: (inner chunk, shard) in elements, for every array but the Near Band's `r`.
 SIDE: Final = (16_384, 1_048_576)

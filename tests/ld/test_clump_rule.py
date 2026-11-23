@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from script_modules import load_script
+from ld_script_modules import load_script
 
 rule = load_script("realdata/clump_rule")
 

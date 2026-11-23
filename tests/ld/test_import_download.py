@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from ogld.build.importing import download
-from ogld.build.importing.download import Parts, inventory
+from opengwasdb.ld.build.importing import download
+from opengwasdb.ld.build.importing.download import Parts, inventory
 
 
 def test_download_retries_checks_bytes_and_remembers_sha256(tmp_path: Path) -> None:

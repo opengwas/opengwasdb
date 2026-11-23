@@ -1,6 +1,7 @@
 """ogld#5: what a build refuses, and what its filters drop and count (build-inputs §2, §4–§7).
 
-Each refusal is an `ogld.InputError` naming the panel and what was wrong; each drop is counted
+Each refusal is an `opengwasdb.ld.InputError` naming the panel and what was wrong; each drop is
+counted
 under the first filter it fails. The inputs are the Test Panel's chr22 records, edited: the
 Test Panel itself has no missing call, no failing FILTER, no INFO, no record off the autosomes
 and no zero-variance site (its README), so each test makes the one it needs.
@@ -16,8 +17,8 @@ import numpy.typing as npt
 import pytest
 import testdata
 
-import ogld
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld.store import StoreReader
 
 N = 771
 
@@ -54,8 +55,8 @@ def test_missing_calls_are_counted_over_the_whole_input(tmp_path: Path) -> None:
     first, later = 3, len(rows) - 2
     calls[first, 10] = calls[later, 20] = calls[later, 21] = -9
     pgen = fx.write_fileset(tmp_path / "missing", rows, genotypes=calls)
-    with pytest.raises(ogld.InputError, match="has 3 missing genotype") as refused:
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="has 3 missing genotype") as refused:
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     assert fields(int(rows[first]))[2] in str(refused.value), "it names the first by ID"
     assert fx.PANEL_ID in str(refused.value)
     assert not (tmp_path / "store").exists(), "nothing is written for a refused input"
@@ -70,8 +71,8 @@ def test_a_missing_call_is_refused_before_a_missing_filter_column(tmp_path: Path
     lines = [line.rsplit("\t", 1)[0] for line in edited(rows, {})]
     assert lines[0].endswith("ALT")
     pgen = fx.write_fileset(tmp_path / "both", rows, genotypes=calls, lines=lines)
-    with pytest.raises(ogld.InputError, match="1 missing genotype"):
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="1 missing genotype"):
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
 
 
 # ------------------------------------------------------------------------------ record rules
@@ -81,8 +82,8 @@ def test_a_pvar_without_a_filter_column_is_refused(tmp_path: Path) -> None:
     rows = chr22()
     lines = [line.rsplit("\t", 1)[0] for line in edited(rows, {})]
     pgen = fx.write_fileset(tmp_path / "nofilter", rows, lines=lines)
-    with pytest.raises(ogld.InputError, match="no FILTER column"):
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="no FILTER column"):
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
 
 
 def test_a_pvar_without_its_columns_is_refused(tmp_path: Path) -> None:
@@ -90,8 +91,8 @@ def test_a_pvar_without_its_columns_is_refused(tmp_path: Path) -> None:
     lines = edited(rows, {})
     lines[0] = lines[0].replace("REF", "ALLELE1")
     pgen = fx.write_fileset(tmp_path / "noref", rows, lines=lines)
-    with pytest.raises(ogld.InputError, match="it has no REF"):
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="it has no REF"):
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
 
 
 @pytest.mark.parametrize("label", ["X", "chrX", "23", "MT", "chrY", "HLA-A"])
@@ -100,8 +101,8 @@ def test_a_record_off_the_autosomes_is_refused(tmp_path: Path, label: str) -> No
     last = int(rows[-1])
     record = fields(last)
     pgen = fx.write_fileset(tmp_path / "x", rows, lines=edited(rows, {last: [label, *record[1:]]}))
-    with pytest.raises(ogld.InputError, match="only autosomes") as refused:
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="only autosomes") as refused:
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     assert record[2] in str(refused.value)
 
 
@@ -111,15 +112,15 @@ def test_a_missing_chromosome_label_is_refused(tmp_path: Path) -> None:
     pgen = fx.write_fileset(
         tmp_path / "x", rows, lines=edited(rows, {first: [".", *fields(first)[1:]]})
     )
-    with pytest.raises(ogld.InputError, match="chromosome is missing"):
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="chromosome is missing"):
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
 
 
 def test_a_chr_prefix_is_the_engine_s_label(tmp_path: Path) -> None:
     rows = chr22()
     lines = edited(rows, {int(r): ["chr22", *fields(int(r))[1:]] for r in rows})
     pgen = fx.write_fileset(tmp_path / "chr", rows, lines=lines)
-    ogld.build(fx.inputs(pgen), tmp_path / "store")
+    opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     reader = StoreReader.open(tmp_path / "store")
     assert (reader.rows_of(fx.alids(passing22())) >= 0).all()
 
@@ -131,8 +132,8 @@ def test_an_allele_outside_acgt_is_refused(tmp_path: Path, ref: str, alt: str) -
     record = fields(row)
     lines = edited(rows, {row: [*record[:3], ref, alt, *record[5:]]})
     pgen = fx.write_fileset(tmp_path / "allele", rows, lines=lines)
-    with pytest.raises(ogld.InputError, match="alleles must be A, C, G and T") as refused:
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="alleles must be A, C, G and T") as refused:
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     assert record[2] in str(refused.value)
 
 
@@ -141,7 +142,7 @@ def test_lower_case_alleles_are_the_engine_s_upper_case(tmp_path: Path) -> None:
     row = int(passing22()[0])
     record = fields(row)
     lines = edited(rows, {row: [*record[:3], record[3].lower(), record[4].lower(), *record[5:]]})
-    ogld.build(
+    opengwasdb.ld.build(
         fx.inputs(fx.write_fileset(tmp_path / "lower", rows, lines=lines)), tmp_path / "store"
     )
     assert StoreReader.open(tmp_path / "store").rows_of(fx.alids([row]))[0] >= 0
@@ -152,8 +153,8 @@ def test_two_snvs_sharing_an_alid_are_refused_naming_both(tmp_path: Path) -> Non
     one = fields(int(rows[0]))
     lines = edited(rows, {int(rows[1]): [one[0], one[1], "copy", one[3], one[4], one[5]]})
     pgen = fx.write_fileset(tmp_path / "twice", rows, lines=lines)
-    with pytest.raises(ogld.InputError, match="not a reversed-indel pair") as refused:
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="not a reversed-indel pair") as refused:
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     assert one[2] in str(refused.value)
     assert "copy" in str(refused.value)
 
@@ -163,8 +164,8 @@ def test_a_chromosome_in_two_places_is_refused(tmp_path: Path) -> None:
     on21 = np.flatnonzero(v.chrom == "21")
     first = fx.write_fileset(tmp_path / "a", on21)
     second = fx.write_fileset(tmp_path / "b", on21[:50])
-    with pytest.raises(ogld.InputError, match="chromosome 21 appears in two places"):
-        ogld.build(fx.inputs(first, pgen=(first, second)), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="chromosome 21 appears in two places"):
+        opengwasdb.ld.build(fx.inputs(first, pgen=(first, second)), tmp_path / "store")
 
 
 def test_a_pvar_and_pgen_of_different_lengths_are_refused(tmp_path: Path) -> None:
@@ -172,8 +173,8 @@ def test_a_pvar_and_pgen_of_different_lengths_are_refused(tmp_path: Path) -> Non
     pgen = fx.write_fileset(tmp_path / "short", rows)
     pvar = pgen.with_suffix(".pvar")
     pvar.write_text("\n".join(pvar.read_text().splitlines()[:-1]) + "\n")
-    with pytest.raises(ogld.InputError, match="records but"):
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="records but"):
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
 
 
 # ---------------------------------------------------------------------------------- filters
@@ -197,7 +198,7 @@ def test_each_dropped_record_is_counted_under_the_first_filter_it_fails(tmp_path
     record = fields(lowqual)
     lines = edited(rows, {lowqual: [*record[:5], "LowQual"], rare: [*fields(rare)[:5], "LowQual"]})
     pgen = fx.write_fileset(tmp_path / "filters", rows, genotypes=calls, lines=lines)
-    provenance = ogld.build(fx.inputs(pgen), tmp_path / "store")
+    provenance = opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     dropped = provenance["variants_dropped"]
     # The rare record fails FILTER first, so it is counted there, not under `mac`.
     assert dropped["filter"] == 2
@@ -218,8 +219,8 @@ def test_mac_is_counted_on_the_kept_samples(tmp_path: Path) -> None:
     mac = min(alt, 2 * N - alt)
     rows = chr22()
     pgen = fx.write_fileset(tmp_path / "mac", rows)
-    at = ogld.build(fx.inputs(pgen, mac_min=mac), tmp_path / "at")
-    above = ogld.build(fx.inputs(pgen, mac_min=mac + 1), tmp_path / "above")
+    at = opengwasdb.ld.build(fx.inputs(pgen, mac_min=mac), tmp_path / "at")
+    above = opengwasdb.ld.build(fx.inputs(pgen, mac_min=mac + 1), tmp_path / "above")
     assert StoreReader.open(tmp_path / "at").rows_of(fx.alids([row]))[0] >= 0
     assert StoreReader.open(tmp_path / "above").rows_of(fx.alids([row]))[0] == -1
     assert above["variant_filters"]["mac_min"] == mac + 1
@@ -240,7 +241,7 @@ def test_an_info_floor_drops_and_counts_what_is_at_or_below_it(tmp_path: Path) -
     rows, good = chr22(), passing22()
     score = {int(good[0]): "AF=0.1;R2=0.8", int(good[1]): "INFO=0.5", int(good[2]): "INFO=0.81"}
     pgen = fx.write_fileset(tmp_path / "info", rows, lines=with_info(rows, score))
-    provenance = ogld.build(fx.inputs(pgen, info_min=0.8), tmp_path / "store")
+    provenance = opengwasdb.ld.build(fx.inputs(pgen, info_min=0.8), tmp_path / "store")
     assert provenance["variants_dropped"]["info"] == 2, "INFO > info_min: 0.8 itself fails"
     assert provenance["variant_filters"]["info_min"] == 0.8
     found = StoreReader.open(tmp_path / "store").rows_of(fx.alids(good[:3]))
@@ -256,8 +257,8 @@ def test_an_info_score_must_be_one_number(tmp_path: Path, info: str, says: str) 
     rows = chr22()
     row = int(passing22()[3])
     pgen = fx.write_fileset(tmp_path / "info", rows, lines=with_info(rows, {row: info}))
-    with pytest.raises(ogld.InputError, match=says) as refused:
-        ogld.build(fx.inputs(pgen, info_min=0.8), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match=says) as refused:
+        opengwasdb.ld.build(fx.inputs(pgen, info_min=0.8), tmp_path / "store")
     assert fields(row)[2] in str(refused.value)
 
 
@@ -275,7 +276,7 @@ def test_a_reversed_indel_pair_keeps_the_record_whose_ref_is_a1(tmp_path: Path) 
         },
     )
     pgen = fx.write_fileset(tmp_path / "indel", rows, lines=lines)
-    provenance = ogld.build(fx.inputs(pgen), tmp_path / "store")
+    provenance = opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
     assert provenance["variants_dropped"]["duplicate_reversed_indel"] == 1
     reader = StoreReader.open(tmp_path / "store")
     row = reader.rows_of([f"{chrom}:{position}:T:TA"])
@@ -312,15 +313,15 @@ def iids() -> list[str]:
 )
 def test_a_keep_file_is_refused(tmp_path: Path, lines: list[str], says: str) -> None:
     keep = keep_file(tmp_path, lines)
-    with pytest.raises(ogld.InputError, match=says):
-        ogld.build(fx.inputs(testdata.panel().pgen, keep=keep), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match=says):
+        opengwasdb.ld.build(fx.inputs(testdata.panel().pgen, keep=keep), tmp_path / "store")
 
 
 def test_a_keep_file_subset_is_the_panel_s_n(tmp_path: Path) -> None:
     kept = iids()[:500]
     keep = keep_file(tmp_path, ["#IID", *kept])
     pgen = fx.write_fileset(tmp_path / "sub", chr22())
-    provenance = ogld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")
+    provenance = opengwasdb.ld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")
     assert provenance["panel"]["n"] == 500
 
 
@@ -360,21 +361,21 @@ def pc_file(tmp_path: Path, edit: str) -> Path:
 )
 def test_a_pc_file_is_refused(tmp_path: Path, edit: str, says: str) -> None:
     pcs = pc_file(tmp_path, edit)
-    with pytest.raises(ogld.InputError, match=says):
-        ogld.build(fx.inputs(testdata.panel().pgen, 10, pcs=pcs), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match=says):
+        opengwasdb.ld.build(fx.inputs(testdata.panel().pgen, 10, pcs=pcs), tmp_path / "store")
 
 
 def test_a_pc_file_with_fid_is_read_by_iid(tmp_path: Path) -> None:
     pcs = pc_file(tmp_path, "fid")
     pgen = fx.write_fileset(tmp_path / "chr", np.arange(len(testdata.variants())))
-    provenance = ogld.build(fx.inputs(pgen, 10, pcs=pcs), tmp_path / "store")
+    provenance = opengwasdb.ld.build(fx.inputs(pgen, 10, pcs=pcs), tmp_path / "store")
     assert provenance["adjustment"]["k"] == 10
 
 
 def test_a_k0_build_reads_no_pc_file(tmp_path: Path) -> None:
     # At k = 0 no PC File is read: one that would be refused is not even opened.
     broken = pc_file(tmp_path, "nan")
-    provenance = ogld.build(
+    provenance = opengwasdb.ld.build(
         fx.inputs(fx.write_fileset(tmp_path / "c", chr22()), pcs=broken), tmp_path / "s"
     )
     assert provenance["adjustment"]["pc_file"] is None
@@ -385,20 +386,20 @@ def test_a_k0_build_reads_no_pc_file(tmp_path: Path) -> None:
 
 def test_a_store_is_never_written_over_another(tmp_path: Path) -> None:
     (tmp_path / "store").mkdir()
-    with pytest.raises(ogld.InputError, match="exists"):
-        ogld.build(fx.inputs(testdata.panel().pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="exists"):
+        opengwasdb.ld.build(fx.inputs(testdata.panel().pgen), tmp_path / "store")
 
 
 def test_threads_count_workers(tmp_path: Path) -> None:
-    with pytest.raises(ogld.InputError, match="at least 1"):
-        ogld.build(fx.inputs(testdata.panel().pgen), tmp_path / "store", threads=0)
+    with pytest.raises(opengwasdb.ld.InputError, match="at least 1"):
+        opengwasdb.ld.build(fx.inputs(testdata.panel().pgen), tmp_path / "store", threads=0)
 
 
 def test_a_fileset_needs_its_three_files(tmp_path: Path) -> None:
     pgen = fx.write_fileset(tmp_path / "lonely", chr22())
     pgen.with_suffix(".psam").unlink()
-    with pytest.raises(ogld.InputError, match=r"needs its \.pgen, \.pvar"):
-        ogld.build(fx.inputs(pgen), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match=r"needs its \.pgen, \.pvar"):
+        opengwasdb.ld.build(fx.inputs(pgen), tmp_path / "store")
 
 
 def test_two_filesets_of_one_name_are_refused(tmp_path: Path) -> None:
@@ -407,8 +408,8 @@ def test_two_filesets_of_one_name_are_refused(tmp_path: Path) -> None:
     v = testdata.variants()
     one = fx.write_fileset(tmp_path / "a" / "same", np.flatnonzero(v.chrom == "21"))
     two = fx.write_fileset(tmp_path / "b" / "same", chr22())
-    with pytest.raises(ogld.InputError, match="share a file name"):
-        ogld.build(fx.inputs(one, pgen=(one, two)), tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match="share a file name"):
+        opengwasdb.ld.build(fx.inputs(one, pgen=(one, two)), tmp_path / "store")
 
 
 def test_a_pvar_zst_is_read(tmp_path: Path) -> None:
@@ -420,8 +421,8 @@ def test_a_pvar_zst_is_read(tmp_path: Path) -> None:
     pvar = packed.with_suffix(".pvar")
     pvar.with_name("packed.pvar.zst").write_bytes(bytes(Zstd().encode(pvar.read_bytes())))
     pvar.unlink()
-    one = ogld.build(fx.inputs(plain), tmp_path / "one")
-    other = ogld.build(fx.inputs(packed), tmp_path / "other")
+    one = opengwasdb.ld.build(fx.inputs(plain), tmp_path / "one")
+    other = opengwasdb.ld.build(fx.inputs(packed), tmp_path / "other")
     assert one["counts"] == other["counts"]
     assert "packed.pvar.zst" in other["source"]["sha256"]
 
@@ -431,7 +432,7 @@ def test_ogld_build_prints_the_provenance_and_exits_2_on_a_refusal(
 ) -> None:
     import json
 
-    from ogld import cli
+    from opengwasdb.ld import cli
 
     pgen = fx.write_fileset(tmp_path / "chr22", chr22())
     argv = ["build", str(tmp_path / "store"), "--pgen", str(pgen)]
@@ -449,7 +450,7 @@ def test_ogld_build_prints_the_provenance_and_exits_2_on_a_refusal(
 # ------------------------------------------------------------- malformed and misaligned inputs
 
 
-def malformed(tmp_path: Path, what: str) -> tuple[ogld.BuildInputs, str]:
+def malformed(tmp_path: Path, what: str) -> tuple[opengwasdb.ld.BuildInputs, str]:
     """A chr22 build whose `what` is broken, and the file and line its refusal must name."""
     rows = chr22()
     pgen = fx.write_fileset(tmp_path / "bad", rows)
@@ -502,8 +503,8 @@ def malformed(tmp_path: Path, what: str) -> tuple[ogld.BuildInputs, str]:
 def test_a_malformed_input_is_refused_naming_the_file(tmp_path: Path, what: str) -> None:
     # Review of #5 (standards a2): each was a traceback, an IndexError or a RuntimeError.
     given, names = malformed(tmp_path, what)
-    with pytest.raises(ogld.InputError, match=names):
-        ogld.build(given, tmp_path / "store")
+    with pytest.raises(opengwasdb.ld.InputError, match=names):
+        opengwasdb.ld.build(given, tmp_path / "store")
     assert not (tmp_path / "store").exists()
 
 
@@ -517,8 +518,10 @@ def test_a_psam_missing_one_sample_is_refused(tmp_path: Path) -> None:
     gone = lines.pop(101).split("\t")[0]
     psam.write_text("\n".join(lines) + "\n")
     keep = keep_file(tmp_path, ["#IID", *(iid for iid in iids() if iid != gone)])
-    with pytest.raises(ogld.InputError, match=r"short\.psam lists 770 samples.*short\.pgen.*771"):
-        ogld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")
+    with pytest.raises(
+        opengwasdb.ld.InputError, match=r"short\.psam lists 770 samples.*short\.pgen.*771"
+    ):
+        opengwasdb.ld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")
 
 
 def test_a_build_without_threadpoolctl_refuses_naming_the_extra(tmp_path: Path) -> None:
@@ -528,14 +531,15 @@ def test_a_build_without_threadpoolctl_refuses_naming_the_extra(tmp_path: Path) 
     code = (
         "import sys\n"
         "sys.modules['threadpoolctl'] = None\n"
-        "sys.path.insert(0, 'tests')\n"
-        "import build_fixtures, testdata, ogld\n"
+        "sys.path.insert(0, 'tests/ld')\n"
+        "import build_fixtures, testdata, opengwasdb.ld\n"
         "try:\n"
-        f"    ogld.build(build_fixtures.inputs(testdata.panel().pgen), {str(tmp_path / 's')!r})\n"
-        "except ogld.InputError as refusal:\n"
+        "    opengwasdb.ld.build(build_fixtures.inputs(testdata.panel().pgen), "
+        f"{str(tmp_path / 's')!r})\n"
+        "except opengwasdb.ld.InputError as refusal:\n"
         "    print(refusal)\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
-    assert "ogld[build]" in done.stdout
+    assert "opengwasdb[ld-build]" in done.stdout
     assert not (tmp_path / "s").exists()

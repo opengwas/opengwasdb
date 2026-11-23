@@ -14,10 +14,10 @@ from collections.abc import Sequence
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import judge_region
-from ogld.identity import normalise_chromosome
-from ogld.query.reader import Reader
-from ogld.query.results import LDMatrix
+from opengwasdb.ld.format import judge_region
+from opengwasdb.ld.identity import normalise_chromosome
+from opengwasdb.ld.query.reader import Reader
+from opengwasdb.ld.query.results import LDMatrix
 
 
 def matrix(reader: Reader, alids: Sequence[str], *, fill: float | None) -> LDMatrix:

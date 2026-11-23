@@ -20,13 +20,13 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import zarr
-from script_modules import load_script
+from ld_script_modules import load_script
 from store_copies import TEST_STORE, copy_store, resharded
 
-import ogld
-from ogld.format import REncoding
-from ogld.format.geometry import near_pair_of
-from ogld.store import StoreReader, layout
+import opengwasdb.ld
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.format.geometry import near_pair_of
+from opengwasdb.ld.store import StoreReader, layout
 
 #: Inner chunks of 512 elements, 4 to a shard, as `test_store_reads.py` re-shards the Test Store.
 INNER, PER_SHARD = 512, 4
@@ -131,7 +131,7 @@ def every_alid() -> list[str]:
 WIDE_REGIONS = (("21", 29_000_000, 5_000_000), ("22", 38_000_000, 5_000_000))
 
 
-def far_stored(m: ogld.LDMatrix) -> int:
+def far_stored(m: opengwasdb.ld.LDMatrix) -> int:
     """The pairs of `m` more than 3 Mb apart that hold a Stored r."""
     gap = np.abs(m.variants.position[:, None] - m.variants.position[None, :])
     return int(((m.kinds() == "stored") & (gap > 3_000_000)).sum()) // 2
@@ -152,7 +152,7 @@ def test_a_matrix_and_a_region_answer_alike_from_a_store_holding_a_leftover_inde
             shutil.rmtree(copy / "index" / chrom / name / "c")
             lost += 1
     assert lost == 4, "both chromosomes' index entries must be lost"
-    whole, plain = ogld.open(TEST_STORE), ogld.open(copy)
+    whole, plain = opengwasdb.ld.open(TEST_STORE), opengwasdb.ld.open(copy)
     names = every_alid()
     expected = whole.matrix(names)
     assert far_stored(expected) == 7, "the matrix must hold the Test Store's seven Far Pairs"
@@ -185,7 +185,7 @@ def test_a_store_without_far_pairs_is_refused_naming_them(tmp_path: Path) -> Non
     copy = copy_store(tmp_path / "store")
     shutil.rmtree(copy / "far")
     with pytest.raises(ValueError, match=r"far/2[12]/indptr is missing"):
-        ogld.open(copy).matrix(every_alid())
+        opengwasdb.ld.open(copy).matrix(every_alid())
 
 
 # ------------------------------------------------------------------ stores written before them
@@ -218,7 +218,7 @@ def test_far_pairs_derived_from_the_index_are_the_ones_the_store_writes(tmp_path
     after = files(copy)
     assert {path: data for path, data in after.items() if not path.startswith("far/")} == before
     assert {path: data for path, data in after.items() if path.startswith("far/")} == committed
-    assert not any(ogld.validate(copy).values())
+    assert not any(opengwasdb.ld.validate(copy).values())
 
 
 def test_a_store_that_holds_far_pairs_is_not_derived_again(tmp_path: Path) -> None:

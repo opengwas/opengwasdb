@@ -13,9 +13,9 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import answer_kinds
-from ogld.identity import order_key
-from ogld.store.tables import Variants, check_columns, columns_of
+from opengwasdb.ld.format import answer_kinds
+from opengwasdb.ld.identity import order_key
+from opengwasdb.ld.store.tables import Variants, check_columns, columns_of
 
 
 @dataclass(frozen=True)
@@ -125,7 +125,7 @@ class Clumps:
     def leads(self) -> npt.NDArray[np.str_]:
         """The lead ALIDs, strongest first, ties by genomic order then ALID (ogld#6): the
         order the greedy pass took them in, by the engine's order of the columns a result
-        holds (`ogld.identity.order_key`), never one re-formed from an ALID's alleles."""
+        holds (`opengwasdb.ld.identity.order_key`), never one re-formed from an ALID's alleles."""
 
         def key(i: int) -> tuple[float, int, int, str]:
             rank = order_key(str(self.chrom[i]), int(self.position[i]), str(self.alid[i]))

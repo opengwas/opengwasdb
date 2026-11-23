@@ -2,7 +2,7 @@
 
 The four queries are methods of one opened store, because each needs the same state:
 the reader, t_far and the distances the store measured. That keeps the interface to
-`ogld.open` and four calls, while the reader, the codes and the refusal rules stay
+`opengwasdb.ld.open` and four calls, while the reader, the codes and the refusal rules stay
 behind it. Each method delegates to a module of its own, so the tickets that implement
 them (ogld#4: matrices; ogld#6: proxies and clumping) edit different files.
 """
@@ -15,20 +15,20 @@ from typing import cast
 
 import numpy.typing as npt
 
-from ogld.format import Provenance
-from ogld.genotypes.reader import GenotypeReader
-from ogld.query import clumping, matrices
-from ogld.query import proxies as proxies_query
-from ogld.query.kind import GENOTYPE, open_kind
-from ogld.query.reader import Reader
-from ogld.query.results import Clumps, LDMatrix, Proxies
-from ogld.store import StoreReader
-from ogld.store.location import OpenedStore
-from ogld.store.reader import opened_ld
+from opengwasdb.ld.format import Provenance
+from opengwasdb.ld.genotypes.reader import GenotypeReader
+from opengwasdb.ld.query import clumping, matrices
+from opengwasdb.ld.query import proxies as proxies_query
+from opengwasdb.ld.query.kind import GENOTYPE, open_kind
+from opengwasdb.ld.query.reader import Reader
+from opengwasdb.ld.query.results import Clumps, LDMatrix, Proxies
+from opengwasdb.ld.store import StoreReader
+from opengwasdb.ld.store.location import OpenedStore
+from opengwasdb.ld.store.reader import opened_ld
 
 
 class LDStore:
-    """An opened LD Store. Get one from `ogld.open`."""
+    """An opened LD Store. Get one from `opengwasdb.ld.open`."""
 
     def __init__(self, reader: Reader) -> None:
         self._reader = reader

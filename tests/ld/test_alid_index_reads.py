@@ -18,8 +18,8 @@ import pytest
 import zarr
 from store_copies import TEST_STORE, copy_store
 
-from ogld.store import StoreReader, layout
-from ogld.store.variants import _index_pays
+from opengwasdb.ld.store import StoreReader, layout
+from opengwasdb.ld.store.variants import _index_pays
 
 
 def oracle(store: Path) -> dict[str, int]:

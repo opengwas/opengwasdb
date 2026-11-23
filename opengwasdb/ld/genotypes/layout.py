@@ -14,9 +14,9 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from ogld.format import InputError
-from ogld.genotypes.pgen import PgenFileset
-from ogld.store import layout
+from opengwasdb.ld.format import InputError
+from opengwasdb.ld.genotypes.pgen import PgenFileset
+from opengwasdb.ld.store import layout
 
 KEY = "genotype_store"
 VERSION = "0.1.0"

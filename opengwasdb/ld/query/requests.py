@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ogld.format import judge_partner_request
-from ogld.query.reader import Reader
+from opengwasdb.ld.format import judge_partner_request
+from opengwasdb.ld.query.reader import Reader
 
 
 def window_of(reader: Reader, *, r2: float, kb: float) -> float:

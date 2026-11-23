@@ -1,14 +1,15 @@
-"""Kind dispatch for public validation, from the one root read `ogld.open` also uses (#91)."""
+"""Kind dispatch for public validation, from the one root read `opengwasdb.ld.open` also uses
+(#91)."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from ogld.genotypes import validation as genotypes
-from ogld.query.kind import GENOTYPE, open_kind
-from ogld.store import Finding
-from ogld.store.validation import validate_group
+from opengwasdb.ld.genotypes import validation as genotypes
+from opengwasdb.ld.query.kind import GENOTYPE, open_kind
+from opengwasdb.ld.store import Finding
+from opengwasdb.ld.store.validation import validate_group
 
 
 def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:

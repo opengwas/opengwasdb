@@ -18,8 +18,8 @@ def test_a_companion_copied_from_identical_metadata_cannot_change_rows(
     import shutil
     from unittest.mock import patch
 
-    from ogld.format import InputError
-    from ogld.store import StoreReader, layout
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader, layout
 
     a = written(tmp_path / "a")
     changed = list(WIDTH_ROWS)
@@ -28,7 +28,7 @@ def test_a_companion_copied_from_identical_metadata_cannot_change_rows(
     if linked_keys:
         from test_alid_index import without_companion
 
-        from ogld.store.assembly import derive_alid_mmap
+        from opengwasdb.ld.store.assembly import derive_alid_mmap
 
         for store in (a, b):
             without_companion(store)
@@ -66,8 +66,8 @@ def test_nonregular_mandatory_metadata_refuses_before_open(tmp_path: Path, kind:
     import os
     import signal
 
-    from ogld.format import InputError
-    from ogld.store import StoreReader
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
 
     store = written(tmp_path / "store")
     metadata = store / "variants/alid_index/alid/zarr.json"
@@ -91,9 +91,9 @@ def test_nonregular_mandatory_metadata_refuses_before_open(tmp_path: Path, kind:
 
 @pytest.mark.parametrize("damage", ["cycle", "broken-link"])
 def test_canonical_directory_cycles_and_broken_links_refuse(tmp_path: Path, damage: str) -> None:
-    from ogld.format import InputError
-    from ogld.store import StoreReader
-    from ogld.store.validation import validate
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
+    from opengwasdb.ld.store.validation import validate
 
     store = written(tmp_path / "store")
     chunks = store / "variants/alid_index/alid/c"
@@ -133,9 +133,9 @@ def test_manifest_pins_every_canonical_file(tmp_path: Path) -> None:
 def test_malformed_manifest_fields_refuse_with_a_concrete_diagnostic(
     tmp_path: Path, damage: str
 ) -> None:
-    from ogld.format import InputError
-    from ogld.store import StoreReader
-    from ogld.store.validation import validate
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
+    from opengwasdb.ld.store.validation import validate
 
     store = written(tmp_path / "store")
     manifest = json.loads((generation(store) / "manifest.json").read_bytes())
@@ -158,8 +158,8 @@ def test_malformed_manifest_fields_refuse_with_a_concrete_diagnostic(
 
 
 def test_schema_one_refuses_with_a_rederivation_instruction(tmp_path: Path) -> None:
-    from ogld.format import InputError
-    from ogld.store import StoreReader
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
 
     store = written(tmp_path / "store")
     manifest = json.loads((generation(store) / "manifest.json").read_bytes())
@@ -176,7 +176,7 @@ def test_schema_one_refuses_with_a_rederivation_instruction(tmp_path: Path) -> N
 
 
 def test_writer_and_derivation_publish_identical_canonical_bytes(tmp_path: Path) -> None:
-    from script_modules import load_script
+    from ld_script_modules import load_script
 
     # A build of its own: what is compared is the payloads the writer published at `finish`.
     store = built(tmp_path / "store", WIDTH_ROWS)
@@ -242,7 +242,7 @@ def republish(store: Path, manifest: dict) -> None:
 def test_validation_rejects_self_consistent_wrong_rows(tmp_path: Path) -> None:
     import hashlib
 
-    from ogld.store.validation import validate
+    from opengwasdb.ld.store.validation import validate
 
     store = written(tmp_path / "store")
     directory = generation(store)
@@ -253,7 +253,7 @@ def test_validation_rejects_self_consistent_wrong_rows(tmp_path: Path) -> None:
     manifest = json.loads((directory / "manifest.json").read_bytes())
     manifest["payloads"]["rows.i32le"] = hashlib.sha256(rows.tobytes()).hexdigest()
     republish(store, manifest)
-    from ogld.store import layout
+    from opengwasdb.ld.store import layout
 
     assert layout.alid_companion(zarr.open_group(store, mode="r")) is not None, (
         "integrity/content binding do not prove correspondence for a hand-forged generation"
@@ -264,8 +264,8 @@ def test_validation_rejects_self_consistent_wrong_rows(tmp_path: Path) -> None:
 
 
 def test_mapped_lookup_uses_no_locus_or_column_reads(tmp_path: Path, monkeypatch) -> None:
-    from ogld.store import StoreReader
-    from ogld.store import variants as variants_module
+    from opengwasdb.ld.store import StoreReader
+    from opengwasdb.ld.store import variants as variants_module
 
     store = written(tmp_path / "store")
     root = zarr.open_group(store, mode="r")
@@ -298,8 +298,8 @@ def test_mapped_lookup_uses_no_locus_or_column_reads(tmp_path: Path, monkeypatch
 def test_all_test_store_names_and_width_boundaries_are_exact(tmp_path: Path) -> None:
     from store_copies import copy_store
 
-    from ogld.store import StoreReader
-    from ogld.store.assembly import derive_alid_mmap
+    from opengwasdb.ld.store import StoreReader
+    from opengwasdb.ld.store.assembly import derive_alid_mmap
 
     store = copy_store(tmp_path / "test-store")
     names = np.asarray(zarr.open_group(store, mode="r")["variants/alid"][:]).tolist()
@@ -315,8 +315,8 @@ def test_all_test_store_names_and_width_boundaries_are_exact(tmp_path: Path) -> 
 def test_null_publication_is_corrupt_rather_than_absent(tmp_path: Path) -> None:
     import pytest
 
-    from ogld.format import InputError
-    from ogld.store import StoreReader
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
 
     store = written(tmp_path / "store")
     path = store / "zarr.json"
@@ -335,7 +335,7 @@ def test_store_without_either_index_keeps_exact_scan(tmp_path: Path) -> None:
 
     from store_copies import copy_store
 
-    from ogld.store import StoreReader
+    from opengwasdb.ld.store import StoreReader
 
     store = copy_store(tmp_path / "older")
     root = zarr.open_group(store, mode="r")
@@ -361,9 +361,9 @@ def test_store_without_either_index_keeps_exact_scan(tmp_path: Path) -> None:
     ],
 )
 def test_corrupt_publication_refuses_and_fails_validation(tmp_path: Path, damage: str) -> None:
-    from ogld.format import InputError
-    from ogld.store import StoreReader
-    from ogld.store.validation import validate
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
+    from opengwasdb.ld.store.validation import validate
 
     store = written(tmp_path / "store")
     directory = generation(store)
@@ -408,7 +408,7 @@ def test_self_consistent_payload_change_fails_canonical_validation(
 ) -> None:
     import hashlib
 
-    from ogld.store.validation import validate
+    from opengwasdb.ld.store.validation import validate
 
     store = written(tmp_path / "store")
     directory = generation(store)
@@ -429,8 +429,8 @@ def test_a_source_change_during_derivation_names_the_store_generation_and_file(
 ) -> None:
     import shutil
 
-    from ogld.format import InputError
-    from ogld.store import assembly
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import assembly
 
     store = written(tmp_path / "store")
     root = zarr.open_group(store, mode="r+")
@@ -462,11 +462,11 @@ def test_a_source_change_during_derivation_names_the_store_generation_and_file(
 def test_a_noncanonical_builder_never_publishes_a_pointer(
     tmp_path: Path, monkeypatch, publication: str, damage: str
 ) -> None:
-    from script_modules import load_script
+    from ld_script_modules import load_script
     from test_alid_index import without_companion
 
-    from ogld.format import InputError
-    from ogld.store import StoreReader, assembly
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader, assembly
 
     store = tmp_path / "store"
     prior = None
@@ -518,8 +518,8 @@ def test_failed_publication_is_unpublished_and_restartable(
 ) -> None:
     import shutil
 
-    from ogld.store import StoreReader, assembly
-    from ogld.store.assembly import derive_alid_mmap
+    from opengwasdb.ld.store import StoreReader, assembly
+    from opengwasdb.ld.store.assembly import derive_alid_mmap
 
     store = written(tmp_path / "store")
     expected = {p.name: p.read_bytes() for p in generation(store).iterdir()}
@@ -563,8 +563,8 @@ def test_failed_publication_is_unpublished_and_restartable(
 
 @pytest.mark.parametrize("schema", [True, 1.0])
 def test_schema_must_be_an_integer_version(tmp_path: Path, schema: object) -> None:
-    from ogld.format import InputError
-    from ogld.store import StoreReader
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.store import StoreReader
 
     store = written(tmp_path / "store")
     manifest = json.loads((generation(store) / "manifest.json").read_bytes())
@@ -576,9 +576,9 @@ def test_schema_must_be_an_integer_version(tmp_path: Path, schema: object) -> No
 
 
 def test_http_ignores_local_companion_even_when_corrupt(tmp_path: Path) -> None:
-    from test_store_reads import serving
+    from opengwasdb.ld.store import StoreReader
 
-    from ogld.store import StoreReader
+    from .test_store_reads import serving
 
     store = written(tmp_path / "store")
     (generation(store) / "keys.bin").unlink()
@@ -589,7 +589,7 @@ def test_http_ignores_local_companion_even_when_corrupt(tmp_path: Path) -> None:
 
 
 def test_exact_wide_lookup_does_not_read_unrelated_near_band_data(tmp_path: Path) -> None:
-    from ogld.store import StoreReader
+    from opengwasdb.ld.store import StoreReader
 
     store = written(tmp_path / "store")
     names = np.asarray(zarr.open_group(store, mode="r")["variants/alid"][:]).tolist()

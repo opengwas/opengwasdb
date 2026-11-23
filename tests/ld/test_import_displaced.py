@@ -9,12 +9,12 @@ import numpy as np
 import pytest
 from test_import_cli import FIXTURE, import_args
 
-from ogld.build.importing import run
-from ogld.build.importing.lift import Lifted, far_distance
-from ogld.build.importing.run import ImportInputs, load_lifted
-from ogld.cli import main
-from ogld.format import NEAR_BP
-from ogld.store import Variants
+from opengwasdb.ld.build.importing import run
+from opengwasdb.ld.build.importing.lift import Lifted, far_distance
+from opengwasdb.ld.build.importing.run import ImportInputs, load_lifted
+from opengwasdb.ld.cli import main
+from opengwasdb.ld.format import NEAR_BP
+from opengwasdb.ld.store import Variants
 
 
 def literal_table() -> Lifted:

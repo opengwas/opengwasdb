@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from script_modules import SCRIPTS, load_script
+from ld_script_modules import SCRIPTS, load_script
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -172,7 +172,7 @@ def test_the_keep_file_needs_its_header(tmp_path):
 
 
 def test_the_build_command_is_one_ogld_accepts(tmp_path):
-    from ogld.cli import _parser
+    from opengwasdb.ld.cli import _parser
 
     pgens = [tmp_path / f"chr{c}.pgen" for c in recipe.CHROMS]
     command = recipe.build_command(
@@ -186,7 +186,7 @@ def test_the_build_command_is_one_ogld_accepts(tmp_path):
 
 
 def test_the_validate_command_is_one_ogld_accepts(tmp_path):
-    from ogld.cli import _parser
+    from opengwasdb.ld.cli import _parser
 
     args = _parser().parse_args(recipe.validate_command(tmp_path / "s", 16)[1:])
     assert (args.location, args.threads) == (str(tmp_path / "s"), 16)

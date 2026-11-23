@@ -8,13 +8,13 @@
 #
 # A machine without the panels fails here, loudly; it does not skip and report green.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../.."
 
 PREFLIGHT=(
-  "tests/realdata/test_build_panel.py"
-  "tests/realdata/test_derive_partners_workers.py"
-  "tests/realdata/test_genotype_threads.py"
-  "tests/realdata/test_query_panel.py"
+  "tests/ld/realdata/test_build_panel.py"
+  "tests/ld/realdata/test_derive_partners_workers.py"
+  "tests/ld/realdata/test_genotype_threads.py"
+  "tests/ld/realdata/test_query_panel.py"
 )
 
 if [ ! -d /data/opengwasdb/reference/hgdp1kgp-hg38 ]; then

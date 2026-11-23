@@ -18,10 +18,10 @@ import pytest
 import support
 from support import alids, panel_data, passing_rows, reference
 
-import ogld
-from ogld.query import clumping
-from ogld.query.results import Clumps
-from ogld.store import StoreReader
+import opengwasdb.ld
+from opengwasdb.ld.query import clumping
+from opengwasdb.ld.query.results import Clumps
+from opengwasdb.ld.store import StoreReader
 
 
 @cache
@@ -36,7 +36,7 @@ def passing_pairs() -> support.Pairs:
 
 
 def clump_two(first: int, second: int, *, r2: float, kb: float) -> Clumps:
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     return store.clump(alids([first, second]), np.array([2.0, 1.0]), r2=r2, kb=kb)
 
 
@@ -50,7 +50,7 @@ def test_a_pair_exactly_w_apart_does_not_join_and_one_bp_nearer_does() -> None:
     assert d / 1000 * 1000 == d, "kb × 1,000 must give the distance back exactly"
     assert len(set(clump_two(i, j, r2=0.01, kb=(d + 1) / 1000).leads())) == 1, "one bp wider joins"
     assert len(set(clump_two(i, j, r2=0.01, kb=d / 1000).leads())) == 2, "exactly W does not (<)"
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     found = store.proxies(alids([i]), r2=0.01, kb=d / 1000)
     assert alids([j])[0] in set(found.proxy), "proxies keeps d ≤ W"
 
@@ -64,7 +64,7 @@ def test_a_pair_whose_r_hat_squared_equals_r2_does_not_join_but_is_a_proxy() -> 
     i, j = int(perfect.row_i[0]), int(perfect.row_j[0])
     assert len(set(clump_two(i, j, r2=0.99, kb=3000).leads())) == 1, "just below 1 joins"
     assert len(set(clump_two(i, j, r2=1.0, kb=3000).leads())) == 2, "r̂² = r2 does not (>)"
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     assert alids([j])[0] in set(store.proxies(alids([i]), r2=1.0, kb=3000).proxy), "proxies: ≥"
 
 
@@ -97,7 +97,7 @@ def test_beyond_3_mb_only_the_index_joins_and_a_variant_keeps_its_strongest_lead
     # Index is the Bound and NaN, and never joins. A mutant reading NaN as 1 gives 250 leads.
     rows = passing_rows()
     z = np.abs(panel_data().gwas().z)[rows]
-    ours = ogld.open(support.TEST_STORE).clump(alids(rows), z, r2=0.1, kb=10_000)
+    ours = opengwasdb.ld.open(support.TEST_STORE).clump(alids(rows), z, r2=0.1, kb=10_000)
     lead = greedy(rows, z, 0.1, 10_000)
     assert list(ours.lead) == alids(rows[lead])
     # 439 clumps at × 32767; at the Test Store's × 511 five pairs whose true r² lies 3–7×10⁻⁵
@@ -159,7 +159,7 @@ def test_a_far_pair_beyond_near_bp_is_a_proxy_from_both_sides() -> None:
     )
     i, j = int(far.row_i[0]), int(far.row_j[0])
     r_hat = float(support.stored_at(far.r[:1])[0])
-    store = ogld.open(support.TEST_STORE)
+    store = opengwasdb.ld.open(support.TEST_STORE)
     for query, proxy in ((i, j), (j, i)):
         found = store.proxies(alids([query]), r2=support.T_FAR, kb=10_000)
         got = dict(zip(found.proxy, found.r, strict=True))

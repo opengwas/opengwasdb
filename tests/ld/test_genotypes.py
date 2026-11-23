@@ -12,13 +12,13 @@ import pytest
 import store_copies
 import testdata
 
-from ogld.format import REncoding
+from opengwasdb.ld.format import REncoding
 
 
 @pytest.mark.parametrize("k", [0, 10])
 @pytest.mark.parametrize("scale", [511, 32767])
 def test_codes_equal_the_base_builder_for_every_near_band_pair(k: int, scale: int) -> None:
-    from ogld.genotypes import covariates, prepare, r
+    from opengwasdb.ld.genotypes import covariates, prepare, r
 
     v = testdata.variants()
     rows = np.flatnonzero(v.passes_filters)
@@ -40,8 +40,8 @@ def test_codes_equal_the_base_builder_for_every_near_band_pair(k: int, scale: in
 
 
 def test_codes_equal_the_independently_built_test_store_for_every_stored_pair() -> None:
-    from ogld.genotypes import covariates, prepare, r
-    from ogld.store import StoreReader
+    from opengwasdb.ld.genotypes import covariates, prepare, r
+    from opengwasdb.ld.store import StoreReader
 
     rows = np.flatnonzero(testdata.variants().passes_filters)
     calls = made.hard_calls()[rows].astype(np.float64)
@@ -78,8 +78,8 @@ def test_codes_are_identical_in_two_block_sizes_and_one_row_at_a_time(k: int, sc
 
 
 def test_pgen_int8_and_float64_paths_read_the_same_test_panel_calls() -> None:
-    from ogld.build.passes import plan
-    from ogld.genotypes import Genotypes
+    from opengwasdb.ld.build.passes import plan
+    from opengwasdb.ld.genotypes import Genotypes
 
     p = testdata.panel()
     fileset = plan((p.pgen,), p.keep, None, made.PANEL_ID).filesets[0]
@@ -100,7 +100,7 @@ def test_build_and_query_have_no_pgen_calls_or_pc_adjustment_implementation() ->
     import ast
     import re
 
-    root = Path(__file__).resolve().parents[1] / "ogld"
+    root = Path(__file__).resolve().parents[2] / "opengwasdb" / "ld"
     forbidden = re.compile(
         r"\b(?:import pgenlib|PgenReader|read_dosages_\w+|linalg\.qr|"
         r"def residuals|unit_vectors|residual_fit)\b"
@@ -127,10 +127,10 @@ def test_build_and_query_have_no_pgen_calls_or_pc_adjustment_implementation() ->
 
 
 def test_a_missing_call_is_not_hidden_by_either_read_path(tmp_path: Path) -> None:
-    import ogld
-    from ogld.build.passes import plan
-    from ogld.format import InputError
-    from ogld.genotypes import Genotypes
+    import opengwasdb.ld
+    from opengwasdb.ld.build.passes import plan
+    from opengwasdb.ld.format import InputError
+    from opengwasdb.ld.genotypes import Genotypes
 
     calls = made.hard_calls()[:2].copy()
     calls[1, 3] = -9
@@ -144,13 +144,13 @@ def test_a_missing_call_is_not_hidden_by_either_read_path(tmp_path: Path) -> Non
     with pytest.raises(
         InputError, match=rf"panel {made.PANEL_ID}.*1 missing.*{testdata.variants().id[1]}"
     ):
-        ogld.build(made.inputs(pgen), tmp_path / "store")
+        opengwasdb.ld.build(made.inputs(pgen), tmp_path / "store")
 
 
 def test_rows_into_refuses_a_buffer_of_another_size_or_layout() -> None:
     """The caller's buffer must be one row per variant and as many kept samples, contiguous."""
-    from ogld.build.passes import plan
-    from ogld.genotypes import Genotypes
+    from opengwasdb.ld.build.passes import plan
+    from opengwasdb.ld.genotypes import Genotypes
 
     p = testdata.panel()
     fileset = plan((p.pgen,), p.keep, None, made.PANEL_ID).filesets[0]

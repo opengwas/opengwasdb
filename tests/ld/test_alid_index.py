@@ -4,11 +4,12 @@
 the file's first line) for five Variant Sets, made by `make_fixture.py` from the engine's
 `write_variant_axis` and its two sidecars. These tests read it; no expected value here comes
 from ogld. The layout's rule — the slot's width, the NUL padding, the bytewise order with a
-stable sort, and which ALIDs are left out — is `ogld.store.layout`'s; the store writes it from
-its own variant table (`ogld.store.assembly`, behind `StoreWriter`).
+stable sort, and which ALIDs are left out — is `opengwasdb.ld.store.layout`'s; the store writes it
+from
+its own variant table (`opengwasdb.ld.store.assembly`, behind `StoreWriter`).
 
 Expected bytes come from the fixture's ALIDs through numpy's own `|S32` cast, which is how the
-engine's writer pads each key, never from `ogld.store.layout`.
+engine's writer pads each key, never from `opengwasdb.ld.store.layout`.
 """
 
 from __future__ import annotations
@@ -26,12 +27,12 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import zarr
-from script_modules import load_script
+from ld_script_modules import load_script
 
-from ogld.format import FAR_BP, NEAR_BP, REncoding, Sourced
-from ogld.identity import orient
-from ogld.store import StoreReader, StoreWriter, Variants, assembly, layout
-from ogld.store.validation import validate
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
+from opengwasdb.ld.identity import orient
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, layout
+from opengwasdb.ld.store.validation import validate
 
 DATA = Path(__file__).resolve().parent / "data" / "alid_index"
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"

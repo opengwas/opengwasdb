@@ -4,7 +4,7 @@
 The Test Store is the LD Store of the Test Panel (`CONTEXT.md`), written from the panel's
 independent `reference_r(10)`, so a reader's tests have real data in the real format before any
 builder exists. Its variants are the rows that pass the build's filters, with the engine's ALID,
-A1 and A2 (`ogld.identity`), reversed indels resolved by the engine's rule; its r is the
+A1 and A2 (`opengwasdb.ld.identity`), reversed indels resolved by the engine's rule; its r is the
 reference r signed to A1. The script supplies that r and what only its source knows, and the
 store makes the rest (`StoreWriter`, ogld#17). That is its codes,
 quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Far Pairs at
@@ -41,19 +41,19 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-import ogld
-from ogld.build import diagnostic, record, tiles
-from ogld.build.inputs import fileset, read_keep
-from ogld.build.pc_check import K_MIN
-from ogld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
-from ogld.format.geometry import chromosome_ranges, local_rows
-from ogld.genotypes import Genotypes
-from ogld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
-from ogld.store import StoreWriter, Variants
+import opengwasdb.ld
+from opengwasdb.ld.build import diagnostic, record, tiles
+from opengwasdb.ld.build.inputs import fileset, read_keep
+from opengwasdb.ld.build.pc_check import K_MIN
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
+from opengwasdb.ld.format.geometry import chromosome_ranges, local_rows
+from opengwasdb.ld.genotypes import Genotypes
+from opengwasdb.ld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
+from opengwasdb.ld.store import StoreWriter, Variants
 
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUT = ROOT / "tests" / "data" / "test-panel" / "store"
-TEST_PANEL = ROOT / "tests" / "data" / "test-panel"
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUT = ROOT / "tests" / "ld" / "data" / "test-panel" / "store"
+TEST_PANEL = ROOT / "tests" / "ld" / "data" / "test-panel"
 PANEL_ID = "hgdp1kgp-v2-EUR-test-panel"
 
 
@@ -69,7 +69,7 @@ class VariantSet:
 
 def panel_data() -> ModuleType:
     """The Test Panel's loader, `tests/testdata.py`: the one way to read the panel's files."""
-    tests = str(ROOT / "tests")
+    tests = str(ROOT / "tests" / "ld")
     if tests not in sys.path:
         sys.path.insert(0, tests)
     return importlib.import_module("testdata")
@@ -93,7 +93,8 @@ def variant_set() -> VariantSet:
 def alt_counts(rows: npt.NDArray[np.int64], pgen: Path | None = None) -> npt.NDArray[np.int8]:
     """The ALT allele count (0, 1, 2) of each row of the Test Panel (or of `pgen`, a fileset
     of rows of it), for the kept samples: [rows, samples], read by the pgen reader
-    (`ogld.genotypes.Genotypes`). A missing call is refused, never averaged in (ADR 0002)."""
+    (`opengwasdb.ld.genotypes.Genotypes`). A missing call is refused, never averaged in (ADR
+    0002)."""
     panel = panel_data().panel()
     name = "the Test Panel"
     first = fileset(pgen or panel.pgen, read_keep(panel.keep, name), None, name)
@@ -101,7 +102,7 @@ def alt_counts(rows: npt.NDArray[np.int64], pgen: Path | None = None) -> npt.NDA
         counts = genotypes.rows(rows)
     missing = np.flatnonzero((counts < 0).any(axis=1))
     if len(missing):
-        raise ogld.InputError(f"missing call in row {int(rows[missing[0]])} of {name}")
+        raise opengwasdb.ld.InputError(f"missing call in row {int(rows[missing[0]])} of {name}")
     return counts.astype(np.int8)
 
 
@@ -157,7 +158,8 @@ def sha256(path: Path) -> str:
 
 
 def adjustment(k: int) -> Adjustment:
-    """The `adjustment` record a build makes (`ogld.build.record.adjustment`) of the Test Panel's
+    """The `adjustment` record a build makes (`opengwasdb.ld.build.record.adjustment`) of the Test
+    Panel's
     first k PCs, which its manifest's PC Check kept."""
     if k == 0:
         return record.adjustment([], 0, K_MIN, None, None)
@@ -233,7 +235,7 @@ def sourced(
         "adjustment": adjustment(k),
         "pc_diagnostic": diagnostic,
         "software": {
-            "ogld": ogld.__version__,
+            "ogld": opengwasdb.ld.__version__,
             "numpy": np.__version__,
             "zarr": zarr.__version__,
         },
@@ -303,7 +305,8 @@ def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
     """What PC Adjustment did to chance LD, measured on the Test Panel (spec §7): every
     chr21 × chr22 pair, the share at r² ≥ 0.01 before and after, what sampling predicts, and the
     exact quantiles of the change in r over `change_pairs`. The rate, the window, the regions,
-    the quantiles and the sampling formula are `ogld.build.diagnostic`'s; only the pairs differ
+    the quantiles and the sampling formula are `opengwasdb.ld.build.diagnostic`'s; only the pairs
+    differ
     from a build's, because the Test Panel holds every chr21 × chr22 pair and no other."""
     before, after = unit_columns(vs, 0), unit_columns(vs, k)
     chrom = vs.variants.chrom

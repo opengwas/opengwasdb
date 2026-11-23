@@ -9,9 +9,9 @@ import math
 from pathlib import Path
 
 import pytest
-from script_modules import load_script
+from ld_script_modules import load_script
 
-import ogld
+import opengwasdb.ld
 
 script = load_script("realdata/make_403_inputs")
 Record = script.Record
@@ -85,7 +85,8 @@ def test_of_an_insertion_and_a_deletion_the_store_s_a1_frequency_names_the_one_i
 def test_when_both_records_match_the_stores_frequency_the_reversed_indel_rule_decides() -> None:
     # ins (C>CT) has A1 = C = REF: frequency 1 − 300/1330. del (CT>C) has A1 = C = ALT: 1030/1330.
     # The two are the same number, so the store cannot tell them apart, and the rule (REF = A1,
-    # ogld.identity.resolve_reversed_indels) decides: ins, whichever order the records came in.
+    # opengwasdb.ld.identity.resolve_reversed_indels) decides: ins, whichever order the records came
+    # in.
     counts = {"ins": (300, 1330), "del": (1030, 1330)}
     stored = 1 - 300 / 1330
     assert stored == pytest.approx(1030 / 1330)
@@ -158,7 +159,7 @@ def test_a_keep_file_without_the_iid_header_is_refused_as_the_builder_refuses_it
 ) -> None:
     keep = tmp_path / "EUR.keep"
     keep.write_text("HG1\nHG2\n")
-    with pytest.raises(ogld.InputError, match="#IID"):
+    with pytest.raises(opengwasdb.ld.InputError, match="#IID"):
         script.keep_sha256(keep)
 
 

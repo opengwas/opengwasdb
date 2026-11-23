@@ -1,4 +1,5 @@
-"""The PC Check, `ogld.build.pc_check` (build-inputs.md §8): the one implementation, adopted from
+"""The PC Check, `opengwasdb.ld.build.pc_check` (build-inputs.md §8): the one implementation,
+adopted from
 lane 2d's reference `scripts/test_panel/pc_check.py` by ogld#5.
 
 The owner's rule (7 November 2026): a PC is local, and dropped, when one 4 Mb window explains at
@@ -17,10 +18,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import testdata
-from script_modules import load_script
+from ld_script_modules import load_script
 
-from ogld.build import pc_check
-from ogld.format import InputError
+from opengwasdb.ld.build import pc_check
+from opengwasdb.ld.format import InputError
 
 CHROMS, STEP_BP = 3, 20_000
 # A small panel, where chance alone gives a noise PC a best window over 10%; and a panel the size

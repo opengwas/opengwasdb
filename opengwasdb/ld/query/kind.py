@@ -1,6 +1,7 @@
 """One read of a store's root metadata, and which kind of store it says it is (#91).
 
-`ogld.open` and `ogld.validate` both come through here: the root is opened once, its kind is read
+`opengwasdb.ld.open` and `opengwasdb.ld.validate` both come through here: the root is opened once,
+its kind is read
 from the attribute it records, and the opened group is handed to that kind's reader or validator.
 One read is enough: opening the root again in the reader would add a metadata read — an HTTP
 round trip for a remote store — to every open.
@@ -17,8 +18,8 @@ from typing import Final, Literal
 
 import zarr
 
-from ogld.genotypes.layout import KEY
-from ogld.store.location import ChunkCache, open_group
+from opengwasdb.ld.genotypes.layout import KEY
+from opengwasdb.ld.store.location import ChunkCache, open_group
 
 LD: Final = "ld_store"
 GENOTYPE: Final = "genotype_store"

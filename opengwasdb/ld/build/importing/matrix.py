@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from ogld.build.importing.parts import read_part
+from opengwasdb.ld.build.importing.parts import read_part
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]

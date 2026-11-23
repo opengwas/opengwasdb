@@ -1,16 +1,19 @@
 """Writing an LD Store: the seam every producer writes through (spec §1–§7, §12; ogld#4, ogld#17).
 
 A producer supplies r and what only its source knows; the store assembly behind this seam
-(`ogld/store/assembly.py`) does the rest (owner, 10 November 2026). That covers quantising at the
+(`opengwasdb/ld/store/assembly.py`) does the rest (owner, 10 November 2026). That covers quantising
+at the
 store's encoding, the row lengths, the thresholds at the far code floor and the Partner Floor, the
-Far Pairs, the counts, the Partner Rows' frames (`ogld/store/frames.py`), the provenance a store
+Far Pairs, the counts, the Partner Rows' frames (`opengwasdb/ld/store/frames.py`), the provenance a
+store
 derives from itself, and validation.
 
 How each producer calls it:
 
 - **The builder** creates the writer with its encoding, `NEAR_BP`, `FAR_BP`, `t_partner`, the
   kept samples' n and the covariates' k. Each of its workers computes a tile's product,
-  `ogld.genotypes.r(rows, span)`, with `span` running from the tile's first row to the far stop
+  `opengwasdb.ld.genotypes.r(rows, span)`, with `span` running from the tile's first row to the far
+  stop
   of row `last − 1`. It cuts the tile, `writer.cut(start + first, r)`, and measures its own PC
   Diagnostic on the same `r`. The build's thread writes the cuts in row order,
   `writer.write(cut)`, then calls `finish`.
@@ -42,10 +45,10 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import Provenance, REncoding, Sourced
-from ogld.format.geometry import chromosome_ranges
-from ogld.store import layout
-from ogld.store.assembly import (
+from opengwasdb.ld.format import Provenance, REncoding, Sourced
+from opengwasdb.ld.format.geometry import chromosome_ranges
+from opengwasdb.ld.store import layout
+from opengwasdb.ld.store.assembly import (
     Chromosome,
     Cut,
     Cutter,
@@ -54,8 +57,8 @@ from ogld.store.assembly import (
     derive_alid_mmap,
     provenance,
 )
-from ogld.store.tables import Variants
-from ogld.store.validation import ValidationFailed, validate_group
+from opengwasdb.ld.store.tables import Variants
+from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
 
 class StoreWriter:
@@ -136,7 +139,7 @@ class StoreWriter:
         As for `create`, a pre-existing output is refused and `finish` validates every rule
         before claiming a store. No genotype build calls this path.
         """
-        from ogld.store.joining import joined
+        from opengwasdb.ld.store.joining import joined
 
         root, cutter, ranges, tally = joined(location, chromosomes, sourced)
         writer = cls(root, cutter, ranges)
@@ -161,7 +164,7 @@ class StoreWriter:
         `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (spec §3). It runs
         for every column c up to the last variant within far_bp of the block's last row, and no
         further: `r.shape[1]` is that variant's row + 1 − first. That is what
-        `ogld.genotypes.r(rows, span)` gives for the block against those rows, and the
+        `opengwasdb.ld.genotypes.r(rows, span)` gives for the block against those rows, and the
         chromosome's whole matrix for a block of all its rows. Only each row's later partners
         within far_bp are read. On and below the diagonal, and past a row's own far stop, `r` may
         hold anything, NaN included. Any floating dtype is accepted.
@@ -237,7 +240,8 @@ class StoreWriter:
         """Assemble the provenance, validate the store and write it; return it as written
         (spec §7, §12).
 
-        `sourced` is what only the producer knows (`ogld.format.Sourced`). The writer adds what
+        `sourced` is what only the producer knows (`opengwasdb.ld.format.Sourced`). The writer adds
+        what
         the store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`,
         `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It refuses, naming the
         chromosome, a store with rows not written. It also refuses a `sourced` with a key of the

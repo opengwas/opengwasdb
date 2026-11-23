@@ -4,7 +4,7 @@
 (owner, 10 November 2026; `docs/architecture/ownership.md`, "Provenance and what goes in a
 store"). It handles:
 
-- quantising r at the store's encoding, through `ogld.format.REncoding` (spec §3);
+- quantising r at the store's encoding, through `opengwasdb.ld.format.REncoding` (spec §3);
 - the Near Band's row lengths and `indptr`, from the positions (spec §4);
 - the threshold at the far code floor, judged on codes, for every pair within far_bp (§3, §5);
 - the Far Pairs: the pairs at that floor beyond near_bp, once each, in the earlier row (spec §5;
@@ -17,7 +17,7 @@ store"). It handles:
 
 Validation at `finish` runs every rule of spec §12 through `validate_group`. A producer supplies r
 for blocks of rows in order, and at `finish` it supplies what only the source knows
-(`ogld.format.Sourced`).
+(`opengwasdb.ld.format.Sourced`).
 
 **Memory is bounded by the block and the far_bp window, never the chromosome.** These are
 measured on chr6 of the whole-panel EUR store (602,466 rows, 6,826,805,033 Near Band codes).
@@ -53,7 +53,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from ogld.format import (
+from opengwasdb.ld.format import (
     FORMAT_VERSION,
     T_FAR_Q,
     Codes,
@@ -65,7 +65,7 @@ from ogld.format import (
     claims_partner_rows,
     t_far,
 )
-from ogld.format.geometry import (
+from opengwasdb.ld.format.geometry import (
     blocks,
     chromosome_index,
     indptr_of,
@@ -77,9 +77,9 @@ from ogld.format.geometry import (
     windows,
     within,
 )
-from ogld.store import frames, layout
-from ogld.store.location import ChunkCache, open_group
-from ogld.store.validation import (
+from opengwasdb.ld.store import frames, layout
+from opengwasdb.ld.store.location import ChunkCache, open_group
+from opengwasdb.ld.store.validation import (
     PARTNER_RULES,
     ValidationFailed,
     require_alid_mmap,
@@ -747,7 +747,7 @@ def _beyond_near(
     """Which of one chromosome's local pairs (lo[k], hi[k]) lie more than near_bp apart: of the
     pairs the store keeps at the far code floor, its Far Pairs (spec §3, §5). The one test the
     store writes them by, from a cut and from an index alike (ADR 0007); exactly near_bp apart is
-    within, the edge `ogld.format.geometry.within` holds."""
+    within, the edge `opengwasdb.ld.format.geometry.within` holds."""
     at = np.asarray(position, dtype=np.int64)
     return ~within(at[np.asarray(hi)] - at[np.asarray(lo)], near_bp)
 
@@ -1294,7 +1294,8 @@ def _named(
 
 def _claimed_at(recorded: dict[str, Any], t_partner: float, floor: int, store: Path) -> bool:
     """Whether the provenance claims Partner Rows already, and at this floor (spec §13;
-    partner-rows §6.2). The claim is `ogld.format.claims_partner_rows`, one rule for the reader,
+    partner-rows §6.2). The claim is `opengwasdb.ld.format.claims_partner_rows`, one rule for the
+    reader,
     validation and this derivation: a store that records 0.1.0 is unclaimed whatever keys it
     carries, so a run settles its residue instead of refusing it as nothing to derive. A store
     that does claim them at another floor is refused rather than given frames at a second: a row
