@@ -71,25 +71,10 @@ ACROSS_BLOCKS = ["partners.symmetric", "partners.near"]
 
 RESERVED = -32768
 
-#: The rules one pass over each chromosome's Near Band, Far Pairs and Partner Rows feeds
-#: (ld-store §12).
-SCANNED = [
-    "near.codes",
-    *(f"far.{rule}" for rule in ("rows", "codes", "distance", "threshold")),
-    *(
-        f"partners.{rule}"
-        for rule in (
-            "frames",
-            "rows",
-            "codes",
-            "distance",
-            "threshold",
-            "symmetric",
-            "near",
-            "far",
-        )
-    ),
-]
+#: Every rule one pass over each chromosome's Near Band, Far Pairs and Partner Rows feeds
+#: (ld-store §12), read from the registry: a new scanned rule must fail here too, and
+#: `faults_in_every_block` has no fault for it until someone writes one.
+SCANNED = list(validation._SCANNED)
 
 
 @cache

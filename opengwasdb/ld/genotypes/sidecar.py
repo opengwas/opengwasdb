@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,6 +26,9 @@ from opengwasdb.ld.store.assembly import (
 from opengwasdb.ld.store.tables import Variants
 from opengwasdb.ld.store.validation import ValidationFailed
 from opengwasdb.ld.store.writer import write_variant_table
+
+#: numpy's `open_memmap` ships untyped: the signature it has, written once. The call is unchanged.
+_create_npy: Callable[..., np.memmap[Any, Any]] = np.lib.format.open_memmap
 
 
 class SidecarWriter:
@@ -65,7 +69,7 @@ class SidecarWriter:
             "basis": cov.basis.shape,
         }
         self.arrays = {
-            name: np.lib.format.open_memmap(
+            name: _create_npy(
                 root / "genotypes" / f"{name}.npy", mode="w+", dtype=dtype, shape=shapes[name]
             )
             for name, dtype in ARRAYS.items()

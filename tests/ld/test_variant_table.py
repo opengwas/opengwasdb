@@ -10,6 +10,7 @@ on its own, from a location, and never through a reader.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -154,8 +155,6 @@ def test_a_table_answers_with_the_ld_arrays_gone(tmp_path: Path) -> None:
     Partner Rows, so a variant read that reached one would fail there. Here the three groups are
     absent, and the six reads answer what the committed store's table answers.
     """
-    import shutil
-
     stripped = tmp_path / "variants-only"
     shutil.copytree(TEST_STORE / "variants", stripped / "variants")
     shutil.copy2(TEST_STORE / "zarr.json", stripped / "zarr.json")

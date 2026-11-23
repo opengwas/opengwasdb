@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import build_fixtures
 import numpy as np
 import pytest
+import testdata
 from contract.support import TEST_STORE
 
 import opengwasdb.ld
@@ -73,9 +75,6 @@ def test_a_store_closes_its_reader_and_its_pgen_handles(
     genotype_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from contextlib import closing
-
-    import build_fixtures
-    import testdata
 
     from opengwasdb.ld.genotypes.pgen import Genotypes
 

@@ -22,6 +22,7 @@ variant columns included, equal to the first layout's, so a timing compares layo
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import os
@@ -76,8 +77,6 @@ def store_bytes(path: Path) -> int:
 def build_one(layout: str, out: Path, threads: int) -> None:
     """Build chr22 in `layout`, in this process: `NEAR_R` is set before `opengwasdb ld build`
     runs. The child process exits after, so no other build sees the layout."""
-    import contextlib
-
     from opengwasdb.ld import cli
     from opengwasdb.ld.store import layout as store_layout
 

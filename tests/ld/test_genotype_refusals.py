@@ -6,6 +6,7 @@ from pathlib import Path
 import build_fixtures
 import numpy as np
 import pytest
+import testdata
 import zarr
 from contract.support import TEST_STORE
 from store_copies import private_sidecar_copy
@@ -41,8 +42,6 @@ def test_kind_dispatch_and_explicit_wrong_kind_refusals(genotype_store: Path) ->
 
 
 def test_sidecar_and_inputs_move_together(tmp_path: Path) -> None:
-    import testdata
-
     tree = tmp_path / "tree"
     tree.mkdir()
     pgen = build_fixtures.copy_panel(tree / "panel")

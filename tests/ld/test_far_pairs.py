@@ -10,6 +10,8 @@ Every expected value here is read from the store's own arrays with zarr, from th
 reference r, or is the answer the committed Test Store gives; never the reader's far part.
 """
 
+from __future__ import annotations
+
 import json
 import shutil
 from pathlib import Path
