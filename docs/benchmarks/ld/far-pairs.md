@@ -1,6 +1,6 @@
 # The Far Pairs beside the Proxy Index: reads before and after (ogld#31)
 
-_Measured 12–13 November 2026, with ogld#8's benchmark (`scripts/bench/latency.py`) on the
+_Measured 12–13 November 2026, with ogld#8's benchmark (`scripts/ld/bench/latency.py`) on the
 published HGDP+1kGP EUR store. The records are in [`results/far-pairs/`](results/far-pairs/);
 ogld#8's own are in [`results/`](results/), and its method, targets and states are in
 [`latency.md`](latency.md)._
@@ -55,14 +55,14 @@ was discarded.
 **Commands.**
 
 ```bash
-pixi run -e dev bench-latency step1 --target local http0 http10 http50 --case scattered region \
-    --seeds 1 --out docs/benchmarks/results/far-pairs/step1-chr22-after.jsonl
-PYTHONPATH=<a checkout of orch/1-ld-stores@1cb5c6e> pixi run -e dev bench-latency step1 \
+pixi run -e dev ld-bench-latency step1 --target local http0 http10 http50 --case scattered region \
+    --seeds 1 --out docs/benchmarks/ld/results/far-pairs/step1-chr22-after.jsonl
+PYTHONPATH=<a checkout of orch/1-ld-stores@1cb5c6e> pixi run -e dev ld-bench-latency step1 \
     --target local http0 http10 http50 --case scattered region --seeds 1 --chrom 11 \
     --centres 25000000 40000000 50000000 --widths 10 \
-    --out docs/benchmarks/results/far-pairs/step1-chr11-before.jsonl
-pixi run -e dev bench-latency step1 ... --out docs/benchmarks/results/far-pairs/step1-chr11-after.jsonl
-pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/far-pairs/<file>
+    --out docs/benchmarks/ld/results/far-pairs/step1-chr11-before.jsonl
+pixi run -e dev ld-bench-latency step1 ... --out docs/benchmarks/ld/results/far-pairs/step1-chr11-after.jsonl
+pixi run -e dev python scripts/ld/bench/report.py docs/benchmarks/ld/results/far-pairs/<file>
 ```
 
 Each file is kept gzipped, as ogld#8 keeps its records, and `report.py` reads it so. The tables

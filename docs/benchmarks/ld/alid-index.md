@@ -33,7 +33,7 @@ Measured 15 November 2026 on the IEU node, against opengwas/ogld#40's baseline
 
 ## The 37 Analyses, r² 0.01, cold
 
-`scripts/bench/latency.py`'s step 1, cold only, a fresh reader and advisory page eviction per
+`scripts/ld/bench/latency.py`'s step 1, cold only, a fresh reader and advisory page eviction per
 Analysis, `taskset -c 0-7`, BLAS 1, seven shared decode workers, zarr's helper at one thread.
 Uptime before and after each run is in the records; the load was 1.5–3.6 before and 2.6–5.1 after,
 against opengwas/ogld#40's 3.9–6.8. The phase times of `rows_of`, `prefetch` and `partners` overlap, as they do
@@ -107,7 +107,7 @@ A whole list of one real Analysis is where they cross: 91,618 ALIDs, 3.93 s agai
 
 ## opengwas/ogld#8's step-1 reads, head against tip
 
-`scripts/bench/latency.py`'s step 1, `--case proxies scattered --seeds 1`, locally and over HTTP
+`scripts/ld/bench/latency.py`'s step 1, `--case proxies scattered --seeds 1`, locally and over HTTP
 with 50 ms added per request, the tip and the head in turn on disjoint cores. Medians of the
 records; `proxies` was run three times and `scattered` once.
 

@@ -70,7 +70,7 @@ cache rather than copying it into a run and then copying it again. The transfer 
 before that change. Removing cancellation draining also failed its test; a cancelled read
 must await workers still holding its buffers.
 
-A reproducible wrapper, `scripts/bench/fast_decode.py`, now runs opengwas/ogld#8's existing cases and
+A reproducible wrapper, `scripts/ld/bench/fast_decode.py`, now runs opengwas/ogld#8's existing cases and
 records whole-clump SHA-256, distinct chunks counted at `_keep_run`, and full uptime beside
 every timing. The acceptance run of the stores samples first/middle/last chunks of every array in
 all five published stores against zarr (`pixi run -e dev acceptance-stores`, ogld#40); it needs
@@ -182,9 +182,9 @@ Reproduce the final read records with the wrapper, BLAS 1 and zarr helper 1:
 pixi install --locked -e dev
 pixi reinstall --locked -e dev ogld
 # Prefix commands with taskset -c 0-7 on this node; descendants inherit it.
-pixi run -e dev python scripts/bench/fast_decode.py step1 --target local \
+pixi run -e dev python scripts/ld/bench/fast_decode.py step1 --target local \
   --case clump --cold-only --zarr-threads 1 --out clump-37.jsonl
-pixi run -e dev python scripts/bench/fast_decode.py step1 --target local http10 http50 \
+pixi run -e dev python scripts/ld/bench/fast_decode.py step1 --target local http10 http50 \
   --case proxies scattered region --seeds 1 --zarr-threads 1 --out reads.jsonl
 ```
 
