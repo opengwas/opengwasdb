@@ -23,12 +23,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from store_copies import FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store, store_reads
+from store_copies import (
+    FLOOR,
+    R_SCALE,
+    T_PARTNER,
+    TEST_STORE,
+    copy_store,
+    snv_variants,
+    store_reads,
+)
 
 import opengwasdb.ld
 from opengwasdb.ld.format import VALIDATION_RULES, InputError, Refusal, REncoding
-from opengwasdb.ld.identity import orient
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout
+from opengwasdb.ld.store import StoreReader, StoreWriter, layout
 from opengwasdb.ld.store.validation import validate_group
 
 #: The package whose source must not name the component.
@@ -122,15 +129,7 @@ def small_store(out: Path) -> Path:
     """A store this code writes, of four variants on two chromosomes, from a known r."""
     position = np.array([1_000_000, 4_500_000, 2_000_000, 6_000_000], dtype=np.int64)
     chrom = ["1", "1", "2", "2"]
-    oriented = [orient(c, int(p), "A", "C") for c, p in zip(chrom, position, strict=True)]
-    table = Variants(
-        np.array(chrom),
-        position,
-        np.array([o.alid for o in oriented]),
-        np.array([o.a1 for o in oriented]),
-        np.array([o.a2 for o in oriented]),
-        np.full(4, 0.3),
-    )
+    table = snv_variants(chrom, position)
     writer = StoreWriter.create(
         out,
         variants=table,

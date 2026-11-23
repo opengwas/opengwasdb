@@ -43,7 +43,7 @@ import pytest
 
 import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
-from opengwasdb.ld.identity import alid_locus
+from opengwasdb.variants.sorted_spelling import sorted_alid_locus
 
 EXPLAINED_FILE = Path(__file__).with_name("explained_differences.json")
 KB = 3000
@@ -64,7 +64,7 @@ def named(variable: str, what: str) -> Path:
 
 def distance(alid: str, other: str) -> float:
     """The bp between two ALIDs on one chromosome; infinite across chromosomes (no pair there)."""
-    here, there = alid_locus(alid), alid_locus(other)
+    here, there = sorted_alid_locus(alid), sorted_alid_locus(other)
     assert here is not None, f"{alid} must be an ALID"
     assert there is not None, f"{other} must be an ALID"
     return abs(here[1] - there[1]) if here[0] == there[0] else math.inf

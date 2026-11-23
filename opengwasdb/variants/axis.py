@@ -162,7 +162,14 @@ def variant_rsid_rows_path(store_path: str | Path) -> Path:
 
 
 def parse_canonical_alid(identifier: str) -> ParsedAlid | None:
-    """Parse a canonical ALID-like identifier, returning None for aliases."""
+    """Parse a canonical ALID-like identifier, returning None for aliases.
+
+    The lenient parser, for the engine's reads of a GWAS Store, a variant list or a Variant
+    Reference: the chromosome is normalised (`chr1`, `23`), the alleles are upper-cased and not
+    required in either order, and the position has no width or int32 limit.
+    `opengwasdb.variants.sorted_spelling.sorted_alid_locus` is the strict one, for an LD Store's
+    lookup, which must find nothing under a spelling the Store never wrote.
+    """
 
     parts = str(identifier).split(":")
     if len(parts) != 4:

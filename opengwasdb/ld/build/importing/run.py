@@ -38,8 +38,8 @@ from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
 from opengwasdb.ld.build.record import sha256
 from opengwasdb.ld.format import NEAR_BP, Provenance, REncoding, Sourced
 from opengwasdb.ld.format.geometry import stop_within
-from opengwasdb.ld.identity import chromosome_rank
 from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.version import __version__
 
 # The source policy, not an encoding default (owner #88; ADR 0015).

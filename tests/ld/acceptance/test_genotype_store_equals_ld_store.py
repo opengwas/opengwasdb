@@ -40,7 +40,7 @@ import numpy as np
 import pytest
 
 import opengwasdb.ld
-from opengwasdb.ld.identity import alid_locus
+from opengwasdb.variants.sorted_spelling import sorted_alid_locus
 
 TARGET = "OGS-00012__GCST90476460"
 KB = 3000
@@ -160,7 +160,7 @@ def chr22(alids: list[str]) -> list[int]:
     """The indexes of the ALIDs on chromosome 22, in request order."""
     out = []
     for i, alid in enumerate(alids):
-        locus = alid_locus(alid)
+        locus = sorted_alid_locus(alid)
         if locus is not None and locus[0] == "22":
             out.append(i)
     return out
