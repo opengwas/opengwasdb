@@ -15,7 +15,7 @@ measurement here is a fresh interpreter, repeated, and reported as median and ra
 
     benchmark_process_start.py --store S --selection sel.json --tree T --runs 7 --output out.json
 
-``--selection`` is a store-comparison artifact (its ``selection`` block) or a bare
+``--selection`` (optional; without it only the other measurements run) is a store-comparison artifact (its ``selection`` block) or a bare
 ``{random_alids, random_analyses}`` file.
 """
 
@@ -84,7 +84,7 @@ def summary(values: list[float]) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--store", type=Path, required=True)
-    parser.add_argument("--selection", type=Path, required=True)
+    parser.add_argument("--selection", type=Path)
     parser.add_argument("--tree", type=Path, required=True)
     parser.add_argument("--phewas-alid")
     parser.add_argument("--runs", type=int, default=7)
@@ -92,10 +92,13 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    selection = json.loads(args.selection.read_text())
-    selection = selection.get("selection", selection)
-    alids = selection["random_alids"][: args.n_alids]
-    analyses = selection["random_analyses"]
+    alids: list[str] = []
+    analyses: list[str] = []
+    if args.selection is not None:
+        selection = json.loads(args.selection.read_text())
+        selection = selection.get("selection", selection)
+        alids = selection["random_alids"][: args.n_alids]
+        analyses = selection["random_analyses"]
     probe = run("import opengwasdb; print(opengwasdb.__file__)", tree=args.tree).stdout.strip()
     assert probe.startswith(str(args.tree.resolve())), probe
 
@@ -104,12 +107,13 @@ def main() -> None:
     out["imports"] = summary([float(run(IMPORTS).stdout) for _ in range(args.runs)])
     out["tabix_open"] = summary([float(run(TABIX, table).stdout) for _ in range(args.runs)])
     out["index_open"] = summary([float(run(INDEX, index).stdout) for _ in range(args.runs)])
-    walls = []
-    for _ in range(args.runs):
-        start = time.perf_counter()
-        run(LOOKUP, str(args.store), json.dumps(alids), json.dumps(analyses), tree=args.tree)
-        walls.append((time.perf_counter() - start) * 1e3)
-    out["open_and_lookup"] = summary(walls)
+    if alids:
+        walls = []
+        for _ in range(args.runs):
+            start = time.perf_counter()
+            run(LOOKUP, str(args.store), json.dumps(alids), json.dumps(analyses), tree=args.tree)
+            walls.append((time.perf_counter() - start) * 1e3)
+        out["open_and_lookup"] = summary(walls)
     if args.phewas_alid:
         out["phewas"] = summary(
             [
