@@ -125,10 +125,9 @@ from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.store_reader.variant_axis import VariantRecord
+from opengwasdb.store_reader.variant_axis import VariantAxis, VariantRecord
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, chromosome_sort_key, write_variant_axis
-from opengwasdb.variants.axis import VariantAxis
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +212,7 @@ def _match_source_rows(
     stay unmatched: the rows they own keep their NaN fill below, and a source
     position is never fabricated from row 0 or another sentinel.
     """
-    src_axis = VariantAxis(source_path)
+    src_axis = open_store(source_path).variant_axis(aliases=False)
     try:
         src_rows = [_source_row_for(src_axis, alid) for alid in canonical_alids]
         matched_local = [i for i, r in enumerate(src_rows) if r is not None]
@@ -457,7 +456,7 @@ def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _Sourc
     which is what a source with no ``assigned_ancestry`` column gets; a set
     keeps only the matching Analyses imputed and carries the rest through
     observed-only (ADR 0028)."""
-    src_variant_axis = VariantAxis(src)
+    src_variant_axis = open_store(src).variant_axis(aliases=False)
     src_variants = src_variant_axis.all()
     src_variant_axis.close()
     src_alid_to_idx = {v.alid: v.variant_index for v in src_variants}
