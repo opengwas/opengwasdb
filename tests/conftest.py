@@ -73,16 +73,28 @@ def dense_fixture_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def rsid_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """The six `store_reader_digests` fixture releases, built once per session, each row
-    naming an rsID (`rsid_releases.with_rsids`). Never written to: copy one to change it."""
-    from rsid_releases import with_rsids
+def digest_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """The six `store_reader_digests` fixture releases -- Dense, Ragged and Hybrid, each
+    Observed-Only and Reference-Completed -- built once per session and shared by every
+    module that asks them questions. Never written to: copy one to change it."""
     from store_reader_digests import build_releases
 
-    built = build_releases(tmp_path_factory.mktemp("rsid-releases"))
-    for path in built.values():
+    return build_releases(tmp_path_factory.mktemp("digest-releases"))
+
+
+@pytest.fixture(scope="session")
+def rsid_releases(
+    digest_releases: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, Path]:
+    """`digest_releases`, copied once per session, each row naming an rsID
+    (`rsid_releases.with_rsids`). Never written to: copy one to change it."""
+    from rsid_releases import with_rsids
+
+    root = tmp_path_factory.mktemp("rsid-releases")
+    copies = {name: Path(copytree(path, root / name)) for name, path in digest_releases.items()}
+    for path in copies.values():
         with_rsids(path)
-    return built
+    return copies
 
 
 @pytest.fixture

@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from store_reader_digests import GOLDEN, build_releases, release_digests
+from store_reader_digests import GOLDEN, release_digests
 
 from opengwasdb.query import query_store
 from opengwasdb.store.query_digests import query_shapes
@@ -34,8 +34,8 @@ LOG10_P_RTOL = 1e-12
 
 
 @pytest.fixture(scope="module")
-def releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    return build_releases(tmp_path_factory.mktemp("store-reader-digests"))
+def releases(digest_releases: dict[str, Path]) -> dict[str, Path]:
+    return digest_releases
 
 
 def test_the_pins_cover_every_layout_and_completion_state():

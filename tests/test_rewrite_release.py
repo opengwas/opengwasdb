@@ -20,12 +20,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components
-from store_reader_digests import build_releases
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.store import rewrite
-from opengwasdb.store.query_digests import differences, release_digests
+from opengwasdb.store.query_digests import differences, probed_alids, release_digests
 from opengwasdb.store.rewrite import (
     RewriteError,
     RewriteStep,
@@ -34,6 +33,7 @@ from opengwasdb.store.rewrite import (
 )
 from opengwasdb.store_reader.alid_sidecar import (
     ALID_SIDECAR_FILENAMES,
+    KEY_WIDTH,
     AlidSidecar,
     write_alid_sidecar,
 )
@@ -43,9 +43,9 @@ FIXED_WIDTH = ("variant_alid_bytes.npy", "variant_alid_rows.npy")
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+def built(digest_releases: dict[str, Path]) -> dict[str, Path]:
     """The six releases as this build writes them: 0.3.0. Never written to."""
-    return build_releases(tmp_path_factory.mktemp("rewrite-built"))
+    return digest_releases
 
 
 @pytest.fixture(scope="module")
@@ -226,3 +226,59 @@ def test_the_cli_rewrites_and_refuses_by_name(sources, tmp_path):
     assert _version(destination) == "0.3.0"
     assert again.exit_code == 1
     assert "already exists" in again.output
+
+
+@pytest.fixture(scope="module")
+def long_alid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A 0.2.3 Dense release holding ALIDs over 32 bytes, two sharing their 24-byte key:
+    the ones only the sidecar's full-byte compare tells apart."""
+    from test_long_alid_0_3_0 import LONG_ALIDS, _dense
+
+    source = as_0_2_3(_dense(tmp_path_factory.mktemp("long-alids")))
+    keys = [alid.encode()[:KEY_WIDTH] for alid in LONG_ALIDS]
+    assert len(set(keys)) < len(keys), "fixture: two long ALIDs must share a key"
+    assert set(LONG_ALIDS) <= set(probed_alids(_variants(source))), "the proof must ask them"
+    return source
+
+
+def _variants(release: Path) -> dict[int, dict[str, str]]:
+    from opengwasdb.query import query_store
+
+    with query_store(release) as q:
+        return q.variants_table()
+
+
+def _plant_a_search_bug(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer every ALID that shares a key with the first ALID holding it."""
+    monkeypatch.setattr(
+        AlidSidecar, "_row_in_run", lambda self, lo, hi, query: int(self.order[lo])
+    )
+
+
+def test_the_step_refuses_a_sidecar_whose_search_misses_a_row(
+    long_alid_source, tmp_path, monkeypatch
+):
+    _plant_a_search_bug(monkeypatch)
+    with pytest.raises(RewriteError, match="do not resolve to their own row") as refused:
+        rewrite_release(long_alid_source, tmp_path / "rewritten")
+    assert type(refused.value) is RewriteError, "the step, not the proof, must catch it"
+    assert not (tmp_path / "rewritten").exists()
+
+
+def test_the_proof_asks_the_long_alids_and_refuses_the_same_bug(
+    long_alid_source, tmp_path, monkeypatch
+):
+    """With the step's check removed, the proof's ALID probes still see the bug."""
+    _plant_a_search_bug(monkeypatch)
+    monkeypatch.setattr(rewrite, "_require_every_alid_resolves", lambda directory, alids: None)
+    with pytest.raises(RewriteVerificationError) as refused:
+        rewrite_release(long_alid_source, tmp_path / "rewritten")
+    probes = [d for d in refused.value.differences if d.startswith("alid_probes/")]
+    assert any(d.startswith("alid_probes/phewas/") for d in probes), refused.value.differences
+    assert any(d.startswith("alid_probes/lookup/") for d in probes), refused.value.differences
+    assert not (tmp_path / "rewritten").exists()
+
+
+def test_the_long_alid_source_rewrites_clean_without_the_bug(long_alid_source, tmp_path):
+    destination = rewrite_release(long_alid_source, tmp_path / "rewritten")
+    assert differences(release_digests(long_alid_source), release_digests(destination)) == []

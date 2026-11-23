@@ -49,9 +49,11 @@ from opengwasdb.store.convert import (
 )
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store.query_digests import differences, release_digests
-from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.format import (
+    CURRENT_FORMAT_VERSION,
+    LAST_0_2_FORMAT_VERSION,
     UnsupportedFormatVersion,
     carries_alid_sidecar,
     check_format_version,
@@ -66,10 +68,10 @@ from opengwasdb.store_reader.variant_axis import (
 from opengwasdb.variants.legacy_table import iter_variant_records
 
 #: The one `format_version` this rewrite reads: every other is refused (module docstring).
-SOURCE_FORMAT_VERSION = "0.2.3"
+SOURCE_FORMAT_VERSION = LAST_0_2_FORMAT_VERSION
 
 #: The `format_version` it writes: 0.2.3's features with every step's change.
-TARGET_FORMAT_VERSION = format_version_for(carries_regions=False, reference_first_indels=True)
+TARGET_FORMAT_VERSION = CURRENT_FORMAT_VERSION
 
 #: How many differences a refused proof prints; it counts them all.
 _SHOWN_DIFFERENCES = 20
@@ -80,7 +82,14 @@ class RewriteError(Exception):
 
 
 class RewriteVerificationError(RewriteError):
-    """The staged release answers some question differently from its source."""
+    """The staged release answers some question differently from its source.
+
+    `differences` names every one (`query_digests.differences`); the message shows the first.
+    """
+
+    def __init__(self, message: str, differences: list[str]) -> None:
+        super().__init__(message)
+        self.differences = differences
 
 
 @dataclass(frozen=True)
@@ -115,13 +124,36 @@ def _write_alid_sidecar(context: RewriteContext) -> None:
 
     The ALIDs come from the table, not from the fixed-width index, which leaves out
     every ALID over 32 bytes (#127). The table must hold rows 0..n-1 in order, one per
-    entry of `variant_offsets.npy`; any other table is refused, never indexed.
+    entry of `variant_offsets.npy`; any other table is refused, never indexed. The
+    sidecar is written by its one writer, the codec's `write_alid_sidecar` (a build
+    reaches it through `write_variant_axis`, which writes the whole axis; this step
+    rewrites only the ALID index). Before the step ends, every ALID is searched for
+    and must name its own row: the proof's questions reach only some of them.
     """
     for directory in context.staged_components():
         alids = list(_alids_in_row_order(directory))
         write_alid_sidecar(directory, alids)
+        _require_every_alid_resolves(directory, alids)
         variant_alid_bytes_path(directory).unlink()
         variant_alid_rows_path(directory).unlink()
+
+
+def _require_every_alid_resolves(directory: Path, alids: list[str]) -> None:
+    """Refuse a sidecar in which some ALID does not find its own row."""
+    import numpy as np
+
+    sidecar = AlidSidecar.open(directory)
+    if sidecar is None:
+        raise RewriteError(f"{directory}: the ALID sidecar was not written")
+    rows = sidecar.search(alids)
+    wrong = np.flatnonzero(rows != np.arange(len(alids)))
+    if wrong.size:
+        first = int(wrong[0])
+        raise RewriteError(
+            f"{directory}: {wrong.size} ALID(s) of {len(alids)} do not resolve to their own "
+            f"row in the written sidecar; first, {alids[first]!r} at row {first} resolves to "
+            f"{int(rows[first])}"
+        )
 
 
 def _alids_in_row_order(directory: Path) -> Iterator[str]:
@@ -163,7 +195,7 @@ def rewrite_release(
     """Derive a 0.3.0 release at `destination` from the 0.2.3 one at `source`."""
     source = Path(source).resolve()
     destination = Path(destination).resolve()
-    refuse_destination(source, destination, error=RewriteError)
+    refuse_destination(source, destination, error=RewriteError, named="DESTINATION")
     components = _refuse_unrewritable(source)
     started = time.perf_counter()
     reference = release_digests(source)
@@ -291,7 +323,8 @@ def _require_same_answers(
         raise RewriteVerificationError(
             f"the rewritten release answers {len(found)} question(s) differently from its "
             f"source, so it is not published to {destination}; the staging directory was "
-            f"removed and the source is unchanged. First differences:\n  {shown}"
+            f"removed and the source is unchanged. First differences:\n  {shown}",
+            found,
         )
 
 

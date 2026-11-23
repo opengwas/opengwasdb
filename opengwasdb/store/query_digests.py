@@ -17,6 +17,13 @@ and widest top-hit answers resolved to rows. A resolved row's `log10_p` is kept 
 number, because a test compares it with a tolerance against pins written by code
 that computed it otherwise (`tests/test_store_reader_digests.py`); `differences`
 compares it exactly, which is right between two releases read by one build.
+
+The **ALID probes** ask about the ALIDs a spread of variants misses: the longest the
+release holds, and one at each length where an ALID index changes how it searches
+(`PROBED_ALID_LENGTHS`). Spread variants are short -- on OGS-00007 and OGS-00025 the
+longest of them is 15 and 16 bytes -- so without the probes no question would reach
+the sidecar's full-byte compare (#467 review). They are their own section, so the
+store-reader pins, written before it, still name every shape they hold.
 """
 
 from __future__ import annotations
@@ -46,6 +53,14 @@ N_VARIANTS_ASKED = 7
 #: How many Analyses the per-Analysis shapes name, spread over the release. Every
 #: fixture release has fewer, so each is asked about every one of its Analyses.
 N_ANALYSES_ASKED = 8
+
+#: ALID lengths, in bytes, where an ALID index changes how it searches: either side of
+#: the sidecar's 24-byte key (`alid_sidecar.KEY_WIDTH`) and of the 0.2 series' 32-byte
+#: slot (`alid.ALID_WIDTH`). The probes ask one ALID of each length a release holds.
+PROBED_ALID_LENGTHS = (23, 24, 25, 32, 33)
+
+#: How many of a release's longest ALIDs the probes ask.
+N_LONGEST_PROBED = 3
 
 #: Identifiers no release holds: an absent answer must stay absent.
 ABSENT_IDENTIFIERS = ("1:1:A:C", "rs0")
@@ -208,6 +223,29 @@ def _resolved(q: Any, result: Any) -> tuple[dict[str, str], list[float]]:
     return digests, [float(row["log10_p"]) for row in rows]
 
 
+def probed_alids(variants: dict[int, dict[str, Any]]) -> list[str]:
+    """The release's longest ALIDs, then the first at each of `PROBED_ALID_LENGTHS`."""
+    alids = [variants[key]["alid"] for key in sorted(variants)]
+    by_length = sorted(range(len(alids)), key=lambda i: (-len(alids[i].encode()), i))
+    chosen = [alids[i] for i in by_length[:N_LONGEST_PROBED]]
+    for length in PROBED_ALID_LENGTHS:
+        at = next((a for a in alids if len(a.encode()) == length), None)
+        if at is not None and at not in chosen:
+            chosen.append(at)
+    return chosen
+
+
+def _probe_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Each probed ALID's PheWAS, and one lookup of them all, digested."""
+    alids = probed_alids(variants)
+    ids = _spread(
+        [row["analysis_id"] for _, row in sorted(q.analyses_table().items())], N_ANALYSES_ASKED
+    )
+    out = {f"phewas/{alid}": result_digests(dict(q.phewas(alid))) for alid in alids}
+    out["lookup"] = result_digests(dict(q.lookup(alids, ids)))
+    return out
+
+
 def release_digests(path: str | Path) -> dict[str, Any]:
     """Every answer the release at `path` gives, digested; `log10_p` per resolved shape."""
     from opengwasdb.query import query_store
@@ -227,6 +265,7 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             out["shapes"][name] = result_digests(dict(result))
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
+        out["alid_probes"] = _probe_digests(q, variants)
     return out
 
 
@@ -241,7 +280,7 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found.append(f"adapter: {reference['adapter']} != {candidate['adapter']}")
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
-    for section in ("shapes", "resolved"):
+    for section in ("shapes", "resolved", "alid_probes"):
         found += _shape_differences(section, reference[section], candidate[section])
     return found + _log10_p_differences(reference["log10_p"], candidate["log10_p"])
 

@@ -1182,17 +1182,22 @@ def require_valid_staged_release(
 
 
 def refuse_destination(
-    source: Path, destination: Path, *, error: type[Exception] = ConversionError
+    source: Path,
+    destination: Path,
+    *,
+    error: type[Exception] = ConversionError,
+    named: str = "--into",
 ) -> None:
     """Refuse a destination that is the source, lies inside it, or already exists.
 
     A derived release never writes its source and never replaces an existing release
     (spec §21.4). Both paths are resolved by the caller. Shared with the rewrite to
-    0.3.0 (`opengwasdb.store.rewrite`), which raises its own `error`.
+    0.3.0 (`opengwasdb.store.rewrite`), which raises its own `error`; `named` is how the
+    caller's command line spells the destination.
     """
     if source == destination:
         raise error(
-            f"source and destination are the same path ({source}); a derived release cannot "
+            f"source and {named} are the same path ({source}); a derived release cannot "
             "be written into the one it was given (spec §21.4)"
         )
     if source in destination.parents:

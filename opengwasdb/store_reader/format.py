@@ -61,6 +61,13 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: 0.2.2 or 0.2.3 source is completed.
 WRITTEN_FORMAT_VERSIONS: tuple[str, ...] = ("0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.3.0")
 
+#: The last 0.2 version: 0.2.2's reference-first indels with 0.2.3's SE count, every
+#: feature 0.3.0 keeps. The one version `ogdb rewrite-release` derives 0.3.0 from.
+LAST_0_2_FORMAT_VERSION = WRITTEN_FORMAT_VERSIONS[3]
+
+#: The first version whose ALID index is the variable-length sidecar (ADR 0105).
+ALID_SIDECAR_FORMAT_VERSION = WRITTEN_FORMAT_VERSIONS[4]
+
 #: The first `format_version` whose indel ALIDs spell the reference allele first
 #: (ADR 0079). Every earlier one sorts an indel's alleles, so its deletion reads
 #: like the insertion of the same sequence; nothing rewrites such a Store.
@@ -111,7 +118,7 @@ def format_version_for(
                 f"this one does not (reference_first_indels={reference_first_indels}, "
                 f"records_se_out_of_range={records_se_out_of_range})"
             )
-        return WRITTEN_FORMAT_VERSIONS[4]
+        return ALID_SIDECAR_FORMAT_VERSION
     if reference_first_indels:
         return WRITTEN_FORMAT_VERSIONS[3 if records_se_out_of_range else 2]
     return WRITTEN_FORMAT_VERSIONS[1] if carries_regions else WRITTEN_FORMAT_VERSIONS[0]
@@ -131,7 +138,7 @@ ZARR_FORMAT_BY_SERIES: Mapping[tuple[int, ...], int] = MappingProxyType(
 
 #: The first `format_version` whose ALID index is the variable-length sidecar
 #: (`opengwasdb.store_reader.alid_sidecar`, ADR 0105) and not the fixed-width pair.
-ALID_SIDECAR_SINCE = (0, 3, 0)
+ALID_SIDECAR_SINCE = tuple(int(part) for part in ALID_SIDECAR_FORMAT_VERSION.split("."))
 
 
 def carries_alid_sidecar(version: str) -> bool:
