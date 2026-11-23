@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from functools import cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any
 
 import numcodecs
 import numpy as np
@@ -31,15 +31,16 @@ from store_copies import (
     FLOOR,
     PARTNER_FLOOR,
     R_SCALE,
-    T_PARTNER,
     TEST_STORE,
     arrays,
     copy_store,
+    sourced,
+    writer_for_test_store,
 )
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding, Sourced
+from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout, validation
 from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
@@ -74,18 +75,20 @@ RESERVED = -32768
 #: (spec §12).
 SCANNED = [
     "near.codes",
-    "far.rows",
-    "far.codes",
-    "far.distance",
-    "far.threshold",
-    "partners.frames",
-    "partners.rows",
-    "partners.codes",
-    "partners.distance",
-    "partners.threshold",
-    "partners.symmetric",
-    "partners.near",
-    "partners.far",
+    *(f"far.{rule}" for rule in ("rows", "codes", "distance", "threshold")),
+    *(
+        f"partners.{rule}"
+        for rule in (
+            "frames",
+            "rows",
+            "codes",
+            "distance",
+            "threshold",
+            "symmetric",
+            "near",
+            "far",
+        )
+    ),
 ]
 
 
@@ -868,23 +871,6 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
 # ------------------------------------------------------------------ on write
 
 
-#: The Store-derived keys `finish` adds itself (ogld#17); the rest of provenance is the
-#: producer's.
-DERIVED = (
-    "format_version",
-    "encoding",
-    "n_variants",
-    "near_bp",
-    "far_bp",
-    "t_far",
-    "t_far_q",
-    "far_code_floor",
-    "t_partner",
-    "partner_code_floor",
-    "counts",
-)
-
-
 def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> StoreWriter:
     """A writer over the Test Store's first four variants, chr21, each within 3 Mb of the rest,
     with their r written below the far code floor, so an empty Proxy Index. `frequency`, when
@@ -895,29 +881,11 @@ def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> Stor
     if frequency is not None:
         v = variants
         variants = Variants(v.chrom, v.position, v.alid, v.a1, v.a2, np.full(4, frequency))
-    writer = StoreWriter.create(
-        tmp_path / name,
-        variants=variants,
-        encoding=REncoding(R_SCALE),
-        near_bp=3_000_000,
-        far_bp=10_000_000,
-        n=771,
-        k=10,
-        t_partner=0.01,
-    )
+    writer = writer_for_test_store(tmp_path / name, variants)
     r = np.full((4, 4), np.nan)
     r[np.triu_indices(4, k=1)] = np.array([10, -20, 30, 40, -50, 60]) / R_SCALE
     writer.write(writer.cut(0, r))
     return writer
-
-
-def sourced(**changes: Any) -> Sourced:
-    """The Test Store's provenance without the keys the store derives, with `changes`."""
-    p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
-    for key in DERIVED:
-        del p[key]
-    p.update(changes)
-    return cast(Sourced, p)
 
 
 def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path: Path) -> None:
@@ -1113,17 +1081,7 @@ def adverse_store(path: Path, n: int = 1500) -> Path:
     )
     r = np.full((n, n), PARTNER_FLOOR / R_SCALE)
     np.fill_diagonal(r, 1.0)
-    writer = StoreWriter.create(
-        path,
-        variants=variants,
-        encoding=REncoding(R_SCALE),
-        near_bp=3_000_000,
-        far_bp=10_000_000,
-        n=771,
-        k=10,
-        t_partner=T_PARTNER,
-        compress_workers=4,
-    )
+    writer = writer_for_test_store(path, variants, compress_workers=4)
     writer.write(writer.cut(0, r))
     writer.finish(sourced(), threads=8)
     return path

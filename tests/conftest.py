@@ -9,6 +9,7 @@ import pytest
 import shared_releases
 
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from tests.ld.tier_markers import unasked
 from tests.ssf_builds import build_ragged_from_ssf
 
 if TYPE_CHECKING:
@@ -295,3 +296,16 @@ def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
     build_indexed_subset(store, "hm3", listing, reference_assembly="GRCh38")
     return store
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Keep the opt-in tiers (`realdata`, `acceptance`) out of any run that does not name them.
+
+    A command line's `-m` replaces an `addopts` one, so a default written there is lost to
+    `-m ld`, which would run the HGDP+1kGP tier on a machine without the panels. The deselection
+    is here instead, after every conftest has added its marks, and `-m realdata` still asks."""
+    dropped = unasked(items, config.getoption("markexpr") or "")
+    if dropped:
+        items[:] = [item for item in items if item not in dropped]
+        config.hook.pytest_deselected(items=dropped)

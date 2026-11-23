@@ -13,7 +13,6 @@ pool that still progresses, and a damaged frame that fails the whole request wit
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 import threading
 from pathlib import Path
@@ -22,6 +21,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import pytest
+from fingerprint import answer_fingerprint
 from store_copies import PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, copy_store, store_reads
 
 import opengwasdb.ld
@@ -95,24 +95,6 @@ def _subset(name: str, store: opengwasdb.ld.LDStore) -> tuple[list[str], npt.NDA
     raise AssertionError(f"no subset {name}")
 
 
-def _digest(columns: dict[str, Any]) -> str:
-    """A result's every column, read as bytes: an answer's fingerprint, never a subset of it."""
-    hasher = hashlib.sha256()
-    for name, value in columns.items():
-        if isinstance(value, tuple):
-            hasher.update(name.encode())
-            for item in value:
-                hasher.update(str(item).encode())
-                hasher.update(b"\0")
-            continue
-        array = np.ascontiguousarray(value)
-        hasher.update(name.encode())
-        hasher.update(str(array.dtype).encode())
-        hasher.update(str(array.shape).encode())
-        hasher.update(array.tobytes())
-    return hasher.hexdigest()
-
-
 def fingerprint(store: opengwasdb.ld.LDStore, name: str) -> str:
     """One case's answer on `store`, digested: the frozen answers were recorded with this."""
     case = {case[0]: case for case in CASES}[name]
@@ -120,7 +102,7 @@ def fingerprint(store: opengwasdb.ld.LDStore, name: str) -> str:
     names, score = _subset(subset, store)
     if kind == "clump":
         got = store.clump(names, score, r2=r2, kb=kb)
-        return _digest(
+        return answer_fingerprint(
             {
                 "alid": got.alid,
                 "chrom": got.chrom,
@@ -134,7 +116,7 @@ def fingerprint(store: opengwasdb.ld.LDStore, name: str) -> str:
             }
         )
     found = store.proxies(names, r2=r2, kb=kb)
-    return _digest(
+    return answer_fingerprint(
         {
             "query": found.query,
             "proxy": found.proxy,

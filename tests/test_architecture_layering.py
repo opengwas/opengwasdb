@@ -22,9 +22,12 @@ import pytest
 from architecture_model import (
     BaselineError,
     ImportEdge,
+    ModelError,
+    check_independence,
     check_layering,
     engine_sources,
     import_graph,
+    independent_pairs,
     load_baseline,
     load_model,
 )
@@ -309,3 +312,36 @@ def test_this_repository_has_no_upward_import_the_baseline_does_not_list() -> No
     assert len(graph) > 500  # a graph this size is the code's imports, not a few of them
 
     assert check_layering(model, graph, load_baseline(BASELINE_PATH)) == []
+
+
+def test_an_import_between_independent_siblings_fails_in_either_direction() -> None:
+    model = {
+        **MODEL,
+        "components": [
+            _component("one", "One", 3, ["opengwasdb/one/"]),
+            _component("two", "Two", 3, ["opengwasdb/two/"]),
+        ],
+        "independent": [["one", "two"]],
+    }
+    for importer, imported in (("one", "two"), ("two", "one")):
+        graph = import_graph(
+            model,
+            {
+                f"opengwasdb/{importer}/a.py": f"from opengwasdb.{imported}.b import x\n",
+                f"opengwasdb/{imported}/b.py": "x = 1\n",
+            },
+        )
+        assert check_layering(model, graph, baseline=()) == []  # the same layer: allowed
+        assert len(check_independence(model, graph)) == 1
+
+
+def test_a_component_independent_of_a_missing_one_is_an_error() -> None:
+    model = {**MODEL, "independent": [["model", "nowhere"]]}
+    with pytest.raises(ModelError, match="'nowhere'"):
+        check_independence(model, ())
+
+
+def test_this_repository_keeps_its_independent_siblings_apart() -> None:
+    model = load_model(MODEL_PATH)
+    assert ("ld-build", "ld-query") in independent_pairs(model)
+    assert check_independence(model, import_graph(model, engine_sources(ROOT))) == []

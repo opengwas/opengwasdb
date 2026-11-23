@@ -26,16 +26,16 @@ import zarr
 from store_copies import (
     FLOOR,
     R_SCALE,
-    T_PARTNER,
     TEST_STORE,
     copy_store,
     snv_variants,
     store_reads,
+    writer_for_test_store,
 )
 
 import opengwasdb.ld
 from opengwasdb.ld.format import VALIDATION_RULES, InputError, Refusal, REncoding
-from opengwasdb.ld.store import StoreReader, StoreWriter, layout
+from opengwasdb.ld.store import StoreReader, layout
 from opengwasdb.ld.store.validation import validate_group
 
 #: The package whose source must not name the component.
@@ -130,16 +130,7 @@ def small_store(out: Path) -> Path:
     position = np.array([1_000_000, 4_500_000, 2_000_000, 6_000_000], dtype=np.int64)
     chrom = ["1", "1", "2", "2"]
     table = snv_variants(chrom, position)
-    writer = StoreWriter.create(
-        out,
-        variants=table,
-        encoding=REncoding(R_SCALE),
-        near_bp=3_000_000,
-        far_bp=10_000_000,
-        n=771,
-        k=10,
-        t_partner=T_PARTNER,
-    )
+    writer = writer_for_test_store(out, table)
     r = np.full((2, 2), np.nan)
     r[0, 1] = 0.5
     writer.write(writer.cut(0, r))

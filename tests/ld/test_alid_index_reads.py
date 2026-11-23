@@ -8,9 +8,6 @@ and one missing an entry — because a reader that trusts it answers another var
 none, and the answers must not move.
 """
 
-from __future__ import annotations
-
-import tracemalloc
 from pathlib import Path
 
 import numpy as np
@@ -148,6 +145,8 @@ def peak_lookup(tmp_path: Path, name: str, entries: int) -> tuple[int, int]:
     the chunks it keeps: the same measurement the reviews made, which peaked at 548 MB before the
     search read a shard at a time, and at 50 MB when it kept the previous shard alive.
     """
+    import tracemalloc
+
     store = copy_store(tmp_path / name)
     keys, rows = fabricated_keys(entries)
     root = zarr.open_group(store, mode="r+")

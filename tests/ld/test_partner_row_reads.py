@@ -28,10 +28,9 @@ from typing import Any
 
 import numcodecs
 import numpy as np
-import numpy.typing as npt
 import pytest
-import zarr
 from contract.support import RangeHandler
+from partner_oracle import Pairs, chromosomes, far_pairs, near_pairs, store
 from store_copies import PARTNER_FLOOR, TEST_STORE
 from zarr.abc.store import RangeByteRequest
 
@@ -51,38 +50,6 @@ DAMAGED_FRAME = 5
 
 #: zstd at a frame's own level, with the content checksum its header carries (§5.2).
 _ZSTD = numcodecs.Zstd(level=frames.ZSTD_LEVEL, checksum=True)
-
-Pairs = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int16]]
-
-
-def store() -> zarr.Group:
-    return zarr.open_group(str(TEST_STORE), mode="r")
-
-
-def chromosomes(group: zarr.Group) -> dict[str, tuple[int, int]]:
-    listed: list[dict[str, Any]] = group["variants"].attrs["chromosomes"]
-    return {entry["name"]: (entry["row_start"], entry["row_stop"]) for entry in listed}
-
-
-def near_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Near Band pair of one chromosome, from spec §4's address rule written out here: the
-    code of pair (l, m) is at `r[indptr[l] + (m − l − 1)]`, so its address gives its pair."""
-    held = group["near"][chrom]
-    indptr = np.asarray(held["indptr"][:], dtype=np.int64)
-    codes = np.asarray(held["r"][:], dtype=np.int16)
-    lengths = np.diff(indptr)
-    row = np.repeat(np.arange(len(lengths), dtype=np.int64), lengths)
-    offset = np.arange(len(codes), dtype=np.int64) - np.repeat(indptr[:-1], lengths)
-    return row, row + 1 + offset, codes
-
-
-def far_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Far Pair of one chromosome, each in its earlier row: (row, later row, code)."""
-    held = group["far"][chrom]
-    indptr = np.asarray(held["indptr"][:], dtype=np.int64)
-    rows = np.repeat(np.arange(len(indptr) - 1, dtype=np.int64), np.diff(indptr))
-    return rows, np.asarray(held["partner"][:], dtype=np.int64), np.asarray(held["r"][:], np.int16)
-
 
 @cache
 def expected(chrom: str) -> Pairs:

@@ -7,10 +7,12 @@ No test writes into `tests/data/`; each works on a copy under its own `tmp_path`
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
@@ -19,7 +21,8 @@ import zarr
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore
 
-from opengwasdb.ld.store import Variants
+from opengwasdb.ld.format import REncoding, Sourced
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -193,3 +196,65 @@ def unpartnered(to: Path) -> Path:
                 fill_value=fill,
             )
     return to
+
+
+#: The store-derived keys `finish` adds (spec §7), every other key being the producer's.
+DERIVED = frozenset(
+    {
+        "format_version",
+        "encoding",
+        "n_variants",
+        "near_bp",
+        "far_bp",
+        "t_far",
+        "t_far_q",
+        "far_code_floor",
+        "t_partner",
+        "partner_code_floor",
+        "counts",
+    }
+)
+
+
+def sourced(**changes: Any) -> Sourced:
+    """The Test Store's provenance without the keys the store derives, with `changes`."""
+    p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
+    for key in DERIVED:
+        del p[key]
+    p.update(changes)
+    return cast(Sourced, p)
+
+
+def private_sidecar_copy(
+    genotype_store: Path, tmp_path: Path
+) -> tuple[Path, zarr.Group, dict[str, Any]]:
+    """A private copy of a Genotype Store whose pins point at the original inputs (relative paths
+    survive the copy into another directory), its ALID companion dropped (a store without one is
+    not a fixture for this), with its root group and its genotype record, whose edits the caller
+    writes back."""
+    copy = tmp_path / "sidecar"
+    shutil.copytree(genotype_store, copy)
+    root = zarr.open_group(copy, mode="a")
+    record = dict(root.attrs["genotype_store"])
+    for fileset in record["filesets"]:
+        for name in ("pgen", "psam", "pvar"):
+            pin = fileset[name]
+            pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    for pin in record["inputs"]:
+        pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    del root.attrs["alid_mmap"]
+    return copy, root, record
+
+
+def writer_for_test_store(path: Path, variants: Variants, **more: Any) -> StoreWriter:
+    """A writer with the Test Store's geometry and encoding: near_bp 3 Mb, far_bp 10 Mb, n = 771,
+    k = 10, the Test Store's scale and `T_PARTNER`; `more` adds or replaces arguments."""
+    arguments: dict[str, Any] = {
+        "encoding": REncoding(R_SCALE),
+        "near_bp": 3_000_000,
+        "far_bp": 10_000_000,
+        "n": 771,
+        "k": 10,
+        "t_partner": T_PARTNER,
+    }
+    return StoreWriter.create(path, variants=variants, **{**arguments, **more})
