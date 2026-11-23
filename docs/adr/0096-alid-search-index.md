@@ -12,7 +12,7 @@ store; ADR 0089 the identity the keys are made of, and ADR 0095 the decoder that
 **Who decided.** The owner, 15 November 2026, on #403's cold clump timing: finding the variants
 of 37 Analyses took 94 s of the 272 s they took at r² 0.01, and 59 s of that was reading ALID
 strings through Zarr's variable-length path. The design is the engine's, whose variant table
-searches a fixed-width ALID sidecar (opengwasdb `variants/axis.py` and its ld-store §10a), adapted to
+searches a fixed-width ALID sidecar (`opengwasdb/variants/axis.py` and its ld-store §10a), adapted to
 a Zarr array a reader can fetch over HTTP.
 
 ## Context

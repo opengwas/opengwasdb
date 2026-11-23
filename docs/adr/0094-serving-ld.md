@@ -49,12 +49,12 @@ its job contract from here where it fits (Consequences):
 - **How a query runs.** Every data query is a job keyed by (user, canonical query hash) in a
   Redis queue (its opengwas/ogld#11). Each API process runs **one** worker coroutine, which claims one job at
   a time and runs its store query on a bounded thread pool in the same process
-  (`ogdb_api/operations.py`); more throughput means more API processes on one Redis, whose
+  ([ogdb-api's operations.py](https://github.com/opengwas/ogdb-api/blob/9d36e76882e00b0918c8330864116bb640198bac/ogdb_api/operations.py)); more throughput means more API processes on one Redis, whose
   admission is shared (its opengwas/ogld#18). Its stress run measured 0.2 jobs/s for one process, and "latency
   grows with queue depth, not with memory" (DEVLOG, its opengwas/ogld#10).
 - **Limits a job meets.** A store query that runs past `OGDB_STORE_TIMEOUT_SECONDS` (30 s) fails
   terminally; the query cannot be interrupted, so its thread and release slot stay held until it
-  returns (`ogdb_api/planner.py`, `BackendLimiter`).
+  returns ([ogdb-api's planner.py](https://github.com/opengwas/ogdb-api/blob/9d36e76882e00b0918c8330864116bb640198bac/ogdb_api/planner.py), `BackendLimiter`).
 - **How a result is returned.** The client polls `GET /api/jobs/{id}` at the interval the API
   recommends, then reads the result: inline up to 10,000 rows, else immutable NDJSON pages, at
   most 100,000 rows and 50 MB a job, held in a results cache of 1 GiB until every page is read

@@ -34,10 +34,11 @@ the spelling to them. A lookup given a deletion's reference-first ALID refuses
   label.
 - A copy can drift, and drift is silent: it flips the sign of r for some variants. The fixture
   prevents it. `orient.tsv`, `chromosomes.tsv` and `reversed.tsv` were written by
-  `tests/ld/data/identity/make_fixture.py` running the engine's functions from the engine's pixi
+  [ogld's `make_fixture.py`](https://github.com/opengwas/ogld/blob/147f54dc9ab1be1e4da4f6856edd1f68797abb79/tests/data/identity/make_fixture.py) running the engine's functions from the engine's pixi
   environment. The script refuses an engine checkout that is dirty, or that is not the one
   `opengwasdb` was imported from, and each file names the engine commit on its first line.
-  `tests/ld/test_identity_conformance.py` needs no engine at test time.
+  [ogld's conformance test](https://github.com/opengwas/ogld/blob/147f54dc9ab1be1e4da4f6856edd1f68797abb79/tests/test_identity_conformance.py) needed no engine at test time
+  (today `tests/ld/test_sorted_spelling_conformance.py` holds the same fixtures).
 - Refusals are held to the engine's message and `reason`, and the fixture has rows with two
   faults, so the engine's order is tested: the chromosome, then **ALT before REF** (the engine's
   effect allele is the ALT), then the position, then identical alleles. Moving any check fails a

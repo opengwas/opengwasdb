@@ -57,7 +57,7 @@ already-running decode jobs before the read releases its buffers. The executor's
 Python shutdown waits for its workers. Applications still budget zarr's I/O helper threads
 separately; this is not a process-wide thread limit.
 
-The implementation was checked against zarr 3.4.2's `codecs/sharding.py`, especially
+The implementation was checked against zarr 3.4.2's [sharding codec](https://github.com/zarr-developers/zarr-python/blob/v3.4.2/src/zarr/codecs/sharding.py), especially
 `_ShardIndex`, `_get_index_chunk_spec`, `_shard_index_size` and `_shard_index_byte_range`.
 It calls none of those private methods. It uses public codec descriptions, metadata key
 encoding, StorePath.get and byte requests. Zarr remains the format, metadata parser,
