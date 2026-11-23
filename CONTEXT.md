@@ -1,6 +1,6 @@
 # OpenGWASDB Domain Glossary
 
-OpenGWASDB stores, validates, and queries large collections of GWAS and QTL summary statistics as standalone releases. The domain language separates source observations, physical storage layout, reference completion, and query behaviour.
+OpenGWASDB stores, validates, and queries large collections of GWAS and QTL summary statistics as standalone releases. The domain language separates source observations, physical storage layout, reference completion, and query behaviour. LD Stores, which publish linkage disequilibrium without the genotypes it came from, have their own section after the engine's terms (**LD Store**).
 
 ## Language
 
@@ -84,7 +84,7 @@ The guarantee a Store Release makes about which source associations it retains, 
 Whether a Store Release contains only source-observed associations or has also been completed against a reference variant set. Observed-Only and Reference-Completed releases share query concepts but differ in whether imputed associations may be present.
 
 **LD Reference Panel**:
-The declared ancestry-specific LD resource used for reference completion. It defines the **Reference Variant Set** and provides LD information used to infer imputed associations.
+The declared ancestry-specific LD resource used for reference completion. It defines the **Reference Variant Set** and provides LD information used to infer imputed associations. It is not an **LD Store** (see the LD Stores section) and not a **Source Panel**: an LD Store is published LD that clumping and proxy lookup read, built from a Source Panel's genotypes; an LD Reference Panel is what completion reads to impute.
 
 **Analysis Catalogue** _(superseded, ADR 0027)_:
 Formerly: the complete list of candidate Analyses for ingestion, persisted by OpenGWASDB itself. Superseded by the `opengwasdb-stores` registry, which performs the same annotate-then-subset selection in a separate repository. OpenGWASDB retains the annotator functions (ancestry assignment, effect-scale standardisation) as reusable logic, but no longer persists a Catalogue of its own — a Store Release no longer depends on one to be interpretable (see **Analytical Metadata**).
@@ -152,13 +152,16 @@ The correlation between two Analyses' association statistics under the null — 
 A release-level derived structure for a Dense Store giving Rho between every pair of Analyses. It is optional provenance-bearing metadata (which variants and null threshold produced it), not part of the association data, and shares the Store's Analysis identity and query concepts.
 
 **Variant Identity**:
-The canonical within-Store variant key is ALID, `chr:pos:A1:A2`, after upper-casing, trimming and left alignment. Where the two alleles are one length (an SNV or a substitution), A1 is alphabetically first and A2 the other; where they differ (an indel), A1 is the reference allele the source declares, so an insertion and the deletion of the same sequence are two variants (format 0.2.2, ADR 0079). An indel whose source declares no reference names no ALID and is dropped. A lower-case base is the same base, so `a`/`g` and `A`/`G` are one variant on every layout, and a statistic is signed against the upper-cased pair's A1 (issue #360). Cross-Store identity is the pair (**Reference Assembly**, ALID).
+The canonical within-Store variant key is ALID, `chr:pos:A1:A2`. Each allele is upper-cased and stripped of whitespace, and must be one of A, C, G, T; nothing else is done to it, and in particular **no left alignment**. Where the two alleles are one length (an SNV or a substitution), A1 is alphabetically first and A2 the other. Where they differ (an indel), a GWAS Store's A1 is the reference allele the source declares, so an insertion and the deletion of the same sequence are two variants (format 0.2.2, ADR 0079); an LD Store still sorts an indel's two alleles, as GWAS Stores of formats 0.2.0 and 0.2.1 do, until #462 moves it. An indel whose source declares no reference names no ALID and is dropped. A lower-case base is the same base, so `a`/`g` and `A`/`G` are one variant on every layout, and a statistic is signed against the upper-cased pair's A1 (issue #360). Cross-Store identity is the pair (**Reference Assembly**, ALID).
 
 **Store Variant Table**:
 The Store-wide union of canonical variants referenced by its Analyses. Each variant occurs once in a Store Release, independently of how many Analyses report it.
 
 **Variant Index**:
 A compact Store-local reference to a row in the Store Variant Table. It has no identity or stability guarantee outside its Store Release.
+
+**ALID Search Index**:
+The sorted array of fixed-width keys a Store's variant table keeps so an ALID is found without a scan: each key is the ALID's UTF-8 bytes NUL-padded to 32 bytes, with the Store Variant Table row it names. An ALID wider than the slot, which only an indel can be, is left out, never truncated into it, and is found by an exact scan at its position, so a miss in the index never means "absent" on its own. `opengwasdb.variants.axis.is_indexable_alid` is the one rule for what it holds (issue #127; `store-format.md`). An LD Store keeps the same structure over its own **Variant Set** (**ALID Index**, in the LD Stores section). Not the **Variant Index**, which is a row reference.
 
 **Variant Routing**:
 Deciding which **Variant Index** each source coordinate of a build reaches, and what rs identifier the variant it reaches carries (`opengwasdb.variants.routing`, ADR 0071). The authority is either the build's own sources, read once and lifted from hg19 to GRCh38 (Pass 1), or a Variant Reference, a routing frozen as an artifact. Routing re-orients a statistic a reverse-strand lift swapped, resolves associations that reach one place by Association Admission's duplicate rule (agreeing ones collapse, conflicting ones are dropped; ADR 0072), and refuses rather than guesses where two loci or two names collide. Distinct from routing an Analysis by its **Assigned Ancestry**, which decides which release it belongs to, not where its associations land.
@@ -234,6 +237,143 @@ _Avoid_: check, validator, seam — a rule is the unit a caller names and a test
 What one Validation Rule reports about one target: the rule's name, an error, a warning or a skip, the message, and the target it judged. A release fails when any rule reports an error; a warning names something a reader should know about a valid release, such as an infinite SE; a skip says the rule could not judge that target and names why — the rules that blocked it, or that it had nothing to judge — so a skip never reads as a pass. `validate --format json` prints every finding, skips included, and `errors`, `warnings` and `skipped` project the same records (spec §20.1).
 _Avoid_: error string, pass — a finding carries the rule that found it, and a skip is not a finding that everything was well.
 
+## LD Stores
+
+An LD Store holds linkage disequilibrium (LD) per ancestry, in a form that can be published without the genotypes it came from and read in pieces. Clumping, proxy lookup and LD matrices read only that. The language separates what is stored, what a reader is told about a pair, and when a request is refused. It reuses the variant vocabulary above: **Variant Identity** (ALID, A1) and **Reference Assembly** mean exactly what they mean there. The code that builds and reads LD Stores is `opengwasdb.ld`, and its decisions are ADRs 0087–0101 (formerly ogld's own numbering).
+
+### The store
+
+**LD Store**:
+The published LD of one **Source Panel** on one **Reference Assembly**, after **PC Adjustment**: its **Near Band**, its **Far Pairs**, its **Partner Rows** (0.2.0), its **Variant Set**, its **ALID Index** and its provenance, one per (Source Panel, Reference Assembly) (ADR 0087). It holds no individual-level data. Its aggregate statistics, such as A1 frequencies beside the sample count, carry some risk of membership inference, which the decision to publish LD accepts (ADR 0087).
+_Avoid_: LD panel, LD Reference Panel — the engine's **LD Reference Panel** is the resource reference completion reads to impute, which an LD Store is not; LD matrix, which is one read of an LD Store.
+
+**Genotype Store**:
+A public Source Panel's existing pgen filesets plus a local sidecar holding its Variant Set,
+PC-adjustment data and provenance. LD is computed on the host with the same Pair Answers and
+Refusals as an LD Store; publishing the genotypes is a separate decision (owner, #18,
+20–21 November 2026; ADR 0100).
+_Avoid_: genotype cache — decoded calls are not retained.
+
+**Source Panel**:
+The individual-level genotypes an LD Store is built from, such as HGDP+1kGP EUR (n = 665, its unrelated samples; ADR 0088, decision 11) or Pan-UKB's UK Biobank EUR (n = 420,542, imported after adjustment for 15
+named covariates; ADR 0101): one ancestry's samples and their sample count n. Restricted genotypes never leave their host; only their LD Store is published. Public panels
+may also answer through a local **Genotype Store**, without a publishing decision. The public
+**Test Panel** slice is committed with the owner's approval (ADR 0087, clarification; ADR 0088, decision 7).
+_Avoid_: reference panel, LD panel (both collide with the engine's **LD Reference Panel**); cohort, which names a study.
+
+**Variant Set**:
+The variants an LD Store covers: those of its Source Panel that pass the build's recorded filters (by default MAC ≥ 20, and INFO > 0.8 for an imputed panel) and have nonzero genotype variance. The genotypes must be complete: a missing call is refused, never imputed. A variant outside it is **Absent**.
+_Avoid_: SNP list, panel variants; not the engine's **Reference Variant Set**, which is the variant set an **LD Reference Panel** defines for completion, nor its **Store Variant Table**, which is the union of a GWAS Store's variants.
+
+**ALID Index**:
+The Variant Set's ALIDs as fixed-width keys a search can run over: each entry is an ALID's UTF-8 bytes NUL-padded to 32 bytes, sorted bytewise, with the Variant Set row it names. It is the LD Store's own **ALID Search Index**, with the engine's fixed width and left-out rule, and an ALID wider than the slot is left out of it and found by the exact scan at its position, never truncated into it (opengwasdb issue #127; ADR 0096). A validated local companion searches mapped keys for short and long lists alike (ADR 0098). Without a companion, a long list searches the canonical Zarr index one shard at a time and a short list takes the exact scan; wider ALIDs retain that scan on both paths, so an answer never changes.
+_Avoid_: variant lookup table, ALID map; **Variant Index**, the engine's row reference, which is a different thing.
+
+**Near Band**:
+Every pair of Variant Set variants on one chromosome at most 3 Mb apart, each with its r: the part of an LD Store that is complete (ADR 0087). It never crosses a chromosome.
+_Avoid_: window — a window is what a request asks for; LD block — blocks partition a chromosome, and the band does not.
+
+**Far Pairs**:
+The pairs on one chromosome more than 3 Mb and at most 10 Mb apart whose r² reaches the **Far Threshold**, each with its r, once each in its earlier variant's row, so a matrix reads them (ADR 0093). They were the **Proxy Index**'s entries beyond 3 Mb, and a matrix read them without the index; the index is gone (#72), and they stand as they were. Any other pair 3–10 Mb apart has the **Bound**, not a 0.
+_Avoid_: long-range LD — that names the **Long-Range LD Regions**; sparse LD, which hides the rule that decides membership.
+
+**Proxy Index**:
+Retired (#72; ADR 0097). Per variant, every partner within the LD Store's far distance (10 Mb), on either side, whose r² reaches the **Far Threshold**, kept in both variants' rows so a variant's proxies were one read. It held every **Far Pair** and the Near Band's pairs at r² ≥ t_far again (owner, 7 November 2026; ld-store §11), and a 0.1.0 reader answered `proxies` and `clump` from it; from 0.2.0 they read the **Partner Rows**. A build writes no index, but an older store may still hold one, which nothing reads but the migration that derives a missing Far Pairs from it (`derive_far_pairs`, ld-store §11). The term stays for reading a 0.1.0 store and for the record.
+_Avoid_: far index, LD index; sparse band, which suggests no threshold.
+
+**Frame**:
+The unit of storage and of reading for the store's partner component (the **Partner Rows**, below): the rows of 16 consecutive variants of one chromosome, compressed as one zstd frame with its checksum and content size, and never cut across a frame. A reader takes G from the component's attributes, never assumes it; from format 0.2.0 a Frame is one positional read or HTTP Range request and one decompress.
+_Avoid_: chunk, shard, block — a Zarr chunk and a Near Band shard are other units; page, which is the operating system's.
+
+**Partner Threshold** (t_partner):
+The r² a pair within 3 Mb must reach to be in a store's **Partner Rows** (below). From format 0.2.0 each LD Store records its own, set per Source Panel as a build input with no default, and never above t_far: 0.01 for the HGDP+1kGP stores, 0.001 for UK Biobank EUR, where it equals t_far. A request's r2 is compared against it, and is a different number.
+_Avoid_: clumping threshold, r² threshold, r² floor, all of which name a request's r2; t_far, which rules the 3–10 Mb pairs.
+
+**Partner Floor** (`partner_code_floor`):
+The code a store's **Partner Threshold** cuts at, by `ld-store.md` §3's floor rule. From format 0.2.0 each store records it, and every Near Band code within 3 Mb at or above it is an entry in its **Partner Rows** (below).
+_Avoid_: far code floor, which is the same rule at t_far; cutoff, floor, unqualified.
+
+**Partner Rows**:
+Per variant, every partner within 10 Mb on either side whose r² reaches the **Partner Threshold** within 3 Mb and t_far beyond it, with its code, in both variants' rows so one variant's partners are one **Frame** read. They hold every entry the retired **Proxy Index** held, since the Partner Threshold is never above t_far; from format 0.2.0 `clump` and `proxies` read them and nothing else, and they replaced the index (#72; ADR 0097; `docs/spec/partner-rows.md`).
+_Avoid_: sparse band, row index, clump index; "Proxy Index" for the new component, which holds more than the index does.
+
+**Far Threshold** (t_far):
+The r² a 3–10 Mb pair must reach to be among the Far Pairs: t_far = max(0.001, q / (n − k − 1)), with q = 20.84 the χ²₁ upper quantile at p = 5×10⁻⁶, n the Source Panel's sample count and k the number of PCs adjusted for (ADR 0087). Each LD Store records its own t_far, and that recorded value is the one every reader uses.
+_Avoid_: r² threshold or clumping threshold, unqualified: a request's r2 is a different number, compared against this one.
+
+**PC Adjustment**:
+Computing LD as the correlation of genotypes after regressing out the first k principal components of the Source Panel that the **PC Check** keeps, read from a **PC File**; a build computes no PCs (ADR 0088). It gives the LD whose null z-score correlations match a PC-adjusted GWAS; k = 0 is unadjusted LD. An imported LD matrix may have adjusted for more covariates than PCs: provenance names them all, and t_far's k counts them.
+_Avoid_: LD correction; covariate adjustment, which is wider than PCs.
+
+**PC File**:
+Precomputed principal components for a Source Panel's samples, in plink2's `.eigenvec` layout, which a build reads and records by hash and declared source. They are our own, made outside the build by a recipe script that follows gnomAD's subcontinental method with the **Long-Range LD Regions** excluded (ADR 0088).
+_Avoid_: eigenvec, which names the layout, not the role.
+
+**PC Check**:
+The builder's scan of every PC in the **PC File** for a **Local PC**, by the owner's rule: one 4 Mb window explains ≥ 10% of it, that share beats the window-side null, and the rest of the genome explains at most 0.05 of what that window does. The covariates are the first up to 10 PCs kept; a build with fewer than 5 kept is refused. Provenance records the scan, the dropped PCs and the null (ADR 0088).
+_Avoid_: PC QC, unqualified.
+
+**Local PC**:
+A PC the **PC Check** drops: an axis of one stretch of genome, such as an inversion's karyotype, rather than ancestry. It is regressed out of nothing.
+_Avoid_: bad PC, artefact PC; long-range PC, which confuses it with the **Long-Range LD Regions**.
+
+**Long-Range LD Region**:
+A genomic region, such as the MHC or the 8p23 and 17q21 inversions, whose extended LD can dominate principal components. The PCA that makes a **PC File** leaves these regions out, and the **PC Check** drops any **Local PC** that still tracks one.
+_Avoid_: LD block — the engine's LD blocks partition the genome for its eigendecompositions and are a different list.
+
+**PC Diagnostic**:
+An LD Store's record of what PC Adjustment did to chance LD: on one seeded set of unlinked (cross-chromosome) pairs, the share at r² ≥ 0.01 before adjustment, after it, and as sampling alone predicts.
+_Avoid_: QC metric, unqualified.
+
+**Published LD Source**:
+A published pre-computed matrix and its indexed variant TSV from which an LD Store
+is imported. Pan-UKB EUR's Hail BlockMatrix holds residual covariance; import
+normalises its diagonal to correlation, lifts GRCh37 to GRCh38, checks alleles and
+orients to engine A1. Provenance pins the inputs and counts losses (ADR 0101).
+_Avoid_: genotype panel — the import never reads individual-level data.
+
+**Source Kind**:
+Whether an LD Store was built from a Source Panel's genotypes or imported from a published LD matrix, such as Pan-UKB's; provenance records it (ld-store §7).
+_Avoid_: origin, input type.
+
+**Test Panel**:
+The committed real subset of HGDP+1kGP EUR under `tests/ld/data/test-panel/`, with its PC File and independent reference r: the genotypes every test that needs genotypes reads. It keeps all 771 of EUR's v2 members, not the 665 unrelated ones a build keeps (owner's ruling), so its n, t_far and far code floor are its own.
+_Avoid_: fixture panel, toy data; synthetic panel, which the LD tests do not use.
+
+**Test Store**:
+The LD Store written from the Test Panel's reference r at k = 10 and n = 771, at HGDP+1kGP's × 511, under `tests/ld/data/test-panel/store/`, which reader and query tests open.
+_Avoid_: fixture store.
+
+### What a reader is told
+
+**Pair Answer**:
+What an LD Store says about one pair of Variant Set variants: exactly one of the **Stored r**, the **Bound** or **Not Measured**. A variant paired with itself is r = 1. An unstored pair is never a 0: a matrix gives it as NaN, or as the caller's **Fill** (ADR 0087).
+_Avoid_: value, when the answer may be a Bound.
+
+**Stored r**:
+A pair's r, signed to each variant's engine A1, as the LD Store holds it: exact to half the step of the store's own encoding, 1/(2 × r_scale) for the scale it records. That is 9.8×10⁻⁴ on an HGDP+1kGP store (× 511) and 2.4×10⁻⁴ on UK Biobank EUR (× 2047) (ADR 0090). Every threshold is judged on the Stored r, so a pair whose computed r² lies within about 2|r| × half that step of a threshold can fall on either side of it.
+_Avoid_: true r, for the value a reader gets; that is the computed r before quantisation.
+
+**Bound**:
+The Pair Answer "r² < t_far" for a 3–10 Mb pair that is not among the Far Pairs, judged on its Stored r. It is information about the pair, not its absence: it answers any question whose threshold is at or above t_far.
+_Avoid_: zero, missing, NA.
+
+**Not Measured**:
+The Pair Answer for a pair the LD Store holds nothing about: more than 10 Mb apart, or on different chromosomes.
+_Avoid_: zero, missing, unlinked.
+
+**Absent**:
+What an LD Store says about a variant outside its Variant Set, and so about every pair it is in. Distinct from a pair of present variants being Not Measured.
+_Avoid_: Not Measured, for a variant.
+
+**Fill**:
+The number a caller asks a matrix query to put in place of every unstored pair, such as 0. Without one, an unstored pair is NaN. A Fill acts on a query's result, never on the LD Store.
+_Avoid_: default value, missing value.
+
+**Refusal**:
+An LD Store request declined because answering it exactly would need a Pair Answer the store does not have: any window over its far distance (10 Mb), a window over 3 Mb with an r² threshold below t_far, or, from format 0.2.0, a window up to 3 Mb with an r² threshold below the **Partner Threshold**. A region wider than the far distance is refused too. A Refusal names its reason, the store it is about and, where a remedy exists, what to do instead — ask at or above the threshold that store records, or read a store that records a lower one — and is never replaced by an approximate answer (ADR 0087).
+_Avoid_: error, for an expected outcome; fallback or approximation, which is what a Refusal exists to prevent.
+
 ## Example dialogue
 
 Developer: "This UK Biobank biomarker batch has 1,000 Analyses sharing a variant axis. Should it be Dense?"
@@ -248,3 +388,20 @@ Developer: "For a molecular QTL store, do suggestive trans hits get expanded to 
 
 Domain expert: "No. Complete cis regions and significant trans regions within their existing boundaries. Suggestive singleton associations remain singletons."
 
+## Example dialogue: LD Stores
+
+Developer: "A user wants to clump at r² 0.001 with a 10 Mb window on HGDP+1kGP EUR. Can we treat the missing 3–10 Mb pairs as 0?"
+
+Domain expert: "No. Those pairs have a Bound, r² < 0.032, not a Stored r of 0. A threshold of 0.001 is below t_far, so the request is a Refusal. On the UK Biobank EUR LD Store, t_far is 0.001 and the same request is answered."
+
+Developer: "And at r² 0.05 with a 5 Mb window on AMR?"
+
+Domain expert: "AMR's t_far is 0.063 at k = 10, so 0.05 is below it, and that is refused too. With a 3 Mb window it is answered from the Partner Rows, whose rows hold every pair up to 3 Mb apart at or above AMR's Partner Threshold of 0.01; 0.05 is above it, so a pair they do not hold cannot reach it."
+
+Developer: "A hit isn't in the LD Store at all: it's below MAC 20 in this panel."
+
+Domain expert: "Then it is Absent. That is not the same as a pair being Not Measured, and the reader says which one it is."
+
+Developer: "A fine-mapping tool wants the LD matrix with zeros in it."
+
+Domain expert: "Then it passes a Fill of 0. Without one, the cells the store does not hold are NaN, and the matrix's positions and t_far say which of them are the Bound and which are Not Measured. The Fill changes the result, never the LD Store."
