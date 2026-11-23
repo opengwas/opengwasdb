@@ -11,7 +11,9 @@
   `store` and `layouts.dense` packages' re-exports, are imported on first use).
   `opengwasdb.query` keeps its public names and answers every query as before
   (`tests/test_store_reader_digests.py` pins the answers of the code before the
-  move). `log10_p` and the Top-Hit `z_critical` are computed without scipy: within
-  1e-15 of the exact value, and cutting every stored |z| where the scipy form did.
-  The 0.2.x Store Variant Table's pysam and SQLite reads stay in
-  `opengwasdb.variants.axis`, behind a `LegacyVariantTable` seam.
+  move). `log10_p` and the Top-Hit `z_critical` are computed without scipy:
+  `log10_p` is within 3.9e-16 relative error of a 50-digit reference across
+  -40 <= z <= 40 (809 points), and `z_critical` cuts every stored |z| where the
+  scipy form did. The 0.2.x Store Variant Table's pysam and SQLite reads move to
+  `opengwasdb.variants.legacy_table`, behind the Store Reader's
+  `LegacyVariantTable` seam.

@@ -26,20 +26,68 @@ def scipy_log10_p(z: np.ndarray) -> np.ndarray:
     return result
 
 
-def exact_log10_p(z: float) -> float:
-    """log10 of ``erfc(|z| / sqrt(2))`` to 50 digits, for |z| <= 1, by erf's Taylor series."""
-    assert abs(z) <= 1.0
+_PI = Decimal("3.14159265358979323846264338327950288419716939937510582097494459")
+
+
+def _taylor_log_erfc(y: Decimal) -> Decimal:
+    """``ln erfc(y)`` by erf's Taylor series: exact to the context's precision for y <= 3."""
+    term, total, n = y, Decimal(0), 0
+    while n == 0 or abs(term) > Decimal(10) ** -80:
+        total += term / (2 * n + 1)
+        n += 1
+        term = -term * y * y / n
+    return (1 - 2 * total / _PI.sqrt()).ln()
+
+
+def _continued_fraction_log_erfc(y: Decimal, depth: int = 4000) -> Decimal:
+    """``ln erfc(y)`` by Laplace's continued fraction, for y > 3, where the series
+    would need hundreds of digits to cancel:
+    erfc(y) = exp(-y²) / sqrt(pi) / (y + (1/2) / (y + 1 / (y + (3/2) / (y + ...))))."""
+    t = y
+    for n in range(depth, 0, -1):
+        t = y + (Decimal(n) / 2) / t
+    return -y * y - _PI.sqrt().ln() - t.ln()
+
+
+def exact_log10_p(z: float, *, method: str | None = None) -> float:
+    """log10 of ``erfc(|z| / sqrt(2))`` to 50 digits, for any |z| a test asks."""
     with localcontext() as context:
-        context.prec = 50
-        y = Decimal(abs(z)) / Decimal(2).sqrt()
-        term, total, n = y, Decimal(0), 0
-        while n == 0 or abs(term) > Decimal(10) ** -60:
-            total += term / (2 * n + 1)
-            n += 1
-            term = -term * y * y / n
-        pi = Decimal("3.14159265358979323846264338327950288419716939937510")
-        erf = 2 * total / pi.sqrt()
-        return float((1 - erf).ln() / Decimal(10).ln())
+        context.prec = 70
+        y = abs(Decimal(z)) / Decimal(2).sqrt()
+        if y == 0:
+            return 0.0
+        series = method == "series" or (method is None and y <= 3)
+        log_erfc = _taylor_log_erfc(y) if series else _continued_fraction_log_erfc(y)
+        return float(log_erfc / Decimal(10).ln())
+
+
+def test_the_two_references_agree_where_they_meet():
+    for z in (3.0, 4.243, 5.0, 6.0):
+        series = exact_log10_p(z, method="series")
+        assert series == exact_log10_p(z, method="fraction"), z
+
+
+#: 809 points over -40 <= z <= 40: every 0.1 in both signs, and the edges of the
+#: paths `log10_p_two_sided` takes (p near 1, the series' switch at |z| = 36.8,
+#: p subnormal at 37.5 and 0.0 at 38.5).
+GRID = np.concatenate(
+    [
+        np.linspace(0.0, 40.0, 401),
+        -np.linspace(0.05, 39.95, 400),
+        [1e-12, -1e-9, 1e-6, -1e-4, 37.5, -38.5, 26 * math.sqrt(2), -26 * math.sqrt(2) + 1e-9],
+    ]
+)
+
+
+def test_log10_p_is_within_4e_16_of_the_exact_value_across_minus_40_to_40():
+    assert len(GRID) >= 200 and GRID.min() == -39.95 and GRID.max() == 40.0
+    exact = np.array([exact_log10_p(float(z)) for z in GRID])
+    ours = log10_p_two_sided(GRID)
+    zero = exact == 0.0
+    assert np.all(ours[zero] == 0.0)
+    relative = np.abs(ours[~zero] - exact[~zero]) / np.abs(exact[~zero])
+    # The measured maximum is 3.9e-16, at |z| = 36.35 (stated in `stats.py`).
+    assert relative.max() < 4e-16, (relative.max(), GRID[~zero][relative.argmax()])
 
 
 #: Below this |z| scipy's own form loses digits: its p is ``0.5 - tiny`` doubled,
@@ -61,7 +109,7 @@ def test_log10_p_agrees_with_scipy_to_1e_12_below_37():
     assert relative.max() < 1e-12, (relative.max(), z[relative.argmax()])
 
 
-@pytest.mark.parametrize("z", [0.0, 1e-12, 1e-9, 1e-6, 1e-4, 2e-4, 1e-3, 0.3, 0.7, 1.0])
+@pytest.mark.parametrize("z", [0.0, 1e-12, 1e-9, 1e-6, 1e-4, 2e-4, 1e-3, 0.3, 0.7, 1.0, 47.8])
 def test_log10_p_is_exact_where_scipy_is_not(z: float):
     ours = float(log10_p_two_sided(np.array([z]))[0])
     exact = exact_log10_p(z)
