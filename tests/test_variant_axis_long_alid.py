@@ -18,6 +18,7 @@ from format_0_2_3 import as_0_2_3, with_fixed_width_alid_index
 
 from opengwasdb.store_reader.alid import ALID_WIDTH, is_indexable_alid
 from opengwasdb.store_reader.alid_index import FixedWidthAlidIndex
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
@@ -52,19 +53,22 @@ def test_the_fixture_alids_are_wider_than_the_index_slot():
 FORMS = ["sidecar", "fixed_width"]
 
 
-def _write(tmp_path, variants, form: str) -> None:
+#: The `format_version` that carries each form, which a bare axis directory names.
+VERSION = {"sidecar": CURRENT_FORMAT_VERSION, "fixed_width": "0.2.3"}
+
+
+def _write(tmp_path, variants, form: str) -> VariantAxis:
     write_variant_axis(tmp_path, variants, {})
     if form == "fixed_width":
         with_fixed_width_alid_index(tmp_path)
+    return VariantAxis(tmp_path, format_version=VERSION[form])
 
 
 @pytest.mark.parametrize("form", FORMS)
 def test_a_long_indel_resolves_to_itself_not_its_neighbour(tmp_path, form):
     """Each ALID returns its own row, or nothing -- never the other variant's."""
     short, long_ = _shared_prefix_pair()
-    _write(tmp_path, [short, long_], form)
-
-    va = VariantAxis(tmp_path)
+    va = _write(tmp_path, [short, long_], form)
     try:
         for expected in (short, long_):
             got = va.by_identifier(expected.alid)
@@ -81,10 +85,7 @@ def test_variants_that_fit_the_slot_still_use_the_fast_index(tmp_path):
     """The exact-scan fallback must not become the normal path."""
     short, long_ = _shared_prefix_pair()
     ordinary = _variant("10", 2_000_000, "A", "G")
-    write_variant_axis(tmp_path, [short, long_, ordinary], {})
-    with_fixed_width_alid_index(tmp_path)  # the 0.2 series' index, which this is about
-
-    va = VariantAxis(tmp_path)
+    va = _write(tmp_path, [short, long_, ordinary], "fixed_width")  # the 0.2 index
     try:
         assert is_indexable_alid(ordinary.alid)
         assert va.by_identifier(ordinary.alid).alid == ordinary.alid
@@ -105,9 +106,7 @@ def test_the_batched_lookup_path_resolves_long_indels_too(tmp_path, form):
     """
     short, long_ = _shared_prefix_pair()
     ordinary = _variant("10", 2_000_000, "A", "G")
-    _write(tmp_path, [short, long_, ordinary], form)
-
-    va = VariantAxis(tmp_path)
+    va = _write(tmp_path, [short, long_, ordinary], form)
     try:
         got = va.indices_by_identifiers([short.alid, long_.alid, ordinary.alid])
         assert sorted(int(i) for i in got) == [0, 1, 2], (
@@ -239,10 +238,28 @@ def test_repeated_index_keys_are_counted_across_window_boundaries(tmp_path, monk
     two windows must still be counted, and a key compared with itself must not be."""
     import numpy as np
 
-    from opengwasdb.validation.rules import variants
+    from opengwasdb.store_reader import alid_index
 
     keys = np.array([b"a", b"b", b"b", b"c", b"d", b"d", b"d"], dtype="|S4")
-    path = tmp_path / "variant_alid_bytes.npy"
-    np.save(path, keys)
-    monkeypatch.setattr(variants, "_KEY_WINDOW", window)
-    assert variants._adjacent_repeats(path) == 3
+    index = alid_index.FixedWidthAlidIndex(keys, np.arange(len(keys), dtype="int32"))
+    monkeypatch.setattr(alid_index, "_KEY_WINDOW", window)
+    assert index.repeated_keys() == 3
+
+
+@pytest.mark.parametrize("form", FORMS)
+def test_alids_come_back_in_the_order_asked_on_either_index(tmp_path, form):
+    """`[long, short]` gives `[1, 0]`: the short ALID is row 0 and the long one row 1.
+
+    The 0.2 path once answered the index's hits first and appended the scanned long
+    ALIDs, giving `[0, 1]`; the same lookup of the 0.3.0 release rewritten from it
+    gave `[1, 0]`, so the two formats disagreed (#467).
+    """
+    short = _variant("1", 100, "A", "G")
+    long_ = _variant("1", 200, "A", "A" + "C" * (ALID_WIDTH + 8))
+    assert not is_indexable_alid(long_.alid) and is_indexable_alid(short.alid)
+    va = _write(tmp_path, [short, long_], form)
+    try:
+        assert va.indices_by_identifiers([long_.alid, short.alid]).tolist() == [1, 0]
+        assert va.indices_by_identifiers([short.alid, long_.alid]).tolist() == [0, 1]
+    finally:
+        va.close()

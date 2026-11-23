@@ -153,17 +153,19 @@ def variant_rsid_rows_path(store_path: str | Path) -> Path:
 class VariantAxis:
     """Read a Store's variants: its search indexes here, its Variant Table through `legacy`."""
 
-    def __init__(self, store_path: str | Path, legacy: LegacyVariantTable):
+    def __init__(
+        self, store_path: str | Path, legacy: LegacyVariantTable, *, format_version: str
+    ):
         self.store_path = Path(store_path)
         self.table_path = variant_table_path(self.store_path)
         self.tabix_path = variant_tabix_path(self.store_path)
         self.offsets_path = variant_offsets_path(self.store_path)
         self._offsets = np.load(self.offsets_path, mmap_mode="r")
         self._legacy = legacy
-        # The ALID index, whichever one the release carries (`open_alid_index`): format
-        # 0.3.0's sidecar, the 0.2 series' fixed-width pair, or, on a release built before
-        # issue 029, none, when every ALID is found by scanning the table.
-        self._alid_index = open_alid_index(self.store_path)
+        # The ALID index the release's `format_version` carries, and no other
+        # (`open_alid_index`): format 0.3.0's sidecar or the 0.2 series' fixed-width pair.
+        # A release missing it is refused here, never read by scanning the table.
+        self._alid_index = open_alid_index(self.store_path, format_version)
         # mmap'd rsid search index — present on stores built after issue #109.
         # Absent on older stores, where rsid lookups find nothing (as they did
         # before that index existed).
@@ -181,8 +183,8 @@ class VariantAxis:
         return int(len(self._offsets))
 
     @property
-    def alid_index(self) -> AlidIndex | None:
-        """The release's ALID index (`opengwasdb.store_reader.alid_index`); None if it has none."""
+    def alid_index(self) -> AlidIndex:
+        """The release's ALID index (`opengwasdb.store_reader.alid_index`)."""
         return self._alid_index
 
     def close(self) -> None:
@@ -247,8 +249,12 @@ class VariantAxis:
         stores built before it. Unlike `by_identifier`, an rsid contributes
         *every* row it names, not only the lowest-indexed one. Identifiers that
         don't resolve are dropped, matching `by_identifier()`'s None-on-miss
-        semantics. The returned order is not guaranteed to match the input
-        order.
+        semantics.
+
+        The order: the ALIDs' rows first, in the order the ALIDs were asked, then
+        the rsids' rows, each rsid's rows ascending, in the order the rsids were
+        asked. A Dense `lookup` keeps this order; a Ragged or Hybrid `lookup`
+        returns its associations in row order whatever it was asked.
         """
         parsed_pairs, alias_identifiers = _split_identifiers(identifiers)
         indices = self._indices_of_alids(parsed_pairs)
@@ -258,13 +264,13 @@ class VariantAxis:
     def _indices_of_alids(self, parsed_pairs: list[tuple[str, ParsedAlid]]) -> list[int]:
         """The rows the ALIDs name, in the order asked: the ALID index first, the exact
         scan for any it cannot be asked about (one too wide for the 0.2 series' slot,
-        #127) or on a release without one.
+        #127).
 
         In the order asked on either index: a 0.2 release's scanned rows once came after
-        its indexed ones, so a lookup naming a long ALID listed its rows in another order
-        than the same lookup of the 0.3.0 release rewritten from it (#467).
+        its indexed ones, so a Dense lookup naming a long ALID listed its rows in another
+        order than the same lookup of the 0.3.0 release rewritten from it (#467).
         """
-        rows = self._search([query for query, _ in parsed_pairs])
+        rows = self._alid_index.search([query for query, _ in parsed_pairs])
         indices: list[int] = []
         for (_, parsed), row in zip(parsed_pairs, rows.tolist(), strict=True):
             if row >= 0:
@@ -274,11 +280,6 @@ class VariantAxis:
                 if record is not None:
                     indices.append(record.variant_index)
         return indices
-
-    def _search(self, alids: Sequence[str]) -> np.ndarray:
-        if self._alid_index is None:
-            return np.full(len(alids), UNINDEXED, dtype=np.int64)
-        return self._alid_index.search(alids)
 
     def _indices_of_aliases(self, aliases: list[str]) -> list[int]:
         """Every row each rsid names, not just the first: a phewas over rs123 at
@@ -300,7 +301,7 @@ class VariantAxis:
         return indices
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
-        row = int(self._search([_canonical(parsed)])[0])
+        row = int(self._alid_index.search([_canonical(parsed)])[0])
         if row == UNINDEXED:
             return self._scanned_record(parsed)
         return None if row == ABSENT else self.by_index(row)
@@ -373,7 +374,7 @@ class VariantAxis:
                 records[index] = record
         return records
 
-    def identity_by_indices(self, variant_index: np.ndarray) -> dict[str, np.ndarray] | None:
+    def identity_by_indices(self, variant_index: np.ndarray) -> dict[str, np.ndarray]:
         """chromosome/position/effect_allele/other_allele/alid for `variant_index`,
         resolved without a table scan.
 
@@ -385,12 +386,7 @@ class VariantAxis:
         sought one at a time with `by_index()`, bounded by how many a query
         returns. `rsid` is the one identity field this can't produce: it isn't
         part of the ALID, so it's the only reason a caller still needs `by_indices()`.
-
-        Returns `None` when the release has no ALID index (built before issue
-        029) -- callers should fall back to `by_indices()` there.
         """
-        if self._alid_index is None:
-            return None
         vi = np.asarray(variant_index, dtype="int64")
         alids = self._alid_index.alids(vi)
         for slot in [k for k, alid in enumerate(alids) if alid is None]:

@@ -259,7 +259,10 @@ def test_validator_rejects_a_missing_alid_sidecar_file(request, fixture, name):
     result = validate_store(store)
 
     assert result.failed() == {"envelope.required"}
-    assert f"missing {name} (ALID sidecar)" in result.errors
+    # The required entries are the files `alid_index_kind` names for 0.3.0; a Dense
+    # release's message says to rebuild, as it did for the fixed-width pair.
+    rebuild = f"missing {name} — rebuild the store to generate the ALID search index"
+    assert (rebuild if fixture == "dense_store_path" else f"missing {name}") in result.errors
 
 
 def test_a_0_3_0_release_carrying_the_fixed_width_pair_fails_its_envelope(dense_store_path):

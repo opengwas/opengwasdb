@@ -82,10 +82,17 @@ def _sidecar_version(version: str) -> bool:
 def as_0_2_3(release: Path) -> Path:
     """Turn the 0.3.0 release at `release` into the 0.2.3 one its build would have written."""
     for directory in components(release):
-        with_fixed_width_alid_index(directory)
-        manifest = directory / "manifest.json"
-        text = manifest.read_text(encoding="utf-8")
-        stamp = '"format_version": "0.3.0"'
-        assert text.count(stamp) == 1, f"{manifest} is not stamped 0.3.0 once"
-        manifest.write_text(text.replace(stamp, '"format_version": "0.2.3"'), encoding="utf-8")
+        component_as_0_2_3(directory)
     return release
+
+
+def component_as_0_2_3(directory: Path) -> Path:
+    """One Store Release directory -- a release, or a Hybrid's nested Dense Component --
+    turned from 0.3.0 into 0.2.3: the fixed-width pair, and the stamp that carries it."""
+    with_fixed_width_alid_index(directory)
+    manifest = directory / "manifest.json"
+    text = manifest.read_text(encoding="utf-8")
+    stamp = '"format_version": "0.3.0"'
+    assert text.count(stamp) == 1, f"{manifest} is not stamped 0.3.0 once"
+    manifest.write_text(text.replace(stamp, '"format_version": "0.2.3"'), encoding="utf-8")
+    return directory

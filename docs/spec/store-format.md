@@ -4,17 +4,22 @@ Status: draft
 Format version written (on the epic #450 branch, released once #468-#472 are in): `0.3.0`, `0.2.3`'s features with the variable-length ALID sidecar (§4, ADR 0105), which every build and completion writes and `ogdb rewrite-release` derives from a `0.2.3` release (§21.4)  
 Also readable: `0.2.3`, `0.2.2`, `0.2.1` and `0.2.0` (Zarr v3 with sharding, §10a; the fixed-width ALID index; indels spelt reference first from `0.2.2`, sorted before it), and `0.1.0` (Zarr v2); nothing else (§21). Sections below that name no version describe `0.2.2` and every later one.
 
-This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.2.2**, what every builder of this package writes
-since #381: Zarr v3 with the sharding codec (§10a), an indel's ALID spelt reference
-first (§4, ADR 0079), and a Ragged release's optional `regions.tsv` (§1, §17);
+This document defines the contract for valid OpenGWASDB Store Releases. On the
+epic #450 branch every builder and completion of this package writes
+`format_version` **0.3.0**: 0.2.3's features with the variable-length ALID sidecar
+in place of the fixed-width ALID index (§4, ADR 0105); it is released once #468-#472
+are in. It also describes **0.2.3**, which every builder wrote from #338 to #467
+(0.2.2 and the count of associations left out for an SE above 65,504, §7a); **0.2.2**,
+what every builder wrote from #381 to #338: Zarr v3 with the sharding codec (§10a),
+an indel's ALID spelt reference first (§4, ADR 0079), and a Ragged release's optional
+`regions.tsv` (§1, §17);
 **0.2.1**, which package 0.9.0 stamps a Ragged release carrying `regions.tsv`, its
 indels sorted (issue #430); **0.2.0**, the same layout with neither, which every
 builder wrote from #247 and the converter still writes; and **0.1.0** (Zarr v2),
-which a reader still reads and a builder no longer writes. The three 0.2 releases
-are "the 0.2 series" below wherever the layout is meant. Everything below that is
-not about the physical layout, the indel ALID or the region table holds for all
-four: statistic planes carry a
+which a reader still reads and a builder no longer writes. The four 0.2 releases
+are "the 0.2 series" below wherever the layout is meant; 0.3.0 has the same layout.
+Everything below that is not about the physical layout, the ALID index, the indel
+ALID or the region table holds for all of them: statistic planes carry a
 declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
 is a per-variant baseline plus a per-cell `int8` logit residual rather than a
 `float32` plane, and `se` is either `float16` or — when the build measures the
@@ -684,7 +689,8 @@ full-byte order. Every ALID is indexed, however long, and no ALID names two rows
 `variant_alid_bytes.npy`/`variant_alid_rows.npy` (`|S32`, sorted, leaving out every
 ALID wider than 32 bytes) are not written from 0.3.0, and a 0.3.0 release that
 carries them fails its closed envelope; a 0.2 release keeps them, and a reader
-reads them there.
+reads them there. A reader opens the index a release's `format_version` carries and no
+other, whatever other files lie beside it, and refuses a release missing it (ADR 0105 §5).
 
 Long alleles MAY use deterministic hashed ALIDs as compact identifiers, but the complete normalised alleles MUST be retained once per variant so exact export and validation do not depend on an irreversible hash.
 
@@ -2463,7 +2469,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `manifest.format_stamp` | release | check | a 0.2 release is stamped the lowest `format_version` its features use: 0.2.2 when its indels are spelt reference first, whether or not it declares `regions.tsv`; otherwise 0.2.1 when it declares `regions.tsv`, 0.2.0 when it does not (§21.3); a release newer than 0.2.2 is not judged, and the rule warns that the package must be upgraded (§21.2) |
 | `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table |
 | `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
-| `variant_table.alid_index` | release | fold | the 0.2 series' fixed-width ALID search index covers exactly the indexable ALIDs, collision-free; a 0.3.0 release carries none, and has nothing here to judge |
+| `variant_table.alid_index` | release | fold | the 0.2 series' fixed-width ALID search index covers exactly the indexable ALIDs, collision-free; not judged on a 0.3.0 release, which carries the sidecar instead |
 | `variant_table.alid_sidecar` | release | fold | from format 0.3.0, the ALID sidecar names each row by the ALID the table gives it, its offsets start at 0, rise with every row and end at its byte array's end, its order names every row once, each key is the first 24 bytes of its row's ALID, and the keys run in the strict order of the full ALID bytes (§4, ADR 0105); not judged on an earlier release |
 | `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |

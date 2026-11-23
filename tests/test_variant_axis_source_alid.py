@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
 from opengwasdb.store_reader.variant_axis import parse_variant_line as _parse_variant_line
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
@@ -21,7 +22,7 @@ def test_source_alid_round_trips(tmp_path):
     source_alids = ["1:900:A:G", None, "1:2900:A:T"]
     write_variant_axis(tmp_path, variants, {}, source_alids)
 
-    va = VariantAxis(tmp_path)
+    va = VariantAxis(tmp_path, format_version=CURRENT_FORMAT_VERSION)
     try:
         assert va.by_index(0).source_alid == "1:900:A:G"
         assert va.by_index(1).source_alid is None  # "." → None

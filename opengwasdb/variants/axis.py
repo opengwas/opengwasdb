@@ -9,6 +9,7 @@ opengwasdb-stores) that constructs an axis from a Store path.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
@@ -221,7 +222,33 @@ class VariantAxis(reader_axis.VariantAxis):
     validation, opengwasdb-stores' audit -- writes ``VariantAxis(path)`` as it
     always has. `aliases` is an open `index.sqlite` connection the caller keeps,
     for a Store whose rsids may only be named in `variant_aliases`.
+
+    The ALID index it opens is the one the release's `format_version` carries
+    (`alid_index_kind`), read from its `manifest.json`. A directory with no manifest
+    -- an axis a test or a build step has just written -- must say which version it
+    is in `format_version`; nothing is guessed from the files present.
     """
 
-    def __init__(self, store_path: str | Path, aliases: sqlite3.Connection | None = None):
-        super().__init__(store_path, TabixVariantTable(store_path, aliases))
+    def __init__(
+        self,
+        store_path: str | Path,
+        aliases: sqlite3.Connection | None = None,
+        *,
+        format_version: str | None = None,
+    ):
+        super().__init__(
+            store_path,
+            TabixVariantTable(store_path, aliases),
+            format_version=format_version or _declared_format_version(Path(store_path)),
+        )
+
+
+def _declared_format_version(store: Path) -> str:
+    """The `format_version` `store`'s manifest declares; refused when it has none."""
+    manifest = store / "manifest.json"
+    if not manifest.exists():
+        raise ValueError(
+            f"{store} has no manifest.json to say which ALID index it carries; "
+            "pass format_version= for a bare Variant Axis directory"
+        )
+    return str(json.loads(manifest.read_text(encoding="utf-8"))["format_version"])

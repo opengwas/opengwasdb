@@ -170,13 +170,36 @@ A missing sidecar file fails `envelope.required`.
 ### 5. One ALID index, two implementations
 
 `opengwasdb.store_reader.alid_index` is the one place that knows there are two ALID indexes. Both
-answer one interface: `search` (each ALID's row, `ABSENT`, or `UNINDEXED` for an ALID the 0.2 slot
-cannot hold), `alids` (each row's ALID, None where the index has none) and `unindexed_rows`.
-`open_alid_index` opens whichever one a release carries, and `alid_index_kind` names the one a
-`format_version` carries, for the envelope and its required entries. The Variant Axis and
-`check-observed-view` ask the interface and fall back to the Variant Table only for `UNINDEXED`
-ALIDs or a release without any index; on 0.3.0 neither reads the table to resolve an ALID. #476
-deletes `FixedWidthAlidIndex` and its entry in `ALID_INDEX_KINDS`.
+answer one interface:
+- `search`: each ALID's row, `ABSENT`, or `UNINDEXED` for an ALID the 0.2 slot cannot hold;
+- `alids`: each row's ALID, None where the index has none;
+- `unindexed_rows`;
+- `problems`: what the validator's two rules report.
+
+**One key chooses it: the release's `format_version`** (`alid_index_kind`). The Variant Axis takes
+the version from the manifest and opens that kind only (`open_alid_index`). The envelope, its
+required entries and both validator rules (each with a version `when=`) ask the same function. The
+files present choose nothing:
+- a stray sidecar beside a 0.2.3 release's pair is never read, and `envelope.closed` reports it;
+- a release whose version carries an index whose files are missing is refused by name. Every
+  readable version carries one, so no release is read by scanning the table for every ALID. A
+  0.1.0 release without the pair, such as the retired OGS-00010, is refused, as `validate` already
+  failed it.
+
+The Variant Axis and `check-observed-view` read the table only for an `UNINDEXED` ALID, which the
+0.2 pair alone answers.
+
+**Order.** The axis answers ALIDs in the order asked, then rsIDs, on either index; a 0.2 release
+once put the scanned long ALIDs last. A Dense `lookup` keeps that order. A Ragged or Hybrid `lookup`
+returns its associations in row order whatever it was asked, on both formats, and #467 does not
+change that.
+
+**What #476 deletes**, when the 0.2 series stops being read:
+- `FixedWidthAlidIndex` and its entry in `ALID_INDEX_KINDS`;
+- the 0.2 branch of `alid_index_kind`;
+- `UNINDEXED`, with the axis's and `check-observed-view`'s table reads for it;
+- the `variant_table.alid_index` rule and its `when=`, which then leave `variant_table.alid_sidecar`
+  without a `when=`.
 
 ## Consequences
 

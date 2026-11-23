@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
@@ -38,7 +39,7 @@ def _axis(tmp_path: Path) -> VariantAxis:
             # variants[3] deliberately has no rsid
         },
     )
-    return VariantAxis(tmp_path)
+    return VariantAxis(tmp_path, format_version=CURRENT_FORMAT_VERSION)
 
 
 def test_rsid_resolves_to_its_variant(tmp_path: Path):
@@ -85,6 +86,6 @@ def test_axis_without_an_rsid_index_still_opens(tmp_path: Path):
     variant_rsid_bytes_path(tmp_path).unlink()
     variant_rsid_rows_path(tmp_path).unlink()
 
-    stale = VariantAxis(tmp_path)
+    stale = VariantAxis(tmp_path, format_version=CURRENT_FORMAT_VERSION)
     assert stale.by_identifier("1:100:A:G") is not None
     assert stale.by_identifier("rs1") is None

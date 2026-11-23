@@ -19,7 +19,7 @@ import pytest
 import test_dense_completion as tdc
 from cli_output import normalize_cli_output
 from dense_sources import build_dense_fixture
-from format_0_2_3 import with_fixed_width_alid_index
+from format_0_2_3 import component_as_0_2_3
 from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
@@ -28,6 +28,7 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.alid import ALID_WIDTH
+from opengwasdb.store_reader.alid_index import MissingAlidIndex
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
@@ -284,7 +285,7 @@ def test_imputed_cells_are_not_failures(tmp_path, pair):
 
 
 def _point_alids_at_each_others_rows(store: Path, first: bytes, second: bytes) -> None:
-    with_fixed_width_alid_index(store)  # the fixed-width pair is the one corrupted here
+    component_as_0_2_3(store)  # the fixed-width pair, a 0.2 release's, is the one corrupted
     alids = np.load(store / "variant_alid_bytes.npy")
     rows = np.load(store / "variant_alid_rows.npy")
     i, j = (int(np.flatnonzero(alids == alid)[0]) for alid in (first, second))
@@ -317,7 +318,7 @@ def _rename_an_alid(store: Path, alid: bytes, replacement: bytes) -> None:
     source row finds nothing to map to. The new key sorts between the same neighbours as
     the old one, so the index stays searchable and only that one row's identity moves.
     """
-    with_fixed_width_alid_index(store)  # the fixed-width pair is the one corrupted here
+    component_as_0_2_3(store)  # the fixed-width pair, a 0.2 release's, is the one corrupted
     path = store / "variant_alid_bytes.npy"
     alids = np.load(path)
     at = int(np.flatnonzero(alids == alid)[0])
@@ -736,7 +737,7 @@ def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path,
     unindexed = 0
     if form == "fixed_width":
         for store in (observed, completed):
-            with_fixed_width_alid_index(store)
+            component_as_0_2_3(store)
         indexed = len(np.load(observed / "variant_alid_bytes.npy"))
         assert indexed == N_PARENT, "fixture must leave the long ALID out of the index"
         unindexed = 1
@@ -756,20 +757,15 @@ def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path,
     assert verdict["passed"], verdict["failures"]
 
 
-@pytest.mark.parametrize("absent", ["source", "target", "both"])
-def test_a_store_with_no_alid_index_is_still_checked(pair, absent):
+@pytest.mark.parametrize("absent", ["source", "target"])
+def test_a_store_missing_its_alid_index_is_refused_not_scanned(pair, absent):
+    """Every readable version carries an ALID index. A Store missing its own is
+    incomplete, and the check refuses it by naming the files (#467 review); it once
+    mapped every row by scanning the table."""
     observed, completed = pair
-    stores = {"source": [observed], "target": [completed], "both": [observed, completed]}[absent]
-    for store in stores:
-        # A 0.2 release built before the ALID index: no pair, and no 0.3.0 sidecar.
-        with_fixed_width_alid_index(store)
-        (store / "variant_alid_bytes.npy").unlink()
-        (store / "variant_alid_rows.npy").unlink()
+    store = observed if absent == "source" else completed
+    component_as_0_2_3(store)
+    (store / "variant_alid_bytes.npy").unlink()
 
-    verdict = check_observed_view(observed, completed, seed=1).record
-
-    assert verdict["axis"]["parent_rows_unindexed"] == (N_PARENT if observed in stores else 0)
-    assert verdict["axis"]["child_rows_unindexed"] == (N_CHILD if completed in stores else 0)
-    assert verdict["axis"]["parent_rows_unmapped"] == 0
-    assert verdict["totals"]["parent_observed"] == N_OBSERVED
-    assert verdict["passed"], verdict["failures"]
+    with pytest.raises(MissingAlidIndex, match="variant_alid_bytes.npy"):
+        check_observed_view(observed, completed, seed=1)

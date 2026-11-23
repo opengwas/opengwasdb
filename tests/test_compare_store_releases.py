@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 import zarr
+from format_0_2_3 import follow_stamp
 
 from benchmarks.compare_store_releases import discover_arrays
 
@@ -80,6 +81,7 @@ def _release(directory, rows, *, format_version=None, reference_assembly="GRCh38
         payload = json.loads(manifest.read_text())
         payload["format_version"] = format_version
         manifest.write_text(json.dumps(payload))
+        follow_stamp(store)
     return store
 
 

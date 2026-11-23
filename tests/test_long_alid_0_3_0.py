@@ -130,3 +130,21 @@ def test_lookup_and_phewas_by_a_long_alid_return_its_row_without_pysam(
     legacy = Path(shutil.copytree(store, tmp_path / "as-0.2.3"))
     as_0_2_3(legacy)
     assert _probe(legacy) | {"pysam": False} == found | {"pysam": False}
+
+
+@pytest.mark.parametrize("form", ["0.3.0", "0.2.3"])
+def test_a_dense_lookup_returns_rows_in_the_order_asked(tmp_path: Path, form: str) -> None:
+    """A long ALID asked before a short one comes back first on both formats. (A Ragged
+    or Hybrid `lookup` returns row order whatever it is asked; this is Dense's contract.)"""
+    store = _dense(tmp_path)
+    if form == "0.2.3":
+        as_0_2_3(store)
+    from opengwasdb.query import query_store
+
+    with query_store(store) as q:
+        rows = {row["alid"]: index for index, row in q.variants_table().items()}
+        asked = ["1:900000:A:G", LONG_ALIDS[2], LONG_ALIDS[0]]
+        ids = [row["analysis_id"] for _, row in sorted(q.analyses_table().items())]
+        got = q.lookup(asked, ids)["variant_index"].tolist()
+    assert got == [rows[alid] for alid in asked]
+    assert got != sorted(got), "fixture: the order asked must not be row order"

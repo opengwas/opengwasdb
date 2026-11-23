@@ -432,26 +432,19 @@ _MAP_WINDOW = 1_000_000
 
 
 class _AxisRows:
-    """One Store's axis, by ALID, exactly: its ALID index first, and its Variant Table
-    for the rows that index leaves out (a 0.2 ALID over 32 bytes, #127; every row of a
-    Store built before any index). Nothing is skipped, truncated or hashed."""
+    """One Store's axis, by ALID, exactly: the ALID index its `format_version` carries
+    first, and its Variant Table for the rows that index leaves out (a 0.2 ALID over 32
+    bytes, #127). Nothing is skipped, truncated or hashed."""
 
     def __init__(self, path: Path, n_rows: int) -> None:
         self._path = path
-        self._index = open_alid_index(path)
-        self.unindexed = (
-            np.arange(n_rows, dtype=np.int64)
-            if self._index is None
-            else self._index.unindexed_rows(n_rows)
-        )
+        self._index = open_alid_index(path, open_store(path).manifest.format_version)
+        self.unindexed = self._index.unindexed_rows(n_rows)
         self._scanned: dict[int, str] | None = None
 
     def alids(self, rows: np.ndarray) -> np.ndarray:
         """Each row's ALID: from the index, or from the table where the index has none."""
-        if self._index is None:
-            alids = np.full(len(rows), None, dtype=object)
-        else:
-            alids = self._index.alids(rows)
+        alids = self._index.alids(rows)
         missing = [k for k, alid in enumerate(alids) if alid is None]
         if missing:
             scanned = self._scanned_alids()
@@ -462,24 +455,20 @@ class _AxisRows:
         """Each ALID's row, or -1 where this axis holds none (or the ALID is None)."""
         found = np.full(len(alids), -1, dtype=np.int64)
         named = [k for k, alid in enumerate(alids) if alid is not None]
-        if not named:
-            return found
-        asked = [str(alids[k]) for k in named]
-        found[np.asarray(named, dtype=np.int64)] = self._search(asked)
+        if named:
+            asked = [str(alids[k]) for k in named]
+            found[np.asarray(named, dtype=np.int64)] = self._search(asked)
         return found
 
     def _search(self, asked: list[str]) -> np.ndarray:
         """The index's answer, with each `UNINDEXED` ALID found in the table, or -1."""
-        if self._index is None:
-            rows = np.full(len(asked), UNINDEXED, dtype=np.int64)
-        else:
-            rows = self._index.search(asked)
+        rows = np.asarray(self._index.search(asked), dtype=np.int64)
         unindexed = np.flatnonzero(rows == UNINDEXED).tolist()
         if unindexed:
             by_alid = {alid: row for row, alid in self._scanned_alids().items()}
             for k in unindexed:
                 rows[k] = by_alid.get(asked[k], -1)
-        return np.maximum(rows, -1)
+        return np.asarray(np.maximum(rows, -1), dtype=np.int64)
 
     def _scanned_alids(self) -> dict[int, str]:
         """The ALID of every row the index leaves out, read from the table once."""

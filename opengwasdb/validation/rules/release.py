@@ -29,7 +29,6 @@ from opengwasdb.store.open import (
     newer_than_written_text,
 )
 from opengwasdb.store_reader.alid_index import alid_index_kind
-from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
@@ -204,12 +203,11 @@ def _rebuild_alid_index(name: str) -> str:
 
 
 def _alid_index_entries(target: Target, *, rebuild: bool = False) -> list[tuple[str, Path]]:
-    """The ALID index a release of its `format_version` carries (`alid_index_kind`): from
-    0.3.0 the variable-length sidecar (ADR 0105), before it the fixed-width pair."""
+    """The files of the ALID index a release of its `format_version` carries
+    (`alid_index_kind`): from 0.3.0 the variable-length sidecar (ADR 0105), before it the
+    fixed-width pair."""
     kind = alid_index_kind(target.store.manifest.format_version)
     path = target.store.path
-    if kind is AlidSidecar:
-        return [(f"missing {name} (ALID sidecar)", path / name) for name in kind.FILENAMES]
     return [
         (_rebuild_alid_index(name) if rebuild else f"missing {name}", path / name)
         for name in kind.FILENAMES

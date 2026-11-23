@@ -196,13 +196,15 @@ class AlidSidecar:
         return str(self._text[start:stop], "utf-8")
 
     def alids(self, rows: np.ndarray) -> np.ndarray:
-        """The ALIDs of `rows`, as an object array in `rows`' order."""
+        """The ALIDs of `rows`, as an object array in `rows`' order; None for a row past
+        the sidecar's end, which names no ALID there."""
         rows = np.asarray(rows, dtype=np.int64)
-        starts = np.asarray(self.offsets[rows], dtype=np.int64).tolist()
-        stops = np.asarray(self.offsets[rows + 1], dtype=np.int64).tolist()
+        out = np.full(rows.size, None, dtype=object)
+        held = np.flatnonzero((rows >= 0) & (rows < self.n_rows))
+        starts = np.asarray(self.offsets[rows[held]], dtype=np.int64).tolist()
+        stops = np.asarray(self.offsets[rows[held] + 1], dtype=np.int64).tolist()
         text = self._text
-        out = np.empty(len(starts), dtype=object)
-        out[:] = [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
+        out[held] = [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
         return out
 
     def search(self, alids: Sequence[str]) -> np.ndarray:
@@ -212,6 +214,17 @@ class AlidSidecar:
     def unindexed_rows(self, n_rows: int) -> np.ndarray:
         """The rows the index leaves out: none."""
         return np.empty(0, dtype=np.int64)
+
+    def problems(self, table_rows: int, expected_indexed: int) -> Iterator[str]:
+        """Its structure (`sidecar_problems`), and one row per row of the table: every
+        row is indexed, so `expected_indexed` is `table_rows` and adds nothing."""
+        found = list(sidecar_problems(self))
+        yield from found
+        if not found and self.n_rows != table_rows:
+            yield (
+                f"the ALID sidecar names {self.n_rows} rows but variants.tsv.gz has "
+                f"{table_rows}"
+            )
 
     def row_of(self, alid: str) -> int | None:
         """The row `alid` names, None when the release holds no such ALID."""
