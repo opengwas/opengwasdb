@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
 from tests.ld.tier_markers import misplaced, refuse_misplaced, unasked
 
 ROOT = Path(__file__).resolve().parent
