@@ -5,8 +5,10 @@ extension after epic #307 and said it would be reconsidered only if a phase on t
 a per-row interpreted kernel that vectorised code cannot express. #477 asked, as a time-boxed spike, whether the
 `zarrs` crate or a smaller inner chunk would make scattered lookups fast enough to reopen that.
 
-**Status:** proposed. This ADR records measurements and sets out options A-D; it decides none of them. The owner
-decides. ADR 0081 stands until then.
+**Status:** accepted by the owner on 23 November 2026, in the #450 orchestration run.
+
+**Decision:** option A, do nothing. Keep ADR 0081 and the 1000 x 64 inner chunk; the Store Reader and ogquery stay
+pure Python. Options B-D below, and the comparison table, are kept as the record of what was weighed.
 
 ## Context and method
 
@@ -75,7 +77,7 @@ End-to-end warm medians, 10 variants x 100 Analyses / 100 x 10; ratio against th
 
 ## Options for the owner
 
-On 23 November the owner decided that hosted releases are not rewritten: once #467-#472 are in, every store is
+Before choosing, the owner decided on 23 November that hosted releases are not rewritten: once #467-#472 are in, every store is
 rebuilt from source at 0.3.0 (opengwas/opengwasdb-stores#498).
 
 * **A. Do nothing.** Keep ADR 0081 and the 1000 x 64 chunk.
@@ -102,6 +104,10 @@ rebuilt from source at 0.3.0 (opengwas/opengwasdb-stores#498).
 
 ## Consequences
 
-* Nothing in `opengwasdb/` changes with this ADR; the spike lives in `benchmarks/rust_spike/` and ships nothing.
-* Not measured: Ragged and Hybrid layouts, OGS-00016, a quiet host, first-touch disk reads (no root to drop the page
-  cache), intermediate inner-chunk sizes, and write or build time at the smaller chunk.
+* ADR 0081 stands. Nothing in `opengwasdb/` changes with this ADR.
+* The spike stays under `benchmarks/rust_spike/` as a measurement, not shipped code.
+* Reopening needs a new measurement that meets ADR 0081's criterion (a per-row interpreted kernel that vectorised
+  code cannot express, on a phase of the milestone's critical path), or a demonstrated Python-side parallel decode
+  (option D).
+* Not measured, so open to a later measurement: Ragged and Hybrid layouts, OGS-00016, a quiet host, first-touch disk
+  reads (no root to drop the page cache), intermediate inner-chunk sizes, and write or build time at the smaller chunk.
