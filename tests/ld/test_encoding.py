@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 import zarr
 from ld_script_modules import load_script
-from store_copies import R_SCALE, TEST_STORE
+from store_copies import R_SCALE, TEST_STORE, copy_store
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
@@ -141,7 +141,7 @@ UNIMPLEMENTED = {
 def test_an_encoding_the_reader_does_not_implement_is_refused_at_open_naming_it(
     case: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    copy = shutil.copytree(TEST_STORE, tmp_path / "store")
+    copy = copy_store(tmp_path / "store")
     meta = copy / "zarr.json"
     doc = json.loads(meta.read_text())
     recorded: dict[str, Any] = doc["attributes"]["ld_store"]["encoding"]
@@ -255,7 +255,7 @@ def test_a_breaker_fails_the_same_rules_at_another_scale(
     # The committed Test Store and a × 2047 store, each broken the one way: its own rule fails,
     # and the scale changes no rule's verdict.
     breaker = contract("test_store").BREAKERS[rule]
-    here = shutil.copytree(TEST_STORE, tmp_path / "committed")
+    here = copy_store(tmp_path / "committed")
     there = shutil.copytree(store_at(2047, tmp_path_factory), tmp_path / "x2047")
     # Compare canonical Stores in the same representation state. A fresh build also has
     # ADR 0098 companions, whose intentional staleness is tested separately in test_alid_mmap.
