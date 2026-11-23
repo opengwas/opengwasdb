@@ -245,8 +245,8 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
 
 ### 6.2 Deriving the existing stores (D6)
 
-`ogld derive-partners <store> --t-partner T [--threads t] [--processes p] [--chromosomes …]
-[--drop-index]` (ogld#69):
+`opengwasdb ld derive-partners <store> --t-partner T [--threads t] [--processes p]
+[--chromosomes C]… [--drop-index]` (ogld#69):
 
 - `--t-partner` is required and has no default (D3), and it is never above the store's recorded
   `t_far`: a larger one is refused naming both. A store whose provenance already records Partner
@@ -281,7 +281,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   follows a link there. The check is not a lock — a concurrent writer to the same store could still
   plant one between the check and the write — and this derivation does not support one: a store
   has one writer, as §6.1's carry and §5.1's rename already assume.
-- `--chromosomes` names the ones to derive — all the store lacks by default — and one the store
+- `--chromosomes C`, repeated once per chromosome, names the ones to derive — all the store lacks by default — and one the store
   does not have is refused; one it already has is skipped.
 - Drops `index/` afterwards, as its own step and only on request (`--drop-index`), so a derived
   store can be checked against its index before the index is removed. It removes the arrays, then

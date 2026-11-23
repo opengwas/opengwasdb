@@ -6,11 +6,12 @@
 # 1,000-variant whole-genome matrix. It fails, never skips, when an input is missing.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
+source scripts/ld/refuse_old_env.sh
 
 SCRATCH=/data/opengwasdb/work/ogld/scratch
-export OGLD_GENOTYPE_STORE="${OGLD_GENOTYPE_STORE:-$SCRATCH/91/eur.store}"
-export OGLD_81_EUR_STORE="${OGLD_81_EUR_STORE:-$SCRATCH/64/81-eur}"
-export OGLD_403_ANALYSES="${OGLD_403_ANALYSES:-/data/opengwasdb/work/ogld/realdata/403-analyses}"
+export OPENGWASDB_LD_GENOTYPE_STORE="${OPENGWASDB_LD_GENOTYPE_STORE:-$SCRATCH/91/eur.store}"
+export OPENGWASDB_LD_81_EUR_STORE="${OPENGWASDB_LD_81_EUR_STORE:-$SCRATCH/64/81-eur}"
+export OPENGWASDB_LD_403_ANALYSES="${OPENGWASDB_LD_403_ANALYSES:-/data/opengwasdb/work/ogld/realdata/403-analyses}"
 
 exec pytest -m acceptance --timeout=7200 -rfEx -p no:cacheprovider \
   tests/ld/acceptance/test_genotype_store_equals_ld_store.py "$@"

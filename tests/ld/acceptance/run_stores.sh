@@ -6,6 +6,7 @@
 # skips, when a store is missing.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
+source scripts/ld/refuse_old_env.sh
 
 exec pytest -m acceptance --timeout=10800 -rfEx -p no:cacheprovider \
   tests/ld/acceptance/test_hgdp1kgp_stores.py "$@"

@@ -490,7 +490,7 @@ class StoreReader(ComponentWorkers):
                 f"{self._provenance['format_version']}, which has no "
                 f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
                 "naming the missing component; a store built before 0.2.0 derives them with "
-                "`ogld derive-partners` (spec §13; partner-rows §5.1)"
+                "`opengwasdb ld derive-partners` (spec §13; partner-rows §5.1)"
             )
         return float(self._provenance["t_partner"])
 

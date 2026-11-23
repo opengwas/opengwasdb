@@ -408,13 +408,13 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0002 lists the five absent).
   These are the PC Files' samples (below).
 - **Keep files:** `scripts/make_keeps.py` writes `/data/opengwasdb/work/ogld/keep/<panel>.keep`
-  (`$OGLD_KEEP`), plink2's `#IID` layout: each panel's PC File samples that gnomAD v3.1.2's sample
+  (`$OPENGWASDB_LD_KEEP`), plink2's `#IID` layout: each panel's PC File samples that gnomAD v3.1.2's sample
   metadata does not mark related (`relatedness_inference.related` false, its maximal set of
   unrelated samples), in the PC File's order. A sample the metadata lacks is refused. EUR 665,
   AFR 608, EAS 724, SAS 672, AMR 341. A build reads these (§4); the members files are the PC
   Files' input only.
 - **PC Files:** `scripts/make_pcs.py` writes `/data/opengwasdb/work/ogld/pcs/<panel>.eigenvec`
-  (`$OGLD_PCS`) and, beside it, the PC Check's JSON report, which names that file by its root
+  (`$OPENGWASDB_LD_PCS`) and, beside it, the PC Check's JSON report, which names that file by its root
   variable and its SHA-256; declared source "ogld scripts/make_pcs.py on HGDP+1kGP v2" with its commit.
 - **Conversion:** §3's BCF command, one fileset per chromosome.
 

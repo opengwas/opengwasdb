@@ -3,9 +3,9 @@
  "params": {
   "out": "tests/data/test-panel",
   "work": "<work>",
-  "source": "$OGLD_PHASED_V2/hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf",
-  "keep": "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
-  "pcs": "$OGLD_PCS/EUR.eigenvec",
+  "source": "$OPENGWASDB_LD_PHASED_V2/hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf",
+  "keep": "$OPENGWASDB_LD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
+  "pcs": "$OPENGWASDB_LD_PCS/EUR.eigenvec",
   "pcs_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)",
   "chromosomes": [
    "21",
@@ -101,7 +101,7 @@
   "--vcf",
   "<work>/test_panel.vcf.gz",
   "--keep",
-  "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
+  "$OPENGWASDB_LD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
   "--max-alleles",
   "2",
   "--set-all-var-ids",
@@ -116,7 +116,7 @@
  "inputs": {
   "genotypes": {
    "21": {
-    "path": "$OGLD_PHASED_V2/hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
+    "path": "$OPENGWASDB_LD_PHASED_V2/hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
     "bytes": 269957263,
     "verified": {
      "file": "hgdp1kgp_chr21.filtered.SNV_INDEL.phased.shapeit5.bcf",
@@ -132,7 +132,7 @@
     }
    },
    "22": {
-    "path": "$OGLD_PHASED_V2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
+    "path": "$OPENGWASDB_LD_PHASED_V2/hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
     "bytes": 278689536,
     "verified": {
      "file": "hgdp1kgp_chr22.filtered.SNV_INDEL.phased.shapeit5.bcf",
@@ -149,11 +149,11 @@
    }
   },
   "keep": {
-   "path": "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
+   "path": "$OPENGWASDB_LD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
    "sha256": "5b491d6fd477e4cc9a48cc0928463d50ce3cb49a5890b6eeb82b396fe81cad71"
   },
   "pcs": {
-   "path": "$OGLD_PCS/EUR.eigenvec",
+   "path": "$OPENGWASDB_LD_PCS/EUR.eigenvec",
    "sha256": "8ea02cdc208b334278d348b0d53e46cb6c6d322ea69b89c8e26d72ad52915e79",
    "declared_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
   }
@@ -753,8 +753,8 @@
  },
  "files": {
   "README.md": {
-   "sha256": "e39deed5ce970430394f44671e882bb123ce36c59a69c8c3d6b25fd67be32c3d",
-   "bytes": 10044
+   "sha256": "f654075967a70d577c251332c32731a57821a15247ce80a82400fccbd27a686e",
+   "bytes": 10107
   },
   "dosages.raw": {
    "sha256": "31d296bc32b733a5d2d0de07bc4633382ab304436c95b8a44811972549de7832",

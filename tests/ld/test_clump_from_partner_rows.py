@@ -359,7 +359,7 @@ def test_a_store_without_partner_rows_is_refused_naming_the_component_and_the_wa
         with pytest.raises(InputError) as refused:
             _ask(old, query, names, score, r2=0.01, kb=3000)
         assert "Partner Rows" in str(refused.value)
-        assert "ogld derive-partners" in str(refused.value)
+        assert "opengwasdb ld derive-partners" in str(refused.value)
         assert str(where) in str(refused.value), "the store it refused is named"
     assert seen == [], f"a store without Partner Rows fell back to {seen}"
 

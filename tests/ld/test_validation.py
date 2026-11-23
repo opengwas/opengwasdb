@@ -862,7 +862,7 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
             cli.main(["validate", "--threads", threads, str(copy)])
         assert refused.value.code == 2
         said = capsys.readouterr().err
-        assert f"argument --threads: needs a whole number of at least 1, not '{threads}'" in said
+        assert "Invalid value for '--threads'" in said
 
 
 # ------------------------------------------------------------------ on write

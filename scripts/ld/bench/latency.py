@@ -25,10 +25,10 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
     pixi run -e dev bench-latency step1 --target local http0 --out results.jsonl
 
 Where things are comes from their owners, never from here: the published EUR store is
-`build_hgdp1kgp.store_path("EUR")` under `$OGLD_STORES`, #403's Analyses are under
-`$OGLD_403_ANALYSES` and the layouts' builds under `$OGLD_LAYOUTS`, each with its default in
-`scripts/test_panel/roots.py`. Each run's first record says which commit's code ran and, through
-`test_panel.checkout.problem`, whether the checkout could be cited as that code.
+`build_hgdp1kgp.store_path("EUR")` under `$OPENGWASDB_LD_STORES`, #403's Analyses are under
+`$OPENGWASDB_LD_403_ANALYSES` and the layouts' builds under `$OPENGWASDB_LD_LAYOUTS`, each with its
+default in `scripts/test_panel/roots.py`. Each run's first record says which commit's code ran and,
+through `test_panel.checkout.problem`, whether the checkout could be cited as that code.
 
 Threads: zarr's pool is `--zarr-threads` (6), BLAS 1; the static host and the proxy run one
 event loop and at most two worker threads each. So a timing uses at most 8 threads busy at once
@@ -432,7 +432,7 @@ def published() -> Path:
 
 def layouts() -> Path:
     """Where `build_layouts.py` built EUR chr22 in each layout."""
-    path: Path = roots.root("OGLD_LAYOUTS")
+    path: Path = roots.root("OPENGWASDB_LD_LAYOUTS")
     return path
 
 
@@ -520,15 +520,17 @@ class Sample:
 
 
 def analyses(names: list[str] | None) -> list[Path]:
-    """#403's Analyses under `$OGLD_403_ANALYSES`: all of them, or those `names`, every one of
-    which must be there. A name that is not is refused, never dropped, so a run cannot time
-    fewer Analyses than it was asked for."""
-    found = sorted(p for p in roots.root("OGLD_403_ANALYSES").iterdir() if p.is_dir())
+    """#403's Analyses under `$OPENGWASDB_LD_403_ANALYSES`: all of them, or those `names`, every
+    one of which must be there. A name that is not is refused, never dropped, so a run cannot
+    time fewer Analyses than it was asked for."""
+    found = sorted(p for p in roots.root("OPENGWASDB_LD_403_ANALYSES").iterdir() if p.is_dir())
     if names is None:
         return found
     unknown = sorted(set(names) - {p.name for p in found})
     if unknown:
-        raise SystemExit(f"no such Analyses under $OGLD_403_ANALYSES: {', '.join(unknown)}")
+        raise SystemExit(
+            f"no such Analyses under $OPENGWASDB_LD_403_ANALYSES: {', '.join(unknown)}"
+        )
     return [p for p in found if p.name in names]
 
 

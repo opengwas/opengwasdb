@@ -16,8 +16,8 @@ CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
   lie within the encoding's band, |r̂² − r2| ≤ 2|r̂|·e + e², and replays the greedy: on the
   store's joins it must give our leads, and with exactly those pairs flipped, plink2's.
 
-The input `OGLD_403_ANALYSES` holds one directory per Analysis with `hits.all.tsv` (ALID, z,
-chromosome, position; the 5e-8 tier), which `scripts/realdata/make_403_inputs.py` makes.
+The input `OPENGWASDB_LD_403_ANALYSES` holds one directory per Analysis with `hits.all.tsv` (ALID,
+z, chromosome, position; the 5e-8 tier), which `scripts/realdata/make_403_inputs.py` makes.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def test_leads_equal_plink2_s_on_403_s_37_analyses_on_chr22(
     store, pfile = chr22
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
     assert REncoding.of(store.provenance["encoding"]).scale == HGDP_SCALE
-    root = required("OGLD_403_ANALYSES", "#403's 37 Analyses' hits, from ogld#6")
+    root = required("OPENGWASDB_LD_403_ANALYSES", "#403's 37 Analyses' hits, from ogld#6")
     analyses = sorted(path for path in root.iterdir() if path.is_dir())
     assert len(analyses) == 37, f"#403 has 37 EUR Analyses; {root} holds {len(analyses)}"
     compared = differing = flipped = 0

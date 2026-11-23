@@ -56,7 +56,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 import shutil
 import subprocess
 import sys
@@ -64,6 +63,8 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple
+
+from opengwasdb.ld import env
 
 OPENGWASDB = Path.home() / "repo" / "opengwasdb"
 BRANCH = "origin/orch/62-locus-leads"
@@ -167,10 +168,13 @@ def extract(out: Path) -> None:
 
 
 def plink2_exe() -> Path:
-    """The one plink2 every step runs: `$OGLD_PLINK2`, else the one on PATH (CONTRIBUTING)."""
-    found = os.environ.get("OGLD_PLINK2") or shutil.which("plink2")
+    """The one plink2 every step runs: `$OPENGWASDB_LD_PLINK2`, else the one on PATH
+    (CONTRIBUTING)."""
+    found = env.read("OPENGWASDB_LD_PLINK2", "") or shutil.which("plink2")
     if not found or not Path(found).exists():
-        raise SystemExit("plink2 not found: set OGLD_PLINK2 (tests/realdata/run.sh finds one)")
+        raise SystemExit(
+            "plink2 not found: set OPENGWASDB_LD_PLINK2 (tests/realdata/run.sh finds one)"
+        )
     return Path(found)
 
 

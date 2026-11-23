@@ -1,22 +1,29 @@
-"""The `ogld` command: `ogld build`, `ogld validate`, `ogld info`, `ogld derive-partners`
-(layer 3).
+"""The `opengwasdb ld` commands: `build`, `import`, `validate`, `info`, `derive-partners` (layer 3).
 
-A thin shell over the public functions, so a job and a person run exactly what a caller
-of the package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners`
-(ogld#69). Exit status: 0 done, 1 the store breaks a rule, 2 a `Refusal` or an `InputError`. Any
-other exception is a fault inside ogld and propagates with its traceback. An option left out
-takes the default `BuildInputs` and `build` declare, so no default is written twice.
+A thin shell over the public functions, so a job and a person run exactly what a caller of the
+package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners` (ogld#69).
+Exit status: 0 done, 1 the store breaks a rule, 2 a `Refusal`, an `InputError`, an
+`IdentityError`, an environment variable under an old name, or a command line the parser refuses,
+printed as `opengwasdb ld <command>: <problem>`. Any other exception is a fault inside
+`opengwasdb.ld` and propagates with its traceback.
+
+An option left out takes the default `BuildInputs`, `ImportInputs` and the functions declare, so
+no default is written twice: an option the command line did not set is None here and is not
+passed on (`_given`).
 """
 
 from __future__ import annotations
 
-import argparse
+import functools
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
+import typer
+
+from opengwasdb.ld import env
 from opengwasdb.ld.build import BuildInputs, build, build_genotypes
 from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, InputError, Refusal
@@ -26,213 +33,186 @@ from opengwasdb.ld.query.validation import validate_at
 from opengwasdb.ld.store import Finding
 from opengwasdb.ld.store.assembly import derive_partners
 
+ld_app = typer.Typer(
+    name="ld",
+    help="Build, validate and inspect LD Stores.",
+    no_args_is_help=True,
+    add_completion=False,
+)
 
-def _optional_float(text: str) -> float | None:
-    return None if text.lower() == "none" else float(text)
+_THREADS = {"min": 1}
+_REFUSED = (Refusal, InputError, IdentityError, env.LegacyVariable)
 
 
-def _threads(text: str) -> int:
-    """A count of threads; argparse names the option in front of the reason it refuses one."""
-    if not text.strip().isdigit() or int(text) < 1:
-        raise argparse.ArgumentTypeError(f"needs a whole number of at least 1, not {text!r}")
-    return int(text)
+def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:
+    """Run one command: refuse an old environment variable first, map a refusal to exit 2 and
+    its status to the process's exit code."""
+
+    def decorate(run: Callable[..., int]) -> Callable[..., None]:
+        @functools.wraps(run)
+        def command_with_status(*args: Any, **options: Any) -> None:
+            try:
+                env.refuse_legacy()
+                status = run(*args, **options)
+            except _REFUSED as problem:
+                print(f"opengwasdb ld {command}: {_message(problem)}", file=sys.stderr)
+                status = 2
+            if status:
+                raise typer.Exit(status)
+
+        return command_with_status
+
+    return decorate
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="ogld", description="Build, validate and inspect LD Stores."
+def _message(problem: BaseException) -> str:
+    # A SystemExit's `code` is the message it was raised with.
+    return str(problem.code) if isinstance(problem, SystemExit) else str(problem)
+
+
+def _given(**options: Any) -> dict[str, Any]:
+    """The options the command line set; the rest keep the defaults the callee declares."""
+    return {name: value for name, value in options.items() if value is not None}
+
+
+def _info_min(text: str | None) -> dict[str, Any]:
+    """`--info-min`: a number, or `none` for no INFO filter; left out, `BuildInputs`' default."""
+    if text is None:
+        return {}
+    if text.lower() == "none":
+        return {"info_min": None}
+    try:
+        return {"info_min": float(text)}
+    except ValueError:
+        raise typer.BadParameter(
+            f"needs a number or none, not {text!r}", param_hint="--info-min"
+        ) from None
+
+
+@ld_app.command("build")
+@_exits("build")
+def build_command(
+    out: Annotated[Path, typer.Argument(help="the Store to write; it must not exist")],
+    *,
+    genotypes: Annotated[
+        bool, typer.Option("--genotypes", help="write a Genotype Store sidecar")
+    ] = False,
+    pgen: Annotated[list[Path], typer.Option(help="repeat for one file per chromosome")],
+    keep: Annotated[Path, typer.Option()],
+    pcs: Annotated[Path | None, typer.Option()] = None,
+    pc_source: Annotated[str | None, typer.Option()] = None,
+    panel_id: Annotated[str, typer.Option()],
+    ancestry: Annotated[str, typer.Option()],
+    genotype_source: Annotated[str, typer.Option()],
+    r_scale: Annotated[
+        int,
+        typer.Option(
+            help="the store's r scale, r̂ = code / r_scale, as ADR 0090 sets it for the panel; "
+            "no default",
+        ),
+    ],
+    t_partner: Annotated[
+        float,
+        typer.Option(
+            help="the r² a pair within near_bp must reach to be in the Partner Rows; "
+            "no default, and never above t_far (partner-rows §3)",
+        ),
+    ],
+    k: Annotated[int | None, typer.Option()] = None,
+    k_min: Annotated[int | None, typer.Option()] = None,
+    mac_min: Annotated[int | None, typer.Option()] = None,
+    info_min: Annotated[str | None, typer.Option(help="a number, or none")] = None,
+    threads: Annotated[int | None, typer.Option()] = None,
+) -> int:
+    """Build an LD Store from a Source Panel (docs/spec/build-inputs.md)."""
+    inputs = BuildInputs(
+        pgen=tuple(pgen),
+        keep=keep,
+        pcs=pcs,
+        pc_source=pc_source,
+        panel_id=panel_id,
+        ancestry=ancestry,
+        genotype_source=genotype_source,
+        r_scale=r_scale,
+        t_partner=t_partner,
+        **_given(k=k, k_min=k_min, mac_min=mac_min),
+        **_info_min(info_min),
     )
-    commands = parser.add_subparsers(dest="command", required=True)
-    _build_command(commands)
-    _import_command(commands)
-    _validate_command(commands)
-    _derive_command(commands)
-    commands.add_parser("info", help="print the provenance").add_argument("location")
-    return parser
+    builder = build_genotypes if genotypes else build
+    print(json.dumps(builder(inputs, out, **_given(threads=threads)), indent=1))
+    return 0
 
 
-def _build_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """`ogld build`: a Source Panel's genotypes to a store (docs/spec/build-inputs.md)."""
-    b = commands.add_parser(
-        "build", help="build an LD Store from a Source Panel (docs/spec/build-inputs.md)"
-    )
-    b.add_argument("out", type=Path)
-    b.add_argument("--genotypes", action="store_true", help="write a Genotype Store sidecar")
-    b.add_argument(
-        "--pgen",
-        type=Path,
-        action="append",
-        required=True,
-        help="repeat for one file per chromosome",
-    )
-    b.add_argument("--keep", type=Path, required=True)
-    b.add_argument("--pcs", type=Path)
-    b.add_argument("--pc-source")
-    b.add_argument("--panel-id", required=True)
-    b.add_argument("--ancestry", required=True)
-    b.add_argument("--genotype-source", required=True)
-    b.add_argument(
-        "--r-scale",
-        type=int,
-        required=True,
-        help="the store's r scale, r̂ = code / r_scale, as ADR 0004 sets it for the panel; "
-        "no default",
-    )
-    b.add_argument(
-        "--t-partner",
-        type=float,
-        required=True,
-        help="the r² a pair within near_bp must reach to be in the Partner Rows; no default, and "
-        "never above t_far (partner-rows §3)",
-    )
-    unset = argparse.SUPPRESS
-    b.add_argument("--k", type=int, default=unset)
-    b.add_argument("--k-min", type=int, default=unset)
-    b.add_argument("--mac-min", type=int, default=unset)
-    b.add_argument("--info-min", type=_optional_float, default=unset, help="a number, or none")
-    b.add_argument("--threads", type=int, default=unset)
+_FarTarget = Annotated[
+    int | None,
+    typer.Option(
+        min=NEAR_BP + 1,
+        max=FAR_BP,
+        help="complete radius every chromosome must reach, after dropping displaced liftover "
+        f"(default {FAR_TARGET_BP}; above the Near Band, at most far_bp)",
+    ),
+]
+_DisplacedCap = Annotated[
+    int | None,
+    typer.Option(
+        min=0,
+        help="most variants one displaced liftover segment may lose; a larger one refuses "
+        f"(default {DISPLACED_CAP})",
+    ),
+]
 
 
-def _import_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    command = commands.add_parser("import", help="import Pan-UKB published LD (ADR 0015)")
-    command.add_argument("out", type=Path)
-    for name in ("metadata", "variants", "chain", "fasta", "work"):
-        command.add_argument("--" + name, type=Path, required=True)
-    command.add_argument("--ledger", type=Path, help="supplied part listing/SHA-256 ledger")
-    command.add_argument("--parts", type=Path, help="read-only directory of existing parts")
-    command.add_argument(
-        "--delete-parts", action="store_true", help="delete owned downloads after close"
-    )
-    command.add_argument("--threads", type=_threads, default=1)
-    command.add_argument(
-        "--download-workers",
-        type=_threads,
-        default=8,
-        help="parts of a chromosome downloaded at once",
-    )
-    command.add_argument(
-        "--far-target-bp",
-        type=_far_target,
-        default=FAR_TARGET_BP,
-        help="complete radius every chromosome must reach, after dropping displaced liftover",
-    )
-    command.add_argument(
-        "--displaced-cap",
-        type=_displaced_cap,
-        default=DISPLACED_CAP,
-        help="most variants one displaced liftover segment may lose; a larger one refuses",
-    )
-
-
-def _far_target(text: str) -> int:
-    if not text.strip().isdigit() or not NEAR_BP < int(text) <= FAR_BP:
-        raise argparse.ArgumentTypeError(
-            f"needs a whole number of base pairs above the Near Band ({NEAR_BP}) and at most "
-            f"the format's far_bp ({FAR_BP}), not {text!r}"
-        )
-    return int(text)
-
-
-def _displaced_cap(text: str) -> int:
-    if not text.strip().isdigit():
-        raise argparse.ArgumentTypeError(f"needs a whole number of at least 0, not {text!r}")
-    return int(text)
-
-
-def _import(args: argparse.Namespace) -> int:
+@ld_app.command("import")
+@_exits("import")
+def import_command(
+    out: Annotated[Path, typer.Argument(help="the Store to write; it must not exist")],
+    *,
+    metadata: Annotated[Path, typer.Option()],
+    variants: Annotated[Path, typer.Option()],
+    chain: Annotated[Path, typer.Option()],
+    fasta: Annotated[Path, typer.Option()],
+    work: Annotated[Path, typer.Option()],
+    ledger: Annotated[
+        Path | None, typer.Option(help="supplied part listing/SHA-256 ledger")
+    ] = None,
+    parts: Annotated[
+        Path | None, typer.Option(help="read-only directory of existing parts")
+    ] = None,
+    delete_parts: Annotated[
+        bool | None, typer.Option("--delete-parts", help="delete owned downloads after close")
+    ] = None,
+    threads: Annotated[int | None, typer.Option(**_THREADS)] = None,
+    download_workers: Annotated[
+        int | None, typer.Option(help="parts of a chromosome downloaded at once", **_THREADS)
+    ] = None,
+    far_target_bp: _FarTarget = None,
+    displaced_cap: _DisplacedCap = None,
+) -> int:
+    """Import Pan-UKB published LD (ADR 0101)."""
     # Optional dependencies are loaded only on this path, never when opening an LD Store.
     from opengwasdb.ld.build.importing.run import ImportInputs, import_panukb
 
     inputs = ImportInputs(
+        metadata=metadata,
+        variants=variants,
+        chain=chain,
+        fasta=fasta,
+        work=work,
         **_given(
-            args,
-            "metadata",
-            "variants",
-            "chain",
-            "fasta",
-            "work",
-            "ledger",
-            "parts",
-            "delete_parts",
-            "threads",
-            "download_workers",
-            "far_target_bp",
-            "displaced_cap",
-        )
+            ledger=ledger,
+            parts=parts,
+            delete_parts=delete_parts,
+            threads=threads,
+            download_workers=download_workers,
+            far_target_bp=far_target_bp,
+            displaced_cap=displaced_cap,
+        ),
     )
     try:
-        made = import_panukb(inputs, args.out)
+        made = import_panukb(inputs, out)
     except (ValueError, OSError) as problem:
         raise InputError(str(problem)) from problem
     print(json.dumps(made, indent=1))
-    return 0
-
-
-def _validate_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """`ogld validate`: every rule of spec §12 against a store."""
-    v = commands.add_parser("validate", help="run every validation rule")
-    v.add_argument("location")
-    v.add_argument("--threads", type=_threads, default=1, help="blocks read and checked at once")
-
-
-def _derive_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """`ogld derive-partners`: the Partner Rows for a store built before them (§6.2)."""
-    d = commands.add_parser(
-        "derive-partners",
-        help="add the Partner Rows to an existing LD Store (docs/spec/partner-rows.md §6.2)",
-    )
-    d.add_argument("store", type=Path)
-    d.add_argument(
-        "--t-partner",
-        type=float,
-        required=True,
-        help="the r² a pair within near_bp must reach to be in the Partner Rows; no default, and "
-        "never above the store's t_far (partner-rows §3)",
-    )
-    d.add_argument(
-        "--threads", type=_threads, default=1, help="compressor threads within one chromosome"
-    )
-    d.add_argument(
-        "--processes", type=_threads, default=1, help="chromosomes derived at once, largest first"
-    )
-    d.add_argument(
-        "--chromosomes",
-        nargs="+",
-        default=None,
-        metavar="CHROM",
-        help="the chromosomes to derive; every one the store lacks by default",
-    )
-    d.add_argument(
-        "--drop-index",
-        action="store_true",
-        help=(
-            "afterwards remove a Proxy Index the store still holds — a leftover of a store derived "
-            "before format 0.2.0 had none — if its Partner Rows pass their rules"
-        ),
-    )
-
-
-def _given(args: argparse.Namespace, *names: str) -> dict[str, Any]:
-    """The options among `names` the command line set; the rest keep their declared defaults."""
-    return {name: getattr(args, name) for name in names if hasattr(args, name)}
-
-
-def _build(args: argparse.Namespace) -> int:
-    inputs = BuildInputs(
-        pgen=tuple(args.pgen),
-        keep=args.keep,
-        pcs=args.pcs,
-        pc_source=args.pc_source,
-        panel_id=args.panel_id,
-        ancestry=args.ancestry,
-        genotype_source=args.genotype_source,
-        r_scale=args.r_scale,
-        t_partner=args.t_partner,
-        **_given(args, "k", "k_min", "mac_min", "info_min"),
-    )
-    builder = build_genotypes if args.genotypes else build
-    provenance = builder(inputs, args.out, **_given(args, "threads"))
-    print(json.dumps(provenance, indent=1))
     return 0
 
 
@@ -245,29 +225,74 @@ def report(findings: dict[str, list[Finding]]) -> int:
     return 1 if any(findings.values()) else 0
 
 
-def _validate(args: argparse.Namespace) -> int:
-    return report(validate_at(args.location, threads=args.threads))
+@ld_app.command("validate")
+@_exits("validate")
+def validate_command(
+    location: Annotated[str, typer.Argument()],
+    *,
+    threads: Annotated[
+        int | None, typer.Option(help="blocks read and checked at once", **_THREADS)
+    ] = None,
+) -> int:
+    """Run every validation rule (docs/spec/ld-store.md §12)."""
+    return report(validate_at(location, **_given(threads=threads)))
 
 
-def _info(args: argparse.Namespace) -> int:
-    print(json.dumps(open_store(args.location).provenance, indent=1))
+@ld_app.command("info")
+@_exits("info")
+def info_command(location: Annotated[str, typer.Argument()]) -> int:
+    """Print the provenance."""
+    print(json.dumps(open_store(location).provenance, indent=1))
     return 0
 
 
-def _derive(args: argparse.Namespace) -> int:
+@ld_app.command("derive-partners")
+@_exits("derive-partners")
+def derive_command(
+    store: Annotated[Path, typer.Argument()],
+    *,
+    t_partner: Annotated[
+        float,
+        typer.Option(
+            help="the r² a pair within near_bp must reach to be in the Partner Rows; "
+            "no default, and never above the store's t_far (partner-rows §3)",
+        ),
+    ],
+    threads: Annotated[
+        int | None, typer.Option(help="compressor threads within one chromosome", **_THREADS)
+    ] = None,
+    processes: Annotated[
+        int | None, typer.Option(help="chromosomes derived at once, largest first", **_THREADS)
+    ] = None,
+    chromosomes: Annotated[
+        list[str] | None,
+        typer.Option(
+            metavar="CHROM",
+            help="a chromosome to derive; repeat for each; every one the store lacks by default",
+        ),
+    ] = None,
+    drop_index: Annotated[
+        bool,
+        typer.Option(
+            "--drop-index",
+            help="afterwards remove a Proxy Index the store still holds — a leftover of a store "
+            "derived before format 0.2.0 had none — if its Partner Rows pass their rules",
+        ),
+    ] = False,
+) -> int:
+    """Add the Partner Rows to an existing LD Store (docs/spec/partner-rows.md §6.2)."""
     made = derive_partners(
-        args.store,
-        t_partner=args.t_partner,
-        threads=args.threads,
-        processes=args.processes,
-        chromosomes=args.chromosomes,
-        drop_index=args.drop_index,
+        store,
+        t_partner=t_partner,
+        chromosomes=chromosomes or None,
+        drop_index=drop_index,
+        **_given(threads=threads, processes=processes),
     )
     if made is None:
         print(
-            f"ogld derive-partners: {args.store}: the chromosomes asked for are derived, and the "
-            "provenance is not written until every chromosome of the Variant Set has its Partner "
-            "Rows (partner-rows §6.2)",
+            f"opengwasdb ld derive-partners: {store}: the chromosomes asked for are derived, and "
+            "the provenance is not written until every chromosome of the Variant Set has its "
+            "Partner Rows (partner-rows §6.2)",
             file=sys.stderr,
         )
         return 0
@@ -276,20 +301,26 @@ def _derive(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run one `ogld` command and return its exit status."""
-    args = _parser().parse_args(argv)
-    run = {
-        "build": _build,
-        "import": _import,
-        "validate": _validate,
-        "info": _info,
-        "derive-partners": _derive,
-    }[args.command]
+    """Run one `opengwasdb ld` command line and return its exit status.
+
+    The entry point a test or a script calls; the same commands are `opengwasdb ld …`. A command
+    line the parser refuses exits 2 with click's usage message, as a `SystemExit`.
+    """
     try:
-        return run(args)
-    except (Refusal, InputError, IdentityError) as problem:
-        print(f"ogld {args.command}: {problem}", file=sys.stderr)
-        return 2
+        status = ld_app(
+            args=None if argv is None else list(argv),
+            prog_name="opengwasdb ld",
+            standalone_mode=False,
+        )
+    except Exception as problem:
+        # The parser's own refusals (a ClickException, whichever click typer carries): its usage
+        # message, then exit 2. Matched by what they offer, so this needs no import of click,
+        # which newer typer vendors and older typer takes from the environment.
+        if not (hasattr(problem, "show") and hasattr(problem, "exit_code")):
+            raise
+        problem.show()
+        raise SystemExit(problem.exit_code) from None
+    return int(status or 0)
 
 
-__all__ = ["main", "report"]
+__all__ = ["ld_app", "main", "report"]

@@ -169,6 +169,6 @@ def test_a_plink2_that_will_not_say_its_version_is_refused(
     broken = tmp_path / "plink2"
     broken.write_text("#!/bin/sh\necho 'not a version' >&2\nexit 3\n")
     broken.chmod(0o755)
-    monkeypatch.setenv("OGLD_PLINK2", str(broken))
+    monkeypatch.setenv("OPENGWASDB_LD_PLINK2", str(broken))
     with pytest.raises(SystemExit, match="--version"):
         script.plink2_version()
