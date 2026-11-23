@@ -803,6 +803,16 @@ class HybridStoreQuery(_StoreQueryBase):
             result[in_range] = panel[safe] == needles
         return result
 
+    def _panel_rows(self, shared_indices: np.ndarray) -> np.ndarray:
+        """The Dense Component's rows of shared indices already known to be on the panel.
+
+        The needles are narrowed to the map's own dtype: searching an `int32` map
+        with `int64` needles promotes and copies all of it on every call (38 ms
+        for one needle on OGS-00004's 13.4 M-entry map), see `_on_panel_mask`.
+        """
+        needles = np.asarray(shared_indices).astype(self._dense_to_shared.dtype, copy=False)
+        return np.searchsorted(self._dense_to_shared, needles)
+
     def _shared_is_on_panel(self, shared_idx: int) -> bool:
         return bool(self._on_panel_mask(np.array([shared_idx], dtype=np.int64))[0])
 
@@ -860,7 +870,7 @@ class HybridStoreQuery(_StoreQueryBase):
         if index is None:
             return Associations.empty()
         if self._shared_is_on_panel(index):
-            panel_row = int(np.searchsorted(self._dense_to_shared, index))
+            panel_row = int(self._panel_rows(np.array([index]))[0])
             return self._remap_dense(
                 self._dense.phewas_at(panel_row, observed_only=observed_only)
             )
@@ -887,7 +897,7 @@ class HybridStoreQuery(_StoreQueryBase):
         # off-panel variant), which would consult `variant_aliases`.
         shared = np.unique(self._variant_axis.indices_by_identifiers(identifiers)).astype(np.int64)
         on_panel = self._on_panel_mask(shared)
-        panel_rows = np.searchsorted(self._dense_to_shared, shared[on_panel])
+        panel_rows = self._panel_rows(shared[on_panel])
         dense = self._remap_dense(
             self._dense.lookup_at(panel_rows, analysis_ids, observed_only=observed_only)
         )

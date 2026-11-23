@@ -164,3 +164,18 @@ def test_questions_a_search_index_answers_never_load_pysam_or_sqlite(
     # written by the code before #464) and is the one question that opens the table.
     assert sizes["range_phewas"] > 0
     assert probe["after_range_phewas"] == ["pysam"]
+
+
+@pytest.mark.parametrize("name", ["hybrid_completed", "hybrid_observed"])
+def test_a_hybrid_phewas_names_the_panel_row_without_inverting_the_alid_index(
+    releases: dict[str, Path], name: str
+):
+    """Naming the one Dense row must not build `variant_index -> ALID slot` for the whole
+    shared axis (23.5 M rows on OGS-00004: phewas went from 48 to 503 ms)."""
+    from opengwasdb.query import query_store
+
+    on_panel, off_panel = _asked(releases[name])
+    with query_store(releases[name]) as q:
+        for chosen in (on_panel, off_panel):
+            assert len(q.phewas(chosen["alid"])["variant_index"]) > 0
+        assert q._variant_axis._alid_inverse is None
