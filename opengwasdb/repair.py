@@ -9,8 +9,6 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE, per_variant_chunk_size
-from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
 from opengwasdb.store.arrays import (
     ArrayRole,
@@ -20,6 +18,8 @@ from opengwasdb.store.arrays import (
     open_group,
 )
 from opengwasdb.store.swap import recover_interrupted_swap, swap_staged
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path
 
 
 @dataclass(frozen=True)

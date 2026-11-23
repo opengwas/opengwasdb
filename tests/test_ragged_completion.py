@@ -20,7 +20,7 @@ from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation.validate import validate_store
 
 # ── Synthetic BESD fixture (reused from test_ragged_build_besd.py) ─────────
@@ -217,7 +217,7 @@ class TestTopHitCountsRefreshedByCompletion:
     list a threshold is evaluated against."""
 
     def test_completed_top_hit_counts_match_completed_top_hit_index(self, completed_store):
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.top_hits import read_top_hit_counts
 
         table = read_analyses(completed_store / "analyses.tsv")
@@ -243,7 +243,8 @@ class TestTopHitCountsRefreshedByCompletion:
         top-hit index rather than adding onto whatever the source said, so
         the completed values equal a fresh recomputation for every threshold
         column and the stale marker is neither retained nor double-counted."""
-        from opengwasdb.model.analyses import read_analyses, write_analyses
+        from opengwasdb.model.analyses import write_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.top_hits import read_top_hit_counts
 
         analyses_path = observed_store / "analyses.tsv"
@@ -280,7 +281,7 @@ class TestCompletionRollupColumns:
     def test_rollup_columns_match_completion_quality_table(self, completed_store):
         import sqlite3
 
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         table = read_analyses(completed_store / "analyses.tsv")
         rows = {int(r["analysis_index"]): r for r in table.rows}
@@ -318,7 +319,7 @@ class TestCompletionRollupColumns:
             conn.close()
 
     def test_completed_against_recorded_when_ancestry_matches(self, completed_store):
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         rows = read_analyses(completed_store / "analyses.tsv").rows
         # This fixture's build carries no assigned_ancestry column, so
@@ -616,7 +617,7 @@ class TestPanelAlidCanonicalisation:
         return completed_store
 
     def test_new_panel_variant_in_underscore_form_is_imputed(self, tmp_path):
-        from opengwasdb.variants import parse_canonical_alid
+        from opengwasdb.store_reader.alid import parse_canonical_alid
         from opengwasdb.variants.axis import VariantAxis
 
         # 7 observed positions (alleles already alphabetically A1<A2, so no
@@ -891,8 +892,8 @@ class TestAncestryMatchedRaggedCompletion:
     def test_only_matching_ancestry_analysis_is_imputed(self, tmp_path):
         import sqlite3
 
-        from opengwasdb.model.analyses import read_analyses
-        from opengwasdb.variants import parse_canonical_alid
+        from opengwasdb.store_reader.alid import parse_canonical_alid
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.variants.axis import VariantAxis
         from tests.ssf_builds import build_ragged_from_ssf
 
@@ -1680,7 +1681,8 @@ class TestGeneTargetLessAnalyses:
         """Blank `trait_chr`/`trait_bp` and nothing else, so the only
         difference from a store that does get completed is the one thing this
         issue is about."""
-        from opengwasdb.model.analyses import read_analyses, write_analyses
+        from opengwasdb.model.analyses import write_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         table = read_analyses(store / "analyses.tsv")
         rows = [{**row, "trait_chr": "", "trait_bp": ""} for row in table.rows]

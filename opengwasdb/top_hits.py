@@ -7,8 +7,10 @@ threshold, as parallel arrays ordered by ``(analysis_index, variant_index)`` wit
 an ``analysis_offsets`` array addressing one Analysis's slice. A Dense Store, a
 Ragged Store and a Hybrid Store's Ragged Overflow Component write the same tier;
 what differs between them is how the candidate cells are *harvested*, which stays
-in ``layouts/*/top_hits.py``. This module owns everything after the harvest and
-everything a reader needs, so the layouts cannot drift apart on the format.
+in ``layouts/*/top_hits.py``. This module owns everything after the harvest, so
+the layouts cannot drift apart on the format; what a reader needs -- the tiers,
+their keys and rows, and the |z| a threshold cuts at -- is the Store Reader's
+(`opengwasdb.store_reader.top_hits` and `.stats`, #464), and is re-exported here.
 
 The on-disk format is specified in ``docs/spec/store-format.md``; nothing here
 changes it.
@@ -19,10 +21,9 @@ from __future__ import annotations
 import importlib
 import logging
 import math
-from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 import numpy as np
 import zarr
@@ -34,18 +35,21 @@ from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS, Analysis
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole
 
+# Re-exported: the Store Reader owns the cut (#464). It is called through the
+# module, so a test that moves the cut moves every caller with it.
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.stats import z_critical as z_critical
+from opengwasdb.store_reader.top_hits import (
+    TOP_HIT_GROUP,
+    TOP_HIT_THRESHOLDS,
+    threshold_key,
+)
+
 log = logging.getLogger(__name__)
 
 # scipy ships no type stubs; importing by name keeps the build's one scipy use
-# from needing a per-site `type: ignore`.
+# (the stored `p_value`'s erfc) from needing a per-site `type: ignore`.
 _special = importlib.import_module("scipy.special")
-
-#: The group a Store's data.zarr holds the Top-Hit Index in.
-TOP_HIT_GROUP = "top_hits"
-
-#: The thresholds a Store Release indexes, loosest last. Positionally paired with
-#: `TOP_HIT_COUNT_COLUMNS`, the `analyses.tsv` columns the tiers' counts land in.
-TOP_HIT_THRESHOLDS = (5e-8, 5e-6, 5e-4)
 
 #: Re-exported from the seam, which owns the role's default layout, so the
 #: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
@@ -73,49 +77,6 @@ _TIER_DTYPES = {
     "imputed": "uint8",
     "eaf": "float32",
 }
-
-
-def threshold_key(threshold: float) -> str:
-    """Stable Zarr group key for a p-value threshold."""
-
-    return f"p_{threshold:.0e}".replace("-", "_").replace("+", "")
-
-
-def tier_threshold(key: str, group: Any, *, missing: float | None = None) -> float:
-    """The p-value threshold a tier was written for.
-
-    Its ``threshold`` attribute; when the tier has none, `missing` if the caller
-    names its own fallback, else the threshold its key spells -- the inverse of
-    `threshold_key` (``p_5e_08`` -> 5e-08).
-    """
-    if "threshold" in group.attrs:
-        return float(group.attrs["threshold"])
-    if missing is not None:
-        return missing
-    return float(key.replace("p_", "").replace("_", "-"))
-
-
-def has_index(root: Any) -> bool:
-    """Whether a Store's data group holds a Top-Hit Index."""
-    return TOP_HIT_GROUP in root
-
-
-def index_group(root: Any) -> Any:
-    """The Top-Hit Index group of a Store's data group, one tier per key."""
-    return root[TOP_HIT_GROUP]
-
-
-def z_critical(threshold: float) -> float:
-    """|z| cutoff equivalent to two-sided p <= threshold.
-
-    The stored p-value is ``p = erfc(|z| / sqrt(2))`` (see the query facade and
-    the old scalar ``p_value_from_z``), so ``p <= threshold`` is exactly
-    ``|z| >= sqrt(2) * erfcinv(threshold)``. Thresholding on ``|z|`` lets the
-    hot path avoid computing a p-value for every cell. The index build, the
-    Ragged scan fallback and the validator all cut here and nowhere else.
-    """
-
-    return math.sqrt(2.0) * float(_special.erfcinv(threshold))
 
 
 # ── write ─────────────────────────────────────────────────────────────────────
@@ -172,7 +133,7 @@ def _write_tier(
 ) -> int:
     group = store_arrays.create_group(top, threshold_key(threshold))
 
-    keep = abs_z >= z_critical(threshold)
+    keep = abs_z >= reader_stats.z_critical(threshold)
     kept = {name: values[keep] for name, values in columns.items()}
     kept["abs_z"] = abs_z[keep]
     kept["p_value"] = _special.erfc(kept["abs_z"].astype("float64") / math.sqrt(2.0))
@@ -211,122 +172,6 @@ def _write_tier(
 
 
 # ── read ──────────────────────────────────────────────────────────────────────
-
-
-class TierRows(NamedTuple):
-    """The rows of one tier (or one Analysis's slice of it), in index order.
-
-    `se`, `eaf` and `imputed` are None when the index predates the array; the
-    caller decides what an older index derives them from.
-    """
-
-    variant_index: np.ndarray
-    analysis_index: np.ndarray
-    z: np.ndarray
-    se: np.ndarray | None
-    eaf: np.ndarray | None
-    imputed: np.ndarray | None
-
-
-class TopHitTier:
-    """Address one threshold tier without exposing its physical arrays.
-
-    Each of the tier's arrays is opened at most once per tier object (#244).
-    zarr-python 3 reads an array's metadata from the store on every
-    ``group[name]`` and every ``name in group`` -- about 1 ms each on a local
-    store -- and one top-hit query touches up to seven arrays, so a reader that
-    reopened them per field spent more time on metadata than on hits (OGS-00009:
-    21 ms as it was, 5.8 ms opened once). A Store Release does not change while
-    it is queried, so an opened array stays valid for the tier's lifetime.
-    """
-
-    def __init__(self, group: zarr.Group):
-        self.group = group
-        self._arrays: dict[str, zarr.Array | None] = {}
-
-    def _array(self, name: str) -> zarr.Array | None:
-        """The tier's array `name`, or None when this index predates it."""
-        if name not in self._arrays:
-            try:
-                self._arrays[name] = self.group[name]
-            except KeyError:
-                self._arrays[name] = None
-        return self._arrays[name]
-
-    def _required(self, name: str) -> zarr.Array:
-        array = self._array(name)
-        if array is None:
-            raise KeyError(f"top-hit tier {self.group.path!r} has no {name!r} array")
-        return array
-
-    def has(self, name: str) -> bool:
-        """Whether this tier's index carries the array `name`."""
-        return self._array(name) is not None
-
-    @property
-    def has_offsets(self) -> bool:
-        """Whether an Analysis's slice can be addressed (older indexes cannot)."""
-        return self.has("analysis_offsets")
-
-    def _bounds(self, analysis_index: int | None) -> tuple[int, int]:
-        if analysis_index is None:
-            return 0, int(self._required("z").shape[0])
-        offsets = self._required("analysis_offsets")
-        if analysis_index < 0 or analysis_index + 1 >= int(offsets.shape[0]):
-            return 0, 0
-        pair = offsets[analysis_index : analysis_index + 2]
-        return int(pair[0]), int(pair[1])
-
-    def _read(self, name: str, bounds: tuple[int, int], dtype: str) -> np.ndarray:
-        start, stop = bounds
-        return np.asarray(self._required(name)[start:stop], dtype=dtype)
-
-    def _read_if_present(self, name: str, bounds: tuple[int, int], dtype: str) -> np.ndarray | None:
-        return self._read(name, bounds, dtype) if self.has(name) else None
-
-    def read(
-        self, analysis_index: int | None = None, *, require: Iterable[str] = ()
-    ) -> TierRows:
-        """The tier's rows, or one Analysis's slice of them.
-
-        An `analysis_index` outside the index addresses an empty slice. Naming an
-        optional array in `require` makes its absence a KeyError rather than a
-        None, for a caller (a Ragged read) that has no fallback for it.
-        """
-        for name in require:
-            self._required(name)
-        bounds = self._bounds(analysis_index)
-        return TierRows(
-            variant_index=self._read("variant_index", bounds, "int32"),
-            analysis_index=self._read("analysis_index", bounds, "int32"),
-            z=self._read("z", bounds, "float32"),
-            se=self._read_if_present("se", bounds, "float32"),
-            eaf=self._read_if_present("eaf", bounds, "float32"),
-            imputed=self._read_if_present("imputed", bounds, "uint8"),
-        )
-
-
-class TopHitTiers:
-    """A store's top-hit threshold tiers, each opened once and kept (#244).
-
-    A query facade holds one, so a repeated top-hit query reuses the tier group
-    and the arrays its `TopHitTier` already opened instead of reading their
-    metadata from the store again.
-    """
-
-    def __init__(self, root: zarr.Group):
-        self._root = root
-        self._tiers: dict[str, TopHitTier | None] = {}
-
-    def tier(self, threshold: float) -> TopHitTier | None:
-        """The tier for `threshold`, or None when the store has no such tier."""
-        key = threshold_key(threshold)
-        if key not in self._tiers:
-            try:
-                self._tiers[key] = TopHitTier(self._root[f"{TOP_HIT_GROUP}/{key}"])
-            except KeyError:
-                self._tiers[key] = None
-        return self._tiers[key]
 
 
 # ── counts ────────────────────────────────────────────────────────────────────

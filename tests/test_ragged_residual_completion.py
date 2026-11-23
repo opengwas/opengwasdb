@@ -450,7 +450,7 @@ def test_top_hit_index_is_consistent_with_the_decoded_plane_even_when_stale(
     The stale values are the SEs the source rows carry, before the source's
     own quantisation: since issue #301 the source's *decoded* values are what
     the completed plane decodes, so they could not differ from it."""
-    from opengwasdb.top_hits import threshold_key
+    from opengwasdb.store_reader.top_hits import threshold_key
 
     stale_store = tmp_path / "stale.opengwasdb"
     shutil.copytree(scenario.completed, stale_store)

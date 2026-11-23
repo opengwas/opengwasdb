@@ -36,10 +36,10 @@ from opengwasdb.build.eaf_orientation import (
     select_rows,
     site_hash,
 )
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import EafOrientationOutcome, EafScope
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.variants import iter_variant_records, variant_table_path
 
 log = logging.getLogger(__name__)

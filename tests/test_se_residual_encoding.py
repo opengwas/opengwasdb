@@ -39,7 +39,7 @@ from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 

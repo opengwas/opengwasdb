@@ -24,10 +24,10 @@ from typing import Any, Generic, TypeVar
 
 from opengwasdb.admission.rules import Reason
 from opengwasdb.encoding import StoreEncoding
-from opengwasdb.model.analyses import AnalysesTable, read_analyses
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.variants import VariantAxis
 
 #: What one scan yields: a block of the data it reads.

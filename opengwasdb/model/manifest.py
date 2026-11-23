@@ -8,11 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from opengwasdb.encoding import StoreEncoding, UnsupportedEncoding
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    CompletionState,
-    PrimaryStorageLayout,
-)
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 
 
 def _encoding_from_dict(data: dict[str, Any]) -> StoreEncoding:

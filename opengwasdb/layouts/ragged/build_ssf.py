@@ -56,12 +56,7 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model import coverage_for_layout
 from opengwasdb.model.analyses import PassthroughMetadata, write_analysis_records
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafScope,
-    PrimaryStorageLayout,
-    StoredEffectScale,
-)
+from opengwasdb.model.enums import EafScope, StoredEffectScale
 from opengwasdb.model.manifest import RegionsEntry
 from opengwasdb.model.manifest_columns import (
     ManifestColumns,
@@ -82,6 +77,7 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants.axis import (
     write_variant_axis,

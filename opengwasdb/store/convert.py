@@ -67,7 +67,6 @@ from opengwasdb.encoding.codec import (
     se_above_bound,
 )
 from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store.arrays import (
@@ -93,6 +92,7 @@ from opengwasdb.store.open import (
     OpenGWASDBStore,
     format_version_for,
 )
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 #: The layouts the converter understands (#248).  Every other value is refused

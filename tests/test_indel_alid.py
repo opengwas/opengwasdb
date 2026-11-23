@@ -13,11 +13,10 @@ import pytest
 
 from opengwasdb.admission.rules import LOGGED, Reason
 from opengwasdb.readers.tabular import NO_REFERENCE
+from opengwasdb.store_reader.identity import MalformedIdentity, VariantNormalisationError
 from opengwasdb.variants.normalise import (
     IdentityFaults,
-    MalformedIdentity,
     UndeclaredReference,
-    VariantNormalisationError,
     canonical_alid,
     identity_fault,
     orient_or_drop,

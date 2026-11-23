@@ -23,7 +23,9 @@ from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import check_writable_zarr_layout
-from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE, TOP_HIT_THRESHOLDS
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE
 
 log = logging.getLogger(__name__)
 
@@ -294,7 +296,7 @@ def _run_scan(
             planes.eaf,
             n_variants,
             band,
-            top_hits.z_critical(max(thresholds)),
+            reader_stats.z_critical(max(thresholds)),
             n_workers,
         )
     _write_scan_harvest(store_path, parts, thresholds, planes.imputed, planes.eaf, timer)

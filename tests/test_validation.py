@@ -17,10 +17,11 @@ from opengwasdb.encoding.codec import SeExceptionTable, se_float16
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses, write_analyses
+from opengwasdb.model.analyses import write_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import Severity, validate_store
 from opengwasdb.validation.rules.side_tables import (
     FLOAT16_EXACT_MINIMUM,
@@ -602,7 +603,7 @@ def test_validator_accepts_migrated_hybrid_store(hybrid_store_path):
 
 
 def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_path):
-    from opengwasdb.layouts.hybrid.layout import dense_component_path
+    from opengwasdb.store_reader.hybrid import dense_component_path
 
     connection = open_store(dense_component_path(hybrid_store_path)).index_connection()
     try:
@@ -618,7 +619,7 @@ def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_pa
 
 
 def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
-    from opengwasdb.layouts.hybrid.layout import dense_component_path
+    from opengwasdb.store_reader.hybrid import dense_component_path
 
     analyses_path = dense_component_path(hybrid_store_path) / "analyses.tsv"
     table = read_analyses(analyses_path)
@@ -684,7 +685,7 @@ def test_validator_rejects_stray_file_at_hybrid_top_level(hybrid_store_path):
 
 
 def test_validator_rejects_stray_file_in_hybrid_dense_component(hybrid_store_path):
-    from opengwasdb.layouts.hybrid.layout import dense_component_path
+    from opengwasdb.store_reader.hybrid import dense_component_path
 
     (dense_component_path(hybrid_store_path) / "stray.txt").write_text("x")
 

@@ -21,9 +21,9 @@ import numpy as np
 from opengwasdb.associations import State, Tally
 from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.encoding.codec import SE_FLOAT16_MAX, se_above_bound
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import array_length
 from opengwasdb.store.open import records_se_out_of_range
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, OBSERVED_ONLY, prefix
 from opengwasdb.validation.rules.encoding import PLAN, plane_label

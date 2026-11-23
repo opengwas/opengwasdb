@@ -53,10 +53,10 @@ from opengwasdb.associations import Cells, CsrReader, State
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.layouts.dense.complete import completion_band_rows
-from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path
 from opengwasdb.validation.observed_view import (
     _DIFF_PLANES,
     FAILING_COUNTERS,

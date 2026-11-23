@@ -100,8 +100,6 @@ from opengwasdb.encoding import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.timing import log_phase, log_progress, progress_every
-from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole, array_length
@@ -113,8 +111,11 @@ from opengwasdb.store.open import (
     staged_named_group,
     zarr_format_for_version,
 )
+from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.assembly import normalise_build
-from opengwasdb.variants import VariantAxis, parse_canonical_alid
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path
+from opengwasdb.variants import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 

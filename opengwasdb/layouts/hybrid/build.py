@@ -153,11 +153,6 @@ from opengwasdb.layouts.hybrid.key_table import (
     lookup_matched,
     resolve_keys,
 )
-from opengwasdb.layouts.hybrid.layout import (
-    DENSE_SUBDIR,
-    dense_component_path,
-    dense_to_shared_path,
-)
 from opengwasdb.layouts.hybrid.overflow_spills import assemble_overflow_csr
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
@@ -174,12 +169,7 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    CompletionState,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import coverage_for_layout
 from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
     InfoScoreState,
@@ -190,6 +180,8 @@ from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, format_version_for
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids

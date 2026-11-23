@@ -38,11 +38,11 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.query import query_store
-from opengwasdb.stats import log10_p_two_sided
 from opengwasdb.store.open import (
     UnsupportedFormatVersion,
     open_store,
 )
+from opengwasdb.store_reader.stats import log10_p_two_sided
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 

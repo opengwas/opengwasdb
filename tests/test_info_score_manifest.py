@@ -6,10 +6,11 @@ import pytest
 
 from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.build.resolve_manifest import _build_analysis_fingerprints, read_resolve_manifest
-from opengwasdb.model.analyses import read_analyses, validate_analyses
+from opengwasdb.model.analyses import validate_analyses
 from opengwasdb.model.info_score_policy import parse_info_score_policy
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.interface import ImputationScoreKind
+from opengwasdb.store_reader.analyses import read_analyses
 
 BASE = {
     "analysis_id": "GCST1",

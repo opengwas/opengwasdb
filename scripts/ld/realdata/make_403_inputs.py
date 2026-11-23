@@ -259,7 +259,7 @@ def records_by_alid(pvar: Path, alids: set[str]) -> tuple[dict[str, list[Record]
     """The pvar records whose ALID the store holds, by ALID, and how many records have no ALID
     (an allele the engine refuses, `VariantNormalisationError`): the store can hold none of
     those, so they are counted, and the caller reports the count."""
-    from opengwasdb.variants.normalise import VariantNormalisationError
+    from opengwasdb.store_reader.identity import VariantNormalisationError
     from opengwasdb.variants.sorted_spelling import sorted_identity
 
     found: dict[str, list[Record]] = {}

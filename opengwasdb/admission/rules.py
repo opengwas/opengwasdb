@@ -82,12 +82,11 @@ from opengwasdb.build.info_score_filter import (
 )
 from opengwasdb.model.info_score_policy import InfoScorePolicy
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.store_reader.identity import InvalidAllele, MissingChromosome
 from opengwasdb.variants.normalise import (
     HmCodeIndel,
     HmColumnsIndel,
-    InvalidAllele,
     LiftedOffPrimary,
-    MissingChromosome,
     UndeclaredReference,
     UnharmonisedIndel,
 )

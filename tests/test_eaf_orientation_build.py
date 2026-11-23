@@ -33,8 +33,8 @@ from eaf_fixtures import (
 from opengwasdb.build.eaf_orientation import EafOrientationError
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import EafOrientationOutcome
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.eaf_audit import audit_eaf_orientation
 from tests.ssf_builds import build_ragged_from_ssf

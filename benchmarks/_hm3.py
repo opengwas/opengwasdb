@@ -46,9 +46,9 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     list_indexed_subsets,
     open_indexed_subset,
 )
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import open_group
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 
 #: The conventional name of the HapMap3 subset. A default derived artifact, so
 #: an operator may omit it; the name is the benchmark's only handle on it.

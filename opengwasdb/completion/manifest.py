@@ -20,9 +20,9 @@ from typing import Any
 
 from opengwasdb.completion.block import COMPLETION_METHOD
 from opengwasdb.encoding import StoreEncoding
-from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import completed_format_version
+from opengwasdb.store_reader.enums import CompletionState
 
 
 def build_completion_provenance(

@@ -23,10 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from opengwasdb.readers.gwas_vcf import project_lifted_alleles
+from opengwasdb.store_reader.alid import parse_canonical_alid
 
 # Re-exported: opengwasdb-stores imports `normalise_build` from here.
 from opengwasdb.store_reader.assembly import normalise_build as normalise_build
-from opengwasdb.variants.axis import parse_canonical_alid
 from opengwasdb.variants.normalise import canonical_alid, ref_is_a1
 from opengwasdb.variants.reference import iter_reference_alids
 

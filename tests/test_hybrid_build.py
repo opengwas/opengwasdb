@@ -46,7 +46,6 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     check_hash,
     encode_key,
 )
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.p_value_test import PValueTest
@@ -55,7 +54,8 @@ from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 HG19_POS_1 = 100_000

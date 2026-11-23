@@ -54,15 +54,11 @@ from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, count
 from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import Analysis, read_analysis_records
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
-from opengwasdb.variants import (
-    VariantAxis,
-    is_indexable_alid,
-    variant_alid_bytes_path,
-    variant_alid_rows_path,
-)
+from opengwasdb.store_reader.alid import is_indexable_alid
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.variants import VariantAxis, variant_alid_bytes_path, variant_alid_rows_path
 
 __all__ = [
     "FAILING_COUNTERS",

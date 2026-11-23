@@ -186,12 +186,12 @@ def write_release_manifest(
     describes a plain float16/float16/float32 Store.
     """
     from opengwasdb.encoding import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-    from opengwasdb.model.enums import (
+    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.enums import (
         AssociationCoverage,
         CompletionState,
         PrimaryStorageLayout,
     )
-    from opengwasdb.model.manifest import StoreManifest
 
     manifest = StoreManifest(
         store_id=store_id,

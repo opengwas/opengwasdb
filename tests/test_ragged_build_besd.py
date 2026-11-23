@@ -153,7 +153,7 @@ def test_cli_build_ragged_besd_refuses_to_guess_the_coverage(tmp_path):
 
 
 def test_analyses_tsv_carries_probe_identities(tmp_path):
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
@@ -314,7 +314,7 @@ def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
     genomic position) are carried into the shared schema."""
     import sqlite3
 
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
@@ -342,7 +342,7 @@ def test_top_hit_counts_in_analyses_tsv_match_top_hit_index(tmp_path):
     """Issue #73: Ragged builds persist per-Analysis Top-Hit Counts in
     analyses.tsv, matching what the store's own top-hit index actually
     contains -- not zero, not stale."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.top_hits import read_top_hit_counts
 
     out = _build_store(tmp_path)
@@ -391,7 +391,7 @@ def test_range_by_analysis_matches_trait_position(tmp_path):
 
     out = _build_store(tmp_path)
 
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     # Independent oracle: compute the expected analysis_index set by hand
     # from the same analyses.tsv rows the query facade reads, rather than
@@ -525,7 +525,7 @@ def test_no_analyses_manifest_build_is_byte_identical(tmp_path):
 
 def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
     """Issue #173: --analyses overlays metadata, sample_size, original_sd, and attribution."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "analyses_overlay.tsv"
@@ -591,8 +591,8 @@ def test_besd_se_is_standardised_by_the_manifests_original_sd(tmp_path):
     The values are the fixture's own, not the new code's arithmetic: probe 1
     holds beta=0.5 and se=0.05, so it stores z=10.0 and se=0.025 (0.05 / 2.0).
     """
-    from opengwasdb.model.analyses import read_analyses
     from opengwasdb.model.enums import OriginalSdMethod
+    from opengwasdb.store_reader.analyses import read_analyses
 
     require_rescaling(OriginalSdMethod.SOURCE_PROVIDED)
     prefix = _make_besd_fixture(tmp_path)
@@ -708,7 +708,7 @@ def test_analyses_overlay_malformed_sample_size_fails_loudly(tmp_path):
 
 def test_analyses_overlay_with_tissue_suffix_joins_correctly(tmp_path):
     """Issue #173: when tissue is supplied, manifest joined by suffixed analysis_id."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "analyses_tissue_suffixed.tsv"
@@ -735,7 +735,7 @@ def test_analyses_overlay_with_tissue_suffix_joins_correctly(tmp_path):
 
 def test_besd_derived_trait_position_stays_authoritative(tmp_path):
     """Issue #173: BESD-derived trait_chr and trait_bp stay authoritative over manifest."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "analyses_pos_conflict.tsv"
@@ -803,7 +803,7 @@ def test_cli_build_ragged_besd_accepts_analyses_option(tmp_path):
     from typer.testing import CliRunner
 
     from opengwasdb.cli.main import app
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "cli_analyses.tsv"

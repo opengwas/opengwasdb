@@ -61,9 +61,10 @@ import sqlite3
 from pathlib import Path
 
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
-from opengwasdb.model.analyses import RETIRED_ANALYSIS_COLUMNS, Analysis, read_analyses
+from opengwasdb.model.analyses import RETIRED_ANALYSIS_COLUMNS, Analysis
 from opengwasdb.model.enums import OriginalSdMethod
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
 
 _ANCESTRY_SIDECAR = "ancestry.tsv"
 _ANCESTRY_PROVENANCE = "ancestry_provenance.json"

@@ -42,18 +42,14 @@ from opengwasdb.model.analyses import (
     with_se_out_of_range,
     write_analyses,
 )
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafOrientationOutcome,
-    EafScope,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafOrientationOutcome, EafScope, coverage_for_layout
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.arrays import ArrayRole, compressor
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     VARIANT_OFFSETS_FILENAME,

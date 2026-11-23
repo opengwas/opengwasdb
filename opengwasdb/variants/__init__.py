@@ -7,6 +7,11 @@ from typing import TYPE_CHECKING
 from opengwasdb.lazy_exports import exported_names, lazy_hooks
 
 if TYPE_CHECKING:
+    from opengwasdb.store_reader.alid import is_indexable_alid as is_indexable_alid
+    from opengwasdb.store_reader.alid import is_indexable_rsid as is_indexable_rsid
+    from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
+    from opengwasdb.store_reader.identity import normalise_allele as normalise_allele
+    from opengwasdb.store_reader.identity import normalise_chromosome as normalise_chromosome
     from opengwasdb.variants.axis import VARIANT_ALID_BYTES_FILENAME as VARIANT_ALID_BYTES_FILENAME
     from opengwasdb.variants.axis import VARIANT_ALID_ROWS_FILENAME as VARIANT_ALID_ROWS_FILENAME
     from opengwasdb.variants.axis import VARIANT_AXIS_FORMAT as VARIANT_AXIS_FORMAT
@@ -15,10 +20,7 @@ if TYPE_CHECKING:
     from opengwasdb.variants.axis import VARIANT_TABLE_FILENAME as VARIANT_TABLE_FILENAME
     from opengwasdb.variants.axis import VariantAxis as VariantAxis
     from opengwasdb.variants.axis import VariantRecord as VariantRecord
-    from opengwasdb.variants.axis import is_indexable_alid as is_indexable_alid
-    from opengwasdb.variants.axis import is_indexable_rsid as is_indexable_rsid
     from opengwasdb.variants.axis import iter_variant_records as iter_variant_records
-    from opengwasdb.variants.axis import parse_canonical_alid as parse_canonical_alid
     from opengwasdb.variants.axis import variant_alid_bytes_path as variant_alid_bytes_path
     from opengwasdb.variants.axis import variant_alid_rows_path as variant_alid_rows_path
     from opengwasdb.variants.axis import variant_offsets_path as variant_offsets_path
@@ -31,8 +33,6 @@ if TYPE_CHECKING:
     from opengwasdb.variants.normalise import Orientation as Orientation
     from opengwasdb.variants.normalise import VariantNormalisationError as VariantNormalisationError
     from opengwasdb.variants.normalise import chromosome_sort_key as chromosome_sort_key
-    from opengwasdb.variants.normalise import normalise_allele as normalise_allele
-    from opengwasdb.variants.normalise import normalise_chromosome as normalise_chromosome
     from opengwasdb.variants.normalise import orient_to_canonical as orient_to_canonical
     from opengwasdb.variants.reference import UnmarkedArtifactError as UnmarkedArtifactError
     from opengwasdb.variants.reference import VariantReference as VariantReference
@@ -42,6 +42,12 @@ if TYPE_CHECKING:
 #: Each re-exported name, by the module it comes from; imported on first use
 #: (`opengwasdb.lazy_exports`, #464).
 _EXPORTS = {
+    "opengwasdb.store_reader.alid": (
+        "is_indexable_alid",
+        "is_indexable_rsid",
+        "parse_canonical_alid",
+    ),
+    "opengwasdb.store_reader.identity": ("normalise_allele", "normalise_chromosome"),
     "opengwasdb.variants.axis": (
         "VARIANT_AXIS_FORMAT",
         "VARIANT_OFFSETS_FILENAME",
@@ -52,9 +58,6 @@ _EXPORTS = {
         "VariantAxis",
         "VariantRecord",
         "iter_variant_records",
-        "parse_canonical_alid",
-        "is_indexable_alid",
-        "is_indexable_rsid",
         "variant_offsets_path",
         "variant_rsid_bytes_path",
         "variant_rsid_rows_path",
@@ -69,8 +72,6 @@ _EXPORTS = {
         "Orientation",
         "VariantNormalisationError",
         "chromosome_sort_key",
-        "normalise_allele",
-        "normalise_chromosome",
         "orient_to_canonical",
     ),
     "opengwasdb.variants.reference": (

@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
 
-from opengwasdb.query import log10_p_two_sided, query_store
+from opengwasdb.query import query_store
+from opengwasdb.store_reader.stats import log10_p_two_sided
 
 
 def test_log10_p_two_sided_matches_known_values():

@@ -33,9 +33,9 @@ from numcodecs import Blosc
 from opengwasdb.index import create_lookup_indexes, initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE, DEFAULT_COMPRESSOR
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,

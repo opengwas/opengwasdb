@@ -17,12 +17,9 @@ from opengwasdb.model.analyses import (
 from opengwasdb.model.enums import (
     COVERAGES_BY_LAYOUT,
     AncestryAssignmentMethod,
-    AssociationCoverage,
-    CompletionState,
     EafScope,
     InfoScope,
     OriginalSdMethod,
-    PrimaryStorageLayout,
     SampleSizeKind,
     SampleSizeScope,
     StoredEffectScale,
@@ -39,6 +36,7 @@ from opengwasdb.model.manifest_columns import (
     required_manifest_column,
     resolve_manifest_columns,
 )
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 
 __all__ = [
     "ANALYSIS_COLUMNS",

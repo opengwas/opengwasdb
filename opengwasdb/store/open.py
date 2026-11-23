@@ -25,9 +25,9 @@ from typing import TYPE_CHECKING, Any
 
 import zarr
 
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery

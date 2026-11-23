@@ -31,11 +31,9 @@ from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
-from opengwasdb.top_hits import (
-    TOP_HIT_THRESHOLDS,
-    read_top_hit_counts,
-    threshold_key,
-)
+from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS, threshold_key
+from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -135,7 +133,7 @@ def _reference_tiers(
     root = zarr.open_group(str(scratch), mode="w", zarr_format=2)
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
     top_hits.write_index(root, columns, thresholds, n_analyses, compressor=compressor)
-    return root[top_hits.TOP_HIT_GROUP], n_analyses
+    return root[reader_top_hits.TOP_HIT_GROUP], n_analyses
 
 
 def _arrays(group: zarr.Group) -> dict[str, np.ndarray]:
@@ -219,7 +217,7 @@ def test_streamed_tiers_match_materialising_reference(
         assert encoding.eaf.is_residual, "fixture must select a residual eaf plane"
     store = shutil.copytree(seed_store, tmp_path / "store")
     reference_path = shutil.copytree(seed_reference, tmp_path / "ref.zarr")
-    ref = zarr.open_group(str(reference_path), mode="r")[top_hits.TOP_HIT_GROUP]
+    ref = zarr.open_group(str(reference_path), mode="r")[reader_top_hits.TOP_HIT_GROUP]
     build_ragged_top_hit_indexes(
         store, thresholds=TOP_HIT_THRESHOLDS, encoding=encoding, slice_cells=slice_cells
     )

@@ -49,12 +49,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypeVar
 
-from opengwasdb.variants.axis import (
-    alid_sort_key,
-    iter_variant_records,
-    parse_canonical_alid,
-    variant_table_path,
-)
+from opengwasdb.store_reader.alid import parse_canonical_alid
+from opengwasdb.variants.axis import alid_sort_key, iter_variant_records, variant_table_path
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.windows import DEFAULT_WINDOW_SIZE_MB, window_key, window_size_bp
 

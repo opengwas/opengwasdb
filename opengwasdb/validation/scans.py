@@ -55,8 +55,8 @@ from opengwasdb.encoding.planes import (
     DenseZPlane,
     RaggedEafPlane,
 )
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable, failed_words
 
 log = logging.getLogger(__name__)

@@ -28,7 +28,6 @@ from opengwasdb.model.analyses import (
     NON_NEGATIVE_INTEGER_OR_BLANK,
     RETIRED_ANALYSIS_COLUMNS,
     TOP_HIT_COUNT_COLUMNS,
-    read_analyses,
 )
 from opengwasdb.model.enums import (
     SD_RESCALING_METHODS,
@@ -36,7 +35,6 @@ from opengwasdb.model.enums import (
     EafOrientationOutcome,
     EafScope,
     OriginalSdMethod,
-    PrimaryStorageLayout,
     StoredEffectScale,
 )
 from opengwasdb.model.regions import (
@@ -46,6 +44,8 @@ from opengwasdb.model.regions import (
     read_store_regions,
 )
 from opengwasdb.store.open import records_se_out_of_range
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.release import REQUIRED
 

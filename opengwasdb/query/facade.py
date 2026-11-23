@@ -73,7 +73,6 @@ from typing import NoReturn, Self
 
 import numpy as np
 
-from opengwasdb import top_hits
 from opengwasdb.associations import (
     Associations,
     Cells,
@@ -81,19 +80,20 @@ from opengwasdb.associations import (
     DenseGridReader,
     SubsetReader,
 )
-from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetError,
     IndexedSubsetLayoutError,
     rescope_indexed_subset_error,
 )
 from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.query.resolve import resolve_rows
 from opengwasdb.store.open import OpenGWASDBStore, open_store
-from opengwasdb.top_hits import TierRows, TopHitTier, TopHitTiers
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.analyses import AnalysesIndex
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
 from opengwasdb.variants import VariantAxis
 
 
@@ -632,7 +632,7 @@ class RaggedStoreQuery(_StoreQueryBase):
         agree on the boundary. The reader refuses a non-canonical marker the
         cutoff would otherwise drop.
         """
-        cutoff = top_hits.z_critical(threshold)
+        cutoff = reader_stats.z_critical(threshold)
         hits: list[np.ndarray] = []
         for window in self._reader.windows(region):
             assert window.pos is not None

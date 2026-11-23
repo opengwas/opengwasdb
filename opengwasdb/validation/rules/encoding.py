@@ -24,8 +24,8 @@ from opengwasdb.encoding import (
     ZOverflowTable,
     per_variant_chunk_size,
 )
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.validation.rule import Check, Kind, Ride, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS
 from opengwasdb.validation.rules.release import REQUIRED

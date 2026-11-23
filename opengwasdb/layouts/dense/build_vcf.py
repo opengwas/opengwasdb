@@ -85,18 +85,16 @@ from opengwasdb.layouts.dense.constants import (
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafScope,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafScope, coverage_for_layout
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.stats import z_critical
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.routing import (

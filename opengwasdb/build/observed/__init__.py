@@ -11,11 +11,11 @@ from opengwasdb.layouts.dense import (
     DenseBuildResult,
     build_dense_observed_store,
 )
-from opengwasdb.model.enums import AssociationCoverage
 from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
 from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.enums import AssociationCoverage
 
 
 def build_dense_observed_from_manifest(

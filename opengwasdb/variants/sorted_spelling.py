@@ -26,14 +26,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from opengwasdb.variants.normalise import (
+from opengwasdb.store_reader.identity import (
     CANONICAL_CHROMOSOMES,
     VALID_BASES,
     VariantNormalisationError,
     normalise_allele,
-    orient_to_canonical,
-    sorted_alid_alleles,
 )
+from opengwasdb.variants.normalise import orient_to_canonical, sorted_alid_alleles
 
 #: A position an LD Store's int32 column holds (ld-store spec §2), spelt with at most this many
 #: digits.

@@ -66,10 +66,10 @@ from opengwasdb.layouts.dense.indexed_subsets import (
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.validation import validate_store
 
 #: On-panel ALIDs of the ``_hybrid`` fixture (its reference panel).

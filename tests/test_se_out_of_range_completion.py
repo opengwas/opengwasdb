@@ -43,12 +43,11 @@ from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import (
     N_MISSING_SE_OUT_OF_RANGE,
-    AnalysesTable,
-    read_analyses,
     read_analysis_records,
     write_analyses,
 )
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.observed_view import check_observed_view
 

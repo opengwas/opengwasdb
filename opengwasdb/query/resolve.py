@@ -34,8 +34,8 @@ from collections.abc import Iterator, Mapping
 
 import numpy as np
 
-from opengwasdb.index import AnalysesIndex
-from opengwasdb.stats import log10_p_two_sided
+from opengwasdb.store_reader.analyses import AnalysesIndex
+from opengwasdb.store_reader.stats import log10_p_two_sided
 from opengwasdb.variants import VariantAxis, VariantRecord
 
 

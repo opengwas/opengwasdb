@@ -17,12 +17,12 @@ from functools import cached_property
 from pathlib import Path
 
 from opengwasdb.readers.registry import SourceSpec, open_source
-from opengwasdb.variants.axis import sorted_alids
-from opengwasdb.variants.normalise import (
+from opengwasdb.store_reader.identity import (
     VariantNormalisationError,
     is_primary_contig,
     normalise_chromosome,
 )
+from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import (
     VariantReference,
     warn_reference_left_rows_blank,

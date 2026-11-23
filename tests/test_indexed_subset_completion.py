@@ -55,9 +55,10 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     list_indexed_subsets,
     open_indexed_subset,
 )
-from opengwasdb.model.analyses import read_analyses, write_analyses
+from opengwasdb.model.analyses import write_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant, VariantAxis
 

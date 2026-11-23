@@ -48,9 +48,9 @@ from typing import Any
 import zarr
 
 from benchmarks._artifact import provenance, write_artifact
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.validation import validate_store
 
 DEFAULT_OUTPUT = Path(

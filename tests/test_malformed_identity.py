@@ -28,15 +28,17 @@ from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GwasVcfReader
 from opengwasdb.readers.interface import SourceReader, StreamTally
 from opengwasdb.readers.tabular import NO_REFERENCE
+from opengwasdb.store_reader.identity import (
+    InvalidAllele,
+    MissingChromosome,
+    normalise_allele,
+    normalise_chromosome,
+)
 from opengwasdb.variants.axis import iter_variant_records
 from opengwasdb.variants.normalise import (
     IdentityFaults,
-    InvalidAllele,
-    MissingChromosome,
     allele_fault,
     identity_fault,
-    normalise_allele,
-    normalise_chromosome,
     orient_or_drop,
 )
 

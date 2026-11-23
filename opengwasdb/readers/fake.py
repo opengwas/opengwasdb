@@ -20,7 +20,8 @@ from opengwasdb.readers.interface import (
     StreamTally,
 )
 from opengwasdb.readers.rows import MetricsChunk, ReaderBatch
-from opengwasdb.variants.normalise import canonical_alid, identity_allele, normalise_chromosome
+from opengwasdb.store_reader.identity import identity_allele, normalise_chromosome
+from opengwasdb.variants.normalise import canonical_alid
 
 
 class FakeReader:

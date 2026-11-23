@@ -5,9 +5,9 @@ import pytest
 
 from opengwasdb.encoding import DenseZPlane
 from opengwasdb.index import connect, get_metadata
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 

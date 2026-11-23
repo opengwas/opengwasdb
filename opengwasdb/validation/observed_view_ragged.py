@@ -65,10 +65,11 @@ from opengwasdb.completion.regions import (
 )
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import Analysis, read_analysis_records
-from opengwasdb.model.enums import AssociationCoverage, CompletionState
 from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
+from opengwasdb.store_reader.alid import is_indexable_alid
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState
 from opengwasdb.validation.observed_view import (
     SE_OUT_OF_RANGE_FAILING,
     ObservedViewRefused,
@@ -86,7 +87,7 @@ from opengwasdb.validation.observed_view import (
     leaves_out,
     se_out_of_range_accounting,
 )
-from opengwasdb.variants import VariantAxis, is_indexable_alid
+from opengwasdb.variants import VariantAxis
 
 __all__ = ["FAILING_COUNTERS", "STRATA", "check_ragged"]
 

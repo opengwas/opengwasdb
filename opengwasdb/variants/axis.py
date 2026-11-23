@@ -12,11 +12,21 @@ from typing import Any
 import numpy as np
 import pysam
 
+from opengwasdb.store_reader.alid import (
+    ALID_DTYPE,
+    ALID_WIDTH,
+    RSID_DTYPE,
+    RSID_WIDTH,
+    ParsedAlid,
+    is_indexable_alid,
+    is_indexable_rsid,
+)
+
+# Re-exported: opengwasdb-stores imports it from here.
+from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
 from opengwasdb.variants.normalise import (
     CanonicalVariant,
-    VariantNormalisationError,
     chromosome_sort_key,
-    normalise_allele,
     normalise_chromosome,
 )
 
@@ -34,54 +44,6 @@ VARIANT_HEADER = (
     "#chromosome\tposition\tvariant_index\teffect_allele\tother_allele\talid\trsid"
     "\tsource_alid\n"
 )
-# Fixed byte-width for ALID encoding in the mmap'd search index. Fixed, because
-# that is what lets `np.searchsorted` run over the array as an mmap without
-# parsing it. Measured across the FinnGen, GWAS Catalog and metabolome pilots,
-# ALID length is mean 14.9 and p99 21; the slack is for indels.
-#
-# An ALID wider than this is *left out* of the index, never cast into it:
-# `np.array(..., dtype="|S32")` truncates silently, and two indels at one
-# position agreeing over the slot width then collapse to a single key, so a
-# lookup by either full ALID returned whichever row sorted first (issue #127 --
-# on the published finngen-r13 release, 342 variants answering to another's
-# name). Excluded ALIDs stay reachable: `by_alid` resolves them by exact scan
-# over the position instead, which is slower and right.
-_ALID_WIDTH = 32
-_ALID_DTYPE = f"|S{_ALID_WIDTH}"
-
-# Fixed byte-width for rsid encoding in the mmap'd rsid search index. An rsid is
-# "rs" + digits, far inside this; the width exists so a malformed or non-rs
-# identifier in a source's rsid column cannot silently truncate into a *false
-# match* for a different variant. Anything wider is left out of the index (and
-# counted in a warning) rather than stored truncated -- see `_write_rsid_index`.
-_RSID_WIDTH = 24
-_RSID_DTYPE = f"|S{_RSID_WIDTH}"
-
-
-def is_indexable_alid(alid: str) -> bool:
-    """Whether `alid` fits the fixed-width ALID search index (issue #127).
-
-    The one place the rule lives: `write_variant_axis` decides what to index by
-    it, `VariantAxis.by_alid` decides whether a miss means "absent" or "ask the
-    exact scan" by it, and `opengwasdb.validation.validate` checks the index
-    holds no key shared by two variants -- which is what this rule prevents.
-    """
-    return len(alid.encode("utf-8")) <= _ALID_WIDTH
-
-
-def is_indexable_rsid(rsid: str | None) -> bool:
-    """Whether `rsid` can be resolved by name in a store (issue #109).
-
-    The one place the rule lives: `_write_rsid_index` decides what to index by
-    it, `indices_by_alias` decides what is worth searching for by it, and
-    `opengwasdb.validation.validate` counts what it should find by it. Three
-    copies of a width check would be three chances for a correctly-built store
-    to fail its own validator.
-    """
-    if not rsid or rsid == ".":
-        return False
-    return len(rsid.encode("utf-8")) <= _RSID_WIDTH
-
 # `by_indices()` switchover point between random-access and full-scan
 # resolution -- see that method's docstring for the measured costs behind it.
 _BULK_SCAN_FRACTION = 0.01
@@ -125,14 +87,6 @@ class VariantRecord(Mapping[str, Any]):
         return 8
 
 
-@dataclass(frozen=True)
-class ParsedAlid:
-    chromosome: str
-    position: int
-    effect_allele: str
-    other_allele: str
-
-
 def variant_table_path(store_path: str | Path) -> Path:
     return Path(store_path) / VARIANT_TABLE_FILENAME
 
@@ -159,34 +113,6 @@ def variant_rsid_bytes_path(store_path: str | Path) -> Path:
 
 def variant_rsid_rows_path(store_path: str | Path) -> Path:
     return Path(store_path) / VARIANT_RSID_ROWS_FILENAME
-
-
-def parse_canonical_alid(identifier: str) -> ParsedAlid | None:
-    """Parse a canonical ALID-like identifier, returning None for aliases.
-
-    The lenient parser, for the engine's reads of a GWAS Store, a variant list or a Variant
-    Reference: the chromosome is normalised (`chr1`, `23`), the alleles are upper-cased and not
-    required in either order, and the position has no width or int32 limit.
-    `opengwasdb.variants.sorted_spelling.sorted_alid_locus` is the strict one, for an LD Store's
-    lookup, which must find nothing under a spelling the Store never wrote.
-    """
-
-    parts = str(identifier).split(":")
-    if len(parts) != 4:
-        return None
-    chromosome, position_text, effect_allele, other_allele = parts
-    try:
-        position = int(position_text)
-        if position <= 0:
-            return None
-        return ParsedAlid(
-            chromosome=normalise_chromosome(chromosome),
-            position=position,
-            effect_allele=normalise_allele(effect_allele),
-            other_allele=normalise_allele(other_allele),
-        )
-    except (TypeError, ValueError, VariantNormalisationError):
-        return None
 
 
 def alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:
@@ -297,7 +223,7 @@ def write_variant_axis(
         force=True,
     )
     # Write mmap'd ALID search index: two parallel arrays sorted by ALID bytes.
-    # Over-wide ALIDs are left out rather than truncated in -- see `_ALID_WIDTH`.
+    # Over-wide ALIDs are left out rather than truncated in -- see `ALID_WIDTH`.
     indexable = [(v.alid, i) for i, v in enumerate(variants) if is_indexable_alid(v.alid)]
     n_too_long = len(variants) - len(indexable)
     if n_too_long:
@@ -305,9 +231,9 @@ def write_variant_axis(
             "%d ALID(s) longer than %d bytes left out of the ALID search index: "
             "they resolve by exact scan instead, which is slower and correct",
             n_too_long,
-            _ALID_WIDTH,
+            ALID_WIDTH,
         )
-    alid_bytes = np.array([alid for alid, _ in indexable], dtype=_ALID_DTYPE)
+    alid_bytes = np.array([alid for alid, _ in indexable], dtype=ALID_DTYPE)
     row_indices = np.array([i for _, i in indexable], dtype="int32")
     sort_order = np.argsort(alid_bytes, kind="stable")
     np.save(variant_alid_bytes_path(store), alid_bytes[sort_order])
@@ -327,7 +253,7 @@ def _write_rsid_index(
     real "no association." Deriving the index from the same `rsid_by_alid`
     the table rows are written from makes the two impossible to disagree.
 
-    Rows whose rsid does not fit `_RSID_WIDTH` are left out rather than stored
+    Rows whose rsid does not fit `RSID_WIDTH` are left out rather than stored
     truncated, which would make them resolve *another* variant's lookup.
 
     Rows with no rsid are omitted, so a store whose source carries none writes
@@ -352,9 +278,9 @@ def _write_rsid_index(
             "%d variant identifier(s) longer than %d bytes left out of the rsid index: "
             "they are not resolvable by name in this store",
             n_too_long,
-            _RSID_WIDTH,
+            RSID_WIDTH,
         )
-    rsid_bytes = np.array([rsid for rsid, _ in rows], dtype=_RSID_DTYPE)
+    rsid_bytes = np.array([rsid for rsid, _ in rows], dtype=RSID_DTYPE)
     rsid_rows = np.array([index for _, index in rows], dtype="int32")
     order = np.argsort(rsid_bytes, kind="stable")
     np.save(variant_rsid_bytes_path(store), rsid_bytes[order])
@@ -447,7 +373,7 @@ class VariantAxis:
         # false match for a different variant.
         if rsid_bytes is None or rsid_rows is None or not is_indexable_rsid(alias):
             return np.empty(0, dtype="int32")
-        query = np.array(alias, dtype=_RSID_DTYPE)
+        query = np.array(alias, dtype=RSID_DTYPE)
         lo = int(np.searchsorted(rsid_bytes, query, side="left"))
         hi = int(np.searchsorted(rsid_bytes, query, side="right"))
         if lo == hi:
@@ -493,7 +419,7 @@ class VariantAxis:
             scanned = [p for q, p in parsed_pairs if not is_indexable_alid(q)]
             if alid_bytes is not None and alid_rows is not None:
                 if indexable:
-                    queries = np.array([q for q, _ in indexable], dtype=_ALID_DTYPE)
+                    queries = np.array([q for q, _ in indexable], dtype=ALID_DTYPE)
                     positions = np.searchsorted(alid_bytes, queries)
                     in_bounds = positions < len(alid_bytes)
                     hit = np.zeros(len(queries), dtype=bool)
@@ -528,7 +454,7 @@ class VariantAxis:
         # indexed (issue #127), and casting it to the slot width to ask would
         # match a *different* variant's truncated key -- the defect itself.
         if self._alid_bytes is not None and is_indexable_alid(alid):
-            query = np.array([alid], dtype=_ALID_DTYPE)
+            query = np.array([alid], dtype=ALID_DTYPE)
             idx = int(np.searchsorted(self._alid_bytes, query[0]))
             if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
                 return self.by_index(int(self._alid_rows[idx]))

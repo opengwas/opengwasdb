@@ -57,10 +57,10 @@ from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole, array_length
+from opengwasdb.store_reader.enums import CompletionState
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
 _COMPRESSOR = store_arrays.compressor()

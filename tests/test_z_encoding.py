@@ -21,7 +21,7 @@ from opengwasdb.encoding import (
     ZOverflowBuilder,
     ZOverflowTable,
 )
-from opengwasdb.stats import log10_p_two_sided
+from opengwasdb.store_reader.stats import log10_p_two_sided
 
 
 def _codec(values: np.ndarray) -> tuple[StoreCodec, np.ndarray]:

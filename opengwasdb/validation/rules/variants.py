@@ -19,19 +19,18 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.model.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED, current_builders_wrote, severity_owed
 from opengwasdb.variants import (
     VariantRecord,
-    is_indexable_alid,
-    is_indexable_rsid,
     iter_variant_records,
     variant_alid_bytes_path,
     variant_table_path,
 )
-from opengwasdb.variants.normalise import is_primary_contig
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.

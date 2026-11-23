@@ -32,7 +32,7 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
-from opengwasdb.top_hits import TopHitTier
+from opengwasdb.store_reader.top_hits import TopHitTier
 
 
 @pytest.fixture(scope="module")

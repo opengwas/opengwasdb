@@ -22,7 +22,8 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.top_hits import z_critical
+from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.stats import z_critical
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import VALUES_AFTER, frequencies
 from opengwasdb.validation.rules.release import REQUIRED
@@ -40,7 +41,7 @@ def tier_root(target: Target) -> Any:
 
 
 def has_index(target: Target) -> bool:
-    return bool(top_hits.has_index(tier_root(target)))
+    return bool(reader_top_hits.has_index(tier_root(target)))
 
 
 def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
@@ -49,7 +50,7 @@ def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
     What the structure rules learn from them is remembered apart, small, so a rule
     registered after the scan does not load the tier a second time.
     """
-    group = top_hits.index_group(tier_root(target))[key]
+    group = reader_top_hits.index_group(tier_root(target))[key]
     return target.remember(
         f"top_hits/{key}", lambda: top_hits.load_tier_arrays(group), until=ASSOCIATIONS.name
     )
@@ -57,7 +58,7 @@ def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
 
 def _problem(target: Target, key: str) -> str | None:
     """What is structurally wrong with a complete tier, if anything; kept for the run."""
-    group = top_hits.index_group(tier_root(target))[key]
+    group = reader_top_hits.index_group(tier_root(target))[key]
     return target.remember(
         f"top_hits/{key}/problem",
         lambda: top_hits.structural_problem(
@@ -80,7 +81,7 @@ def _abs_z_agrees(target: Target, key: str) -> bool:
 
 def _sound_keys(target: Target) -> list[str]:
     """The tiers with every array and a sound structure, in listing order."""
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     return [
         key
         for key in _keys(target)
@@ -96,7 +97,7 @@ def _keys(target: Target) -> list[str]:
     order and promises nothing about it, so a rule that reported the tiers in that
     order named the same failing ones in a different order from run to run.
     """
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     return sorted(index, key=lambda key: _tier_order(key, index[key]))
 
 
@@ -110,7 +111,7 @@ def _tier_order(key: str, group: Any) -> tuple[int, float, str]:
     with it.
     """
     try:
-        threshold = top_hits.tier_threshold(key, group)
+        threshold = reader_top_hits.tier_threshold(key, group)
     except (TypeError, ValueError):
         return (1, 0.0, key)
     if not math.isfinite(threshold):
@@ -120,7 +121,7 @@ def _tier_order(key: str, group: Any) -> tuple[int, float, str]:
 
 def arrays(target: Target) -> Iterator[str]:
     """Every tier carries the arrays a tier is made of."""
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     for key in _keys(target):
         missing = top_hits.missing_arrays(index[key])
         if missing:
@@ -139,7 +140,7 @@ def _expects_imputed(target: Target) -> bool:
 
 def structure(target: Target) -> Iterator[str]:
     """Every complete tier has parallel arrays, sound offsets and ordered slices."""
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     for key in _keys(target):
         if top_hits.missing_arrays(index[key]):
             continue
@@ -190,7 +191,7 @@ def tier_facts(target: Target) -> list[TierFact]:
     A tier's `variant_index` length is its cell count and its key is its name, so
     a judge reads neither the arrays the pass held nor anything the pass released.
     """
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     return [
         TierFact(key, int(index[key]["variant_index"].shape[0]))
         for key in _sound_keys(target)
@@ -205,7 +206,7 @@ def _sound(target: Target) -> list[Tier]:
     then the loaded set, `abs_z` and `offsets` with it, is dropped, and the tier
     keeps what the planes are checked against.
     """
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     complete = [key for key in _keys(target) if not top_hits.missing_arrays(index[key])]
     built: dict[str, Tier] = {}
     for key in sorted(complete, key=lambda k: -int(index[k]["variant_index"].shape[0])):
@@ -227,7 +228,7 @@ def _built(target: Target, key: str, group: Any) -> Tier | None:
         loaded = _in_row_order(loaded)
     return Tier(
         key=key,
-        z_crit=z_critical(top_hits.tier_threshold(key, group)),
+        z_crit=z_critical(reader_top_hits.tier_threshold(key, group)),
         cells=CellIndex(loaded["rows"], loaded["cols"]),
         z=loaded["z_values"],
         se=loaded["se_values"],

@@ -27,11 +27,12 @@ from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import read_top_hit_counts, threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.top_hits import threshold_key
+from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import VariantAxis
 

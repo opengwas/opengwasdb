@@ -26,8 +26,8 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 
 from opengwasdb.admission import admission_record_for
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.variants.axis import VariantAxis
-from opengwasdb.variants.normalise import is_primary_contig
 from opengwasdb.variants.routing import place_sites
 
 #: The alt-lifted row's source key as the Admission record logs it.

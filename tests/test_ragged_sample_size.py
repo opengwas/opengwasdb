@@ -169,7 +169,7 @@ def test_the_table_identity_and_its_match_counts_are_recorded(
 
 
 def test_an_analysis_given_n_declares_variant_level_scope(sampled: Path) -> None:
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     rows = read_analyses(sampled / "analyses.tsv").rows
     assert {r["analysis_id"]: r["sample_size_scope"] for r in rows} == {
@@ -567,7 +567,7 @@ def test_the_esi_frequency_is_stored_and_a_flipped_allele_stores_one_minus_f(
 
 
 def test_stored_esi_frequencies_with_reference_evidence_pass_validate(frequencies: Path) -> None:
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.validation import validate_store
 
     result = validate_store(frequencies)
@@ -588,7 +588,7 @@ def test_without_a_reference_the_probes_are_unverified_not_a_consensus(tmp_path:
     """Three probes would meet the consensus rule, but they share one `.esi`
     frequency per variant and so agree by construction; they must not certify
     each other."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.validation import validate_store
 
     store = _build_frequencies(tmp_path)

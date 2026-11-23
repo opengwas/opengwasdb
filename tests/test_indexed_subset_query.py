@@ -55,7 +55,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     open_indexed_subset,
 )
 from opengwasdb.query import query_store
-from opengwasdb.stats import p_value_from_z
+from opengwasdb.store_reader.stats import p_value_from_z
 from tests.ssf_builds import build_ragged_from_ssf
 
 #: The subset's variant slots, chosen so the index carries every class the query

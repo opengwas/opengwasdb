@@ -54,12 +54,8 @@ from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.ld.cli import ld_app
-from opengwasdb.model.analyses import read_analyses, read_analysis_records
-from opengwasdb.model.enums import (
-    COVERAGES_BY_LAYOUT,
-    AssociationCoverage,
-    PrimaryStorageLayout,
-)
+from opengwasdb.model.analyses import read_analysis_records
+from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
@@ -68,7 +64,9 @@ from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store.open import UnsupportedFormatVersion
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,

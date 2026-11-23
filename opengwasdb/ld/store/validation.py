@@ -60,7 +60,8 @@ from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
 from opengwasdb.ld.store.layout import chromosomes_listed, never_data, shown_fill
 from opengwasdb.ld.store.location import frame_source, open_group
-from opengwasdb.variants.normalise import VariantNormalisationError, chromosome_rank
+from opengwasdb.store_reader.identity import VariantNormalisationError
+from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identity
 
 #: Elements of a Near Band a rule reads at once: 8 Mi codes are 16 MiB.

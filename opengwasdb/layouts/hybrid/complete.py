@@ -62,19 +62,10 @@ from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import write_variant_table
-from opengwasdb.layouts.hybrid.layout import (
-    DENSE_SUBDIR,
-    dense_component_path,
-    dense_to_shared_path,
-)
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_out_of_range
-from opengwasdb.model.enums import (
-    CompletionState,
-    PrimaryStorageLayout,
-)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import check_format_version_stamp, completed_format_version
 from opengwasdb.store.arrays import open_group, open_group_for_write
@@ -84,6 +75,8 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
 from opengwasdb.variants import VariantAxis, VariantRecord
 from opengwasdb.variants.axis import sorted_alids
 

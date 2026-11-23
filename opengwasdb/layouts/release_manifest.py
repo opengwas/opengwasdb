@@ -16,13 +16,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opengwasdb.encoding import StoreEncoding
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    CompletionState,
-    PrimaryStorageLayout,
-)
 from opengwasdb.model.manifest import RegionsEntry, StoreManifest
 from opengwasdb.store.open import format_version_for
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 
 
 def observed_only_release_manifest(

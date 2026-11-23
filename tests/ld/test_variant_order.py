@@ -8,8 +8,9 @@ import numpy as np
 import pytest
 
 from opengwasdb.ld.query.results import Clumps
+from opengwasdb.store_reader.identity import AUTOSOMES, VariantNormalisationError
 from opengwasdb.variants.axis import alid_sort_key
-from opengwasdb.variants.normalise import AUTOSOMES, VariantNormalisationError, chromosome_rank
+from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 RECORDS = [

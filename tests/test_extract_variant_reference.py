@@ -29,7 +29,7 @@ from opengwasdb.query import query_store
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import UnmarkedArtifactError, read_variant_reference
 from opengwasdb.variants.routing import extract_variant_reference

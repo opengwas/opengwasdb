@@ -17,8 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.model.enums import COVERAGES_BY_LAYOUT, PrimaryStorageLayout
+from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
     HYBRID_DENSE_COMPONENT_ENVELOPE,
@@ -33,6 +32,8 @@ from opengwasdb.store.open import (
     split_format_version,
     zarr_format_for_version,
 )
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
 from opengwasdb.variants import (
     variant_alid_bytes_path,
