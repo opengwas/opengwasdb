@@ -381,8 +381,8 @@ class _Component:
 
 _FAR: Final = _Component("far", "far_partner", "far_code", "far_owner")
 #: The store's sparse components: the Far Pairs (ld-store §5). The Proxy Index was the other, and
-#: #72 removed it. The Partner Rows are named for the findings that compare their entries with
-#: the Near Band's and the Far Pairs' (partner-rows §10). Their entries are frames, not
+#: opengwas/ogld#72 removed it. The Partner Rows are named for the findings that compare their
+#: entries with the Near Band's and the Far Pairs' (partner-rows §10). Their entries are frames, not
 #: `indptr`-delimited arrays, so they are no part of `_COMPONENTS`.
 _COMPONENTS: Final = (_FAR,)
 _PARTNERS: Final = _Component("partners", "partner", "code", "row")
@@ -1210,7 +1210,7 @@ class _Frames:
         path = layout.partners_path(chrom)
         group = store.node(path)
         if not isinstance(group, zarr.Group):
-            raise _Unchecked(path, f"{path} is missing (ld-store §5.1; partners.files)")
+            raise _Unchecked(path, f"{path} is missing (partner-rows §5.1; partners.files)")
         try:
             reader = open_partner_frames(store.root, chrom, FrameCache(0))
         except ValueError as unreadable:
@@ -2067,8 +2067,8 @@ def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
     path = layout.partners_path(chrom)
     node = store.node(path)
     if not isinstance(node, zarr.Group):
-        missing = "missing: every chromosome of the Variant Set has one (ld-store §5.1)"
-        yield path, "is not a group (ld-store §5.1)" if node is not None else missing
+        missing = "missing: every chromosome of the Variant Set has one (partner-rows §5.1)"
+        yield path, "is not a group (partner-rows §5.1)" if node is not None else missing
         return
     attrs = dict(node.attrs)
     yield from _partner_attrs(path, attrs)
@@ -2080,7 +2080,7 @@ def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
     length = attrs.get("frames_bytes")
     yield from _frames_array(path, frames, length)
     if index is None:
-        yield f"{path}/{layout.FRAMES_INDEX}", "missing (ld-store §5.1)"
+        yield f"{path}/{layout.FRAMES_INDEX}", "missing (partner-rows §5.1)"
     elif (yield from _frames_index(path, index, attrs.get("frames"))):
         where = f"{path}/{layout.FRAMES_INDEX}"
         yield from _chunk_ends(where, index, index.dtype.itemsize * index.shape[0])
@@ -2096,7 +2096,7 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
     """The chunk file `array` addresses holds exactly `expected` bytes. The hash checks read the
     declared prefix, so a store that appended bytes to a chunk keeps both its metadata and its
     hash right; the file's own size says otherwise, and a store that cannot be measured is asked
-    for one byte past the end (ld-store §5.1, §5.3)."""
+    for one byte past the end (partner-rows §5.1, §5.3)."""
     if isinstance(array.store_path.store, LocalStore):
         try:
             size = layout.chunk_file(array).stat().st_size
@@ -2107,7 +2107,7 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
                 where,
                 (
                     f"its chunk file holds {size:,} bytes, not the {expected:,} its metadata and "
-                    "hash name (ld-store §5.1, §5.3)"
+                    "hash name (partner-rows §5.1, §5.3)"
                 ),
             )
         return
@@ -2121,7 +2121,9 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
     if beyond:
         yield (
             where,
-            (f"holds bytes past the {expected:,} its metadata and hash name (ld-store §5.1, §5.3)"),
+            (
+                f"holds bytes past the {expected:,} its metadata and hash name (partner-rows §5.1, §5.3)"
+            ),
         )
 
 
@@ -2129,9 +2131,9 @@ def _partner_attrs(path: str, attrs: dict[str, Any]) -> _Problems:
     """The group records each of §5.3's attributes, of its type."""
     for name, kind in _PARTNER_ATTRS.items():
         if name not in attrs:
-            yield path, f"records no {name} (ld-store §5.3)"
+            yield path, f"records no {name} (partner-rows §5.3)"
         elif not _TYPES[kind](attrs[name]):
-            yield path, f"records {name} as {attrs[name]!r}, not of type {kind} (ld-store §5.3)"
+            yield path, f"records {name} as {attrs[name]!r}, not of type {kind} (partner-rows §5.3)"
 
 
 def _partner_sizes(path: str, attrs: dict[str, Any], rows: int) -> _Problems:
@@ -2147,7 +2149,7 @@ def _partner_sizes(path: str, attrs: dict[str, Any], rows: int) -> _Problems:
         yield (
             path,
             f"records {attrs.get('frames')!r} frames, but {rows:,} rows at {per_frame} a frame "
-            f"are {due:,} (ld-store §5.2)",
+            f"are {due:,} (partner-rows §5.2)",
         )
 
 
@@ -2155,13 +2157,13 @@ def _frames_array(path: str, frames: zarr.Array[Any] | None, length: object) -> 
     """The `frames` array is uint8, one chunk of `frames_bytes` bytes (§5.1, §5.3)."""
     where = f"{path}/{layout.FRAMES}"
     if frames is None:
-        yield where, "missing (ld-store §5.1)"
+        yield where, "missing (partner-rows §5.1)"
         return
     found = frames.metadata.to_dict()["data_type"]
     if found != "uint8":
-        yield where, f"its dtype is {found}, not uint8 (ld-store §5.1)"
+        yield where, f"its dtype is {found}, not uint8 (partner-rows §5.1)"
     if not _is_int(length):
-        yield where, "has no frames_bytes to be as long as (ld-store §5.3)"
+        yield where, "has no frames_bytes to be as long as (partner-rows §5.3)"
     elif frames.shape != (length,):
         yield (
             where,
@@ -2171,7 +2173,7 @@ def _frames_array(path: str, frames: zarr.Array[Any] | None, length: object) -> 
         yield (
             where,
             f"its chunks are {frames.chunks}, not one chunk of every byte: a frame is one "
-            "positional read of the chunk file (ld-store §5.1)",
+            "positional read of the chunk file (partner-rows §5.1)",
         )
 
 
@@ -2183,7 +2185,7 @@ def _frames_index(
     where = f"{path}/{layout.FRAMES_INDEX}"
     found = index.metadata.to_dict()["data_type"]
     if found != "uint64":
-        yield where, f"its dtype is {found}, not uint64 (ld-store §5.1)"
+        yield where, f"its dtype is {found}, not uint64 (partner-rows §5.1)"
     if not _is_int(count):
         return False
     if index.shape != (count + 1,):
@@ -2201,21 +2203,21 @@ def _frames_index_hash(path: str, offsets: npt.NDArray[np.int64], recorded: obje
     if digest != recorded:
         yield (
             f"{path}/{layout.FRAMES_INDEX}",
-            f"hashes to {digest}, not the recorded {recorded!r} (ld-store §5.3)",
+            f"hashes to {digest}, not the recorded {recorded!r} (partner-rows §5.3)",
         )
 
 
 def _offsets_judged(where: str, offsets: npt.NDArray[np.int64], length: object) -> _Problems:
     """`offsets` start at 0, ascend strictly and end at the frames' `length` bytes (§5.2, §5.3)."""
     if offsets[0] != 0:
-        yield where, f"starts at {offsets[0]:,}, not 0 (ld-store §5.2)"
+        yield where, f"starts at {offsets[0]:,}, not 0 (partner-rows §5.2)"
     descending = np.flatnonzero(np.diff(offsets) <= 0)
     if len(descending):
         more = f" and {len(descending) - _NAMED:,} more" if len(descending) > _NAMED else ""
         named = ", ".join(str(int(at) + 1) for at in descending[:_NAMED])
-        yield where, f"does not ascend strictly at offset(s) {named}{more} (ld-store §5.2)"
+        yield where, f"does not ascend strictly at offset(s) {named}{more} (partner-rows §5.2)"
     if _is_int(length) and offsets[-1] != length:
-        yield where, f"ends at {offsets[-1]:,}, but frames_bytes is {length:,} (ld-store §5.3)"
+        yield where, f"ends at {offsets[-1]:,}, but frames_bytes is {length:,} (partner-rows §5.3)"
 
 
 def _frames_file_judged(
@@ -2237,7 +2239,7 @@ def _frames_file_judged(
                     where,
                     (
                         f"holds {at + len(raw):,} bytes, fewer than the {length:,} its metadata "
-                        "and hash name (ld-store §5.1, §5.3)"
+                        "and hash name (partner-rows §5.1, §5.3)"
                     ),
                 )
                 return
@@ -2250,7 +2252,7 @@ def _frames_file_judged(
         source.close()
     found = digest.hexdigest()
     if found != recorded:
-        yield where, f"hashes to {found}, not the recorded {recorded!r} (ld-store §5.3)"
+        yield where, f"hashes to {found}, not the recorded {recorded!r} (partner-rows §5.3)"
 
 
 class _PartnerRule(_Scanned):
@@ -2326,7 +2328,7 @@ class _PartnerRows(_PartnerRule):
         frames = self.c.frames
         assert frames is not None
         if frames.entries is None:
-            raise _Unchecked(f"{self.where}", "records no entries (ld-store §5.3)")
+            raise _Unchecked(f"{self.where}", "records no entries (partner-rows §5.3)")
         if frames.entries != self.seen:
             yield (
                 self.where,

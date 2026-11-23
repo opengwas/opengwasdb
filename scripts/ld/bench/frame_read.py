@@ -14,8 +14,8 @@ times `--reads` random frame reads through `PreadSource` and through `location.R
 is the store path a remote store uses, and the one a local store paid before ADR 0095's direct
 decoder. Interleave the
 two, report the median of `--runs`, and print µs/read and the projection onto 3,850 frames (the
-reads GCST90476460's clump made, #65). Only the I/O is timed: nothing is decompressed and no frame
-is decoded. Nothing is committed.
+reads GCST90476460's clump made, opengwas/ogld#65). Only the I/O is timed: nothing is decompressed
+and no frame is decoded. Nothing is committed.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ import zarr
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.location import PreadSource, RangeSource
 
-#: The frames GCST90476460's clump read (#65): what a per-read cost is projected onto.
+#: The frames GCST90476460's clump read (opengwas/ogld#65): what a per-read cost is projected onto.
 FRAMES: Final = 3_850
 #: EUR chr22's median frame's compressed size, in bytes (§5.2: about 20 KiB).
 FRAME_BYTES: Final = 25_600

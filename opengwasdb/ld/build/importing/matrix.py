@@ -1,4 +1,4 @@
-"""Residual covariance to A1-signed correlation (ADR 0101; #89 ruling)."""
+"""Residual covariance to A1-signed correlation (ADR 0101; opengwas/ogld#89 ruling)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def correlation(
     row_sign: IntArray,
     column_sign: IntArray,
 ) -> FloatArray:
-    """Normalise before quantising, preserving #89's float64 operation order."""
+    """Normalise before quantising, preserving opengwas/ogld#89's float64 operation order."""
     result = np.array(raw, dtype=np.float64)
     result /= np.sqrt(row_diagonal[:, None] * column_diagonal)
     result *= row_sign[:, None]

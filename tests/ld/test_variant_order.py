@@ -60,7 +60,7 @@ def test_order_key_reads_a_chr_prefix_as_the_engine_does() -> None:
 
 def test_a_chromosome_s_rank_is_the_first_field_of_its_order() -> None:
     # The Variant Set's chromosomes and validation's ranges are ordered by this alone, with no
-    # position or ALID made up to call order_key with (review of epic #1).
+    # position or ALID made up to call order_key with (review of epic opengwas/ogld#1).
     names = ["X", "22", "2", "MT", "10", "Y", "9", "1"]
     assert sorted(names, key=chromosome_rank) == ["1", "2", "9", "10", "22", "X", "Y", "MT"]
     for name in names:

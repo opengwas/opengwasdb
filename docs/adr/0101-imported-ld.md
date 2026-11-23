@@ -2,8 +2,8 @@
 
 Formerly ogld ADR 0015.
 
-Issue #93, epic #88. Authority: the owner's 20 November 2026 rulings on #88,
-#89's diagonal-normalisation ruling, and #93's kickoff ruling (21 November).
+Issue opengwas/ogld#93, epic opengwas/ogld#88. Authority: the owner's 20 November 2026 rulings on opengwas/ogld#88,
+opengwas/ogld#89's diagonal-normalisation ruling, and opengwas/ogld#93's kickoff ruling (21 November).
 
 ## Context
 
@@ -39,7 +39,7 @@ refuse the chromosome, the import drops the smaller of the two segments holding 
 target-radius window's GRCh37 extremes (segments split where the GRCh37−GRCh38
 offset jumps by more than 100 kb; ties drop the one with the lowest GRCh37
 position), repeating until the radius reaches the target, `--far-target-bp`
-(default 8 Mb, at most the format's 10 Mb `far_bp`; #99, owner ruling). A
+(default 8 Mb, at most the format's 10 Mb `far_bp`; opengwas/ogld#99, owner ruling). A
 segment over `--displaced-cap` (default 10,000 variants) is never dropped: the chromosome
 is refused by name. Dropped variants are counted as `liftover_displaced`.
 
@@ -96,7 +96,7 @@ can join unmeasured pairs. Whole-genome staging was rejected on disk cost.
 The existing `opengwasdb ld validate` remains the sole validator. The matched 511/0.01
 analysis view, benchmarking and the whole-genome run belong elsewhere.
 
-## Concurrent downloads and dead addresses (#97)
+## Concurrent downloads and dead addresses (opengwas/ogld#97)
 
 S3's DNS for the bucket rotates over addresses, about a third of which never
 answer from the IEU host, and a single stream is 13–20 MB/s: the whole-genome

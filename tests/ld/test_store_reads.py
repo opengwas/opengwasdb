@@ -49,7 +49,8 @@ INNER, PER_SHARD = 512, 4
 def test_one_chromosomes_positions_are_loaded_once_however_many_cold_callers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A chromosome's positions are read once, and both caches hold that one array (#71).
+    """A chromosome's positions are read once, and both caches hold that one array
+    (opengwas/ogld#71).
 
     Four cold callers meet at a barrier around the position read: `loci_of` and `pair_r`, the two
     paths that reach a chromosome. One reaches the positions through the variant table and the
@@ -551,7 +552,7 @@ class Sent(list[tuple[str, int]]):
     """The path and body length of every response a server sent, and each response's status.
 
     A list of the pairs the tests already read, so a server that answers a range past a file's end
-    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (ld-store
+    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (partner-rows
     §5.1).
     """
 
@@ -913,7 +914,7 @@ def test_a_cache_size_that_is_not_a_count_of_bytes_is_refused(size: Any) -> None
 
 
 def test_a_store_keeps_4_gib_of_its_chunks_unless_told_otherwise() -> None:
-    # The owner's default (ogld#32), at which #8 measured repeated reads warm.
+    # The owner's default (ogld#32), at which opengwas/ogld#8 measured repeated reads warm.
     assert opengwasdb.ld.open(TEST_STORE)._reader.cache_bytes == 4 << 30
     assert opengwasdb.ld.open(TEST_STORE, cache_bytes=12_345)._reader.cache_bytes == 12_345
 
@@ -944,7 +945,8 @@ def test_at_every_answered_r2_the_partner_rows_are_read_and_no_near_band_or_inde
 def test_the_test_store_passes_every_rule_over_http() -> None:
     # The chunk files' ends are probed one byte past their length, which a server answers with 416
     # (RFC 9110 §15.5.17): an unsatisfiable range says the file ends there, and a store must not be
-    # refused for it (ld-store §5.1, §5.3). This store passed only when the probe read an empty 206.
+    # refused for it (partner-rows §5.1, §5.3). This store passed only when the probe read an empty
+    # 206.
     with serving(TEST_STORE) as (url, sent):
         found = opengwasdb.ld.validate(url)
     assert not any(found.values()), {rule: f for rule, f in found.items() if f}

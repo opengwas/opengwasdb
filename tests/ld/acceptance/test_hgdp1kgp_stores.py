@@ -1,6 +1,6 @@
-"""Epic #1's acceptance for the five HGDP+1kGP LD Stores (ogld#7): every validation rule passes
-on each, each records what a reader of its provenance needs, and the direct decoder returns the
-same bytes as zarr on each (ogld#40, ADR 0095).
+"""Epic opengwas/ogld#1's acceptance for the five HGDP+1kGP LD Stores (ogld#7): every validation
+rule passes on each, each records what a reader of its provenance needs, and the direct decoder
+returns the same bytes as zarr on each (ogld#40, ADR 0095).
 
 The stores are the ones `scripts/ld/build_hgdp1kgp.py build` writes under `$OGLD_STORES`; its
 constants and paths (`recipe`) say the scale, k, names and roots, and `$OGLD_STORE_<ANC>` names one
@@ -92,9 +92,12 @@ def test_provenance_records_what_a_reader_needs(panel: str) -> None:
     assert [name for name, _, _ in held] == AUTOSOMES, f"{panel} holds chromosomes {held}"
     assert all(stop > start for _, start, stop in held), "a chromosome with no variants"
     assert p["counts"]["near_pairs"] > 0, "the Near Band's pair count"
-    # These five are 0.1.0 stores, so they still record the Proxy Index they hold: #73 derives
-    # their Partner Rows and drops it, and this assertion goes with the last of them (#72).
-    assert p["counts"]["index_entries"] > 0, "a 0.1.0 store's Proxy Index, until #73 drops it"
+    # These five are 0.1.0 stores, so they still record the Proxy Index they hold: opengwas/ogld#73
+    # derives their Partner Rows and drops it, and this assertion goes with the last of them
+    # (opengwas/ogld#72).
+    assert p["counts"]["index_entries"] > 0, (
+        "a 0.1.0 store's Proxy Index, until opengwas/ogld#73 drops it"
+    )
     t_far = p["t_far"]
     assert isinstance(t_far, float), f"t_far is {t_far!r}"
     assert 0 < t_far < 1, f"t_far is {t_far!r}"

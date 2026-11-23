@@ -7,9 +7,10 @@ The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.
   (`docs/spec/build-inputs.md` §10), and the suite converts chr22:20–32 Mb once, with §3's flags,
   for EUR's 665 unrelated samples: `OGLD_EUR_KEEP` names the keep file `scripts/ld/make_keeps.py`
   writes (ADR 0088, decision 11). On 20–23 Mb of it, the k = 0 Near Band matches
-  `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants compared
-  include every choice build-inputs §6's reversed-indel rule makes there (both records at MAC >=
-  20, judged here from plink2's own allele counts): each must keep the record whose REF is A1.
+  `plink2 --r-unphased` within the quantisation step: epic opengwas/ogld#1's acceptance. The
+  variants compared include every choice build-inputs §6's reversed-indel rule makes there (both
+  records at MAC >= 20, judged here from plink2's own allele counts): each must keep the record
+  whose REF is A1.
 - Real LD survives PC Adjustment: on the 12 Mb slice, pairs within 100 kb change little from
   k = 0 to k = 10, and each of the provenance's five quantiles of that change is its own
   computation over every such pair, from the two stores' Near Bands. 12 Mb, not 3, because the
@@ -230,7 +231,7 @@ def band_within(store: Path, distance: int) -> tuple[npt.NDArray[np.float64], in
 def test_real_ld_survives_pc_adjustment(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    # Epic #1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
+    # Epic opengwas/ogld#1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
     # Regions (none is in chr22:20–32 Mb), and the distribution is recorded.
     pcs = required("OGLD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
@@ -256,7 +257,7 @@ def test_real_ld_survives_pc_adjustment(
     # The provenance's quantiles are of the computed change; these are of the Stored r's. Each
     # Stored r is within half the store's step of its r, so a change in Stored r is within one
     # step of the computed change, and an order statistic moves no further; the recorded quantile
-    # is the computed one to within half a bin. At × 511 that is 1.96×10⁻³ (#16).
+    # is the computed one to within half a bin. At × 511 that is 1.96×10⁻³ (opengwas/ogld#16).
     tolerance = 1 / scale + HALF_BIN
     for q in (0.0, 0.5, 0.9, 0.99, 1.0):
         ours = float(np.quantile(change, q, method="lower"))

@@ -48,7 +48,7 @@ store at any other scale could be neither written nor read.
    r = ±1 stays exact; negating a code never overflows; and a lost chunk still reads as a code
    that is never a correlation. A code past the scale, which the container can hold, is no
    correlation either: the reader and the writer refuse it, and `near.codes` and `partners.codes`
-   fail it (`index.codes` failed it too, until #72 removed that rule with the Proxy Index).
+   fail it (`index.codes` failed it too, until opengwas/ogld#72 removed that rule with the Proxy Index).
 4. **A build takes its scale as an input** (`BuildInputs.r_scale`, `opengwasdb ld build --r-scale`) and
    records it. There is no default a build could fall back on silently.
 

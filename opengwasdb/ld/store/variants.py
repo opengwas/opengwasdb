@@ -5,7 +5,7 @@ chromosomes, positions, ALIDs and alleles (`variants/`), the search that turns a
 into rows — the ALID Index (ADR 0096) or the local companion over it (ADR 0098) — and the
 chromosome-local loci the LD half needs to place a row. `StoreReader` composes one and delegates
 to it, and the Genotype Store reader composes the same class over its sidecar, so ALID lookup
-has one owner (owner, on epic #18, 21 November 2026; ogld#94). `rows_of`, `rows_in`,
+has one owner (owner, on epic opengwas/ogld#18, 21 November 2026; ogld#94). `rows_of`, `rows_in`,
 `chromosome_range`, `alids_of`, `loci_of` and `variants` are that owner's reads.
 
 A table opens no store: its reader opens the group, refuses what it cannot read (ld-store §13) and
@@ -51,7 +51,7 @@ _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
 #: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
 #: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
-#: index holds; `docs/benchmarks/alid-index.md` has both sides of it. A small store's list is a
+#: index holds; `docs/benchmarks/ld/alid-index.md` has both sides of it. A small store's list is a
 #: large share of it, so a test store's lookups read the index.
 _INDEX_SHARE: Final = 2_150
 
@@ -64,7 +64,8 @@ def _index_pays(count: int, entries: int) -> bool:
 
 @dataclass(frozen=True)
 class Loci:
-    """One chromosome's Variant Set rows and positions, and nothing of its LD components (#71).
+    """One chromosome's Variant Set rows and positions, and nothing of its LD components
+    (opengwas/ogld#71).
 
     A query that reads only the Partner Rows still needs each hit's chromosome, position and ALID
     to order it and measure distances, and must not read `near/<chrom>/indptr` to get them
@@ -207,7 +208,7 @@ class VariantTable:
         document, which over HTTP is a request). The table opens no group of its own, so the reader
         that composes it opens the store once, and it holds the reader's `OpenedStore` rather than
         a copy of it, so the one chunk cache and the location a refusal names are one object's
-        (#94)."""
+        (opengwas/ogld#94)."""
         self._opened = opened
         root = opened.root
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
@@ -215,7 +216,7 @@ class VariantTable:
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._located = {}
-        # A chromosome's first use is one load, however many threads make it (#71).
+        # A chromosome's first use is one load, however many threads make it (opengwas/ogld#71).
         self._loci_lock = threading.Lock()
         self._columns = {name: kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
         self._index_arrays = None
@@ -265,7 +266,8 @@ class VariantTable:
         return self._stops
 
     def loci(self, chrom: str) -> Loci:
-        """One chromosome's rows and positions, read on first use and nothing else (#71).
+        """One chromosome's rows and positions, read on first use and nothing else
+        (opengwas/ogld#71).
 
         Positions are the variant table's, one slice a chromosome, so an ALID lookup, a clump and
         a proxies query read no `near/<chrom>/indptr`. A chromosome's positions are loaded once,
@@ -499,9 +501,9 @@ class VariantTable:
         """Chromosomes and positions, without allele columns clump never returns (ogld#40).
 
         It reads the variant table's positions and nothing of the LD components: `clump` and
-        `proxies` call it, and from 0.2.0 their only LD read is the Partner Rows (#71). This is a
-        store-layer read, not a public query or a new caller setting. Geometry and chromosome label
-        dtypes stay identical to the full variant-table read.
+        `proxies` call it, and from 0.2.0 their only LD read is the Partner Rows (opengwas/ogld#71).
+        This is a store-layer read, not a public query or a new caller setting. Geometry and
+        chromosome label dtypes stay identical to the full variant-table read.
         """
         rows = self.checked_rows(rows)
         position = np.empty(len(rows), dtype=np.int64)
@@ -558,7 +560,7 @@ class VariantTable:
         self, rows: npt.NDArray[np.int64]
     ) -> Iterator[tuple[Loci, npt.NDArray[np.int64]]]:
         """Each chromosome `rows` touch, its rows and positions, and the positions in `rows` that
-        are on it (#71), without opening any of its LD components."""
+        are on it (opengwas/ogld#71), without opening any of its LD components."""
         which = chromosome_index(self._stops, rows)
         for index in np.unique(which):
             yield self.loci(self._names[index]), np.flatnonzero(which == index)

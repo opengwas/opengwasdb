@@ -2,7 +2,7 @@
 
 Formerly ogld ADR 0013.
 
-Issue #90, epic #18. The owner's ruling of 21 November 2026 on #18 adopts this formula
+Issue opengwas/ogld#90, epic opengwas/ogld#18. The owner's ruling of 21 November 2026 on opengwas/ogld#18 adopts this formula
 and module layer. This records that ruling, not a new Store format or provenance contract.
 ADR 0088 decision 10 still applies: pgenlib remains the optional `opengwasdb[ld-build]` extra,
 imported only when opening a pgen, with the same refusal naming the extra.

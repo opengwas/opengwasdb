@@ -28,7 +28,8 @@ from opengwasdb.ld.store.writer import write_variant_table
 
 
 class SidecarWriter:
-    """The shared variant writer plus adjustment data; never writes LD components (#91)."""
+    """The shared variant writer plus adjustment data; never writes LD components
+    (opengwas/ogld#91)."""
 
     def __init__(
         self,

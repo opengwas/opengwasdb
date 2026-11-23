@@ -1,6 +1,6 @@
 """Copies of the Test Store for tests that must change one: re-sharded, or with a piece lost.
 
-No test writes into `tests/data/`; each works on a copy under its own `tmp_path`.
+No test writes into `tests/ld/data/`; each works on a copy under its own `tmp_path`.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def stored_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.float64]
 
 @contextlib.contextmanager
 def store_reads() -> Iterator[list[str]]:
-    """Every key a reader fetches from a local store while the block runs (#71).
+    """Every key a reader fetches from a local store while the block runs (opengwas/ogld#71).
 
     That is each array's chunks and shard indexes, and every `zarr.json` metadata document, by the
     store's own key: `/c/` is followed by coordinates, so a predicate on the key's ending matches
@@ -136,8 +136,9 @@ def unpartnered(to: Path) -> Path:
 
     It is what `opengwasdb ld derive-partners` derives into, so a test holds the derived component
     against the committed one — the build's — byte for byte, and `--drop-index` has something to
-    remove. The index's arrays are empty placeholders: nothing reads a Proxy Index since #72, and a
-    test that reads one is testing the component this fixture stands for, not its data.
+    remove. The index's arrays are empty placeholders: nothing reads a Proxy Index since
+    opengwas/ogld#72, and a test that reads one is testing the component this fixture stands for,
+    not its data.
     """
     copy_store(to)
     shutil.rmtree(to / "partners")

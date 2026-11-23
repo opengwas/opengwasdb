@@ -1,4 +1,5 @@
-"""Genotype Stores answer through the same public queries as the independent Test Store (#91)."""
+"""Genotype Stores answer through the same public queries as the independent Test Store
+(opengwas/ogld#91)."""
 
 from pathlib import Path
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the Test Store, `tests/data/test-panel/store/` (opengwas/ogld#12).
+"""Write the Test Store, `tests/ld/data/test-panel/store/` (opengwas/ogld#12).
 
 The Test Store is the LD Store of the Test Panel (`CONTEXT.md`), written from the panel's
 independent `reference_r(10)`, so a reader's tests have real data in the real format before any
@@ -9,7 +9,7 @@ reference r signed to A1. The script supplies that r and what only its source kn
 store makes the rest (`StoreWriter`, ogld#17). That is its codes,
 quantised at × 511, HGDP+1kGP EUR's encoding (ld-store §3; ADR 0090), the Near Band, the Far Pairs
 at t_far for n = 771 and the k it was written at (ld-store §4, §5), the Partner Rows, and the
-counts. It holds no Proxy Index: #72 removed the component (ADR 0097). It is "import a
+counts. It holds no Proxy Index: opengwas/ogld#72 removed the component (ADR 0097). It is "import a
 precomputed r" in miniature. It is deterministic: the same inputs write the same bytes.
 
     pixi run -e dev python scripts/ld/make_test_store.py --r-scale=<scale> --t-partner=<r²> \

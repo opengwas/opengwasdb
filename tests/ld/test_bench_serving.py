@@ -1,5 +1,5 @@
 """ogld#9's serving measurements (`scripts/ld/bench/serving.py`): what they read, when they stop,
-and that `docs/benchmarks/serving-tables.md` is their records rendered.
+and that `docs/benchmarks/ld/serving-tables.md` is their records rendered.
 
 ADR 0094 rests on these numbers: the memory of a process holding the five stores, filled to its
 cache's budget, and how late an event loop's ticks wake while ogld reads beside it.

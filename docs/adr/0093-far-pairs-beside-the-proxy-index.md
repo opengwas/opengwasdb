@@ -3,7 +3,7 @@
 Formerly ogld ADR 0007.
 
 > **Status: superseded in part by [ADR 0097](./0097-partner-rows-replace-the-proxy-index.md).**
-> The Proxy Index this decision puts the Far Pairs beside is gone (#72): the Partner Rows hold
+> The Proxy Index this decision puts the Far Pairs beside is gone (opengwas/ogld#72): the Partner Rows hold
 > every entry it held, and `clump` and `proxies` read them. The Far Pairs themselves, their rules
 > and their shape stand exactly as decided here; what no longer holds is decision 3's division of
 > reads (`partners` reading the index at r2 ≥ t_far), decision 5's `far.index`, which went with
@@ -36,7 +36,7 @@ component held nothing it did not. ld-store §11 weighed what the merge cost rea
 - a region wider than `near_bp` would read 3–9% more bytes.
 
 ogld#8 timed reads of the published HGDP+1kGP EUR store (× 511, k = 10, layout C) from local
-disk and over HTTP with 0, 10 and 50 ms added per request (`docs/benchmarks/latency.md`,
+disk and over HTTP with 0, 10 and 50 ms added per request (`docs/benchmarks/ld/latency.md`,
 12 November 2026). The first estimate held; the second did not:
 
 - **A 10 Mb region** read 6.2–9.3% more bytes for its index rows, as estimated. But it walked
@@ -142,7 +142,7 @@ is what they need.
 - **The Test Store holds 7 Far Pairs** (4 on chr21, 3 on chr22), 7.7 KB in `far/`. Every other
   array of it is byte-identical to the store written before this decision, and its provenance
   names the commit whose code wrote it, `far/` included.
-- **What the reads gained, measured** (`docs/benchmarks/far-pairs.md`), on the published EUR
+- **What the reads gained, measured** (`docs/benchmarks/ld/far-pairs.md`), on the published EUR
   store, before and after reading the same bytes. A matrix of 500 variants on one chromosome
   reads 10 Far Pairs chunks on chr22 and 102 on chr11, where it read 894 and 1,058 index chunks,
   and at 50 ms a request takes 53 s and 63 s where it took 129 s and 161 s. chr22 is the best

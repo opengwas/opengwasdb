@@ -3,15 +3,15 @@
 The Partner Rows hold, for each variant, every partner within `far_bp` whose code reaches the
 Partner Floor within `near_bp` or the far code floor beyond it, in both variants' rows. They are
 grouped `ROWS_PER_FRAME` rows to a zstd frame, and one chromosome's frames are the bytes of a
-single-chunk `uint8` array, so a row is one positional read and one decompress (ld-store §5.4).
+single-chunk `uint8` array, so a row is one positional read and one decompress (partner-rows §5.4).
 
 This module owns both directions of that codec and the group around it:
 
 - `encode_frame` and `decode_frame` write and read a frame's byte layout (§5.2): k, the rows'
   lengths, the partner deltas and the codes, the two arrays byte-shuffled, as one zstd frame at
   level 3 with the content checksum and the content size set in its header. `Frame` is a decoded
-  frame, and `Frame.row` gives one row's partners and codes. #68 validates frames through them
-  and #70 reads rows with them; neither parses a payload of its own.
+  frame, and `Frame.row` gives one row's partners and codes. opengwas/ogld#68 validates frames
+  through them and opengwas/ogld#70 reads rows with them; neither parses a payload of its own.
 - `FramesGroup` is one chromosome's `partners/<chrom>/` group: its two arrays, its attributes and
   the chunk file they point at. A frame is compressed on a bounded pool and appended to the chunk
   file as it is finished, in frame order, so the bytes do not depend on the pool's size or on the
@@ -130,7 +130,7 @@ class Frame:
         if not self.first <= local_row < self.first + self.rows:
             raise ValueError(
                 f"row {local_row} is not in frame {self.number} of chromosome {self.chrom}, "
-                f"which holds rows {self.first}–{self.first + self.rows - 1} (ld-store §5.2)"
+                f"which holds rows {self.first}–{self.first + self.rows - 1} (partner-rows §5.2)"
             )
         at = local_row - self.first
         span = slice(int(self.indptr[at]), int(self.indptr[at + 1]))
@@ -186,7 +186,7 @@ def _lengths(
         if held != coded:
             raise ValueError(
                 f"{where}, row {first + at}: {held} partner(s) and {coded} code(s), and a row's "
-                "codes are its pairs' (ld-store §5.2)"
+                "codes are its pairs' (partner-rows §5.2)"
             )
         counts.append(held)
     return np.array(counts, dtype=_LITTLE_ROW)
@@ -235,7 +235,7 @@ def _deltas(
     if len(deltas) and (deltas.min() < bounds.min or deltas.max() > bounds.max):
         raise ValueError(
             "a Partner Rows delta does not fit int32: the frame's partners are not one "
-            "chromosome's rows (ld-store §5.2)"
+            "chromosome's rows (partner-rows §5.2)"
         )
     return deltas.astype(_LITTLE_DELTA)
 
@@ -258,7 +258,7 @@ def encode_frame(
     """
     where = _where(chrom, number)
     if not rows:
-        raise ValueError(f"{where} holds no rows: a frame holds at least one (ld-store §5.2)")
+        raise ValueError(f"{where} holds no rows: a frame holds at least one (partner-rows §5.2)")
     lengths = _lengths(rows, first, where)
     partners, codes = _stacked(lengths, rows)
     try:
@@ -316,7 +316,7 @@ def _payload(raw: bytes, where: str) -> bytes:
         raise ValueError(
             f"{where} does not decompress: its zstd frame is damaged, or its content checksum "
             f"fails ({failed}). A frame that cannot be checked is never read as a short row "
-            "(ld-store §5.4)"
+            "(partner-rows §5.4)"
         ) from failed
 
 
@@ -324,20 +324,22 @@ def _counted(payload: bytes, where: str, rows: int) -> tuple[int, npt.NDArray[np
     """The payload's k and lengths, refused when k is not `rows` or the payload's length is not
     exactly 4 + 4k + 6E (§5.2)."""
     if len(payload) < 4:
-        raise ValueError(f"{where} holds {len(payload)} bytes: too few for its k (ld-store §5.2)")
+        raise ValueError(
+            f"{where} holds {len(payload)} bytes: too few for its k (partner-rows §5.2)"
+        )
     k = int(np.frombuffer(payload, _LITTLE_ROW, 1)[0])
     if k != rows:
-        raise ValueError(f"{where} holds {k} rows, not the {rows} it is due (ld-store §5.2)")
+        raise ValueError(f"{where} holds {k} rows, not the {rows} it is due (partner-rows §5.2)")
     if len(payload) < 4 + 4 * k:
         raise ValueError(
-            f"{where} holds {len(payload)} bytes: too few for k = {k} rows' lengths (ld-store §5.2)"
+            f"{where} holds {len(payload)} bytes: too few for k = {k} rows' lengths (partner-rows §5.2)"
         )
     lengths = np.frombuffer(payload, _LITTLE_ROW, k, 4).astype(np.int64)
     entries = int(lengths.sum())
     if len(payload) != 4 + 4 * k + 6 * entries:
         raise ValueError(
             f"{where}'s payload is {len(payload)} bytes, and k = {k} with {entries} entries "
-            f"needs exactly {4 + 4 * k + 6 * entries} = 4 + 4k + 6E (ld-store §5.2)"
+            f"needs exactly {4 + 4 * k + 6 * entries} = 4 + 4k + 6E (partner-rows §5.2)"
         )
     return k, lengths
 
@@ -355,7 +357,7 @@ def _partners(
     bounds = np.iinfo(np.int32)
     if len(partners) and (partners.min() < 0 or partners.max() > bounds.max):
         raise ValueError(
-            "a Partner Rows frame decodes to a partner that is not a row (ld-store §5.2)"
+            "a Partner Rows frame decodes to a partner that is not a row (partner-rows §5.2)"
         )
     return partners.astype(np.int32)
 
@@ -436,7 +438,7 @@ class FramePayload:
         if not self.first <= local_row < self.first + self.rows:
             raise ValueError(
                 f"row {local_row} is not in frame {self.number} of chromosome {self.chrom}, "
-                f"which holds rows {self.first}–{self.first + self.rows - 1} (ld-store §5.2)"
+                f"which holds rows {self.first}–{self.first + self.rows - 1} (partner-rows §5.2)"
             )
         at = local_row - self.first
         start = int(self.lengths[:at].sum())
@@ -466,7 +468,7 @@ class FramePayload:
         if partners.min() < 0 or partners.max() > bounds.max:
             raise ValueError(
                 f"frame {self.number} of chromosome {self.chrom} decodes to a partner that is not "
-                "a row (ld-store §5.2)"
+                "a row (partner-rows §5.2)"
             )
         return partners.astype(np.int32), codes
 
@@ -846,7 +848,7 @@ def _beside(root: zarr.Group, container: Path | None) -> Path:
     store's own `partners/` group, which this makes a node of its hierarchy (ld-store §1, §5.1).
 
     A derivation supplies a plain directory and makes it a node only once every chromosome is in
-    place, so a run killed part-way leaves the store it was (#69)."""
+    place, so a run killed part-way leaves the store it was (opengwas/ogld#69)."""
     if container is None:
         return layout.local_directory(root.require_group(layout.PARTNERS).store_path)
     return container
@@ -874,7 +876,7 @@ class FramesGroup:
     it is a node of the store's hierarchy. `close` creates both arrays' metadata at their final
     shape, puts the file where that metadata's chunk key names, checks that zarr reads it back as
     the frames appended, sets the group's attributes and only then publishes it, so a chromosome
-    is either whole or not there at all (issue #67).
+    is either whole or not there at all (issue opengwas/ogld#67).
 
     A group that fails — a frame that will not compress, a row count short, a chunk file zarr
     cannot read back — is poisoned: it removes its temporary directory, shuts its pool down, and
@@ -889,7 +891,7 @@ class FramesGroup:
     store's `partners/` group, which this then creates. `opengwasdb ld derive-partners` gives a
     plain directory that is not yet a node of the store's hierarchy, so a derivation killed part-way
     leaves the store it was: a `partners/` node is one validation judges and a reader trusts
-    (partner-rows §5.1, §6.2; issue #69).
+    (partner-rows §5.1, §6.2; issue opengwas/ogld#69).
     """
 
     def __init__(
@@ -959,13 +961,13 @@ class FramesGroup:
         if rows and self._added % ROWS_PER_FRAME:
             raise ValueError(
                 f"frame {self._submitted - 1} of chromosome {self._chrom} is still open: a frame "
-                f"holds {ROWS_PER_FRAME} rows (ld-store §5.2)"
+                f"holds {ROWS_PER_FRAME} rows (partner-rows §5.2)"
             )
         due = min(ROWS_PER_FRAME, self._rows - self._added)
         if len(rows) != due:
             raise ValueError(
                 f"frame {self._submitted} of chromosome {self._chrom} holds {due} rows, not "
-                f"{len(rows)} (ld-store §5.2)"
+                f"{len(rows)} (partner-rows §5.2)"
             )
         self._entries += sum(len(np.asarray(partners)) for partners, _ in rows)
         self._pending.append(self._start(self._added, rows))
@@ -1130,7 +1132,7 @@ class FramesGroup:
         if array.shape != (self._bytes,) or array.chunks != (self._bytes,):
             raise ValueError(
                 f"chromosome {self._chrom}'s frames array has shape {array.shape} and chunks "
-                f"{array.chunks}, not one chunk of its {self._bytes} bytes (ld-store §5.1)"
+                f"{array.chunks}, not one chunk of its {self._bytes} bytes (partner-rows §5.1)"
             )
 
     def _file_is_the_frames(self, array: zarr.Array[Any], offsets: npt.NDArray[np.uint64]) -> Path:
@@ -1158,7 +1160,7 @@ class FramesGroup:
                 if read != held.read(span.stop - span.start):
                     raise ValueError(
                         f"zarr reads chromosome {self._chrom}'s frames back differently from the "
-                        f"chunk file's own bytes at {span.start} (ld-store §5.1)"
+                        f"chunk file's own bytes at {span.start} (partner-rows §5.1)"
                     )
 
     def _decodes_to(self, array: zarr.Array[Any], path: Path) -> None:
@@ -1167,7 +1169,7 @@ class FramesGroup:
         if bytes(np.asarray(array[:]).tobytes()) != path.read_bytes():
             raise ValueError(
                 f"chromosome {self._chrom}'s frames do not decode to the chunk file's bytes "
-                "(ld-store §5.1)"
+                "(partner-rows §5.1)"
             )
 
 

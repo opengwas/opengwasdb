@@ -15,14 +15,14 @@ Two measurements, each written as JSON lines to `--out`, and the tables of every
   would wait while ogld reads. The queries are ogld#8's own (`latency.clump_query`,
   `matrix_query`, `region_query`), so each record carries what its query answered, and runs under
   different zarr settings can be held to the same answer.
-- `tables`: renders records as `docs/benchmarks/serving-tables.md`: ogld#8's step-1 tables of the
+- `tables`: renders records as `docs/benchmarks/ld/serving-tables.md`: ogld#8's step-1 tables of the
   `bench-latency` runs (`report.step1_tables`), then the memory and lag runs, one row a record.
 
     pixi run -e dev bench-serving memory --out memory.jsonl
     pixi run -e dev bench-serving lag --out lag.jsonl
     pixi run -e dev bench-serving lag --engine-zarr --out lag.jsonl
-    pixi run -e dev bench-serving tables docs/benchmarks/results/9/*.jsonl.gz \
-        > docs/benchmarks/serving-tables.md
+    pixi run -e dev bench-serving tables docs/benchmarks/ld/results/9/*.jsonl.gz \
+        > docs/benchmarks/ld/serving-tables.md
 
 `bench-serving` keeps BLAS to one thread, as `bench-latency` does. zarr's pool is
 `--zarr-threads` (6), and `lag` adds one worker thread. The stores are only read.

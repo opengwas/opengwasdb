@@ -1,9 +1,9 @@
-"""Regenerate the conformance fixture from the engine's own identity functions (ADR 0003).
+"""Regenerate the conformance fixture from the engine's own identity functions (ADR 0089).
 
 Run it with the engine's interpreter, never ogld's, so the answers come from the engine:
 
     PYTHONPATH=~/repo/opengwasdb ~/repo/opengwasdb/.pixi/envs/default/bin/python \
-        tests/data/identity/make_fixture.py ~/repo/opengwasdb
+        tests/ld/data/identity/make_fixture.py ~/repo/opengwasdb
 
 It refuses an engine checkout that is not clean, and writes its commit into both files.
 Only the engine's `orient_to_canonical` and `normalise_chromosome` produce an answer; this
@@ -44,7 +44,7 @@ ORIENT_CASES: list[tuple[str, int | str, str, str]] = [
     ("22", 300, "CAG", "C"),
     ("22", 300, "C", "CAG"),
     ("22", 300, "cag", "c"),
-    # not trimmed or left aligned: the engine keeps these as spelt (ADR 0003)
+    # not trimmed or left aligned: the engine keeps these as spelt (ADR 0089)
     ("22", 400, "CAA", "CA"),
     ("22", 400, "CA", "CAA"),
     ("22", 401, "TCA", "TGA"),

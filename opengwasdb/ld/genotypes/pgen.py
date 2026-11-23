@@ -138,8 +138,8 @@ class Genotypes:
         """Decode into a caller-owned contiguous buffer, including a disjoint thread's slice.
 
         Genomic ALID order differs from physical pgen order at some tied positions. Reorder
-        only those rows in place, not a full dosage matrix (#91: 214 ms proxy read/copy).
-        Each caller/thread owns its Genotypes handle; no native reader is shared.
+        only those rows in place, not a full dosage matrix (opengwas/ogld#91: 214 ms proxy
+        read/copy). Each caller/thread owns its Genotypes handle; no native reader is shared.
         """
         if out.shape != (len(rows), len(self._fileset.subset)) or not out.flags.c_contiguous:
             raise ValueError(

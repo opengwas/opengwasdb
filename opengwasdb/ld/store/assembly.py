@@ -88,7 +88,8 @@ from opengwasdb.ld.store.validation import (
 
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
 #: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged. That function is
-#: the only code left that reads the component (#72): no store this package writes holds one.
+#: the only code left that reads the component (opengwas/ogld#72): no store this package writes
+#: holds one.
 DERIVE_ENTRIES: Final = 1 << 23
 #: Variant Set rows `derive_alid_index` reads at once: 1,048,576 ALIDs, whose keys are 32 MiB.
 ALID_ROWS: Final = 1 << 20
@@ -238,7 +239,7 @@ class Cutter:
         self, first: int, r: npt.NDArray[np.floating[Any]], near_stop: npt.NDArray[np.int64]
     ) -> Codes:
         """The block's Near Band codes, row after row. Each row's run is one slice: five times
-        faster than a fancy index (lane #5)."""
+        faster than a fancy index (lane opengwas/ogld#5)."""
         runs = [r[t, t + 1 : stop] for t, stop in enumerate(near_stop)]
         values = np.concatenate(runs)
         lengths = near_stop - np.arange(1, len(near_stop) + 1)
@@ -383,9 +384,9 @@ class Appender:
 class NearBandStream:
     """One chromosome's Near Band, written as its blocks arrive (ld-store §4, §6).
 
-    This is lane #4's measured design (comment on ogld#17). `r`'s length, the sum of the row
-    lengths, is known from the positions before any code arrives. So `indptr` is written whole,
-    and `r` is created at its full length, when the chromosome's first block arrives. Codes
+    This is lane opengwas/ogld#4's measured design (comment on ogld#17). `r`'s length, the sum of
+    the row lengths, is known from the positions before any code arrives. So `indptr` is written
+    whole, and `r` is created at its full length, when the chromosome's first block arrives. Codes
     are written in whole shards of `r` (`ShardCarry`), and less than one shard is carried to the
     next block. The last shard is written when the last row arrives.
     """
@@ -573,11 +574,11 @@ class PartnerRowsStream:
     """One chromosome's Partner Rows, written a frame at a time (§5; partner-rows §6.1).
 
     It is fed by (a block of rows, its Near Band codes, its Far Pairs) rather than by a `Cut`
-    alone, so that #69's derivation can feed the same emitter from a store's own Near Band and Far
-    Pairs and produce a build's bytes. The Near Band's codes become (lo, hi) pairs through the
-    band's row lengths, and each is kept at the Partner Floor; the Far Pairs are already the pairs
-    beyond near_bp at the far code floor, so they are kept as they come. Both are handed to
-    `RowCarry`, whose rows then hold every partner on both sides, each at its pair's one code.
+    alone, so that opengwas/ogld#69's derivation can feed the same emitter from a store's own Near
+    Band and Far Pairs and produce a build's bytes. The Near Band's codes become (lo, hi) pairs
+    through the band's row lengths, and each is kept at the Partner Floor; the Far Pairs are already
+    the pairs beyond near_bp at the far code floor, so they are kept as they come. Both are handed
+    to `RowCarry`, whose rows then hold every partner on both sides, each at its pair's one code.
 
     The rows are assembled into frames of `frames.ROWS_PER_FRAME`, which `frames.FramesGroup`
     compresses on a bounded pool and appends in frame order, so the bytes do not depend on the
@@ -602,7 +603,7 @@ class PartnerRowsStream:
         and whose pairs are kept at the floors `REncoding.partner_mask` chooses: the Partner
         Floor within `near_bp`, the far code floor beyond it to `far_bp`. `container` is the
         directory the group is published into, the store's `partners/` group by default; a
-        derivation gives a directory that is not yet one (#69)."""
+        derivation gives a directory that is not yet one (opengwas/ogld#69)."""
         self._chrom = chrom
         self._encoding = encoding
         self._indptr = indptr_of(lengths)
@@ -768,11 +769,11 @@ def derive_far_pairs(
     An index element no store holds, which is what a lost chunk reads as, is refused, naming its
     array, rather than read as a row without Far Pairs.
 
-    This is the one place left in `opengwasdb/ld/` that reads the Proxy Index (#72), and it has a
-    live caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
-    holds an index and no `far/`, and #73 derives its Far Pairs before its Partner Rows. A store
-    this package writes never needs it, and no other code path names the component's arrays
-    (`tests/ld/test_proxy_index_removed.py`).
+    This is the one place left in `opengwasdb/ld/` that reads the Proxy Index (opengwas/ogld#72),
+    and it has a live caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0
+    store that holds an index and no `far/`, and opengwas/ogld#73 derives its Far Pairs before its
+    Partner Rows. A store this package writes never needs it, and no other code path names the
+    component's arrays (`tests/ld/test_proxy_index_removed.py`).
     """
     indptr = _whole(index, "indptr")
     stream = FarPairsStream(far, len(indptr) - 1, encoding)
@@ -1063,9 +1064,9 @@ def derive_partners(
     unless `chromosomes` names ones it lacks.
 
     `drop_index` removes a Proxy Index the store still holds — a leftover of a store derived
-    before #72 — and its count, a step of its own (partner-rows §6.2): it does so only for a store
-    whose Partner Rows pass those rules, and never for one whose derivation is incomplete. A store
-    this package writes holds no `index/`, so there it is nothing to do.
+    before opengwas/ogld#72 — and its count, a step of its own (partner-rows §6.2): it does so only
+    for a store whose Partner Rows pass those rules, and never for one whose derivation is
+    incomplete. A store this package writes holds no `index/`, so there it is nothing to do.
     """
     store = Path(location)
     root = _writable(store)
@@ -1198,9 +1199,10 @@ def _refuse_writes(plan: _Plan) -> None:
     `O_NOFOLLOW`) and then replaces the document with it, so a link at that name would be written
     through and published as the store's metadata.
 
-    A store's read-only components may be links: the scratch stores #71 and #73 read are a copied
-    `zarr.json` beside links to the published store's `near/`, `far/`, `variants/` and `index/`
-    (a published 0.1.0 store holds that last one until its rollout drops it).
+    A store's read-only components may be links: the scratch stores opengwas/ogld#71 and
+    opengwas/ogld#73 read are a copied `zarr.json` beside links to the published store's `near/`,
+    `far/`, `variants/` and `index/` (a published 0.1.0 store holds that last one until its rollout
+    drops it).
 
     This check runs before the first write and is not a lock: a concurrent writer to the same store
     could still plant one between the check and the write. A store has one writer (as §6.1's carry
@@ -1550,12 +1552,12 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     """Remove a Proxy Index a store still holds, whose Partner Rows hold every entry it had
     (partner-rows §6.2; ADR 0097, D1): its `index/` group and its `counts.index_entries`.
 
-    From #72 a store this package writes has none, and no rule expects one: the removal is what
-    finishes a store derived by an earlier `opengwasdb ld derive-partners`, and a store without one
-    is left as it is. The count goes with the arrays, in that order, and only after they are gone: a
-    removal that fails leaves the count in place and raises, naming the path, and a run killed
-    between the two leaves a count with no arrays, which validation reads as an extra provenance
-    key and ignores (ld-store §7).
+    From opengwas/ogld#72 a store this package writes has none, and no rule expects one: the removal
+    is what finishes a store derived by an earlier `opengwasdb ld derive-partners`, and a store
+    without one is left as it is. The count goes with the arrays, in that order, and only after they
+    are gone: a removal that fails leaves the count in place and raises, naming the path, and a run
+    killed between the two leaves a count with no arrays, which validation reads as an extra
+    provenance key and ignores (ld-store §7).
 
     A scratch store's `index/` is a link to a published one, which is read, never removed: the link
     goes and the directory it names stays (partner-rows §6.2).

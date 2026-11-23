@@ -433,7 +433,7 @@ def test_a_gap_of_exactly_w_cuts_and_one_of_w_minus_one_does_not(
 
 def test_one_two_and_eight_requested_workers_give_one_answer() -> None:
     """The answer does not depend on the pool, and eight requested workers are four
-    (partner-rows §9.2; #65's measurement)."""
+    (partner-rows §9.2; opengwas/ogld#65's measurement)."""
     store = opengwasdb.ld.open(TEST_STORE)
     names, score = _subset("all", store)
     answers = {}
@@ -453,7 +453,8 @@ def test_one_two_and_eight_requested_workers_give_one_answer() -> None:
 
 @pytest.mark.parametrize("requested", [0, -1, 1.5, True, "4"])
 def test_the_pool_size_is_a_count_of_threads(requested: Any) -> None:
-    """The seam is private (#71 keeps the pool's size internal), and a count below 1 is refused."""
+    """The seam is private (opengwas/ogld#71 keeps the pool's size internal), and a count below 1 is
+    refused."""
     reader = StoreReader.open(TEST_STORE)
     with pytest.raises(InputError, match="component thread count"):
         reader._set_query_workers(requested)
@@ -465,7 +466,7 @@ def test_a_saturated_pool_still_progresses_and_never_overruns_its_workers(
 ) -> None:
     """More components than threads: every task runs, exactly `workers` at once and never more —
     eight requested is four (partner-rows §9.2) — and the answer is the serial one."""
-    assert COMPONENT_WORKERS_MAX == 4, "the cap #65's measurement fixed"
+    assert COMPONENT_WORKERS_MAX == 4, "the cap opengwas/ogld#65's measurement fixed"
     names, score = _subset("all", opengwasdb.ld.open(TEST_STORE))
     once = StoreReader.open(TEST_STORE)
     once._set_query_workers(1)

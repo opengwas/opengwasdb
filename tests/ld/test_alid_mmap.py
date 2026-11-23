@@ -1,4 +1,5 @@
-"""Local companion behavior, held to the table and independently decoded canonical bytes (#47)."""
+"""Local companion behavior, held to the table and independently decoded canonical bytes
+(opengwas/ogld#47)."""
 
 from __future__ import annotations
 

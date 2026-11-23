@@ -1,6 +1,6 @@
 """ogld#3: ogld's identity function held to the engine's own (ADR 0089).
 
-`tests/data/identity/` holds the engine's answers (opengwas/opengwasdb at the commit named on
+`tests/ld/data/identity/` holds the engine's answers (opengwas/opengwasdb at the commit named on
 the files' first line) for awkward inputs, made by `make_fixture.py`. These tests read it;
 no expected value here comes from ogld.
 """

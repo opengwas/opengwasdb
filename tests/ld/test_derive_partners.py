@@ -3,7 +3,7 @@
 Every test works on a copy of the committed Test Store that `store_copies.unpartnered` puts back
 to 0.1.0 — `partners/` removed, the four keys that describe it dropped — and holds the derived
 component against the one the writer built, byte for byte. Nothing here writes into
-`tests/data/`.
+`tests/ld/data/`.
 
 The interruption test kills a real derivation with a real `SIGKILL`, after its first frame has
 reached the file: the child replaces `FramesGroup._append` with itself plus `os.kill`, so the kill

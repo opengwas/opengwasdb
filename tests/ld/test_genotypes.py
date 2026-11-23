@@ -1,4 +1,5 @@
-"""The shared genotype arithmetic against the frozen builder and independent Test Store (#90)."""
+"""The shared genotype arithmetic against the frozen builder and independent Test Store
+(opengwas/ogld#90)."""
 
 from __future__ import annotations
 

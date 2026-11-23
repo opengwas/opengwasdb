@@ -132,7 +132,7 @@ def arrays(group: Any, prefix: str = "") -> list[str]:
 def same_data(out: Path, layouts: list[str]) -> None:
     """Every array of every layout decodes to the first layout's values, read in bounded
     windows: the Near Band, the Far Pairs and the Partner Rows, and the variant columns too. No
-    layout this script builds holds a Proxy Index (#72)."""
+    layout this script builds holds a Proxy Index (opengwas/ogld#72)."""
     import numpy as np
     import zarr
 

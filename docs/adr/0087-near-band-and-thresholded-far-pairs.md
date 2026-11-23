@@ -2,7 +2,7 @@
 
 Formerly ogld ADR 0001.
 
-> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
@@ -36,7 +36,7 @@ Formerly ogld ADR 0001.
 > EAS and SAS it reads as the Bound" no longer describe it.
 
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
-This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
+This ADR records the owner's decisions of 7 November 2026 (epic opengwas/ogld#1, "Decisions already taken"),
 and the options they rejected. It also records what the prototypes measured. The format itself is
 in `docs/spec/ld-store.md`; the terms are in `CONTEXT.md`.
 
@@ -44,7 +44,7 @@ in `docs/spec/ld-store.md`; the terms are in `CONTEXT.md`.
 
 Clumping and LD matrices have needed individual-level genotypes on the server: plink `--bfile`
 panels for OpenGWAS's 1000 Genomes service, and `pgen` panels for the engine's prototypes. That has
-three costs (epic #1):
+three costs (epic opengwas/ogld#1):
 
 - **The panels are small.** At r² 0.001, MR's default threshold, sampling alone passes a share
   P(χ²₁ ≥ n × 0.001) of unlinked pairs. That is 37% at n = 817 and 48% at n = 503, the range of
@@ -62,7 +62,7 @@ ogld provides the LD that clumping reads.
 
 ## Decision
 
-The owner decided (epic #1, 7 November 2026):
+The owner decided (epic opengwas/ogld#1, 7 November 2026):
 
 1. **One LD Store per (ancestry panel, assembly).** The panel is the **Source Panel**, and the
    assembly is the engine's **Reference Assembly**.
@@ -173,7 +173,7 @@ all five panels.
 - An LD Store answers every pair up to 3 Mb exactly, so clumping, proxies and LD matrices within
   a 3 Mb window never depend on a threshold.
 - Each LD Store is hundreds of GB. Size scales with the square of variant density, so AFR is 2.7×
-  EUR. Publishing is a question of hosting, decided with serving in #9.
+  EUR. Publishing is a question of hosting, decided with serving in opengwas/ogld#9.
 - **A variant's upstream partners are scattered.** Row i holds only i's downstream partners. Its
   upstream ones are one element in each row of the preceding 3 Mb, so `proxies()`, and anything
   else that needs a whole column, reads the band's span over that 3 Mb, not one row. The
@@ -191,7 +191,7 @@ all five panels.
 ## Clarification, 7 November 2026
 
 The owner checked this ADR and the spec at ogld#2 and decided four further points the same day
-(epic #1, comment of 7 November 2026, decisions 1, 2, 3 and 6). They clarify the decisions above
+(epic opengwas/ogld#1, comment of 7 November 2026, decisions 1, 2, 3 and 6). They clarify the decisions above
 and do not reverse them: the answer table and the refusals stand.
 
 **The upstream half is a Proxy Index** (decision 1 of the comment). The consequence above, "A

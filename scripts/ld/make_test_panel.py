@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the Test Panel, `tests/data/test-panel/` (opengwas/ogld#2; ADR 0088).
+"""Write the Test Panel, `tests/ld/data/test-panel/` (opengwas/ogld#2; ADR 0088).
 
 The Test Panel is a real slice of HGDP+1kGP EUR, committed so every test that needs genotypes
 reads the same data (`CONTEXT.md`). This script makes it on an IEU compute node, from the phased

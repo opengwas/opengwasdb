@@ -11,15 +11,15 @@ is what Zarr fetches and decodes in any case, keeps the decoded chunks and the s
 up to a byte budget, and serves each request from them. So a query that reads a few pairs at a
 time, as clumping does once per lead, fetches each chunk once, from disk or over HTTP. A read's
 missing runs of chunks are fetched together, a bounded batch at a time (ogld#32). How a store is
-read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/latency.md`), and
-ogld#32 tuned it (`docs/benchmarks/fast-reader.md`).
+read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/ld/latency.md`), and
+ogld#32 tuned it (`docs/benchmarks/ld/fast-reader.md`).
 
 `OpenedStore` is the one object an opened store's facts and its cache are held in, because a
-reader and the `VariantTable` it composes are two halves of one store and not two stores (#94): a
-replaced cache is replaced for both. The reads every other read is made of are here beside it —
-`elements_of` for an array's elements at coordinates, `runs_of` for its ragged runs, both refused
-if a chunk was lost, `array_indptr` for an offset array read whole, and `kept_array` for an array
-whose fill value no valid store can hold (ld-store §6).
+reader and the `VariantTable` it composes are two halves of one store and not two stores
+(opengwas/ogld#94): a replaced cache is replaced for both. The reads every other read is made of are
+here beside it — `elements_of` for an array's elements at coordinates, `runs_of` for its ragged
+runs, both refused if a chunk was lost, `array_indptr` for an offset array read whole, and
+`kept_array` for an array whose fill value no valid store can hold (ld-store §6).
 """
 
 from __future__ import annotations
@@ -212,7 +212,8 @@ class RangeSource:
             if _unsatisfiable(failed):
                 # A range that begins past the file's end is unsatisfiable, and the file ends
                 # there: the read's bytes are none, as a local `pread` past the end answers. A
-                # probe past the last byte is how a store's chunk file is measured (ld-store §5.1).
+                # probe past the last byte is how a store's chunk file is measured (partner-rows
+                # §5.1).
                 return b""
             raise ValueError(
                 f"{self._key} could not be read as bytes [{start}, {stop}): "

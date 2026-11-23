@@ -2,8 +2,8 @@
 
 Formerly ogld ADR 0014.
 
-Issue #91, epic #18. Authority: the owner's 20–21 November 2026 rulings on #18
-and the #91 resume ruling on relative paths. This records those rulings and the
+Issue opengwas/ogld#91, epic opengwas/ogld#18. Authority: the owner's 20–21 November 2026 rulings on opengwas/ogld#18
+and the opengwas/ogld#91 resume ruling on relative paths. This records those rulings and the
 implementation choices they leave to the reader ticket. ADR 0099 remains the
 single arithmetic owner; ADR 0098 remains the ALID companion contract.
 
@@ -74,7 +74,7 @@ its decode touched, and keeping all 22 at once takes a clump's peak RSS from 1.3
 (+0.69 GB), and a repeated whole-genome clump still reuses what its last chromosomes left. This
 is a handle cache, never a decoded-call cache.
 
-Measured (#91): assembling one proxy window's dosage block whole costs 432 ms,
+Measured (opengwas/ogld#91): assembling one proxy window's dosage block whole costs 432 ms,
 with 214 ms inside read/reorder, and the 3 Mb region 4.05 s. Decode writes
 disjoint output slices on at most four reader threads, with no concatenation or
 retained calls. Rows at tied loci that differ between physical pgen and ALID

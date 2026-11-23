@@ -185,9 +185,9 @@ def judge_window(
 
     It is the format's answer when the window is already a distance rather than a kb: a caller
     that has one asks it and is answered or refused at the same edges. Nothing in `opengwasdb.ld`
-    calls it since #71 — `clump` and `proxies` ask `judge_partner_request`, which has the Partner
-    Threshold's row too, and a matrix's region is `judge_region`'s — so it is the 0.1.0 table's
-    shape kept for a caller that brings its own window."""
+    calls it since opengwas/ogld#71 — `clump` and `proxies` ask `judge_partner_request`, which has
+    the Partner Threshold's row too, and a matrix's region is `judge_region`'s — so it is the 0.1.0
+    table's shape kept for a caller that brings its own window."""
     return _judged_window(
         r2=r2, window=window_bp, t_far=t_far, near_bp=near_bp, far_bp=far_bp, t_partner=None
     )

@@ -413,7 +413,7 @@ fit gains nothing from being repeated:
 With a 4 GiB budget (`--cache-mib 4096`, load 3.5–3.9), a repeated read is warm. Clumping the four
 Analyses again took 38.0 s at r² 0.01 against 79.9 s cold, and 39.7 s against 71.6 s at 0.001. The
 500 variants took 0.13 s warm on chr22 and 0.52 s genome-wide, against 1.7–2.9 s and 10–15 s with
-256 MiB. A single cold pass reads distinct chunks, which no budget saves; #8's profile found a
+256 MiB. A single cold pass reads distinct chunks, which no budget saves; opengwas/ogld#8's profile found a
 4 GiB cache saved 11% of one.
 
 **Sequential runs of chunks.** `ChunkCache._chunks` reads each run of neighbouring missing chunks

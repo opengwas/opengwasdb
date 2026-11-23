@@ -8,7 +8,7 @@ them to adjust for, by the PC Check. It imports `opengwasdb.ld.store`, `opengwas
 `opengwasdb.ld.identity`, never `opengwasdb.ld.query`.
 
 pgenlib, the pgen reader, is imported inside the build's read path only, never at module
-import: `import ogld` and every reader must work on an install without it
+import: `import opengwasdb.ld` and every reader must work on an install without it
 (tests/ld/test_surface.py holds this).
 """
 

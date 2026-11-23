@@ -212,7 +212,7 @@ def decoded_partners(
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     """One chromosome's Partner Rows, decoded frame by frame: every row's entry offsets, its
     partners and its codes, row after row. The group's own frames, checked against the frames
-    they must be, which is what a reader (#70) and validation (#68) do."""
+    they must be, which is what a reader (opengwas/ogld#70) and validation (opengwas/ogld#68) do."""
     held = root[f"partners/{chrom}"]
     rows, per_frame = int(held.attrs["rows"]), int(held.attrs["rows_per_frame"])
     offsets = np.asarray(held["frames_idx"][:], dtype=np.int64)
@@ -330,8 +330,8 @@ def test_a_sparse_array_under_one_shard_is_clipped_and_one_over_it_is_whole_shar
 def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Lane #4's design: zarr rewrites a shard without reading it back only when a write covers
-    # it whole, so the band and the Far Pairs are written a whole shard at a time, the rest
+    # Lane opengwas/ogld#4's design: zarr rewrites a shard without reading it back only when a write
+    # covers it whole, so the band and the Far Pairs are written a whole shard at a time, the rest
     # carried.
     monkeypatch.setattr(layout, "NEAR_R", (1_024, 4_096))
     monkeypatch.setattr(layout, "SIDE", (1_024, 4_096))
@@ -409,10 +409,10 @@ def test_the_writer_holds_a_window_of_the_chromosome_not_the_chromosome(
 
 def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path) -> None:
     # A store written before ADR 0093 gains its Far Pairs from its own index (ogld#31). No store
-    # this code writes holds one (#72), so the test writes the index brute force into the store,
-    # as the old one held it. chr22 holds a kept pair exactly near_bp apart: in the index, and
-    # not a Far Pair. So deriving at any other edge than the one the store writes by fails here
-    # (review of #31).
+    # this code writes holds one (opengwas/ogld#72), so the test writes the index brute force into
+    # the store, as the old one held it. chr22 holds a kept pair exactly near_bp apart: in the
+    # index, and not a Far Pair. So deriving at any other edge than the one the store writes by
+    # fails here (review of opengwas/ogld#31).
     writer = create(tmp_path / "s")
     write_all(writer, 100_000)
     writer.finish(sourced())
@@ -451,9 +451,9 @@ def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path
 
 
 def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path: Path) -> None:
-    # Review of #17 (asked): chr1's three variants are 4 and 4.5 Mb apart, so no pair is within
-    # near_bp and its band is empty; two of its three pairs reach the floor. chr2 holds one
-    # variant, so no pair at all. The store writes both and passes every rule.
+    # Review of opengwas/ogld#17 (asked): chr1's three variants are 4 and 4.5 Mb apart, so no pair
+    # is within near_bp and its band is empty; two of its three pairs reach the floor. chr2 holds
+    # one variant, so no pair at all. The store writes both and passes every rule.
     position = np.array([1_000_000, 5_000_000, 9_500_000, 2_000_000], dtype=np.int64)
     chrom = ["1", "1", "1", "2"]
     oriented = [orient(c, int(p), "A", "C") for c, p in zip(chrom, position, strict=True)]
@@ -583,7 +583,8 @@ def test_a_writer_whose_chromosome_failed_never_finishes(
 ) -> None:
     # A frame that will not compress is a chromosome that is not whole: the writer is poisoned, so
     # `finish` refuses naming the failure instead of publishing 0.2.0 provenance over a component
-    # the store does not have (issue #67's acceptance: a truncated component never looks complete).
+    # the store does not have (issue opengwas/ogld#67's acceptance: a truncated component never
+    # looks complete).
     def failing(*args: Any, **kwargs: Any) -> bytes:
         raise RuntimeError("the compressor died")
 

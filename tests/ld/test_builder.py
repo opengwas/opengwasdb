@@ -137,9 +137,9 @@ def test_a_copied_fileset_is_the_same_input(built: Built, tmp_path: Path) -> Non
 def test_blas_runs_one_thread_in_each_worker_while_tiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Review of #5 (standards a4): `threads` must bound the build, but each tile's matrix product
-    # ran on as many BLAS threads as the caller's environment allowed (OpenBLAS here starts 64).
-    # Inside a build BLAS runs one thread, so `threads` workers are `threads` threads.
+    # Review of opengwas/ogld#5 (standards a4): `threads` must bound the build, but each tile's
+    # matrix product ran on as many BLAS threads as the caller's environment allowed (OpenBLAS here
+    # starts 64). Inside a build BLAS runs one thread, so `threads` workers are `threads` threads.
     from threadpoolctl import threadpool_info, threadpool_limits
 
     from opengwasdb.ld.build import tiles
@@ -166,9 +166,9 @@ def test_blas_runs_one_thread_in_each_worker_while_tiling(
 def test_the_store_is_validated_on_the_build_s_threads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Orchestrator note 6: StoreWriter.finish validates on threads (#4's follow-up, c862ea1), and
-    # the build passes it its own, which bound it: the whole EUR panel's validation took 1 h 58 min
-    # on one thread and about 11 min on 16.
+    # Orchestrator note 6: StoreWriter.finish validates on threads (opengwas/ogld#4's follow-up,
+    # c862ea1), and the build passes it its own, which bound it: the whole EUR panel's validation
+    # took 1 h 58 min on one thread and about 11 min on 16.
     from opengwasdb.ld.store import StoreWriter
 
     seen: list[int] = []
@@ -259,8 +259,9 @@ def test_the_window_of_unit_vectors_moves_the_rows_still_needed_and_spares_a_til
 
 @pytest.mark.parametrize(("first", "stop"), [(4, 12), (16, 26), (12, 10)])
 def test_the_window_refuses_rows_it_does_not_hold(first: int, stop: int) -> None:
-    # Review of #17 (standards a5): an assert guarded this, which `python -O` drops, and the
-    # wrong rows of the array would then be read as unit vectors: plausible r, never a refusal.
+    # Review of opengwas/ogld#17 (standards a5): an assert guarded this, which `python -O` drops,
+    # and the wrong rows of the array would then be read as unit vectors: plausible r, never a
+    # refusal.
     from opengwasdb.ld.build import tiles
 
     window = tiles.Window(window_blocks(), capacity=20)
@@ -307,10 +308,10 @@ def test_a_build_whose_window_of_unit_vectors_moves_writes_the_same_store(
     monkeypatch: pytest.MonkeyPatch,
     k: int,
 ) -> None:
-    # Review of #17 (standards a4): no chromosome is long enough to move the window at the build's
-    # own sizes. With 4-row tiles and 8-row genotype blocks it moves more than once over chr22's
-    # 593 rows, and its arrays must be the shared panel build's, which never moved. One thread:
-    # with four, the window's reach-ahead makes its single move cover the chromosome — that
+    # Review of opengwas/ogld#17 (standards a4): no chromosome is long enough to move the window at
+    # the build's own sizes. With 4-row tiles and 8-row genotype blocks it moves more than once over
+    # chr22's 593 rows, and its arrays must be the shared panel build's, which never moved. One
+    # thread: with four, the window's reach-ahead makes its single move cover the chromosome — that
     # threads do not change a store is `test_the_thread_count_does_not_change_the_store`'s.
     from opengwasdb.ld.build import tiles
 

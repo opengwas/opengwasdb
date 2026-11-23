@@ -114,7 +114,8 @@ def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path)
 
 
 def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
-    # ld-store §1: a local path or an HTTP(S) URL. A static Range-serving server, as #9 may use.
+    # ld-store §1: a local path or an HTTP(S) URL. A static Range-serving server, as opengwas/ogld#9
+    # may use.
     remote = opengwasdb.ld.open(served_store)
     assert remote.provenance == opened().provenance
     some = alids(passing_rows()[:40])
@@ -857,7 +858,7 @@ def a_temporary_group_a_crash_left(store: Path) -> None:
 
 def bytes_appended_to_the_frames_file(store: Path) -> None:
     """Twenty-six bytes appended to chr22's frames chunk file: the metadata and both hashes still
-    name the frames a writer wrote, and the file holds more than them (ld-store §5.3)."""
+    name the frames a writer wrote, and the file holds more than them (partner-rows §5.3)."""
     group = zarr.open_group(store / "partners" / "22", mode="r")
     file = layout.chunk_file(group["frames"])
     with file.open("ab") as stream:

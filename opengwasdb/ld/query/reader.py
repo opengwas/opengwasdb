@@ -1,4 +1,4 @@
-"""The reader interface the four queries name (#91).
+"""The reader interface the four queries name (opengwas/ogld#91).
 
 `opengwasdb.ld.store.StoreReader` and `opengwasdb.ld.genotypes.GenotypeReader` both satisfy it
 structurally: one

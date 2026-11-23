@@ -4,7 +4,8 @@
     pixi run -e dev python scripts/ld/bench/deltas.py \
         --before docs/benchmarks/results/step1-*.jsonl.gz \
         --after docs/benchmarks/results/32/step1-*.jsonl.gz \
-        --levers docs/benchmarks/results/32/lever-*.jsonl.gz > docs/benchmarks/fast-reader-tables.md
+        --levers docs/benchmarks/results/32/lever-*.jsonl.gz >
+        docs/benchmarks/ld/fast-reader-tables.md
 
 Records are read and aggregated by `report.py`, as ogld#8's tables are: a sum over the Analyses
 for clumping, a median over the draws for everything else. A read is compared on the draws both

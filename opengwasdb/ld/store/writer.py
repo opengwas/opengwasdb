@@ -30,8 +30,8 @@ provenance, so a half-written store cannot be read as a short one. `finish` runs
 ld-store §12 on what was written and writes the provenance only when all 27 pass.
 
 What a store holds is `format_version` 0.2.0's: the Near Band, the Far Pairs and the Partner Rows
-(partner-rows §5; ADR 0097). It holds no Proxy Index: #72 removed the component, and no array of it
-is written here or read by a reader.
+(partner-rows §5; ADR 0097). It holds no Proxy Index: opengwas/ogld#72 removed the component, and no
+array of it is written here or read by a reader.
 """
 
 from __future__ import annotations
@@ -196,7 +196,8 @@ class StoreWriter:
         A write that fails — a frame that will not compress, a stream that will not close —
         poisons the writer: the rows are counted as written only after the chromosome closed, and
         every later `write` or `finish` raises naming this first failure. So a half-written
-        chromosome is never finished over, and no provenance is ever written for it (issue #67).
+        chromosome is never finished over, and no provenance is ever written for it (issue
+        opengwas/ogld#67).
         """
         self._live()
         if cut.by is not self._cutter:
@@ -278,7 +279,8 @@ class StoreWriter:
 def write_variant_table(
     location: Path, variants: Variants, ranges: dict[str, tuple[int, int]]
 ) -> zarr.Group:
-    """Write the shared variant half, without LD components or a provenance claim (#91).
+    """Write the shared variant half, without LD components or a provenance claim
+    (opengwas/ogld#91).
 
     The LD writer and Genotype Store builder use exactly the same columns and layout. `ranges`
     is the chromosome record its caller computed (`chromosome_ranges`), so the write path has

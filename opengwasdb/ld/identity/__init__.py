@@ -4,7 +4,7 @@ ogld must form exactly the engine's ALID (opengwas/opengwasdb `CONTEXT.md`, _Var
 Identity_) and sign r against its A1. A mismatch is silent: it flips the sign of r for
 some variants, the allele-flip error fine-mapping diagnostics exist to catch. This module
 is a copy of the engine's rules at `1ab2b09`, held to the engine's own answers by the
-fixture in `tests/data/identity/` (ADR 0089). The engine upper-cases, validates A, C, G, T
+fixture in `tests/ld/data/identity/` (ADR 0089). The engine upper-cases, validates A, C, G, T
 and sorts the two alleles. It does not trim or left-align, though its glossary says it does.
 """
 

@@ -3,7 +3,7 @@
 #
 # These suites read the HGDP+1kGP panels under /data/opengwasdb/reference/, so they run on
 # the IEU compute nodes, within 5 minutes in all. Every suite the tier holds is named in
-# PREFLIGHT: cleat's guard-suites gate fails a test_*.py under tests/realdata/ that it does
+# PREFLIGHT: cleat's guard-suites gate fails a test_*.py under tests/ld/realdata/ that it does
 # not name, so no realdata suite can sit on disk and run nowhere.
 #
 # A machine without the panels fails here, loudly; it does not skip and report green.
@@ -32,7 +32,7 @@ export OGLD_V2_EUR_CHR22="${OGLD_V2_EUR_CHR22:-$V2/hgdp1kgp_chr22.filtered.SNV_I
 export OGLD_EUR_PC_FILE="${OGLD_EUR_PC_FILE:-/data/opengwasdb/work/ogld/pcs/EUR.eigenvec}"
 # EUR's 665 unrelated samples, which scripts/ld/make_keeps.py writes (ADR 0088, decision 11).
 export OGLD_EUR_KEEP="${OGLD_EUR_KEEP:-/data/opengwasdb/work/ogld/keep/EUR.keep}"
-# #403's 37 Analyses' hits, which scripts/ld/realdata/make_403_inputs.py makes (tests/realdata/
+# #403's 37 Analyses' hits, which scripts/ld/realdata/make_403_inputs.py makes (tests/ld/realdata/
 # test_query_panel.py says the layout). A test whose input is unset, or names nothing, stops as an
 # expected failure naming it (tests/ld/realdata/realdata_inputs.py): a missing input is not a defect
 # of ogld. `-rfEx` prints every such reason.

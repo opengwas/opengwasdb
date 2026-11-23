@@ -283,7 +283,7 @@ def test_the_floor_at_the_widest_scale_is_the_former_table_s(n: int, k: int, flo
 
 
 def test_the_epic_s_t_far_table_at_k_10() -> None:
-    # Epic #1, "Decisions already taken", decision 3: rounded to the epic's digits.
+    # Epic opengwas/ogld#1, "Decisions already taken", decision 3: rounded to the epic's digits.
     printed = {49766: 0.001, 771: 0.027, 804: 0.026, 817: 0.026, 783: 0.027, 345: 0.062}
     for n, value in printed.items():
         assert round(fmt.t_far(n, 10), 3) == value

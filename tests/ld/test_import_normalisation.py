@@ -1,4 +1,4 @@
-"""Literal covariance oracle, including invalid-diagonal loss classes (#93)."""
+"""Literal covariance oracle, including invalid-diagonal loss classes (opengwas/ogld#93)."""
 
 import numpy as np
 

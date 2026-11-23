@@ -225,7 +225,7 @@ def write_array(path: str, at: slice, value: Any) -> Callable[[Path], None]:
 
 def a_far_pair_exactly_near_bp_apart(store: Path) -> None:
     """Adds chr22's one pair exactly 3,000,000 bp apart to its Far Pairs, at the floor: the edge
-    a Far Pair lies beyond (review of #31)."""
+    a Far Pair lies beyond (review of opengwas/ogld#31)."""
     contract().add_far_pair(lambda gap: gap == 3_000_000, lambda floor: floor)(store)
 
 
@@ -419,7 +419,7 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     "a partner group with no frames array": (
         "partners.files",
         lambda store: shutil.rmtree(store / "partners" / "22" / "frames"),
-        "missing (ld-store §5.1)",
+        "missing (partner-rows §5.1)",
     ),
     "a partner frames array of another dtype": (
         "partners.files",
@@ -534,8 +534,8 @@ def unmeasured(p: dict[str, Any]) -> None:
 
 
 def test_a_store_with_no_cross_chromosome_pair_records_null_rates(tmp_path: Path) -> None:
-    # The ruling of 10 November 2026 (orchestrator note 1 for #4), as lane #5's chr22 builds
-    # record it: n_pairs 0 and the two measured rates null pass.
+    # The ruling of 10 November 2026 (orchestrator note 1 for opengwas/ogld#4), as lane
+    # opengwas/ogld#5's chr22 builds record it: n_pairs 0 and the two measured rates null pass.
     copy = copy_store(tmp_path / "store")
     edit_ld_store(unmeasured)(copy)
     assert findings(copy, ["provenance.complete"])["provenance.complete"] == []
@@ -1189,7 +1189,7 @@ def test_a_0_2_0_store_with_no_partner_rows_fails_its_ten_rules(tmp_path: Path) 
     assert [f.where for f in found["partners.files"]] == ["partners", "partners/21", "partners/22"]
     assert "is not a group of the store's hierarchy" in found["partners.files"][0].message
     assert all(
-        f.message == "missing: every chromosome of the Variant Set has one (ld-store §5.1)"
+        f.message == "missing: every chromosome of the Variant Set has one (partner-rows §5.1)"
         for f in found["partners.files"][1:]
     )
     for rule in PARTNER_FRAME_RULES:

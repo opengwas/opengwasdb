@@ -23,7 +23,8 @@ Sources, all read-only:
 - **The rows.** Each Analysis's Observed Associations at p ≤ 5e-8, read from its engine Store under
   `/data/opengwasdb/stores/` as the sweep's `read_tier` does: `top_hits(threshold=5e-8,
   observed_only=True)` then `resolve`. Imputed rows are not clumped, on either side.
-- **The genotypes.** #5's v2 EUR conversions (`--genotypes`), the pgens the store is built from. A
+- **The genotypes.** opengwas/ogld#5's v2 EUR conversions (`--genotypes`), the pgens the store is
+built from. A
   record's ALID is `opengwasdb.ld.identity.orient(chrom, pos, ref, alt).alid`; a record is kept when
   that
   ALID is in the store's Variant Set, and where an insertion and a deletion share an ALID, the one

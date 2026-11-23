@@ -7,7 +7,7 @@ variants' rows. The emitter's selection is never called, so a second layout of t
 held to the codes, not to itself.
 
 The store is the committed one, which the writer wrote (`scripts/ld/make_test_store.py --t-partner
-0.01`); nothing here writes into `tests/data/`.
+0.01`); nothing here writes into `tests/ld/data/`.
 """
 
 from __future__ import annotations
@@ -123,9 +123,9 @@ def test_every_row_is_the_near_band_and_the_far_pairs_at_their_floors(chrom: str
 def test_the_partner_rows_hold_every_entry_a_proxy_index_held(chrom: str) -> None:
     # t_partner is never above t_far, so every entry the Proxy Index held is an entry here: the
     # Near Band's pairs at the far code floor, and the Far Pairs, each with its own code, both
-    # ways (partner-rows §3; ADR 0097, D1). No store holds an index since #72, so the set is
-    # built from the two components the index held (#72): a second reading of the same codes,
-    # not the emitter's selection.
+    # ways (partner-rows §3; ADR 0097, D1). No store holds an index since opengwas/ogld#72, so the
+    # set is built from the two components the index held (opengwas/ogld#72): a second reading of
+    # the same codes, not the emitter's selection.
     group = store()
     near_lo, near_hi, near_codes = near_pairs(group, chrom)
     far_lo, far_hi, far_codes = far_pairs(group, chrom)

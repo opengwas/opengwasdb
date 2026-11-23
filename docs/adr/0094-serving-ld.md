@@ -2,19 +2,19 @@
 
 Formerly ogld ADR 0008.
 
-> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
 Issue [#9](https://github.com/opengwas/ogld/issues/9), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The reads are in `docs/spec/ld-store.md` §10 and their compatibility in §13. The measurements
-are in `docs/benchmarks/latency.md` (ogld#8), `docs/benchmarks/fast-reader.md` (ogld#32),
-`docs/benchmarks/far-pairs.md` (ogld#31) and `docs/benchmarks/serving.md` (this ticket), each
-rendered from records under `docs/benchmarks/results/`. The terms are in `CONTEXT.md`.
+are in `docs/benchmarks/ld/latency.md` (ogld#8), `docs/benchmarks/ld/fast-reader.md` (ogld#32),
+`docs/benchmarks/ld/far-pairs.md` (ogld#31) and `docs/benchmarks/ld/serving.md` (this ticket), each
+rendered from records under `docs/benchmarks/ld/results/`. The terms are in `CONTEXT.md`.
 
 **Who decided.** The owner, on 13 November 2026, in the orchestrated run, recorded on ogld#9,
-from this ADR's proposal on `orch/1/9-serving` and the numbers in `docs/benchmarks/serving.md`;
+from this ADR's proposal on `orch/1/9-serving` and the numbers in `docs/benchmarks/ld/serving.md`;
 this ticket drafted the proposal, and the owner's rulings made it a decision. Their three
 rulings are the three decisions below. The proposal had recommended ogdb-api's job workers, with
 LD jobs in worker processes of their own; the owner chose a separate service, and that option is
@@ -47,24 +47,24 @@ its job contract from here where it fits (Consequences):
   served 13 Stores with `backend_max_running` 180, in one uvicorn process of 316 MB resident.
   Its live server runs on the same node (owner, 13 November 2026, answering this ticket).
 - **How a query runs.** Every data query is a job keyed by (user, canonical query hash) in a
-  Redis queue (its #11). Each API process runs **one** worker coroutine, which claims one job at
+  Redis queue (its opengwas/ogld#11). Each API process runs **one** worker coroutine, which claims one job at
   a time and runs its store query on a bounded thread pool in the same process
   (`ogdb_api/operations.py`); more throughput means more API processes on one Redis, whose
-  admission is shared (its #18). Its stress run measured 0.2 jobs/s for one process, and "latency
-  grows with queue depth, not with memory" (DEVLOG, its #10).
+  admission is shared (its opengwas/ogld#18). Its stress run measured 0.2 jobs/s for one process, and "latency
+  grows with queue depth, not with memory" (DEVLOG, its opengwas/ogld#10).
 - **Limits a job meets.** A store query that runs past `OGDB_STORE_TIMEOUT_SECONDS` (30 s) fails
   terminally; the query cannot be interrupted, so its thread and release slot stay held until it
   returns (`ogdb_api/planner.py`, `BackendLimiter`).
 - **How a result is returned.** The client polls `GET /api/jobs/{id}` at the interval the API
   recommends, then reads the result: inline up to 10,000 rows, else immutable NDJSON pages, at
   most 100,000 rows and 50 MB a job, held in a results cache of 1 GiB until every page is read
-  plus 300 s (its #16).
+  plus 300 s (its opengwas/ogld#16).
 - **Memory.** Its specification says memory, not CPU, is the binding constraint: OGS-00011's
   reader holds about 24 GiB, and on a 32 GiB VM the whole deployment was OOM-killed at 30.9 GiB.
 - **LD today.** `/api/ld/clump`, `/api/ld/matrix` and `/api/ld/reflookup`, OpenGWAS's own LD
   paths, are registered and answer `501 Not yet implemented` until "an explicitly supported LD
   panel and algorithm" exists (its SPECIFICATION §5). Its ieugwasr and ieugwaspy compatibility
-  epic (its #35) keeps those clients' paths in ogdb-api.
+  epic (its opengwas/ogld#35) keeps those clients' paths in ogdb-api.
 - **Versioning.** It pins `opengwasdb` to one Git revision and upgrades it deliberately, by a
   ten-step procedure in its README.
 - **In front of it.** opengwas/opengwas-gateway authenticates users (JWT) and forwards
@@ -84,7 +84,7 @@ Catalog (the engine's ADR 0039), which records no path.
 
 **What the reads cost**, on the published EUR store, from local disk and over HTTP with a wait
 added to every request. "Now" is the reader with ogld#31's Far Pairs and ogld#32's changes, timed
-by this ticket (`docs/benchmarks/serving.md`); ogld#31 changed no clump or proxy read.
+by this ticket (`docs/benchmarks/ld/serving.md`); ogld#31 changed no clump or proxy read.
 
 | read | local disk | 10 ms a request | 50 ms | 100 ms |
 |---|---|---|---|---|
@@ -120,7 +120,7 @@ Anyone may open an HGDP+1kGP LD Store directly with `opengwasdb.ld.open("https:/
 store directories are published as they are, where a static host serves them with byte ranges,
 and the reader reads them as it reads a local store (§10: "a static host that honours byte
 ranges is enough"). No code is needed: the reader, its refusals and its answers are the same over
-HTTP, and ogld#8, #31, #32 and this ticket measured them. It is the route for clients near the
+HTTP, and ogld#8, opengwas/ogld#31, opengwas/ogld#32 and this ticket measured them. It is the route for clients near the
 data and for reproducing a result against a named store, not the interactive route for a remote
 user: a 500-variant genome-wide matrix is 8.3 s locally, 36.7 s at 50 ms a request and 61.2 s at
 100 ms, a third of it loading the chromosomes' arrays at those latencies, and a clump reads Near
@@ -138,7 +138,7 @@ record for that decision.
 
 **The served copy's path.** The stores are being rebuilt into
 `/data/opengwasdb/work/ogld/stores-final/` and swapped into `/data/opengwasdb/work/ogld/stores/`
-by epic #1's final lane. That path is a work area: builds, benchmarks and lanes write there, and
+by epic opengwas/ogld#1's final lane. That path is a work area: builds, benchmarks and lanes write there, and
 a swap replaces a directory a running service may be reading. This record proposes a stable path
 for the served copy, **`/data/opengwasdb/ld-stores/<store name>/`**, for example
 `/data/opengwasdb/ld-stores/hgdp1kgp-v2-EUR-k10.store/`: beside the engine's
@@ -187,7 +187,7 @@ confirm it. Until then, the stores are at `/data/opengwasdb/work/ogld/stores/` a
   14%, with the same answers, at a node load of 55–94.
 - **Synchronous LD endpoints, no job.** Rejected by this record, not by the owner's ruling,
   which chose the route: it infers from ogdb-api's rule that every data query is a job and that
-  direct routes go (its owner, 6 November 2026, its #11 and #14), with ieugwasr's and ieugwaspy's
+  direct routes go (its owner, 6 November 2026, its opengwas/ogld#11 and opengwas/ogld#14), with ieugwasr's and ieugwaspy's
   compatibility paths the one exception that waits server-side, on a job. A clump can run for
   minutes, which a direct route would hold open.
 
@@ -209,7 +209,7 @@ The owner chose local disk only, for now (decision 3). This table is kept as the
 later choice of a public host. List prices are for 533 GB, each read on 13 November 2026 from
 the source under the table; where the provider's own page would not load, the source is a
 third-party summary and says so. "A full clump" is the 48.6 GB, in 86,286 requests, that #403's
-37 Analyses read at r² 0.01 (`docs/benchmarks/serving.md`).
+37 Analyses read at r² 0.01 (`docs/benchmarks/ld/serving.md`).
 
 | place | storage a month | egress | a full clump read remotely | access control | read locally by a service on the node |
 |---|---|---|---|---|---|

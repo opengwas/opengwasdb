@@ -70,7 +70,7 @@ A build reads PLINK 2 pgen filesets only (ADR 0088, decision 1).
   A record with `*`, a symbolic allele or `.` is refused.
 - **Chromosome names.** `#CHROM` is mapped to the engine's labels: a leading `chr` (any case) is
   removed; `1`–`22` are kept. **Only autosomes are built** (owner, 8 November 2026,
-  epic #1). A record on `X`, `Y`, `XY`, a PAR, `M`/`MT` (or plink2's codes `23`–`26`) is refused,
+  epic opengwas/ogld#1). A record on `X`, `Y`, `XY`, a PAR, `M`/`MT` (or plink2's codes `23`–`26`) is refused,
   naming the chromosome. The reason: a male's X and Y genotypes are hemizygous, and the diploid
   dosage model has no rule for coding them, and the HGDP+1kGP psam files carry no sex to apply one.
   `ld-store.md` already names `X`, `Y` and `MT`, so the format is ready when the owner rules.
@@ -420,7 +420,7 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
 
 ## 11. The Test Panel
 
-The Test Panel, `tests/data/test-panel/`, is v2 chr21 and chr22 for the 771 EUR samples, with the
+The Test Panel, `tests/ld/data/test-panel/`, is v2 chr21 and chr22 for the 771 EUR samples, with the
 EUR PC File and independent reference answers. Its README lists what it holds, where each edge case
 is, and how `scripts/ld/make_test_panel.py` regenerates it; `tests/ld/testdata.py` is the only way a test
 reads it.
@@ -456,7 +456,7 @@ reads it.
   negative-strand mappings, and REF must match the chromosome in `--fasta`
   (plain or gzip). Unmapped/ambiguous loci, chromosome/strand or allele-span
   failures, allele mismatch/identity, invalid frequency and every member of
-  an identity collision are dropped under named loss classes, as in #89.
+  an identity collision are dropped under named loss classes, as in opengwas/ogld#89.
 - A non-finite or non-positive covariance diagonal drops its variant, counted
   separately. Surviving covariance is divided by sqrt(C_ii C_jj), then signed
   with `ogld.identity.orient`. The existing writer alone quantises at ×2047

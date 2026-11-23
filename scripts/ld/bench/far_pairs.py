@@ -4,8 +4,8 @@
 Before ogld#31, `pair_r` read the Proxy Index row of every listed variant once a list spanned
 more than near_bp (ld-store §10). This measured what a separate Far Pairs component, the index's
 entries more than near_bp apart in their earlier row, would save, and its output,
-`docs/benchmarks/results/far_pairs.json`, is the evidence `docs/benchmarks/latency.md`,
-`docs/benchmarks/far-pairs.md` and ld-store §11 cite for ogld#31's `far/`. It is kept so those
+`docs/benchmarks/ld/results/far_pairs.json`, is the evidence `docs/benchmarks/ld/latency.md`,
+`docs/benchmarks/ld/far-pairs.md` and ld-store §11 cite for ogld#31's `far/`. It is kept so those
 figures can be made again. Per chromosome it counts the Far Pairs from the Proxy Index by the
 store's own rule (`_beyond_near`, which `far/` is written by), and for the benchmark's
 500-variant draws (`latency.Sample`, seeds 8–10) the distinct chunks of one array each would
@@ -19,9 +19,9 @@ row.
 
 It reads every chromosome's `index/<c>/partner` once, a block of rows at a time.
 
-**It refuses on this checkout.** The Proxy Index is gone (#72), so this reader can no longer
-produce its counts; the recorded results stay in `docs/benchmarks/results/far_pairs.json`, and
-only a checkout that could still read an index makes them again. `main` refuses up front, naming
+**It refuses on this checkout.** The Proxy Index is gone (opengwas/ogld#72), so this reader can no
+longer produce its counts; the recorded results stay in `docs/benchmarks/ld/results/far_pairs.json`,
+and only a checkout that could still read an index makes them again. `main` refuses up front, naming
 that checkout, rather than raising an `AttributeError` from the middle of a chromosome.
 """
 
@@ -42,7 +42,7 @@ from opengwasdb.ld.store.layout import SIDE
 #: Index entries read at a time.
 _BLOCK = 1 << 25
 #: The checkout whose reader still reads a Proxy Index, and so can make the recorded results
-#: again: `docs/benchmarks/far-pairs.md` ran its "before" side from it.
+#: again: `docs/benchmarks/ld/far-pairs.md` ran its "before" side from it.
 INDEX_READER: Final = "orch/1-ld-stores@1cb5c6e"
 
 
@@ -50,14 +50,15 @@ def refuse_on_this_checkout(store: Path) -> None:
     """Stop before reading anything, naming the checkout to run instead.
 
     This script counts a chromosome's Far Pairs from its Proxy Index arrays, which the reader has
-    not opened since #72 removed the component. The counts it recorded were made from a reader
-    that could, and that is the only place they can be made again.
+    not opened since opengwas/ogld#72 removed the component. The counts it recorded were made from a
+    reader that could, and that is the only place they can be made again.
     """
     raise SystemExit(
-        f"scripts/bench/far_pairs.py reads a Proxy Index, which this checkout's reader no longer "
-        f"opens (#72): {store} may still hold index/, but no code here reads it. Its recorded "
-        f"results, docs/benchmarks/results/far_pairs.json, are made again from a checkout of "
-        f"{INDEX_READER}, with PYTHONPATH naming it, as docs/benchmarks/far-pairs.md ran them"
+        f"scripts/ld/bench/far_pairs.py reads a Proxy Index, which this checkout's reader no longer "
+        f"opens (opengwas/ogld#72): {store} may still hold index/, but no code here reads it. "
+        f"Its recorded results, docs/benchmarks/ld/results/far_pairs.json, are made again from a "
+        f"checkout of {INDEX_READER}, with PYTHONPATH naming it, as docs/benchmarks/ld/far-pairs.md "
+        f"ran them"
     )
 
 

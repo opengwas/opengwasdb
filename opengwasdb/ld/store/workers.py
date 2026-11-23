@@ -6,9 +6,10 @@ from typing import Final
 
 from opengwasdb.ld.format import InputError
 
-#: The most component threads one request runs. Four is where the prototype was fastest (#65:
-#: 1.051 s at G = 8 and 1.067 s at G = 16); eight is slower, 5.753 s and 5.109 s, because a
-#: component's per-lead Python work holds the GIL while only the reads and the decode release it.
+#: The most component threads one request runs. Four is where the prototype was fastest
+#: (opengwas/ogld#65: 1.051 s at G = 8 and 1.067 s at G = 16); eight is slower, 5.753 s and 5.109 s,
+#: because a component's per-lead Python work holds the GIL while only the reads and the decode
+#: release it.
 COMPONENT_WORKERS_MAX: Final = 4
 
 

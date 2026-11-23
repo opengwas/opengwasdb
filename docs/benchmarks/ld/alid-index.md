@@ -1,14 +1,14 @@
 # An ALID search index: what a lookup costs, and what it saves
 
 _Ticket [#42](https://github.com/opengwas/ogld/issues/42), ADR [0010](../adr/0096-alid-search-index.md).
-Measured 15 November 2026 on the IEU node, against #40's baseline
-[`fast-decode-round2.md`](./fast-decode-round2.md) and #8's
+Measured 15 November 2026 on the IEU node, against opengwas/ogld#40's baseline
+[`fast-decode-round2.md`](./fast-decode-round2.md) and opengwas/ogld#8's
 [`latency.md`](./latency.md)._
 
 ## In brief
 
 - **Finding the variants of #403's 37 Analyses took 94.0 s of the 272.5 s they clumped at
-  r² 0.01, cold, 8 threads** (#40's phase table). Reading ALID strings was 59.1 s of it and
+  r² 0.01, cold, 8 threads** (opengwas/ogld#40's phase table). Reading ALID strings was 59.1 s of it and
   loading chromosomes to search their positions 31.1 s. With the ALID index it is **50.4 s**, and
   the same 37 clumps take **229.4 s**. All 37 result fingerprints are identical, lead for lead.
 - **The index's own cost is the chunk count, not the bytes.** 8.55 M keys are 273 MB decoded.
@@ -26,9 +26,9 @@ Measured 15 November 2026 on the IEU node, against #40's baseline
   its shards at a time too. On EUR a shard is 16 MiB of keys: 524,288 of them, 64 inner chunks,
   each shard let go before the next is fetched, so a lookup holds two shards' worth at most (50 MB
   without that release, 33.6 MB with it, at 1.1 M keys). Reading the array whole held 273 MB of
-  keys twice (548 MB peaked, measured by #42's first review). For a 260,821-key list: one chunk a
+  keys twice (548 MB peaked, measured by opengwas/ogld#42's first review). For a 260,821-key list: one chunk a
   read 4.4 s, 16 chunks 1.0 s, a whole shard 0.79 s, one whole read 0.70 s.
-- **#8's step-1 reads are unchanged**, since every list they time is short: the same chunks and
+- **opengwas/ogld#8's step-1 reads are unchanged**, since every list they time is short: the same chunks and
   the same requests, and the same times within the run-to-run spread of this node.
 
 ## The 37 Analyses, r² 0.01, cold
@@ -36,10 +36,10 @@ Measured 15 November 2026 on the IEU node, against #40's baseline
 `scripts/bench/latency.py`'s step 1, cold only, a fresh reader and advisory page eviction per
 Analysis, `taskset -c 0-7`, BLAS 1, seven shared decode workers, zarr's helper at one thread.
 Uptime before and after each run is in the records; the load was 1.5–3.6 before and 2.6–5.1 after,
-against #40's 3.9–6.8. The phase times of `rows_of`, `prefetch` and `partners` overlap, as they do
-in #40's table: they are the seconds spent in each, not a partition.
+against opengwas/ogld#40's 3.9–6.8. The phase times of `rows_of`, `prefetch` and `partners` overlap, as they do
+in opengwas/ogld#40's table: they are the seconds spent in each, not a partition.
 
-| phase | #40, no index | with the index |
+| phase | opengwas/ogld#40, no index | with the index |
 |---|---:|---:|
 | open | 0.87 s | 0.87 s |
 | `rows_of` | 94.05 s | **50.40 s** |
@@ -105,7 +105,7 @@ each length, on one core set, the head and the tip alternately.
 A whole list of one real Analysis is where they cross: 91,618 ALIDs, 3.93 s against 3.06 s, and
 260,821 ALIDs, 5.64 s against 2.74 s, both cold.
 
-## #8's step-1 reads, head against tip
+## opengwas/ogld#8's step-1 reads, head against tip
 
 `scripts/bench/latency.py`'s step 1, `--case proxies scattered --seeds 1`, locally and over HTTP
 with 50 ms added per request, the tip and the head in turn on disjoint cores. Medians of the
@@ -134,7 +134,7 @@ counts, which do not vary, are the same, because a list this short takes the exa
 - `rows_of` reads the index whole for a long list and searches it with `numpy.searchsorted`; every
   ALID the index does not hold, and every ALID of a short list, takes the exact scan.
 - A one-byte `bytes` codec declares no byte order, which `ogld/store/decoding.py` now accepts for
-  a one-byte element only, so the keys decode through #40's direct decoder as every numeric array
+  a one-byte element only, so the keys decode through opengwas/ogld#40's direct decoder as every numeric array
   does (ADR 0095).
 
 ## What was rejected

@@ -2,12 +2,12 @@
 
 Formerly ogld ADR 0005.
 
-> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
-> **ADR 0099 supersedes §5's builder unit vectors** ([ADR 0099](./0099-shared-genotype-arithmetic.md), #90).
+> **ADR 0099 supersedes §5's builder unit vectors** ([ADR 0099](./0099-shared-genotype-arithmetic.md), opengwas/ogld#90).
 > The builder computes r through `opengwasdb.ld.genotypes.r(rows, span)` over prepared `Block`s, not from
 > an array of unit vectors; §5's memory bound and the rest of the record stand.
 
@@ -23,7 +23,7 @@ proposed in `orch/1/17-store-assembly@b54ab09`, and ruled on three points:
 - the builder's unit vectors are windowed too;
 - the Proxy Index streams as the Near Band does.
 
-On 11 November 2026 they also ruled that #17's memory criterion is met for what it owns. The
+On 11 November 2026 they also ruled that opengwas/ogld#17's memory criterion is met for what it owns. The
 PC Check pass moves to ogld#25.
 
 ## Context

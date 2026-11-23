@@ -157,7 +157,9 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     assert provenance["n_variants"] == len(passing_rows())
     assert {"zero_variance", "duplicate_reversed_indel"} <= set(provenance["variants_dropped"])
     assert provenance["counts"]["partner_entries"] >= 2 * provenance["counts"]["far_pairs"]
-    assert "index_entries" not in provenance["counts"], "no store holds a Proxy Index (#72)"
+    assert "index_entries" not in provenance["counts"], (
+        "no store holds a Proxy Index (opengwas/ogld#72)"
+    )
 
 
 def test_an_unadjusted_build_records_k0_and_no_minimum(

@@ -1,4 +1,5 @@
-"""One root read for the kind dispatch, and a genotype reader that composes, not inherits (#91)."""
+"""One root read for the kind dispatch, and a genotype reader that composes, not inherits
+(opengwas/ogld#91)."""
 
 from __future__ import annotations
 

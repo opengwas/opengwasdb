@@ -224,7 +224,7 @@ def _without_collisions(kept: list[LiftedVariant]) -> tuple[list[LiftedVariant],
 def lift_variants(
     rows: list[SourceVariant], chain: Path, fasta: Path
 ) -> tuple[Lifted, dict[str, int]]:
-    """Drop every member of an identity collision, as in #89's measured prototype."""
+    """Drop every member of an identity collision, as in opengwas/ogld#89's measured prototype."""
     if not rows or len({row.chrom for row in rows}) != 1:
         raise ValueError("liftover needs one nonempty chromosome")
     lift = optional_module("pyliftover").LiftOver(str(chain))
@@ -258,7 +258,8 @@ def _table(rows: list[LiftedVariant]) -> Lifted:
 
 
 def drop_displaced(name: str, table: Lifted, *, target: int, cap: int) -> tuple[Lifted, int]:
-    """Drop smaller displaced segments until the complete radius reaches `target` (#99).
+    """Drop smaller displaced segments until the complete radius reaches `target`
+    (opengwas/ogld#99).
 
     Ties drop the segment holding the window's lowest GRCh37 position. A zero cap
     refuses with the radius reached (the Near Band text only if it has a hole); a

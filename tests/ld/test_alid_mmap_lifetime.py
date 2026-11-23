@@ -1,4 +1,5 @@
-"""The companion bundle's ownership boundary, using actual file mappings (ADR 0098; #47)."""
+"""The companion bundle's ownership boundary, using actual file mappings (ADR 0098;
+opengwas/ogld#47)."""
 
 from __future__ import annotations
 

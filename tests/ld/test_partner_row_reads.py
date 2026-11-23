@@ -6,9 +6,9 @@ the Partner Floor, every Far Pair beyond it, and each kept pair in both variants
 `partner_row` reads none of that — it reads one frame's byte range from `partners/<chrom>/frames` —
 so a second layout of the same codes is held to the codes, not to itself.
 
-The damage cases rewrite a copy of the committed Test Store, whose frames are #67's; nothing here
-writes into `tests/data/`. Each is held on both transport paths — a local directory and the same
-directory over HTTP — because §7 gives them one read.
+The damage cases rewrite a copy of the committed Test Store, whose frames are opengwas/ogld#67's;
+nothing here writes into `tests/ld/data/`. Each is held on both transport paths — a local directory
+and the same directory over HTTP — because §7 gives them one read.
 """
 
 from __future__ import annotations

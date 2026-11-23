@@ -1,9 +1,9 @@
-"""Regenerate the ALID index conformance fixture from the engine's own writer (ADR 0010).
+"""Regenerate the ALID index conformance fixture from the engine's own writer (ADR 0096).
 
 Run it with the engine's interpreter, never ogld's, so the answers come from the engine:
 
     PYTHONPATH=~/repo/opengwasdb ~/repo/opengwasdb/.pixi/envs/default/bin/python \
-        tests/data/alid_index/make_fixture.py ~/repo/opengwasdb
+        tests/ld/data/alid_index/make_fixture.py ~/repo/opengwasdb
 
 It refuses an engine checkout that is not clean, and writes its commit into the file. Each
 case is one Variant Set; the engine's `write_variant_axis` writes it, and the two sidecars it

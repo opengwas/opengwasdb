@@ -42,7 +42,7 @@ from opengwasdb.ld.identity import chromosome_rank
 from opengwasdb.ld.store import StoreWriter, Variants
 from opengwasdb.version import __version__
 
-# The source policy, not an encoding default (owner #88; ADR 0101).
+# The source policy, not an encoding default (owner opengwas/ogld#88; ADR 0101).
 PANUKB_SCALE: Final = 2047
 
 

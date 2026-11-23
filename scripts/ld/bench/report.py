@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Render `latency.py`'s records as the tables of `docs/benchmarks/latency-tables.md` (ogld#8).
+"""Render `latency.py`'s records as the tables of `docs/benchmarks/ld/latency-tables.md` (ogld#8).
 
-    pixi run -e dev python scripts/ld/bench/report.py docs/benchmarks/results/*.jsonl.gz \
-        --layouts /data/opengwasdb/work/ogld/scratch/8/layouts > docs/benchmarks/latency-tables.md
+    pixi run -e dev python scripts/ld/bench/report.py docs/benchmarks/ld/results/*.jsonl.gz \
+        --layouts /data/opengwasdb/work/ogld/scratch/8/layouts >
+        docs/benchmarks/ld/latency-tables.md
 
 Every number in the tables is a record's, aggregated as each table says: a sum over the 37
 Analyses for clumping, a median over its repeats for everything else. Each row gives the node's
@@ -58,7 +59,7 @@ def with_far_runs(timings: list[Record]) -> list[Record]:
 
 
 def text_of(path: Path) -> str:
-    """A records file, as `latency.py` writes it or gzipped, as `docs/benchmarks/results/` keeps
+    """A records file, as `latency.py` writes it or gzipped, as `docs/benchmarks/ld/results/` keeps
     it (4 MB of JSON lines are 0.35 MB gzipped)."""
     return gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
 

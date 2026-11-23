@@ -1,4 +1,4 @@
-"""Threshold-query parity and the hit-only clump seam (#91)."""
+"""Threshold-query parity and the hit-only clump seam (opengwas/ogld#91)."""
 
 import dataclasses
 import os

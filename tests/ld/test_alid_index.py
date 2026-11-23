@@ -1,6 +1,6 @@
 """ogld#42: the ALID search index, held to the engine's own writer (ADR 0096).
 
-`tests/data/alid_index/index.tsv` holds the engine's answers (opengwasdb at the commit named on
+`tests/ld/data/alid_index/index.tsv` holds the engine's answers (opengwasdb at the commit named on
 the file's first line) for five Variant Sets, made by `make_fixture.py` from the engine's
 `write_variant_axis` and its two sidecars. These tests read it; no expected value here comes
 from ogld. The layout's rule — the slot's width, the NUL padding, the bytewise order with a

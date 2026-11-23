@@ -1,7 +1,7 @@
 """The parts of the skeleton that are built: result tables, BuildInputs, LDStore's facts, the CLI.
 
 These are containers and plumbing, implemented with the skeleton because every ticket
-uses them. The queries that fill them are tests/contract/'s.
+uses them. The queries that fill them are tests/ld/contract/'s.
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ def test_a_hand_built_clumping_orders_its_leads_on_chr_prefixed_labels() -> None
 
 
 def test_build_inputs_defaults_are_the_owner_s() -> None:
-    # Epic #1 and the owner's decisions of 7 November 2026: up to 10 PCs, at least 5.
+    # Epic opengwas/ogld#1 and the owner's decisions of 7 November 2026: up to 10 PCs, at least 5.
     inputs = build_inputs()
     assert (inputs.k, inputs.k_min, inputs.mac_min, inputs.info_min) == (10, 5, 20, 0.8)
 

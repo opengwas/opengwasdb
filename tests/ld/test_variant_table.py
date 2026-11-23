@@ -1,11 +1,11 @@
 """The variant table stands alone: one class answers every variant read (ogld#94).
 
 `VariantTable` owns the Variant Set's rows and the ALID lookup, so a reader composes it and the
-Genotype Store reader (#91) will compose the same one. This holds it to `StoreReader`'s own
-answers on the Test Store, over a present ALID, an absent one, a duplicate and one wider than the
-index's slot — with the store's committed companion-less index, and with a companion derived over
-a copy of it (ADR 0096, ADR 0098). A table needs none of the LD Store's LD: it is opened here on
-its own, from a location, and never through a reader.
+Genotype Store reader (opengwas/ogld#91) will compose the same one. This holds it to `StoreReader`'s
+own answers on the Test Store, over a present ALID, an absent one, a duplicate and one wider than
+the index's slot — with the store's committed companion-less index, and with a companion derived
+over a copy of it (ADR 0096, ADR 0098). A table needs none of the LD Store's LD: it is opened here
+on its own, from a location, and never through a reader.
 """
 
 from __future__ import annotations
@@ -148,7 +148,8 @@ def test_a_replaced_chunk_cache_reaches_every_variant_read() -> None:
 
 
 def test_a_table_answers_with_the_ld_arrays_gone(tmp_path: Path) -> None:
-    """The variant half needs no LD Store's LD: the root metadata and `variants/` are enough (#94).
+    """The variant half needs no LD Store's LD: the root metadata and `variants/` are enough
+    (opengwas/ogld#94).
 
     A Genotype Store reader composes this table over a store that holds no Near Band, Far Pairs or
     Partner Rows, so a variant read that reached one would fail there. Here the three groups are

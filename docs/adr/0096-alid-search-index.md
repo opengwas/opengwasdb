@@ -22,7 +22,7 @@ a Zarr array a reader can fetch over HTTP.
 position (ld-store §2). That is exact at any length and needs no slot. It also decodes a whole
 16,384-string chunk for each position touched, and loads a chromosome's positions and Near Band
 `indptr` — 137 MB of `indptr` on EUR — before it can search anything: 31.1 s of the 94 s was
-those chromosome loads and 59.1 s the strings. `docs/benchmarks/fast-decode-round2.md` has the
+those chromosome loads and 59.1 s the strings. `docs/benchmarks/ld/fast-decode-round2.md` has the
 phase table.
 
 [#40](https://github.com/opengwas/ogld/issues/40) had already routed every one-dimensional
@@ -41,7 +41,7 @@ the padding and the order: `alid_keys`, `ordered_index` and `alid_index`. The en
 ALIDs whose UTF-8 form is at most 32 bytes, which is the engine's rule and its width
 (`is_indexable_alid`), and its ordering: `np.array(..., dtype="|S32")` with a stable argsort,
 which pads with NUL and keeps ties in row order. A wider ALID is left out and counted in
-`counts.alids_left_out`, never cast into the slot. `tests/data/alid_index/` holds the engine's
+`counts.alids_left_out`, never cast into the slot. `tests/ld/data/alid_index/` holds the engine's
 own answers for five Variant Sets, made by `make_fixture.py` from the engine's
 `write_variant_axis` and the two sidecars it writes, and `tests/ld/test_alid_index.py` holds the
 index to them: an ALID at the slot's width, one a byte wider that agrees with it over all 32, two
@@ -74,7 +74,7 @@ supplies or orders one and a store written before the index gets the same one (A
   grows with the store. A short list takes the exact scan instead, because a search's
   chunks cost more than the string chunks a few loci touch: measured, one ALID's scan is 0.07 s
   against the index's 0.9 s, and 500 of them 0.11 against 0.33, while at 4,000 the index wins and
-  keeps winning (`docs/benchmarks/alid-index.md`). A binary search reading only the chunks one
+  keeps winning (`docs/benchmarks/ld/alid-index.md`). A binary search reading only the chunks one
   key's path touches was measured too, and rejected: with chunks big enough to read the whole index
   in a second, a few hundred keys touch nearly all of them.
 - An ALID wider than the slot has no key (`layout.alid_fits`, the engine's own rule) and is
@@ -117,8 +117,8 @@ Pairs the same way. §13 now lists the owner's 15 November 2026 decision among t
 
 On #403's 37 Analyses at r² 0.01, cold, 8 threads, `rows_of` fell from 94.0 s to 50.4 s and the
 37 clumps from 272.5 s to 229.4 s, with 23,445 leads and all 37 result fingerprints unchanged.
-#8's step-1 reads are unchanged: every list they time is short enough to take the exact scan, and
-they read the same chunks and make the same requests as before. `docs/benchmarks/alid-index.md` has
+opengwas/ogld#8's step-1 reads are unchanged: every list they time is short enough to take the exact scan, and
+they read the same chunks and make the same requests as before. `docs/benchmarks/ld/alid-index.md` has
 the phase table, the chunk-size measurements and the list-length crossover.
 
 ## The stores
@@ -129,4 +129,4 @@ then records the count in the provenance — a new document renamed over the old
 fails leaves a store that validation refuses and a second run repairs, and a store already derived
 is finished rather than refused. On HGDP+1kGP EUR chr22 the derived index
 is byte-identical to a rebuild's, and the store's provenance differs only in `build` and
-`software`, as #31 showed for the Far Pairs.
+`software`, as opengwas/ogld#31 showed for the Far Pairs.

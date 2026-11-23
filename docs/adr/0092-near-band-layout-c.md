@@ -2,15 +2,15 @@
 
 Formerly ogld ADR 0006.
 
-> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
 Issue [#8](https://github.com/opengwas/ogld/issues/8), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The format is in `docs/spec/ld-store.md` (§6 for the chunk and shard shapes, §10 for the reads);
-the measurements are in `docs/benchmarks/latency.md`, rendered from the records in
-`docs/benchmarks/results/`; the terms are in `CONTEXT.md`.
+the measurements are in `docs/benchmarks/ld/latency.md`, rendered from the records in
+`docs/benchmarks/ld/results/`; the terms are in `CONTEXT.md`.
 
 **Who decided.** The owner, on 12 November 2026, on ogld#8, from the benchmark of
 `orch/1/8-latency@2f354ae`: layout C is final. The same ruling brings the Far Pairs back as a
@@ -48,7 +48,7 @@ read's runs of chunks together.
 
 ## Considered options
 
-What ogld#8 measured on EUR chr22, A / B / C (`docs/benchmarks/latency.md`, "Step 2"):
+What ogld#8 measured on EUR chr22, A / B / C (`docs/benchmarks/ld/latency.md`, "Step 2"):
 
 | | A | B | C |
 |---|---|---|---|

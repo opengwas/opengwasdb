@@ -42,7 +42,7 @@ def test_the_validation_rules_are_spec_section_12_s_in_order() -> None:
 def test_the_far_pairs_have_the_four_rules_section_11_named() -> None:
     # The Far Pairs are their own component again (ADR 0093): the four far.* rules ld-store §11
     # named before the merge. `far.index` held them equal to the Proxy Index's far entries, and
-    # went with the index (#72).
+    # went with the index (opengwas/ogld#72).
     far = [rule for rule in fmt.VALIDATION_RULES if rule.startswith("far.")]
     assert far == ["far.rows", "far.codes", "far.distance", "far.threshold"]
 

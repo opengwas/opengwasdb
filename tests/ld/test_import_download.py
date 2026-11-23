@@ -1,4 +1,4 @@
-"""Downloader's external HTTPS seam is exercised without a network (#93)."""
+"""Downloader's external HTTPS seam is exercised without a network (opengwas/ogld#93)."""
 
 import contextlib
 import hashlib
@@ -202,7 +202,8 @@ def test_delete_refuses_an_ownership_claim_for_a_preexisting_cache_part(
     assert path.read_bytes() == b"payload"
 
 
-# --- concurrent downloads and dead addresses (#97) ---------------------------------------
+# --- concurrent downloads and dead addresses (opengwas/ogld#97)
+# ---------------------------------------
 
 
 def _payload(name: str) -> bytes:
@@ -376,7 +377,8 @@ def test_only_the_bucket_host_is_a_target() -> None:
         )
 
 
-# --- the connection seam: timeouts and what counts as unreachable (#97) ------------------
+# --- the connection seam: timeouts and what counts as unreachable (opengwas/ogld#97)
+# ------------------
 
 
 class _Sock:
@@ -445,7 +447,8 @@ def test_a_connect_or_handshake_failure_is_unreachable(monkeypatch, stage, failu
         _connection(context).connect()
 
 
-# --- the real socket path, against a local TLS server (#97) ------------------------------
+# --- the real socket path, against a local TLS server (opengwas/ogld#97)
+# ------------------------------
 
 
 def _certificate(directory: Path, hostname: str) -> tuple[Path, Path]:

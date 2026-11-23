@@ -7,14 +7,14 @@ The engine is opengwas/opengwasdb at `1ab2b09`.
 
 **Who decided.** The copy-not-import choice is the ticket's implementer's, made under the
 ticket's brief ("import the engine's function, or keep a tested copy held to it by a conformance
-test") and framed by epic #1's decision comments. It is not an owner ruling, and the owner may
+test") and framed by epic opengwas/ogld#1's decision comments. It is not an owner ruling, and the owner may
 reverse it. The rulings it rests on are the epic's: ogld's runtime dependencies are numpy, zarr
 and numcodecs, and the format stores the engine's ALID exactly (`ld-store.md` §2).
 
 ## Decision
 
 `ogld.identity` holds a **copy** of the engine's identity rules (`orient_to_canonical`,
-`normalise_chromosome`, `normalise_allele`), and `tests/data/identity/` holds the **engine's own
+`normalise_chromosome`, `normalise_allele`), and `tests/ld/data/identity/` holds the **engine's own
 answers** for awkward inputs, which a default-tier test holds the copy to. ogld does not import
 the engine.
 
@@ -87,8 +87,8 @@ record whose REF the ALID spells first (REF = A1) is kept, and the other is drop
 LD Store row means the same variant as the engine's association at that ALID. A deletion is kept
 where its REF sorts first (`AT/T` over `T/AT`). `ogld.identity.resolve_reversed_indels` is the
 pure rule, tested against rows of `reversed.tsv` (the engine's own BMI_IRN pair, a v2 pair, a pair
-with the deletion kept, a lower-case pair). The builder (#5) applies it to the records that pass
-the variant filters; the Test Store (#12) applies it through the same helper. The Test Panel has no
+with the deletion kept, a lower-case pair). The builder (opengwas/ogld#5) applies it to the records that pass
+the variant filters; the Test Store (opengwas/ogld#12) applies it through the same helper. The Test Panel has no
 such pair.
 
 Two records with identical REF and ALT, and two SNVs sharing an ALID, cannot come from a split of

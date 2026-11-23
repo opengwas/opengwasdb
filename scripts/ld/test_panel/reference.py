@@ -130,7 +130,7 @@ def clump(
     """plink2 --clump lead rows, k = 0, on the passing variants; p = erfc(|z| / sqrt 2).
 
     `--clump-unphased`: plink2 clumps on phased r^2 when the pgen holds phase, as v2's does, but
-    an LD Store's r is unphased (ADR 0088), and #6 is held to equal these leads."""
+    an LD Store's r is unphased (ADR 0088), and opengwas/ogld#6 is held to equal these leads."""
     sumstats = params.work / "gwas.sumstats"
     sumstats.write_text(
         "ID\tP\n"

@@ -137,10 +137,10 @@ class _PgenHandles:
 class GenotypeReader(ComponentWorkers):
     """The query reader interface with computed LD; it composes the variant table and store.
 
-    The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (#94), and the
-    adjustment data and pgen handles are this class's. A pgen handle serves one decoding thread
-    at a time and is kept for the reader's lifetime (pgenlib handles are not shared concurrently);
-    `_PgenHandles` leases it and `close()` closes it.
+    The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (opengwas/ogld#94),
+    and the adjustment data and pgen handles are this class's. A pgen handle serves one decoding
+    thread at a time and is kept for the reader's lifetime (pgenlib handles are not shared
+    concurrently); `_PgenHandles` leases it and `close()` closes it.
     """
 
     _opened: OpenedStore
@@ -279,7 +279,7 @@ class GenotypeReader(ComponentWorkers):
 
         bounds = [(lo, min(lo + _READ_ROWS, len(rows))) for lo in range(0, len(rows), _READ_ROWS)]
         # Native pgen decoding releases the GIL. Four disjoint output slices avoid both the
-        # serial 95 ms dosage decode and a concatenation-sized copy measured in #91.
+        # serial 95 ms dosage decode and a concatenation-sized copy measured in opengwas/ogld#91.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="ogld_pgen") as pool:
             list(pool.map(read, bounds))
         return calls
@@ -334,7 +334,8 @@ class GenotypeReader(ComponentWorkers):
             last = min(first + 128, len(rows))
             raw = r(block[first:last], block[first:])
             # Small stripes keep quantisation's temporary arrays in cache. Compute each
-            # off-diagonal tile only once, then mirror its codes like the LD Store (#91).
+            # off-diagonal tile only once, then mirror its codes like the LD Store
+            # (opengwas/ogld#91).
             for lo in range(first, last, 16):
                 hi = min(lo + 16, last)
                 out[lo:hi, first:] = self._values(

@@ -1,4 +1,4 @@
-"""Epic #1's acceptance for `clump` (ogld#6): plink2's leads, on the whole panel.
+"""Epic opengwas/ogld#1's acceptance for `clump` (ogld#6): plink2's leads, on the whole panel.
 
 On an unadjusted (k = 0) HGDP+1kGP EUR LD Store, `clump` gives the same lead variants as
 `plink2 --clump` for opengwas/opengwasdb#403's 37 EUR Analyses, the 5e-8 tier of each, at r²
@@ -6,8 +6,8 @@ On an unadjusted (k = 0) HGDP+1kGP EUR LD Store, `clump` gives the same lead var
 run, not part of the realdata tier: `pixi run -e dev acceptance-clump` (CONTRIBUTING.md,
 "Acceptance runs"). Its result is recorded on the ticket.
 
-**r² 0.001 is not run** (owner, #64; partner-rows §8.1, D2): from format 0.2.0 a request within
-3 Mb whose r2 is below the store's Partner Threshold is refused with
+**r² 0.001 is not run** (owner, opengwas/ogld#64; partner-rows §8.1, D2): from format 0.2.0 a
+request within 3 Mb whose r2 is below the store's Partner Threshold is refused with
 `threshold_below_t_partner`, and the HGDP+1kGP stores record t_partner = 0.01, so an r² 0.001
 clump on this store is a Refusal, not an answer to compare. The comparison is made at the
 threshold the store supports; a panel whose t_partner were 0.001 — UK Biobank EUR's — could

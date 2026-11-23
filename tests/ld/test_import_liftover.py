@@ -1,4 +1,4 @@
-"""Liftover loss classes against a tiny chain and reference (#93)."""
+"""Liftover loss classes against a tiny chain and reference (opengwas/ogld#93)."""
 
 from pathlib import Path
 

@@ -3,7 +3,7 @@
 A test that needs a malformed input (a missing call, a FILTER that fails, a record on X) makes
 it from the Test Panel's own files in its `tmp_path`: the Test Panel holds none of them
 (its README, "Not in v2, so built by hand in unit tests"), and no test writes into
-`tests/data/`. Genotypes are written with pgenlib, the builder's own reader's library.
+`tests/ld/data/`. Genotypes are written with pgenlib, the builder's own reader's library.
 """
 
 from __future__ import annotations

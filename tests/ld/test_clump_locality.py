@@ -1,4 +1,5 @@
-"""Scheduling changes reads, not result order or greedy edges (#40; partner-rows §9.2)."""
+"""Scheduling changes reads, not result order or greedy edges (opengwas/ogld#40; partner-rows
+§9.2)."""
 
 from __future__ import annotations
 

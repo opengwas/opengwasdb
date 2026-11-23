@@ -9,9 +9,9 @@ a method or a signature that ruff wraps; this test sees both.
 
 The seams inside the package are not pinned (owner, 10 November 2026): `StoreReader`, which
 the queries read through, and `StoreWriter`, which a build writes through. They were pinned
-while epic #1's first tickets were built in parallel against them. They now move with what the
-reads and the builds are measured to need, held by the contract tests (tests/contract/) and by
-`docs/architecture/ownership.md`, which says what each module owns.
+while epic opengwas/ogld#1's first tickets were built in parallel against them. They now move with
+what the reads and the builds are measured to need, held by the contract tests (tests/ld/contract/)
+and by `docs/architecture/ownership.md`, which says what each module owns.
 """
 
 from __future__ import annotations
@@ -148,9 +148,9 @@ def test_the_top_level_names_are_the_public_surface() -> None:
 
 
 def test_no_body_in_ogld_is_a_stub() -> None:
-    # Epic #1 built every public body (#3–#6, #12–#17); a stub raising NotImplementedError(…)
-    # would be a call that looks wired and is not. An abstract method's bare
-    # `raise NotImplementedError` is not one.
+    # Epic opengwas/ogld#1 built every public body (opengwas/ogld#3–opengwas/ogld#6,
+    # opengwas/ogld#12–opengwas/ogld#17); a stub raising NotImplementedError(…) would be a call that
+    # looks wired and is not. An abstract method's bare `raise NotImplementedError` is not one.
     package = Path(opengwasdb.ld.__file__).parent
     stubs = [
         f"{path.relative_to(package)}:{n}"

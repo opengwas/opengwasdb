@@ -261,7 +261,7 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     _wrap(StoreReader, "_chromosome", _loading, patch)
     for owner, name, label in (
         (StoreReader, "_scatter_far", "far_scatter"),
-        # The string reads and the cache's per-string count, the 7% of #14's profile.
+        # The string reads and the cache's per-string count, the 7% of opengwas/ogld#14's profile.
         (StoreReader, "rows_of", "rows_of"),
         (StoreReader, "variants", "variants"),
         (StoreReader, "loci_of", "loci_of"),
@@ -563,7 +563,7 @@ def regions(
     centres: tuple[int, ...] = CENTRES,
 ) -> None:
     """Each region `width` Mb wide at each centre on `chrom`, cold and then warm. A region off
-    chr22 records its chromosome; #8's chr22 records carry none."""
+    chr22 records its chromosome; opengwas/ogld#8's chr22 records carry none."""
     for width in widths:
         for centre in centres:
             meta = {"case": "region", "width_mb": width, "centre": centre}
@@ -610,7 +610,8 @@ def step1(b: Bench, args: argparse.Namespace) -> None:
     cases = set(args.case or CASES["step1"])
     if "proxies" in cases:
         proxies(b, store, sample, args.seeds)
-    # #8 drew lists on chr22 and genome-wide; another chromosome (#31: chr11) is drawn alone.
+    # opengwas/ogld#8 drew lists on chr22 and genome-wide; another chromosome (opengwas/ogld#31:
+    # chr11) is drawn alone.
     lists = ("22", None) if args.chrom == "22" else (args.chrom,)
     if "scattered" in cases:
         scattered(b, store, sample, lists, args.seeds)
@@ -685,8 +686,8 @@ def environment(args: argparse.Namespace) -> dict[str, Any]:
         "argv": sys.argv[1:],
         "commit": code["commit"],
         "code": code,
-        # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as #31
-        # timed the tip's reader beside its own.
+        # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as
+        # opengwas/ogld#31 timed the tip's reader beside its own.
         "ogld_source": str(Path(opengwasdb.ld.__file__).resolve().parent),
         "versions": {
             "ogld": opengwasdb.ld.__version__,

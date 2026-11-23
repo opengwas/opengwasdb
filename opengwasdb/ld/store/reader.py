@@ -10,10 +10,10 @@ number, and the meaning of a NaN is the format's to say (`opengwasdb.ld.format.a
 The variant half is `VariantTable`'s (`opengwasdb/ld/store/variants.py`), which this reader composes
 and
 delegates to: the rows of a list of ALIDs, a region's rows, a chromosome's range, the columns at
-some rows, and the loci a query orders and measures by (#94). One class owns ALID lookup, so a
-second reader composes the same one and #87's change to `rows_of` lands once for both (owner, on
-epic #18, 21 November 2026). What is below is the LD half: pairs, matrices, regions and the
-Partner Rows.
+some rows, and the loci a query orders and measures by (opengwas/ogld#94). One class owns ALID
+lookup, so a second reader composes the same one and opengwas/ogld#87's change to `rows_of` lands
+once for both (owner, on epic opengwas/ogld#18, 21 November 2026). What is below is the LD half:
+pairs, matrices, regions and the Partner Rows.
 
 Reads are bounded (ld-store §10). Opening reads the provenance and the chromosome ranges, and
 nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch,
@@ -31,8 +31,8 @@ From format 0.2.0 a variant's Partner Rows row is a read of its own (`partner_ro
 the decoded frame, which the reader's frame cache keeps. It reads no Near Band chunk and no shard
 index, and a store that holds no Partner Rows is refused naming the component.
 
-No read here opens a Proxy Index: format 0.2.0 stores hold none (#72), and a 0.2.0 store that
-still carries a leftover `index/` answers exactly as one without it does (ld-store §12).
+No read here opens a Proxy Index: format 0.2.0 stores hold none (opengwas/ogld#72), and a 0.2.0
+store that still carries a leftover `index/` answers exactly as one without it does (ld-store §12).
 """
 
 from __future__ import annotations
@@ -144,9 +144,9 @@ class StoreReader(ComponentWorkers):
     it, before anything is decoded. Every code is decoded with the store's own encoding, so
     one process reads stores of different scales side by side.
 
-    It composes a `VariantTable` for the variant half (#94) and keeps the LD half itself: the
-    Near Band, the Far Pairs, the Partner Rows and the codes it decodes. Every public variant
-    read is a delegate, so a query that names one reader is answered by one owner's code.
+    It composes a `VariantTable` for the variant half (opengwas/ogld#94) and keeps the LD half
+    itself: the Near Band, the Far Pairs, the Partner Rows and the codes it decodes. Every public
+    variant read is a delegate, so a query that names one reader is answered by one owner's code.
 
     A reader is not fork-safe and is not inherited across `fork`: it holds locks and, once a
     chromosome's Partner Rows are read, a chunk file's descriptor. A process worker opens its own
@@ -174,9 +174,9 @@ class StoreReader(ComponentWorkers):
         component threads it may run (§9.2).
 
         The table takes the same `OpenedStore` this reader holds, so one store is opened once
-        (#94) and the group, the location a refusal names, the provenance and the one chunk cache
-        are one object's for both halves. Its chromosome record is held here too, as the same
-        objects and never a copy, because the LD reads walk it per step: a range, a label and a
+        (opengwas/ogld#94) and the group, the location a refusal names, the provenance and the one
+        chunk cache are one object's for both halves. Its chromosome record is held here too, as the
+        same objects and never a copy, because the LD reads walk it per step: a range, a label and a
         stop.
         """
         self._opened = opened
@@ -218,8 +218,8 @@ class StoreReader(ComponentWorkers):
     def from_opened(
         cls, opened: OpenedStore, *, frame_cache_bytes: int | None = None
     ) -> StoreReader:
-        """An LD reader over a root a dispatcher opened and named an LD Store (#91): the root is
-        read once, so an open costs one metadata read."""
+        """An LD reader over a root a dispatcher opened and named an LD Store (opengwas/ogld#91):
+        the root is read once, so an open costs one metadata read."""
         try:
             encoding = REncoding.of(opened.provenance.get("encoding"))
         except InputError as unimplemented:
@@ -229,8 +229,9 @@ class StoreReader(ComponentWorkers):
         return reader
 
     # The store's facts and its chunk cache are the `OpenedStore` the variant table holds too, so
-    # these read and, for the cache, replace it for both halves (#94). The benchmark harness swaps
-    # `_cache` to measure what a read holds; a copy here would leave the variant reads behind.
+    # these read and, for the cache, replace it for both halves (opengwas/ogld#94). The benchmark
+    # harness swaps `_cache` to measure what a read holds; a copy here would leave the variant reads
+    # behind.
     @property
     def _root(self) -> zarr.Group:
         return self._opened.root
@@ -342,7 +343,7 @@ class StoreReader(ComponentWorkers):
         The rows are the variant table's answer; the chromosome is opened here first, as this has
         always been the reader's first touch of a chromosome that `region` will read from its Near
         Band, so each of its arrays' fill values is judged before any element is decoded (ld-store
-        §6). `loci_of` is the variant read that must open none of them (#71).
+        §6). `loci_of` is the variant read that must open none of them (opengwas/ogld#71).
         """
         if chrom in self._ranges:
             self._chromosome(chrom)
@@ -362,7 +363,7 @@ class StoreReader(ComponentWorkers):
         self, rows: npt.NDArray[np.int64]
     ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.int64]]:
         """Chromosomes and positions, without allele columns clump never returns (ogld#40): the
-        variant table's positions, and nothing of the LD components (#71)."""
+        variant table's positions, and nothing of the LD components (opengwas/ogld#71)."""
         return self._variant_table.loci_of(rows)
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
@@ -513,7 +514,8 @@ class StoreReader(ComponentWorkers):
     def clump_rows(
         self, chrom: str, rows: npt.NDArray[np.int64], window: float
     ) -> AbstractContextManager[Callable[[int], tuple[npt.NDArray[np.int32], Codes]]]:
-        """The request-local row-source seam `clump` reads a component's partners through (#91).
+        """The request-local row-source seam `clump` reads a component's partners through
+        (opengwas/ogld#91).
 
         `clump` asks this for a callable instead of calling `partner_row` itself, so a reader
         whose pairs are not materialised can answer from the component's hits alone. For an LD
@@ -527,11 +529,11 @@ class StoreReader(ComponentWorkers):
         """One variant's Partner Rows row: every partner within far_bp at its distance's floor,
         each with its code, chromosome-local and ascending (partner-rows §7).
 
-        This is the read `clump` and `proxies` make from #71: one frame's byte range, one decode,
-        and the row's slice of the decoded frame, which the reader's frame cache keeps, so a row of
-        a frame fetched before costs no read (§7 steps 2–3). The partners are chromosome-local rows,
-        as the frame holds them; a code is the stored pair's, judged by the query's threshold and
-        never turned into a number here (§4).
+        This is the read `clump` and `proxies` make from opengwas/ogld#71: one frame's byte range,
+        one decode, and the row's slice of the decoded frame, which the reader's frame cache keeps,
+        so a row of a frame fetched before costs no read (§7 steps 2–3). The partners are
+        chromosome-local rows, as the frame holds them; a code is the stored pair's, judged by the
+        query's threshold and never turned into a number here (§4).
 
         A store that holds no Partner Rows — every 0.1.0 store — is refused naming the component,
         and so is a frame that fails its checksum, its k or its payload length, naming the
@@ -781,7 +783,8 @@ def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore
     """`OpenedStore` for an already opened root, checked as an LD Store (ld-store §1, §7, §13).
 
     The kind dispatcher (`opengwasdb.ld.query.kind`) opens a root once and hands it here or to the
-    Genotype Store reader, so one open is one metadata read whichever kind it holds (#91).
+    Genotype Store reader, so one open is one metadata read whichever kind it holds
+    (opengwas/ogld#91).
     """
     if root.metadata.zarr_format != 3:
         raise InputError(
