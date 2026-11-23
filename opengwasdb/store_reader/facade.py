@@ -1,12 +1,12 @@
 """Layout-independent query facade (ADR-0006, ADR-0020, ADR-0033).
 
 Three adapter classes share one result contract but not one method set --
-`query_store()` / `OpenGWASDBStore.query()` dispatch to the right one from
+`query_store()` / `StoreRelease.query()` dispatch to the right one from
 the store manifest: `StoreQuery` (Dense), `RaggedStoreQuery` (Ragged),
 `HybridStoreQuery` (Hybrid). See ADR-0033 for the full rationale; in short:
 
 Result shape -- every association-returning method returns an
-`opengwasdb.associations.Associations` record. Read as a mapping it is the
+`opengwasdb.store_reader.associations.Associations` record. Read as a mapping it is the
 contract ADR 0020 set: ``{"variant_index", "analysis_index", "z", "se", "eaf",
 "association_status"}`` as parallel arrays (int32, int32, float32, float32,
 float32, object). A Ragged release carrying per-association sample sizes adds
@@ -28,7 +28,7 @@ accepted, on every internal path: `observed_only` narrows the result set
 first, `limit` then caps the already-filtered rows.
 
 Presence (ADR 0070, superseding ADR 0033 §7) -- every read goes through
-`opengwasdb.associations`, so one rule decides presence on every layout and
+`opengwasdb.store_reader.associations`, so one rule decides presence on every layout and
 every method, `top_hits()` included: an association is present exactly when
 neither its Z nor its SE carries its plane's missing marker (spec §15). An
 infinite SE is a value, returned with its Status: only a release before format
@@ -55,7 +55,7 @@ grouping Ragged Analyses by a shared gene filters this table on
 `trait_ontology_id` rather than through a separate lookup. `analysis_label`
 reaches a caller as the stored column, blank included -- a release that
 supplied no label says so, rather than having one invented for it; a *display*
-label is `opengwasdb.model.analyses.analysis_label()`'s job, the one
+label is `opengwasdb.store_reader.analyses.analysis_label()`'s job, the one
 implementation of that fallback (issue #57). `rho()`/`rho_row()`/
 `rho_matrix()` (ADR-0025, a Dense storage artifact) are exposed
 on `StoreQuery` and on `HybridStoreQuery` (delegated to its Dense Component);
@@ -73,8 +73,6 @@ from typing import NoReturn, Self
 
 import numpy as np
 
-from opengwasdb.query.resolve import resolve_rows
-from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader.analyses import AnalysesIndex
 from opengwasdb.store_reader.associations import (
@@ -86,15 +84,17 @@ from opengwasdb.store_reader.associations import (
 )
 from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.hybrid import dense_to_shared_path
 from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
     IndexedSubsetLayoutError,
     rescope_indexed_subset_error,
 )
+from opengwasdb.store_reader.release import StoreRelease, open_release
+from opengwasdb.store_reader.resolve import resolve_rows
 from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
-from opengwasdb.variants import VariantAxis
+from opengwasdb.store_reader.variant_axis import LegacyTableOpener, VariantAxis
 
 
 def _ragged_tier_record(
@@ -173,6 +173,31 @@ def _empty_rho_matrix_result() -> dict[str, np.ndarray]:
     }
 
 
+def _rho_pairs(reader: DenseRhoReader, resolved: list[tuple[str, int]]) -> dict[str, np.ndarray]:
+    """Each pair of `resolved` Analyses' Rho and support, long format; self-pairs excluded."""
+    out_a: list[str] = []
+    out_b: list[str] = []
+    out_rho: list[float] = []
+    out_n: list[int] = []
+    for x in range(len(resolved)):
+        aid_a, idx_a = resolved[x]
+        for y in range(x + 1, len(resolved)):
+            aid_b, idx_b = resolved[y]
+            if idx_a == idx_b:
+                continue
+            r, n = reader.pair(idx_a, idx_b)
+            out_a.append(aid_a)
+            out_b.append(aid_b)
+            out_rho.append(r)
+            out_n.append(n)
+    return {
+        "analysis_id_a": np.array(out_a, dtype=object),
+        "analysis_id_b": np.array(out_b, dtype=object),
+        "rho": np.array(out_rho, dtype="float32"),
+        "n_null": np.array(out_n, dtype="int64"),
+    }
+
+
 def _variants_table(variant_axis: VariantAxis) -> dict[int, dict]:
     """Return all variants keyed by variant_index.
 
@@ -192,7 +217,7 @@ def _variants_table(variant_axis: VariantAxis) -> dict[int, dict]:
     }
 
 
-def _is_completed(store: OpenGWASDBStore) -> bool:
+def _is_completed(store: StoreRelease) -> bool:
     """Whether a release is Reference-Completed, and so must say per cell which are imputed."""
     return store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
 
@@ -227,7 +252,7 @@ class _StoreQueryBase:
         self, result: Mapping[str, np.ndarray], *, include_variant_info: bool = False
     ) -> Iterator[dict[str, object]]:
         """Resolve a raw (index-keyed) result to human-readable rows (issue #104);
-        see `opengwasdb.query.resolve.resolve_rows`."""
+        see `opengwasdb.store_reader.resolve.resolve_rows`."""
         return resolve_rows(
             self._analyses, self._variant_axis, result, include_variant_info=include_variant_info
         )
@@ -236,12 +261,13 @@ class _StoreQueryBase:
 class StoreQuery(_StoreQueryBase):
     """Public query object that hides the physical store layout — Dense stores."""
 
-    def __init__(self, store: OpenGWASDBStore):
+    def __init__(self, store: StoreRelease):
         self.store = store
-        self._connection = store.index_connection()
         self._analyses = AnalysesIndex(store.path)
         self._root = store.arrays(mode="r")
-        self._variant_axis = VariantAxis(store.path, self._connection)
+        # The Store Variant Table, with `index.sqlite`'s `variant_aliases` for an
+        # rsid the rsid index does not hold; both closed with the axis.
+        self._variant_axis = store.variant_axis(aliases=True)
         # Every association read goes through the grid reader: the store's
         # declared encoding (ADR 0037) and the presence rule (ADR 0070) are
         # applied there, once, rather than at each result site.
@@ -260,8 +286,6 @@ class StoreQuery(_StoreQueryBase):
 
     def close(self) -> None:
         self._variant_axis.close()
-        self._connection.close()
-
 
     def _analysis_index(self, analysis_id: str) -> int | None:
         analysis = self._analyses.by_id(analysis_id)
@@ -395,27 +419,7 @@ class StoreQuery(_StoreQueryBase):
             for aid in ids
             if (a := self._analyses.by_id(aid)) is not None
         ]
-        out_a: list[str] = []
-        out_b: list[str] = []
-        out_rho: list[float] = []
-        out_n: list[int] = []
-        for x in range(len(resolved)):
-            aid_a, idx_a = resolved[x]
-            for y in range(x + 1, len(resolved)):
-                aid_b, idx_b = resolved[y]
-                if idx_a == idx_b:
-                    continue
-                r, n = self._rho_reader.pair(idx_a, idx_b)
-                out_a.append(aid_a)
-                out_b.append(aid_b)
-                out_rho.append(r)
-                out_n.append(n)
-        return {
-            "analysis_id_a": np.array(out_a, dtype=object),
-            "analysis_id_b": np.array(out_b, dtype=object),
-            "rho": np.array(out_rho, dtype="float32"),
-            "n_null": np.array(out_n, dtype="int64"),
-        }
+        return _rho_pairs(self._rho_reader, resolved)
 
     def rho_row(self, analysis_id: str) -> dict[str, np.ndarray]:
         """One Analysis's Rho and support against every other Analysis."""
@@ -489,9 +493,9 @@ def _refuse_indexed_subset(store_path: Path, layout: str, subset_name: str) -> N
 class RaggedStoreQuery(_StoreQueryBase):
     """Public query object that hides the physical store layout — Ragged stores."""
 
-    def __init__(self, store: OpenGWASDBStore):
+    def __init__(self, store: StoreRelease):
         self.store = store
-        self._variant_axis = VariantAxis(store.path)
+        self._variant_axis = store.variant_axis(aliases=False)
         self._reader = CsrReader.open(
             store.path,
             store.manifest.encoding,
@@ -706,9 +710,9 @@ class HybridStoreQuery(_StoreQueryBase):
     a plain union with no dedup.
     """
 
-    def __init__(self, store: OpenGWASDBStore):
+    def __init__(self, store: StoreRelease):
         self.store = store
-        self._dense_store = open_store(dense_component_path(store.path))
+        self._dense_store = store.dense_component()
         self._dense = StoreQuery(self._dense_store)
         self._dense_to_shared = np.load(dense_to_shared_path(store.path)).astype("int32")
         # The Overflow at store/data.zarr/ragged.
@@ -721,16 +725,14 @@ class HybridStoreQuery(_StoreQueryBase):
             requires_mask=False,
         )
         self._csr = self._overflow.structure
-        self._connection = store.index_connection()
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
-        self._variant_axis = VariantAxis(store.path, self._connection)  # shared union table
+        self._variant_axis = store.variant_axis(aliases=True)  # shared union table
         self._overflow.open_variant_index(self._variant_axis.n_variants)
         self._top_hits = TopHitTiers(store.arrays(mode="r"))  # overflow's own tiers
 
     def close(self) -> None:
         self._dense.close()
         self._variant_axis.close()
-        self._connection.close()
 
     # ── shared tables ────────────────────────────────────────────────────────
     # `analyses_table()`, `variants_table()` and `resolve()` are the base
@@ -939,9 +941,19 @@ class HybridStoreQuery(_StoreQueryBase):
         return merged.in_genomic_order().head(limit)
 
 
-def query_store(path: str | Path) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
-    """Open a store and return the layout-independent query facade."""
-    store = open_store(path)
+def query_store(
+    path: str | Path, *, legacy: LegacyTableOpener | None = None
+) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
+    """Open a store and return the layout-independent query facade.
+
+    `legacy` reads the release's 0.2.x Store Variant Table (`LegacyTableOpener`);
+    `opengwasdb.query.query_store` supplies opengwasdb's.
+    """
+    return query_release(open_release(path, legacy=legacy))
+
+
+def query_release(store: StoreRelease) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
+    """The layout-independent query facade over an opened release, by its layout."""
     if store.manifest.primary_layout is PrimaryStorageLayout.RAGGED:
         return RaggedStoreQuery(store)
     if store.manifest.primary_layout is PrimaryStorageLayout.HYBRID:

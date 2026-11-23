@@ -47,9 +47,3 @@ allowed:
     name: opengwasdb.readers.interface.ImputationScoreDeclaration
   - file: opengwasdb/model/info_score_policy.py
     name: opengwasdb.readers.interface.ImputationScoreKind
-  # Store Release envelope (layer 1) -> Query (layer 4): opening a store hands back
-  # the query facade, so the storage layer knows its caller.
-  - file: opengwasdb/store/open.py
-    name: opengwasdb.query.facade.StoreQuery
-  - file: opengwasdb/store/open.py
-    name: opengwasdb.query.facade.query_store

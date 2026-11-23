@@ -153,7 +153,7 @@ def select(out: Path) -> list[dict[str, Any]]:
 
 def extract(out: Path) -> None:
     """Each Analysis's Observed Associations at 5e-8, as `hits.all.tsv`."""
-    from opengwasdb.query.facade import query_store  # the opengwasdb interpreter's package
+    from opengwasdb.query import query_store  # the opengwasdb interpreter's package
 
     for entry in json.loads((out / "selection.json").read_text())["analyses"]:
         store, analysis_id = entry["store"], entry["analysis_id"]

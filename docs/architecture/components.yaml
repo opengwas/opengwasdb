@@ -147,7 +147,7 @@ components:
     container: engine
     layer: 4
     stages: [query]
-    summary: The layout-independent query facade, result resolution and association reads.
+    summary: The query API opengwasdb's callers import; it opens a release with opengwasdb's reader of the 0.2.x Variant Table and hands it to the Store Reader's facade.
     paths: [opengwasdb/query/]
   - id: model
     name: Store contract model

@@ -4,7 +4,7 @@
 build cannot interpret before anything else is read (ADR 0038 §2).
 `StoreRelease` is the opened release every reader holds: where its artifacts
 live, its Zarr data group opened read-only, its Hybrid Dense Component, its
-and its Variant Axis.
+its Variant Axis, and the query facade over it.
 
 Writing to a release -- staging, publishing, amending its provenance, opening
 its arrays for writing or its `index.sqlite` -- is `opengwasdb.store.open`'s,
@@ -17,13 +17,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from opengwasdb.store_reader.arrays import open_group
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import check_format_version
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.variant_axis import LegacyTableOpener, VariantAxis
+
+if TYPE_CHECKING:
+    from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 
 
 def release_paths(path: Path) -> dict[str, Path]:
@@ -124,6 +127,12 @@ class StoreRelease(ReleasePaths):
                 "or pass open_release(..., legacy=...)"
             )
         return VariantAxis(self.path, self.legacy(self.path, aliases=aliases))
+
+    def query(self) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
+        """The query facade over this release, by its layout (ADR 0033)."""
+        from opengwasdb.store_reader.facade import query_release
+
+        return query_release(self)
 
 
 def open_release(path: str | Path, *, legacy: LegacyTableOpener | None = None) -> StoreRelease:

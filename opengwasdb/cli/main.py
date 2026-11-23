@@ -57,13 +57,13 @@ from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
-from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.store_reader.indexed import IndexedSubsetError
 from opengwasdb.validation import validate_store

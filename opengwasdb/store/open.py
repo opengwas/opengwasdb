@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import zarr
 
@@ -47,9 +47,6 @@ from opengwasdb.store_reader.release import (
     release_paths,
 )
 from opengwasdb.variants.axis import open_legacy_variant_table
-
-if TYPE_CHECKING:
-    from opengwasdb.query.facade import StoreQuery
 
 #: The first `format_version` whose `analyses.tsv` must record
 #: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the
@@ -483,11 +480,6 @@ class OpenGWASDBStore(StoreRelease):
         """`StoreRelease.dense_component`, opened as an `OpenGWASDBStore`."""
         self._require_hybrid()
         return open_store(self.path / "dense")
-
-    def query(self) -> StoreQuery:
-        from opengwasdb.query.facade import query_store
-
-        return query_store(self.path)
 
     # ---- array / table access -----------------------------------------
 
