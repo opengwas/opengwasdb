@@ -304,6 +304,55 @@ before claiming a fix works, and put the numbers in the commit message.
 
 ---
 
+### LD Stores (`opengwasdb/ld`)
+
+LD Store code is held to everything above, with its own vocabulary
+([CONTEXT.md](./CONTEXT.md), *LD Stores*), contract
+([docs/spec/ld-store.md](./docs/spec/ld-store.md), with
+[build-inputs](./docs/spec/build-inputs.md),
+[partner-rows](./docs/spec/partner-rows.md) and
+[genotype-store](./docs/spec/genotype-store.md)) and decisions (ADRs 0087–0101,
+formerly ogld's own 0001–0015). Cite a section as `ld-store §N`, never a bare `§N`.
+`tests/ld/` has three tiers; `tests/ld/test_tier_markers.py` fails a test marked
+outside its directory, because such a test is deselected by the default tier
+and run by no other.
+
+| tier | what | runs | budget |
+|---|---|---|---|
+| default | every `tests/ld` test without a mark | everywhere, with `pixi run -e dev test` | ≤ 30 s for the directory (27 s at #455) |
+| `realdata` | `tests/ld/realdata/`: reads the HGDP+1kGP panels under `/data/opengwasdb/reference/` | IEU compute nodes only, `pixi run -e dev ld-test-realdata`, before a change that reads a panel is claimed to work; CI has no panels | ≤ 5 minutes |
+| `acceptance` | `tests/ld/acceptance/`: a whole-panel comparison an epic needs | IEU compute nodes, on demand, before the ticket that owns it merges and when a change could alter its answer; the time and every difference go on the ticket | up to about an hour |
+
+`realdata` fails on a machine without the panels, never skips. An input a test
+names by environment variable is asked for through
+`tests/ld/realdata/realdata_inputs.py`: unset or missing, the test stops as an
+expected failure naming the variable before it calls the code, so a missing input
+never reads as a defect. An acceptance run fails when an input is missing. The
+acceptance tasks are `ld-acceptance-clump` (`clump` against plink2 on the
+37 analyses of #403), `ld-acceptance-genotypes` (the Genotype Store equals the LD
+Store) and `ld-acceptance-stores` (the five HGDP+1kGP stores validate and decode
+as zarr does).
+
+A build's `threads` bounds BLAS and zarr from the moment `opengwasdb ld build`
+starts: importing numpy starts OpenBLAS's own pool, which does no work. Measure a
+build's CPU from after its imports, or set `OPENBLAS_NUM_THREADS=1` as the `test`
+task does.
+
+**Test data.** A test that needs genotypes uses the **Test Panel**, the committed
+real subset of HGDP+1kGP EUR under `tests/ld/data/test-panel/`, through
+`tests/ld/testdata.py`; one that needs an LD Store uses the **Test Store**
+under `tests/ld/data/test-panel/store/`. There is no synthetic genotype
+generator (ADR 0088). The Test Panel stays within **5 MB** and `tests/ld/data/`
+within **8 MB** (3.5 MB now); new committed data needs a reason, given in the
+commit that adds it.
+
+**Contract tests.** `tests/ld/contract/` holds one module per ticket of ogld's
+epic, now ordinary tests. A change keeps them passing without changing a signature
+that `tests/ld/test_surface.py` pins, and that file fails if any body in
+`opengwasdb/ld/` is a stub raising `NotImplementedError`. Each calls the function
+it is about before it reads the Test Panel, so a missing loader or file can never
+stand in for the function's own failure, and no test writes into `tests/ld/data/`.
+
 ## Documentation
 
 **Docs are part of the change, not a follow-up.** A stale doc is worse than a
