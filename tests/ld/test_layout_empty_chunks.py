@@ -1,22 +1,20 @@
 """A chunk holding only the fill value is not written, whatever the process has set (#455).
 
-`import opengwasdb` sets zarr's process-wide `array.write_empty_chunks` to True for the GWAS
-Store (opengwasdb/store/arrays.py). ogld built every LD Store and Genotype Store under zarr's
-default, False: such a chunk is left out and reads as the fill value. Every array the LD engine
-creates is created in `opengwasdb.ld.store.layout`, which keeps ogld's behaviour.
-"""
+Importing `opengwasdb.ld` imports `opengwasdb`, which sets zarr's process-wide
+`array.write_empty_chunks` to True for the GWAS Store (opengwasdb/store/arrays.py). ogld built
+every LD Store and Genotype Store under zarr's default, False: such a chunk is left out and reads
+as the fill value. Every array the LD engine creates is created in `opengwasdb.ld.store.layout`,
+which keeps ogld's behaviour."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
-import zarr
+from zarr import Group, config, open_group
 
-import opengwasdb  # noqa: F401  what sets the process-wide value under test
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store import layout
 
@@ -30,13 +28,13 @@ def chunk_files(store: Path, name: str) -> list[str]:
 
 
 @pytest.fixture
-def group(tmp_path: Path) -> zarr.Group:
+def group(tmp_path: Path) -> Group:
     """An empty group, made under the GWAS engine's process-wide setting."""
-    assert zarr.config.get("array.write_empty_chunks") is True, "the setting under test is gone"
-    return zarr.open_group(str(tmp_path), mode="w", zarr_format=3)
+    assert config.get("array.write_empty_chunks") is True, "the setting under test is gone"
+    return open_group(str(tmp_path), mode="w", zarr_format=3)
 
 
-CREATORS: list[tuple[str, Callable[[zarr.Group], Any], int]] = [
+CREATORS: list[tuple[str, Any, int]] = [
     ("numbers", lambda g: layout.new_numbers(g, "numbers", LENGTH, np.int32, -1, (8, 16)), -1),
     ("r", lambda g: layout.new_r_array(g, "r", LENGTH, (8, 16), ENCODING), ENCODING.reserved_code),
     (layout.FRAMES, lambda g: layout.new_frames_array(g, LENGTH), layout.FRAMES_FILL),
@@ -46,7 +44,7 @@ CREATORS: list[tuple[str, Callable[[zarr.Group], Any], int]] = [
 
 @pytest.mark.parametrize(("name", "make", "fill"), CREATORS, ids=[c[0] for c in CREATORS])
 def test_a_chunk_of_only_the_fill_value_is_not_written(
-    group: zarr.Group, tmp_path: Path, name: str, make: Callable[[zarr.Group], Any], fill: int
+    group: Group, tmp_path: Path, name: str, make: Any, fill: int
 ) -> None:
     array = make(group)
     array[:] = np.full(LENGTH, fill, dtype=array.dtype)
@@ -70,7 +68,7 @@ def test_layout_is_the_one_place_an_array_is_created() -> None:
     assert calls == ["store/layout.py"], calls  # the one call, inside `layout._create_array`
 
 
-def test_arrays_written_whole_leave_out_chunks_of_fill(group: zarr.Group, tmp_path: Path) -> None:
+def test_arrays_written_whole_leave_out_chunks_of_fill(group: Group, tmp_path: Path) -> None:
     data = np.full(LENGTH, -1, dtype=np.int32)
     data[:8] = 5  # the first inner chunk holds data; the rest is fill
     layout.put_numbers(group, "numbers", data, -1, (8, 16))
