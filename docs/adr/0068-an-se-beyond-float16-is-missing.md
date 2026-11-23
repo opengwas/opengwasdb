@@ -77,6 +77,13 @@ place. The review of 52edbf1 found seven defects, each fixed here (below).
    Store holds no such SE. A release before 0.2.3 that holds `+inf` is still read
    as a value (ADR 0070), and the presence rule cites #338 for why a 0.2.3 one
    holds none.
+
+   *Note, 23 Nov 2026 (#466, [ADR 0104](0104-the-store-reader-derives-beta-and-pval.md)):*
+   z and that `+inf` SE are still read as values. What a query derives from them is
+   not: the record's `beta` and `pval`, and a resolved row's `log10_p`, are NaN
+   where SE is infinite. They are not `z × se = ±inf` or the p of z alone. The
+   Context's "`beta = z × se` then reads as infinity" describes the stored values,
+   not the Store Reader's `beta`.
 7. **Validation.** `associations.se_infinite` keeps #337's warning for a release
    before 0.2.3 (OGS-00011's 8 cells until opengwasdb-stores#403). From 0.2.3 a
    release holding any SE above 65,504 fails `associations.se_out_of_range`, and

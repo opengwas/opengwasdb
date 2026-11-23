@@ -301,14 +301,16 @@ def run_mr(q, analyses_by_id: dict[str, int], *, imputed_only: bool = False) -> 
     exp_i = analyses_by_id[EXPOSURE]
     out_i = analyses_by_id[OUTCOME]
     per_vi: dict[int, dict] = {}
-    for vi, ai, z, se in zip(
-        look["variant_index"], look["analysis_index"], look["z"], look["se"], strict=True
+    # beta is the Store Reader's (ADR 0104), not z * se again here.
+    for vi, ai, z, se, beta in zip(
+        look["variant_index"], look["analysis_index"], look["z"], look["se"], look["beta"],
+        strict=True,
     ):
         d = per_vi.setdefault(int(vi), {})
         if int(ai) == exp_i:
-            d["z_exp"], d["se_exp"] = float(z), float(se)
+            d["z_exp"], d["se_exp"], d["beta_exp"] = float(z), float(se), float(beta)
         elif int(ai) == out_i:
-            d["z_out"], d["se_out"] = float(z), float(se)
+            d["z_out"], d["se_out"], d["beta_out"] = float(z), float(se), float(beta)
     for vi, ai, status in zip(
         look["variant_index"], look["analysis_index"], look["association_status"], strict=True
     ):
@@ -333,8 +335,8 @@ def run_mr(q, analyses_by_id: dict[str, int], *, imputed_only: bool = False) -> 
                 "alid": rec.alid if rec else str(vi),
                 "chrom": rec.chromosome if rec else "",
                 "pos": int(rec.position) if rec else 0,
-                "beta_exp": d["z_exp"] * d["se_exp"], "se_exp": d["se_exp"],
-                "beta_out": d["z_out"] * d["se_out"], "se_out": d["se_out"],
+                "beta_exp": d["beta_exp"], "se_exp": d["se_exp"],
+                "beta_out": d["beta_out"], "se_out": d["se_out"],
                 "status_exp": d.get("status_exp", "observed"),
                 "status_out": d.get("status_out", "observed"),
             }

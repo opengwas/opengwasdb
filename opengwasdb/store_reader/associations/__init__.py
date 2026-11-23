@@ -25,6 +25,7 @@ from opengwasdb.store_reader.associations.record import (
     non_canonical,
     present,
     states,
+    statistics_of,
 )
 from opengwasdb.store_reader.associations.subset import SubsetReader
 
@@ -44,4 +45,5 @@ __all__ = [
     "non_canonical",
     "present",
     "states",
+    "statistics_of",
 ]

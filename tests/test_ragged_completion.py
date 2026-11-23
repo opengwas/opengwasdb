@@ -1221,6 +1221,8 @@ _RESULT_KEYS = (
     "analysis_index",
     "z",
     "se",
+    "beta",  # derived from z and se (ADR 0104)
+    "pval",
     "eaf",
     "association_status",
 )
@@ -1239,7 +1241,7 @@ def _assert_results_identical(
     assert tuple(right) == _RESULT_KEYS
     for name in ("variant_index", "analysis_index"):
         np.testing.assert_array_equal(left[name], right[name])
-    for name in ("z", "se", "eaf"):
+    for name in ("z", "se", "beta", "pval", "eaf"):
         np.testing.assert_allclose(left[name], right[name], rtol=0, atol=0, equal_nan=True)
     np.testing.assert_array_equal(left["association_status"], right["association_status"])
 
