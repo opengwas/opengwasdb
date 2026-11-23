@@ -18,18 +18,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from store_reader_digests import build_releases
+from rsid_releases import RELEASE_NAMES
 
 from opengwasdb.store_reader.alid import ALID_WIDTH
-from opengwasdb.variants.axis import VariantAxis, write_variant_axis
-from opengwasdb.variants.normalise import CanonicalVariant
+from opengwasdb.variants.axis import VariantAxis
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASES = [
-    f"{layout}_{state}"
-    for layout in ("dense", "hybrid", "ragged")
-    for state in ("completed", "observed")
-]
+RELEASES = RELEASE_NAMES
 
 PROBE = r"""
 import json, sys
@@ -69,46 +64,6 @@ print(json.dumps({"loaded": seen, "sizes": sizes, "after_range_phewas": after}))
 """
 
 
-def _rewrite_with_rsids(store: Path, rsid_by_alid: dict[str, str] | None) -> dict[str, str]:
-    """Rewrite one Variant Table and its search indexes so every row names an rsid."""
-    axis = VariantAxis(store)
-    try:
-        records = axis.all()
-    finally:
-        axis.close()
-    names = rsid_by_alid or {r.alid: f"rs{1000 + r.variant_index}" for r in records}
-    write_variant_axis(
-        store,
-        [
-            CanonicalVariant(r.chromosome, r.position, r.effect_allele, r.other_allele)
-            for r in records
-        ],
-        names,
-        [r.source_alid for r in records],
-    )
-    return names
-
-
-def _with_rsids(store: Path) -> None:
-    """Give a release's rows rsids, a Hybrid's Dense Component too (it resolves its own).
-
-    No fixture release carries one, and a query by rsid on a release that names
-    none is an empty answer that proves nothing about where it was resolved.
-    """
-    names = _rewrite_with_rsids(store, None)
-    if (store / "dense" / "variants.tsv.gz").exists():
-        _rewrite_with_rsids(store / "dense", names)
-
-
-@pytest.fixture(scope="module")
-def releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    # The builders' output is private to this module, so it is rewritten in place.
-    built = build_releases(tmp_path_factory.mktemp("lazy-variant-table"))
-    for path in built.values():
-        _with_rsids(path)
-    return built
-
-
 def _run(code: str, *args: str) -> dict:
     out = subprocess.run(
         [sys.executable, "-c", code, *args], cwd=ROOT, capture_output=True, text=True, check=True
@@ -144,12 +99,12 @@ def _asked(path: Path) -> list[dict]:
 
 @pytest.mark.parametrize("name", RELEASES)
 def test_questions_a_search_index_answers_never_load_pysam_or_sqlite(
-    releases: dict[str, Path], name: str
+    rsid_releases: dict[str, Path], name: str
 ):
-    chosen = _asked(releases[name])
+    chosen = _asked(rsid_releases[name])
     probe = _run(
         PROBE,
-        str(releases[name]),
+        str(rsid_releases[name]),
         json.dumps([r["alid"] for r in chosen]),
         json.dumps([r["rsid"] for r in chosen]),
         chosen[0]["chromosome"],
@@ -168,14 +123,14 @@ def test_questions_a_search_index_answers_never_load_pysam_or_sqlite(
 
 @pytest.mark.parametrize("name", ["hybrid_completed", "hybrid_observed"])
 def test_a_hybrid_phewas_names_the_panel_row_without_inverting_the_alid_index(
-    releases: dict[str, Path], name: str
+    rsid_releases: dict[str, Path], name: str
 ):
     """Naming the one Dense row must not build `variant_index -> ALID slot` for the whole
     shared axis (23.5 M rows on OGS-00004: phewas went from 48 to 503 ms)."""
     from opengwasdb.query import query_store
 
-    on_panel, off_panel = _asked(releases[name])
-    with query_store(releases[name]) as q:
+    on_panel, off_panel = _asked(rsid_releases[name])
+    with query_store(rsid_releases[name]) as q:
         for chosen in (on_panel, off_panel):
             assert len(q.phewas(chosen["alid"])["variant_index"]) > 0
         assert q._variant_axis._alid_inverse is None

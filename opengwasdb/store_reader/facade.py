@@ -339,10 +339,13 @@ class StoreQuery(_StoreQueryBase):
         index = self._variant_axis.index_of(identifier)
         if index is None:
             return Associations.empty()
-        return self.phewas_at(index, observed_only=observed_only)
+        return self._phewas_at(index, observed_only=observed_only)
 
-    def phewas_at(self, variant_index: int, *, observed_only: bool = False) -> Associations:
-        """One variant, named by its Store-local Variant Index, across all analyses."""
+    def _phewas_at(self, variant_index: int, *, observed_only: bool = False) -> Associations:
+        """`phewas` for a variant already named by Store-local Variant Index.
+
+        What a Hybrid asks of its Dense Component, after naming the panel row itself.
+        """
         return self._grid.read(Cells.variants([variant_index]), observed_only=observed_only)
 
     def range_phewas(
@@ -360,16 +363,20 @@ class StoreQuery(_StoreQueryBase):
         """Return present associations for a specific variant × analysis set, Analysis-major."""
         # Row-index resolution only -- no VariantRecord materialisation, no
         # per-identifier variants.tsv.gz open (issue #3).
-        return self.lookup_at(
+        return self._lookup_at(
             self._variant_axis.indices_by_identifiers(identifiers),
             analysis_ids,
             observed_only=observed_only,
         )
 
-    def lookup_at(
+    def _lookup_at(
         self, rows: np.ndarray, analysis_ids: list[str], *, observed_only: bool = False
     ) -> Associations:
-        """`lookup` for variants already named by Store-local Variant Index."""
+        """`lookup` for variants already named by Store-local Variant Index.
+
+        What `lookup` does once it has resolved its identifiers, and what a Hybrid
+        asks of its Dense Component after naming the panel rows itself.
+        """
         cols = [i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None]
         if not len(rows) or not cols:
             return Associations.empty()
@@ -774,47 +781,40 @@ class HybridStoreQuery(_StoreQueryBase):
         """A Dense Component result with its panel-local variant_index made shared."""
         return result.remap_variants(self._dense_to_shared)
 
-    def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
-        """Which shared variant indices are rows of the Dense Component's panel.
+    def _panel_split(self, shared_indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """`(on_panel, rows)` for shared variant indices: which are rows of the Dense
+        Component's panel, and the panel row of each that is (-1 for each that is not).
 
-        One vectorised `searchsorted` over the panel map, with the needles cast
-        to the map's own dtype. The per-variant Python form cast the whole
-        13.4 M-entry `int32` map on every call (22.6 ms against 0.004 ms for an
-        `int32` scalar on OGS-00011), and `range_phewas` made one call per
-        shared variant -- 58,006 of them for a 1 Mb TCF7L2 window (#252).
-        Searching that map with `int64` needles still promoted and copied it on
-        every call (review round 1), so the needles are narrowed instead; a
-        needle outside the map's range cannot be a panel row and is masked out
-        before the cast, so narrowing cannot wrap it into range.
+        The one place the panel map is searched. It is one vectorised `searchsorted`
+        with the needles cast to the map's own dtype. The per-variant Python form cast
+        the whole 13.4 M-entry `int32` map on every call (22.6 ms against 0.004 ms for
+        an `int32` scalar on OGS-00011), and `range_phewas` made one call per shared
+        variant -- 58,006 of them for a 1 Mb TCF7L2 window (#252). Searching that map
+        with `int64` needles still promoted and copied it on every call (review round
+        1, and again in #465 for one needle: 38 ms on OGS-00004), so the needles are
+        narrowed instead; a needle outside the map's range cannot be a panel row and
+        is masked out before the cast, so narrowing cannot wrap it into range, and a
+        needle between two panel rows is off panel, never its neighbour's row.
         """
         shared_indices = np.asarray(shared_indices)
-        if shared_indices.size == 0:
-            return np.zeros(shared_indices.shape, dtype=bool)
+        on_panel = np.zeros(shared_indices.shape, dtype=bool)
+        rows = np.full(shared_indices.shape, -1, dtype=np.int64)
         panel = self._dense_to_shared
-        if panel.size == 0:
-            return np.zeros(shared_indices.shape, dtype=bool)
+        if shared_indices.size == 0 or panel.size == 0:
+            return on_panel, rows
         low, high = int(panel[0]), int(panel[-1])
-        result = np.zeros(shared_indices.shape, dtype=bool)
         in_range = (shared_indices >= low) & (shared_indices <= high)
         if in_range.any():
             needles = shared_indices[in_range].astype(panel.dtype, copy=False)
-            pos = np.searchsorted(panel, needles)
-            safe = np.minimum(pos, panel.size - 1)
-            result[in_range] = panel[safe] == needles
-        return result
+            pos = np.minimum(np.searchsorted(panel, needles), panel.size - 1)
+            hit = panel[pos] == needles
+            on_panel[in_range] = hit
+            rows[np.flatnonzero(in_range)[hit]] = pos[hit]
+        return on_panel, rows
 
-    def _panel_rows(self, shared_indices: np.ndarray) -> np.ndarray:
-        """The Dense Component's rows of shared indices already known to be on the panel.
-
-        The needles are narrowed to the map's own dtype: searching an `int32` map
-        with `int64` needles promotes and copies all of it on every call (38 ms
-        for one needle on OGS-00004's 13.4 M-entry map), see `_on_panel_mask`.
-        """
-        needles = np.asarray(shared_indices).astype(self._dense_to_shared.dtype, copy=False)
-        return np.searchsorted(self._dense_to_shared, needles)
-
-    def _shared_is_on_panel(self, shared_idx: int) -> bool:
-        return bool(self._on_panel_mask(np.array([shared_idx], dtype=np.int64))[0])
+    def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
+        """Which shared variant indices are rows of the Dense Component's panel."""
+        return self._panel_split(shared_indices)[0]
 
     def _overflow_read(self, cells: Cells, *, observed_only: bool) -> Associations:
         """The Overflow's rows for a region, without the `n` a Hybrid never reports."""
@@ -869,10 +869,10 @@ class HybridStoreQuery(_StoreQueryBase):
         index = self._variant_axis.index_of(identifier)
         if index is None:
             return Associations.empty()
-        if self._shared_is_on_panel(index):
-            panel_row = int(self._panel_rows(np.array([index]))[0])
+        on_panel, rows = self._panel_split(np.array([index], dtype=np.int64))
+        if on_panel[0]:
             return self._remap_dense(
-                self._dense.phewas_at(panel_row, observed_only=observed_only)
+                self._dense._phewas_at(int(rows[0]), observed_only=observed_only)
             )
         return self._overflow_read(Cells.variants([index]), observed_only=observed_only)
 
@@ -896,10 +896,10 @@ class HybridStoreQuery(_StoreQueryBase):
         # holds never reaches a Dense Component whose own index lacks it (an
         # off-panel variant), which would consult `variant_aliases`.
         shared = np.unique(self._variant_axis.indices_by_identifiers(identifiers)).astype(np.int64)
-        on_panel = self._on_panel_mask(shared)
-        panel_rows = self._panel_rows(shared[on_panel])
+        on_panel, rows = self._panel_split(shared)
+        panel_rows = rows[on_panel]
         dense = self._remap_dense(
-            self._dense.lookup_at(panel_rows, analysis_ids, observed_only=observed_only)
+            self._dense._lookup_at(panel_rows, analysis_ids, observed_only=observed_only)
         )
         off_panel = [int(i) for i in shared[~on_panel]]
         if not off_panel:

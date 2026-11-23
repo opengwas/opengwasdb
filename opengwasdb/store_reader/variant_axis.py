@@ -82,10 +82,6 @@ class LegacyTableOpener(Protocol):
 # resolution -- see that method's docstring for the measured costs behind it.
 _BULK_SCAN_FRACTION = 0.01
 
-#: `_indexed_row`'s answer when the ALID index cannot be asked at all.
-_NOT_INDEXED = object()
-
-
 @dataclass(frozen=True)
 class VariantRecord(Mapping[str, Any]):
     """One Store Variant Table row."""
@@ -282,7 +278,12 @@ class VariantAxis:
 
     def _indices_of_aliases(self, aliases: list[str]) -> list[int]:
         """Every row each rsid names, not just the first: a phewas over rs123 at
-        a multi-allelic site wants both stored rows."""
+        a multi-allelic site wants both stored rows.
+
+        That holds for an rsid the sidecar rsid index holds. On a release without
+        that index (built before issue #109) the `variant_aliases` fallback
+        answers, and it is `LIMIT 1`: one row, the lowest.
+        """
         indices: list[int] = []
         for identifier in aliases:
             matched = self.indices_by_alias(identifier)
@@ -295,27 +296,27 @@ class VariantAxis:
         return indices
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
-        index = self._indexed_row(parsed)
-        if index is _NOT_INDEXED:
+        if not self._alid_is_indexable(parsed):
             return self._scanned_record(parsed)
-        assert index is None or isinstance(index, int)
+        index = self._indexed_row(parsed)
         return None if index is None else self.by_index(index)
 
-    def _indexed_row(self, parsed: ParsedAlid) -> int | None | object:
-        """The row the ALID index names; None if the index lacks the ALID;
-        `_NOT_INDEXED` if it cannot be asked (absent, or an over-wide ALID).
+    def _alid_is_indexable(self, parsed: ParsedAlid) -> bool:
+        """Whether the ALID index can be asked about `parsed`: it exists, and holds ALIDs that wide.
 
         Only ask the index about ALIDs it could hold. A wider one was never
         indexed (issue #127), and casting it to the slot width to ask would
         match a *different* variant's truncated key -- the defect itself.
         """
-        alid = (
-            f"{parsed.chromosome}:{parsed.position}:"
-            f"{parsed.effect_allele}:{parsed.other_allele}"
-        )
-        if self._alid_bytes is None or not is_indexable_alid(alid):
-            return _NOT_INDEXED
-        query = np.array([alid], dtype=ALID_DTYPE)
+        return self._alid_bytes is not None and is_indexable_alid(_canonical(parsed))
+
+    def _indexed_row(self, parsed: ParsedAlid) -> int | None:
+        """The row the ALID index names, None if it lacks the ALID.
+
+        Only for an ALID `_alid_is_indexable`; the index is asked nothing else.
+        """
+        assert self._alid_bytes is not None and self._alid_rows is not None
+        query = np.array([_canonical(parsed)], dtype=ALID_DTYPE)
         idx = int(np.searchsorted(self._alid_bytes, query[0]))
         if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
             return int(self._alid_rows[idx])
@@ -497,6 +498,11 @@ def parse_variant_line(line: str) -> VariantRecord:
         rsid=None if rsid in {"", "."} else rsid,
         source_alid=None if source_alid in {"", "."} else source_alid,
     )
+
+
+def _canonical(parsed: ParsedAlid) -> str:
+    """The ALID as the table and the indexes spell it."""
+    return f"{parsed.chromosome}:{parsed.position}:{parsed.effect_allele}:{parsed.other_allele}"
 
 
 def _split_identifiers(

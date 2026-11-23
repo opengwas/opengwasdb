@@ -130,9 +130,8 @@ class TabixVariantTable:
                 import sqlite3
 
                 # Read-only: a missing `index.sqlite` is an error, not a new empty file.
-                self._aliases = sqlite3.connect(
-                    f"file:{self._aliases_path}?mode=ro", uri=True, check_same_thread=False
-                )
+                uri = f"{self._aliases_path.resolve().as_uri()}?mode=ro"
+                self._aliases = sqlite3.connect(uri, uri=True, check_same_thread=False)
                 self._aliases.row_factory = sqlite3.Row
             if self._aliases is None:
                 return None

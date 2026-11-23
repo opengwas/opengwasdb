@@ -7,13 +7,14 @@ measurement here is a fresh interpreter, repeated, and reported as median and ra
 - ``imports``: ``import pysam, sqlite3``;
 - ``tabix_open``: ``pysam.TabixFile`` on the release's Store Variant Table;
 - ``index_open``: ``sqlite3.connect`` on its ``index.sqlite``;
-- ``open_and_lookup``: ``query_store`` then one ``lookup`` (``--alids`` by every
+- ``open_and_lookup``: ``query_store`` then one ``lookup`` (10 ALIDs by every
   Analysis the selection names), wall time of the whole process, for the source tree
   named by ``--tree`` (a ``git archive`` of the commit to compare, or the worktree).
 - ``phewas``: ``query_store`` then one ``phewas`` by ``--phewas-alid``; the time of
   the ``phewas`` call itself, in the process.
 
-    benchmark_process_start.py --store S --selection sel.json --tree T --runs 7 --output out.json
+    benchmark_process_start.py --store S --selection sel.json --tree T \
+        --tree-commit SHA --runs 7 --output out.json
 
 ``--selection`` is optional (without it only the other measurements run): a
 store-comparison artifact (its ``selection`` block) or a bare
@@ -30,6 +31,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from benchmarks._artifact import artifact_header, tree_fingerprint, write_artifact
 
 IMPORTS = (
     "import time; t=time.perf_counter(); import pysam, sqlite3; "
@@ -87,6 +90,11 @@ def main() -> None:
     parser.add_argument("--store", type=Path, required=True)
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--tree", type=Path, required=True)
+    parser.add_argument(
+        "--tree-commit",
+        required=True,
+        help="the commit `--tree` holds (a `git archive` has no .git to ask)",
+    )
     parser.add_argument("--phewas-alid")
     parser.add_argument("--runs", type=int, default=7)
     parser.add_argument("--n-alids", type=int, default=10)
@@ -104,7 +112,14 @@ def main() -> None:
     assert probe.startswith(str(args.tree.resolve())), probe
 
     table, index = str(args.store / "variants.tsv.gz"), str(args.store / "index.sqlite")
-    out: dict[str, object] = {"tree": probe, "store": str(args.store), "runs": args.runs}
+    out: dict[str, object] = {
+        **artifact_header("benchmarks/benchmark_process_start.py", sys.argv[1:]),
+        "measured_tree": probe,
+        "measured_tree_commit": args.tree_commit,
+        "measured_tree_fingerprint": tree_fingerprint(args.tree),
+        "store": str(args.store),
+        "runs": args.runs,
+    }
     out["imports"] = summary([float(run(IMPORTS).stdout) for _ in range(args.runs)])
     out["tabix_open"] = summary([float(run(TABIX, table).stdout) for _ in range(args.runs)])
     out["index_open"] = summary([float(run(INDEX, index).stdout) for _ in range(args.runs)])
@@ -122,9 +137,8 @@ def main() -> None:
                 for _ in range(args.runs)
             ]
         )
-    out["load_average_1m"] = os.getloadavg()[0]
-    args.output.write_text(json.dumps(out, indent=2) + "\n")
-    print(json.dumps({k: v["median_ms"] if isinstance(v, dict) else v for k, v in out.items()}))
+    out["host_load_end"] = os.getloadavg()[0]
+    write_artifact(args.output, out)
 
 
 if __name__ == "__main__":

@@ -6,17 +6,17 @@ them (`indices_by_identifiers`); Ragged returned only the lowest, and a Hybrid's
 off-panel half did too. One contract across layouts: every row.
 
 The fixture releases name no rsID, so two rows of a copy are made to share one,
-the way `test_variant_table_lazy` plants rsIDs, a Hybrid's Dense Component too.
+the way `rsid_releases` gives every row one, a Hybrid's Dense Component too.
 """
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
-from store_reader_digests import build_releases
-from test_variant_table_lazy import RELEASES, _rewrite_with_rsids
+from rsid_releases import RELEASE_NAMES, with_rsids
 
 from opengwasdb.query import query_store
 from opengwasdb.variants.axis import VariantAxis
@@ -35,9 +35,7 @@ def _plant(store: Path, pairs: list[tuple[int, int]]) -> dict[str, tuple[int, in
         rsid = f"rs9{k}"
         names[records[a].alid] = names[records[b].alid] = rsid
         planted[rsid] = (a, b)
-    _rewrite_with_rsids(store, names)
-    if (store / "dense" / "variants.tsv.gz").exists():
-        _rewrite_with_rsids(store / "dense", names)
+    with_rsids(store, names)
     return planted
 
 
@@ -56,14 +54,19 @@ def _pairs(store: Path) -> list[tuple[int, int]]:
 
 
 @pytest.fixture(scope="module")
-def planted(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, dict]]:
+def planted(
+    rsid_releases: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, tuple[Path, dict]]:
+    """A private copy of each shared release, with the pairs planted in it."""
+    private = tmp_path_factory.mktemp("multiallelic-rsid")
     out = {}
-    for name, path in build_releases(tmp_path_factory.mktemp("multiallelic-rsid")).items():
+    for name, shared in rsid_releases.items():
+        path = Path(shutil.copytree(shared, private / name))
         out[name] = (path, _plant(path, _pairs(path)))
     return out
 
 
-@pytest.mark.parametrize("name", RELEASES)
+@pytest.mark.parametrize("name", RELEASE_NAMES)
 def test_lookup_by_a_multi_allelic_rsid_returns_every_row(
     planted: dict[str, tuple[Path, dict]], name: str
 ):
