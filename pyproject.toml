@@ -65,21 +65,28 @@ dependencies = [
 # pgenlib alone and a build never lacks threadpoolctl.
 ld-build = ["pgenlib>=0.90"]
 # Importing a producer's LD (Pan-UKB's LD matrices, opengwasdb.ld.build.importing).
-ld-import = ["lz4>=4", "pyliftover>=0.4"]
+# ogld's extra also carried pyliftover, which is a dependency of the package
+# itself here (above), so the extra is lz4 alone.
+ld-import = ["lz4>=4"]
 dev = [
   "pytest>=8",
   "pytest-xdist>=3.6",
   "ruff>=0.6",
   "mypy>=1.10",
   "lizard>=1.17",
-  # opengwasdb.ld's tests (tests/ld/, #455): a per-test timeout, and properties.
+  # Same list as the pixi `dev` feature ([tool.pixi.feature.dev.dependencies]
+  # and its pypi-dependencies), which is how a contributor gets this environment;
+  # `pip install -e .[dev]` is the other way in, and it must not be a way in that
+  # runs less of the suite. So it carries the one dependency the architecture
+  # model's check reads (docs/architecture/components.yaml, issue #358), and
+  # what tests/ld needs (#455): ogld's 5 s per-test timeout, its property tests,
+  # the Test Panel's pgen reader (the `ld-build` extra) and the import fixtures'
+  # decompressor (the `ld-import` extra), so nothing there skips or errors.
+  "pyyaml>=6",
   "pytest-timeout>=2.3",
   "hypothesis>=6.100",
-  # Same list as [tool.pixi.feature.dev.dependencies], which is how a contributor
-  # gets this environment; `pip install -e .[dev]` is the other way in, and it
-  # must not be a way in that lacks the one dependency the architecture model's
-  # check reads (docs/architecture/components.yaml, issue #358).
-  "pyyaml>=6",
+  "pgenlib>=0.90",
+  "lz4>=4",
 ]
 
 [project.scripts]
@@ -278,7 +285,6 @@ pyyaml = "*"
 pytest-timeout = ">=2.3"
 hypothesis = ">=6.100"
 lz4 = ">=4"
-openssl = ">=3"
 
 # pgenlib is PyPI-only. The dev environment carries the `ld-build` extra so the
 # suite reads the Test Panel's pgen and never skips (#455).

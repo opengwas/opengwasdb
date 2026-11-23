@@ -4353,7 +4353,9 @@ packages:
   - zarr>=3.4,<4
   - hypothesis>=6.100 ; extra == 'dev'
   - lizard>=1.17 ; extra == 'dev'
+  - lz4>=4 ; extra == 'dev'
   - mypy>=1.10 ; extra == 'dev'
+  - pgenlib>=0.90 ; extra == 'dev'
   - pytest-timeout>=2.3 ; extra == 'dev'
   - pytest-xdist>=3.6 ; extra == 'dev'
   - pytest>=8 ; extra == 'dev'
@@ -4361,7 +4363,6 @@ packages:
   - ruff>=0.6 ; extra == 'dev'
   - pgenlib>=0.90 ; extra == 'ld-build'
   - lz4>=4 ; extra == 'ld-import'
-  - pyliftover>=0.4 ; extra == 'ld-import'
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: pysam
