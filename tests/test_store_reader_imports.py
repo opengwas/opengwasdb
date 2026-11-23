@@ -90,12 +90,34 @@ def test_the_store_reader_imports_only_numpy_zarr_numcodecs_stdlib_and_itself():
 
 
 def test_importing_the_store_reader_loads_no_heavy_dependency():
+    """Every module of the subpackage, the facade included, imported in one fresh
+    interpreter: the package `__init__` alone imports nothing, so importing only it
+    would prove nothing about the modules a query loads."""
+    modules = sorted(
+        path[: -len(".py")].replace("/", ".").removesuffix(".__init__")
+        for path in store_reader_sources()
+    )
+    assert "opengwasdb.store_reader.facade" in modules
     probe = (
-        "import json, sys\n"
-        "import opengwasdb.store_reader\n"
+        "import importlib, json, sys\n"
+        f"for name in {modules!r}:\n"
+        "    importlib.import_module(name)\n"
         f"print(json.dumps([name for name in {HEAVY!r} if name in sys.modules]))\n"
     )
     out = subprocess.run(
         [sys.executable, "-c", probe], cwd=ROOT, capture_output=True, text=True, check=True
     )
     assert json.loads(out.stdout) == []
+
+
+def test_the_run_time_probe_sees_a_heavy_import():
+    """The probe's check, on a module that does load one, finds it."""
+    probe = (
+        "import json, sys\n"
+        "import opengwasdb.variants.axis\n"
+        f"print(json.dumps([name for name in {HEAVY!r} if name in sys.modules]))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe], cwd=ROOT, capture_output=True, text=True, check=True
+    )
+    assert "pysam" in json.loads(out.stdout)
