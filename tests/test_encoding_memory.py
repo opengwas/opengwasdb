@@ -280,6 +280,6 @@ def test_freed_heap_kept_by_the_allocator_is_handed_back() -> None:
         "the allocator must keep the freed chunks, or there is nothing to hand back"
     )
 
-    assert release_freed_heap() is True
+    release_freed_heap()
     assert freed - resident_bytes() > 100 * _MiB
-    assert len(kept) == 3125
+    del kept  # held to here, so the freed chunks lay under live ones

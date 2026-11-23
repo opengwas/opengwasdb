@@ -437,6 +437,19 @@ class _Pass2Context:
 def _route_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
 ) -> tuple[int, int, int]:
+    """Route and spill one Analysis (`_route_and_spill_column`), then hand what
+    it freed back to the host: a Pass 2 worker lives for the whole pass, and
+    would otherwise keep the high-water of every Analysis it routes (#451)."""
+    routed = _route_and_spill_column(context, task)
+    # The Analysis's columns went out of scope as it returned, so their pages
+    # are among those handed back.
+    release_freed_heap()
+    return routed
+
+
+def _route_and_spill_column(
+    context: _Pass2Context, task: tuple[int, ManifestRow]
+) -> tuple[int, int, int]:
     """Route one study and spill it; its Admission part is written beside the
     Store, and only its column returns, with how many associations it left out
     of the Dense Component and of the Overflow (issue #338)."""
@@ -454,9 +467,6 @@ def _route_column(
             row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
         )
         _spill_hybrid_column(context.spill_dir, col_idx, *parts)
-    # The worker routes the next Analysis from here, so what this one freed is
-    # handed back rather than kept as the worker's high-water (#451).
-    release_freed_heap()
     return col_idx, left_out[0], left_out[1]
 
 

@@ -17,12 +17,18 @@ The reading is deliberately strict. `/proc/meminfo` is a kernel format, not a
 free-form file: a field that is not exactly a whole number of kilobytes is
 `None`, so a caller runs one worker and says why, rather than dividing a number
 nothing meant.
+
+A worker that lives for a whole pass also gives back what it has freed between
+units (`release_freed_heap`), so that what it holds is one unit's working set
+rather than the high-water of every unit it has worked (#451).
 """
 
 from __future__ import annotations
 
 import ctypes
+import functools
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from opengwasdb.build.ordered_pool import RESULTS_HELD_PER_WORKER
@@ -188,23 +194,29 @@ def pool_workers(
     return workers
 
 
-def release_freed_heap() -> bool:
-    """Hand the pages the C heap holds free back to the host; whether it could.
+@functools.cache
+def _malloc_trim() -> Callable[[int], int] | None:
+    """glibc's `malloc_trim`, or `None`, said once, where the C library has none."""
+    try:
+        trim: Callable[[int], int] = ctypes.CDLL(None).malloc_trim
+    except AttributeError:
+        log.warning(
+            "this C library has no malloc_trim, so a long-lived worker keeps the memory "
+            "it has freed (#451)"
+        )
+        return None
+    return trim
+
+
+def release_freed_heap() -> None:
+    """Hand the pages the C heap holds free back to the host.
 
     A long-lived worker otherwise keeps the high-water of every unit it has
     worked: Python frees a source's buffers, but glibc keeps their pages for
-    reuse, and a freed page under a live allocation is never returned. A Pass 2
-    worker of a 240-Analysis build stepped up about 4 GiB on each large source
-    and held it, ending at 12-15 GiB of its own; a single read of one such
-    source left 3.3 GiB held after everything was freed, and 0.23 GiB once
-    trimmed. Trimmed after each Analysis, the same workers ended at 3.6-4.8
-    GiB, though routing one large source still peaks at 12-14 GiB (#451).
-    Only glibc offers `malloc_trim`; elsewhere nothing is
-    released and this says so by returning False.
+    reuse, and a freed page under a live allocation is never returned (#451
+    has the measurements). Only glibc offers `malloc_trim`; on any other C
+    library nothing is released, and the first call says so.
     """
-    try:
-        trim = ctypes.CDLL(None).malloc_trim
-    except AttributeError:
-        return False
-    trim(0)
-    return True
+    trim = _malloc_trim()
+    if trim is not None:
+        trim(0)
