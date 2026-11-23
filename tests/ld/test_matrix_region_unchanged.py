@@ -18,12 +18,10 @@ any digest is compared, so a case that stopped reaching the far side would fail 
 
 from __future__ import annotations
 
-import hashlib
-from typing import Any
-
 import numpy as np
 import pytest
 import zarr
+from fingerprint import answer_fingerprint
 from store_copies import TEST_STORE
 
 import opengwasdb.ld
@@ -36,30 +34,12 @@ SMALL = ALL[:40]
 SLICE = ALL[600:660]
 
 
-def fingerprint(columns: dict[str, Any]) -> str:
-    """Every column of an answer, read as bytes: an answer's fingerprint, never a subset of it."""
-    hasher = hashlib.sha256()
-    for name, value in columns.items():
-        if isinstance(value, tuple):
-            hasher.update(name.encode())
-            for item in value:
-                hasher.update(str(item).encode())
-                hasher.update(b"\0")
-            continue
-        array = np.ascontiguousarray(value)
-        hasher.update(name.encode())
-        hasher.update(str(array.dtype).encode())
-        hasher.update(str(array.shape).encode())
-        hasher.update(array.tobytes())
-    return hasher.hexdigest()
-
-
 def matrix(store: opengwasdb.ld.LDStore, rows: np.ndarray, *, fill: float | None = None) -> str:
     names = list(store._reader.alids_of(rows))
     got = store.matrix(names, fill=fill)
     if fill is not None:
-        return fingerprint({"r": got.r})
-    return fingerprint(
+        return answer_fingerprint({"r": got.r})
+    return answer_fingerprint(
         {
             "chrom": got.variants.chrom,
             "position": got.variants.position,
@@ -127,23 +107,23 @@ def ages(store: opengwasdb.ld.LDStore, reader: StoreReader, rows: np.ndarray) ->
             ("head", start, start + 200),
             ("tail", stop - 200, stop),
         ]:
-            found[f"region_r-{chrom}-{label}"] = fingerprint({"r": reader.region_r(a, b)})
+            found[f"region_r-{chrom}-{label}"] = answer_fingerprint({"r": reader.region_r(a, b)})
             got = store.region(chrom, int(reader._variant_table._columns["position"][a]), 500_000)
             found[f"region-{chrom}-{label}-500k"] = region_fingerprint(got)
-    found["pair_r-sample"] = fingerprint({"r": reader.pair_r(ALL[::5])})
+    found["pair_r-sample"] = answer_fingerprint({"r": reader.pair_r(ALL[::5])})
     first, second = ladder()
-    found["r_of_pairs-ladder"] = fingerprint({"r": reader.r_of_pairs(first, second)})
+    found["r_of_pairs-ladder"] = answer_fingerprint({"r": reader.r_of_pairs(first, second)})
     # The same pairs asked for in the other order: r is symmetric, so these two digests must
     # agree, and the reversed call is a different path through `_step_r` (`min`/`max` swap).
-    found["r_of_pairs-reversed"] = fingerprint({"r": reader.r_of_pairs(second, first)})
+    found["r_of_pairs-reversed"] = answer_fingerprint({"r": reader.r_of_pairs(second, first)})
 
     # The far side: the pairs the store holds as Far Pairs, and the two ways a region reaches
     # its pairs beyond near_bp — a row span, and a public window wide enough to hold them.
     far_lo, far_hi = far_pairs(reader)
-    found["r_of_pairs-far"] = fingerprint({"r": reader.r_of_pairs(far_lo, far_hi)})
-    found["r_of_pairs-far-reversed"] = fingerprint({"r": reader.r_of_pairs(far_hi, far_lo)})
+    found["r_of_pairs-far"] = answer_fingerprint({"r": reader.r_of_pairs(far_lo, far_hi)})
+    found["r_of_pairs-far-reversed"] = answer_fingerprint({"r": reader.r_of_pairs(far_hi, far_lo)})
     lo, hi, at, partner = narrowest_far_pair(reader)
-    found["region_r-far"] = fingerprint({"r": reader.region_r(int(lo[0]), int(hi[0]) + 1)})
+    found["region_r-far"] = answer_fingerprint({"r": reader.region_r(int(lo[0]), int(hi[0]) + 1)})
     radius = (partner - at) // 2 + 1
     wide = store.region("22" if int(lo[0]) >= 468 else "21", (at + partner) // 2, radius)
     found["region-far"] = region_fingerprint(wide)
@@ -151,7 +131,7 @@ def ages(store: opengwasdb.ld.LDStore, reader: StoreReader, rows: np.ndarray) ->
 
 
 def region_fingerprint(got: opengwasdb.ld.LDMatrix) -> str:
-    return fingerprint(
+    return answer_fingerprint(
         {
             "r": got.r,
             "chrom": got.variants.chrom,

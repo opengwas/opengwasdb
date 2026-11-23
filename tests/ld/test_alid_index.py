@@ -269,6 +269,24 @@ def without_companion(store: Path) -> None:
     shutil.rmtree(store / layout.ALID_MMAP, ignore_errors=True)
 
 
+def underived_store(tmp_path: Path, left_out: int | None) -> tuple[Any, Path]:
+    """The derive script and a written store with its ALID index removed, its provenance recording
+    `left_out` ALIDs left out, or no such count when it is None."""
+    script = load_script("derive_alid_index")
+    store = written(tmp_path / "store")
+    without_companion(store)
+    shutil.rmtree(store / layout.ALID_INDEX)
+    meta = store / "zarr.json"
+    document = json.loads(meta.read_text())
+    counts = document["attributes"]["ld_store"]["counts"]
+    if left_out is None:
+        del counts["alids_left_out"]
+    else:
+        counts["alids_left_out"] = left_out
+    meta.write_text(json.dumps(document))
+    return script, store
+
+
 def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
     # The rule is the table's, not the producer's (ADR 0005): the store reads back its own ALID
     # column and indexes it, so a store written before the index gets the same one.
@@ -412,14 +430,7 @@ def test_a_recorded_count_that_is_not_the_table_s_refuses_the_derivation(
 ) -> None:
     # A store whose provenance records a count its table does not give is not one to derive over:
     # the record is not this store's, and nothing is written.
-    script = load_script("derive_alid_index")
-    store = written(tmp_path / "store")
-    without_companion(store)
-    shutil.rmtree(store / layout.ALID_INDEX)
-    meta = store / "zarr.json"
-    document = json.loads(meta.read_text())
-    document["attributes"]["ld_store"]["counts"]["alids_left_out"] = 3
-    meta.write_text(json.dumps(document))
+    script, store = underived_store(tmp_path, left_out=3)
     with pytest.raises(SystemExit, match="provenance records"):
         script.derive(store)
     assert not (store / "variants" / "alid_index-partial").exists()
@@ -431,14 +442,7 @@ def test_a_derivation_that_fails_after_its_rename_is_finished_by_another_run(
 ) -> None:
     # The index is in place before the provenance counts it, so a failure in between leaves a
     # store validation refuses and a second run finishes it (ogld#42's fix round 1).
-    script = load_script("derive_alid_index")
-    store = written(tmp_path / "store")
-    without_companion(store)
-    shutil.rmtree(store / layout.ALID_INDEX)
-    meta = store / "zarr.json"
-    document = json.loads(meta.read_text())
-    del document["attributes"]["ld_store"]["counts"]["alids_left_out"]
-    meta.write_text(json.dumps(document))
+    script, store = underived_store(tmp_path, left_out=None)
 
     def fail(*args: object, **kwargs: object) -> None:
         raise OSError("no space left on device")

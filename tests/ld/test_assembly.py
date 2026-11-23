@@ -219,6 +219,17 @@ def decoded_partners(
     )
 
 
+def assert_far_and_partner_rows(root: zarr.Group, chrom: str, e: Expected) -> None:
+    """The store's Far Pairs and its decoded Partner Rows are the expected ones."""
+    np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
+    np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
+    np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
+    written_indptr, written_partner, written_codes = decoded_partners(root, chrom)
+    np.testing.assert_array_equal(written_indptr, e.partner_rows_indptr)
+    np.testing.assert_array_equal(written_partner, e.partner_rows_partner)
+    np.testing.assert_array_equal(written_codes, e.partner_rows_r)
+
+
 def test_the_fixture_reaches_every_case() -> None:
     for chrom in chromosomes():
         e = expected(chrom)
@@ -263,13 +274,7 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
         np.testing.assert_array_equal(root[f"near/{chrom}/indptr"][:], e.near_indptr)
         np.testing.assert_array_equal(root[f"near/{chrom}/r"][:], e.near_r)
         assert f"index/{chrom}" not in root, "a store this code writes holds no Proxy Index"
-        np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
-        np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
-        np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
-        written_indptr, written_partner, written_codes = decoded_partners(root, chrom)
-        np.testing.assert_array_equal(written_indptr, e.partner_rows_indptr)
-        np.testing.assert_array_equal(written_partner, e.partner_rows_partner)
-        np.testing.assert_array_equal(written_codes, e.partner_rows_r)
+        assert_far_and_partner_rows(root, chrom, e)
         if shards is not None:
             assert root[f"near/{chrom}/r"].shards == (shards[0][1],)
             inner, shard = shards[1]
@@ -415,13 +420,7 @@ def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path
         count = assembly.derive_far_pairs(index, far, here, NEAR_BP, REncoding(R_SCALE))
         e = expected(chrom)
         assert count == e.far_pairs
-        np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
-        np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
-        np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
-        written_indptr, written_partner, written_codes = decoded_partners(root, chrom)
-        np.testing.assert_array_equal(written_indptr, e.partner_rows_indptr)
-        np.testing.assert_array_equal(written_partner, e.partner_rows_partner)
-        np.testing.assert_array_equal(written_codes, e.partner_rows_r)
+        assert_far_and_partner_rows(root, chrom, e)
 
 
 # ------------------------------------------------------------------ empty bands
