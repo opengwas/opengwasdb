@@ -42,7 +42,7 @@ ld_app = typer.Typer(
 )
 
 _THREADS = {"min": 1}
-_REFUSED = (Refusal, InputError, VariantNormalisationError, env.LegacyVariable)
+_REFUSED = (Refusal, InputError, VariantNormalisationError)
 
 
 def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:
@@ -56,7 +56,7 @@ def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:
                 env.refuse_legacy()
                 status = run(*args, **options)
             except _REFUSED as problem:
-                print(f"opengwasdb ld {command}: {_message(problem)}", file=sys.stderr)
+                print(f"opengwasdb ld {command}: {problem}", file=sys.stderr)
                 status = 2
             if status:
                 raise typer.Exit(status)
@@ -64,10 +64,6 @@ def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:
         return command_with_status
 
     return decorate
-
-
-def _message(problem: BaseException) -> str:
-    return problem.message if isinstance(problem, env.LegacyVariable) else str(problem)
 
 
 def _given(**options: Any) -> dict[str, Any]:

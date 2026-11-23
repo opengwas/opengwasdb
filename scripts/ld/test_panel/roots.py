@@ -30,6 +30,7 @@ variable plus the rest of its path, and by hash, so no host path is committed.
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 from opengwasdb.ld import env
@@ -54,13 +55,23 @@ TOOLS = {
 }
 
 
+def read(name: str, default: str) -> str:
+    """`env.read`, for a script: an old variable that is set is reported on stderr and the script
+    exits 2 with no traceback. The one place a script reports it."""
+    try:
+        return env.read(name, default)
+    except env.LegacyVariable as refused:
+        print(refused, file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 def root(name: str) -> Path:
-    return Path(env.read(name, DEFAULTS[name]))
+    return Path(read(name, DEFAULTS[name]))
 
 
 def tool(name: str) -> Path:
     """A tool from its variable, else from `PATH`; refused, naming the variable, if neither."""
-    found = env.read(TOOLS[name], "") or shutil.which(name)
+    found = read(TOOLS[name], "") or shutil.which(name)
     if not found:
         raise SystemExit(f"no {name}: set {TOOLS[name]} or put {name} on PATH")
     return Path(found)
