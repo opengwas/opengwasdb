@@ -60,12 +60,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.encoding.codec import (
-    SE_EXCEPTION_INDEX,
-    SE_EXCEPTION_VALUE,
-    SE_FLOAT16_MAX,
-    se_above_bound,
-)
+from opengwasdb.encoding.codec import SE_FLOAT16_MAX, se_above_bound
 from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.overview import write_overview_html
@@ -87,12 +82,10 @@ from opengwasdb.store.arrays import (
     shard_layout,
     sharded_compressor,
 )
-from opengwasdb.store.open import (
-    WRITTEN_FORMAT_VERSIONS,
-    OpenGWASDBStore,
-    format_version_for,
-)
+from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.codec import SE_EXCEPTION_INDEX, SE_EXCEPTION_VALUE
+from opengwasdb.store_reader.format import WRITTEN_FORMAT_VERSIONS, format_version_for
 from opengwasdb.validation import validate_store
 
 #: The layouts the converter understands (#248).  Every other value is refused

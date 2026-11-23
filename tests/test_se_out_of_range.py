@@ -23,7 +23,6 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import SeOutOfRange, StoreCodec
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model import analyses as model
 from opengwasdb.model.analyses import (
@@ -35,6 +34,8 @@ from opengwasdb.model.analyses import (
     write_analysis_records,
 )
 from opengwasdb.store import open as store_open
+from opengwasdb.store_reader import format as store_format
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 #: The largest SE a float16 plane holds, and the smallest float32 above it.
 EDGE = 65504.0
@@ -182,7 +183,7 @@ def _decoded_extremes(seed: int) -> tuple[float, int]:
     which the float64 prediction is the Analysis' typical SE, so their codes are
     ordinary while narrowing moves the prediction by whole units."""
     from opengwasdb.encoding.codec import SeExceptionBuilder
-    from opengwasdb.encoding.plan import SE_RANGE_CANDIDATES
+    from opengwasdb.store_reader.encoding.plan import SE_RANGE_CANDIDATES
 
     rng = np.random.default_rng(seed)
     n, n_analyses = 2000, 4
@@ -263,8 +264,8 @@ def test_the_streamed_dense_rewrite_counts_a_crossing_as_its_encode_does(tmp_pat
     import zarr
 
     from opengwasdb.encoding import se as se_module
-    from opengwasdb.encoding.planes import DenseEafPlane, DenseSePlane
     from opengwasdb.encoding.timing import PhaseTimer
+    from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane
 
     group = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     n = 60
@@ -369,7 +370,7 @@ def test_the_schema_types_the_count_as_a_non_negative_integer_or_unknown() -> No
 def test_a_build_and_a_completion_write_0_2_3() -> None:
     assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
     assert store_open.CURRENT_FORMAT_VERSION == "0.2.3"
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS)[(0, 2)] == (3,)
+    assert dict(store_format.SUPPORTED_FORMAT_VERSIONS)[(0, 2)] == (3,)
     assert store_open.completed_format_version("0.2.2", carries_regions=False) == "0.2.3"
     assert store_open.completed_format_version("0.2.3", carries_regions=True) == "0.2.3"
 

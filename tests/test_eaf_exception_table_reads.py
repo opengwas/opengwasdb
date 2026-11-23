@@ -42,15 +42,19 @@ from test_indexed_subsets import (
 
 from opengwasdb.encoding import banding
 from opengwasdb.encoding import codec as codec_module
-from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, WindowedExactTable
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
     validate_indexed_subsets,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.codec import (
+    EAF_EXCEPTION_INDEX,
+    EAF_EXCEPTION_VALUE,
+    WindowedExactTable,
+)
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Kind, Target
 

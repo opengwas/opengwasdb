@@ -36,7 +36,6 @@ from opengwasdb.build.eaf_orientation import (
     load_eaf_reference,
     select_sites,
 )
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult, trait_positions
@@ -57,7 +56,6 @@ from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model import coverage_for_layout
 from opengwasdb.model.analyses import PassthroughMetadata, write_analysis_records
 from opengwasdb.model.enums import EafScope, StoredEffectScale
-from opengwasdb.model.manifest import RegionsEntry
 from opengwasdb.model.manifest_columns import (
     ManifestColumns,
     require_columns,
@@ -77,7 +75,9 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import RegionsEntry
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants.axis import (
     write_variant_axis,

@@ -17,9 +17,15 @@ import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi, write_sample_size_table
 
-from opengwasdb.encoding import N_MISSING, EncodingMeasurements, SeMeasurements, StoreEncoding
-from opengwasdb.encoding.plan import NEncoding, UnsupportedEncoding
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
+from opengwasdb.store_reader.encoding.plan import (
+    N_MISSING,
+    EncodingMeasurements,
+    NEncoding,
+    SeMeasurements,
+    StoreEncoding,
+    UnsupportedEncoding,
+)
 
 P1 = "ENSG00000000001"
 P2 = "ENSG00000000002"
@@ -774,7 +780,7 @@ def test_the_validation_rule_names_residual_se_beside_an_n_plan() -> None:
     """The rule itself, for a plan that reached validation without the loader."""
     from dataclasses import replace
 
-    from opengwasdb.encoding import SeEncoding
+    from opengwasdb.store_reader.encoding.plan import SeEncoding
     from opengwasdb.validation.rule import Kind, Target
     from opengwasdb.validation.rules import encoding
     from opengwasdb.validation.run import evaluate

@@ -32,9 +32,8 @@ import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.encoding import StoreEncoding, write_eaf_baseline
+from opengwasdb.encoding import write_eaf_baseline
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.store.arrays import (
@@ -46,9 +45,14 @@ from opengwasdb.store.arrays import (
     compressor,
     open_group_for_write,
 )
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "opengwasdb"
 SEAM = PACKAGE_ROOT / "store" / "arrays.py"
+#: The seam's read side (#464): zarr's runtime configuration and the read-only
+#: open of a Store's group, which the Store Reader may not import the creation
+#: seam for. It may open a group read-only and nothing else (see below).
+READ_SEAM = PACKAGE_ROOT / "store_reader" / "arrays.py"
 #: opengwasdb.ld writes LD Stores and Genotype Stores, a different format with its
 #: own writer (`opengwasdb/ld/store/writer.py`, docs/spec/ld-store.md); this seam
 #: is the GWAS Store's, so it does not scan them (#455).
@@ -669,7 +673,7 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     scanned = 0
     offenders: list[str] = []
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        if path == SEAM or "__pycache__" in path.parts or LD_ENGINE in path.parents:
+        if path in (SEAM, READ_SEAM) or "__pycache__" in path.parts or LD_ENGINE in path.parents:
             continue
         scanned += 1
         offenders.extend(
@@ -681,6 +685,31 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     assert scanned > 50, f"only {scanned} modules scanned; the glob is wrong"
     assert _violations(SEAM.read_text(encoding="utf-8")), "the scanner missed the seam's own calls"
     assert offenders == [], "direct Zarr/Blosc creation outside the seam:\n" + "\n".join(offenders)
+
+
+def test_the_read_seam_only_opens_a_group_read_only() -> None:
+    """The read side of the seam sets zarr's runtime configuration and opens a group,
+    once, in mode ``r``: it creates nothing, and every other call the scanner
+    forbids stays in `SEAM`."""
+    source = READ_SEAM.read_text(encoding="utf-8")
+    found = _violations(source, "store_reader/arrays.py")
+    assert sorted(entry.rsplit(": ", 1)[1] for entry in found) == [
+        "zarr.config.set(",
+        "zarr.config.set(",
+        "zarr.core.sync.sync(",
+        "zarr.open_group(",
+        "zarr.storage.LocalStore.open(",
+    ], found
+    opens = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "open_group"
+    ]
+    assert len(opens) == 1
+    modes = [keyword.value for keyword in opens[0].keywords if keyword.arg == "mode"]
+    assert [ast.literal_eval(mode) for mode in modes] == ["r"]
 
 
 #: One (shape, component_chunk) per role, for the default-layout coverage test

@@ -97,8 +97,8 @@ def main() -> None:
     import numcodecs.blosc
 
     from opengwasdb.encoding import optimise_dense_se
-    from opengwasdb.encoding.plan import StoreEncoding
     from opengwasdb.store import arrays
+    from opengwasdb.store_reader.encoding.plan import StoreEncoding
 
     if args.label != "asis":
         numcodecs.blosc.use_threads = args.label == "on"

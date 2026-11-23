@@ -20,14 +20,10 @@ from opengwasdb.encoding import (
     StoreCodec,
 )
 from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.store.open import (
-    OpenGWASDBStore,
-    UnsupportedFormatVersion,
-    indels_reference_first,
-    open_store,
-)
+from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.format import UnsupportedFormatVersion, indels_reference_first
 from opengwasdb.store_reader.hybrid import dense_component_path
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation.rule import (

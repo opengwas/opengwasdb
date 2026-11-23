@@ -23,16 +23,18 @@ from opengwasdb.store.open import (
     HYBRID_DENSE_COMPONENT_ENVELOPE,
     HYBRID_ENVELOPE,
     RAGGED_ENVELOPE,
-    WRITTEN_FORMAT_VERSIONS,
-    UnsupportedFormatVersion,
     check_format_version_stamp,
-    indels_reference_first,
     newer_than_written,
     newer_than_written_text,
+)
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.format import (
+    WRITTEN_FORMAT_VERSIONS,
+    UnsupportedFormatVersion,
+    indels_reference_first,
     split_format_version,
     zarr_format_for_version,
 )
-from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
 from opengwasdb.variants import (

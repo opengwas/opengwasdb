@@ -45,14 +45,14 @@ from test_ragged_completion import _RESULT_KEYS
 from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.associations import Cells
-from opengwasdb.encoding import EafRead
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.by_variant import VariantIndexError
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store_reader.encoding.planes import EafRead
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import sequence as sequence_rules
 from tests.ssf_builds import build_ragged_from_ssf

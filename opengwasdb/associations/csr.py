@@ -16,15 +16,15 @@ from opengwasdb.associations.cells import (
     window_region,
 )
 from opengwasdb.associations.record import Associations, Inspection, InvalidAssociations, State
-from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import (
     ByVariantReader,
     VariantIndexError,
     has_variant_index,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.manifest import StoreManifest
 
 #: A by-variant index decode's columns, in `Inspection.of`'s order.
 _block_columns = itemgetter("variant_index", "analysis_index", "z", "se", "eaf", "imputed")

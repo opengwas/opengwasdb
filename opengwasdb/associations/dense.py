@@ -19,7 +19,8 @@ from opengwasdb.associations.record import (
     non_canonical,
     require_mask,
 )
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 
 
 class _Grid(NamedTuple):

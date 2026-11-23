@@ -74,24 +74,17 @@ from opengwasdb.completion.schema import completion_quality_rollup, create_compl
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EAF_REFERENCE,
-    SE_MISSING,
     AssociationCodec,
     EafExceptionBuilder,
-    EafExceptionTable,
     SeExceptionBuilder,
-    SeExceptionTable,
     StoreCodec,
-    StoreEncoding,
     ZOverflowBuilder,
-    ZOverflowTable,
     write_dense_se_side_arrays,
     write_eaf_baseline,
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import CellValues, Placement, log_se_out_of_range
-from opengwasdb.encoding.codec import SideTables, table_end_to_end
+from opengwasdb.encoding.codec import SideTables, table_end_to_end, write_exact_table
 from opengwasdb.encoding.memory import (
     EXCEPTION_CELLS_PER_RESULT_BYTE,
     FORK_FLOOR_BYTES,
@@ -112,7 +105,6 @@ from opengwasdb.model.analyses import (
     read_analysis_records,
     reset_top_hit_counts,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -122,7 +114,16 @@ from opengwasdb.store.open import (
 )
 from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.codec import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
+    EafExceptionTable,
+    SeExceptionTable,
+    ZOverflowTable,
+)
+from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
@@ -1722,9 +1723,9 @@ def _write_side_arrays(
     table; the carried EAF baseline and its exception table, when the release
     carries one (a baseline-less plane has no residual codes to make exceptions
     for); and a residual SE plane's exception table and model."""
-    table_end_to_end(ZOverflowTable, tables.z_overflow).write(root)
+    write_exact_table(table_end_to_end(ZOverflowTable, tables.z_overflow), root)
     if baseline is not None:
         write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
-        table_end_to_end(EafExceptionTable, tables.eaf_exceptions).write(root)
+        write_exact_table(table_end_to_end(EafExceptionTable, tables.eaf_exceptions), root)
     if coefficients is not None:
         write_dense_se_side_arrays(root, tables.se_exceptions, coefficients)

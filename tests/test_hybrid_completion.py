@@ -27,10 +27,10 @@ from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.validation import validate_store
@@ -186,7 +186,7 @@ def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     stamp's other feature, rather than spell the panel's indels beside them."""
     from region_tables import edit_manifest
 
-    from opengwasdb.store.open import UnsupportedFormatVersion
+    from opengwasdb.store_reader.format import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
     assert StoreManifest.load(src).format_version == "0.2.3"
@@ -815,13 +815,10 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     LD blocks), so this exercises `_fold_panel_crossovers`'s count of reclaimed
     imputed cells directly against a synthetic completed-dense zarr array instead of
     routing through a real completion run."""
-    from opengwasdb.encoding import (
-        DenseZPlane,
-        EncodingMeasurements,
-        StoreCodec,
-        StoreEncoding,
-    )
+    from opengwasdb.encoding import StoreCodec
     from opengwasdb.layouts.hybrid.complete import _fold_panel_crossovers
+    from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
+    from opengwasdb.store_reader.encoding.planes import DenseZPlane
 
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
     codec = StoreCodec(encoding)

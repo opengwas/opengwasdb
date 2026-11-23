@@ -36,7 +36,6 @@ from opengwasdb.store.arrays import (
     compressor,
     create_array,
     create_group,
-    inner_chunk_of,
     open_group,
     open_group_for_write,
     shard_layout,
@@ -51,6 +50,8 @@ from opengwasdb.store.convert import (
     convert_release,
     verify_conversion,
 )
+from opengwasdb.store_reader import format as store_format
+from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.validation import validate_store
 
 #: The fixture's geometry: more than 1,000 variants so the Dense variant-axis
@@ -797,7 +798,7 @@ def test_completion_refuses_a_converted_0_2_0_source(converted_dense_store: Path
     ADR 0079): it is rebuilt first."""
     version = store_open.open_store(converted_dense_store).manifest.format_version
     assert version == "0.2.0"
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Rebuild the release"):
         store_open.check_writable_format_version(version)
 
 

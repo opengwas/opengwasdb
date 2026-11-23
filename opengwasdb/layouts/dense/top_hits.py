@@ -15,15 +15,16 @@ import zarr
 
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_rows, decoded_band_bytes
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import check_writable_zarr_layout
 from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE
 

@@ -32,12 +32,14 @@ The seam owns five things:
   seam is the only code that hands it to Zarr.  Omitting `fill_value` means
   "the dtype's default", which is *not* the same as `fill_value=None` and is
   what several whole-array writes rely on.
-* **zarr's process-wide runtime configuration** (the section after the
-  imports): chunks that are all fill value are still written, Blosc decodes
-  with its internal threads, and every array goes through zarr's fused codec
-  pipeline with one worker.  zarr-python 3 holds these in runtime config
-  rather than array metadata, so they are set once, when this module is
-  imported (#244).
+* **zarr's process-wide runtime configuration**: chunks that are all fill
+  value are still written, Blosc decodes with its internal threads, and every
+  array goes through zarr's fused codec pipeline with one worker.  zarr-python
+  3 holds these in runtime config rather than array metadata, so they are set
+  once, on import, by the read side of this seam,
+  `opengwasdb.store_reader.arrays`, which this module imports (#244, #464;
+  ADR 0056).  That module also opens a group read-only; this one opens it in
+  every other mode.
 
 The role -> layout policy is one table in this module (`_LAYOUTS`) and nothing
 else chooses chunks.  A role that does not fit an existing entry gets a new
@@ -46,7 +48,6 @@ one rather than a call site that passes `chunks=` by hand.
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import re
@@ -58,7 +59,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Literal
 
-import numcodecs
 import numpy as np
 import zarr
 from numcodecs import Blosc
@@ -67,112 +67,14 @@ from zarr.core.buffer import Buffer
 from zarr.core.sync import sync as zarr_sync
 from zarr.storage import LocalStore
 
-# The module whose import switches Blosc's threads off.  ``import zarr`` loads
-# it today; importing it by name makes sure it has run before the setting below
-# turns them back on, should zarr ever load it lazily.  (`importlib` rather than
-# an import statement so mypy does not follow into zarr's sources.)
-importlib.import_module("zarr.codecs.blosc")
-
-# ── zarr runtime configuration ───────────────────────────────────────────────
-#
-# zarr-python 3 keeps three behaviours in process-wide runtime config rather
-# than in array metadata.  They are set here, once, in the module every Store
-# array is created and opened through, so every array the package touches gets
-# them and none can be opened without them.  ADR 0056 records why each is set,
-# what was rejected and what it costs.
-
-#: zarr 2 wrote every chunk, including one that is entirely the fill value: its
-#: ``write_empty_chunks`` default was True.  zarr-python 3 defaults it to False,
-#: which would silently drop those chunk files from a built store and change
-#: the file set a release holds.  The setting is *runtime* config, not stored
-#: metadata, so pinning it per array only covers the object `create_array`
-#: returns -- every ``group[name]`` reopens with the default.  It is therefore
-#: set once, here, the module that owns the Store's physical layout; every
-#: array this package creates or reopens then writes empty chunks as zarr 2
-#: did.  #247 must revisit this when builders move to Zarr v3 shards.
-zarr.config.set({"array.write_empty_chunks": True})
-
-#: Blosc's internal threads, back on (#244).  ``import zarr`` runs
-#: ``numcodecs.blosc.use_threads = False`` for the whole process, and zarr 3
-#: decodes on worker threads where numcodecs' adaptive default would say no
-#: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~0.6 ms with
-#: Blosc's 8 threads, for a ``[1000, 1000]`` int16 chunk of OGS-00009
-#: (``benchmarks/zarr3_blosc_decode.py``).  zarr 2.18 decoded on the main
-#: thread with 8 Blosc threads; this restores that.
-#:
-#: On its own, under zarr's default pipeline, it is not a speed-up: decodes
-#: issued concurrently from zarr's pool queue on numcodecs' lock (below), so
-#: one Analysis genome-wide went from 76 s to 88 s and random lookups slowed by
-#: 21-41%, while phewas went from 50 ms to 34 ms (medians of three fresh
-#: processes).  It pays off with the one-worker fused pipeline below, which
-#: decodes one chunk at a time with all of Blosc's threads.
-#:
-#: It is safe, from numcodecs 0.17 (the pinned floor) and its c-blosc 1.21.7:
-#:
-#: * threads: a threaded call uses Blosc's one global context, and numcodecs
-#:   serialises every such call -- compress and decompress -- under a module
-#:   ``threading.Lock``, with the GIL released inside it.  Concurrent decodes
-#:   queue rather than race.  (0.16 did not take the lock on decompress.)
-#: * forks: a forked process never uses the global context, because numcodecs
-#:   compares the pid with the importing process's and runs single-threaded
-#:   context functions in a child whatever ``use_threads`` says; it also
-#:   re-creates its lock in the child, and c-blosc discards the inherited global
-#:   context in its own ``pthread_atfork`` child handler.
-#:
-#: It is global because the flag is: numcodecs has no per-call or per-thread
-#: form, so a "query-only" switch could only mean "on from the first query
-#: onwards", a mode that depends on what a process did earlier.  The cost
-#: falls on builds, and it is the one zarr 2.18 already had: a chunk of at
-#: least two Blosc blocks (256 KiB uncompressed at zstd clevel 3, so every
-#: ``[1000, 1000]`` Dense chunk) compressed in the parent writes its blocks in
-#: completion order, so its bytes differ run to run while its decoded values
-#: and its compressed size do not.  Compare built stores byte for byte under
-#: ``BLOSC_NTHREADS=1``, as #243 did.  The SE plan reads compressed sizes only,
-#: and forked workers stay single-threaded.
-if not hasattr(numcodecs.blosc, "use_threads"):
-    raise ImportError(
-        "numcodecs.blosc no longer has `use_threads`; the seam cannot restore threaded "
-        "Blosc decoding, and setting the old name would silently do nothing (#244)"
-    )
-numcodecs.blosc.use_threads = True
-
-#: Every array reads and writes through zarr's ``FusedCodecPipeline`` (opt-in
-#: from zarr 3.3), with one worker (#244).  The default ``BatchedCodecPipeline``
-#: schedules each chunk's fetch and decode as separate event-loop tasks; the
-#: fused one fetches, decodes and scatters a whole selection in one hop to a
-#: worker thread.  On OGS-00009 with Blosc threads on it took one Analysis
-#: genome-wide from 88 s to 24 s (zarr 2.18: 26 s), random lookups from 186 ms
-#: and 1,051 ms to 103 ms and 575 ms, and phewas from 34 ms to 23 ms (medians
-#: of three fresh processes each).
-#:
-#: ``max_workers = 1`` is the measured choice, and the fork-safe one:
-#:
-#: * With Blosc threads on, chunk decodes queue on numcodecs' lock anyway, so a
-#:   pool of workers adds contention, not decode throughput: with its default
-#:   pool (224 workers here) the same read took 41-46 s, and random lookups
-#:   were 23-42% slower; only the one-window read (4,241,966 associations)
-#:   gained, by ~7%.
-#: * With more than one worker the pipeline keeps a module-level
-#:   ``ThreadPoolExecutor``, and zarr 3.4's after-fork reset clears its event
-#:   loop and executor but not that pool (zarr-developers/zarr-python#4478).
-#:   A forked build worker inherits the pool without its threads.  A read there
-#:   of more than one chunk, but of no more chunks than the idle permits the
-#:   parent's pool left, queues work that nothing runs and never returns --
-#:   reproduced with the package's own ``ordered_map`` and on OGS-00009's
-#:   top-hit gather.  A single-chunk read never uses the pool, so one-chunk
-#:   fixtures cannot show it.  With one worker the pool is never created; do
-#:   not raise ``max_workers`` (ADR 0056).
-#:
-#: Writes take the same path: a band write encodes its chunks one at a time
-#: (multi-threaded inside Blosc), as zarr 2.18 did.  A forked worker decodes
-#: single-threaded and now also one chunk at a time.
-_FUSED_PIPELINE = "zarr.core.codec_pipeline.FusedCodecPipeline"
-if not hasattr(importlib.import_module("zarr.core.codec_pipeline"), "FusedCodecPipeline"):
-    raise ImportError(
-        f"{_FUSED_PIPELINE} is gone; the seam's read path and its fork guard were "
-        "written for it (#244)"
-    )
-zarr.config.set({"codec_pipeline.path": _FUSED_PIPELINE, "codec_pipeline.max_workers": 1})
+# The read side of the seam: importing it sets zarr's runtime configuration
+# (ADR 0056), so no array is created here without it. `array_length` and
+# `open_group`'s read mode are its; `array_length` is re-exported because
+# opengwasdb-stores imports it from here.
+from opengwasdb.store_reader import arrays as reader_arrays
+from opengwasdb.store_reader.arrays import array_length as array_length
+from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.encoding.codec import SE_COEFFICIENTS as SE_COEFFICIENTS_KEY
 
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
@@ -257,27 +159,6 @@ def compressor() -> Blosc:
     )
 
 
-def array_length(array: Any) -> int:
-    """The leading dimension of an array -- what zarr 2's ``len(array)`` meant.
-
-    zarr-python 3 removed ``Array.__len__``, so ``len(array)`` now raises
-    ``TypeError``; the leading axis is the length every call site wanted.  A
-    2-D top-hit tier reads the same way as a 1-D CSR plane.
-    """
-    return int(array.shape[0])
-
-
-def inner_chunk_of(array: Any) -> tuple[int, ...]:
-    """The *inner* chunk of a Store array, sharded or not.
-
-    zarr-python 3's ``Array.chunks`` is the inner chunk for a sharded array and
-    ``Array.shards`` is the outer shard -- the reverse of what a reader might
-    assume from the v2 spelling.  Every rule about the unit a query reads (the
-    per-variant chunk rule, issue #135; the recorded-layout rule, #245) must
-    use this, never ``shards``, or it would judge the file unit instead of the
-    read unit.  A store with one chunk per shard has ``chunks == shards``.
-    """
-    return tuple(int(size) for size in array.chunks)
 
 
 def compressor_of(array: Any) -> Any:
@@ -438,7 +319,7 @@ class ArrayRole(StrEnum):
     #: One half of a plane's exact-value exception/overflow table.
     EXCEPTION_TABLE = "exception_table"
     #: The two SE decode coefficients per Analysis.
-    SE_COEFFICIENTS = "se_coefficients"
+    SE_COEFFICIENTS = SE_COEFFICIENTS_KEY
     #: One array of the Rho Matrix group (`rho`, `n_null`, `variant_index`).
     RHO_ARRAY = "rho_array"
     #: One statistic plane of an Indexed Variant Subset (`z`, `se`, `eaf`).
@@ -1444,9 +1325,9 @@ if os.environ.get(_ENFORCE_WHOLE_SHARD_WRITES_ENV) == "1":
 
 
 #: The array a residual `se` plan's per-Analysis fit lives in, as its path
-#: spells it. `ArrayRole.SE_COEFFICIENTS` is the role; this is the key, and the
-#: one place the string is spelled: the role maps below and `encoding.codec`
-#: (lower-level modules cannot define it without an upward import) read it.
+#: spells it. `ArrayRole.SE_COEFFICIENTS` is the role; this is the key, spelled
+#: once, by the Store Reader's codec (`SE_COEFFICIENTS_KEY`), whose decoded
+#: planes read it (#464); the role maps below read it here.
 SE_COEFFICIENTS = ArrayRole.SE_COEFFICIENTS.value
 
 #: The Dense roles, by array path, for a Dense Observed-Only or
@@ -2223,8 +2104,9 @@ def open_group(
 ) -> Any:
     """Open a Zarr group, read-only by default.
 
-    The one place `zarr.open_group` is called, so the Store format is declared
-    once.  `mode` may be a creating mode here; `open_group_for_write` is the
+    With the read-only open, `opengwasdb.store_reader.arrays.open_group`, which
+    mode ``r`` hands to, the one place `zarr.open_group` is called, so the Store
+    format is declared once.  `mode` may be a creating mode here; `open_group_for_write` is the
     named entry point for those, and this general form exists for `r`/`r+` and
     for the release-envelope ``arrays(mode=...)`` methods that forward their
     mode.  A creating mode is pinned to `STORE_ZARR_FORMAT` unless `zarr_format`
@@ -2233,10 +2115,11 @@ def open_group(
     consolidated metadata describes (`refuse_under_consolidated_metadata`).
     """
     zarr_mode = _zarr_mode(mode)
-    if zarr_mode != "r":
-        refuse_under_consolidated_metadata(
-            Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
-        )
+    if zarr_mode == "r":
+        return reader_arrays.open_group(path)
+    refuse_under_consolidated_metadata(
+        Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
+    )
     store = _open_local_store(path, zarr_mode)
     return zarr.open_group(
         store, mode=zarr_mode, zarr_format=_open_group_format(mode, zarr_format)

@@ -16,10 +16,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from opengwasdb.encoding import N_MAX, N_MISSING
 from opengwasdb.model.enums import SampleSizeScope
-from opengwasdb.store.arrays import array_length
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.encoding.plan import N_MAX, N_MISSING
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import VALUES_AFTER
 from opengwasdb.validation.rules.csr import ARRAYS, is_ragged

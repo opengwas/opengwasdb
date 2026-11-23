@@ -23,10 +23,10 @@ from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
 
 HEADER = tdc.SOURCE_HEADER + "\teaf"

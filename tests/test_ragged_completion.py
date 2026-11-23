@@ -1921,7 +1921,7 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(obs
     Reader the source is read through refuses it."""
     from opengwasdb.associations import CsrReader, InvalidAssociations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
     from opengwasdb.variants import VariantAxis
 
     assert StoreManifest.load(observed_store).encoding.se.kind == "float16"
@@ -2152,7 +2152,7 @@ def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
 
     from test_ragged_residual_completion import build_residual_ssf_source, write_eaf_carrying_panel
 
-    from opengwasdb.encoding.plan import EAF_ABSENT, SE_MISSING, Z_MISSING
+    from opengwasdb.store_reader.encoding.plan import EAF_ABSENT, SE_MISSING, Z_MISSING
     from opengwasdb.variants.axis import VariantAxis
 
     observed, _ = build_residual_ssf_source(tmp_path / "source")

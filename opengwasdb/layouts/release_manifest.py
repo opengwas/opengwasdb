@@ -15,10 +15,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from opengwasdb.encoding import StoreEncoding
-from opengwasdb.model.manifest import RegionsEntry, StoreManifest
-from opengwasdb.store.open import format_version_for
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.format import format_version_for
+from opengwasdb.store_reader.manifest import RegionsEntry, StoreManifest
 
 
 def observed_only_release_manifest(

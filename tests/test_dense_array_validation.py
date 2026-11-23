@@ -25,17 +25,11 @@ import zarr
 from store_reads import element_reads, times_read
 
 from opengwasdb import top_hits
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EAF_REFERENCE,
-    Z_OVERFLOW,
-    SeEncoding,
-    StoreEncoding,
-    ZEncoding,
-)
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits
 from opengwasdb.store import open_store
 from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, EAF_REFERENCE
+from opengwasdb.store_reader.encoding.plan import Z_OVERFLOW, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.store_reader.enums import CompletionState
 from opengwasdb.top_hits import slices_are_ordered
 from opengwasdb.validation import RULES, validate_store

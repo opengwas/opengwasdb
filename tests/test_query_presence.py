@@ -30,8 +30,8 @@ from opengwasdb.associations import Associations, InvalidAssociations
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import TopHitTier
 
 

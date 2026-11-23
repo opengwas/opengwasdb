@@ -17,12 +17,18 @@ import pytest
 import zarr
 
 import opengwasdb.store.arrays as store_arrays
-from opengwasdb.encoding import EncodingMeasurements, OverflowCells, StoreEncoding
+from opengwasdb.encoding import OverflowCells
 from opengwasdb.encoding.codec import StoreCodec
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import OverflowCellBatches, optimise_dense_se_joint
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.store_reader.encoding.plan import (
+    EafEncoding,
+    EncodingMeasurements,
+    SeEncoding,
+    StoreEncoding,
+    ZEncoding,
+)
 
 # Small enough that the cells amortise the per-variant baseline: a residual
 # plane also stores one float32 per variant, so a plane with far more

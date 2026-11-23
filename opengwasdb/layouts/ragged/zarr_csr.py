@@ -12,28 +12,16 @@ import zarr
 
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import (
-    SE_EXCEPTION,
-    SE_MISSING,
     EafExceptionBuilder,
-    EafMeasurements,
-    EafRead,
     OverflowCellBatches,
     OverflowCells,
-    RaggedEafPlane,
-    RaggedSePlane,
-    SeEncoding,
     SeExceptionBuilder,
-    SeMeasurements,
     StoreCodec,
-    StoreEncoding,
     ZOverflowBuilder,
-    ZOverflowTable,
     eaf_baseline_from_sorted_runs,
     encode_sample_sizes,
     fit_se,
     measure_eaf,
-    positions_at,
-    positions_flat,
     write_eaf_baseline,
     write_eaf_reference,
 )
@@ -46,21 +34,37 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import (
-    EafExceptionTable,
-    SeExceptionTable,
     SideTables,
     require_parallel,
     table_end_to_end,
+    write_exact_table,
 )
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
-from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole, array_length
+from opengwasdb.store.arrays import ArrayRole
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.encoding.codec import (
+    EafExceptionTable,
+    SeExceptionTable,
+    ZOverflowTable,
+    positions_at,
+    positions_flat,
+)
+from opengwasdb.store_reader.encoding.plan import (
+    N_MISSING,
+    SE_EXCEPTION,
+    SE_MISSING,
+    EafMeasurements,
+    SeEncoding,
+    SeMeasurements,
+    StoreEncoding,
+)
+from opengwasdb.store_reader.encoding.planes import EafRead, RaggedEafPlane, RaggedSePlane
 from opengwasdb.store_reader.enums import CompletionState
+from opengwasdb.store_reader.manifest import StoreManifest
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
 _COMPRESSOR = store_arrays.compressor()
@@ -693,8 +697,8 @@ class RaggedCSRWriter:
             root, plane, codec, encoding, offsets, coefficients, exceptions, region_cells
         )
         write_se_coefficients(root, coefficients, compressor=_COMPRESSOR)
-        exceptions.table().write(
-            root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+        write_exact_table(
+            exceptions.table(), root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
         )
         return counts
 
@@ -814,13 +818,13 @@ class RaggedCSRWriter:
                     positions=positions_flat(lo),
                     exceptions=eaf_exceptions,
                 )
-        z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
+        write_exact_table(z_overflow.table(), root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
         if encoding.eaf.is_residual:
             assert baseline is not None
             write_eaf_baseline(
                 root, baseline, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
             )
-            eaf_exceptions.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
+            write_exact_table(eaf_exceptions.table(), root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
 
     def write_eaf_plane(
         self,
@@ -1069,23 +1073,23 @@ class RaggedCSRWriter:
     ) -> SeExceptionCounts | None:
         """The side tables and per-variant arrays, then the attributes that mark
         the component written, last."""
-        table_end_to_end(ZOverflowTable, tables.z_overflow).write(
-            root, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+        write_exact_table(
+            table_end_to_end(ZOverflowTable, tables.z_overflow), root, role=ArrayRole.RAGGED_EXCEPTION_TABLE
         )
         if encoding.eaf.is_residual:
             assert plan.baseline is not None
             write_eaf_baseline(
                 root, plan.baseline, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
             )
-            table_end_to_end(EafExceptionTable, tables.eaf_exceptions).write(
-                root, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+            write_exact_table(
+                table_end_to_end(EafExceptionTable, tables.eaf_exceptions), root, role=ArrayRole.RAGGED_EXCEPTION_TABLE
             )
         counts = None
         if encoding.se.is_residual:
             assert se_coefficients is not None
             write_se_coefficients(root, se_coefficients, compressor=_COMPRESSOR)
-            table_end_to_end(SeExceptionTable, tables.se_exceptions).write(
-                root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+            write_exact_table(
+                table_end_to_end(SeExceptionTable, tables.se_exceptions), root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
             )
             counts = tables.counts
         self._mark_written(root)

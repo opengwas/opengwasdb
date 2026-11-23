@@ -56,13 +56,7 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
-from opengwasdb.encoding import (
-    EafMeasurements,
-    EncodingMeasurements,
-    StoreEncoding,
-    combine_eaf_measurements,
-    optimise_dense_se_joint,
-)
+from opengwasdb.encoding import combine_eaf_measurements, optimise_dense_se_joint
 from opengwasdb.encoding.association_codec import (
     CellValues,
     Storable,
@@ -175,13 +169,19 @@ from opengwasdb.model.info_score_policy import (
     InfoScoreState,
 )
 from opengwasdb.model.maf_policy import MafPolicy, MafState
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
-from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, format_version_for
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.encoding.plan import (
+    EafMeasurements,
+    EncodingMeasurements,
+    StoreEncoding,
+)
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.format import format_version_for
 from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids

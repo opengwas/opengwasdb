@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING
 from opengwasdb.lazy_exports import exported_names, lazy_hooks
 
 if TYPE_CHECKING:
-    from opengwasdb.model.manifest import StoreManifest as StoreManifest
     from opengwasdb.store.open import OpenGWASDBStore as OpenGWASDBStore
     from opengwasdb.store.open import open_store as open_store
+    from opengwasdb.store_reader.manifest import StoreManifest as StoreManifest
     from opengwasdb.version import __version__ as __version__
 
 _EXPORTS = {
-    "opengwasdb.model.manifest": ("StoreManifest",),
+    "opengwasdb.store_reader.manifest": ("StoreManifest",),
     "opengwasdb.store.open": ("OpenGWASDBStore", "open_store"),
     "opengwasdb.version": ("__version__",),
 }

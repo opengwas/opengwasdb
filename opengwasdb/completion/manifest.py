@@ -19,10 +19,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opengwasdb.completion.block import COMPLETION_METHOD
-from opengwasdb.encoding import StoreEncoding
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import completed_format_version
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import CompletionState
+from opengwasdb.store_reader.manifest import StoreManifest
 
 
 def build_completion_provenance(

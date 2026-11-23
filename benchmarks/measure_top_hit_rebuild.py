@@ -41,7 +41,7 @@ from _artifact import commit, scratch_copy, write_artifact
 
 from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store_reader.manifest import StoreManifest
 
 DEFAULT_OUTPUT = Path("docs/benchmark-output/opengwasdb_top_hit_rebuild.json")
 

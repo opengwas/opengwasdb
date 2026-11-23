@@ -642,8 +642,8 @@ def test_reader_refuses_a_missing_imputed_mask_on_reference_eaf(
     residual: RaggedResidualScenario, tmp_path: Path
 ) -> None:
     """A reference-EAF release without the index's mask must raise, not read zeros."""
-    from opengwasdb.encoding import EafBaselineError
     from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.encoding.plan import EafBaselineError
 
     # A copy, so the destructive edit does not damage the module-scoped fixture
     # for the tests that share it (review round 2, finding 6).
@@ -740,7 +740,7 @@ def test_windowed_exception_table_is_bounded_by_scattered_positions() -> None:
     counter = _CellCounter()
     # A small scan window, so the scattered path reads several windows rather
     # than the whole table in one.
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     original_window = WindowedExactTable.scan_window_entries
     WindowedExactTable.scan_window_entries = chunk * 8
@@ -820,9 +820,8 @@ def _windowed_table(
     """A `WindowedExactTable` over a real zarr group, counting cells read."""
     import tempfile
 
-    from opengwasdb.encoding import EafExceptionTable
-    from opengwasdb.encoding.codec import WindowedExactTable
     from opengwasdb.store import arrays as store_arrays
+    from opengwasdb.store_reader.encoding.codec import EafExceptionTable, WindowedExactTable
 
     directory = tempfile.mkdtemp(prefix="windowed-table-")
     root = store_arrays.open_group_for_write(Path(directory) / "t.zarr", "w")
@@ -881,7 +880,7 @@ def test_windowed_exception_table_bounds_the_number_of_zarr_reads(
     whole table, so the new batched scan needs one window read and the old
     per-chunk scan needs one per position.
     """
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     total = 32768  # 512 inner chunks of 64
     chunk = 64
@@ -947,7 +946,7 @@ def test_windowed_exception_table_scans_a_sparse_scatter_chunk_by_chunk(
     multiple of `positions x chunk x 2`, which the always-batch scan cannot
     meet (it reads a whole window per touched window).
     """
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     total, chunk, window_chunks = 32768, 64, 40  # 512 chunks; production window = 40
     monkeypatch.setattr(WindowedExactTable, "scan_window_entries", chunk * window_chunks)
@@ -983,7 +982,7 @@ def test_windowed_exception_table_scan_terminates_with_an_unaligned_window(
     """
     import signal
 
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     total, chunk = 32768, 7  # 4,682 chunks; 10 % 7 != 0, so the window is unaligned
     monkeypatch.setattr(WindowedExactTable, "scan_window_entries", 10)

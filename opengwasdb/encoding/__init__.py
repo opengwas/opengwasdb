@@ -21,21 +21,11 @@ if TYPE_CHECKING:
     from opengwasdb.encoding.codec import (
         DEFAULT_BASELINE_CELL_BUDGET as DEFAULT_BASELINE_CELL_BUDGET,
     )
-    from opengwasdb.encoding.codec import EAF_BASELINE as EAF_BASELINE
-    from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX as EAF_EXCEPTION_INDEX
-    from opengwasdb.encoding.codec import EAF_EXCEPTION_VALUE as EAF_EXCEPTION_VALUE
-    from opengwasdb.encoding.codec import EAF_REFERENCE as EAF_REFERENCE
-    from opengwasdb.encoding.codec import Z_OVERFLOW_INDEX as Z_OVERFLOW_INDEX
-    from opengwasdb.encoding.codec import Z_OVERFLOW_VALUE as Z_OVERFLOW_VALUE
     from opengwasdb.encoding.codec import EafExceptionBuilder as EafExceptionBuilder
-    from opengwasdb.encoding.codec import EafExceptionTable as EafExceptionTable
     from opengwasdb.encoding.codec import SeExceptionBuilder as SeExceptionBuilder
-    from opengwasdb.encoding.codec import SeExceptionTable as SeExceptionTable
     from opengwasdb.encoding.codec import SparseExactBuilder as SparseExactBuilder
-    from opengwasdb.encoding.codec import SparseExactTable as SparseExactTable
     from opengwasdb.encoding.codec import StoreCodec as StoreCodec
     from opengwasdb.encoding.codec import ZOverflowBuilder as ZOverflowBuilder
-    from opengwasdb.encoding.codec import ZOverflowTable as ZOverflowTable
     from opengwasdb.encoding.codec import eaf_baseline_from_grid as eaf_baseline_from_grid
     from opengwasdb.encoding.codec import eaf_baseline_from_pairs as eaf_baseline_from_pairs
     from opengwasdb.encoding.codec import (
@@ -43,51 +33,12 @@ if TYPE_CHECKING:
     )
     from opengwasdb.encoding.codec import eaf_exception_table as eaf_exception_table
     from opengwasdb.encoding.codec import encode_sample_sizes as encode_sample_sizes
-    from opengwasdb.encoding.codec import expit as expit
-    from opengwasdb.encoding.codec import logit as logit
-    from opengwasdb.encoding.codec import positions_at as positions_at
-    from opengwasdb.encoding.codec import positions_flat as positions_flat
-    from opengwasdb.encoding.codec import positions_pairs as positions_pairs
-    from opengwasdb.encoding.codec import positions_row_band as positions_row_band
-    from opengwasdb.encoding.codec import positions_rows_cols as positions_rows_cols
     from opengwasdb.encoding.measure import combine_eaf_measurements as combine_eaf_measurements
     from opengwasdb.encoding.measure import fit_se as fit_se
     from opengwasdb.encoding.measure import fit_se_grid as fit_se_grid
     from opengwasdb.encoding.measure import measure_eaf as measure_eaf
     from opengwasdb.encoding.measure import measure_eaf_grid as measure_eaf_grid
     from opengwasdb.encoding.measure import measure_eaf_sample as measure_eaf_sample
-    from opengwasdb.encoding.plan import DEFAULT_Z_SCALE as DEFAULT_Z_SCALE
-    from opengwasdb.encoding.plan import EAF_ABSENT as EAF_ABSENT
-    from opengwasdb.encoding.plan import EAF_CODE_MAX as EAF_CODE_MAX
-    from opengwasdb.encoding.plan import EAF_CODE_MIN as EAF_CODE_MIN
-    from opengwasdb.encoding.plan import EAF_EXCEPTION as EAF_EXCEPTION
-    from opengwasdb.encoding.plan import EAF_EXCEPTION_BUDGET as EAF_EXCEPTION_BUDGET
-    from opengwasdb.encoding.plan import EAF_RANGE_CANDIDATES as EAF_RANGE_CANDIDATES
-    from opengwasdb.encoding.plan import ENCODING_VERSION as ENCODING_VERSION
-    from opengwasdb.encoding.plan import N_MAX as N_MAX
-    from opengwasdb.encoding.plan import N_MISSING as N_MISSING
-    from opengwasdb.encoding.plan import SE_EXCEPTION as SE_EXCEPTION
-    from opengwasdb.encoding.plan import SE_EXCEPTION_BUDGET as SE_EXCEPTION_BUDGET
-    from opengwasdb.encoding.plan import SE_MISSING as SE_MISSING
-    from opengwasdb.encoding.plan import SE_RANGE_CANDIDATES as SE_RANGE_CANDIDATES
-    from opengwasdb.encoding.plan import Z_MISSING as Z_MISSING
-    from opengwasdb.encoding.plan import Z_OVERFLOW as Z_OVERFLOW
-    from opengwasdb.encoding.plan import EafBaselineError as EafBaselineError
-    from opengwasdb.encoding.plan import EafEncoding as EafEncoding
-    from opengwasdb.encoding.plan import EafMeasurements as EafMeasurements
-    from opengwasdb.encoding.plan import EncodingMeasurements as EncodingMeasurements
-    from opengwasdb.encoding.plan import NEncoding as NEncoding
-    from opengwasdb.encoding.plan import SeEncoding as SeEncoding
-    from opengwasdb.encoding.plan import SeMeasurements as SeMeasurements
-    from opengwasdb.encoding.plan import StoreEncoding as StoreEncoding
-    from opengwasdb.encoding.plan import UnsupportedEncoding as UnsupportedEncoding
-    from opengwasdb.encoding.plan import ZEncoding as ZEncoding
-    from opengwasdb.encoding.planes import DenseEafPlane as DenseEafPlane
-    from opengwasdb.encoding.planes import DenseSePlane as DenseSePlane
-    from opengwasdb.encoding.planes import DenseZPlane as DenseZPlane
-    from opengwasdb.encoding.planes import EafRead as EafRead
-    from opengwasdb.encoding.planes import RaggedEafPlane as RaggedEafPlane
-    from opengwasdb.encoding.planes import RaggedSePlane as RaggedSePlane
     from opengwasdb.encoding.planes import write_dense_cells as write_dense_cells
     from opengwasdb.encoding.planes import write_eaf_baseline as write_eaf_baseline
     from opengwasdb.encoding.planes import write_eaf_reference as write_eaf_reference
@@ -100,6 +51,55 @@ if TYPE_CHECKING:
     from opengwasdb.store.arrays import component_chunk_size as component_chunk_size
     from opengwasdb.store.arrays import component_variant_chunk as component_variant_chunk
     from opengwasdb.store.arrays import per_variant_chunk_size as per_variant_chunk_size
+    from opengwasdb.store_reader.encoding.codec import EAF_BASELINE as EAF_BASELINE
+    from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX as EAF_EXCEPTION_INDEX
+    from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_VALUE as EAF_EXCEPTION_VALUE
+    from opengwasdb.store_reader.encoding.codec import EAF_REFERENCE as EAF_REFERENCE
+    from opengwasdb.store_reader.encoding.codec import Z_OVERFLOW_INDEX as Z_OVERFLOW_INDEX
+    from opengwasdb.store_reader.encoding.codec import Z_OVERFLOW_VALUE as Z_OVERFLOW_VALUE
+    from opengwasdb.store_reader.encoding.codec import EafExceptionTable as EafExceptionTable
+    from opengwasdb.store_reader.encoding.codec import SeExceptionTable as SeExceptionTable
+    from opengwasdb.store_reader.encoding.codec import SparseExactTable as SparseExactTable
+    from opengwasdb.store_reader.encoding.codec import ZOverflowTable as ZOverflowTable
+    from opengwasdb.store_reader.encoding.codec import expit as expit
+    from opengwasdb.store_reader.encoding.codec import logit as logit
+    from opengwasdb.store_reader.encoding.codec import positions_at as positions_at
+    from opengwasdb.store_reader.encoding.codec import positions_flat as positions_flat
+    from opengwasdb.store_reader.encoding.codec import positions_pairs as positions_pairs
+    from opengwasdb.store_reader.encoding.codec import positions_row_band as positions_row_band
+    from opengwasdb.store_reader.encoding.codec import positions_rows_cols as positions_rows_cols
+    from opengwasdb.store_reader.encoding.plan import DEFAULT_Z_SCALE as DEFAULT_Z_SCALE
+    from opengwasdb.store_reader.encoding.plan import EAF_ABSENT as EAF_ABSENT
+    from opengwasdb.store_reader.encoding.plan import EAF_CODE_MAX as EAF_CODE_MAX
+    from opengwasdb.store_reader.encoding.plan import EAF_CODE_MIN as EAF_CODE_MIN
+    from opengwasdb.store_reader.encoding.plan import EAF_EXCEPTION as EAF_EXCEPTION
+    from opengwasdb.store_reader.encoding.plan import EAF_EXCEPTION_BUDGET as EAF_EXCEPTION_BUDGET
+    from opengwasdb.store_reader.encoding.plan import EAF_RANGE_CANDIDATES as EAF_RANGE_CANDIDATES
+    from opengwasdb.store_reader.encoding.plan import ENCODING_VERSION as ENCODING_VERSION
+    from opengwasdb.store_reader.encoding.plan import N_MAX as N_MAX
+    from opengwasdb.store_reader.encoding.plan import N_MISSING as N_MISSING
+    from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION as SE_EXCEPTION
+    from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET as SE_EXCEPTION_BUDGET
+    from opengwasdb.store_reader.encoding.plan import SE_MISSING as SE_MISSING
+    from opengwasdb.store_reader.encoding.plan import SE_RANGE_CANDIDATES as SE_RANGE_CANDIDATES
+    from opengwasdb.store_reader.encoding.plan import Z_MISSING as Z_MISSING
+    from opengwasdb.store_reader.encoding.plan import Z_OVERFLOW as Z_OVERFLOW
+    from opengwasdb.store_reader.encoding.plan import EafBaselineError as EafBaselineError
+    from opengwasdb.store_reader.encoding.plan import EafEncoding as EafEncoding
+    from opengwasdb.store_reader.encoding.plan import EafMeasurements as EafMeasurements
+    from opengwasdb.store_reader.encoding.plan import EncodingMeasurements as EncodingMeasurements
+    from opengwasdb.store_reader.encoding.plan import NEncoding as NEncoding
+    from opengwasdb.store_reader.encoding.plan import SeEncoding as SeEncoding
+    from opengwasdb.store_reader.encoding.plan import SeMeasurements as SeMeasurements
+    from opengwasdb.store_reader.encoding.plan import StoreEncoding as StoreEncoding
+    from opengwasdb.store_reader.encoding.plan import UnsupportedEncoding as UnsupportedEncoding
+    from opengwasdb.store_reader.encoding.plan import ZEncoding as ZEncoding
+    from opengwasdb.store_reader.encoding.planes import DenseEafPlane as DenseEafPlane
+    from opengwasdb.store_reader.encoding.planes import DenseSePlane as DenseSePlane
+    from opengwasdb.store_reader.encoding.planes import DenseZPlane as DenseZPlane
+    from opengwasdb.store_reader.encoding.planes import EafRead as EafRead
+    from opengwasdb.store_reader.encoding.planes import RaggedEafPlane as RaggedEafPlane
+    from opengwasdb.store_reader.encoding.planes import RaggedSePlane as RaggedSePlane
 
 #: Each re-exported name, by the module it comes from; imported on first use
 #: (`opengwasdb.lazy_exports`, #464).
@@ -112,26 +112,28 @@ _EXPORTS = {
     ),
     "opengwasdb.encoding.codec": (
         "DEFAULT_BASELINE_CELL_BUDGET",
+        "EafExceptionBuilder",
+        "SeExceptionBuilder",
+        "SparseExactBuilder",
+        "StoreCodec",
+        "ZOverflowBuilder",
+        "eaf_baseline_from_grid",
+        "eaf_baseline_from_pairs",
+        "eaf_baseline_from_sorted_runs",
+        "eaf_exception_table",
+        "encode_sample_sizes",
+    ),
+    "opengwasdb.store_reader.encoding.codec": (
         "EAF_BASELINE",
         "EAF_EXCEPTION_INDEX",
         "EAF_EXCEPTION_VALUE",
         "EAF_REFERENCE",
         "Z_OVERFLOW_INDEX",
         "Z_OVERFLOW_VALUE",
-        "EafExceptionBuilder",
         "EafExceptionTable",
-        "SeExceptionBuilder",
         "SeExceptionTable",
-        "SparseExactBuilder",
         "SparseExactTable",
-        "StoreCodec",
-        "ZOverflowBuilder",
         "ZOverflowTable",
-        "eaf_baseline_from_grid",
-        "eaf_baseline_from_pairs",
-        "eaf_baseline_from_sorted_runs",
-        "eaf_exception_table",
-        "encode_sample_sizes",
         "expit",
         "logit",
         "positions_at",
@@ -148,7 +150,7 @@ _EXPORTS = {
         "measure_eaf_grid",
         "measure_eaf_sample",
     ),
-    "opengwasdb.encoding.plan": (
+    "opengwasdb.store_reader.encoding.plan": (
         "DEFAULT_Z_SCALE",
         "EAF_ABSENT",
         "EAF_CODE_MAX",
@@ -176,13 +178,15 @@ _EXPORTS = {
         "UnsupportedEncoding",
         "ZEncoding",
     ),
-    "opengwasdb.encoding.planes": (
+    "opengwasdb.store_reader.encoding.planes": (
         "DenseEafPlane",
         "DenseSePlane",
         "DenseZPlane",
         "EafRead",
         "RaggedEafPlane",
         "RaggedSePlane",
+    ),
+    "opengwasdb.encoding.planes": (
         "write_dense_cells",
         "write_eaf_baseline",
         "write_eaf_reference",

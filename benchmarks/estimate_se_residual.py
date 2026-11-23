@@ -28,9 +28,9 @@ from typing import Any
 import numpy as np
 import zarr
 
-from opengwasdb.encoding.plan import StoreEncoding
-from opengwasdb.encoding.planes import DenseEafPlane, RaggedEafPlane
-from opengwasdb.model import StoreManifest
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, RaggedEafPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 
 MISSING = np.int8(-128)
 EXCEPTION = np.int8(-127)

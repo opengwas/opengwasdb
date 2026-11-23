@@ -8,16 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE, per_variant_chunk_size
+from opengwasdb.encoding import per_variant_chunk_size
 from opengwasdb.store import open_store
-from opengwasdb.store.arrays import (
-    ArrayRole,
-    array_length,
-    compressor_of,
-    create_array,
-    open_group,
-)
+from opengwasdb.store.arrays import ArrayRole, compressor_of, create_array, open_group
 from opengwasdb.store.swap import recover_interrupted_swap, swap_staged
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import dense_component_path
 

@@ -58,11 +58,11 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from opengwasdb.encoding import ENCODING_VERSION
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.plan import ENCODING_VERSION
 from opengwasdb.validation import validate_store
 
 #: The only version whose bytes a 0.1.0 stamp describes truthfully.

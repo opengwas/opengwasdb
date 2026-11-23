@@ -575,8 +575,8 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
     `[head:tail]`) changes values while leaving the write counts alone.
     """
     import opengwasdb.store.arrays as store_arrays
-    from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
     from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+    from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 
     monkeypatch.setattr(
         store_arrays,
@@ -624,7 +624,8 @@ def test_the_dense_se_exception_tables_are_written_once(tmp_path: Path) -> None:
     once (#321): three bands, each with an exact exception, make one write per
     table.
     """
-    from opengwasdb.encoding import SeExceptionTable, write_dense_se_side_arrays
+    from opengwasdb.encoding import write_dense_se_side_arrays
+    from opengwasdb.store_reader.encoding.codec import SeExceptionTable
 
     root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
     runs = [
@@ -645,8 +646,13 @@ def test_the_completed_se_plane_is_compressed_for_its_own_dtype(tmp_path: Path) 
     compressor resolved for that dtype: its Blosc `typesize` is the plane's own
     itemsize, not a `float32` scratch plane's (issue #326)."""
     from opengwasdb.encoding import StoreCodec
-    from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
     from opengwasdb.layouts.dense.complete import _create_completed_planes
+    from opengwasdb.store_reader.encoding.plan import (
+        EafEncoding,
+        SeEncoding,
+        StoreEncoding,
+        ZEncoding,
+    )
 
     plan = StoreEncoding(
         z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")

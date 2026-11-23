@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.encoding.se import optimise_dense_se_joint
 from opengwasdb.encoding.timing import PhaseTimer
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 
 def _preliminary() -> StoreEncoding:

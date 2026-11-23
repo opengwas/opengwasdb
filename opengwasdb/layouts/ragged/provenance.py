@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.ragged.by_variant import with_variant_index
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.variants.axis import (
     VARIANT_AXIS_FORMAT,
     VARIANT_TABIX_FILENAME,

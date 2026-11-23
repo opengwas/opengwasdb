@@ -38,16 +38,14 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.encoding import (
-    EafBaselineError,
-    EafExceptionTable,
-    SeExceptionTable,
-    StoreCodec,
-    StoreEncoding,
-    ZOverflowTable,
-    positions_flat,
-)
-from opengwasdb.encoding.codec import (
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
+from opengwasdb.model.manifest import normalise_coverage
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.encoding.codec import (
     EAF_BASELINE,
     EAF_EXCEPTION_INDEX,
     EAF_EXCEPTION_VALUE,
@@ -56,12 +54,13 @@ from opengwasdb.encoding.codec import (
     SE_EXCEPTION_VALUE,
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
-    require_parallel,
+    EafExceptionTable,
+    SeExceptionTable,
+    ZOverflowTable,
+    positions_flat,
 )
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
-from opengwasdb.model.manifest import StoreManifest, normalise_coverage
-from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole, array_length
+from opengwasdb.store_reader.encoding.plan import EafBaselineError, StoreEncoding
+from opengwasdb.store_reader.manifest import StoreManifest
 
 log = logging.getLogger(__name__)
 
@@ -991,7 +990,7 @@ def _recover_interrupted_install(ragged: Path) -> None:
 def _augment_target(store_path: str | Path, force: bool) -> tuple[Any, Path, Path]:
     """Open the release and settle the preconditions for an in-place augment."""
     from opengwasdb.store import open_store
-    from opengwasdb.store.open import WRITTEN_FORMAT_VERSIONS
+    from opengwasdb.store_reader.format import WRITTEN_FORMAT_VERSIONS
 
     store = open_store(store_path)
     # Any release this build writes: 0.2.1 adds a region table and 0.2.2 spells an

@@ -22,7 +22,6 @@ import re
 from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
 
-from opengwasdb.encoding import EafEncoding
 from opengwasdb.model.analyses import (
     N_MISSING_SE_OUT_OF_RANGE,
     NON_NEGATIVE_INTEGER_OR_BLANK,
@@ -45,6 +44,7 @@ from opengwasdb.model.regions import (
 )
 from opengwasdb.store.open import records_se_out_of_range
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.plan import EafEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.release import REQUIRED

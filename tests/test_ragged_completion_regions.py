@@ -665,7 +665,7 @@ def test_a_completion_refuses_a_source_stamped_other_than_its_features(tmp_path,
     also claims sorted indels, which completion refuses first (ADR 0079)."""
     import shutil
 
-    from opengwasdb.store.open import UnsupportedFormatVersion
+    from opengwasdb.store_reader.format import UnsupportedFormatVersion
 
     source = shutil.copytree(cis_only[0], tmp_path / "restamped.opengwasdb")
     edit_manifest(source, lambda m: {**m, "format_version": "0.2.1"})

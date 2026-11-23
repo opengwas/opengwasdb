@@ -49,7 +49,6 @@ from typer.testing import CliRunner
 
 # Project imports.
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense.indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
@@ -69,6 +68,7 @@ from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.validation import validate_store
 

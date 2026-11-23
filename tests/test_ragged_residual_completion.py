@@ -45,10 +45,11 @@ import pytest
 from logged_warnings import logged_warnings
 from stored_rows import stored_rows
 
-from opengwasdb import StoreManifest, open_store
+from opengwasdb import open_store
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf

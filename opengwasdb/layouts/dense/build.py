@@ -11,8 +11,6 @@ import numpy as np
 from opengwasdb import admission
 from opengwasdb.admission.rules import AnalysisRules
 from opengwasdb.encoding import (
-    EncodingMeasurements,
-    StoreEncoding,
     association_codec,
     eaf_baseline_from_grid,
     fit_se_grid,
@@ -47,6 +45,7 @@ from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.arrays import ArrayRole, compressor
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 from opengwasdb.top_hits import add_hit_counts

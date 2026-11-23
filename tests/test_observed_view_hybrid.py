@@ -58,15 +58,7 @@ from test_hybrid_completion import _write_ld_block
 
 import opengwasdb.layouts.dense.complete as dense_complete
 import opengwasdb.store.arrays as arrays_module
-from opengwasdb.encoding import (
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    EafExceptionBuilder,
-    StoreCodec,
-    positions_pairs,
-)
-from opengwasdb.encoding.plan import Z_MISSING
+from opengwasdb.encoding import EafExceptionBuilder, StoreCodec
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
@@ -74,6 +66,9 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.codec import positions_pairs
+from opengwasdb.store_reader.encoding.plan import Z_MISSING
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
 from opengwasdb.variants import VariantAxis
 

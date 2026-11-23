@@ -44,8 +44,6 @@ import numpy as np
 import pytest
 
 from opengwasdb.encoding import StoreCodec
-from opengwasdb.encoding.plan import SE_MISSING
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import (
     ArrayRole,
     chunk_layout,
@@ -56,6 +54,8 @@ from opengwasdb.store.arrays import (
     shard_layout,
     sharded_compressor,
 )
+from opengwasdb.store_reader.encoding.plan import SE_MISSING
+from opengwasdb.store_reader.manifest import StoreManifest
 
 #: Array names that make up a Zarr group's exact/overflow side tables.
 #: Z and EAF tables are written uncompressed; SE tables use the seam's codec.

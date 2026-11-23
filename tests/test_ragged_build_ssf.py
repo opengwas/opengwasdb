@@ -17,9 +17,9 @@ from stored_rows import stored_rows
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf as real_build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf, declare_scale

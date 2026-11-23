@@ -22,14 +22,13 @@ import numpy as np
 
 from opengwasdb import encoding as enc
 from opengwasdb.store.arrays import (
-    array_length,
     chunk_layout,
     inner_chunk_hint_for_path,
-    inner_chunk_of,
     role_for_array_path,
     shard_layout,
 )
-from opengwasdb.store.open import parse_format_version
+from opengwasdb.store_reader.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.format import parse_format_version
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS
 from opengwasdb.validation.rules.encoding import PLAN

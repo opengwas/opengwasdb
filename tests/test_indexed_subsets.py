@@ -33,7 +33,6 @@ from legacy_fixtures import relayout_as_0_1_0
 from typer.testing import CliRunner, Result
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import (
@@ -59,11 +58,13 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     resolve_variant_list,
     validate_indexed_subsets,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ConsolidatedMetadataError
-from opengwasdb.store.open import destination_lock, directory_lock, zarr_format_for_version
+from opengwasdb.store.open import destination_lock, directory_lock
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.format import zarr_format_for_version
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 

@@ -11,15 +11,15 @@ import json
 import numpy as np
 import pytest
 
-from opengwasdb.encoding import (
+from opengwasdb.encoding import StoreCodec, ZOverflowBuilder
+from opengwasdb.encoding.codec import write_exact_table
+from opengwasdb.store_reader.encoding.codec import ZOverflowTable
+from opengwasdb.store_reader.encoding.plan import (
     Z_MISSING,
     Z_OVERFLOW,
     EncodingMeasurements,
-    StoreCodec,
     StoreEncoding,
     UnsupportedEncoding,
-    ZOverflowBuilder,
-    ZOverflowTable,
 )
 from opengwasdb.store_reader.stats import log10_p_two_sided
 
@@ -186,7 +186,7 @@ def test_the_overflow_table_round_trips_through_zarr(tmp_path):
     root = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     builder = ZOverflowBuilder()
     builder.add(np.array([4, 1]), np.array([137.5, -47.8]))
-    builder.table().write(root)
+    write_exact_table(builder.table(), root)
     read = ZOverflowTable.read(root)
     assert list(read.index) == [1, 4]
     assert read.value[1] == pytest.approx(137.5)

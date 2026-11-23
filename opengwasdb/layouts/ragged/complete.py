@@ -72,11 +72,6 @@ from opengwasdb.completion.regions import analysis_regions, inside, region_block
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    SE_EXCEPTION_BUDGET,
-    StoreEncoding,
-)
 from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
@@ -96,7 +91,6 @@ from opengwasdb.model.analyses import (
     reset_top_hit_counts,
     write_analysis_records,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.regions import REGIONS_FILE, Region, RegionTable, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import (
@@ -106,6 +100,9 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.variants.axis import (
     VariantAxis,
     VariantRecord,

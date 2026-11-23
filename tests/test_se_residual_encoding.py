@@ -12,9 +12,17 @@ from dense_sources import build_dense_from_records
 from residual_fixtures import residual_eligible_records
 
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
-from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
+from opengwasdb.encoding.codec import SeExceptionBuilder, StoreCodec
 from opengwasdb.encoding.measure import fit_se_grid
-from opengwasdb.encoding.plan import (
+from opengwasdb.encoding.planes import write_encoded_planes
+from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
+from opengwasdb.layouts.dense.build import NormalisedAssociation
+from opengwasdb.layouts.dense.complete import complete_dense_store
+from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
+from opengwasdb.query import query_store
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable
+from opengwasdb.store_reader.encoding.plan import (
     SE_EXCEPTION,
     SE_EXCEPTION_BUDGET,
     EafEncoding,
@@ -25,20 +33,13 @@ from opengwasdb.encoding.plan import (
     ZEncoding,
     _decide_se,
 )
-from opengwasdb.encoding.planes import (
+from opengwasdb.store_reader.encoding.planes import (
     DenseEafPlane,
     DenseSePlane,
     DenseZPlane,
     RaggedSePlane,
-    write_encoded_planes,
 )
-from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
-from opengwasdb.layouts.dense.build import NormalisedAssociation
-from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
-from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.query import query_store
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant

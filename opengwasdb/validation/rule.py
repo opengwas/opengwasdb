@@ -23,10 +23,10 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 from opengwasdb.admission.rules import Reason
-from opengwasdb.encoding import StoreEncoding
 from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.variants import VariantAxis
 

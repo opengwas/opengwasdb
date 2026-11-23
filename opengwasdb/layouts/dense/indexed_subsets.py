@@ -78,43 +78,41 @@ import numpy as np
 import zarr
 
 from opengwasdb.associations.record import State, Tally
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EAF_EXCEPTION_INDEX,
-    EAF_EXCEPTION_VALUE,
-    EAF_REFERENCE,
-    SE_MISSING,
-    Z_OVERFLOW_INDEX,
-    Z_OVERFLOW_VALUE,
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    EafExceptionTable,
-    SeExceptionTable,
-    StoreCodec,
-    StoreEncoding,
-    UnsupportedEncoding,
-    ZOverflowTable,
-    positions_at,
-    positions_flat,
-    positions_rows_cols,
-)
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.encoding.codec import write_exact_table
 from opengwasdb.encoding.timing import log_phase, log_progress, progress_every
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole, array_length
+from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole
 from opengwasdb.store.open import (
     DestinationExistsError,
     destination_lock,
     directory_lock,
     open_store,
     staged_named_group,
-    zarr_format_for_version,
 )
 from opengwasdb.store_reader.alid import parse_canonical_alid
+from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.encoding.codec import (
+    EAF_BASELINE,
+    EAF_EXCEPTION_INDEX,
+    EAF_EXCEPTION_VALUE,
+    EAF_REFERENCE,
+    Z_OVERFLOW_INDEX,
+    Z_OVERFLOW_VALUE,
+    EafExceptionTable,
+    SeExceptionTable,
+    ZOverflowTable,
+    positions_at,
+    positions_flat,
+    positions_rows_cols,
+)
+from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding, UnsupportedEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.format import zarr_format_for_version
 from opengwasdb.store_reader.hybrid import dense_component_path
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.variants import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
@@ -931,7 +929,9 @@ def _remap_and_write(
     index, value = _remap_side_table(
         _read_side(root, index_name), _read_side(root, value_name), subset, n_analyses
     )
-    table_type(index=index, value=value).write(group, compressor=store_arrays.compressor())
+    write_exact_table(
+        table_type(index=index, value=value), group, compressor=store_arrays.compressor()
+    )
 
 
 def _write_z_side_tables(

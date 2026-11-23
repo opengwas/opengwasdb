@@ -27,7 +27,8 @@ from validation_bands import band_rows
 
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.indexed_subsets import INDEXED_SUBSETS_GROUP
-from opengwasdb.store.arrays import inner_chunk_of, open_group
+from opengwasdb.store.arrays import open_group
+from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.validation import run as validation_run
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import by_variant, variants

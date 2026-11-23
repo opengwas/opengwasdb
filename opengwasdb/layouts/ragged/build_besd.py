@@ -40,7 +40,6 @@ from opengwasdb.build.liftover import (
     lift_hg19_to_hg38,
     require_lifted_alleles_match_reference,
 )
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
@@ -74,6 +73,7 @@ from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.identity import (
     MalformedIdentity,

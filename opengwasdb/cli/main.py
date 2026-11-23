@@ -56,17 +56,16 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.ld.cli import ld_app
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
-from opengwasdb.store.open import UnsupportedFormatVersion
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -470,7 +469,7 @@ def _written_association_coverage(store_path: Path) -> str:
     as the release's coverage (#294), so what is printed must be what is on
     disk -- including for a completion, which has no argument to echo.
     """
-    manifest = cast(StoreManifest, open_store(store_path).manifest)
+    manifest = open_store(store_path).manifest
     return manifest.association_coverage.value
 
 

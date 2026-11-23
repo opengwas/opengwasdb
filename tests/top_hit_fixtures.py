@@ -20,11 +20,11 @@ from conftest import SOURCE_HEADER, SOURCE_ROWS
 from dense_sources import build_dense_fixture
 from test_ragged_build_besd import _build_store as _build_ragged_store
 
-from opengwasdb.encoding import DenseZPlane
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 
 #: 5e-8 / 5e-6 / 5e-4 are the indexed tiers; 1e-9 and 1e-3 have no tier, so a
 #: Ragged Store answers them by scanning its CSR.

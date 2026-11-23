@@ -600,8 +600,8 @@ def compare_aligned(
     rows, and every compared row's difference code (`ROW_CODES`).
     """
     from opengwasdb.build.ordered_pool import ordered_map
-    from opengwasdb.model.manifest import StoreManifest
-    from opengwasdb.store.open import indels_reference_first
+    from opengwasdb.store_reader.format import indels_reference_first
+    from opengwasdb.store_reader.manifest import StoreManifest
     from opengwasdb.validation.observed_view import _map_axis
 
     left_manifest, right_manifest = StoreManifest.load(left), StoreManifest.load(right)

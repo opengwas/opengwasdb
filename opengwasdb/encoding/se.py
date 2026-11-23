@@ -14,29 +14,15 @@ import numpy as np
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding.codec import (
     EXACT_TABLE_CHUNK,
-    SE_EXCEPTION_INDEX,
-    SE_EXCEPTION_VALUE,
     SeExceptionBuilder,
-    SeExceptionTable,
     StoreCodec,
-    positions_flat,
-    positions_row_band,
     require_parallel,
     require_se_in_range,
-    se_float16,
     se_residual_codes,
     table_end_to_end,
 )
 from opengwasdb.encoding.measure import packed_chunk_bytes, solve_log_se
-from opengwasdb.encoding.plan import (
-    SE_MISSING,
-    SE_RANGE_CANDIDATES,
-    EncodingMeasurements,
-    SeEncoding,
-    SeMeasurements,
-    StoreEncoding,
-)
-from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
+from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.store.arrays import (
     ArrayRole,
@@ -44,6 +30,23 @@ from opengwasdb.store.arrays import (
     create_array,
     move_in_group,
 )
+from opengwasdb.store_reader.encoding.codec import (
+    SE_EXCEPTION_INDEX,
+    SE_EXCEPTION_VALUE,
+    SeExceptionTable,
+    positions_flat,
+    positions_row_band,
+    se_float16,
+)
+from opengwasdb.store_reader.encoding.plan import (
+    SE_MISSING,
+    SE_RANGE_CANDIDATES,
+    EncodingMeasurements,
+    SeEncoding,
+    SeMeasurements,
+    StoreEncoding,
+)
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane
 
 log = logging.getLogger(__name__)
 

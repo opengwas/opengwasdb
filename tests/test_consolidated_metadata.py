@@ -32,7 +32,6 @@ import pytest
 import zarr
 from test_eaf_encoding_layouts import make_store_needing_eaf_repair
 
-from opengwasdb.encoding import EAF_BASELINE
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store.arrays import (
@@ -45,6 +44,7 @@ from opengwasdb.store.arrays import (
     open_group_for_write,
     require_group,
 )
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
 
 
 def _tree(root: Path) -> dict[str, bytes]:

@@ -28,9 +28,9 @@ import numpy as np
 
 
 def _cells(q: Any, rows: np.ndarray, col: int, n_cols: int) -> dict[str, object]:
-    from opengwasdb.encoding import DenseEafPlane, DenseSePlane
     from opengwasdb.encoding.codec import StoreCodec
     from opengwasdb.encoding.planes import positions_pairs
+    from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane
 
     cols = np.full(len(rows), col, dtype=np.int64)
     # This check is about the planes themselves, so it opens them, not a reader.

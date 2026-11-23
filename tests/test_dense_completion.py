@@ -30,12 +30,7 @@ from opengwasdb.completion.ld_panel import (
     shared_endpoints,
     snp_position,
 )
-from opengwasdb.encoding import (
-    DenseSePlane,
-    DenseZPlane,
-    StoreCodec,
-    StoreEncoding,
-)
+from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.codec import Z_MISSING
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
@@ -48,6 +43,8 @@ from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
 from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants import VariantAxis
 
@@ -851,7 +848,7 @@ class TestQuery:
         q.close()
 
     def test_top_hits_does_not_open_frequency_plane(self, completed_store, monkeypatch):
-        from opengwasdb.encoding import DenseEafPlane
+        from opengwasdb.store_reader.encoding.planes import DenseEafPlane
 
         def fail_open(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("top_hits must not open the frequency plane")

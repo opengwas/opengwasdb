@@ -14,11 +14,11 @@ import numpy as np
 import zarr
 from dense_sources import build_dense_from_records
 
-from opengwasdb.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import create_array
+from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
 from opengwasdb.variants import CanonicalVariant
 
 #: The subset every one of these releases publishes.

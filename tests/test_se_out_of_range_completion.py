@@ -178,7 +178,7 @@ def dense_pair(tmp_path_factory) -> tuple[Path, Path]:
 
 
 def _dense_cell(store: Path, alid: str, analysis: int) -> tuple[float, float, int]:
-    from opengwasdb.encoding import DenseSePlane, DenseZPlane
+    from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
     from opengwasdb.variants import VariantAxis
 
     opened = open_store(store)

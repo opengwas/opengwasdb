@@ -12,16 +12,17 @@ import pytest
 from dense_sources import build_dense_from_records
 from residual_fixtures import model_se
 
-from opengwasdb.encoding import DenseSePlane
-from opengwasdb.encoding.codec import SeExceptionTable, se_float16
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import write_analyses
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
+from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable, se_float16
+from opengwasdb.store_reader.encoding.planes import DenseSePlane
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import Severity, validate_store
 from opengwasdb.validation.rules.side_tables import (
     FLOAT16_EXACT_MINIMUM,

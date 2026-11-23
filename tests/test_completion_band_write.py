@@ -39,11 +39,12 @@ from zarr.storage import LocalStore
 import opengwasdb.layouts.dense.complete as complete_module
 import opengwasdb.store.arrays as arrays_module
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
-from opengwasdb.encoding import SeExceptionTable, write_dense_se_side_arrays
+from opengwasdb.encoding import write_dense_se_side_arrays
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store, resume_dense_completion
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import open_group, open_group_for_write
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.variants import CanonicalVariant
 
 N_VARIANTS = 120

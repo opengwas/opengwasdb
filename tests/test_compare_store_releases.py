@@ -156,7 +156,7 @@ def test_the_aligned_comparison_sees_a_respelled_indel_whose_statistics_did_not_
 
 def test_reference_first_releases_keep_insertion_and_deletion_as_distinct_variants(tmp_path):
     from benchmarks.compare_store_releases import compare_aligned
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     common = [
         (1, "A", "G", (0.5, -0.5), 0.25),
@@ -183,7 +183,7 @@ def test_reference_first_releases_keep_insertion_and_deletion_as_distinct_varian
 
 def test_cross_assembly_alignment_refuses_equal_coordinate_strings(tmp_path):
     from benchmarks.compare_store_releases import compare_aligned
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     rows = [(1, "A", "G", (0.5, -0.5), 0.25)]
     left = _release(tmp_path / "left", rows)

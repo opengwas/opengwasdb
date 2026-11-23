@@ -22,8 +22,8 @@ import numpy as np
 from stored_rows import stored_rows
 
 from opengwasdb.completion.ld_panel import LDBlock, list_all_blocks, shared_endpoints
-from opengwasdb.encoding import DenseZPlane
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.variants.axis import VariantAxis
 
 
