@@ -31,12 +31,11 @@ def test_the_synthetic_reaches_the_residual_paths_and_side_tables(
 ) -> None:
     """A small flush writes the residual planes, every side table, and a real region peak."""
     import benchmarks.measure_write_amplification as amp
-    import opengwasdb.store.arrays as store_arrays
     import opengwasdb.store_reader.layout as store_layout
 
     # Several regions in a cheap fixture: a 200-cell shard (one 200-cell inner
     # chunk) with a 200-cell region, so six regions cover 1,200 cells.
-    for module in (store_arrays, store_layout, amp):
+    for module in (store_layout, amp):
         monkeypatch.setattr(module, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 200)
         monkeypatch.setattr(module, "ASSOCIATION_SEQUENCE_CHUNK", 200)
     payload = measure(
