@@ -9,7 +9,9 @@ Result shape -- every association-returning method returns an
 `opengwasdb.store_reader.associations.Associations` record. Read as a mapping it is the
 contract ADR 0020 set: ``{"variant_index", "analysis_index", "z", "se", "eaf",
 "association_status"}`` as parallel arrays (int32, int32, float32, float32,
-float32, object). A Ragged release carrying per-association sample sizes adds
+float32, object), and ``"beta"`` and ``"pval"`` (float64), which the record
+derives from its own ``z`` and ``se`` by `stats.association_statistics` and
+nothing else derives again (ADR 0104). A Ragged release carrying per-association sample sizes adds
 ``"n"`` (float64, NaN where the build was given no N for the pair) to every
 result, empty ones included, and a release without the plane never has the key
 (ADR 0067).

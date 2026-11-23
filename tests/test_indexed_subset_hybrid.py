@@ -89,7 +89,10 @@ REF_SUBSET = [
     "1:200000:A:G",
 ]
 
-_RESULT_KEYS = {"variant_index", "analysis_index", "z", "se", "eaf", "association_status"}
+#: beta and pval are derived from z and se (ADR 0104).
+_RESULT_KEYS = {
+    "variant_index", "analysis_index", "z", "se", "beta", "pval", "eaf", "association_status"
+}
 
 
 def _write_list(path: Path, alids: list[str]) -> Path:

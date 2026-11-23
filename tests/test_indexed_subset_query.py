@@ -70,7 +70,10 @@ _SUBSET_VARIANTS = [
     42,
 ]
 _SUBSET_ALIDS = [alid(v) for v in _SUBSET_VARIANTS]
-_RESULT_KEYS = {"variant_index", "analysis_index", "z", "se", "eaf", "association_status"}
+#: beta and pval are derived from z and se (ADR 0104).
+_RESULT_KEYS = {
+    "variant_index", "analysis_index", "z", "se", "beta", "pval", "eaf", "association_status"
+}
 
 
 def _write_alid_list(path: Path, alids: list[str]) -> Path:

@@ -439,8 +439,9 @@ def regional_windows(q: Any) -> list[dict[str, Any]]:
         result = q.lookup(alids, [locus["analysis_id"]])
         rows = []
         n_observed = n_imputed = 0
-        for vi, z, status in zip(
-            result["variant_index"], result["z"], result["association_status"], strict=True
+        for vi, z, se, status in zip(
+            result["variant_index"], result["z"], result["se"], result["association_status"],
+            strict=True,
         ):
             record = q._variant_axis.by_index(int(vi))
             status = str(status)
@@ -448,7 +449,7 @@ def regional_windows(q: Any) -> list[dict[str, Any]]:
             n_imputed += int(status == "imputed")
             rows.append([
                 int(record.position),
-                round(_report.neglog10_p(float(z)), 3),
+                round(_report.neglog10_p(float(z), float(se)), 3),
                 status,
                 _component_of(q, int(vi)),
             ])

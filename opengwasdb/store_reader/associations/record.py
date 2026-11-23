@@ -22,6 +22,8 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.store_reader.stats import AssociationStatistics, association_statistics
+
 
 class Status(IntEnum):
     """Association Status (spec §15), as a record's int8 `status` holds it."""
@@ -297,6 +299,10 @@ class InvalidAssociations(ValueError):
         )
 
 
+#: The keys a record derives from its z and SE rather than reading (ADR 0104).
+_DERIVED = ("beta", "pval")
+
+
 def _index_column(values: Any, length: int) -> np.ndarray:
     if np.ndim(values) == 0:
         return np.full(length, values, dtype=np.int32)
@@ -308,8 +314,10 @@ class Associations(Mapping[str, np.ndarray]):
     """Decoded associations as parallel arrays, one row each.
 
     Read as a mapping it is the query result contract (ADR 0020, ADR 0070):
-    ``variant_index``, ``analysis_index``, ``z``, ``se``, ``eaf``, ``n`` when
-    the component carries the plane, and ``association_status`` as labels.
+    ``variant_index``, ``analysis_index``, ``z``, ``se``, ``beta``, ``pval``,
+    ``eaf``, ``n`` when the component carries the plane, and
+    ``association_status`` as labels. ``beta`` and ``pval`` are float64, derived
+    from ``z`` and ``se`` by `association_statistics` when first read (ADR 0104).
 
     Every row is valid under spec §15: a constructor that is handed an invalid
     cell raises `InvalidAssociations`. `z` and `se` are NaN exactly where
@@ -387,7 +395,16 @@ class Associations(Mapping[str, np.ndarray]):
 
     def _keys(self) -> tuple[str, ...]:
         n = ("n",) if self.n is not None else ()
-        return ("variant_index", "analysis_index", "z", "se", "eaf", *n, "association_status")
+        return (
+            "variant_index",
+            "analysis_index",
+            "z",
+            "se",
+            *_DERIVED,
+            "eaf",
+            *n,
+            "association_status",
+        )
 
     @cached_property
     def labels(self) -> np.ndarray:
@@ -395,9 +412,17 @@ class Associations(Mapping[str, np.ndarray]):
         out: np.ndarray = STATUS_LABELS[self.status]
         return out
 
+    @cached_property
+    def statistics(self) -> AssociationStatistics:
+        """`beta`, `pval` and `log10_p` from `z` and `se`, derived once (ADR 0104)."""
+        return association_statistics(self.z, self.se)
+
     def __getitem__(self, key: str) -> np.ndarray:
         if key == "association_status":
             return self.labels
+        if key in _DERIVED:
+            derived: np.ndarray = getattr(self.statistics, key)
+            return derived
         if key in ("variant_index", "analysis_index", "z", "se", "eaf") or (
             key == "n" and self.n is not None
         ):

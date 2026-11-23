@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.special import erfc, log_ndtr
+from scipy.special import erfc
+
+from opengwasdb.store_reader.stats import association_statistics
 
 # A stratum of an MR run is only estimated when it holds at least this many
 # instruments: a two-instrument "estimate" is the ratio of two ratios, and
@@ -110,15 +112,17 @@ def selection_summary(
     return out
 
 
-def neglog10_p(z: float) -> float:
-    """-log10 of the two-sided p for a z, computed in the log domain.
+def neglog10_p(z: float, se: float) -> float:
+    """-log10 of the two-sided p for a stored z and SE: the Store Reader's
+    `log10_p` (ADR 0104), negated.
 
     `1 - ndtr(|z|)` underflows to 0 at around z = 38, where this store's
     strongest hits live, and loses its significant digits long before that;
-    `log_ndtr` keeps both. Shared so a regional profile and a locus check
-    cannot disagree about what a p-value is.
+    the reader's `log10_p` keeps both. Shared so a regional profile and a locus
+    check cannot disagree about what a p-value is. NaN where the SE is infinite.
     """
-    return float(-(log_ndtr(-abs(z)) + np.log(2.0)) / np.log(10.0))
+    derived = association_statistics(np.array([z]), np.array([se]))
+    return -float(derived.log10_p[0])
 
 
 def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dict[str, Any] | None:
@@ -133,6 +137,7 @@ def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dic
         return None
     record = q._variant_axis.by_index(int(look["variant_index"][0]))
     z, se, eaf = float(look["z"][0]), float(look["se"][0]), float(look["eaf"][0])
+    beta = float(look["beta"][0])  # the Store Reader's (ADR 0104)
     sign = 1.0 if record.effect_allele == risk_allele else -1.0
     return {
         "analysis_id": analysis_id,
@@ -142,10 +147,10 @@ def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dic
         "variant_index": int(record.variant_index),
         "z": z,
         "se": se,
-        "beta_risk_allele": sign * z * se,
+        "beta_risk_allele": sign * beta,
         "z_risk_allele": sign * z,
         "risk_allele_frequency": eaf if record.effect_allele == risk_allele else 1.0 - eaf,
-        "neglog10_p": neglog10_p(z),
+        "neglog10_p": neglog10_p(z, se),
     }
 
 

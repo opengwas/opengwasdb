@@ -85,6 +85,8 @@ def test_record_reads_as_the_query_result_mapping() -> None:
         "analysis_index",
         "z",
         "se",
+        "beta",
+        "pval",
         "eaf",
         "n",
         "association_status",

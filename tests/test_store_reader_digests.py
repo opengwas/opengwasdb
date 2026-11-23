@@ -14,8 +14,12 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
-from store_reader_digests import GOLDEN, build_releases, release_digests
+from store_reader_digests import GOLDEN, _shapes, build_releases, release_digests
+
+from opengwasdb.query import query_store
+from opengwasdb.store_reader.stats import association_statistics
 
 PINS: dict[str, Any] = json.loads(GOLDEN.read_text(encoding="utf-8"))
 RELEASES = sorted(name for name in PINS if not name.startswith("__"))
@@ -49,6 +53,12 @@ def test_the_pins_cover_every_layout_and_completion_state():
 @pytest.mark.parametrize("name", RELEASES)
 def test_every_answer_matches_the_code_before_the_move(releases: dict[str, Path], name: str):
     found = release_digests(releases[name])
+    # The pins predate beta and pval (ADR 0104): without them, nothing moved.
+    for kind in ("shapes", "resolved"):
+        for shape, digests in found[kind].items():
+            # A resolved answer of no rows has no columns to digest.
+            assert not digests or all(key in digests for key in DERIVED), (kind, shape)
+            found[kind][shape] = {k: v for k, v in digests.items() if k not in DERIVED}
     pinned = PINS[name]
     assert found["adapter"] == pinned["adapter"]
     assert found["variants_table"] == pinned["variants_table"]
@@ -76,3 +86,40 @@ def test_every_answer_matches_the_code_before_the_move(releases: dict[str, Path]
                 got,
                 want,
             )
+
+
+#: The arrays the Store Reader derives (ADR 0104), on every record and resolved row.
+DERIVED = ("beta", "pval")
+
+
+@pytest.mark.parametrize("name", RELEASES)
+def test_every_answer_carries_beta_and_pval_from_the_one_function(
+    releases: dict[str, Path], name: str
+):
+    counts = {"rows": 0, "missing": 0, "resolved": 0}
+    with query_store(releases[name]) as q:
+        for shape, ask in _shapes(q).items():
+            result = ask()
+            derived = association_statistics(result["z"], result["se"])
+            for key in DERIVED:
+                assert key in result, (shape, key)
+                assert result[key].dtype == np.float64, (shape, key)
+                assert np.array_equal(result[key], getattr(derived, key), equal_nan=True), (
+                    shape,
+                    key,
+                )
+            counts["rows"] += len(result["z"])
+            counts["missing"] += int(np.count_nonzero(np.isnan(result["pval"])))
+            if shape.startswith("lookup/"):
+                rows = list(q.resolve(result))
+                for i, row in enumerate(rows):
+                    for key in (*DERIVED, "log10_p"):
+                        want = float(getattr(derived, key)[i])
+                        assert row[key] == want or (math.isnan(want) and math.isnan(row[key]))
+                counts["resolved"] += len(rows)
+    # A fixture of empty answers would pass whatever the reader did.
+    assert counts["rows"] > 200 and counts["resolved"] > 5, counts
+    if name == "ragged_completed":
+        # The one fixture whose answers hold missing rows (12, where imputation
+        # failed): their NaN must reach beta and pval.
+        assert counts["missing"] > 0, counts

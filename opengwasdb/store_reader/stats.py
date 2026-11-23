@@ -1,8 +1,11 @@
-"""The p-value a stored z implies, and the |z| a p-value threshold cuts at.
+"""The statistics a stored z and SE imply, and the |z| a p-value threshold cuts at.
 
-A Store Release stores z; its two-sided p is ``erfc(|z| / sqrt(2))``. Three rules
-follow from that one, and all three live here, without scipy (#464):
+A Store Release stores z and SE; its beta is ``z * se`` and its two-sided p is
+``erfc(|z| / sqrt(2))``. The rules that follow live here, without scipy (#464):
 
+- `association_statistics`, the one derivation of `beta`, `pval` and `log10_p`
+  from a result's z and SE arrays (ADR 0104). Every query record and every
+  resolved row carries its output; nothing else in the package derives them;
 - `p_value_from_z`, the scalar p;
 - `log10_p_two_sided`, its log10 over an array, which result resolution reports
   as `log10_p`. It stays finite and exact where p itself is lost in float64 --
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from typing import NamedTuple
 
 import numpy as np
 
@@ -97,6 +101,51 @@ def log10_p_two_sided(z: np.ndarray) -> np.ndarray:
     logs = np.fromiter(map(_log_erfc, scaled), dtype="float64", count=len(scaled))
     result: np.ndarray = (logs / _LN10)[where].reshape(magnitude.shape)
     return result
+
+
+class AssociationStatistics(NamedTuple):
+    """What a stored z and SE imply, one float64 value per association (ADR 0104)."""
+
+    #: ``z * se``, on the Stored Effect Scale.
+    beta: np.ndarray
+    #: The two-sided p, ``erfc(|z| / sqrt(2))``: 0.0 where it is below float64's
+    #: range (|z| above about 38.5) and subnormal just before; `log10_p` is exact there.
+    pval: np.ndarray
+    #: log10 of `pval`, finite and exact where `pval` underflows.
+    log10_p: np.ndarray
+
+
+def association_statistics(z: np.ndarray, se: np.ndarray) -> AssociationStatistics:
+    """`beta`, `pval` and `log10_p` for each association, from its z and SE (ADR 0104).
+
+    float64 whatever the planes' dtype. A missing association -- z or SE NaN --
+    is NaN in all three. So is one whose SE is infinite: an SE above a `float16`
+    plane's range is an error a release before format 0.2.3 may still hold
+    (ADR 0068), and a beta of ``z * inf`` or a p from its z alone would read as
+    a value. An infinite z with a finite SE keeps its infinities: beta ±inf, p
+    0.0, log10_p -inf.
+
+    Each distinct |z| is evaluated once, as in `log10_p_two_sided`.
+    """
+    z64 = np.asarray(z, dtype="float64")
+    se64 = np.asarray(se, dtype="float64")
+    if z64.shape != se64.shape:
+        raise ValueError(f"z and se differ in shape: {z64.shape} and {se64.shape}")
+    unusable = ~np.isfinite(se64)
+    beta = z64 * se64
+    magnitude = np.abs(z64)
+    distinct, where = np.unique(magnitude.ravel(), return_inverse=True)
+    scaled = (distinct * _SQRT_HALF).tolist()
+    count = len(scaled)
+    # `p_value_from_z`'s form, bit for bit; `scaled` differs from it by an ulp.
+    halved = (distinct / math.sqrt(2.0)).tolist()
+    pval = np.fromiter(map(math.erfc, halved), dtype="float64", count=count)[where]
+    logs = np.fromiter(map(_log_erfc, scaled), dtype="float64", count=count)
+    log10_p = (logs / _LN10)[where]
+    pval, log10_p = pval.reshape(z64.shape), log10_p.reshape(z64.shape)
+    for values in (beta, pval, log10_p):
+        values[unusable] = np.nan
+    return AssociationStatistics(beta, pval, log10_p)
 
 
 def z_critical(threshold: float) -> float:

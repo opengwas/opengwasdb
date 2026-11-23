@@ -94,7 +94,7 @@ def test_neglog10_p_stays_significant_where_a_naive_tail_would_not():
     from scipy.special import ndtr
 
     assert 1.0 - ndtr(40.0) == 0.0
-    assert _hybrid_report.neglog10_p(40.0) == pytest.approx(350.0, abs=1.0)
+    assert _hybrid_report.neglog10_p(40.0, 0.01) == pytest.approx(350.0, abs=1.0)
 
 
 def test_the_default_estimate_is_the_both_observed_instruments():
