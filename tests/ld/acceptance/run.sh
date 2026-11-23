@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The acceptance run of `clump` against plink2 (CONTRIBUTING.md, "Acceptance runs"):
 # `pixi run -e dev ld-acceptance-clump`. It reads the k = 0 whole-panel EUR store and #403's 37
-# Analyses with plink2's leads (scripts/realdata/make_403_inputs.py makes them), takes about
+# Analyses with plink2's leads (scripts/ld/realdata/make_403_inputs.py makes them), takes about
 # an hour (25 minutes on ogld#14's partner reads), and fails, never skips, when an input is missing.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."

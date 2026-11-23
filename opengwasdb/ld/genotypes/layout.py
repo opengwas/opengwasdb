@@ -1,4 +1,5 @@
-"""The Genotype Store sidecar's own layout: root kind, arrays and relative input pins (#91).
+"""The Genotype Store sidecar's own layout: root kind, arrays and relative input pins
+(opengwas/ogld#91).
 
 It sits below both the writer and validation so either may import it, and neither has to
 import the other to name the root key or an array.
@@ -31,7 +32,8 @@ ARRAYS = {
 
 
 def input_pin(path: Path, root: Path) -> dict[str, Any]:
-    """Paths move with the sidecar's tree; size/mtime are cheap open-time guards (#91 ruling)."""
+    """Paths move with the sidecar's tree; size/mtime are cheap open-time guards (opengwas/ogld#91
+    ruling)."""
     stat = path.stat()
     return {
         "path": Path(os.path.relpath(path, root)).as_posix(),

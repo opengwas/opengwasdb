@@ -1,4 +1,4 @@
-"""The spec's validation rules, by name, on write and on demand (spec §12; ogld#4).
+"""The spec's validation rules, by name, on write and on demand (ld-store §12; ogld#4).
 
 Each rule yields where and how one opened hierarchy and its provenance break it. `validate`
 runs all 30, in the spec's order, on a store at a path or URL; `StoreWriter.finish` runs them
@@ -8,7 +8,7 @@ cannot be checked, and when an array will not decode it reports that it cannot b
 as a finding, rather than pass or stop.
 
 Every rule reads in bounded windows, through Zarr directly: a chromosome's positions and
-`indptr` arrays whole, as a reader keeps them (spec §10); a Near Band `_WINDOW` codes, the Far
+`indptr` arrays whole, as a reader keeps them (ld-store §10); a Near Band `_WINDOW` codes, the Far
 Pairs an eighth as many entries, and the variant columns `_ROWS` rows at a time. Seventeen rules
 are generators over the whole store. The fifteen that read the band, the Far Pairs and the
 Partner Rows element by element (`_SCANNED`) share one pass over each chromosome instead: each
@@ -67,7 +67,7 @@ from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identi
 _WINDOW: Final = 1 << 23
 #: A block of rows holds at most `_WINDOW >> _ENTRY_SHIFT` Far Pairs, 1 Mi. The rules work on an
 #: entry through about 100 bytes of int64 arrays and on a band code through about 6, so a
-#: block's working arrays stay near 150 MiB however dense the component is (spec §12).
+#: block's working arrays stay near 150 MiB however dense the component is (ld-store §12).
 _ENTRY_SHIFT: Final = 3
 #: Rows of the variant columns a rule reads at once.
 _ROWS: Final = 1 << 20
@@ -79,9 +79,9 @@ _FRAMES_PER_BLOCK: Final = 256
 #: Partner Rows entries a block holds at most. A later row holds an entry for every earlier
 #: partner within far_bp, so the entries a block carries are not bounded by its own band codes:
 #: a few thousand rows at the end of a chromosome whose pairs are all in LD carry every pair
-#: before them (spec §12). A frame is the component's unit of reading, so a block holds one frame
-#: at least. 524,288 entries cost the ten rules about 42 MB at their worst (measured), which keeps
-#: a block's working arrays near the 150 MiB the band's own limit is sized for.
+#: before them (ld-store §12). A frame is the component's unit of reading, so a block holds one
+#: frame at least. 524,288 entries cost the ten rules about 42 MB at their worst (measured), which
+#: keeps a block's working arrays near the 150 MiB the band's own limit is sized for.
 _PARTNER_ENTRIES: Final = 1 << 19
 #: Offending elements a finding names; it counts the rest.
 _NAMED: Final = 5
@@ -113,7 +113,7 @@ class ValidationFailed(Exception):
     def __init__(self, findings: dict[str, list[Finding]]) -> None:
         failing = [found[0] for found in findings.values() if found]
         named = "; ".join(f"{f.rule} at {f.where}: {f.message}" for f in failing)
-        super().__init__(f"the LD Store breaks {len(failing)} rule(s) of spec §12: {named}")
+        super().__init__(f"the LD Store breaks {len(failing)} rule(s) of ld-store §12: {named}")
         self.findings = findings
 
 
@@ -122,7 +122,7 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
     The result has one key per rule, in the spec's order, whose list is empty when the
     store passes it. Each rule reads in bounded windows and never loads a whole Near
-    Band (spec §12; ogld#4). A location with no Zarr group is an `InputError`.
+    Band (ld-store §12; ogld#4). A location with no Zarr group is an `InputError`.
     """
     return validate_at(location, threads=1)
 
@@ -143,7 +143,7 @@ def validate_group(
 ) -> dict[str, list[Finding]]:
     """The `rules` against the hierarchy `root`, judged with `provenance` as its `ld_store`.
     With `threads` above 1, the pass over the Near Band, the Far Pairs and the Partner Rows
-    reads and checks that many blocks at once, and holds no more (spec §12)."""
+    reads and checks that many blocks at once, and holds no more (ld-store §12)."""
     if threads < 1:
         raise ValueError(f"validation needs at least one thread, not {threads}")
     store = _Store(root, provenance, threads)
@@ -235,7 +235,7 @@ class _Store:
     def value(self, key: str) -> Any:
         """The provenance value at dotted `key`, or `_Unchecked`."""
         if not isinstance(self.provenance, dict):
-            raise _Unchecked("ld_store", "the root group has no ld_store provenance (spec §7)")
+            raise _Unchecked("ld_store", "the root group has no ld_store provenance (ld-store §7)")
         found = _lookup(self.provenance, key)
         if found is _MISSING:
             raise _Unchecked(key, f"provenance has no {key} (provenance.complete)")
@@ -316,18 +316,19 @@ class _Store:
 
     def partners_judged(self) -> bool:
         """Whether this store's Partner Rows are judged: its provenance claims them, which a store
-        of format 0.2.0 or later does and no other can (spec §13; partner-rows §6.2).
+        of format 0.2.0 or later does and no other can (ld-store §13; partner-rows §6.2).
 
         A 0.1.0 store that carries the component anyway is an **unclaimed** one: a derivation
         killed between making `partners/` a node of the hierarchy and writing the provenance that
         claims it. Nothing may read those frames — a reader refuses a store whose provenance has
         no `t_partner` — so judging them here would fail a store no one can use and complete
-        nothing; the device that completes or rebuilds it is `ogld derive-partners` (ogld#69).
+        nothing; the device that completes or rebuilds it is `opengwasdb ld derive-partners`
+        (ogld#69).
         """
         return claims_partner_rows(self.provenance)
 
     def positions(self, name: str, start: int, stop: int) -> npt.NDArray[np.int64]:
-        """One chromosome's positions, kept as a reader keeps them (spec §10)."""
+        """One chromosome's positions, kept as a reader keeps them (ld-store §10)."""
         key = f"position/{name}"
         if key not in self._kept:
             self._kept[key] = self.read("variants/position", start, stop).astype(np.int64)
@@ -368,7 +369,7 @@ def _flag(where: str, bad: npt.NDArray[np.bool_], first: int, what: str) -> _Pro
 
 @dataclass(frozen=True)
 class _Component:
-    """A sparse component of each chromosome, `partner` and `r` delimited by an `indptr` (spec
+    """A sparse component of each chromosome, `partner` and `r` delimited by an `indptr` (ld-store
     §5): its group, the names the pass gives its two parts, and the name it gives the row that
     holds each entry. A rule names the component it checks; none is assumed."""
 
@@ -382,9 +383,9 @@ class _Component:
 
 
 _FAR: Final = _Component("far", "far_partner", "far_code", "far_owner")
-#: The store's sparse components: the Far Pairs (spec §5). The Proxy Index was the other, and
-#: #72 removed it. The Partner Rows are named for the findings that compare their entries with
-#: the Near Band's and the Far Pairs' (partner-rows §10). Their entries are frames, not
+#: The store's sparse components: the Far Pairs (ld-store §5). The Proxy Index was the other, and
+#: opengwas/ogld#72 removed it. The Partner Rows are named for the findings that compare their
+#: entries with the Near Band's and the Far Pairs' (partner-rows §10). Their entries are frames, not
 #: `indptr`-delimited arrays, so they are no part of `_COMPONENTS`.
 _COMPONENTS: Final = (_FAR,)
 _PARTNERS: Final = _Component("partners", "partner", "code", "row")
@@ -397,7 +398,7 @@ _VARIANT_DTYPES: Final = {
     "a1_frequency": "float32",
 }
 
-#: The ALID search index's two arrays (spec §1, §6; ADR 0010). The keys are bytes, not the
+#: The ALID search index's two arrays (ld-store §1, §6; ADR 0096). The keys are bytes, not the
 #: variable-length strings `variants/alid` holds, so a search compares them as they lie.
 _ALID_INDEX_DTYPES: Final = {
     "alid": "uint8",
@@ -408,13 +409,13 @@ _ALID_INDEX_DTYPES: Final = {
 def _shape(store: _Store, path: str, dtype: str, length: int | None) -> _Problems:
     array = store.find(path)
     if array is None:
-        yield path, "missing (spec §1)"
+        yield path, "missing (ld-store §1)"
         return
     found = array.metadata.to_dict()["data_type"]
     if found != dtype:
-        yield path, f"its dtype is {found}, not {dtype} (spec §1)"
+        yield path, f"its dtype is {found}, not {dtype} (ld-store §1)"
     if length is not None and array.shape != (length,):
-        yield path, f"its shape is {array.shape}, not ({length},) (spec §2, §4, §5)"
+        yield path, f"its shape is {array.shape}, not ({length},) (ld-store §2, §4, §5)"
 
 
 def _last(store: _Store, path: str) -> int | None:
@@ -425,7 +426,7 @@ def _last(store: _Store, path: str) -> int | None:
 
 
 def _arrays(store: _Store) -> Iterator[str]:
-    """The path of every array spec §1 names, for the store's chromosomes."""
+    """The path of every array ld-store §1 names, for the store's chromosomes."""
     yield from (f"variants/{name}" for name in _VARIANT_DTYPES)
     yield from (f"{layout.ALID_INDEX}/{name}" for name in _ALID_INDEX_DTYPES)
     for chrom, _, _ in store.chromosomes():
@@ -442,7 +443,7 @@ def _counted(store: _Store, rows: int) -> _Problems:
 
 
 def _index_shapes(store: _Store) -> _Problems:
-    """The ALID index's two arrays (spec §6, §1): its keys are 32 bytes an entry, and it has as
+    """The ALID index's two arrays (ld-store §6, §1): its keys are 32 bytes an entry, and it has as
     many entries as its `row` array holds. `alid_index.count` holds their lengths to the Variant
     Set's."""
     held = store.find(layout.ALID_INDEX_ROW)
@@ -454,7 +455,7 @@ def _index_shapes(store: _Store) -> _Problems:
 @_rule("envelope.arrays")
 def _envelope_arrays(store: _Store) -> _Problems:
     if store.root.metadata.zarr_format != 3:
-        yield "/", f"the hierarchy is Zarr v{store.root.metadata.zarr_format}, not v3 (spec §1)"
+        yield "/", f"the hierarchy is Zarr v{store.root.metadata.zarr_format}, not v3 (ld-store §1)"
         return
     ranges = store.chromosomes()
     size = ranges[-1][2] if ranges else 0
@@ -462,7 +463,7 @@ def _envelope_arrays(store: _Store) -> _Problems:
         yield from _shape(store, f"variants/{name}", dtype, size)
     yield from _index_shapes(store)
     yield from _counted(store, size)
-    # The container's dtype: the same for every admitted encoding (spec §1, §3; ADR 0004).
+    # The container's dtype: the same for every admitted encoding (ld-store §1, §3; ADR 0090).
     r_dtype = REncoding.dtype.name
     for chrom, start, stop in ranges:
         for group in ("near", *(k.group for k in _COMPONENTS)):
@@ -485,14 +486,14 @@ def _envelope_fill(store: _Store) -> _Problems:
                 path,
                 (
                     f"its fill value {shown_fill(fill)} is one valid data can hold there: a "
-                    "chunk it lost would read as data (spec §6)"
+                    "chunk it lost would read as data (ld-store §6)"
                 ),
             )
 
 
 # ------------------------------------------------------------------ provenance
 
-#: Every key spec §7 names, required ones and the keys inside them, with their types.
+#: Every key ld-store §7 names, required ones and the keys inside them, with their types.
 #: "?" allows null; "?import" allows it only for an `ld_matrix` source; "?unmeasured" makes it
 #: null exactly when `pc_diagnostic.pairs.n_pairs` is 0, when no cross-chromosome pair was
 #: there to measure (ruling of 10 November 2026). A key inside one that is null or absent is
@@ -574,7 +575,7 @@ _SCHEMA: Final = {
 
 #: The keys a format version adds, and the version that added them: required from it on, and
 #: checked whenever they are there. A 0.1.0 store has no Partner Rows, so it has none of their
-#: keys, and an older one that carries one anyway is still held to its type (spec §7, §13).
+#: keys, and an older one that carries one anyway is still held to its type (ld-store §7, §13).
 _VERSIONED: Final = {
     "t_partner": "0.2.0",
     "partner_code_floor": "0.2.0",
@@ -582,7 +583,7 @@ _VERSIONED: Final = {
     "software.zstd": "0.2.0",
 }
 
-#: Each entry of the PC Check's `scan`, one per PC of the PC File (spec §7).
+#: Each entry of the PC Check's `scan`, one per PC of the PC File (ld-store §7).
 _SCAN_ENTRY: Final = {
     "pc": "str",
     "window": "str",
@@ -594,7 +595,7 @@ _SCAN_ENTRY: Final = {
     "rest_null_q99": "number",
 }
 
-#: The quantiles `pc_diagnostic.near_100kb_change` holds, by name (spec §7).
+#: The quantiles `pc_diagnostic.near_100kb_change` holds, by name (ld-store §7).
 _QUANTILES: Final = ("0", "0.5", "0.9", "0.99", "1")
 
 _TYPES: Final[dict[str, Callable[[object], bool]]] = {
@@ -627,26 +628,26 @@ class _Context:
 
 def _null_problem(nullable: str, only: str, context: _Context) -> str | None:
     if not nullable:
-        return "null, which spec §7 allows nowhere for this key"
+        return "null, which ld-store §7 allows nowhere for this key"
     if only == "import" and context.source != "ld_matrix":
-        return "null, which spec §7 allows only for an ld_matrix source"
+        return "null, which ld-store §7 allows only for an ld_matrix source"
     if only == "unmeasured" and context.n_pairs != 0:
-        return "null, which spec §7 allows only when pc_diagnostic.pairs.n_pairs is 0"
+        return "null, which ld-store §7 allows only when pc_diagnostic.pairs.n_pairs is 0"
     return None
 
 
 def _key_problem(kind: str, value: object, context: _Context) -> str | None:
     base, nullable, only = kind.partition("?")
     if value is _MISSING:
-        return "missing (spec §7)"
+        return "missing (ld-store §7)"
     if value is None:
         return _null_problem(nullable, only, context)
     if not _TYPES[base](value):
-        return f"{value!r:.80} is not of type {base} (spec §7)"
+        return f"{value!r:.80} is not of type {base} (ld-store §7)"
     if only == "unmeasured" and context.n_pairs == 0:
         return (
             f"{value!r}, but pc_diagnostic.pairs.n_pairs is 0, so nothing was measured: it is "
-            "null (spec §7)"
+            "null (ld-store §7)"
         )
     return None
 
@@ -680,7 +681,7 @@ def _added_later(key: str, version: object) -> bool:
     """Whether `key` joined §7 after the recorded `version`, so a store of that version has none.
 
     A version this package cannot read is not excused a key: the keys are all required, and
-    `provenance.encoding` reports the version itself (spec §13).
+    `provenance.encoding` reports the version itself (ld-store §13).
     """
     added, told = _VERSIONED.get(key), _release(version)
     return added is not None and told is not None and told < (_release(added) or told)
@@ -690,7 +691,7 @@ def _added_later(key: str, version: object) -> bool:
 def _provenance_complete(store: _Store) -> _Problems:
     provenance = store.provenance
     if not isinstance(provenance, dict):
-        yield "ld_store", "the root group has no ld_store provenance object (spec §7)"
+        yield "ld_store", "the root group has no ld_store provenance object (ld-store §7)"
         return
     context = _Context(
         _lookup(provenance, "source.kind"), _lookup(provenance, "pc_diagnostic.pairs.n_pairs")
@@ -710,14 +711,14 @@ def _provenance_complete(store: _Store) -> _Problems:
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
-    `REncoding.of` (spec §3, §13). `opengwasdb ld info` and every reader refuse a store with any
+    `REncoding.of` (ld-store §3, §13). `opengwasdb ld info` and every reader refuse a store with any
     other."""
     version = store.value("format_version")
     if version not in READABLE_FORMATS:
         yield (
             "format_version",
             f"{version!r}: this opengwasdb.ld reads {' and '.join(READABLE_FORMATS)} only "
-            "(spec §13)",
+            "(ld-store §13)",
         )
     try:
         REncoding.of(store.value("encoding"))
@@ -729,7 +730,7 @@ def _provenance_encoding(store: _Store) -> _Problems:
 def _provenance_distances(store: _Store) -> _Problems:
     near, far = store.integer("near_bp"), store.integer("far_bp")
     if near != NEAR_BP:
-        yield "near_bp", f"{near:,}, not {NEAR_BP:,} (ADR 0001)"
+        yield "near_bp", f"{near:,}, not {NEAR_BP:,} (ADR 0087)"
     if not near < far <= FAR_BP:
         yield "far_bp", f"{far:,} is not above near_bp {near:,} and at most {FAR_BP:,}"
 
@@ -742,7 +743,7 @@ def _k_with_pc_file(adjustment: dict[str, Any], k: int) -> _Problems:
             "adjustment",
             (
                 f"a PC File was read, so k_min ≤ k ≤ k_target: k_min {k_min}, k {k}, "
-                f"k_target {k_target} (spec §7)"
+                f"k_target {k_target} (ld-store §7)"
             ),
         )
 
@@ -754,7 +755,7 @@ def _k_without_pc_file(adjustment: dict[str, Any], k: int, source: object) -> _P
             "adjustment.k_min",
             (
                 f"{adjustment['k_min']}, but no PC File was read, so k_min applies to nothing and "
-                "is null (spec §7)"
+                "is null (ld-store §7)"
             ),
         )
     if source == "genotypes" and (k, adjustment.get("k_target")) != (0, 0):
@@ -786,7 +787,7 @@ def _t_far_records(store: _Store) -> _Problems:
     n, k = store.integer("panel.n"), store.integer("adjustment.k")
     recorded, q = store.value("t_far"), store.value("t_far_q")
     if q != T_FAR_Q:
-        yield "t_far_q", f"{q!r}, not {T_FAR_Q} (ADR 0001)"
+        yield "t_far_q", f"{q!r}, not {T_FAR_Q} (ADR 0087)"
     try:
         expected = t_far(n, k)
     except ValueError as impossible:
@@ -815,8 +816,8 @@ def _provenance_threshold(store: _Store) -> _Problems:
 @_rule("provenance.partner_threshold")
 def _provenance_partner_threshold(store: _Store) -> _Problems:
     """t_partner is never above t_far, and `partner_code_floor` is its floor at the recorded
-    scale (partner-rows §5.3, §10; spec §3, §7). A store of a version without Partner Rows has
-    no such keys, and nothing to judge (spec §13)."""
+    scale (partner-rows §5.3, §10; ld-store §3, §7). A store of a version without Partner Rows has
+    no such keys, and nothing to judge (ld-store §13)."""
     if not store.partners_judged():
         return
     t_partner, far = store.value("t_partner"), store.value("t_far")
@@ -834,7 +835,7 @@ def _provenance_partner_threshold(store: _Store) -> _Problems:
             (
                 f"{t_partner!r} is above t_far {far!r}: the Partner Threshold is never above the "
                 "Far Threshold, or a pair between the two within near_bp is in neither component "
-                "(spec §3; partner-rows §3)"
+                "(ld-store §3; partner-rows §3)"
             ),
         )
     floor = store.integer("partner_code_floor")
@@ -855,7 +856,7 @@ def _variants_chromosomes(store: _Store) -> _Problems:
     expected, previous = 0, 0
     for name, start, stop in ranges:
         if chromosome_rank(name) <= previous:
-            yield "variants", f"chromosome {name} is out of chromosome order (spec §2)"
+            yield "variants", f"chromosome {name} is out of chromosome order (ld-store §2)"
         if start != expected:
             yield "variants", f"chromosome {name} starts at row {start:,}, not {expected:,}"
         expected, previous = stop, chromosome_rank(name)
@@ -927,7 +928,7 @@ def _index_keys(store: _Store) -> npt.NDArray[Any]:
 
     Whether the two arrays agree — one key an entry — is `alid_index.count`'s rule, so a key array
     that does not is a finding there, and every rule that reads the keys says it cannot be checked
-    rather than failing on an array too short for the entries it names (spec §12; ogld#42's fix
+    rather than failing on an array too short for the entries it names (ld-store §12; ogld#42's fix
     round 3)."""
     width = layout.ALID_INDEX_WIDTH
     values = store.read(layout.ALID_INDEX_ALID)
@@ -957,7 +958,7 @@ def _entries_by_row(store: _Store) -> npt.NDArray[np.int64]:
 def _table_alids(
     store: _Store, lo: int, hi: int
 ) -> tuple[npt.NDArray[np.str_], npt.NDArray[np.bool_]]:
-    """Rows [lo, hi)'s ALIDs, and whether each fits the index's slot (spec §2; ADR 0010)."""
+    """Rows [lo, hi)'s ALIDs, and whether each fits the index's slot (ld-store §2; ADR 0096)."""
     alids = _strings(store, "alid", lo, hi)
     return alids, layout.alid_fits(alids)
 
@@ -965,7 +966,7 @@ def _table_alids(
 @_rule("alid_index.rows")
 def _alid_index_rows(store: _Store) -> _Problems:
     """One entry a variant: each names a row of the Variant Set, none of them twice, and every
-    ALID that fits the slot is named by one (spec §2, §6; ADR 0010)."""
+    ALID that fits the slot is named by one (ld-store §2, §6; ADR 0096)."""
     path = layout.ALID_INDEX_ROW
     rows = _index_rows(store)
     size = store.array("variants/position").shape[0]
@@ -975,7 +976,7 @@ def _alid_index_rows(store: _Store) -> _Problems:
     if len(twice):
         named = ", ".join(str(row) for row in twice[:_NAMED])
         more = f" and {len(twice) - _NAMED:,} more" if len(twice) > _NAMED else ""
-        yield path, f"names row(s) {named}{more} more than once: one entry a variant (spec §2)"
+        yield path, f"names row(s) {named}{more} more than once: one entry a variant (ld-store §2)"
     by_row = _entries_by_row(store)
     for lo, hi in windows(0, size, _ROWS):
         _, fits = _table_alids(store, lo, hi)
@@ -986,7 +987,8 @@ def _alid_index_rows(store: _Store) -> _Problems:
 
 @_rule("alid_index.order")
 def _alid_index_order(store: _Store) -> _Problems:
-    """The keys ascend bytewise: the order every search over them depends on (spec §2; ADR 0010)."""
+    """The keys ascend bytewise: the order every search over them depends on (ld-store §2; ADR
+    0096)."""
     path = layout.ALID_INDEX_ALID
     width = layout.ALID_INDEX_WIDTH
     count = int(store.array(layout.ALID_INDEX_ALID).shape[0]) // width
@@ -1004,7 +1006,7 @@ def _alid_index_order(store: _Store) -> _Problems:
 def _alid_index_keys(store: _Store) -> _Problems:
     """Each entry's key is the full ALID of the row it names, NUL padded — so that row's ALID
     fits the slot, no key was truncated into it, and none is a key no variant has. One variant
-    answering to another's name is what the width exists to prevent (spec §2; ADR 0010;
+    answering to another's name is what the width exists to prevent (ld-store §2; ADR 0096;
     opengwasdb issue #127)."""
     path = layout.ALID_INDEX_ALID
     width = layout.ALID_INDEX_WIDTH
@@ -1028,7 +1030,7 @@ def _alid_index_keys(store: _Store) -> _Problems:
 @_rule("alid_index.count")
 def _alid_index_count(store: _Store) -> _Problems:
     """The keys are 32 bytes an entry, and provenance's left-out count is the table's own count of
-    ALIDs wider than the slot (spec §2, §6, §7; ADR 0010)."""
+    ALIDs wider than the slot (ld-store §2, §6, §7; ADR 0096)."""
     width = layout.ALID_INDEX_WIDTH
     size = store.array("variants/position").shape[0]
     entries = int(store.array(layout.ALID_INDEX_ROW).shape[0])
@@ -1036,7 +1038,8 @@ def _alid_index_count(store: _Store) -> _Problems:
     if held != entries * width:
         yield (
             layout.ALID_INDEX_ALID,
-            f"holds {held:,} bytes, not {entries:,} keys of {width}: one key an entry (spec §6)",
+            f"holds {held:,} bytes, not {entries:,} keys of {width}: one key an entry "
+            "(ld-store §6)",
         )
     wide = sum(int((~_table_alids(store, lo, hi)[1]).sum()) for lo, hi in windows(0, size, _ROWS))
     recorded = store.integer("counts.alids_left_out")
@@ -1044,13 +1047,13 @@ def _alid_index_count(store: _Store) -> _Problems:
         yield (
             "counts.alids_left_out",
             f"records {recorded:,} left out, but {wide:,} of the {size:,} ALIDs are wider than "
-            "the slot: the count is the table's (spec §7)",
+            "the slot: the count is the table's (ld-store §7)",
         )
     yield from _alid_mmap(store)
 
 
 def _alid_mmap(store: _Store) -> _Problems:
-    """Optional local bytes must exactly reproduce the canonical arrays (ADR 0012)."""
+    """Optional local bytes must exactly reproduce the canonical arrays (ADR 0098)."""
     try:
         companion = layout.alid_companion(store.root)
     except InputError as invalid:
@@ -1065,7 +1068,7 @@ def require_alid_mmap(root: zarr.Group, directory: Path, count: int) -> None:
     """Refuse publication unless these unpublished payloads exactly match canonical arrays.
 
     Publication and `alid_index.count` use one check; lookup deliberately checks integrity
-    and content binding only, under the trusted-producer model (ADR 0012).
+    and content binding only, under the trusted-producer model (ADR 0098).
     """
     store = _Store(root, root.attrs.get("ld_store"))
     try:
@@ -1134,7 +1137,7 @@ def _near_rows(store: _Store) -> _Problems:
         if not problems:
             expected = near_row_lengths(store.positions(chrom, start, stop), near_bp)
             bad = np.diff(indptr) != expected
-            yield from _flag(path, bad, 0, "a row whose length is not spec §4's")
+            yield from _flag(path, bad, 0, "a row whose length is not ld-store §4's")
 
 
 # ------------------------------------------------------------------ one pass over each chromosome
@@ -1144,7 +1147,7 @@ def _in_order[T, R](work: Callable[[T], R], items: Iterable[T], threads: int) ->
     """`work` of each item, in the items' order, on `threads` threads. At most `threads` items
     are begun and not yet taken: a full queue is drained before the next item is asked for, so a
     pass holds that many blocks at once and no more — the planner's own item included, which is
-    why the item is taken only where there is room for it (spec §12)."""
+    why the item is taken only where there is room for it (ld-store §12)."""
     if threads == 1:
         yield from map(work, items)
         return
@@ -1211,7 +1214,7 @@ class _Frames:
         path = layout.partners_path(chrom)
         group = store.node(path)
         if not isinstance(group, zarr.Group):
-            raise _Unchecked(path, f"{path} is missing (spec §5.1; partners.files)")
+            raise _Unchecked(path, f"{path} is missing (partner-rows §5.1; partners.files)")
         try:
             reader = open_partner_frames(store.root, chrom, FrameCache(0))
         except ValueError as unreadable:
@@ -1354,7 +1357,7 @@ def _plans(
     decoding its frames, because what bounds it is its entries and not its rows: a later row
     holds an entry for every earlier partner within far_bp, so a few thousand rows near a
     chromosome's end carry every pair before them, which the block's own band codes say nothing
-    about (spec §12). Frames are decoded here, once, on the pass's own thread and handed to the
+    about (ld-store §12). Frames are decoded here, once, on the pass's own thread and handed to the
     rules, so none is decompressed twice; a block holds `_PARTNER_ENTRIES` at most — one frame
     where a frame alone holds more — and ends at the first frame it cannot read.
     """
@@ -1887,7 +1890,8 @@ class _Counted:
 
     def __init__(self, rows: int) -> None:
         # A count of none is a count, not an absence: every row has an entry count, and it is 0
-        # until an entry names it (spec §8's NaN is for an unstored pair's r, which this is not).
+        # until an entry names it (ld-store §8's NaN is for an unstored pair's r, which this is
+        # not).
         self.counts = np.full(rows, 0, dtype=np.int64)
         self.lock = threading.Lock()
 
@@ -2018,7 +2022,7 @@ def _partners_files(store: _Store) -> _Problems:
     """Every chromosome of the Variant Set has a `partners/<c>/` group with both arrays, its
     attributes are the sizes §5.3 names, its `frames_idx` is F + 1 ascending offsets from 0 to
     `frames_bytes`, and both chunk files are the ones its hashes name (partner-rows §5.1, §5.3,
-    §10). A store whose version has no Partner Rows has nothing to judge (spec §13).
+    §10). A store whose version has no Partner Rows has nothing to judge (ld-store §13).
 
     `partners/` is a group of the store's one hierarchy, never a directory beside it (§1, §5.1):
     a 0.2.0 store whose root does not list it is a damaged one even when every chromosome's group
@@ -2033,8 +2037,8 @@ def _partners_files(store: _Store) -> _Problems:
         yield (
             layout.PARTNERS,
             "is not a group of the store's hierarchy: a 0.2.0 store's Partner Rows are a node of "
-            "it, listed by `members()` with both arrays of every chromosome (spec §1, §5.1; "
-            "partner-rows §5.1)",
+            "it, listed by `members()` with both arrays of every chromosome "
+            "(ld-store §1, partner-rows §5.1; partner-rows §5.1)",
         )
     for chrom, start, stop in store.chromosomes():
         yield from _partner_files(store, chrom, stop - start)
@@ -2067,8 +2071,8 @@ def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
     path = layout.partners_path(chrom)
     node = store.node(path)
     if not isinstance(node, zarr.Group):
-        missing = "missing: every chromosome of the Variant Set has one (spec §5.1)"
-        yield path, "is not a group (spec §5.1)" if node is not None else missing
+        missing = "missing: every chromosome of the Variant Set has one (partner-rows §5.1)"
+        yield path, "is not a group (partner-rows §5.1)" if node is not None else missing
         return
     attrs = dict(node.attrs)
     yield from _partner_attrs(path, attrs)
@@ -2080,7 +2084,7 @@ def _partner_files(store: _Store, chrom: str, rows: int) -> _Problems:
     length = attrs.get("frames_bytes")
     yield from _frames_array(path, frames, length)
     if index is None:
-        yield f"{path}/{layout.FRAMES_INDEX}", "missing (spec §5.1)"
+        yield f"{path}/{layout.FRAMES_INDEX}", "missing (partner-rows §5.1)"
     elif (yield from _frames_index(path, index, attrs.get("frames"))):
         where = f"{path}/{layout.FRAMES_INDEX}"
         yield from _chunk_ends(where, index, index.dtype.itemsize * index.shape[0])
@@ -2096,7 +2100,7 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
     """The chunk file `array` addresses holds exactly `expected` bytes. The hash checks read the
     declared prefix, so a store that appended bytes to a chunk keeps both its metadata and its
     hash right; the file's own size says otherwise, and a store that cannot be measured is asked
-    for one byte past the end (spec §5.1, §5.3)."""
+    for one byte past the end (partner-rows §5.1, §5.3)."""
     if isinstance(array.store_path.store, LocalStore):
         try:
             size = layout.chunk_file(array).stat().st_size
@@ -2107,7 +2111,7 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
                 where,
                 (
                     f"its chunk file holds {size:,} bytes, not the {expected:,} its metadata and "
-                    "hash name (spec §5.1, §5.3)"
+                    "hash name (partner-rows §5.1, §5.3)"
                 ),
             )
         return
@@ -2121,7 +2125,10 @@ def _chunk_ends(where: str, array: zarr.Array[Any], expected: int) -> _Problems:
     if beyond:
         yield (
             where,
-            (f"holds bytes past the {expected:,} its metadata and hash name (spec §5.1, §5.3)"),
+            (
+                f"holds bytes past the {expected:,} its metadata and hash name "
+                "(partner-rows §5.1, §5.3)"
+            ),
         )
 
 
@@ -2129,9 +2136,9 @@ def _partner_attrs(path: str, attrs: dict[str, Any]) -> _Problems:
     """The group records each of §5.3's attributes, of its type."""
     for name, kind in _PARTNER_ATTRS.items():
         if name not in attrs:
-            yield path, f"records no {name} (spec §5.3)"
+            yield path, f"records no {name} (partner-rows §5.3)"
         elif not _TYPES[kind](attrs[name]):
-            yield path, f"records {name} as {attrs[name]!r}, not of type {kind} (spec §5.3)"
+            yield path, f"records {name} as {attrs[name]!r}, not of type {kind} (partner-rows §5.3)"
 
 
 def _partner_sizes(path: str, attrs: dict[str, Any], rows: int) -> _Problems:
@@ -2147,7 +2154,7 @@ def _partner_sizes(path: str, attrs: dict[str, Any], rows: int) -> _Problems:
         yield (
             path,
             f"records {attrs.get('frames')!r} frames, but {rows:,} rows at {per_frame} a frame "
-            f"are {due:,} (spec §5.2)",
+            f"are {due:,} (partner-rows §5.2)",
         )
 
 
@@ -2155,13 +2162,13 @@ def _frames_array(path: str, frames: zarr.Array[Any] | None, length: object) -> 
     """The `frames` array is uint8, one chunk of `frames_bytes` bytes (§5.1, §5.3)."""
     where = f"{path}/{layout.FRAMES}"
     if frames is None:
-        yield where, "missing (spec §5.1)"
+        yield where, "missing (partner-rows §5.1)"
         return
     found = frames.metadata.to_dict()["data_type"]
     if found != "uint8":
-        yield where, f"its dtype is {found}, not uint8 (spec §5.1)"
+        yield where, f"its dtype is {found}, not uint8 (partner-rows §5.1)"
     if not _is_int(length):
-        yield where, "has no frames_bytes to be as long as (spec §5.3)"
+        yield where, "has no frames_bytes to be as long as (partner-rows §5.3)"
     elif frames.shape != (length,):
         yield (
             where,
@@ -2171,7 +2178,7 @@ def _frames_array(path: str, frames: zarr.Array[Any] | None, length: object) -> 
         yield (
             where,
             f"its chunks are {frames.chunks}, not one chunk of every byte: a frame is one "
-            "positional read of the chunk file (spec §5.1)",
+            "positional read of the chunk file (partner-rows §5.1)",
         )
 
 
@@ -2183,7 +2190,7 @@ def _frames_index(
     where = f"{path}/{layout.FRAMES_INDEX}"
     found = index.metadata.to_dict()["data_type"]
     if found != "uint64":
-        yield where, f"its dtype is {found}, not uint64 (spec §5.1)"
+        yield where, f"its dtype is {found}, not uint64 (partner-rows §5.1)"
     if not _is_int(count):
         return False
     if index.shape != (count + 1,):
@@ -2201,21 +2208,21 @@ def _frames_index_hash(path: str, offsets: npt.NDArray[np.int64], recorded: obje
     if digest != recorded:
         yield (
             f"{path}/{layout.FRAMES_INDEX}",
-            f"hashes to {digest}, not the recorded {recorded!r} (spec §5.3)",
+            f"hashes to {digest}, not the recorded {recorded!r} (partner-rows §5.3)",
         )
 
 
 def _offsets_judged(where: str, offsets: npt.NDArray[np.int64], length: object) -> _Problems:
     """`offsets` start at 0, ascend strictly and end at the frames' `length` bytes (§5.2, §5.3)."""
     if offsets[0] != 0:
-        yield where, f"starts at {offsets[0]:,}, not 0 (spec §5.2)"
+        yield where, f"starts at {offsets[0]:,}, not 0 (partner-rows §5.2)"
     descending = np.flatnonzero(np.diff(offsets) <= 0)
     if len(descending):
         more = f" and {len(descending) - _NAMED:,} more" if len(descending) > _NAMED else ""
         named = ", ".join(str(int(at) + 1) for at in descending[:_NAMED])
-        yield where, f"does not ascend strictly at offset(s) {named}{more} (spec §5.2)"
+        yield where, f"does not ascend strictly at offset(s) {named}{more} (partner-rows §5.2)"
     if _is_int(length) and offsets[-1] != length:
-        yield where, f"ends at {offsets[-1]:,}, but frames_bytes is {length:,} (spec §5.3)"
+        yield where, f"ends at {offsets[-1]:,}, but frames_bytes is {length:,} (partner-rows §5.3)"
 
 
 def _frames_file_judged(
@@ -2237,7 +2244,7 @@ def _frames_file_judged(
                     where,
                     (
                         f"holds {at + len(raw):,} bytes, fewer than the {length:,} its metadata "
-                        "and hash name (spec §5.1, §5.3)"
+                        "and hash name (partner-rows §5.1, §5.3)"
                     ),
                 )
                 return
@@ -2250,12 +2257,12 @@ def _frames_file_judged(
         source.close()
     found = digest.hexdigest()
     if found != recorded:
-        yield where, f"hashes to {found}, not the recorded {recorded!r} (spec §5.3)"
+        yield where, f"hashes to {found}, not the recorded {recorded!r} (partner-rows §5.3)"
 
 
 class _PartnerRule(_Scanned):
     """A rule that reads a chromosome's Partner Rows. A store of a version that has none — a
-    0.1.0 store without the component — passes it with nothing to judge (spec §13), and takes no
+    0.1.0 store without the component — passes it with nothing to judge (ld-store §13), and takes no
     part of any block; a store that has them is fed the block's frames, and says which one it
     could not read."""
 
@@ -2326,19 +2333,19 @@ class _PartnerRows(_PartnerRule):
         frames = self.c.frames
         assert frames is not None
         if frames.entries is None:
-            raise _Unchecked(f"{self.where}", "records no entries (spec §5.3)")
+            raise _Unchecked(f"{self.where}", "records no entries (partner-rows §5.3)")
         if frames.entries != self.seen:
             yield (
                 self.where,
                 f"records {frames.entries:,} entries, but its frames hold {self.seen:,} "
-                "(spec §5.3, §10)",
+                "(partner-rows §5.3, ld-store §10)",
             )
 
 
 @_scanned("partners.codes")
 class _PartnerCodes(_PartnerRule):
     """Every code is one of the store's encoding: none is the reserved code, and |code| ≤
-    r_scale, so a dequantised r̂ never leaves [−1, 1] (spec §12; partner-rows §10)."""
+    r_scale, so a dequantised r̂ never leaves [−1, 1] (ld-store §12; partner-rows §10)."""
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
         super().__init__(store, c)
@@ -2432,7 +2439,7 @@ class _PartnerSymmetric(_PartnerRule):
     """(l, m, c) is an entry exactly when (m, l, c) is: the 64-bit hash-sum method the retired
     index.symmetric used, every entry adding its pair's hash to the earlier row's sum for its own
     side, and a row whose two sums differ the earlier row of a pair held one way only or with
-    two codes (spec §12; partner-rows §10)."""
+    two codes (ld-store §12; partner-rows §10)."""
 
     def __init__(self, store: _Store, c: _Chromosome) -> None:
         super().__init__(store, c)
@@ -2463,7 +2470,7 @@ class _PartnerSymmetric(_PartnerRule):
 class _PartnerNear(_PartnerRule):
     """The Partner Rows' near half is the Near Band at the Partner Floor, both ways: every entry
     within near_bp carries the band's code, and every band code at the Partner Floor is an
-    entry — the retired index.near's method at the Partner Threshold's floor (spec §12;
+    entry — the retired index.near's method at the Partner Threshold's floor (ld-store §12;
     partner-rows §10).
     The recheck at the chromosome's end reads again only the blocks holding an entry that names
     a row whose sums differ, each against the band's code for its pair."""
@@ -2576,7 +2583,7 @@ class _PartnerNear(_PartnerRule):
 class _PartnerFar(_PartnerRule):
     """The entries beyond near_bp, in each pair's earlier row, are exactly the Far Pairs, pair
     for pair and code for code: the retired far.index's comparison, read against the Partner
-    Rows (spec §12; partner-rows §10). Both are read by the same block of rows, so nothing is
+    Rows (ld-store §12; partner-rows §10). Both are read by the same block of rows, so nothing is
     carried; that an entry beyond near_bp is in its later row too is partners.symmetric's to
     say."""
 

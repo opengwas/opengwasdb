@@ -12,7 +12,7 @@ One pass over every record of every fileset, in pgen order, block by block:
    `.`; MAC ≥ `mac_min` on the kept samples; INFO > `info_min` when it is set; nonzero variance.
 4. **Per chromosome:** the engine's identity in the sorted spelling an LD Store keeps until #462
    (`opengwasdb.variants.sorted_spelling.sorted_identity`), one record per ALID by that
-   spelling's reversed-indel rule, and the engine's variant order (spec §2).
+   spelling's reversed-indel rule, and the engine's variant order (ld-store §2).
 
 A record's REF and ALT are passed unchanged to the identity function, which neither trims nor
 left-aligns (ADR 0089).

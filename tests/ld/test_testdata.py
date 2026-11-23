@@ -1,9 +1,9 @@
-"""The Test Panel is what its manifest and README say it is (tests/testdata.py; ADR 0002).
+"""The Test Panel is what its manifest and README say it is (tests/ld/testdata.py; ADR 0088).
 
 Expected values come from outside the loader: the SHA-256s from manifest.json, plink2's own r,
 plink2's `--export A` dosages recomputed here by a different route (`numpy.linalg.lstsq`
-residuals), and literal rows and positions copied from tests/data/test-panel/README.md's
-edge-case table. Nothing here recomputes an answer the way scripts/make_test_panel.py does.
+residuals), and literal rows and positions copied from tests/ld/data/test-panel/README.md's
+edge-case table. Nothing here recomputes an answer the way scripts/ld/make_test_panel.py does.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ import pytest
 import testdata as td
 
 HALF_STEP = 1 / 65534  # half of one int16 step: the quantisation tolerance (ld-store.md §3)
-T_FAR_K10 = 20.84 / (771 - 10 - 1)  # t_far for 771 samples at k = 10 (ADR 0001, decision 3)
+T_FAR_K10 = 20.84 / (771 - 10 - 1)  # t_far for 771 samples at k = 10 (ADR 0087, decision 3)
 SCALE = 32767
 
-# Literals from tests/data/test-panel/README.md, "The edge cases, and where they are".
+# Literals from tests/ld/data/test-panel/README.md, "The edge cases, and where they are".
 EXACT = {  # distance -> (row_i, row_j, pos_i, pos_j)
     3_000_000: (478, 491, 16_190_010, 19_190_010),
     3_000_001: (472, 490, 16_022_568, 19_022_569),
@@ -46,7 +46,7 @@ CLUMP_P1 = 5e-8
 
 
 def test_every_file_matches_its_manifest_hash() -> None:
-    # The Test Store under store/ is not the Test Panel: scripts/make_test_store.py writes it.
+    # The Test Store under store/ is not the Test Panel: scripts/ld/make_test_store.py writes it.
     files = td.manifest()["files"]
     on_disk = sorted(
         str(p.relative_to(td.TEST_PANEL))
@@ -123,7 +123,7 @@ def test_reference_r_at_k0_equals_plink2_s() -> None:
     assert np.array_equal(ref.row_j, plink2.row_j)
     strong = np.abs(plink2.r) > 0.9
     assert strong.sum() > 100, "the fixture must hold strong LD for this to mean anything"
-    # Complete genotypes: numpy's Pearson r and plink2's agree to rounding (ADR 0002), far
+    # Complete genotypes: numpy's Pearson r and plink2's agree to rounding (ADR 0088), far
     # inside the quantisation step the builder is held to.
     assert np.max(np.abs(ref.r - plink2.r)) <= HALF_STEP
     assert np.max(np.abs(ref.r - plink2.r)) < 1e-12
@@ -139,7 +139,7 @@ def test_adjustment_changes_r() -> None:
 def _dosage_r(k: int) -> dict[tuple[int, int], float]:
     """r between the exported rows at k, by lstsq residuals on [1, the PC Check's first k PCs].
 
-    A different route from scripts/test_panel/reference.py (QR projections, no lstsq), from a
+    A different route from scripts/ld/test_panel/reference.py (QR projections, no lstsq), from a
     different file (plink2's `--export A` text, not panel.pgen through plink2 --make-bed).
     """
     d, pcs = td.dosages(), td.pcs()

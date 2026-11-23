@@ -3,7 +3,7 @@
 A test that needs a malformed input (a missing call, a FILTER that fails, a record on X) makes
 it from the Test Panel's own files in its `tmp_path`: the Test Panel holds none of them
 (its README, "Not in v2, so built by hand in unit tests"), and no test writes into
-`tests/data/`. Genotypes are written with pgenlib, the builder's own reader's library.
+`tests/ld/data/`. Genotypes are written with pgenlib, the builder's own reader's library.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def test_panel_build(
     k: int, factory: pytest.TempPathFactory
 ) -> tuple[opengwasdb.ld.Provenance, Path]:
     """The Test Panel built at k, once per test process and shared by every module that reads
-    one: tests/contract/test_build.py, test_builder.py, test_build_diagnostic.py and
+    one: tests/ld/contract/test_build.py, test_builder.py, test_build_diagnostic.py and
     test_walking_path.py. Each would otherwise build its own."""
     if k not in _BUILDS:
         out = factory.mktemp(f"test-panel-k{k}") / "store"
@@ -140,8 +140,8 @@ def copy_panel(prefix: Path) -> Path:
 
 
 def a1_signs() -> npt.NDArray[np.float64]:
-    """+1 where a Test Panel row's A1 is its ALT, −1 where it is REF (spec §3): the test oracle's,
-    `tests/contract/support.py` (`docs/architecture/ownership.md`, "Test oracles")."""
+    """+1 where a Test Panel row's A1 is its ALT, −1 where it is REF (ld-store §3): the test
+    oracle's, `tests/ld/contract/support.py` (`docs/architecture/ownership.md`, "Test oracles")."""
     return support.oriented()[1]
 
 

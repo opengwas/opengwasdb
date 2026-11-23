@@ -1,4 +1,4 @@
-"""The #40 record names whole answers and fetches, not just lead counts."""
+"""The opengwas/ogld#40 record names whole answers and fetches, not just lead counts."""
 
 from __future__ import annotations
 

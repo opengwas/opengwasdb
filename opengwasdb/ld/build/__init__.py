@@ -1,15 +1,15 @@
 """Building an LD Store from a Source Panel's genotypes (layer 2; ogld#5).
 
-The builder runs where the genotypes are and writes only the LD Store (ADR 0001,
-decision 5). Its inputs are specified in `docs/spec/build-inputs.md` (ADR 0002): a PLINK
+The builder runs where the genotypes are and writes only the LD Store (ADR 0087,
+decision 5). Its inputs are specified in `docs/spec/build-inputs.md` (ADR 0088): a PLINK
 2 pgen with complete genotypes, a keep file and a PC File. ogld runs no PCA: the PCs are
 computed outside the library by a recipe script, and the builder only chooses which of
 them to adjust for, by the PC Check. It imports `opengwasdb.ld.store`, `opengwasdb.ld.format` and
 `opengwasdb.variants` (variant identity, in the sorted spelling), never `opengwasdb.ld.query`.
 
 pgenlib, the pgen reader, is imported inside the build's read path only, never at module
-import: `import ogld` and every reader must work on an install without it
-(tests/test_surface.py holds this).
+import: `import opengwasdb.ld` and every reader must work on an install without it
+(tests/ld/test_surface.py holds this).
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def bounded(threads: int) -> AbstractContextManager[object]:
     thread per core in each matrix product, and zarr's default pool adds 28 to the write.
 
     The caller's zarr setting is restored on exit. zarr makes its pool once, on first use, so
-    the cap holds when the build is its process's first zarr work, as `ogld build` is.
+    the cap holds when the build is its process's first zarr work, as `opengwasdb ld build` is.
     threadpoolctl is a dependency of opengwasdb itself, so a build never lacks it (#455)."""
     stack = ExitStack()
     stack.enter_context(threadpool_limits(limits=1, user_api="blas"))
@@ -54,12 +54,12 @@ def bounded(threads: int) -> AbstractContextManager[object]:
 class BuildInputs:
     """Everything a build reads and every setting it applies (`docs/spec/build-inputs.md`).
 
-    Each field is recorded in the store's provenance (spec §7).
+    Each field is recorded in the store's provenance (ld-store §7).
 
     - `pgen`: one or more PLINK 2 `.pgen` files, one per chromosome or one for the
       genome, each with its `.pvar` (or `.pvar.zst`) and `.psam` beside it; GRCh38. The
       genotypes must be complete: the build refuses any missing call, naming the variant
-      and the panel, rather than impute it (owner, 7 November 2026; ADR 0002).
+      and the panel, rather than impute it (owner, 7 November 2026; ADR 0088).
     - `keep`: the samples to use, one `#IID` per line; n is their count.
     - `pcs`: the PC File (plink2's `.eigenvec` layout). The PC Check scans every PC in
       it and drops the local ones; the first up to k PCs it keeps are regressed out.
@@ -69,12 +69,12 @@ class BuildInputs:
     - `panel_id`, `ancestry`: the Source Panel, as provenance names it.
     - `genotype_source`: what the genotypes are, such as the release and its files.
     - `r_scale`: the scale of the store's encoding, r̂ = code / r_scale, any whole number
-      `opengwasdb.ld.format.REncoding` admits (spec §3). ADR 0004 sets each Source Panel's (owner,
-      10 November 2026). There is no default, so no build falls back on a scale it was not
+      `opengwasdb.ld.format.REncoding` admits (ld-store §3). ADR 0090 sets each Source Panel's
+      (owner, 10 November 2026). There is no default, so no build falls back on a scale it was not
       given; provenance records it in `encoding`.
     - `t_partner`: the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
       the store's Partner Rows (CONTEXT.md; partner-rows §3). A build input with no default
-      (ADR 0011, D3): 0.01 for the HGDP+1kGP panels and 0.001 for UK Biobank EUR, where it
+      (ADR 0097, D3): 0.01 for the HGDP+1kGP panels and 0.001 for UK Biobank EUR, where it
       equals t_far. It is never above t_far, which the store refuses, naming both, once the
       panel's n and the covariates' k give t_far. Provenance records it as `t_partner`.
     - `k`: the target number of PCs to regress out, taken in order from those the PC
@@ -123,7 +123,7 @@ class BuildInputs:
 
 def _check_partner(t_partner: float) -> None:
     """The Partner Threshold is an r², and a build is given one: there is no default
-    (ADR 0011, D3). It is above t_far or not, which only the panel's n and k can say, so that
+    (ADR 0097, D3). It is above t_far or not, which only the panel's n and k can say, so that
     check is the store's (`REncoding.partner_code_floor`)."""
     if not 0.0 <= t_partner <= 1.0:
         raise InputError(
@@ -145,7 +145,7 @@ def _check_pc_counts(k: int, k_min: int) -> None:
 @dataclass(frozen=True)
 class _Prepared:
     """What both builders read before they write: the plan, the Variant Set, the PC Check and
-    the variants FLAT drops from it (build inputs §8, §6)."""
+    the variants FLAT drops from it (build-inputs §8, §6)."""
 
     plan: passes.Plan
     found: Pass
@@ -174,7 +174,7 @@ def _prepare(inputs: BuildInputs, threads: int) -> _Prepared:
 
 
 def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1) -> Provenance:
-    """Build the LD Store of `inputs` at `out` and return its provenance (spec §7; ogld#5).
+    """Build the LD Store of `inputs` at `out` and return its provenance (ld-store §7; ogld#5).
 
     Refuses an input with a missing call. Filters the Variant Set, then runs the PC Check
     (`docs/spec/build-inputs.md` §8): a PC is local, and dropped, when one 4 Mb window
@@ -257,7 +257,7 @@ def _adjustment(inputs: BuildInputs, plan: passes.Plan, chosen: passes.Choice) -
 def build_genotypes(
     inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1
 ) -> Provenance:
-    """Build a local sidecar over existing pgens, without materialising pairwise LD (ADR 0014).
+    """Build a local sidecar over existing pgens, without materialising pairwise LD (ADR 0100).
 
     Variant Set selection, PC Check, sample ordering and FLAT drops are the LD builder's.
     The PC Diagnostic is null: computing the entire Near Band only for its diagnostic would

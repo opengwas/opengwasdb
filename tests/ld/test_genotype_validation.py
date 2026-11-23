@@ -1,4 +1,4 @@
-"""Build/validate and corruption refusals at the public sidecar boundary (#91)."""
+"""Build/validate and corruption refusals at the public sidecar boundary (opengwas/ogld#91)."""
 
 from pathlib import Path
 

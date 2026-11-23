@@ -1,4 +1,4 @@
-"""The rule that explains a lead that differs from plink2's (opengwas/ogld#6, spec §3).
+"""The rule that explains a lead that differs from plink2's (opengwas/ogld#6, ld-store §3).
 
 `clump` joins two variants at r̂² > r2 within the window, on the Stored r of a pair, which is the
 true r rounded to the store's encoding: |r̂ − r| ≤ `max_error`, half a code. plink2 judges the same
@@ -93,7 +93,7 @@ def explain(
     np.fill_diagonal(near, False)
     if np.isnan(r_hat[near]).any():
         i, j = np.argwhere(near & np.isnan(r_hat))[0]
-        raise OutsideBand(f"pair ({i}, {j}) is inside the window and not stored (spec §3)")
+        raise OutsideBand(f"pair ({i}, {j}) is inside the window and not stored (ld-store §3)")
     if np.isnan(true_r2[near]).any():
         i, j = np.argwhere(near & np.isnan(true_r2))[0]
         raise OutsideBand(f"pair ({i}, {j}) is inside the window and plink2 gave no r² for it")

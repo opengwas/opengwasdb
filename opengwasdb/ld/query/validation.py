@@ -13,12 +13,13 @@ from opengwasdb.ld.store.validation import validate_group
 
 
 def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
-    """Run the named rules of the store kind recorded at the root (spec §12)."""
+    """Run the named rules of the store kind recorded at the root (ld-store §12)."""
     return _validate(location, threads=1)
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int = 1) -> dict[str, list[Finding]]:
-    """`validate` on `threads` threads, which is what `ogld validate --threads` asks for."""
+    """`validate` on `threads` threads, which is what `opengwasdb ld validate --threads` asks
+    for."""
     return _validate(location, threads=threads)
 
 
@@ -27,7 +28,7 @@ def _validate(location: str | os.PathLike[str], *, threads: int) -> dict[str, li
 
     Validation reports an envelope it cannot read as a finding of its own rule, rather than
     raising: a Zarr v2 hierarchy, or a root with no provenance, is what `envelope.arrays` and
-    `provenance.complete` are for (spec §12).
+    `provenance.complete` are for (ld-store §12).
     """
     kinded = open_kind(location)
     root = kinded.root

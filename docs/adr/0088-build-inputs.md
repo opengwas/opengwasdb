@@ -1,12 +1,14 @@
 # Build inputs: a PLINK 2 pgen of complete genotypes, and a PC File ogld does not compute
 
+Formerly ogld ADR 0002.
+
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 on what an LD Store build reads, with
 the evidence that led to them and the options rejected. It **supersedes the PC wording of
-[ADR 0001](./0001-near-band-and-thresholded-far-pairs.md), decision 4** ("The PCs come from
+[ADR 0087](./0087-near-band-and-thresholded-far-pairs.md), decision 4** ("The PCs come from
 LD-pruned common variants, with the Long-Range LD Regions excluded"): the PCs are still computed
 that way, but outside ogld, by one recipe, and the builder checks every PC File it is given.
-Lane 2c adds the matching clarification to ADR 0001 (#2). The formats and rules are in
+Lane 2c adds the matching clarification to ADR 0087 (opengwas/ogld#2). The formats and rules are in
 [`docs/spec/build-inputs.md`](../spec/build-inputs.md); the terms are in `CONTEXT.md`.
 
 Every number below is from the prototype branch `proto/1-build-inputs`, cited as
@@ -15,7 +17,7 @@ Every number below is from the prototype branch `proto/1-build-inputs`, cited as
 
 ## Context
 
-ADR 0001 decided what an LD Store holds. The builder (ogld#5) needs to know what it reads:
+ADR 0087 decided what an LD Store holds. The builder (ogld#5) needs to know what it reads:
 which genotype formats, which PCs, and what a missing genotype means. Three facts forced the
 decisions.
 
@@ -65,7 +67,7 @@ apart; regressing out an ancestry axis is what PC Adjustment is for.
 
 ## Decision
 
-The owner decided (7 November 2026; epic #1 comments and the planning pass on #2):
+The owner decided (7 November 2026; epic opengwas/ogld#1 comments and the planning pass on opengwas/ogld#2):
 
 1. **The builder reads PLINK 2 pgen only.** VCF/BCF, PLINK 1 bed and BGEN are converted with
    plink2 first, by the commands `build-inputs.md` documents. One fileset per chromosome or one
@@ -91,15 +93,15 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    | SAS | 783 | 782 | HGDP00175 | 0.0270298 |
    | AMR | 345 | 345 | none | 0.0623952 |
 
-   t_far = max(0.001, 20.84 / (n − k − 1)) on the v2 sample count (ADR 0001, decision 3).
+   t_far = max(0.001, 20.84 / (n − k − 1)) on the v2 sample count (ADR 0087, decision 3).
 4. **PCs are precomputed and supplied in a PC File; ogld runs no PCA.** For all five HGDP+1kGP
    panels they are **our own**, from the same v2 genotypes, by one recipe script,
-   `scripts/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
+   `scripts/ld/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
    relateds projected; SNVs with AF 5–95%; LD-pruned at r² < 0.1 in 500 kb), excluding the
-   Long-Range LD Regions of `ogld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
+   Long-Range LD Regions of `opengwasdb/ld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
    local, and dropped from the covariates, when all three hold (the owner's rule, adopted
-   7 November 2026 at the review of #2):
+   7 November 2026 at the review of opengwas/ogld#2):
    - one 4 Mb window explains ≥ 10% of it;
    - that share is above the window-side null, the 99th percentile of the largest window share
      over 200 permutations of the PC across samples;
@@ -111,7 +113,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    Provenance records `k_target`, `k_min` and `k`, the scan (with each PC's `ratio`,
    `window_null_q99` and, as a diagnostic, `rest_null_q99`), the dropped PCs and the null.
    `k_min` applies only when PCs are used: at k = 0 no PC File is read, nothing is refused for
-   want of PCs, and provenance records `k_min` as null (review of #2, 7 November 2026).
+   want of PCs, and provenance records `k_min` as null (review of opengwas/ogld#2, 7 November 2026).
 
    **Why the ratio.** The owner first set the rule as "one window explains ≥ 10% and the rest of
    the genome explains it no better than chance". Measured on karyotype-like scores, it kept EUR's
@@ -128,28 +130,28 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    On our v2 PCs it drops no PC in any of the five panels: each keeps 20 of 20 and uses
    PC1–PC10. The smallest ratio of any PC is EUR PC2's, 0.104, which LCT's window explains 0.195
    of (`proto/1-build-inputs@8c25ab3:…/results/pc_check_v2_scan.tsv`).
-6. **Superseded by [ADR 0015](./0015-imported-ld.md)** (owner, #88/#93,
+6. **Superseded by [ADR 0101](./0101-imported-ld.md)** (owner, opengwas/ogld#88/#93,
    20–21 November 2026): published Pan-UKB covariance may now be imported.
    **Originally: imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
-   the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
+   the source kind and every covariate adjusted for (epic opengwas/ogld#1 comment of 7 November 2026).
 7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
    EUR samples, with the EUR PC File and independent reference answers
-   ([`tests/data/test-panel/README.md`](../../tests/data/test-panel/README.md)). The owner approved
-   committing this public slice on 7 November 2026. ADR 0001's decision 5, "Genotypes never leave
+   ([`tests/ld/data/test-panel/README.md`](../../tests/data/test-panel/README.md)). The owner approved
+   committing this public slice on 7 November 2026. ADR 0087's decision 5, "Genotypes never leave
    the host they are built on", still holds for every non-public Source Panel, such as UK Biobank.
    It does not hold for HGDP+1kGP, whose genotypes are already public under gnomAD's CC0 terms.
-8. **An INFO floor needs INFO** (accepted at the review of #2). With `info_min` set, a pgen that
+8. **An INFO floor needs INFO** (accepted at the review of opengwas/ogld#2). With `info_min` set, a pgen that
    carries no INFO score (`R2` or `INFO` in the pvar) is refused, so a sequenced panel passes
    `info_min = None` explicitly rather than skip the filter quietly.
-9. **Only autosomes are built** (owner, 8 November 2026, epic #1; chrX is a later ticket). A record on X, Y,
+9. **Only autosomes are built** (owner, 8 November 2026, epic opengwas/ogld#1; chrX is a later ticket). A record on X, Y,
    a PAR or MT is refused: a male's X and Y genotypes are hemizygous, the diploid dosage model has
    no rule for them, and the HGDP+1kGP psam files carry no sex to apply one.
-10. **pgenlib is an optional `ogld[build]` extra** (owner, 8 November 2026). Reading an LD Store
+10. **pgenlib is an optional `opengwasdb[ld-build]` extra** (owner, 8 November 2026). Reading an LD Store
    needs numpy, zarr and numcodecs only. Building one needs pgenlib, which conda-forge does not
-   carry, so `import ogld` works without it and the builder refuses, naming the extra, when it is
+   carry, so `import opengwasdb.ld` works without it and the builder refuses, naming the extra, when it is
    missing.
 
-   _Addition, 10 November 2026 (owner, at the review of #4):_ reading an LD Store also needs
+   _Addition, 10 November 2026 (owner, at the review of opengwas/ogld#4):_ reading an LD Store also needs
    **fsspec and aiohttp, as required runtime dependencies**, not an extra. The spec makes a read
    over HTTP(S) as much a read as one from disk: §2 keeps the whole store one Zarr hierarchy so
    that a client reads it over HTTP, and §10 reads it so. zarr opens a URL through fsspec's HTTP
@@ -158,8 +160,8 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    an extra was possible, and was rejected: pgenlib is an extra only because conda-forge lacks it,
    and an install that cannot read a published store over HTTP would be a reader that half works.
 
-   _Addition, 10 November 2026 (orchestrator's fix brief for #5, at its review):_ **threadpoolctl
-   joins pgenlib in the `ogld[build]` extra.** A build's `threads` must bound it, and each LD
+   _Addition, 10 November 2026 (orchestrator's fix brief for opengwas/ogld#5, at its review):_ **threadpoolctl
+   joins pgenlib in the `opengwasdb[ld-build]` extra.** A build's `threads` must bound it, and each LD
    tile is a matrix product on which OpenBLAS starts a thread per core unless told otherwise:
    the review measured 64 under `build.threads` = 16. threadpoolctl holds BLAS to one thread
    for the build's duration, so the build's own workers are its whole thread count. Only a
@@ -170,18 +172,18 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    missing threadpoolctl cannot happen and is no longer a refusal. The extra, now
    `opengwasdb[ld-build]`, is pgenlib alone. What threadpoolctl does for a build is unchanged.
 
-11. **A Source Panel is its unrelated samples** (owner, 10 November 2026, epic #1, decided at the
-   review of #5's whole-panel EUR build). That build's PC diagnostic found 0.0104 of 200,000 seeded
+11. **A Source Panel is its unrelated samples** (owner, 10 November 2026, epic opengwas/ogld#1, decided at the
+   review of opengwas/ogld#5's whole-panel EUR build). That build's PC diagnostic found 0.0104 of 200,000 seeded
    cross-chromosome pairs at r² ≥ 0.01, against 0.0058 from sampling: the HGDP+1kGP members files
    include 1kGP's trios (EUR has 197 first-degree pairs among 771; AFR 321 among 801), and
    relatives share haplotypes on every chromosome. At k = 0 the rate was 1.76 times what n
    predicts on all 771 EUR, and 1.07 times on the 665 unrelated. Every HGDP+1kGP panel therefore
    uses gnomAD v3.1.2's maximal set of unrelated samples (`relatedness_inference.related` false),
    which leaves no first- or second-degree pair: EUR 665, AFR 608, EAS 724, SAS 672, AMR 341.
-   `scripts/make_keeps.py` makes the keep files from gnomAD's sample metadata
+   `scripts/ld/make_keeps.py` makes the keep files from gnomAD's sample metadata
    (`build-inputs.md` §10). Unchanged: the PC Files, already computed on the unrelated samples with
    the relatives projected; the Test Panel, which stays at 771 as committed test data whose
-   provenance says so; and #5's whole-panel cost evidence, built on 771. UK Biobank (#10) needs
+   provenance says so; and opengwas/ogld#5's whole-panel cost evidence, built on 771. UK Biobank (opengwas/ogld#10) needs
    an unrelated set too, by its own kinship.
 
 ## Considered options
@@ -214,7 +216,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 - **The epic's k = 0 criterion stands.** With complete genotypes, numpy's Pearson r equals
   `plink2 --r-unphased` (the Test Panel's `reference_r(0)` against its `plink2_r()`: at most 1.0×10⁻¹⁴ on all 146,593 pairs).
 - **Fewer variants, so smaller stores.** v2 EUR chr22 has 124,449 sites at MAC ≥ 20, 50.9% of
-  the 244,656 that ADR 0001's size estimates counted from the unfiltered VCF, which included
+  the 244,656 that ADR 0087's size estimates counted from the unfiltered VCF, which included
   non-PASS sites and applied no call-rate floor (AMR's count alone was PASS-only). Near Band bytes
   scale roughly with the square of variant density, so EUR's Near Band would be roughly 26% of the
   spec's 308 GB, about 80 GB: a rough figure, from one chromosome; ogld#7 measures it.

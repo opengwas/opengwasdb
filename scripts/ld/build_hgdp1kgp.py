@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """Convert, build and validate the five HGDP+1kGP LD Stores (ogld#7; spec build-inputs §3, §10).
 
-    pixi run -e dev python scripts/build_hgdp1kgp.py convert  [--panel AFR ...] [--jobs 8]
-    pixi run -e dev python scripts/build_hgdp1kgp.py build    [--panel AFR ...] [--builds 2]
+    pixi run -e dev python scripts/ld/build_hgdp1kgp.py convert  [--panel AFR ...] [--jobs 8]
+    pixi run -e dev python scripts/ld/build_hgdp1kgp.py build    [--panel AFR ...] [--builds 2]
 
 `convert` turns each panel's 22 phased v2 BCFs into one pgen fileset per chromosome. The command
 is `test_panel.tools.conversion_args`, build-inputs §3's, with the panel's unrelated keep file
-(§10, ADR 0002 decision 11); this script adds only plink2's threads and memory. A fileset is
+(§10, ADR 0088 decision 11); this script adds only plink2's threads and memory. A fileset is
 current only when its stamp (`<prefix>.stamp.json`, `tools.stamp_matches`) records today's
 command, source checksum, keep file hash and plink2 version. The stamp is written after plink2
 exits 0 and the fileset holds exactly the keep file's samples, so a conversion that failed, or
 was cut short, has none and is converted again. A conversion that finishes with other samples
 than the keep file's stops the run.
 
-`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0004) and
-`--t-partner` PANEL_T_PARTNER (ADR 0011), the panel's PC File,
+`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0090) and
+`--t-partner` PANEL_T_PARTNER (ADR 0097), the panel's PC File,
 keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) threads, `--builds`
 (2) panels at once. It refuses a store that already exists. When a panel fails, panels not yet
 started are cancelled and the one still running finishes; the run then stops with that failure.
 
-Where things live, each overridable and each in `scripts/test_panel/roots.py`:
+Where things live, each overridable and each in `scripts/ld/test_panel/roots.py`:
 `$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_PCS`, `$OPENGWASDB_LD_KEEP`, `$OPENGWASDB_LD_PLINK2`,
 and the recipe's `$OPENGWASDB_LD_PGEN_V2` (the filesets), `$OPENGWASDB_LD_STORES` and
 `$OPENGWASDB_LD_SCRATCH` (the logs; each timing line carries `uptime`).
@@ -46,9 +46,9 @@ from test_panel.tools import (
 #: AFR first: it has the most variants, so its chr6 is the memory to watch.
 PANELS = ("AFR", "EUR", "EAS", "SAS", "AMR")
 CHROMS = tuple(range(1, 23))
-#: The stores' encoding (ADR 0004): `BuildInputs.r_scale` has no default, so the recipe names it.
+#: The stores' encoding (ADR 0090): `BuildInputs.r_scale` has no default, so the recipe names it.
 PANEL_SCALE = 511
-#: The Partner Rows' threshold (ADR 0011, D3): `BuildInputs.t_partner` has no default either, and
+#: The Partner Rows' threshold (ADR 0097, D3): `BuildInputs.t_partner` has no default either, and
 #: 0.01 is the owner's for the HGDP+1kGP panels, below EUR's t_far 0.0319 (partner-rows §3, §11).
 PANEL_T_PARTNER = 0.01
 K = 10
@@ -93,7 +93,7 @@ def build_command(
         "--pcs",
         str(pcs),
         "--pc-source",
-        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
+        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0088)",
         "--panel-id",
         panel_id(panel),
         "--ancestry",

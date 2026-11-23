@@ -1,5 +1,5 @@
-"""`scripts/make_keeps.py`: each HGDP+1kGP panel's keep file is its unrelated samples (owner,
-10 November 2026; ADR 0002, decision 11), on literal rows of gnomAD v3.1.2's sample metadata.
+"""`scripts/ld/make_keeps.py`: each HGDP+1kGP panel's keep file is its unrelated samples (owner,
+10 November 2026; ADR 0088, decision 11), on literal rows of gnomAD v3.1.2's sample metadata.
 """
 
 from __future__ import annotations

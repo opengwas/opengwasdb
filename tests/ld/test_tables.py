@@ -1,7 +1,7 @@
 """The parts of the skeleton that are built: result tables, BuildInputs, LDStore's facts, the CLI.
 
 These are containers and plumbing, implemented with the skeleton because every ticket
-uses them. The queries that fill them are tests/contract/'s.
+uses them. The queries that fill them are tests/ld/contract/'s.
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ def test_a_hand_built_clumping_orders_its_leads_on_chr_prefixed_labels() -> None
 
 
 def test_build_inputs_defaults_are_the_owner_s() -> None:
-    # Epic #1 and the owner's decisions of 7 November 2026: up to 10 PCs, at least 5.
+    # Epic opengwas/ogld#1 and the owner's decisions of 7 November 2026: up to 10 PCs, at least 5.
     inputs = build_inputs()
     assert (inputs.k, inputs.k_min, inputs.mac_min, inputs.info_min) == (10, 5, 20, 0.8)
 
@@ -272,7 +272,7 @@ def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Owner, 10 November 2026: a build takes its scale as an input, and there is no default it
-    # could fall back on silently (ADR 0004).
+    # could fall back on silently (ADR 0090).
     field = next(f for f in dataclasses.fields(opengwasdb.ld.BuildInputs) if f.name == "r_scale")
     assert field.default is dataclasses.MISSING
     given = {
@@ -296,7 +296,7 @@ def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
 def test_a_build_with_no_partner_threshold_is_refused_naming_what_is_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # A build input with no default (ADR 0011, D3): each Source Panel's build names its own, and
+    # A build input with no default (ADR 0097, D3): each Source Panel's build names its own, and
     # the store refuses one above t_far once the panel's n and k give it (partner-rows §3).
     field = next(f for f in dataclasses.fields(opengwasdb.ld.BuildInputs) if f.name == "t_partner")
     assert field.default is dataclasses.MISSING

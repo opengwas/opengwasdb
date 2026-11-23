@@ -1,4 +1,5 @@
-"""The numeric decoder's seam: the same chunks as zarr, not another LD encoding (#40)."""
+"""The numeric decoder's seam: the same chunks as zarr, not another LD encoding
+(opengwas/ogld#40)."""
 
 from __future__ import annotations
 

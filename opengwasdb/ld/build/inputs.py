@@ -45,7 +45,7 @@ class Samples:
         return len(self.iids)
 
     def sha256(self) -> str:
-        """`panel.samples_sha256`: SHA-256 of the sorted IIDs, one per line (spec §7)."""
+        """`panel.samples_sha256`: SHA-256 of the sorted IIDs, one per line (ld-store §7)."""
         return hashlib.sha256(("\n".join(sorted(self.iids)) + "\n").encode()).hexdigest()
 
 
@@ -286,7 +286,7 @@ def read_pc_file(path: Path, samples: Samples, panel: str) -> PcFile:
 
 def pc_file_iids(path: Path, panel: str) -> list[str]:
     """The PC File's IIDs, in its order: the same reader as `read_pc_file`, so a missing, empty
-    or malformed PC File is refused the same way (`scripts/make_keeps.py` reads a panel's
+    or malformed PC File is refused the same way (`scripts/ld/make_keeps.py` reads a panel's
     samples so)."""
     lines = [line.split("\t") for line in _lines(path, panel) if line.strip()]
     column, _ = _pc_header(lines[0], path, panel)

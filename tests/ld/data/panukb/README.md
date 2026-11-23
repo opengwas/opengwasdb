@@ -1,4 +1,4 @@
-# Native BlockMatrix worked literal (#93)
+# Native BlockMatrix worked literal (opengwas/ogld#93)
 
 `part-0` is a 3×3 column-major Breeze DenseMatrix in Hail 0.2.64's
 RichDenseMatrixDouble encoding: little-endian int32 rows and columns, byte

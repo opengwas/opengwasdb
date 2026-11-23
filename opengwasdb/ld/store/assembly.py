@@ -1,22 +1,22 @@
-"""What goes in an LD Store, from the r its producer supplies (spec §3–§7, §12; ogld#17).
+"""What goes in an LD Store, from the r its producer supplies (ld-store §3–§7, §12; ogld#17).
 
 `StoreWriter` is the seam a producer calls. This module, behind it, owns what goes in a store
 (owner, 10 November 2026; `docs/architecture/ownership.md`, "Provenance and what goes in a
 store"). It handles:
 
-- quantising r at the store's encoding, through `opengwasdb.ld.format.REncoding` (spec §3);
-- the Near Band's row lengths and `indptr`, from the positions (spec §4);
+- quantising r at the store's encoding, through `opengwasdb.ld.format.REncoding` (ld-store §3);
+- the Near Band's row lengths and `indptr`, from the positions (ld-store §4);
 - the threshold at the far code floor, judged on codes, for every pair within far_bp (§3, §5);
-- the Far Pairs: the pairs at that floor beyond near_bp, once each, in the earlier row (spec §5;
-  ADR 0007), from the pairs a cut already keeps, with no second pass over r;
+- the Far Pairs: the pairs at that floor beyond near_bp, once each, in the earlier row (ld-store §5;
+  ADR 0093), from the pairs a cut already keeps, with no second pass over r;
 - the Partner Rows: every pair within far_bp at its distance's floor, in both variants' rows, 16
-  rows to a zstd frame (spec §5; partner-rows §5, §6.1; ADR 0011);
+  rows to a zstd frame (ld-store §5; partner-rows §5, §6.1; ADR 0097);
 - their derivation for a store built before them, from that store's own Near Band and Far Pairs,
   through the same emitter a build feeds (partner-rows §6.2; ogld#69);
-- the counts, and the rest of the provenance a store derives from itself (spec §7).
+- the counts, and the rest of the provenance a store derives from itself (ld-store §7).
 
-Validation at `finish` runs every rule of spec §12 through `validate_group`. A producer supplies r
-for blocks of rows in order, and at `finish` it supplies what only the source knows
+Validation at `finish` runs every rule of ld-store §12 through `validate_group`. A producer supplies
+r for blocks of rows in order, and at `finish` it supplies what only the source knows
 (`opengwasdb.ld.format.Sourced`).
 
 **Memory is bounded by the block and the far_bp window, never the chromosome.** These are
@@ -88,7 +88,8 @@ from opengwasdb.ld.store.validation import (
 
 #: Proxy Index entries `derive_far_pairs` reads at once, or one row's when it holds more: 8 Mi
 #: entries are 48 MiB of `partner` and `r`, and about 200 MiB as they are judged. That function is
-#: the only code left that reads the component (#72): no store this package writes holds one.
+#: the only code left that reads the component (opengwas/ogld#72): no store this package writes
+#: holds one.
 DERIVE_ENTRIES: Final = 1 << 23
 #: Variant Set rows `derive_alid_index` reads at once: 1,048,576 ALIDs, whose keys are 32 MiB.
 ALID_ROWS: Final = 1 << 20
@@ -108,13 +109,13 @@ class Cut:
     """A block of rows cut from its producer's r: what `StoreWriter.write` writes.
 
     `first` is the block's first global row and `rows` how many it holds, all on one chromosome.
-    `near` holds their Near Band codes, row after row (spec §4). `lo`, `hi` and `codes` are their
-    Far Pairs, as local rows lo < hi: each partner hi more than near_bp and at most far_bp from
-    row lo whose code `REncoding.stored_mask` keeps, once, with its one code (spec §3, §5),
+    `near` holds their Near Band codes, row after row (ld-store §4). `lo`, `hi` and `codes` are
+    their Far Pairs, as local rows lo < hi: each partner hi more than near_bp and at most far_bp
+    from row lo whose code `REncoding.stored_mask` keeps, once, with its one code (ld-store §3, §5),
     ascending by (lo, hi). `far` marks those more than near_bp apart — every one of them, and it
     is kept so a reader of a Cut can name the half it reads. `far_candidates`
     counts the block's pairs more than near_bp and at most far_bp apart, all judged, and
-    `far_pairs` those of them kept (spec §7). `by` is the `Cutter` that cut it, so a cut is
+    `far_pairs` those of them kept (ld-store §7). `by` is the `Cutter` that cut it, so a cut is
     written only by its own store.
 
     A producer neither builds nor reads one: it hands what `StoreWriter.cut` returned to
@@ -139,8 +140,8 @@ class Cut:
 class Cutter:
     """What every block of one store is cut by, fixed when the store is created: the Variant
     Set's positions and chromosome ranges, near_bp and far_bp, the encoding, and t_far with its
-    far code floor and t_partner with its Partner Floor (spec §3–§5; partner-rows §3). Nothing in
-    it changes after `create`, so blocks are cut on any thread, in any order."""
+    far code floor and t_partner with its Partner Floor (ld-store §3–§5; partner-rows §3). Nothing
+    in it changes after `create`, so blocks are cut on any thread, in any order."""
 
     def __init__(
         self,
@@ -189,7 +190,7 @@ class Cutter:
         to judge it on its code, only when its |r| can reach the floor. A value that is not a
         number is such a pair, so quantising refuses it rather than let it pass as below the
         floor. So a pair the producer did not measure is refused, never stored and never read as
-        a Bound (spec §8).
+        a Bound (ld-store §8).
         """
         name, start, stop = self.chromosome(first)
         if r.ndim != 2 or len(r) == 0:
@@ -220,7 +221,7 @@ class Cutter:
         self, name: str, local: int, rows: int, width: int
     ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
         """The near and far stops of the block's rows, counted from its first row; refuse an r
-        that is not exactly as wide as its last row's far stop (spec §4, §5)."""
+        that is not exactly as wide as its last row's far stop (ld-store §4, §5)."""
         position = self.positions(name)
         reach = position[local : local + width + 1]
         far_stop = stop_within(reach, self.far_bp)[:rows]
@@ -230,7 +231,7 @@ class Cutter:
             raise ValueError(
                 f"r for rows {local}–{last} of chromosome {name} has {width} columns; it needs "
                 f"{want} columns from its first row, to the last variant within far_bp = "
-                f"{self.far_bp:,} of its last row (spec §5)"
+                f"{self.far_bp:,} of its last row (ld-store §5)"
             )
         return stop_within(reach, self.near_bp)[:rows], far_stop
 
@@ -238,7 +239,7 @@ class Cutter:
         self, first: int, r: npt.NDArray[np.floating[Any]], near_stop: npt.NDArray[np.int64]
     ) -> Codes:
         """The block's Near Band codes, row after row. Each row's run is one slice: five times
-        faster than a fancy index (lane #5)."""
+        faster than a fancy index (lane opengwas/ogld#5)."""
         runs = [r[t, t + 1 : stop] for t, stop in enumerate(near_stop)]
         values = np.concatenate(runs)
         lengths = near_stop - np.arange(1, len(near_stop) + 1)
@@ -302,7 +303,7 @@ class Cutter:
             raise ValueError(
                 f"r({row}, {partner}) = {values[lo]} is not a correlation: a pair within far_bp "
                 "that was not measured, or a fault in computing it. Nothing is stored for it, "
-                "and it is never read as a Bound (spec §3, §8)"
+                "and it is never read as a Bound (ld-store §3, §8)"
             ) from refused
 
 
@@ -348,7 +349,7 @@ class Appender:
     """A 1-D array whose length is known only at its end, written a whole shard at a time.
 
     The array is created at one shard when the first fills and grows by `resize`. An array under
-    one shard is made at its end, at its clipped shape (spec §6). Either way its shard files and
+    one shard is made at its end, at its clipped shape (ld-store §6). Either way its shard files and
     metadata are those of the array written whole (checked on zarr 3.4.2).
     """
 
@@ -381,11 +382,11 @@ class Appender:
 
 
 class NearBandStream:
-    """One chromosome's Near Band, written as its blocks arrive (spec §4, §6).
+    """One chromosome's Near Band, written as its blocks arrive (ld-store §4, §6).
 
-    This is lane #4's measured design (comment on ogld#17). `r`'s length, the sum of the row
-    lengths, is known from the positions before any code arrives. So `indptr` is written whole,
-    and `r` is created at its full length, when the chromosome's first block arrives. Codes
+    This is lane opengwas/ogld#4's measured design (comment on ogld#17). `r`'s length, the sum of
+    the row lengths, is known from the positions before any code arrives. So `indptr` is written
+    whole, and `r` is created at its full length, when the chromosome's first block arrives. Codes
     are written in whole shards of `r` (`ShardCarry`), and less than one shard is carried to the
     next block. The last shard is written when the last row arrives.
     """
@@ -421,7 +422,8 @@ _Pairs = tuple[_Rows, _Rows, Codes]
 
 
 def _entries(group: zarr.Group, encoding: REncoding) -> tuple[Appender, Appender]:
-    """A sparse component's `partner` and `r` (spec §5, §6), each grown a whole shard at a time."""
+    """A sparse component's `partner` and `r` (ld-store §5, §6), each grown a whole shard at a
+    time."""
     side = layout.SIDE
     partner = Appender(
         lambda n: layout.new_numbers(group, "partner", n, np.int32, layout.PARTNER_FILL, side),
@@ -459,7 +461,7 @@ class Rows:
 
 
 class RowCarry:
-    """The block-at-a-time row carry the Partner Rows are written by (spec §5; partner-rows
+    """The block-at-a-time row carry the Partner Rows are written by (ld-store §5; partner-rows
     §6.1).
 
     A pair (lo, hi) goes into row lo as the block arrives, because both rows are the store's, and
@@ -572,11 +574,11 @@ class PartnerRowsStream:
     """One chromosome's Partner Rows, written a frame at a time (§5; partner-rows §6.1).
 
     It is fed by (a block of rows, its Near Band codes, its Far Pairs) rather than by a `Cut`
-    alone, so that #69's derivation can feed the same emitter from a store's own Near Band and Far
-    Pairs and produce a build's bytes. The Near Band's codes become (lo, hi) pairs through the
-    band's row lengths, and each is kept at the Partner Floor; the Far Pairs are already the pairs
-    beyond near_bp at the far code floor, so they are kept as they come. Both are handed to
-    `RowCarry`, whose rows then hold every partner on both sides, each at its pair's one code.
+    alone, so that opengwas/ogld#69's derivation can feed the same emitter from a store's own Near
+    Band and Far Pairs and produce a build's bytes. The Near Band's codes become (lo, hi) pairs
+    through the band's row lengths, and each is kept at the Partner Floor; the Far Pairs are already
+    the pairs beyond near_bp at the far code floor, so they are kept as they come. Both are handed
+    to `RowCarry`, whose rows then hold every partner on both sides, each at its pair's one code.
 
     The rows are assembled into frames of `frames.ROWS_PER_FRAME`, which `frames.FramesGroup`
     compresses on a bounded pool and appends in frame order, so the bytes do not depend on the
@@ -601,7 +603,7 @@ class PartnerRowsStream:
         and whose pairs are kept at the floors `REncoding.partner_mask` chooses: the Partner
         Floor within `near_bp`, the far code floor beyond it to `far_bp`. `container` is the
         directory the group is published into, the store's `partners/` group by default; a
-        derivation gives a directory that is not yet one (#69)."""
+        derivation gives a directory that is not yet one (opengwas/ogld#69)."""
         self._chrom = chrom
         self._encoding = encoding
         self._indptr = indptr_of(lengths)
@@ -700,11 +702,11 @@ class PartnerRowsStream:
 
 
 class FarPairsStream:
-    """One chromosome's Far Pairs, written row by row as blocks arrive (spec §5; ADR 0007).
+    """One chromosome's Far Pairs, written row by row as blocks arrive (ld-store §5; ADR 0093).
 
     Row l holds every pair (l, m), m > l, more than near_bp and at most far_bp apart whose code
     reaches the far code floor, ascending in m: the pairs beyond near_bp once each, in their
-    earlier row (spec §5; ADR 0007). They all come from row l's own block, so each block's rows
+    earlier row (ld-store §5; ADR 0093). They all come from row l's own block, so each block's rows
     are complete when it arrives, and nothing is carried. `partner` and `r` grow shard by shard
     (`Appender`). `indptr` is held, n_c + 1 int64, and written at the end.
     """
@@ -745,8 +747,8 @@ def _beyond_near(
     position: npt.NDArray[np.int64], lo: npt.ArrayLike, hi: npt.ArrayLike, near_bp: int
 ) -> npt.NDArray[np.bool_]:
     """Which of one chromosome's local pairs (lo[k], hi[k]) lie more than near_bp apart: of the
-    pairs the store keeps at the far code floor, its Far Pairs (spec §3, §5). The one test the
-    store writes them by, from a cut and from an index alike (ADR 0007); exactly near_bp apart is
+    pairs the store keeps at the far code floor, its Far Pairs (ld-store §3, §5). The one test the
+    store writes them by, from a cut and from an index alike (ADR 0093); exactly near_bp apart is
     within, the edge `opengwasdb.ld.format.geometry.within` holds."""
     at = np.asarray(position, dtype=np.int64)
     return ~within(at[np.asarray(hi)] - at[np.asarray(lo)], near_bp)
@@ -760,18 +762,18 @@ def derive_far_pairs(
     encoding: REncoding,
 ) -> int:
     """Write one chromosome's Far Pairs into the empty group `far`, from its Proxy Index group
-    `index`, for a store written before they came back (ADR 0007), and return how many. They are
-    the index's entries beyond near_bp (`_beyond_near`) in each pair's earlier row (spec §5), read
-    a block of rows at a time and written in row order through `FarPairsStream`, as a store being
-    built writes them, so the arrays are a build's, byte for byte. The index is not changed. An
-    index element no store holds, which is what a lost chunk reads as, is refused, naming its
+    `index`, for a store written before they came back (ADR 0093), and return how many. They are
+    the index's entries beyond near_bp (`_beyond_near`) in each pair's earlier row (ld-store §5),
+    read a block of rows at a time and written in row order through `FarPairsStream`, as a store
+    being built writes them, so the arrays are a build's, byte for byte. The index is not changed.
+    An index element no store holds, which is what a lost chunk reads as, is refused, naming its
     array, rather than read as a row without Far Pairs.
 
-    This is the one place left in `ogld/` that reads the Proxy Index (#72), and it has a live
-    caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
-    holds an index and no `far/`, and #73 derives its Far Pairs before its Partner Rows. A store
-    this package writes never needs it, and no other code path names the component's arrays
-    (`tests/test_proxy_index_removed.py`).
+    This is the one place left in `opengwasdb/ld/` that reads the Proxy Index (opengwas/ogld#72),
+    and it has a live caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0
+    store that holds an index and no `far/`, and opengwas/ogld#73 derives its Far Pairs before its
+    Partner Rows. A store this package writes never needs it, and no other code path names the
+    component's arrays (`tests/ld/test_proxy_index_removed.py`).
     """
     indptr = _whole(index, "indptr")
     stream = FarPairsStream(far, len(indptr) - 1, encoding)
@@ -788,8 +790,8 @@ def derive_far_pairs(
 
 
 def derive_alid_index(variants: zarr.Group, index: zarr.Group) -> int:
-    """Write the ALID search index into `index` from `variants`' own ALID column (spec §2, §6;
-    ADR 0010), and return how many ALIDs are too wide for its slot, counted from that column.
+    """Write the ALID search index into `index` from `variants`' own ALID column (ld-store §2, §6;
+    ADR 0096), and return how many ALIDs are too wide for its slot, counted from that column.
 
     The keys, their padding and their order are `layout.alid_index`'s: a store writes what the
     rule gives, whether it is being built or derived from the table it already has, and whether
@@ -800,7 +802,7 @@ def derive_alid_index(variants: zarr.Group, index: zarr.Group) -> int:
     The column is read a block of rows at a time, so nothing holds the table's strings whole:
     the keys take 32 bytes a variant, read at the end to sort them. The count is the table's own,
     never `n_variants` less the keys' length: a count inferred from the index would agree with any
-    index, including one with an entry too many (spec §7; ogld#42's review).
+    index, including one with an entry too many (ld-store §7; ogld#42's review).
     """
     alid = variants["alid"]
     assert isinstance(alid, zarr.Array)
@@ -833,7 +835,7 @@ def _whole(group: zarr.Group, name: str, span: slice = slice(None)) -> npt.NDArr
 
 @dataclass
 class Tally:
-    """The counts provenance records (spec §7), added up block by block."""
+    """The counts provenance records (ld-store §7), added up block by block."""
 
     near_pairs: int = 0
     far_candidates: int = 0
@@ -859,7 +861,7 @@ class Tally:
 
 class Chromosome:
     """One chromosome being written: its Near Band, its Far Pairs and its Partner Rows
-    (spec §4, §5; partner-rows §5, §6.1)."""
+    (ld-store §4, §5; partner-rows §5, §6.1)."""
 
     def __init__(
         self, root: zarr.Group, cutter: Cutter, name: str, *, compress_workers: int = 1
@@ -899,20 +901,20 @@ _PRODUCER_KEYS: Final = frozenset(Sourced.__required_keys__)
 def _only_what_the_producer_knows(sourced: Sourced) -> dict[str, Any]:
     """`sourced` as a mutable dict, refused unless it is exactly the producer's keys: a key the
     store derives is refused, because the store would record its own instead, and one no reader
-    knows is refused, because it would be stored unread and unchecked (spec §7)."""
+    knows is refused, because it would be stored unread and unchecked (ld-store §7)."""
     given: dict[str, Any] = dict(sourced)
     derived_keys = set(Provenance.__required_keys__) - _PRODUCER_KEYS
     ours = sorted(set(given) & derived_keys)
     if ours:
         raise ValueError(
             f"{', '.join(ours)}: the store derives these itself; a producer gives only "
-            f"{sorted(_PRODUCER_KEYS)} (spec §7)"
+            f"{sorted(_PRODUCER_KEYS)} (ld-store §7)"
         )
     unknown = sorted(set(given) - _PRODUCER_KEYS)
     if unknown:
         raise ValueError(
-            f"{', '.join(unknown)}: not a key of `Sourced`; spec §7 lets a store hold other keys, "
-            "but this writer records only the producer's and its own"
+            f"{', '.join(unknown)}: not a key of `Sourced`; ld-store §7 lets a store hold other "
+            "keys, but this writer records only the producer's and its own"
         )
     missing = sorted(_PRODUCER_KEYS - set(given))
     if missing:
@@ -922,13 +924,13 @@ def _only_what_the_producer_knows(sourced: Sourced) -> dict[str, Any]:
 
 def _with_zstd(software: object) -> dict[str, str]:
     """The producer's `software` versions with `zstd` added: a frame's bytes depend on the zstd
-    that made them, so a store records it, and refuses a producer's other version (spec §7)."""
+    that made them, so a store records it, and refuses a producer's other version (ld-store §7)."""
     told = dict(cast(dict[str, str], software))
     mine = frames.zstd_version()
     if told.setdefault("zstd", mine) != mine:
         raise ValueError(
             f"provenance records zstd {told['zstd']!r}, but the Partner Rows' frames were "
-            f"compressed with {mine!r}: a frame's bytes depend on it (spec §7)"
+            f"compressed with {mine!r}: a frame's bytes depend on it (ld-store §7)"
         )
     return told
 
@@ -936,16 +938,16 @@ def _with_zstd(software: object) -> dict[str, str]:
 def provenance(
     sourced: Sourced, cutter: Cutter, n_variants: int, tally: Tally, *, alids_left_out: int = 0
 ) -> Provenance:
-    """The store's provenance, in spec §7's order. It is the producer's `sourced` plus what the
+    """The store's provenance, in ld-store §7's order. It is the producer's `sourced` plus what the
     store derives from itself: `format_version`, `encoding`, `n_variants`, `near_bp`, `far_bp`,
     `t_far`, `t_far_q`, `far_code_floor`, `t_partner`, `partner_code_floor` and `counts`, the
-    count of ALIDs the search index left out and of Partner Rows entries among them (ADR 0010;
+    count of ALIDs the search index left out and of Partner Rows entries among them (ADR 0096;
     partner-rows §5.3). `software` is the producer's list of versions, which the store adds `zstd`
     to, the library that compressed its Partner Rows' frames (§7).
 
-    Spec §7 lets a store hold other keys, which a reader ignores. This writer records none: a key
-    `Sourced` does not name is refused, whether it is one the store derives, which a producer may
-    not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
+    ld-store §7 lets a store hold other keys, which a reader ignores. This writer records none: a
+    key `Sourced` does not name is refused, whether it is one the store derives, which a producer
+    may not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
     `sourced` that lacks a key of the producer's, or records an n or k other than the threshold's,
     is refused too."""
     given = _only_what_the_producer_knows(sourced)
@@ -953,7 +955,7 @@ def provenance(
     if said != (cutter.n, cutter.k):
         raise ValueError(
             f"provenance records n = {said[0]} and k = {said[1]}, but the store was "
-            f"thresholded at t_far for n = {cutter.n} and k = {cutter.k} (spec §3)"
+            f"thresholded at t_far for n = {cutter.n} and k = {cutter.k} (ld-store §3)"
         )
     given["software"] = _with_zstd(given["software"])
     derived: dict[str, Any] = {
@@ -1046,7 +1048,7 @@ def derive_partners(
     drop_index: bool = False,
 ) -> Provenance | None:
     """Add the Partner Rows to the existing LD Store at `location`, from its own Near Band and
-    Far Pairs, and return the provenance that claims them (partner-rows §6.2; ADR 0011, D6).
+    Far Pairs, and return the provenance that claims them (partner-rows §6.2; ADR 0097, D6).
 
     `t_partner` is the **Partner Threshold**, a required input with no default, and never above
     the store's recorded `t_far`. Chromosomes are derived `processes` at a time, largest first,
@@ -1062,9 +1064,9 @@ def derive_partners(
     unless `chromosomes` names ones it lacks.
 
     `drop_index` removes a Proxy Index the store still holds — a leftover of a store derived
-    before #72 — and its count, a step of its own (partner-rows §6.2): it does so only for a store
-    whose Partner Rows pass those rules, and never for one whose derivation is incomplete. A store
-    this package writes holds no `index/`, so there it is nothing to do.
+    before opengwas/ogld#72 — and its count, a step of its own (partner-rows §6.2): it does so only
+    for a store whose Partner Rows pass those rules, and never for one whose derivation is
+    incomplete. A store this package writes holds no `index/`, so there it is nothing to do.
     """
     store = Path(location)
     root = _writable(store)
@@ -1197,9 +1199,10 @@ def _refuse_writes(plan: _Plan) -> None:
     `O_NOFOLLOW`) and then replaces the document with it, so a link at that name would be written
     through and published as the store's metadata.
 
-    A store's read-only components may be links: the scratch stores #71 and #73 read are a copied
-    `zarr.json` beside links to the published store's `near/`, `far/`, `variants/` and `index/`
-    (a published 0.1.0 store holds that last one until its rollout drops it).
+    A store's read-only components may be links: the scratch stores opengwas/ogld#71 and
+    opengwas/ogld#73 read are a copied `zarr.json` beside links to the published store's `near/`,
+    `far/`, `variants/` and `index/` (a published 0.1.0 store holds that last one until its rollout
+    drops it).
 
     This check runs before the first write and is not a lock: a concurrent writer to the same store
     could still plant one between the check and the write. A store has one writer (as §6.1's carry
@@ -1293,7 +1296,7 @@ def _named(
 
 
 def _claimed_at(recorded: dict[str, Any], t_partner: float, floor: int, store: Path) -> bool:
-    """Whether the provenance claims Partner Rows already, and at this floor (spec §13;
+    """Whether the provenance claims Partner Rows already, and at this floor (ld-store §13;
     partner-rows §6.2). The claim is `opengwasdb.ld.format.claims_partner_rows`, one rule for the
     reader,
     validation and this derivation: a store that records 0.1.0 is unclaimed whatever keys it
@@ -1313,7 +1316,8 @@ def _claimed_at(recorded: dict[str, Any], t_partner: float, floor: int, store: P
 
 
 def _ranges(root: zarr.Group) -> dict[str, tuple[int, int]]:
-    """Each chromosome's rows in the Variant Set, as the `variants` group records them (spec §2)."""
+    """Each chromosome's rows in the Variant Set, as the `variants` group records them (ld-store
+    §2)."""
     variants = root.get("variants")
     if not isinstance(variants, zarr.Group):
         raise InputError("the store has no variants group: it is not an LD Store")
@@ -1400,7 +1404,7 @@ def derive_partner_rows(job: _Schedule) -> int:
     """Write one chromosome's Partner Rows from its store's Near Band and Far Pairs, and return
     them: every pair's code in both variants' rows, twice the pairs (partner-rows §5.3, §6.2).
 
-    The Near Band is read a block of rows at a time through the direct decoder (ADR 0009), and the
+    The Near Band is read a block of rows at a time through the direct decoder (ADR 0095), and the
     Far Pairs as their `indptr` whole and their partner and code arrays one block's worth at a
     time. Both are handed to the emitter a build hands its cuts, so the frames are a build's, byte
     for byte (§6.1). `FramesGroup` publishes the group by one rename, so the chromosome is whole or
@@ -1471,7 +1475,7 @@ def _array(group: zarr.Group, path: str) -> zarr.Array[Any]:
 
 def _slice(cache: ChunkCache, array: zarr.Array[Any], first: int, length: int) -> npt.NDArray[Any]:
     """Elements `first` … `first + length − 1` of `array`, read through the direct decoder, and
-    refused where one is a value no store holds there: a chunk the store lost (ADR 0009)."""
+    refused where one is a value no store holds there: a chunk the store lost (ADR 0095)."""
     return layout.refused_if_lost(array, cache.runs(array, [first], [length])[0])
 
 
@@ -1493,7 +1497,7 @@ def _clear_temporaries(component: Path) -> None:
 def _claimed(plan: _Plan, t_partner: float) -> dict[str, Any]:
     """`plan.recorded` as the store's provenance once its Partner Rows are claimed: format
     0.2.0's four keys, the count over every chromosome's own `entries`, and no other change
-    (partner-rows §5.3; spec §7)."""
+    (partner-rows §5.3; ld-store §7)."""
     made = dict(plan.recorded)
     made["format_version"] = FORMAT_VERSION
     made["t_partner"] = t_partner
@@ -1546,14 +1550,14 @@ def _partner_entries(plan: _Plan) -> int:
 
 def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenance:
     """Remove a Proxy Index a store still holds, whose Partner Rows hold every entry it had
-    (partner-rows §6.2; ADR 0011, D1): its `index/` group and its `counts.index_entries`.
+    (partner-rows §6.2; ADR 0097, D1): its `index/` group and its `counts.index_entries`.
 
-    From #72 a store this package writes has none, and no rule expects one: the removal is what
-    finishes a store derived by an earlier `ogld derive-partners`, and a store without one is left
-    as it is. The count goes with the arrays, in that order, and only after they are gone: a
-    removal that fails leaves the count in place and raises, naming the path, and a run killed
-    between the two leaves a count with no arrays, which validation reads as an extra provenance
-    key and ignores (spec §7).
+    From opengwas/ogld#72 a store this package writes has none, and no rule expects one: the removal
+    is what finishes a store derived by an earlier `opengwasdb ld derive-partners`, and a store
+    without one is left as it is. The count goes with the arrays, in that order, and only after they
+    are gone: a removal that fails leaves the count in place and raises, naming the path, and a run
+    killed between the two leaves a count with no arrays, which validation reads as an extra
+    provenance key and ignores (ld-store §7).
 
     A scratch store's `index/` is a link to a published one, which is read, never removed: the link
     goes and the directory it names stays (partner-rows §6.2).
@@ -1568,12 +1572,12 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
 
 
 def derive_alid_mmap(path: Path) -> int:
-    """Publish the LD Store's optional local companion (ADR 0012)."""
+    """Publish the LD Store's optional local companion (ADR 0098)."""
     return derive_variant_companion(path, provenance_key="ld_store")
 
 
 def derive_variant_companion(path: Path, *, provenance_key: str) -> int:
-    """Publish an optional local companion from validated canonical arrays (ADR 0012).
+    """Publish an optional local companion from validated canonical arrays (ADR 0098).
 
     Serialize cooperating derivations. A private partial is fsynced before its immutable
     generation rename; replacing root metadata publishes the pointer last. A retry cleans a
@@ -1619,7 +1623,7 @@ def _derive_alid_mmap(path: Path, directory: Path, provenance_key: str) -> int:
             f"canonical source {path / changed}: changed during companion derivation",
         )
     # Integrity hashes cannot establish correspondence. This same bounded comparison is
-    # `alid_index.count`'s, and must pass before the publication point (ADR 0012, round 2).
+    # `alid_index.count`'s, and must pass before the publication point (ADR 0098, round 2).
     require_alid_mmap(root, destination, count)
     document = json.loads((path / "zarr.json").read_bytes())
     document["attributes"][layout.ALID_MMAP_ATTR] = pointer

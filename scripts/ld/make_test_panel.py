@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Write the Test Panel, `tests/data/test-panel/` (opengwas/ogld#2; ADR 0002).
+"""Write the Test Panel, `tests/ld/data/test-panel/` (opengwas/ogld#2; ADR 0088).
 
 The Test Panel is a real slice of HGDP+1kGP EUR, committed so every test that needs genotypes
 reads the same data (`CONTEXT.md`). This script makes it on an IEU compute node, from the phased
-HGDP+1kGP v2 callset and the EUR PC File that `scripts/make_pcs.py` writes:
+HGDP+1kGP v2 callset and the EUR PC File that `scripts/ld/make_pcs.py` writes:
 
 1. Convert chr21 and chr22 for the 771 EUR samples with the command `docs/spec/build-inputs.md`
    documents, and count every record's genotypes.
@@ -19,7 +19,7 @@ HGDP+1kGP v2 callset and the EUR PC File that `scripts/make_pcs.py` writes:
 
 It is deterministic: a fixed seed, no timestamps, and first-by-position or strongest-first choices.
 
-    pixi run -e dev python scripts/make_test_panel.py --work <scratch dir>
+    pixi run -e dev python scripts/ld/make_test_panel.py --work <scratch dir>
 """
 
 from __future__ import annotations

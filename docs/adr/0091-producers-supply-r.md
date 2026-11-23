@@ -1,12 +1,14 @@
 # A producer supplies r; the LD Store makes the rest of itself
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0005.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
-> **ADR 0013 supersedes §5's builder unit vectors** ([ADR 0013](./0013-shared-genotype-arithmetic.md), #90).
-> The builder computes r through `ogld.genotypes.r(rows, span)` over prepared `Block`s, not from
+> **ADR 0099 supersedes §5's builder unit vectors** ([ADR 0099](./0099-shared-genotype-arithmetic.md), opengwas/ogld#90).
+> The builder computes r through `opengwasdb.ld.genotypes.r(rows, span)` over prepared `Block`s, not from
 > an array of unit vectors; §5's memory bound and the rest of the record stand.
 
 Issue [#17](https://github.com/opengwas/ogld/issues/17), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
@@ -15,20 +17,20 @@ The format is in `docs/spec/ld-store.md` (§3–§7, §12); the owners are in
 
 **Who decided.** The owner. On 10 November 2026, from the architecture review of
 `orch/1-ld-stores@bd40f52` (candidate B2), they decided that what goes in an LD Store belongs to
-`ogld.store`, behind the writer. On 11 November 2026, on ogld#17, they confirmed the signatures
+`opengwasdb.ld.store`, behind the writer. On 11 November 2026, on ogld#17, they confirmed the signatures
 proposed in `orch/1/17-store-assembly@b54ab09`, and ruled on three points:
 - `software`, `reference_assembly` and `variants_dropped` are the producer's;
 - the builder's unit vectors are windowed too;
 - the Proxy Index streams as the Near Band does.
 
-On 11 November 2026 they also ruled that #17's memory criterion is met for what it owns. The
+On 11 November 2026 they also ruled that opengwas/ogld#17's memory criterion is met for what it owns. The
 PC Check pass moves to ogld#25.
 
 ## Context
 
 Every producer implemented what goes in a store, and the writer only checked it.
-- **Three producers each did the store's work.** The builder, `scripts/make_test_store.py` and
-  `tests/test_walking_path.py` each quantised, thresholded at the far code floor, mirrored every
+- **Three producers each did the store's work.** The builder, `scripts/ld/make_test_store.py` and
+  `tests/ld/test_walking_path.py` each quantised, thresholded at the far code floor, mirrored every
   pair into both rows of the Proxy Index, counted the pairs, and computed provenance a store
   derives from itself.
 - **The writer kept whole chromosomes.** It held a chromosome's Near Band, and copied it, before
@@ -43,7 +45,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
 
 1. **A producer supplies r, for blocks of rows in order, and what only its source knows.** The
    store does the rest:
-   - quantising at the store's encoding (ADR 0004);
+   - quantising at the store's encoding (ADR 0090);
    - the Near Band's row lengths;
    - the threshold at the far code floor;
    - both directions of the Proxy Index;
@@ -51,7 +53,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
    - the provenance a store derives from itself;
    - validation.
 
-   `ogld/store/assembly.py` holds all of it, behind `StoreWriter`.
+   `opengwasdb/ld/store/assembly.py` holds all of it, behind `StoreWriter`.
 2. **The seam is four calls.**
    - `StoreWriter.create(location, *, variants, encoding, near_bp, far_bp, n, k)` writes the
      Variant Set. It fixes the encoding, the distances, and t_far(n, k) with its floor, before
@@ -65,7 +67,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
      the store, and only then writes the provenance.
 
    The writer exposes its `encoding` and `far_bp` read-only, so a producer gives each once.
-3. **Provenance is split in two.** The producer gives `ogld.format.Sourced`: `source`, `panel`,
+3. **Provenance is split in two.** The producer gives `opengwasdb.ld.format.Sourced`: `source`, `panel`,
    `reference_assembly`, `variant_filters`, `variants_dropped`, `adjustment`, `pc_diagnostic`,
    `software` and `build`. The store derives the rest: `format_version`, `encoding`,
    `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It
@@ -120,7 +122,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
   creates the writer with the `far_bp` its lift to GRCh38 leaves whole, its N, and its source's
   count of covariates as k (15 for Pan-UKB). It finishes with `source.kind = "ld_matrix"`.
 - **A store written in any blocks, on any number of threads, holds the same arrays.**
-  `tests/test_assembly.py` holds every array to a brute force over pairs, written in blocks of 1
+  `tests/ld/test_assembly.py` holds every array to a brute force over pairs, written in blocks of 1
   to 100,000 rows on 1 to 4 threads.
 - **The PC Check pass was not bounded when this was decided.** It held a chromosome's genotypes
   before tiling: 6.1 GB on chr6 at k = 10, growing with rows × n, and the 10.4 GB peak

@@ -1,7 +1,7 @@
-"""ogld#8's read-latency benchmark (`scripts/bench/`): what it counts, the wait its proxy adds,
+"""ogld#8's read-latency benchmark (`scripts/ld/bench/`): what it counts, the wait its proxy adds,
 and which records its report keeps.
 
-`docs/benchmarks/latency.md` rests on two things these hold. Its round-trip model assumes the
+`docs/benchmarks/ld/latency.md` rests on two things these hold. Its round-trip model assumes the
 proxy waits once for each request, and requests in flight together wait together. Its byte and
 request columns are the client's counts, which must equal what crossed the proxy. ogld#31 and
 ogld#32 re-run the benchmark, so both stay tested, not just checked once.
@@ -149,7 +149,7 @@ def test_the_host_honours_byte_ranges_through_the_proxy(tmp_path: Path) -> None:
 def test_the_proxy_waits_once_per_request_and_requests_in_flight_wait_together(
     tmp_path: Path,
 ) -> None:
-    # The round-trip model (docs/benchmarks/latency.md) is the 0 ms time plus one wait for each
+    # The round-trip model (docs/benchmarks/ld/latency.md) is the 0 ms time plus one wait for each
     # request made in sequence; a wait per byte, per connection or per pair of requests breaks it.
     (tmp_path / "chunk").write_bytes(b"x" * 64)
     wait = 0.15
@@ -341,8 +341,9 @@ def test_a_run_records_whether_its_checkout_is_the_code_that_ran(
 
 
 def test_a_run_that_read_no_far_pairs_shows_none_not_zero() -> None:
-    # #8's runs read a store without far/, so their Far Pairs columns say nothing was read, not
-    # a measured 0; #31's runs read the Far Pairs, and a read that needed none is a true 0.
+    # opengwas/ogld#8's runs read a store without far/, so their Far Pairs columns say nothing was
+    # read, not a measured 0; opengwas/ogld#31's runs read the Far Pairs, and a read that needed
+    # none is a true 0.
     before, _ = report.read(sorted(RESULTS.glob("*.jsonl.gz")))
     after, _ = report.read([RESULTS / "far-pairs" / "step1-chr22-after.jsonl.gz"])
 

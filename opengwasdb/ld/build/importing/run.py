@@ -1,4 +1,4 @@
-"""Chromosome-bounded, restartable Pan-UKB import through StoreWriter (ADR 0015)."""
+"""Chromosome-bounded, restartable Pan-UKB import through StoreWriter (ADR 0101)."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from opengwasdb.ld.store import StoreWriter, Variants
 from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.version import __version__
 
-# The source policy, not an encoding default (owner #88; ADR 0015).
+# The source policy, not an encoding default (owner opengwas/ogld#88; ADR 0101).
 PANUKB_SCALE: Final = 2047
 
 

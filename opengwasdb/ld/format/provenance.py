@@ -1,4 +1,4 @@
-"""The provenance an LD Store carries, and the names of its validation rules (spec §7, §12).
+"""The provenance an LD Store carries, and the names of its validation rules (ld-store §7, §12).
 
 The types mirror the JSON object in the root group's `ld_store` attribute key for key, so
 mypy holds the builder (ogld#5), the writer (ogld#4) and validation to one shape.
@@ -13,17 +13,17 @@ from typing import Final, Literal, TypedDict
 FORMAT_VERSION: Final = "0.2.0"
 
 #: The format versions this package reads: `0.1.0`, the stores built before the Partner Rows (no
-#: `partners/`; its `clump` and `proxies` read a Proxy Index, which #72 removed and nothing here
-#: reads now), and `0.2.0`, which adds them (spec §13). A store records one, and a reader refuses
-#: any other.
+#: `partners/`; its `clump` and `proxies` read a Proxy Index, which opengwas/ogld#72 removed and
+#: nothing here reads now), and `0.2.0`, which adds them (ld-store §13). A store records one, and a
+#: reader refuses any other.
 READABLE_FORMATS: Final = ("0.1.0", FORMAT_VERSION)
 
 
 class Encoding(TypedDict):
-    """How the store's `r` arrays hold r (spec §3, §7). A store may record any values here;
+    """How the store's `r` arrays hold r (ld-store §3, §7). A store may record any values here;
     `opengwasdb.ld.format.REncoding.of` says whether this package implements them, and a reader
     refuses
-    a store whose encoding it does not (spec §13)."""
+    a store whose encoding it does not (ld-store §13)."""
 
     r_dtype: str
     r_scale: int
@@ -86,7 +86,7 @@ class PcNull(TypedDict):
 
 
 class PcCheck(TypedDict):
-    """The PC Check's result: the local-PC rule (owner, 7 November 2026; ADR 0002).
+    """The PC Check's result: the local-PC rule (owner, 7 November 2026; ADR 0088).
 
     A PC is local, and dropped from the covariates, when all three hold: one `window_bp`
     window explains at least `min_share` of it; that share beats `PcScan.window_null_q99`;
@@ -107,7 +107,7 @@ class PcCheck(TypedDict):
 
 
 class Adjustment(TypedDict):
-    """What was regressed out of the genotypes before r was computed (spec §7).
+    """What was regressed out of the genotypes before r was computed (ld-store §7).
 
     `covariates` names every covariate, in order, and `k` is their number: t_far's k. For a
     build from a PC File they are the first up to `k_target` PCs the PC Check kept, and
@@ -132,7 +132,7 @@ class PcDiagnosticPairs(TypedDict):
 
 
 class PcDiagnostic(TypedDict):
-    """What PC Adjustment did to chance LD and to real LD (spec §7). The two measured rates are
+    """What PC Adjustment did to chance LD and to real LD (ld-store §7). The two measured rates are
     None when the Variant Set has no cross-chromosome pair (one chromosome), and `pairs.n_pairs`
     is then 0: a rate nothing measured is not a number."""
 
@@ -148,7 +148,7 @@ class VariantFilters(TypedDict):
 
     `filter` lists the FILTER values that pass (`PASS` and `.`); `mac_min` is the minor
     allele count floor; `info_min` the INFO floor, None when none was applied (a sequenced
-    panel); `autosomes_only` that a record off chromosomes 1-22 was refused (spec §1).
+    panel); `autosomes_only` that a record off chromosomes 1-22 was refused (ld-store §1).
     """
 
     filter: list[str]
@@ -173,7 +173,7 @@ class Build(TypedDict):
 
 
 class Provenance(TypedDict):
-    """The root group's `ld_store` attribute (spec §7). Every key is required."""
+    """The root group's `ld_store` attribute (ld-store §7). Every key is required."""
 
     format_version: str
     encoding: Encoding
@@ -198,7 +198,7 @@ class Provenance(TypedDict):
 
 
 class Sourced(TypedDict):
-    """The provenance only a store's producer knows (spec §7; owner, 10 November 2026): what r
+    """The provenance only a store's producer knows (ld-store §7; owner, 10 November 2026): what r
     was computed from and how, by what software, and at what cost.
 
     A producer hands this to `StoreWriter.finish`, which adds what the store derives from itself:
@@ -222,7 +222,7 @@ class Sourced(TypedDict):
 def release_of(version: object) -> tuple[int, ...] | None:
     """`MAJOR.MINOR.PATCH` as numbers, or None for one that is not that.
 
-    Spec §13 makes `format_version` the one thing that says which components a store has, so a
+    ld-store §13 makes `format_version` the one thing that says which components a store has, so a
     reader, a validation rule and the derivation all ask it the same way (ogld#69). A version this
     package cannot parse is None here; whoever needs it refuses the store by name (§13,
     `provenance.encoding`).
@@ -242,7 +242,7 @@ PARTNER_ROWS_SINCE: Final = (0, 2, 0)
 
 def claims_partner_rows(recorded: object) -> bool:
     """Whether a store's provenance claims the Partner Rows: the Partner Threshold is recorded
-    **and** the kind claims a component that answers at it (spec §7, §13; partner-rows §6.2).
+    **and** the kind claims a component that answers at it (ld-store §7, §13; partner-rows §6.2).
 
     For an LD Store the second half is the recorded **format version**, 0.2.0 or later. A 0.1.0
     store that carries `t_partner`, or a whole `partners/`, holds a residue nothing has claimed —
@@ -251,7 +251,7 @@ def claims_partner_rows(recorded: object) -> bool:
 
     A Genotype Store sidecar claims them too: its own format records `t_partner` and the
     `filesets` and `arrays` it holds instead of materialised frames, and `clump` and `proxies`
-    answer from that threshold by computing the pairs (ADR 0014). A consumer deciding capability
+    answer from that threshold by computing the pairs (ADR 0100). A consumer deciding capability
     from provenance must see the same answer for both kinds.
 
     The callers are one rule here: the reader (`StoreReader.has_partner_rows`), validation
@@ -266,7 +266,7 @@ def claims_partner_rows(recorded: object) -> bool:
     return sidecar or (version is not None and version >= PARTNER_ROWS_SINCE)
 
 
-#: Every key spec §7 requires, dotted where it is nested. `provenance.complete` checks them.
+#: Every key ld-store §7 requires, dotted where it is nested. `provenance.complete` checks them.
 REQUIRED_KEYS: Final = (
     "format_version",
     "encoding.r_dtype",
@@ -311,7 +311,7 @@ REQUIRED_KEYS: Final = (
     "build.threads",
 )
 
-#: The validation rules, by name, in the order spec §12 lists them. Each runs on write
+#: The validation rules, by name, in the order ld-store §12 lists them. Each runs on write
 #: and on demand; ogld#4 implements them, each with a store that breaks it.
 VALIDATION_RULES: Final = (
     "envelope.arrays",

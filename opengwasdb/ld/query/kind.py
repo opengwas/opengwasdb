@@ -1,4 +1,4 @@
-"""One read of a store's root metadata, and which kind of store it says it is (#91).
+"""One read of a store's root metadata, and which kind of store it says it is (opengwas/ogld#91).
 
 `opengwasdb.ld.open` and `opengwasdb.ld.validate` both come through here: the root is opened once,
 its kind is read

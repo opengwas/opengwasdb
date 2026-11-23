@@ -1,7 +1,7 @@
 """Copies of the Test Store for tests that must change one: re-sharded, or with a piece lost;
 and `snv_variants`, the Variant Set of a small store a test writes itself.
 
-No test writes into `tests/data/`; each works on a copy under its own `tmp_path`.
+No test writes into `tests/ld/data/`; each works on a copy under its own `tmp_path`.
 """
 
 from __future__ import annotations
@@ -28,12 +28,12 @@ from opengwasdb.variants.sorted_spelling import sorted_identity
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 #: The Test Store's encoding, r̂ = code / R_SCALE, as a literal: every test that needs the Test
 #: Store's step, or builds the Test Panel to compare with it, takes it from here, never from
-#: ogld (spec §3; ADR 0004). A test holds the store's record to it.
+#: ogld (ld-store §3; ADR 0090). A test holds the store's record to it.
 R_SCALE = 511
 #: Half a step: |r̂ − r| never exceeds it.
 HALF_STEP = 1 / (2 * R_SCALE)
 #: The far code floor at R_SCALE for the Test Panel's n = 771, all of EUR's v2 members by the
-#: owner's ruling, where a panel's build keeps 665 (spec §3's table): FLOOR at the Test Store's
+#: owner's ruling, where a panel's build keeps 665 (ld-store §3's table): FLOOR at the Test Store's
 #: k = 10, FLOOR_K0 at k = 0, and FLOOR_K7 at k = 7, where a build that drops a local PC lands.
 #: At × 511 the three t_far (0.0274211, 0.0270649, 0.0273132) share a floor; at × 32767 they
 #: were 5426, 5391 and 5416.
@@ -63,7 +63,7 @@ def snv_variants(chrom: list[str], position: npt.NDArray[np.int64]) -> Variants:
 
 
 def codes_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.int64]:
-    """r as a store at × `scale` codes it, computed here rather than by ogld: spec §3's
+    """r as a store at × `scale` codes it, computed here rather than by ogld: ld-store §3's
     clamp(rint(r × scale), −scale, +scale), half to even."""
     return np.clip(np.rint(np.asarray(r, dtype=np.float64) * scale), -scale, scale).astype(np.int64)
 
@@ -75,7 +75,7 @@ def stored_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.float64]
 
 @contextlib.contextmanager
 def store_reads() -> Iterator[list[str]]:
-    """Every key a reader fetches from a local store while the block runs (#71).
+    """Every key a reader fetches from a local store while the block runs (opengwas/ogld#71).
 
     That is each array's chunks and shard indexes, and every `zarr.json` metadata document, by the
     store's own key: `/c/` is followed by coordinates, so a predicate on the key's ending matches
@@ -120,7 +120,7 @@ def arrays(group: zarr.Group, prefix: str = "") -> Iterator[tuple[str, zarr.Arra
 
 def resharded(to: Path, inner: int, per_shard: int) -> Path:
     """The Test Store rewritten with inner chunks of `inner` elements and `per_shard` of them
-    to a shard: the same data and metadata on another layout, as ogld#9 may serve it (spec §6).
+    to a shard: the same data and metadata on another layout, as ogld#9 may serve it (ld-store §6).
     """
     copy_store(to)
     source = zarr.open_group(TEST_STORE, mode="r")
@@ -155,10 +155,11 @@ def unpartnered(to: Path) -> Path:
     the four keys that describe it dropped, and the Proxy Index a 0.1.0 store holds with its
     `counts.index_entries` (partner-rows §6.2, §13; ld-store §13).
 
-    It is what `ogld derive-partners` derives into, so a test holds the derived component against
-    the committed one — the build's — byte for byte, and `--drop-index` has something to remove.
-    The index's arrays are empty placeholders: nothing reads a Proxy Index since #72, and a test
-    that reads one is testing the component this fixture stands for, not its data.
+    It is what `opengwasdb ld derive-partners` derives into, so a test holds the derived component
+    against the committed one — the build's — byte for byte, and `--drop-index` has something to
+    remove. The index's arrays are empty placeholders: nothing reads a Proxy Index since
+    opengwas/ogld#72, and a test that reads one is testing the component this fixture stands for,
+    not its data.
     """
     copy_store(to)
     shutil.rmtree(to / "partners")
@@ -198,7 +199,7 @@ def unpartnered(to: Path) -> Path:
     return to
 
 
-#: The store-derived keys `finish` adds (spec §7), every other key being the producer's.
+#: The store-derived keys `finish` adds (ld-store §7), every other key being the producer's.
 DERIVED = frozenset(
     {
         "format_version",

@@ -1,19 +1,21 @@
 # LD Stores hold a 3 Mb Near Band and thresholded Far Pairs
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0001.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
-> **Decision 2's "quantised to `int16`" is superseded by [ADR 0004](./0004-per-store-encoding.md)**
+> **Decision 2's "quantised to `int16`" is superseded by [ADR 0090](./0090-per-store-encoding.md)**
 > (owner, 10 November 2026). Each LD Store records its own encoding: a symmetric scale in an
 > `int16` container, × 511 for the five HGDP+1kGP stores and × 2047 for UK Biobank EUR, where
 > this ADR's format read one scale, × 32767, for all. So the consequence below on where a pair at
-> exactly t_far lands is now spec §3's table at each store's own scale. The rest of decision 2
+> exactly t_far lands is now ld-store §3's table at each store's own scale. The rest of decision 2
 > stands.
 
 > **The merge of the Far Pairs into the Proxy Index, the clarification's note of 8 November 2026,
-> is superseded by [ADR 0007](./0007-far-pairs-beside-the-proxy-index.md)** (owner, 12 November
+> is superseded by [ADR 0093](./0093-far-pairs-beside-the-proxy-index.md)** (owner, 12 November
 > 2026, on ogld#8's measurements). The Far Pairs are again their own component beside the Proxy
 > Index: `matrix` and `region` read them, and `proxies` and `clump` read the index. Decision 3
 > stands as written.
@@ -21,20 +23,20 @@
 > **Clarified on 7 November 2026** (see "Clarification, 7 November 2026" at the end). The
 > upstream half is settled as a Proxy Index; a matrix query returns NaN for an unstored pair and a
 > number only through the caller's `fill`; and the PC part of decision 4 is superseded by
-> [ADR 0002](./0002-build-inputs.md): the PCs are our own, computed outside ogld with the
+> [ADR 0088](./0088-build-inputs.md): the PCs are our own, computed outside ogld with the
 > Long-Range LD Regions excluded, and the builder drops local PCs. Decision 5 holds for every
 > non-public panel; the public Test Panel slice is committed. The decisions below stand as written
 > otherwise.
 
 > **Clarified on 13 November 2026** (see "Clarification, 13 November 2026" at the end). Where a
-> pair at exactly t_far lands is spec §3's table, at each store's own scale ([ADR
-> 0004](./0004-per-store-encoding.md)) and on the unrelated samples each build keeps, with the Far
-> Pairs their own component ([ADR 0007](./0007-far-pairs-beside-the-proxy-index.md)). The
+> pair at exactly t_far lands is ld-store §3's table, at each store's own scale ([ADR
+> 0090](./0090-per-store-encoding.md)) and on the unrelated samples each build keeps, with the Far
+> Pairs their own component ([ADR 0093](./0093-far-pairs-beside-the-proxy-index.md)). The
 > Context's "stored on every HGDP+1kGP panel at k = 10" and the 7 November clarification's "on
 > EAS and SAS it reads as the Bound" no longer describe it.
 
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
-This ADR records the owner's decisions of 7 November 2026 (epic #1, "Decisions already taken"),
+This ADR records the owner's decisions of 7 November 2026 (epic opengwas/ogld#1, "Decisions already taken"),
 and the options they rejected. It also records what the prototypes measured. The format itself is
 in `docs/spec/ld-store.md`; the terms are in `CONTEXT.md`.
 
@@ -42,7 +44,7 @@ in `docs/spec/ld-store.md`; the terms are in `CONTEXT.md`.
 
 Clumping and LD matrices have needed individual-level genotypes on the server: plink `--bfile`
 panels for OpenGWAS's 1000 Genomes service, and `pgen` panels for the engine's prototypes. That has
-three costs (epic #1):
+three costs (epic opengwas/ogld#1):
 
 - **The panels are small.** At r² 0.001, MR's default threshold, sampling alone passes a share
   P(χ²₁ ≥ n × 0.001) of unlinked pairs. That is 37% at n = 817 and 48% at n = 503, the range of
@@ -60,7 +62,7 @@ ogld provides the LD that clumping reads.
 
 ## Decision
 
-The owner decided (epic #1, 7 November 2026):
+The owner decided (epic opengwas/ogld#1, 7 November 2026):
 
 1. **One LD Store per (ancestry panel, assembly).** The panel is the **Source Panel**, and the
    assembly is the engine's **Reference Assembly**.
@@ -171,7 +173,7 @@ all five panels.
 - An LD Store answers every pair up to 3 Mb exactly, so clumping, proxies and LD matrices within
   a 3 Mb window never depend on a threshold.
 - Each LD Store is hundreds of GB. Size scales with the square of variant density, so AFR is 2.7×
-  EUR. Publishing is a question of hosting, decided with serving in #9.
+  EUR. Publishing is a question of hosting, decided with serving in opengwas/ogld#9.
 - **A variant's upstream partners are scattered.** Row i holds only i's downstream partners. Its
   upstream ones are one element in each row of the preceding 3 Mb, so `proxies()`, and anything
   else that needs a whole column, reads the band's span over that 3 Mb, not one row. The
@@ -181,7 +183,7 @@ all five panels.
   included, is judged on the Stored r, so a reader sees one consistent rule. The cost is that a
   pair whose true r² is exactly t_far lands on whichever side its rounding puts it. It is stored
   on every HGDP+1kGP panel at k = 10. On UK Biobank EUR it reads as the Bound, for a true r² up
-  to 0.0010006 (spec §3).
+  to 0.0010006 (ld-store §3).
 - A request whose threshold is below t_far is refused only when its window exceeds 3 Mb. A small
   panel such as AMR (t_far 0.062) therefore refuses more than a large one. UK Biobank EUR
   (t_far 0.001) refuses, at r2 ≥ 0.001, only windows over 10 Mb.
@@ -189,7 +191,7 @@ all five panels.
 ## Clarification, 7 November 2026
 
 The owner checked this ADR and the spec at ogld#2 and decided four further points the same day
-(epic #1, comment of 7 November 2026, decisions 1, 2, 3 and 6). They clarify the decisions above
+(epic opengwas/ogld#1, comment of 7 November 2026, decisions 1, 2, 3 and 6). They clarify the decisions above
 and do not reverse them: the answer table and the refusals stand.
 
 **The upstream half is a Proxy Index** (decision 1 of the comment). The consequence above, "A
@@ -202,11 +204,11 @@ thresholded index (`docs/spec/ld-store.md` §5 and §11). That changes no answer
 whether to merge is the owner's decision, put to them at ogld#2. Decision 3 above is unchanged in
 meaning: a 3–10 Mb pair is stored exactly when r̂² ≥ t_far.
 *8 November 2026:* the owner merged them. The Proxy Index is the Far Pairs' only storage, and a
-region matrix wider than 3 Mb reads about 3–9% more bytes for it (spec §11). ogld#8 measures that
+region matrix wider than 3 Mb reads about 3–9% more bytes for it (ld-store §11). ogld#8 measures that
 cost before the first release.
 *12 November 2026:* reversed on ogld#8's measurements, before any store was published: a matrix
 of 500 variants on one chromosome read about 890 index chunks for its far pairs, where a Far
-Pairs component reads about 11 ([ADR 0007](./0007-far-pairs-beside-the-proxy-index.md)).
+Pairs component reads about 11 ([ADR 0093](./0093-far-pairs-beside-the-proxy-index.md)).
 
 **A matrix is one signed-r matrix, NaN where unstored** (decision 2). A matrix query returns the
 Stored r of every pair it holds and NaN for every other pair, the Bound and Not Measured alike.
@@ -235,7 +237,7 @@ keeps; if fewer survive, those that do, as long as at least 5 do, and the build 
 otherwise. t_far's k is the number used, and provenance records the target, the minimum, the k
 used, the scan, the dropped PCs and the null. Decision 4's "The PCs come from
 LD-pruned common variants, with the Long-Range LD Regions excluded" is superseded by
-[ADR 0002](./0002-build-inputs.md), which has the evidence: gnomAD's PCs, which did not exclude the
+[ADR 0088](./0088-build-inputs.md), which has the evidence: gnomAD's PCs, which did not exclude the
 regions, and our own, which do, both carry EUR's north–south axis through LCT, and the rule keeps
 it as ancestry. What PC Adjustment is, and why, is unchanged.
 
@@ -253,7 +255,7 @@ distances it measured: 3 Mb near, and at most 10 Mb far (`docs/spec/ld-store.md`
 Test Panel, a public slice of HGDP+1kGP v2 chr21 and chr22 for the 771 EUR samples, to this
 repository as test data. HGDP+1kGP's genotypes are already public under gnomAD's terms, so this
 does not touch decision 5, which still holds for every non-public Source Panel, such as UK
-Biobank: its genotypes never leave the host they are on. ADR 0002, decision 7, records the same
+Biobank: its genotypes never leave the host they are on. ADR 0088, decision 7, records the same
 from the build inputs' side.
 
 **Panel sizes** (the same later decisions). The phased v2 callset has fewer samples in three
@@ -269,20 +271,20 @@ The format version stays `0.1.0`: no LD Store has been written in it yet.
 
 Two statements above say where a pair whose true r² is exactly t_far lands, and neither holds
 now. The Context says it "is stored on every HGDP+1kGP panel at k = 10" and reads as the Bound
-on UK Biobank EUR; the 7 November clarification's "Panel sizes" says spec §3's table uses the
+on UK Biobank EUR; the 7 November clarification's "Panel sizes" says ld-store §3's table uses the
 phased callset's sizes and that on EAS and SAS the pair reads as the Bound. Both were worked at
 × 32767, on each panel's whole sample count. Since then three decisions moved the answer:
 
-- [ADR 0004](./0004-per-store-encoding.md) gave each store its own scale: × 511 for the five
+- [ADR 0090](./0090-per-store-encoding.md) gave each store its own scale: × 511 for the five
   HGDP+1kGP stores, × 2047 for UK Biobank EUR.
-- [ADR 0002](./0002-build-inputs.md), decision 11, builds each HGDP+1kGP store on its unrelated
+- [ADR 0088](./0088-build-inputs.md), decision 11, builds each HGDP+1kGP store on its unrelated
   samples: EUR 665, AFR 608, EAS 724, SAS 672 and AMR 341. AMR's t_far at k = 10 is therefore
   0.0631515, not the Context's 0.062.
-- [ADR 0007](./0007-far-pairs-beside-the-proxy-index.md) made the Far Pairs their own component
+- [ADR 0093](./0093-far-pairs-beside-the-proxy-index.md) made the Far Pairs their own component
   again, so a pair beyond `near_bp` that is stored is a Far Pair in `far/<chrom>/`, as well as
   an entry of the Proxy Index.
 
-Spec §3's table is the answer, and the only one: at k = 10 a pair at exactly t_far is a Far Pair
+ld-store §3's table is the answer, and the only one: at k = 10 a pair at exactly t_far is a Far Pair
 on HGDP+1kGP SAS and on UK Biobank EUR, and reads as the Bound "r² < t_far" on HGDP+1kGP EUR,
 AFR, EAS and AMR. The Context, decision 3's table and the 7 November clarification are left as
 they were written.

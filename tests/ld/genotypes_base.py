@@ -5,7 +5,7 @@ basis of the covariates, from a QR factorisation, and projects. This oracle shar
 builds the design itself (an intercept column and the PCs, in the sample order), solves the least
 squares problem with `numpy.linalg.lstsq` for every variant at once, takes the residuals, and scales
 each variant's residual to a unit vector signed to A1. r(i, j) is then the dot product of two such
-vectors (spec §3); at k = 0 the intercept alone centres the dosages and r is Pearson's.
+vectors (ld-store §3); at k = 0 the intercept alone centres the dosages and r is Pearson's.
 
 The two agree to float error: measured on the Test Panel's 771 samples, the largest difference in r
 is 3.4e-13 at k = 0 and 4.5e-13 at k = 10. The tests compare them to 1e-11, some twenty times that

@@ -126,7 +126,7 @@ def test_a_keep_file_is_hashed_as_the_builder_hashes_its_samples(tmp_path: Path)
 
 
 def test_inputs_that_are_not_the_ones_the_store_was_built_from_are_refused(tmp_path: Path) -> None:
-    # The store's source.sha256 keys the keep file beside the pgens, as spec §7 says.
+    # The store's source.sha256 keys the keep file beside the pgens, as ld-store §7 says.
     keep = tmp_path / "keep" / "EUR.keep"
     keep.parent.mkdir()
     keep.write_text("#IID\nHG1\nHG2\n")

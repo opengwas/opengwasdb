@@ -1,9 +1,11 @@
 # A local sidecar over existing pgens
 
-Issue #91, epic #18. Authority: the owner's 20–21 November 2026 rulings on #18
-and the #91 resume ruling on relative paths. This records those rulings and the
-implementation choices they leave to the reader ticket. ADR 0013 remains the
-single arithmetic owner; ADR 0012 remains the ALID companion contract.
+Formerly ogld ADR 0014.
+
+Issue opengwas/ogld#91, epic opengwas/ogld#18. Authority: the owner's 20–21 November 2026 rulings on opengwas/ogld#18
+and the opengwas/ogld#91 resume ruling on relative paths. This records those rulings and the
+implementation choices they leave to the reader ticket. ADR 0099 remains the
+single arithmetic owner; ADR 0098 remains the ALID companion contract.
 
 ## Context
 
@@ -29,7 +31,7 @@ There is no override argument. Moving the sidecar and pgens together preserves
 resolution; moving the sidecar alone does not.
 
 Small adjustment arrays use uncompressed NumPy `.npy` files opened read-only
-with mmap, so processes share their pages. `ogld.genotypes` owns these paths,
+with mmap, so processes share their pages. `opengwasdb.ld.genotypes` owns these paths,
 dtypes and descriptors. The arrays hold pgen row, fileset index, projections,
 residual norms, A1 signs and the common PC basis. A request reads dosages through
 Genotypes and calls `adjust.r`; it never caches decoded calls. BLAS runs one
@@ -50,9 +52,9 @@ emitter and this reader all call them, so the Bound and Not Measured cannot drif
 between a materialised store and a computed one.
 
 The reader composes rather than subclasses: it holds its own `OpenedStore` and composes
-`VariantTable` exactly as `StoreReader` does, and both satisfy `ogld.query.reader.Reader`
+`VariantTable` exactly as `StoreReader` does, and both satisfy `opengwasdb.ld.query.reader.Reader`
 structurally. So a genotype reader has no LD reader's members that mean nothing here
-(`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `ogld.open` and `ogld.validate`
+(`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `opengwasdb.ld.open` and `ogld.validate`
 read the root once and hand the opened metadata to the kind that owns it.
 
 The clump seam is a request-local context manager yielding a row callable.
@@ -72,7 +74,7 @@ its decode touched, and keeping all 22 at once takes a clump's peak RSS from 1.3
 (+0.69 GB), and a repeated whole-genome clump still reuses what its last chromosomes left. This
 is a handle cache, never a decoded-call cache.
 
-Measured (#91): assembling one proxy window's dosage block whole costs 432 ms,
+Measured (opengwas/ogld#91): assembling one proxy window's dosage block whole costs 432 ms,
 with 214 ms inside read/reorder, and the 3 Mb region 4.05 s. Decode writes
 disjoint output slices on at most four reader threads, with no concatenation or
 retained calls. Rows at tied loci that differ between physical pgen and ALID

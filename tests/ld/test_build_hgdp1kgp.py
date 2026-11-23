@@ -1,4 +1,4 @@
-"""`scripts/build_hgdp1kgp.py` (ogld#7): when a conversion counts as current, and every way the
+"""`scripts/ld/build_hgdp1kgp.py` (ogld#7): when a conversion counts as current, and every way the
 recipe stops rather than go on. plink2 is a fake script that writes small filesets, or fails in
 one chosen way (`FAKE_PLINK2`)."""
 

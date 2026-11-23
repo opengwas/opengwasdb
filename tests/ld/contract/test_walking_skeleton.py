@@ -1,10 +1,10 @@
 """The walking skeleton's contract: the thinnest real path, and the Test Store it writes.
 
 pgen → r at k = 0 → the Near Band → write → read → one pair answered. The skeleton's script,
-`scripts/make_test_store.py`, writes the Test Store from the Test Panel's `reference_r(10)`
-into `tests/data/test-panel/store/`; the ticket runs it, and no test writes there. Its
-`write_test_store(k, out)` also gives ogld#6 a k = 0 store. From then on ogld#4–#6 build
-against real data in the format.
+`scripts/ld/make_test_store.py`, writes the Test Store from the Test Panel's `reference_r(10)`
+into `tests/ld/data/test-panel/store/`; the ticket runs it, and no test writes there. Its
+`write_test_store(k, out)` also gives ogld#6 a k = 0 store. From then on ogld#4–opengwas/ogld#6
+build against real data in the format.
 
 These tests go through the store seam, `StoreReader`, not the queries, which are ogld#4's
 and ogld#6's.
@@ -82,7 +82,7 @@ def arrays(group: zarr.Group, prefix: str = "") -> dict[str, np.ndarray]:
 
 def test_the_script_writes_the_committed_test_store_again(tmp_path: Path) -> None:
     # Into tmp_path, never over the committed store: the ticket runs the script into
-    # tests/data/test-panel/store/, and this holds the two to one set of arrays.
+    # tests/ld/data/test-panel/store/, and this holds the two to one set of arrays.
     StoreReader.open(support.TEST_STORE)
     script = load_script("make_test_store")
     out = script.write_test_store(10, tmp_path / "again", support.R_SCALE, 0.01)

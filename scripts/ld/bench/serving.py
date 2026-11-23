@@ -6,7 +6,7 @@ Two measurements, each written as JSON lines to `--out`, and the tables of every
 - `memory`: one process opens the five stores, as a worker that serves them would, and records
   its resident memory (`VmRSS` and its peak `VmHWM`, from /proc/self/status) after the opens,
   after loading every chromosome's positions and `indptr` arrays (Near Band and Far Pairs: what
-  a long-lived reader keeps, spec §10), and after filling each store's chunk
+  a long-lived reader keeps, ld-store §10), and after filling each store's chunk
   cache with 3 Mb regions until it holds 95% of its budget. Each record carries every store's
   cache count beside the process's memory. A store that runs out of regions first stops the run.
 - `lag`: the main thread runs an asyncio event loop, as a web service does, and ticks every
@@ -15,14 +15,14 @@ Two measurements, each written as JSON lines to `--out`, and the tables of every
   would wait while ogld reads. The queries are ogld#8's own (`latency.clump_query`,
   `matrix_query`, `region_query`), so each record carries what its query answered, and runs under
   different zarr settings can be held to the same answer.
-- `tables`: renders records as `docs/benchmarks/serving-tables.md`: ogld#8's step-1 tables of the
+- `tables`: renders records as `docs/benchmarks/ld/serving-tables.md`: ogld#8's step-1 tables of the
   `bench-latency` runs (`report.step1_tables`), then the memory and lag runs, one row a record.
 
     pixi run -e dev bench-serving memory --out memory.jsonl
     pixi run -e dev bench-serving lag --out lag.jsonl
     pixi run -e dev bench-serving lag --engine-zarr --out lag.jsonl
-    pixi run -e dev bench-serving tables docs/benchmarks/results/9/*.jsonl.gz \
-        > docs/benchmarks/serving-tables.md
+    pixi run -e dev bench-serving tables docs/benchmarks/ld/results/9/*.jsonl.gz \
+        > docs/benchmarks/ld/serving-tables.md
 
 `bench-serving` keeps BLAS to one thread, as `bench-latency` does. zarr's pool is
 `--zarr-threads` (6), and `lag` adds one worker thread. The stores are only read.
@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Final, TextIO
 
 # The read benchmark beside this script: where the stores and Analyses are, its queries, and its
-# tables (scripts/bench/latency.py and report.py).
+# tables (scripts/ld/bench/latency.py and report.py).
 import latency
 import report
 
@@ -104,7 +104,7 @@ def memory_record(step: str, stores: dict[str, Any], **extra: Any) -> dict[str, 
 
 def load_chromosomes(store: Any) -> int:
     """Load every chromosome's kept arrays, the Far Pairs' `indptr` too, through the reader's
-    own loaders (spec §10), so the count is what a reader that has met every chromosome keeps.
+    own loaders (ld-store §10), so the count is what a reader that has met every chromosome keeps.
     No public read loads a chromosome without reading pairs too. Returns the chromosomes."""
     reader = store._reader
     for name in reader._ranges:

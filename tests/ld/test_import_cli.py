@@ -1,4 +1,4 @@
-"""Published LD import through the CLI, existing validator and reader (#93)."""
+"""Published LD import through the CLI, existing validator and reader (opengwas/ogld#93)."""
 
 import io
 import json

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """A static host for LD Stores and a latency proxy in front of it, on this machine (ogld#8).
 
-An LD Store is plain Zarr, so a static host that honours byte ranges serves it (spec §10). This
+An LD Store is plain Zarr, so a static host that honours byte ranges serves it (ld-store §10). This
 is that host, on loopback, and a proxy in front of it that waits a set time before forwarding
 each request, to stand in for a network's round trip. It is loopback with injected latency, not
 a real WAN: there is no bandwidth limit, no loss, and no extra round trip to open a connection,
 which a real client pays once per connection (and more for TLS) and then reuses.
 
-    python scripts/bench/http_static.py static ROOT   # prints "ready PORT"
-    python scripts/bench/http_static.py proxy UPSTREAM  # prints "ready PORT"
+    python scripts/ld/bench/http_static.py static ROOT   # prints "ready PORT"
+    python scripts/ld/bench/http_static.py proxy UPSTREAM  # prints "ready PORT"
 
 The static host is aiohttp's `FileResponse`, which honours one byte range, a suffix range
 included, and sends with sendfile. The proxy streams each response through and counts what

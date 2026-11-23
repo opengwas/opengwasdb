@@ -1,8 +1,10 @@
 # One owner for pgen reading and PC-adjusted r
 
-Issue #90, epic #18. The owner's ruling of 21 November 2026 on #18 adopts this formula
+Formerly ogld ADR 0013.
+
+Issue opengwas/ogld#90, epic opengwas/ogld#18. The owner's ruling of 21 November 2026 on opengwas/ogld#18 adopts this formula
 and module layer. This records that ruling, not a new Store format or provenance contract.
-ADR 0002 decision 10 still applies: pgenlib remains the optional `ogld[build]` extra,
+ADR 0088 decision 10 still applies: pgenlib remains the optional `opengwasdb[ld-build]` extra,
 imported only when opening a pgen, with the same refusal naming the extra.
 
 ## Context
@@ -13,7 +15,7 @@ never copy** rule and can silently give different Stored r for the same Source P
 
 ## Decision
 
-`ogld.genotypes` owns pgen reading, the orthonormal covariate basis Q of [intercept,
+`opengwasdb.ld.genotypes` owns pgen reading, the orthonormal covariate basis Q of [intercept,
 kept PCs], residuals and their FLAT test, projections p = xQ, residual norms
 N = ‖x − pQᵀ‖, and the A1 sign s (+1 where A1 is ALT, −1 otherwise).
 Its single `r(rows, span)` computes, in float64 BLAS:
@@ -23,7 +25,7 @@ r_ij = s_i s_j (x_i·x_j − p_i·p_j) / (N_i N_j)
 ```
 
 A row-against-window call is the same function on a one-row block. Quantisation remains
-`ogld.format.REncoding`'s, including half-to-even rounding and its floating-error refusal.
+`opengwasdb.ld.format.REncoding`'s, including half-to-even rounding and its floating-error refusal.
 At k = 0 Q contains the intercept alone. The PC Diagnostic's adjusted-minus-unadjusted
 change must call the same function on each basis. Residual norms retain the explicit
 residual calculation and original FLAT refusal text (build-inputs §6); subtracting squared

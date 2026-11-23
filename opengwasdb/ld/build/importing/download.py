@@ -1,4 +1,4 @@
-"""Bounded HTTPS downloads and durable per-part SHA-256 receipts (ADR 0015)."""
+"""Bounded HTTPS downloads and durable per-part SHA-256 receipts (ADR 0101)."""
 
 from __future__ import annotations
 

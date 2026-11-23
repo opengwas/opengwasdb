@@ -1,52 +1,54 @@
 # The Near Band is chunked by layout C: 262,144 codes an inner chunk, 256 to a shard
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0006.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
 Issue [#8](https://github.com/opengwas/ogld/issues/8), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The format is in `docs/spec/ld-store.md` (§6 for the chunk and shard shapes, §10 for the reads);
-the measurements are in `docs/benchmarks/latency.md`, rendered from the records in
-`docs/benchmarks/results/`; the terms are in `CONTEXT.md`.
+the measurements are in `docs/benchmarks/ld/latency.md`, rendered from the records in
+`docs/benchmarks/ld/results/`; the terms are in `CONTEXT.md`.
 
 **Who decided.** The owner, on 12 November 2026, on ogld#8, from the benchmark of
 `orch/1/8-latency@2f354ae`: layout C is final. The same ruling brings the Far Pairs back as a
 component of their own (ogld#31) and moves the reader's speed-ups to ogld#32. Each of those is
 its own decision; this record is the layout's.
 
-**Partly superseded by ADR 0010.** Decision 2 describes the arrays that existed when layout C
+**Partly superseded by ADR 0096.** Decision 2 describes the arrays that existed when layout C
 was chosen. The later ALID search index has its own chunk and shard shapes.
 
 ## Context
 
-Spec §6 named three shapes for the Near Band's `near/<c>/r`, as (inner chunk, shard) in codes:
+ld-store §6 named three shapes for the Near Band's `near/<c>/r`, as (inner chunk, shard) in codes:
 A (4,096, 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). The prototype chose C
 provisionally on a 12 Mb slice, where C's lead was the variant column read that the Proxy Index
 then took away (§11). §6 left the choice to ogld#8, because B read 2.5–7× fewer bytes on small
 reads, which could matter to a client limited by bandwidth rather than by requests.
 
-ogld#8 built HGDP+1kGP EUR chr22 three times by `ogld build` (× 511, k = 10, the published
-store's inputs; `scripts/bench/build_layouts.py`), once in each layout. The three decode to the
+ogld#8 built HGDP+1kGP EUR chr22 three times by `opengwasdb ld build` (× 511, k = 10, the published
+store's inputs; `scripts/ld/bench/build_layouts.py`), once in each layout. The three decode to the
 same arrays, and C's shards are byte-identical to the published store's chr22. It timed each read
 that differs, locally and over HTTP from a static host on loopback with 0, 10 and 50 ms added to
-every request (`scripts/bench/latency.py`), with ogld's reader and with a prototype that fetches a
+every request (`scripts/ld/bench/latency.py`), with ogld's reader and with a prototype that fetches a
 read's runs of chunks together.
 
 ## Decision
 
 1. **`near/<c>/r` is chunked 262,144 codes an inner chunk and 67,108,864 to a shard** (256 inner
-   chunks, 128 MiB raw), zstd level 3 inside the shard, as §6's table says. `ogld.store.layout`
+   chunks, 128 MiB raw), zstd level 3 inside the shard, as §6's table says. `opengwasdb.ld.store.layout`
    holds the shape (`NEAR_R`), and the writer takes it from there.
 2. **Every other array present at this decision keeps its one shape**, 16,384 to an inner chunk
    and 1,048,576 to a shard. ogld#8 measured no read the Proxy Index's or the variant table's
-   shape held back. ADR 0010 later gives the ALID search index different shapes.
+   shape held back. ADR 0096 later gives the ALID search index different shapes.
 3. **A shape is not a format version** (§13). A store re-sharded for serving (ogld#9) reads the
    same, and a reader depends on no shape: each array's metadata records its own.
 
 ## Considered options
 
-What ogld#8 measured on EUR chr22, A / B / C (`docs/benchmarks/latency.md`, "Step 2"):
+What ogld#8 measured on EUR chr22, A / B / C (`docs/benchmarks/ld/latency.md`, "Step 2"):
 
 | | A | B | C |
 |---|---|---|---|

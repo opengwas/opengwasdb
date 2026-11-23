@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Give an LD Store written before ADR 0010 its ALID search index, from its own variant table.
+"""Give an LD Store written before ADR 0096 its ALID search index, from its own variant table.
 
-    pixi run -e dev python scripts/derive_alid_index.py STORE [STORE ...]
+    pixi run -e dev python scripts/ld/derive_alid_index.py STORE [STORE ...]
 
 ogld#7 wrote the five HGDP+1kGP stores before the owner's 15 November 2026 decision to carry the
-engine's ALID index beside the variant table (ADR 0010). A store's index is its own `variants/alid`
+engine's ALID index beside the variant table (ADR 0096). A store's index is its own `variants/alid`
 column, padded and sorted (`opengwasdb.ld.store.assembly.derive_alid_index`, the function
 `StoreWriter.finish` calls), so it is derived rather than rebuilt. On HGDP+1kGP EUR chr22 the
 derived index was byte-identical, file for file, to a rebuild's (ogld#42).
@@ -20,8 +20,8 @@ that is fully derived is left as it is. This is not one transaction across two r
 may open the store between them, so run this when no reader does. No array is written but the
 index's two, and no other file but the root metadata document.
 
-Validate each store afterwards: `ogld validate`, or `pixi run -e dev acceptance-stores` for the
-five.
+Validate each store afterwards: `opengwasdb ld validate`, or `pixi run -e dev acceptance-stores` for
+the five.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.assembly import ALID_ROWS, derive_alid_index
 
 #: Where the index is written until every entry is, and counted: then it is renamed `alid_index`.
-#: A reader ignores it (spec §1), and no other writer makes it.
+#: A reader ignores it (ld-store §1), and no other writer makes it.
 PARTIAL = "alid_index-partial"
 
 
@@ -87,7 +87,7 @@ def derive(store: Path) -> int:
 
 def table_counts(store: Path) -> tuple[int, int]:
     """The table's rows, and how many of its ALIDs are wider than the index's slot: counted from
-    `variants/alid` itself, block by block, never inferred from an index's length (spec §7)."""
+    `variants/alid` itself, block by block, never inferred from an index's length (ld-store §7)."""
     alid = zarr.open_array(store / "variants" / "alid", mode="r")
     rows = int(alid.shape[0])
     wide = 0
@@ -108,13 +108,13 @@ def recorded_count(store: Path) -> int | None:
 
 
 def root_provenance(store: Path) -> dict[str, Any]:
-    """The root group's `ld_store` attribute, as recorded (spec §7)."""
+    """The root group's `ld_store` attribute, as recorded (ld-store §7)."""
     document: dict[str, Any] = json.loads((store / "zarr.json").read_text())
     return dict(document["attributes"]["ld_store"])
 
 
 def record_count(store: Path, left_out: int) -> None:
-    """Rewrite the store's provenance with `counts.alids_left_out` (spec §7), the one key this
+    """Rewrite the store's provenance with `counts.alids_left_out` (ld-store §7), the one key this
     derivation adds. A new document renamed over the old one, so no reader sees a half one."""
     import os
 

@@ -36,7 +36,7 @@ def check_columns(table: DataclassInstance) -> None:
 
 @dataclass(frozen=True)
 class Variants:
-    """Rows of the Variant Set (spec §2): one per variant, in the order the caller asked."""
+    """Rows of the Variant Set (ld-store §2): one per variant, in the order the caller asked."""
 
     chrom: npt.NDArray[np.str_]
     position: npt.NDArray[np.int64]

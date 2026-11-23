@@ -1,4 +1,4 @@
-"""Chromosome restart and deletion at the public import seam (#93)."""
+"""Chromosome restart and deletion at the public import seam (opengwas/ogld#93)."""
 
 import io
 import json

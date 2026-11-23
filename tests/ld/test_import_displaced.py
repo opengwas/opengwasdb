@@ -1,4 +1,4 @@
-"""Displaced liftover segments at the plan, CLI and resume seams (#99)."""
+"""Displaced liftover segments at the plan, CLI and resume seams (opengwas/ogld#99)."""
 
 import json
 from dataclasses import replace

@@ -1,5 +1,5 @@
 """ogld#5: the PC diagnostic, dosages and PC Adjustment's edge, each against a computation of its
-own (spec §7; build-inputs §6, §7, §9).
+own (ld-store §7; build-inputs §6, §7, §9).
 
 - `near_100kb_change` is the change in the Test Panel's independent reference r from k = 0 to
   k = 10, signed to A1, over its pairs within 100 kb: its quantiles to within one bin.
@@ -200,8 +200,8 @@ def test_the_cost_is_this_build_s() -> None:
 def test_a_variant_set_inside_the_long_range_regions_is_refused_before_a_write(
     tmp_path: Path,
 ) -> None:
-    # Review of #5 (standards a3): the PC diagnostic's change in r is measured on pairs within
-    # 100 kb outside the Long-Range LD Regions. An MHC-only Variant Set has none, which its
+    # Review of opengwas/ogld#5 (standards a3): the PC diagnostic's change in r is measured on pairs
+    # within 100 kb outside the Long-Range LD Regions. An MHC-only Variant Set has none, which its
     # positions say before anything is written, so the build refuses there, naming the panel,
     # and leaves no half-written store to block a rerun.
     v = testdata.variants()
@@ -229,9 +229,9 @@ def standardised(x: np.ndarray) -> np.ndarray:
 
 
 def test_a_variant_the_covariates_span_is_dropped_and_counted(tmp_path: Path) -> None:
-    # Review of #5 (standards a5): filter 4 after PC Adjustment had no test. PC10 here is 30% one
-    # variant's genotypes and 70% ancestry PC1, as the contract's kept PC2 is: one window explains
-    # much of it, the rest of the genome too, so the PC Check keeps it, and with PC1 also a
+    # Review of opengwas/ogld#5 (standards a5): filter 4 after PC Adjustment had no test. PC10 here
+    # is 30% one variant's genotypes and 70% ancestry PC1, as the contract's kept PC2 is: one window
+    # explains much of it, the rest of the genome too, so the PC Check keeps it, and with PC1 also a
     # covariate the variant lies in their span: no variance is left.
     row = 1050
     pcs = testdata.pcs().values

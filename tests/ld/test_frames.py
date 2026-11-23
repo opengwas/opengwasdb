@@ -24,7 +24,7 @@ import zarr
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store import frames
 
-#: The frame's decompressed payload, field by field (spec §5.2), little-endian:
+#: The frame's decompressed payload, field by field (partner-rows §5.2), little-endian:
 #: k = 2, lengths (2, 1), then the partner deltas (−2, 4, 2) and the codes (52, −90, 120),
 #: each array stored as planes: every element's byte 0, then every element's byte 1, and so on.
 K = bytes.fromhex("02000000")
@@ -70,8 +70,10 @@ def test_a_frame_is_one_zstd_frame_with_its_checksum_and_its_content_size() -> N
     raw = encoded(FIRST, ROWS)
     assert raw[:4] == b"\x28\xb5\x2f\xfd", "a zstd frame's magic number"
     descriptor = raw[4]
-    assert descriptor & 0x04, "the content checksum is set (spec §5.2)"
-    assert descriptor >> 6 or descriptor & 0x20, "the content size is in the header (spec §5.2)"
+    assert descriptor & 0x04, "the content checksum is set (partner-rows §5.2)"
+    assert descriptor >> 6 or descriptor & 0x20, (
+        "the content size is in the header (partner-rows §5.2)"
+    )
     assert ZSTD.decode(raw) == PAYLOAD
 
 
@@ -144,7 +146,8 @@ def open_store(path: Path) -> zarr.Group:
 
 
 def chunk_file(array: zarr.Array) -> Path:
-    """Where the array's one chunk is written, from its own metadata (spec §5.1): never assumed."""
+    """Where the array's one chunk is written, from its own metadata (partner-rows §5.1): never
+    assumed."""
     key = array.metadata.encode_chunk_key((0,))
     return Path(array.store_path.store.root) / array.store_path.path / key
 
@@ -302,7 +305,8 @@ def test_a_group_that_fails_before_its_attributes_is_never_published(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The whole group is built beside the store and published with one rename: a failure after the
-    # frames and before the attributes leaves no `partners/<chrom>/` at all (issue #67).
+    # frames and before the attributes leaves no `partners/<chrom>/` at all (issue
+    # opengwas/ogld#67).
     group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=16)
     group.add(FORTY[:16])
 
@@ -359,7 +363,8 @@ def test_a_row_of_partners_and_codes_of_other_counts_is_refused_naming_it(
 
 def test_a_target_that_appeared_before_the_rename_is_refused_not_replaced(tmp_path: Path) -> None:
     # One writer per store, and a chromosome's group is written once: a target that is there when
-    # the group is published, empty or not, is refused rather than replaced (issue #67).
+    # the group is published, empty or not, is refused rather than replaced (issue
+    # opengwas/ogld#67).
     group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=16)
     group.add(FORTY[:16])
     target = tmp_path / "store" / "partners" / "22"
@@ -400,7 +405,8 @@ def test_a_stale_temporary_group_of_the_same_chromosome_is_removed(tmp_path: Pat
 
 def test_a_refusal_from_a_pending_frame_names_its_own_number(tmp_path: Path) -> None:
     # With eight compressors three frames are pending at once; a row of the second must be named
-    # frame 1, not the frame the appended offsets have reached (issue #67's review, round 2).
+    # frame 1, not the frame the appended offsets have reached (issue opengwas/ogld#67's review,
+    # round 2).
     rows = frame_rows(48, [*PAIRS, (21, 24), (21, 30)])
     partners, codes = rows[21]
     rows[21] = (partners, codes[:-1])

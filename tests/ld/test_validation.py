@@ -1,7 +1,7 @@
-"""The validation rules beyond the contract (spec §12; ogld#4): read in small windows, on write,
+"""The validation rules beyond the contract (ld-store §12; ogld#4): read in small windows, on write,
 on stores that are not LD Stores, and through the CLI.
 
-The contract (tests/contract/test_store.py) breaks each rule once at the default window, which
+The contract (tests/ld/contract/test_store.py) breaks each rule once at the default window, which
 reads the Test Store's arrays in one piece. Here the windows are small, so a rule's state must
 carry across them, and each breaker must still fail its rule.
 """
@@ -44,7 +44,7 @@ from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout, validation
 from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
-#: The Partner Rows' ten rules (spec §12; partner-rows §10): the component's, and the provenance
+#: The Partner Rows' ten rules (ld-store §12; partner-rows §10): the component's, and the provenance
 #: key that describes its threshold.
 PARTNER_RULES = [
     rule
@@ -72,7 +72,7 @@ ACROSS_BLOCKS = ["partners.symmetric", "partners.near"]
 RESERVED = -32768
 
 #: The rules one pass over each chromosome's Near Band, Far Pairs and Partner Rows feeds
-#: (spec §12).
+#: (ld-store §12).
 SCANNED = [
     "near.codes",
     *(f"far.{rule}" for rule in ("rows", "codes", "distance", "threshold")),
@@ -130,7 +130,7 @@ def test_every_required_key_has_a_type_to_check() -> None:
 
 
 #: The keys the Partner Rows cost: 0.2.0 requires them, and 0.1.0 has no Partner Rows at all
-#: (spec §7, §13; partner-rows §5.3).
+#: (ld-store §7, §13; partner-rows §5.3).
 PARTNER_KEYS = ("t_partner", "partner_code_floor", "counts.partner_entries", "software.zstd")
 
 
@@ -154,7 +154,7 @@ def rewritten(store: Path, edit: Callable[[dict[str, Any]], None]) -> Path:
 
 def test_the_partner_rows_keys_are_required_from_0_2_0_only(tmp_path: Path) -> None:
     # A 0.1.0 store has no Partner Rows, so it cannot have their keys: requiring them
-    # unconditionally would refuse every store published before them (spec §7, §13).
+    # unconditionally would refuse every store published before them (ld-store §7, §13).
     earlier = copy_store(tmp_path / "earlier")
 
     def as_0_1_0(provenance: dict[str, Any]) -> None:
@@ -228,7 +228,7 @@ def write_array(path: str, at: slice, value: Any) -> Callable[[Path], None]:
 
 def a_far_pair_exactly_near_bp_apart(store: Path) -> None:
     """Adds chr22's one pair exactly 3,000,000 bp apart to its Far Pairs, at the floor: the edge
-    a Far Pair lies beyond (review of #31)."""
+    a Far Pair lies beyond (review of opengwas/ogld#31)."""
     contract().add_far_pair(lambda gap: gap == 3_000_000, lambda floor: floor)(store)
 
 
@@ -362,7 +362,7 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     "a measured rate null though pairs were measured": (
         "provenance.complete",
         edit_ld_store(lambda p: p["pc_diagnostic"].update(rate_r2_ge_0_01_adjusted=None)),
-        "null, which spec §7 allows only when pc_diagnostic.pairs.n_pairs is 0",
+        "null, which ld-store §7 allows only when pc_diagnostic.pairs.n_pairs is 0",
     ),
     "a measured rate though no pair was measured": (
         "provenance.complete",
@@ -422,7 +422,7 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     "a partner group with no frames array": (
         "partners.files",
         lambda store: shutil.rmtree(store / "partners" / "22" / "frames"),
-        "missing (spec §5.1)",
+        "missing (partner-rows §5.1)",
     ),
     "a partner frames array of another dtype": (
         "partners.files",
@@ -537,8 +537,8 @@ def unmeasured(p: dict[str, Any]) -> None:
 
 
 def test_a_store_with_no_cross_chromosome_pair_records_null_rates(tmp_path: Path) -> None:
-    # The ruling of 10 November 2026 (orchestrator note 1 for #4), as lane #5's chr22 builds
-    # record it: n_pairs 0 and the two measured rates null pass.
+    # The ruling of 10 November 2026 (orchestrator note 1 for opengwas/ogld#4), as lane
+    # opengwas/ogld#5's chr22 builds record it: n_pairs 0 and the two measured rates null pass.
     copy = copy_store(tmp_path / "store")
     edit_ld_store(unmeasured)(copy)
     assert findings(copy, ["provenance.complete"])["provenance.complete"] == []
@@ -613,7 +613,7 @@ def test_a_corrupt_root_document_is_an_input_error(
 def test_a_block_holds_an_eighth_as_many_sparse_entries_as_band_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Spec §12: a block holds at most `_WINDOW` band codes and an eighth as many entries of a
+    # ld-store §12: a block holds at most `_WINDOW` band codes and an eighth as many entries of a
     # sparse component, so its working arrays stay bounded however dense the component is.
     monkeypatch.setattr(validation, "_WINDOW", 4096)
     rows = 1_000
@@ -661,7 +661,7 @@ def counted_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
 def test_every_code_and_entry_is_read_once_by_all_the_rules_together(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Spec §12: the rules that read the band, the index and the Far Pairs element by element
+    # ld-store §12: the rules that read the band, the index and the Far Pairs element by element
     # share one pass.
     group = zarr.open_group(TEST_STORE, mode="r")
     held = {
@@ -720,7 +720,7 @@ def test_threads_find_what_one_thread_finds_in_the_same_order(
 
 
 def test_a_recheck_reads_only_the_blocks_that_name_a_flagged_row() -> None:
-    # Spec §12: a rule whose state crosses blocks finds its offender again at the chromosome's
+    # ld-store §12: a rule whose state crosses blocks finds its offender again at the chromosome's
     # end, and reads again only the blocks holding an entry that names a flagged row.
     named = validation._Named(6)
     named.add(np.array([1, 4]), np.array([0, 5]))
@@ -744,7 +744,7 @@ def test_threads_read_blocks_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_a_block_is_planned_only_once_a_finished_one_is_handed_back() -> None:
-    # Spec §12: a pass holds its threads' blocks at once, and no more. `_plans` decodes a block
+    # ld-store §12: a pass holds its threads' blocks at once, and no more. `_plans` decodes a block
     # before it is submitted, so the next plan must not be made while the queue is full: what the
     # pass holds then is its threads' blocks, plus the one frame the planner keeps for the next.
     produced = 0
@@ -847,7 +847,7 @@ def test_a_location_with_no_zarr_group_is_an_input_error(tmp_path: Path) -> None
 def test_a_zarr_v2_hierarchy_fails_envelope_arrays(tmp_path: Path) -> None:
     zarr.open_group(tmp_path / "v2", mode="w", zarr_format=2)
     found = opengwasdb.ld.validate(tmp_path / "v2")
-    assert found["envelope.arrays"][0].message == "the hierarchy is Zarr v2, not v3 (spec §1)"
+    assert found["envelope.arrays"][0].message == "the hierarchy is Zarr v2, not v3 (ld-store §1)"
 
 
 def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
@@ -900,7 +900,7 @@ def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path
 def test_finish_runs_the_partner_rows_rules_before_it_writes_provenance(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # `StoreWriter.finish` judges the store it wrote with the whole spec §12, the Partner Rows'
+    # `StoreWriter.finish` judges the store it wrote with the whole ld-store §12, the Partner Rows'
     # rules among them: one that fails leaves the store with no provenance, so a reader refuses
     # it rather than read a component no rule has checked (ogld#68).
     def fails(store: validation._Store) -> Iterator[tuple[str, str]]:
@@ -996,7 +996,7 @@ DAMAGE: dict[str, tuple[Callable[[Path], None], int]] = {
 
 
 def test_a_frame_without_a_content_size_keeps_a_valid_checksum(tmp_path: Path) -> None:
-    # Spec §12's row has two clauses, and a frame whose checksum is also wrong would let either
+    # ld-store §12's row has two clauses, and a frame whose checksum is also wrong would let either
     # catch it: this frame's payload still passes its checksum, so only the header guard refuses
     # it, and the finding says which requirement is missing.
     copy = copy_store(tmp_path / "store")
@@ -1053,7 +1053,7 @@ def entries_held(monkeypatch: pytest.MonkeyPatch, budget: int) -> list[int]:
 def test_a_block_the_partner_rows_join_holds_a_budget_of_entries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Spec §12: a block the Partner Rows join is bounded by its entries, not its rows, because a
+    # ld-store §12: a block the Partner Rows join is bounded by its entries, not its rows, because a
     # later row holds an entry for every earlier partner within far_bp. chr22's 24,020 entries at
     # 4,096 a block are several blocks, and no block holds more than the budget.
     held = entries_held(monkeypatch, 4096)
@@ -1122,8 +1122,8 @@ def test_a_crash_s_temporary_group_is_named_and_refused(tmp_path: Path) -> None:
 
 
 def test_a_0_1_0_store_with_no_partner_rows_passes_its_ten_rules(tmp_path: Path) -> None:
-    # Spec §12, §13: a store has one format version, 0.1.0 has no Partner Rows, and a 0.1.0 store
-    # has none — so there is nothing for the ten rules to judge, and they pass.
+    # ld-store §12, §13: a store has one format version, 0.1.0 has no Partner Rows, and a 0.1.0
+    # store has none — so there is nothing for the ten rules to judge, and they pass.
     earlier = copy_store(tmp_path / "earlier")
     shutil.rmtree(earlier / "partners")
 
@@ -1138,7 +1138,7 @@ def test_a_0_1_0_store_with_no_partner_rows_passes_its_ten_rules(tmp_path: Path)
 
 
 def test_a_0_2_0_store_with_no_partner_rows_fails_its_ten_rules(tmp_path: Path) -> None:
-    # Spec §13: a 0.2.0 store without the component is not one, so `partners.files` names the
+    # ld-store §13: a 0.2.0 store without the component is not one, so `partners.files` names the
     # missing node, then each chromosome's group, and every rule that needs a frame says it cannot
     # be checked (partner-rows §5.1: `partners/` is a node of the store's one hierarchy).
     later = copy_store(tmp_path / "later")
@@ -1147,7 +1147,7 @@ def test_a_0_2_0_store_with_no_partner_rows_fails_its_ten_rules(tmp_path: Path) 
     assert [f.where for f in found["partners.files"]] == ["partners", "partners/21", "partners/22"]
     assert "is not a group of the store's hierarchy" in found["partners.files"][0].message
     assert all(
-        f.message == "missing: every chromosome of the Variant Set has one (spec §5.1)"
+        f.message == "missing: every chromosome of the Variant Set has one (partner-rows §5.1)"
         for f in found["partners.files"][1:]
     )
     for rule in PARTNER_FRAME_RULES:

@@ -1,4 +1,5 @@
-"""Local companion behavior, held to the table and independently decoded canonical bytes (#47)."""
+"""Local companion behavior, held to the table and independently decoded canonical bytes
+(opengwas/ogld#47)."""
 
 from __future__ import annotations
 
@@ -172,7 +173,7 @@ def test_schema_one_refuses_with_a_rederivation_instruction(tmp_path: Path) -> N
     assert generation(store).name in message
     assert "manifest.json" in message
     assert "schema 1" in message
-    assert "scripts/derive_alid_mmap.py" in message
+    assert "scripts/ld/derive_alid_mmap.py" in message
 
 
 def test_writer_and_derivation_publish_identical_canonical_bytes(tmp_path: Path) -> None:

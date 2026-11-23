@@ -1,4 +1,4 @@
-"""Every test under tests/acceptance/ is in the `acceptance` tier (CONTRIBUTING.md, "Acceptance
+"""Every test under tests/ld/acceptance/ is in the `acceptance` tier (CONTRIBUTING.md, "Acceptance
 runs"): the default tier and the realdata tier deselect it. Each run has its own task:
 `pixi run -e dev acceptance-clump` runs `test_clump_equals_plink2.py` (ogld#6),
 `pixi run -e dev acceptance-stores` runs `test_hgdp1kgp_stores.py` (ogld#7), and

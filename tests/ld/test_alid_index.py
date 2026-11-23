@@ -1,6 +1,6 @@
-"""ogld#42: the ALID search index, held to the engine's own writer (ADR 0010).
+"""ogld#42: the ALID search index, held to the engine's own writer (ADR 0096).
 
-`tests/data/alid_index/index.tsv` holds the engine's answers (opengwasdb at the commit named on
+`tests/ld/data/alid_index/index.tsv` holds the engine's answers (opengwasdb at the commit named on
 the file's first line) for five Variant Sets, made by `make_fixture.py` from the engine's
 `write_variant_axis` and its two sidecars. These tests read it; no expected value here comes
 from ogld. The layout's rule — the slot's width, the NUL padding, the bytewise order with a
@@ -140,7 +140,7 @@ def table(rows: list[tuple[str, int, str, str]]) -> Variants:
 
 
 LONG = "ACGT" * 6
-#: The Test Store's producer keys, for a store this file writes (tests/test_assembly.py does the
+#: The Test Store's producer keys, for a store this file writes (tests/ld/test_assembly.py does the
 #: same): what only a producer knows, with nothing the store derives.
 SOURCED: dict[str, Any] = {
     key: value
@@ -192,7 +192,7 @@ def built(out: Path, rows: list[tuple[str, int, str, str]]) -> Path:
 def _template() -> Path:
     """`WIDTH_ROWS`' store, built once per test process and copied by every test that reads it.
 
-    A build publishes an ALID companion (ADR 0012), which end to end — the canonical index's
+    A build publishes an ALID companion (ADR 0098), which end to end — the canonical index's
     arrays, their pins, the payloads and the exact correspondence check before the pointer —
     costs several times what copying the finished tree does. Only a test whose subject is that
     publication calls `built` for itself; `test_a_written_store_publishes_its_companion`
@@ -230,7 +230,7 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
 
 
 def test_a_written_store_publishes_its_companion(tmp_path: Path) -> None:
-    """ADR 0012's writer publication, on a build of its own (the other tests copy the result).
+    """ADR 0098's writer publication, on a build of its own (the other tests copy the result).
 
     The pointer names one generation whose payloads are the canonical index's own bytes, the
     manifest pins every canonical file, and the exact correspondence rule passes before anything
@@ -262,7 +262,7 @@ def test_a_written_store_publishes_its_companion(tmp_path: Path) -> None:
 
 
 def without_companion(store: Path) -> None:
-    """Exercise ADR 0010's canonical fallback independently of ADR 0012's companion."""
+    """Exercise ADR 0096's canonical fallback independently of ADR 0098's companion."""
     root = zarr.open_group(store, mode="r+")
     if layout.ALID_MMAP_ATTR in root.attrs:
         del root.attrs[layout.ALID_MMAP_ATTR]
@@ -288,7 +288,7 @@ def underived_store(tmp_path: Path, left_out: int | None) -> tuple[Any, Path]:
 
 
 def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
-    # The rule is the table's, not the producer's (ADR 0005): the store reads back its own ALID
+    # The rule is the table's, not the producer's (ADR 0091): the store reads back its own ALID
     # column and indexes it, so a store written before the index gets the same one.
     store = written(tmp_path / "store")
     without_companion(store)
@@ -322,7 +322,7 @@ def test_a_lost_chunk_of_the_index_is_refused(tmp_path: Path) -> None:
 def rebuild(store: Path, alids: list[str]) -> None:
     """Write `store`'s index over again from `alids`, its entries in no order: validation fails it
     (`alid_index.order`) and its misses a reader still scans. The truncated index is not here: it
-    is `alid_index.keys`' breaker in `tests/contract/test_store.py`."""
+    is `alid_index.keys`' breaker in `tests/ld/contract/test_store.py`."""
     kept = [row for row, alid in enumerate(alids) if len(alid.encode()) <= 32]
     keys = np.array([alids[row] for row in kept], dtype=f"|S{layout.ALID_INDEX_WIDTH}")
     rows = np.array(kept, dtype=np.int32)
@@ -382,14 +382,14 @@ def test_rows_of_is_right_on_an_unsorted_index(tmp_path: Path) -> None:
 
 def test_a_present_alid_is_found_without_loading_its_chromosome(tmp_path: Path) -> None:
     # The index is the variant table's, not the positions': a search reads keys and nothing
-    # else, so the chromosome's positions and Near Band indptr stay unread (spec §10).
+    # else, so the chromosome's positions and Near Band indptr stay unread (ld-store §10).
     built = crafted(tmp_path)
     reader = StoreReader.open(built.path)
     assert reader.rows_of([built.alids[2]]).tolist() == [2]
     assert reader._loaded == {}
     assert reader._variant_table._located == {}, "the search read no positions either"
     # An ALID at the slot's width is indexed like any other: validation guarantees its key is
-    # the full ALID (ADR 0010; ogld#42's fix round 1).
+    # the full ALID (ADR 0096; ogld#42's fix round 1).
     assert reader.rows_of([built.alids[0]]).tolist() == [0]
     assert reader._loaded == {}
     assert reader._variant_table._located == {}
@@ -406,14 +406,14 @@ def test_the_index_is_read_only_for_an_alid_it_could_hold(tmp_path: Path) -> Non
 
 
 def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path) -> None:
-    # `scripts/derive_alid_index.py` adds the index to a store written before it: the arrays go
+    # `scripts/ld/derive_alid_index.py` adds the index to a store written before it: the arrays go
     # under a group a reader ignores, and it takes the real name only when the count matches.
     script = load_script("derive_alid_index")
     store = written(tmp_path / "store")
     without_companion(store)
     shutil.rmtree(store / layout.ALID_INDEX)
-    # A store written before ADR 0010 records no count of what its index leaves out; the
-    # derivation adds it (spec §7).
+    # A store written before ADR 0096 records no count of what its index leaves out; the
+    # derivation adds it (ld-store §7).
     meta = store / "zarr.json"
     document = json.loads(meta.read_text())
     del document["attributes"]["ld_store"]["counts"]["alids_left_out"]

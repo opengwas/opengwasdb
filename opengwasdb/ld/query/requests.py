@@ -1,4 +1,4 @@
-"""What `proxies` and `clump` share: judging a request against the store (spec §9; ogld#6)."""
+"""What `proxies` and `clump` share: judging a request against the store (ld-store §9; ogld#6)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ def window_of(reader: Reader, *, r2: float, kb: float) -> float:
 
     It is compared with the distances and the thresholds the store recorded, never a rounded
     display. From 0.2.0 both queries read the Partner Rows and nothing else, so a store that holds
-    none is refused first, naming the missing component and `ogld derive-partners`, rather than
-    answered from the Near Band (partner-rows §5.1, §8.1). Then the request is judged with the
+    none is refused first, naming the missing component and `opengwasdb ld derive-partners`, rather
+    than answered from the Near Band (partner-rows §5.1, §8.1). Then the request is judged with the
     store's own t_partner as well as its t_far: within `near_bp` a threshold below t_partner is the
     refusal `threshold_below_t_partner`, decided before any frame is read.
     """

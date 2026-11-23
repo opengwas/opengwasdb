@@ -1,14 +1,14 @@
 """ogld#5's contract: the builder, on the Test Panel, against the independent reference r.
 
 The Test Panel's `reference_r(k)` is a short numpy computation in lane 2d's script, checked
-against plink2's `--r-unphased` at k = 0 by tests/test_testdata.py. The builder must match it
+against plink2's `--r-unphased` at k = 0 by tests/ld/test_testdata.py. The builder must match it
 within the quantisation step: in the Near Band pair by pair, and in which pairs beyond 3 Mb
 it keeps, except where a pair's code lies on the far code floor's rounding edge.
 
 The builder also refuses an input with a missing call, and its PC Check (the owner's
 local-PC rule, `docs/spec/build-inputs.md` §8) drops a Local PC, keeps a PC with a strong
 window that the rest of the genome also explains, and uses the first up to 10 PCs kept,
-refusing with fewer than 5 (owner, 7 November 2026; ADR 0002). The hand-built PCs use the
+refusing with fewer than 5 (owner, 7 November 2026; ADR 0088). The hand-built PCs use the
 Test Panel's 771 samples: the ratio cannot drop any PC below about 100.
 
 Every test calls `opengwasdb.ld.build` before it reads the Test Panel: a build is given `PANEL`'s
@@ -72,7 +72,7 @@ def built(
     k: int, tmp_path_factory: pytest.TempPathFactory
 ) -> tuple[opengwasdb.ld.Provenance, Path]:
     """The Test Panel built at k, once per worker and shared with ogld#5's own tests
-    (tests/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
+    (tests/ld/build_fixtures.py); the first call is where a test stops until ogld#5 lands."""
     found = build_fixtures.test_panel_build(k, tmp_path_factory)
     check_panel_paths()
     return found
@@ -102,7 +102,7 @@ def test_the_near_band_at_k10_matches_the_reference(
 def test_the_near_band_at_k0_matches_the_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    # The reference at k = 0 is held to plink2 --r-unphased by tests/test_testdata.py.
+    # The reference at k = 0 is held to plink2 --r-unphased by tests/ld/test_testdata.py.
     _, out = built(0, tmp_path_factory)
     assert near_band_matches(opengwasdb.ld.open(out), 0) > 1000
 
@@ -157,13 +157,15 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
     assert provenance["n_variants"] == len(passing_rows())
     assert {"zero_variance", "duplicate_reversed_indel"} <= set(provenance["variants_dropped"])
     assert provenance["counts"]["partner_entries"] >= 2 * provenance["counts"]["far_pairs"]
-    assert "index_entries" not in provenance["counts"], "no store holds a Proxy Index (#72)"
+    assert "index_entries" not in provenance["counts"], (
+        "no store holds a Proxy Index (opengwas/ogld#72)"
+    )
 
 
 def test_an_unadjusted_build_records_k0_and_no_minimum(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    # k_min applies only when PCs are used (spec §7): at k = 0 the default k_min = 5 refuses
+    # k_min applies only when PCs are used (ld-store §7): at k = 0 the default k_min = 5 refuses
     # nothing, and provenance records it as null.
     provenance, _ = built(0, tmp_path_factory)
     assert inputs(0).k_min == 5, "the build was given the default minimum"

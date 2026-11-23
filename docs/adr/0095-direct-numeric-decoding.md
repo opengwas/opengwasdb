@@ -1,18 +1,20 @@
 # Decode recognised numeric chunks directly on a bounded pool
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0009.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), opengwas/ogld#72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. **Round 2's chromosome prefetch went with
-> it** (#72): `ChunkCache.prefetch`, its plan and its compressed-range credit served `clump`'s
+> it** (opengwas/ogld#72): `ChunkCache.prefetch`, its plan and its compressed-range credit served `clump`'s
 > warm windows, and nothing calls them now. The round's measurements and its direct-decoding,
 > shared-pool and single-flight decisions stand, and those are what serve `matrix` and `region`.
 
 Issue [#40](https://github.com/opengwas/ogld/issues/40), part of epic
-[#1](https://github.com/opengwas/ogld/issues/1). Spec §6 defines the bytes; §10 defines reads.
+[#1](https://github.com/opengwas/ogld/issues/1). ld-store §6 defines the bytes; §10 defines reads.
 
 **Who decided.** The owner, 13 November 2026, on
-[epic #1's diagnosis](https://github.com/opengwas/ogld/issues/1#issuecomment-6866202125):
+[epic opengwas/ogld#1's diagnosis](https://github.com/opengwas/ogld/issues/1#issuecomment-6866202125):
 decode numeric chunks directly and in parallel, clump chromosome by chromosome, and read
 only the variant columns clump returns. No format or public signature changes.
 
@@ -20,17 +22,17 @@ only the variant columns clump returns. No format or public signature changes.
 
 The diagnosis counted 51,641 fetches for GCST90476460, 33,394 distinct Near Band chunks.
 About 90% of clumping time was zarr's per-chunk machinery, serialised on its event loop;
-a direct zstd decode took 0.25–0.43 ms against about 2.4 ms through zarr. #32 already
+a direct zstd decode took 0.25–0.43 ms against about 2.4 ms through zarr. opengwas/ogld#32 already
 owns chunk planning, the cache budget, concurrent runs and kept shard indexes.
 
 ## Decision
 
-`ogld/store/location.py` calls the numeric backend in `ogld/store/decoding.py`, which
+`opengwasdb/ld/store/location.py` calls the numeric backend in `opengwasdb/ld/store/decoding.py`, which
 recognises a one-dimensional numeric array only when its declared
 codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
 CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. A one-byte
 element has no byte order and zarr declares none for it, so a `bytes` codec without an `endian`
-is read as it lies — that is how the ALID index's `uint8` keys decode directly (ADR 0010). Other
+is read as it lies — that is how the ALID index's `uint8` keys decode directly (ADR 0096). Other
 chains, strings included, still use zarr. Shapes and keys come from the opened array's
 metadata, never the layout defaults or an array path.
 
@@ -40,7 +42,7 @@ chunk. It verifies CRC32C with numcodecs before interpreting the index. Missing 
 empty inner chunks produce the array's fill value; the reader's existing refusal is unchanged.
 Truncated indexes and corrupt zstd frames raise, not fall back.
 
-Indexes and ranges use the store's async interface, through #32's wrapper, on local disk
+Indexes and ranges use the store's async interface, through opengwas/ogld#32's wrapper, on local disk
 and HTTP alike. Only physically adjacent requested ranges are merged. The existing batch
 planner bounds each read's decoded buffers. Each native decoded chunk owns its buffer and
 transfers it to the cache without a second copy. The planner reserves one chunk for trimming
@@ -76,7 +78,7 @@ fallback reader and sole writer. numcodecs is already a direct runtime dependenc
 
 ## Round 2: bounded chromosome prefetch and shared I/O
 
-The orchestrator's round-2 instruction on #40 requires warming a chromosome's candidate
+The orchestrator's round-2 instruction on opengwas/ogld#40 requires warming a chromosome's candidate
 chunks before the greedy pass, with positional windows when they do not fit. A bounded
 sparse-graph prototype (1 GiB graph/work allowance plus cache and fetch buffers) took
 68.419 s on GCST90476460, including one graph-cap fallback; prefetch with a shared I/O/decode
@@ -135,12 +137,12 @@ as decoded bytes; a codec's encoded size is not in general bounded by its decode
 
 ## Review fixes and acceptance ruling, 14 November 2026
 
-The owner accepts #40 with both performance targets **recorded as unmet**: cold
+The owner accepts opengwas/ogld#40 with both performance targets **recorded as unmet**: cold
 GCST90476460 improved from 141 to 38 s, independently 116.6 to 25.2 s in review, and the
 37 Analyses from 489 to 272 s. The measured-work bounds, approximately 14.5 s and 155.1 s
 against targets of ≤10 s and ≤90 s, constrain this implementation and workload, not the
-format. Lookup and speculative warming can change. Further speed work belongs to #42's
-ALID search index and #41's symmetric Near Band prototype, under the owner's #40 review-fix
+format. Lookup and speculative warming can change. Further speed work belongs to opengwas/ogld#42's
+ALID search index and opengwas/ogld#41's symmetric Near Band prototype, under the owner's opengwas/ogld#40 review-fix
 ruling of 14 November 2026; acceptance does not redefine those targets as met.
 
 The accepted review extraction puts codec recognition, shard-index size and parsing, zstd

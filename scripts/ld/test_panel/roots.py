@@ -4,25 +4,25 @@ Each root has a default for the IEU nodes. The manifest records an input as its 
 variable plus the rest of its path, and by hash, so no host path is committed.
 
 - `OPENGWASDB_LD_PHASED_V2`, default `/data/opengwasdb/work/ogld/phased_v2`: the phased
-  HGDP+1kGP v2 BCFs, each with its `.complete` record (ADR 0002);
-- `OPENGWASDB_LD_PCS`, default `/data/opengwasdb/work/ogld/pcs`: `scripts/make_pcs.py`'s PC
+  HGDP+1kGP v2 BCFs, each with its `.complete` record (ADR 0088);
+- `OPENGWASDB_LD_PCS`, default `/data/opengwasdb/work/ogld/pcs`: `scripts/ld/make_pcs.py`'s PC
   Files and reports;
 - `OPENGWASDB_LD_REFERENCE`, default `/data/opengwasdb/reference`: the panels' members files
   and gnomAD's sample metadata (`META_NAME` under it);
-- `OPENGWASDB_LD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/make_keeps.py`'s
-  keep files, each panel's unrelated samples (ADR 0002);
+- `OPENGWASDB_LD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/ld/make_keeps.py`'s
+  keep files, each panel's unrelated samples (ADR 0088);
 - `OPENGWASDB_LD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`:
-  `scripts/build_hgdp1kgp.py`'s conversions, one directory per panel (ogld#7);
+  `scripts/ld/build_hgdp1kgp.py`'s conversions, one directory per panel (ogld#7);
 - `OPENGWASDB_LD_STORES`, default `/data/opengwasdb/work/ogld/stores`: the five HGDP+1kGP LD
   Stores, staged there until ogld#9 chooses where they are published;
 - `OPENGWASDB_LD_SCRATCH`, default `/data/opengwasdb/work/ogld/scratch/7`: that script's logs
   and timings;
 - `OPENGWASDB_LD_403_ANALYSES`, default `/data/opengwasdb/work/ogld/realdata/403-analyses`:
-  opengwasdb#403's 37 EUR Analyses, `scripts/realdata/make_403_inputs.py`'s output, which the
-  realdata tier, the acceptance run and `scripts/bench/latency.py` read (ogld#6, ogld#8);
+  opengwasdb#403's 37 EUR Analyses, `scripts/ld/realdata/make_403_inputs.py`'s output, which the
+  realdata tier, the acceptance run and `scripts/ld/bench/latency.py` read (ogld#6, ogld#8);
 - `OPENGWASDB_LD_LAYOUTS`, default `/data/opengwasdb/work/ogld/scratch/8/layouts`: EUR chr22
-  built once per Near Band layout by `scripts/bench/build_layouts.py`, which
-  `scripts/bench/latency.py` times (ogld#8);
+  built once per Near Band layout by `scripts/ld/bench/build_layouts.py`, which
+  `scripts/ld/bench/latency.py` times (ogld#8);
 - `OPENGWASDB_LD_PLINK2`, `OPENGWASDB_LD_BCFTOOLS`, `OPENGWASDB_LD_BGZIP`, default the program
   on `PATH`: the tools.
 """

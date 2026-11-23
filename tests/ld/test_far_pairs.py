@@ -1,10 +1,10 @@
-"""The Far Pairs beside the Proxy Index (ogld#31; spec §5, §8, §10; ADR 0007).
+"""The Far Pairs beside the Proxy Index (ogld#31; ld-store §5, §8, §10; ADR 0093).
 
 Each chromosome's `far/<chrom>/` holds its pairs more than near_bp and at most far_bp apart whose
 code reaches the far code floor, once each, in the earlier variant's row: the pairs a Proxy Index
 held beyond near_bp, in their earlier rows. `matrix` and `region` read those pairs from the Far
-Pairs alone; from #72 no store holds an index at all, and a store that still carries a leftover
-one answers the same (spec §12).
+Pairs alone; from opengwas/ogld#72 no store holds an index at all, and a store that still carries a
+leftover one answers the same (ld-store §12).
 
 Every expected value here is read from the store's own arrays with zarr, from the Test Panel's
 reference r, or is the answer the committed Test Store gives; never the reader's far part.
@@ -54,10 +54,10 @@ def rows_of(store: Path, kind: str, chrom: str) -> _Pairs:
 
 
 def write_a_proxy_index(store: Path) -> None:
-    """Give `store` the Proxy Index a store written before #72 held, rebuilt from its own Near
-    Band and Far Pairs: every pair within far_bp at the far code floor, both ways, ascending by
-    (row, partner). No store this package writes has one; it is the input `derive_far_pairs`
-    migrates, which `without_far_pairs` below hands it."""
+    """Give `store` the Proxy Index a store written before opengwas/ogld#72 held, rebuilt from its
+    own Near Band and Far Pairs: every pair within far_bp at the far code floor, both ways,
+    ascending by (row, partner). No store this package writes has one; it is the input
+    `derive_far_pairs` migrates, which `without_far_pairs` below hands it."""
     floor = int(str(provenance(store)["far_code_floor"]))
     far_bp = int(str(provenance(store)["far_bp"]))
     encoding = REncoding.of(provenance(store)["encoding"])
@@ -138,9 +138,9 @@ def far_stored(m: opengwasdb.ld.LDMatrix) -> int:
 def test_a_matrix_and_a_region_answer_alike_from_a_store_holding_a_leftover_index(
     small_chunks: Path, tmp_path: Path
 ) -> None:
-    # A 0.2.0 store derived before #72 still holds `index/`. Nothing reads it (spec §12), so a
-    # matrix and a region answer exactly as the store without one does — even when every entry
-    # of it is gone, which a read would have to refuse (spec §6).
+    # A 0.2.0 store derived before opengwas/ogld#72 still holds `index/`. Nothing reads it (ld-store
+    # §12), so a matrix and a region answer exactly as the store without one does — even when every
+    # entry of it is gone, which a read would have to refuse (ld-store §6).
     copy = tmp_path / "leftover-index"
     shutil.copytree(small_chunks, copy)
     write_a_proxy_index(copy)
@@ -196,7 +196,7 @@ def files(store: Path, under: str = "") -> dict[str, bytes]:
 
 
 def without_far_pairs(to: Path) -> Path:
-    """A copy of the Test Store as a store written before ADR 0007 holds it: its Proxy Index,
+    """A copy of the Test Store as a store written before ADR 0093 holds it: its Proxy Index,
     which no store this code writes has, and no far/."""
     copy = copy_store(to)
     write_a_proxy_index(copy)

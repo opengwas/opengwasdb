@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""#40's reads, using #8's runner with result fingerprints, distinct chunks and uptime.
+"""opengwas/ogld#40's reads, using opengwas/ogld#8's runner with result fingerprints, distinct
+chunks and uptime.
 
 Use latency.py's arguments, including `step1 --target local http10 http50`. Set
 `--zarr-threads 1` and BLAS 1: seven workers share local I/O and numeric decoding,

@@ -1,14 +1,16 @@
-"""The Proxy Index is gone, and a store that still carries one reads and validates alike (#72).
+"""The Proxy Index is gone, and a store that still carries one reads and validates alike
+(opengwas/ogld#72).
 
-Three seams, each observed to fail against the code before #72:
+Three seams, each observed to fail against the code before opengwas/ogld#72:
 
 - **No `index/`.** The package source names no array of the component, and a store this code
   writes has no such key: the store's own keys are listed and none begins with `index`. The one
-  place that still names it is the removal `ogld derive-partners --drop-index` makes, and a
-  migration that writes Far Pairs from a store too old to read (ADR 0007).
-- **A leftover `index/`.** A 0.2.0 store derived before #72 without `--drop-index` holds the
+  place that still names it is the removal `opengwasdb ld derive-partners --drop-index` makes, and a
+  migration that writes Far Pairs from a store too old to read (ADR 0093).
+- **A leftover `index/`.** A 0.2.0 store derived before opengwas/ogld#72 without `--drop-index`
+holds the
   component. It opens, answers exactly as the store without one does, and validation ignores it
-  rather than reporting it (spec §12) — even when every entry of it is gone, which a read of it
+  rather than reporting it (ld-store §12) — even when every entry of it is gone, which a read of it
   would have to refuse.
 - **A 0.1.0 store** still opens and answers `matrix` and `region`, which read the Near Band and
   the Far Pairs; `clump` and `proxies` are refused, as they are now, naming the Partner Rows.
@@ -161,8 +163,8 @@ def test_a_store_this_code_writes_holds_no_index_key(tmp_path: Path) -> None:
 
 
 def write_a_leftover_index(store: Path) -> None:
-    """Give `store` a Proxy Index a store derived before #72 still holds: one entry a chromosome,
-    valid enough that reading it would answer, and never read by this package."""
+    """Give `store` a Proxy Index a store derived before opengwas/ogld#72 still holds: one entry a
+    chromosome, valid enough that reading it would answer, and never read by this package."""
     root = zarr.open_group(str(store), mode="r+")
     for chrom, (start, stop) in {
         entry["name"]: (entry["row_start"], entry["row_stop"])
@@ -218,8 +220,8 @@ def every_query(store_path: Path) -> None:
 
 
 def test_no_query_reads_a_key_of_a_leftover_index(tmp_path: Path) -> None:
-    # The real isolation check (#71's method): on a 0.2.0 copy that still holds the component, a
-    # read of any array of it — or of its own `zarr.json` — would be a store key here.
+    # The real isolation check (opengwas/ogld#71's method): on a 0.2.0 copy that still holds the
+    # component, a read of any array of it — or of its own `zarr.json` — would be a store key here.
     copy = copy_store(tmp_path / "store")
     write_a_leftover_index(copy)
     held = [str(path) for path in copy.rglob("index/*/*/zarr.json")]
@@ -241,7 +243,7 @@ def test_validation_ignores_a_leftover_index(tmp_path: Path) -> None:
 
 
 def test_a_leftover_index_whose_entries_are_lost_is_still_not_read(tmp_path: Path) -> None:
-    # A read of any of its arrays would refuse them (spec §6): a matrix and a region answer on.
+    # A read of any of its arrays would refuse them (ld-store §6): a matrix and a region answer on.
     copy = copy_store(tmp_path / "store")
     write_a_leftover_index(copy)
     for chunk in sorted(copy.glob("index/*/*/c/*")):
@@ -289,8 +291,9 @@ def test_a_0_1_0_store_opens_and_answers_matrix_and_region(tmp_path: Path) -> No
 def test_a_0_1_0_store_with_every_index_chunk_lost_still_validates_and_answers(
     tmp_path: Path,
 ) -> None:
-    # No rule validates an index of either version since #72 (#71/#72 read nothing of it), so a
-    # 0.1.0 store whose index is gone is still a valid 0.1.0 store, and still answers.
+    # No rule validates an index of either version since opengwas/ogld#72 (opengwas/ogld#71/#72 read
+    # nothing of it), so a 0.1.0 store whose index is gone is still a valid 0.1.0 store, and still
+    # answers.
     copy = a_0_1_0_store(tmp_path / "store")
     chunks = sorted(copy.glob("index/*/*/c/*"))
     assert len(chunks) >= 4, "both chromosomes' three arrays must have a chunk to lose"

@@ -1,7 +1,9 @@
 # Import published covariance as adjusted-genotype correlation
 
-Issue #93, epic #88. Authority: the owner's 20 November 2026 rulings on #88,
-#89's diagonal-normalisation ruling, and #93's kickoff ruling (21 November).
+Formerly ogld ADR 0015.
+
+Issue opengwas/ogld#93, epic opengwas/ogld#88. Authority: the owner's 20 November 2026 rulings on opengwas/ogld#88,
+opengwas/ogld#89's diagonal-normalisation ruling, and opengwas/ogld#93's kickoff ruling (21 November).
 
 ## Context
 
@@ -19,10 +21,10 @@ normalised as r_ij = C_ij / sqrt(C_ii C_jj); non-finite and non-positive
 diagonals drop variants under separate counted loss classes. Identity,
 quantisation, thresholds and assembly remain their existing owners'.
 
-The importer lives under `ogld.build.importing`. Hail is not a dependency:
+The importer lives under `opengwasdb.ld.build.importing`. Hail is not a dependency:
 Hail 0.2.64 BlockMatrix parts are read natively. The variant table is exported
 once with Hail by a script outside the package and supplied as TSV. `lz4` and
-`pyliftover` are optional `ogld[import]` dependencies, loaded only on the import
+`pyliftover` are optional `opengwasdb[ld-import]` dependencies, loaded only on the import
 path with a refusal naming the extra. All Pixi test environments install them.
 
 GRCh37 coordinates are lifted to GRCh38 and REF alleles checked against FASTA,
@@ -37,7 +39,7 @@ refuse the chromosome, the import drops the smaller of the two segments holding 
 target-radius window's GRCh37 extremes (segments split where the GRCh37−GRCh38
 offset jumps by more than 100 kb; ties drop the one with the lowest GRCh37
 position), repeating until the radius reaches the target, `--far-target-bp`
-(default 8 Mb, at most the format's 10 Mb `far_bp`; #99, owner ruling). A
+(default 8 Mb, at most the format's 10 Mb `far_bp`; opengwas/ogld#99, owner ruling). A
 segment over `--displaced-cap` (default 10,000 variants) is never dropped: the chromosome
 is refused by name. Dropped variants are counted as `liftover_displaced`.
 
@@ -54,7 +56,7 @@ directory. These are restart checkpoints, each validated by the existing
 writer. The additive `StoreWriter.join` hard-links their immutable LD
 components, concatenates the variant half in bounded slices, derives the
 combined index/companion and validates before publishing. Joined row ranges
-come from `ogld.format.geometry.chromosome_ranges_from_counts`: closed
+come from `opengwasdb.ld.format.geometry.chromosome_ranges_from_counts`: closed
 chromosome counts avoid allocating a genome-wide chromosome-label array.
 Work and output
 must share a filesystem. A failed final join is rebuilt from closed inputs;
@@ -91,10 +93,10 @@ block as zero. A tiny worked-literal fixture pins Hail's binary format without
 committing genotypes. Using covariance unchanged was rejected because it is
 not correlation. Assuming a 10 Mb target radius was rejected because liftover
 can join unmeasured pairs. Whole-genome staging was rejected on disk cost.
-The existing `ogld validate` remains the sole validator. The matched 511/0.01
+The existing `opengwasdb ld validate` remains the sole validator. The matched 511/0.01
 analysis view, benchmarking and the whole-genome run belong elsewhere.
 
-## Concurrent downloads and dead addresses (#97)
+## Concurrent downloads and dead addresses (opengwas/ogld#97)
 
 S3's DNS for the bucket rotates over addresses, about a third of which never
 answer from the IEU host, and a single stream is 13–20 MB/s: the whole-genome

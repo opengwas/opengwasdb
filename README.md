@@ -8,7 +8,7 @@ The store contract:
 - embedded SQLite for metadata and lookup indexes;
 - Zarr for compressed association arrays;
 - layout-independent build and query APIs;
-- optional reference completion using LD reference panels.
+- optional reference completion using an LD Reference Panel.
 
 OpenGWASDB implements **Dense**, **Ragged**, and **Hybrid** layouts, with observed-only and reference completion; [docs/store-format-compatibility.md](./docs/store-format-compatibility.md) lists the `format_version`s each release reads and writes. Service and catalogue deployment are not part of this package.
 
@@ -27,6 +27,7 @@ The design baseline lives in:
 
 - [CONTEXT.md](./CONTEXT.md) — domain glossary; the authority on vocabulary
 - [docs/spec/store-format.md](./docs/spec/store-format.md) — the store contract
+- [docs/spec/ld-store.md](./docs/spec/ld-store.md) — the LD Store contract
 - [docs/adr/](./docs/adr/) — decisions and their consequences
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how work moves through the repository
 
@@ -51,8 +52,7 @@ pixi run -e dev lint        # ruff check .
 pixi run -e dev typecheck   # mypy opengwasdb
 ```
 
-For a one-off script or REPL, use `pixi run -e dev python <script>.py`
-rather than invoking a bare interpreter.
+For a script or REPL, use `pixi run -e dev python` rather than invoking a bare interpreter.
 
 `pip install -e ".[dev]"` also works, without `bcftools`. The version comes
 from the `v*` tags; clone with them.

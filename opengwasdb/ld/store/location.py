@@ -1,4 +1,4 @@
-"""Where an LD Store is, and how its elements are read (spec §1, §10).
+"""Where an LD Store is, and how its elements are read (ld-store §1, §10).
 
 A store is a local path or an HTTP(S) URL, opened as one Zarr hierarchy. A reader and
 validation open it the same way, so a store served from a static host that honours byte
@@ -11,15 +11,15 @@ is what Zarr fetches and decodes in any case, keeps the decoded chunks and the s
 up to a byte budget, and serves each request from them. So a query that reads a few pairs at a
 time, as clumping does once per lead, fetches each chunk once, from disk or over HTTP. A read's
 missing runs of chunks are fetched together, a bounded batch at a time (ogld#32). How a store is
-read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/latency.md`), and
-ogld#32 tuned it (`docs/benchmarks/fast-reader.md`).
+read is decided here, in one place: ogld#8 measured it (`docs/benchmarks/ld/latency.md`), and
+ogld#32 tuned it (`docs/benchmarks/ld/fast-reader.md`).
 
 `OpenedStore` is the one object an opened store's facts and its cache are held in, because a
-reader and the `VariantTable` it composes are two halves of one store and not two stores (#94): a
-replaced cache is replaced for both. The reads every other read is made of are here beside it —
-`elements_of` for an array's elements at coordinates, `runs_of` for its ragged runs, both refused
-if a chunk was lost, `array_indptr` for an offset array read whole, and `kept_array` for an array
-whose fill value no valid store can hold (spec §6).
+reader and the `VariantTable` it composes are two halves of one store and not two stores
+(opengwas/ogld#94): a replaced cache is replaced for both. The reads every other read is made of are
+here beside it — `elements_of` for an array's elements at coordinates, `runs_of` for its ragged
+runs, both refused if a chunk was lost, `array_indptr` for an offset array read whole, and
+`kept_array` for an array whose fill value no valid store can hold (ld-store §6).
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def open_group(location: str | os.PathLike[str], *, cache: ChunkCache | None = N
 
     A location with no Zarr group at all, or whose root metadata will not parse, is an
     `InputError` naming it. A Zarr v2 group opens,
-    so validation can say it is not v3 (spec §12, `envelope.arrays`) rather than not there.
+    so validation can say it is not v3 (ld-store §12, `envelope.arrays`) rather than not there.
     """
     root = _opened(location)
     if cache is None:
@@ -114,8 +114,8 @@ class PreadSource:
 
     The descriptor is opened by the first read and kept for the reader's life, so a frame is one
     `os.pread` and no zarr call: a local store pays no event-loop hop a frame
-    (`scripts/bench/frame_read.py` measures both paths on one file). Opening it lazily is what keeps
-    a refusal's context: a file that is missing or unopenable refuses the read that needed it,
+    (`scripts/ld/bench/frame_read.py` measures both paths on one file). Opening it lazily is what
+    keeps a refusal's context: a file that is missing or unopenable refuses the read that needed it,
     naming the chromosome and the frame the caller asked for, as a remote store's empty Range does.
 
     `close` marks the source closed, waits for the reads in flight, and only then closes the
@@ -212,7 +212,8 @@ class RangeSource:
             if _unsatisfiable(failed):
                 # A range that begins past the file's end is unsatisfiable, and the file ends
                 # there: the read's bytes are none, as a local `pread` past the end answers. A
-                # probe past the last byte is how a store's chunk file is measured (spec §5.1).
+                # probe past the last byte is how a store's chunk file is measured (partner-rows
+                # §5.1).
                 return b""
             raise ValueError(
                 f"{self._key} could not be read as bytes [{start}, {stop}): "
@@ -257,14 +258,14 @@ def frame_source(array: zarr.Array[Any]) -> FrameSource:
 
 @dataclass
 class OpenedStore:
-    """An opened LD Store as both halves of its reader see it (spec §7, §10; ogld#94).
+    """An opened LD Store as both halves of its reader see it (ld-store §7, §10; ogld#94).
 
-    The group, the location a refusal names (spec §9), the provenance the reads judge rows and
+    The group, the location a refusal names (ld-store §9), the provenance the reads judge rows and
     entries by, and the one chunk cache every read goes through. A reader and the `VariantTable`
     it composes hold this same object rather than copies, so replacing any of the four replaces it
     for both halves: `StoreReader._cache` is this `cache`, and the benchmark harness swaps it to
     measure what a read holds. One store therefore keeps one chunk budget, and a query's positions
-    and its pairs are kept under it (spec §10).
+    and its pairs are kept under it (ld-store §10).
     """
 
     root: zarr.Group
@@ -276,7 +277,7 @@ class OpenedStore:
 @dataclass(frozen=True)
 class _ShardIndex:
     """The key a shard's index is kept under beside the chunks: the shard's store key, and the
-    bytes of its index, which zarr reads as the shard's suffix (spec §6). A chunk is kept under
+    bytes of its index, which zarr reads as the shard's suffix (ld-store §6). A chunk is kept under
     (array path, chunk number); the two kinds of key are never equal."""
 
     key: str
@@ -367,7 +368,7 @@ class ChunkCache:
 
         A run in one chunk is a read-only view of the kept chunk, and one across chunks is
         joined; no coordinate is built per element. So a region's Near Band rows read as
-        contiguous slices, one per row (spec §10; ogld#14)."""
+        contiguous slices, one per row (ld-store §10; ogld#14)."""
         start = np.asarray(first, dtype=np.int64)
         count = np.asarray(length, dtype=np.int64)
         size = int(array.chunks[0])
@@ -483,7 +484,7 @@ class ChunkCache:
 
     @property
     def budget(self) -> int:
-        """The bytes this cache keeps at most (spec §10)."""
+        """The bytes this cache keeps at most (ld-store §10)."""
         return self._budget
 
     def index(self, shard: _ShardIndex) -> bytes | None:
@@ -529,7 +530,7 @@ def runs_of(
     first: npt.NDArray[np.int64],
     length: npt.NDArray[np.int64],
 ) -> list[npt.NDArray[Any]]:
-    """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
+    """The ragged runs of `array` (ld-store §10), each one slice, through the chunk cache;
     a lost chunk refused."""
     return [refused_if_lost(array, run) for run in cache.runs(array, first, length)]
 
@@ -546,7 +547,7 @@ def kept_array(root: zarr.Group, path: str) -> zarr.Array[Any]:
     if not never_data(path, array.fill_value).all():
         raise ValueError(
             f"{path} has the fill value {shown_fill(array.fill_value)}, which valid data can hold "
-            "there: a chunk it lost would read as data (spec §6, envelope.fill)"
+            "there: a chunk it lost would read as data (ld-store §6, envelope.fill)"
         )
     return array
 
@@ -557,7 +558,7 @@ def _array(root: zarr.Group, path: str) -> zarr.Array[Any]:
         member = root[path]
     except KeyError:
         raise ValueError(
-            f"{path} is missing: every LD Store holds it (spec §1, envelope.arrays)"
+            f"{path} is missing: every LD Store holds it (ld-store §1, envelope.arrays)"
         ) from None
     assert isinstance(member, zarr.Array)
     return member
@@ -585,7 +586,7 @@ def _batches(
     pieces: list[tuple[int, int]], concurrency: int, most: int
 ) -> Iterator[list[tuple[int, int]]]:
     """`pieces` in order, as batches of at most `concurrency` pieces and `most` chunks: what
-    one read has in flight at once (spec §10; ogld#32)."""
+    one read has in flight at once (ld-store §10; ogld#32)."""
     batch: list[tuple[int, int]] = []
     held = 0
     for first, stop in pieces:
@@ -629,10 +630,10 @@ def _fetched(
 
 
 class _KeptIndexes(WrapperStore[Store]):
-    """A store whose shard indexes a `ChunkCache` keeps, in its budget (spec §6, §10; ogld#32).
+    """A store whose shard indexes a `ChunkCache` keeps, in its budget (ld-store §6, §10; ogld#32).
 
     zarr reads a shard's index before the chunks a read needs from it, and again on every
-    read: over HTTP, a round trip before the one that fetches the chunks. Spec §6 puts an LD
+    read: over HTTP, a round trip before the one that fetches the chunks. ld-store §6 puts an LD
     Store's shard index at the shard's end, which zarr reads as a suffix of the shard, and
     reads nothing else that way. So each suffix read is answered from the cache when it holds
     it, and kept when it is fetched; every other read passes through. A missing shard is not
@@ -714,7 +715,7 @@ class _KeptIndexes(WrapperStore[Store]):
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
-            # Sharing protects other readers, not permission to outlive this read (ADR 0009).
+            # Sharing protects other readers, not permission to outlive this read (ADR 0095).
             # Consume a failure while draining, but preserve this waiter's cancellation.
             drained = asyncio.gather(pending, return_exceptions=True)
             while not drained.done():

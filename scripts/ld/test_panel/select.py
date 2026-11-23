@@ -110,7 +110,7 @@ def _strong_far(
     z: np.ndarray, pos: np.ndarray, t_far: float, far_bp: int, encoding: REncoding
 ) -> list[tuple[float, int, int]]:
     """(-Stored r^2, a, b) for every pair more than near_bp and at most far_bp apart whose code
-    reaches the far code floor (spec §3, §5), strongest first."""
+    reaches the far code floor (ld-store §3, §5), strongest first."""
     hits: list[tuple[float, int, int]] = []
     near_stop, far_stop = stop_within(pos, NEAR_BP), stop_within(pos, far_bp)
     floor = encoding.far_code_floor(t_far)

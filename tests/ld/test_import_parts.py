@@ -1,4 +1,4 @@
-"""Hail 0.2.64's worked literal, independent of the production decoder (#93)."""
+"""Hail 0.2.64's worked literal, independent of the production decoder (opengwas/ogld#93)."""
 
 import sys
 from pathlib import Path

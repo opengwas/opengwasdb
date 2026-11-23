@@ -2,7 +2,7 @@
 
 **Partial result: the 10-second target is not met.** Answers and bounds pass. The final
 cold GCST90476460 runs took 40.573 s alone and 60.323 s within the 37-Analysis run, not ≤10 s.
-Do not treat this implementation as satisfying #40's performance acceptance.
+Do not treat this implementation as satisfying opengwas/ogld#40's performance acceptance.
 
 ## Measure first
 
@@ -43,7 +43,7 @@ both endian comparisons with invalid zstd input. Decoding a short frame directly
 larger destination was observed to pass silently in numcodecs; the regression test failed
 before the decoder was changed to check the decoded length.
 
-#32's HTTP flight and held-buffer tests run on the direct path. The planner now reserves
+opengwas/ogld#32's HTTP flight and held-buffer tests run on the direct path. The planner now reserves
 space inside the decoded-byte allowance for trimming or byte-order conversion; the cache
 budget is unchanged. Native decoded single-chunk buffers transfer to the cache without copying.
 The complete default tier passed 1,240 tests in 26.76 s with eight pytest workers at this
@@ -70,7 +70,7 @@ cache rather than copying it into a run and then copying it again. The transfer 
 before that change. Removing cancellation draining also failed its test; a cancelled read
 must await workers still holding its buffers.
 
-A reproducible wrapper, `scripts/bench/fast_decode.py`, now runs #8's existing cases and
+A reproducible wrapper, `scripts/bench/fast_decode.py`, now runs opengwas/ogld#8's existing cases and
 records whole-clump SHA-256, distinct chunks counted at `_keep_run`, and full uptime beside
 every timing. The acceptance run of the stores samples first/middle/last chunks of every array in
 all five published stores against zarr (`pixi run -e dev acceptance-stores`, ogld#40); it needs
@@ -84,12 +84,12 @@ Records and diagnostic sources are in [`results/40/`](results/40/), compressed w
 The production source was clean; the wrapper records its installed version and commit.
 The long runs inherited CPU affinity 0–7, BLAS 1 and zarr helper 1; the decode pool has five
 workers. Local clients had eight threads including the caller and event loop. HTTP uses
-#8's separate static/proxy processes (the proxy is asynchronous, the static host has two
+opengwas/ogld#8's separate static/proxy processes (the proxy is asynchronous, the static host has two
 file helpers); all descendants inherit the same eight-CPU cap. Every timing carries full
 `uptime`. The cold method remains advisory page eviction, not a guarantee against another
-reader warming shared files. The original tip run used one zarr helper, whereas #32/#38's
+reader warming shared files. The original tip run used one zarr helper, whereas opengwas/ogld#32/#38's
 comparison records used six: ratios across these records are not controlled thread-allocation
-experiments. Load was about 2–5 here, versus 4–35 for #32 and 39–60 for #38.
+experiments. Load was about 2–5 here, versus 4–35 for opengwas/ogld#32 and 39–60 for opengwas/ogld#38.
 
 ### GCST90476460 and the 37
 
@@ -99,7 +99,7 @@ It reads 7.413 GB compressed and decodes 17.508 GB of Near Band chunks. The isol
 was 40.573 s, load 4.65→4.94; within the 37 it was 60.323 s, load 4.20→4.50. The same whole-result
 fingerprint is recorded in both. At r² 0.001 it took 51.411 s and fetched 28,085 Near Band chunks.
 
-Each Analysis cold, r² 0.01 / 0.001, compared with #38's reader records:
+Each Analysis cold, r² 0.01 / 0.001, compared with opengwas/ogld#38's reader records:
 
 | r² | before seconds | head seconds | before / head Near Band chunks | head leads | head over 30 s |
 |---|---:|---:|---:|---:|---:|
@@ -129,11 +129,11 @@ interval of 100 µs (52.548 s, same bytes). Neither is shipped. In particular, n
 global is changed by the library. More profiling of decode/allocation costs is needed before
 choosing another implementation or asking the owner to revisit the held-back format change.
 
-### #8 step-1 reads against #32
+### opengwas/ogld#8 step-1 reads against opengwas/ogld#32
 
 Seconds, before → head. Matrices are the seeded 500-variant draw, cold. Regions are medians
 of the same three centres, cold; proxies are 100 variants on an opened store. All 162 read
-summaries match #32. These are single runs; local differences below about 45% can be noise.
+summaries match opengwas/ogld#32. These are single runs; local differences below about 45% can be noise.
 
 | read | local | +10 ms | +50 ms |
 |---|---:|---:|---:|

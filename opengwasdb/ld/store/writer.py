@@ -1,4 +1,5 @@
-"""Writing an LD Store: the seam every producer writes through (spec §1–§7, §12; ogld#4, ogld#17).
+"""Writing an LD Store: the seam every producer writes through (ld-store §1–§7, §12; ogld#4,
+ogld#17).
 
 A producer supplies r and what only its source knows; the store assembly behind this seam
 (`opengwasdb/ld/store/assembly.py`) does the rest (owner, 10 November 2026). That covers quantising
@@ -26,11 +27,11 @@ How each producer calls it:
 
 A store is not one until `finish` writes its provenance. A reader refuses a directory without
 provenance, so a half-written store cannot be read as a short one. `finish` runs every rule of
-spec §12 on what was written and writes the provenance only when all 27 pass.
+ld-store §12 on what was written and writes the provenance only when all 27 pass.
 
 What a store holds is `format_version` 0.2.0's: the Near Band, the Far Pairs and the Partner Rows
-(partner-rows §5; ADR 0011). It holds no Proxy Index: #72 removed the component, and no array of it
-is written here or read by a reader.
+(partner-rows §5; ADR 0097). It holds no Proxy Index: opengwas/ogld#72 removed the component, and no
+array of it is written here or read by a reader.
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
 
 class StoreWriter:
-    """Writes one LD Store (spec §1) from the r its producer supplies, block by block."""
+    """Writes one LD Store (ld-store §1) from the r its producer supplies, block by block."""
 
     def __init__(
         self,
@@ -97,14 +98,14 @@ class StoreWriter:
         compress_workers: int = 1,
     ) -> StoreWriter:
         """Start a store at a new `location`: write the Variant Set, in engine order, and its
-        chromosome ranges (spec §2), and fix what every block is cut by. That is the encoding
-        (spec §3), the distances (§4, §5), t_far for `n` samples and `k` covariates with its far
+        chromosome ranges (ld-store §2), and fix what every block is cut by. That is the encoding
+        (ld-store §3), the distances (§4, §5), t_far for `n` samples and `k` covariates with its far
         code floor (§3), and `t_partner` with its Partner Floor (partner-rows §3).
 
         `n` and `k` are given here because blocks are thresholded as they arrive; `finish`
         refuses a `Sourced` whose `panel.n` or `adjustment.k` differs. `t_partner` is the
         **Partner Threshold**, a build input with no default, and never above t_far: one that is
-        raises, naming both (ADR 0011, D3; partner-rows §3). `compress_workers` is how many
+        raises, naming both (ADR 0097, D3; partner-rows §3). `compress_workers` is how many
         worker threads compress the Partner Rows' frames; their bytes do not depend on it.
 
         Refuses, before writing anything, a location that exists, an n and k with no t_far, a
@@ -130,7 +131,7 @@ class StoreWriter:
     def join(
         cls, location: Path, chromosomes: Sequence[Path], sourced: Sourced, *, threads: int = 1
     ) -> Provenance:
-        """Join closed single-chromosome stores without recomputing a code (ADR 0015).
+        """Join closed single-chromosome stores without recomputing a code (ADR 0101).
 
         This additive import path lets a producer discover diagonal losses one chromosome
         at a time, whereas `create` deliberately fixes a genotype build's Variant Set up
@@ -159,10 +160,10 @@ class StoreWriter:
 
     def cut(self, first: int, r: npt.NDArray[np.floating[Any]]) -> Cut:
         """Cut the block of rows `first`, `first + 1`, … `first + len(r) − 1` (global rows, one
-        chromosome) from their r, ready to `write` (spec §3–§5).
+        chromosome) from their r, ready to `write` (ld-store §3–§5).
 
-        `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (spec §3). It runs
-        for every column c up to the last variant within far_bp of the block's last row, and no
+        `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (ld-store §3). It
+        runs for every column c up to the last variant within far_bp of the block's last row, and no
         further: `r.shape[1]` is that variant's row + 1 − first. That is what
         `opengwasdb.ld.genotypes.r(rows, span)` gives for the block against those rows, and the
         chromosome's whole matrix for a block of all its rows. Only each row's later partners
@@ -187,15 +188,16 @@ class StoreWriter:
         each chromosome is finished before the next begins.
 
         The Near Band's codes are written in whole shards of `near/<chrom>/r`, the rest carried;
-        its `indptr` comes from the positions when the chromosome's first cut arrives (spec §4).
-        The Far Pairs are written row by row, each in its earlier row (spec §5); the Partner Rows
-        are framed as their rows complete. The counts are added up. When the chromosome's last
+        its `indptr` comes from the positions when the chromosome's first cut arrives (ld-store §4).
+        The Far Pairs are written row by row, each in its earlier row (ld-store §5); the Partner
+        Rows are framed as their rows complete. The counts are added up. When the chromosome's last
         row arrives, what is carried is written and the chromosome is complete.
 
         A write that fails — a frame that will not compress, a stream that will not close —
         poisons the writer: the rows are counted as written only after the chromosome closed, and
         every later `write` or `finish` raises naming this first failure. So a half-written
-        chromosome is never finished over, and no provenance is ever written for it (issue #67).
+        chromosome is never finished over, and no provenance is ever written for it (issue
+        opengwas/ogld#67).
         """
         self._live()
         if cut.by is not self._cutter:
@@ -238,7 +240,7 @@ class StoreWriter:
 
     def finish(self, sourced: Sourced, *, threads: int = 1) -> Provenance:
         """Assemble the provenance, validate the store and write it; return it as written
-        (spec §7, §12).
+        (ld-store §7, §12).
 
         `sourced` is what only the producer knows (`opengwasdb.ld.format.Sourced`). The writer adds
         what
@@ -246,7 +248,7 @@ class StoreWriter:
         `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It refuses, naming the
         chromosome, a store with rows not written. It also refuses a `sourced` with a key of the
         store's or an n or k that is not what `create` thresholded with. Then it runs every rule
-        of spec §12 on `threads` workers and raises `ValidationFailed` if any fails, before the
+        of ld-store §12 on `threads` workers and raises `ValidationFailed` if any fails, before the
         provenance is written: a store without one is never read.
         """
         self._live()
@@ -256,8 +258,9 @@ class StoreWriter:
                 f"the rows of chromosome {', '.join(unwritten)} were not written, from row "
                 f"{self._next}"
             )
-        # The ALID index is the store's, from the table it wrote (spec §2; ADR 0010): no producer
-        # supplies or orders one, and a store is unreadable until `finish` writes its provenance.
+        # The ALID index is the store's, from the table it wrote (ld-store §2; ADR 0096): no
+        # producer supplies or orders one, and a store is unreadable until `finish` writes its
+        # provenance.
         variants = self._root["variants"]
         assert isinstance(variants, zarr.Group)
         left_out = derive_alid_index(variants, variants.create_group("alid_index"))
@@ -276,7 +279,8 @@ class StoreWriter:
 def write_variant_table(
     location: Path, variants: Variants, ranges: dict[str, tuple[int, int]]
 ) -> zarr.Group:
-    """Write the shared variant half, without LD components or a provenance claim (#91).
+    """Write the shared variant half, without LD components or a provenance claim
+    (opengwas/ogld#91).
 
     The LD writer and Genotype Store builder use exactly the same columns and layout. `ranges`
     is the chromosome record its caller computed (`chromosome_ranges`), so the write path has
@@ -309,5 +313,5 @@ def _as_json(provenance: Provenance) -> dict[str, Any]:
 def _positions(position: npt.NDArray[np.int64]) -> npt.NDArray[np.int32]:
     """Positions as the int32 array stores them; one that does not fit is refused, not wrapped."""
     if len(position) and (position.min() < 0 or position.max() > np.iinfo(np.int32).max):
-        raise ValueError("a position does not fit the int32 `position` array (spec §2)")
+        raise ValueError("a position does not fit the int32 `position` array (ld-store §2)")
     return position.astype(np.int32)

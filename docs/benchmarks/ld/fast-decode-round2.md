@@ -1,4 +1,4 @@
-# #40 round 2: fill the pool before the greedy pass
+# opengwas/ogld#40 round 2: fill the pool before the greedy pass
 
 ## Measure before choosing
 
@@ -38,7 +38,7 @@ compressed ranges have a separate 256 MiB credit limit held until decode complet
 oversized chunks remain the documented exception. Ranges coalesce at most 512 KiB gaps into
 16 MiB reads; only requested chunks decode. Actual requests are semaphore-bounded by zarr's
 async concurrency. Positions, indptr, request/results, codec workspace and cache bookkeeping
-are additional, as in spec §10; this is not an RSS limit.
+are additional, as in ld-store §10; this is not an RSS limit.
 
 The wrapper bridges exact LocalStore's public get_sync through its async interface on the
 same seven-worker pool as decompression. HTTP and subclasses keep their own async interface.
@@ -89,11 +89,11 @@ per cold query. Every record includes both uptimes. The resumed clean isolated q
 These repeated times vary; do not present the earlier 22.423 s diagnostic as the final timing.
 
 The 37 cold queries take **272.473 s at 0.01** and **281.736 s at 0.001** (round 1:
-454.787/398.388 s; #38: 488.595/404.409 s). All 74 complete result fingerprints equal round 1,
+454.787/398.388 s; opengwas/ogld#38: 488.595/404.409 s). All 74 complete result fingerprints equal round 1,
 not just the 23,445/13,866 lead totals. Each threshold warms **265,270 distinct Near Band
 chunks**, with no re-fetches: warming candidate pairs also decodes chunks the eventual greedy
 pass would not visit (GCST90476460: 43,453 versus round 1's 33,394). This is a scheduling versus
-extra-work tradeoff, not a reduction to #38's approximately 203,000-chunk decode floor.
+extra-work tradeoff, not a reduction to opengwas/ogld#38's approximately 203,000-chunk decode floor.
 
 ### Where the 37's time goes
 
@@ -189,7 +189,7 @@ previous round-2 eight-process run was 1,266 tests in 15.68 s. Lint, strict type
 postflight and all 10 changed-scope gates pass. Integration merge remains already up to date
 at f5e4845. All final timings have their full uptimes in the compressed records below.
 
-## Final step-1 reads against #32
+## Final step-1 reads against opengwas/ogld#32
 
 Seconds, before → head. Same seeded draws, centres and summaries as the round-1 table.
 Local runs use seven numeric/I/O workers and one fallback helper. **Final HTTP runs reserve
@@ -197,7 +197,7 @@ four helpers for the two host processes**, leaving three numeric workers and one
 helper: at most eight configured workers including the hosts, with affinity 0–7 inherited
 by every child. This is a benchmark-only private allocation, not a new public knob.
 Initial seven-worker-client HTTP records are retained for provenance but are **not** used in
-this final table. #32's historical helper allocation differs, so this is not a controlled
+this final table. opengwas/ogld#32's historical helper allocation differs, so this is not a controlled
 worker-count comparison. Small changes, especially on local disk, should not be over-read.
 
 | read | local | +10 ms | +50 ms |
@@ -210,8 +210,8 @@ worker-count comparison. Small changes, especially on local disk, should not be 
 | four clumps, 0.01, cold sum | 52.219 → 24.505 | 101.900 → 53.715 | 224.212 → 124.225 |
 | four clumps, 0.001, cold sum | 46.387 → 27.442 | 90.884 → 55.604 | 204.645 → 121.637 |
 
-All 162 read summaries and all 24 clump lead counts match #32. Each four-clump run now makes
-5,174 requests at either threshold, versus #32's 7,537/6,887. The small-region and 50 ms proxy
+All 162 read summaries and all 24 clump lead counts match opengwas/ogld#32. Each four-clump run now makes
+5,174 requests at either threshold, versus opengwas/ogld#32's 7,537/6,887. The small-region and 50 ms proxy
 regressions are retained rather than hidden behind aggregate clump wins.
 
 ### Retained evidence

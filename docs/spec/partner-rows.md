@@ -1,9 +1,9 @@
 # Partner Rows: a clump-and-proxy component for the LD Store
 
 Status: **accepted, and normative beside `docs/spec/ld-store.md`**, which takes the sections this
-document amends. The decisions are the owner's, of 18 November 2026 (§1; ADR 0011), revised by the
-measurements of #65 and its fixed G (§11).
-Format version described: `0.2.0` (decision D5); the version bump lands with the writer, #67.
+document amends. The decisions are the owner's, of 18 November 2026 (§1; ADR 0097), revised by the
+measurements of opengwas/ogld#65 and its fixed G (§11).
+Format version described: `0.2.0` (decision D5); the version bump lands with the writer, opengwas/ogld#67.
 
 This document specifies a new LD Store component, the **Partner Rows**. For each variant it
 holds every partner whose Stored r reaches a floor, on both sides, stored as one small compressed
@@ -13,7 +13,7 @@ only `matrix` and `region`.
 
 It specifies the format (§3–§5), how the component is built (§6), how it is read and queried
 (§7–§8), how both are parallelised (§9), how it is validated (§10), and what it costs (§11). The
-evidence is on issues #40, #45, #50 and #65 and in the measurements of 17–18 November 2026 (§11).
+evidence is on issues opengwas/ogld#40, opengwas/ogld#45, opengwas/ogld#50 and opengwas/ogld#65 and in the measurements of 17–18 November 2026 (§11).
 
 Normative language is `ld-store.md`'s: MUST, SHOULD, MAY.
 
@@ -33,12 +33,12 @@ compute. Two measured facts make a small, direct structure possible:
 - On EUR chr22, **5.0% of Near Band pairs have r̂² > 0.01** (1.9% reach t_far). A lead's
   two-sided row at that floor has a median of 800 entries, against 19,971 in the dense band.
 - One row read as one positional read, with no chunk, shard index or Zarr call, took the
-  dense chr22 greedy from 0.227 s to 0.056 s on #50's packed-row prototype. The rows there
+  dense chr22 greedy from 0.227 s to 0.056 s on opengwas/ogld#50's packed-row prototype. The rows there
   were dense; these are 20× smaller.
 
-Epic #45 decided to keep the triangle and reject symmetric rows, because dense symmetric rows
+Epic opengwas/ogld#45 decided to keep the triangle and reject symmetric rows, because dense symmetric rows
 would have cost about 181 GB for the EUR store. Thresholding changes that trade: the Partner Rows
-are symmetric rows at about 5% of the size. For `clump` and `proxies` this design supersedes #45's
+are symmetric rows at about 5% of the size. For `clump` and `proxies` this design supersedes opengwas/ogld#45's
 decision 1. The triangle stays for `matrix` and `region`.
 
 ## 1. Decisions (owner, 18 November 2026)
@@ -48,23 +48,23 @@ decision 1. The triangle stays for `matrix` and `region`.
 | D1 | **The Partner Rows replace the Proxy Index.** | They hold every index entry (§3), so `proxies` reads them too. Measured on EUR: 14.76 GB at G = 16 (11.82 GB at G = 64), which is +5.38 GB (+2.44 GB) net of its 9.38 GB index; the owner's scaling puts the five panels at about +53 GB net at G = 64 (§11) |
 | D2 | **`clump` and `proxies` with r2 below t_partner and W ≤ `near_bp` are refused**, `threshold_below_t_partner`. | On HGDP+1kGP at r² 0.001, 90% of the pairs that pass are sampling noise (§11). Today's answered r² 0.001 clumps on those stores become Refusals: a breaking change |
 | D3 | **t_partner is set per reference dataset and recorded in the store's metadata**, as t_far is. | A build input with no default: each Source Panel's build names its own (0.01 for HGDP+1kGP, 0.001 = t_far for UK Biobank EUR), and a build without one refuses. It never exceeds t_far (§3) |
-| D4 | **A Zarr group** per chromosome, inside the store's one hierarchy (§5; refined by the owner on 18 November 2026, ADR 0011). | `partners/<chrom>/` holds two arrays, `frames` and `frames_idx`, each one chunk, and the manifest's keys as the group's attributes. One read per frame, with no shard index. Plain files make zarr's `members()` warn; a node in the hierarchy is what removes it, and #67 measures that on a real store |
+| D4 | **A Zarr group** per chromosome, inside the store's one hierarchy (§5; refined by the owner on 18 November 2026, ADR 0097). | `partners/<chrom>/` holds two arrays, `frames` and `frames_idx`, each one chunk, and the manifest's keys as the group's attributes. One read per frame, with no shard index. Plain files make zarr's `members()` warn; a node in the hierarchy is what removes it, and opengwas/ogld#67 measures that on a real store |
 | D5 | **Format version 0.2.0.** | A new component, a removed one and a changed refusal table |
 | D6 | **Derive** the five existing stores' Partner Rows from their Near Band and Far Pairs (§6.2). | No genotypes needed. Byte-identical to a build |
 
 **Fixed by the measurements of 18 November 2026:**
 
-- **G = 16** (measured on #65; §5.2, §11). It is the smallest G of those equally fast: 14.76 GB of
+- **G = 16** (measured on opengwas/ogld#65; §5.2, §11). It is the smallest G of those equally fast: 14.76 GB of
   EUR genome bytes against G = 8's 16.68 GB, and 1.067 s cold LD against 1.051 s, a difference
   inside the samples' spread.
-- **Component workers are capped at 4** for #71 (§9.2, option B). At eight, cold LD regresses to
+- **Component workers are capped at 4** for opengwas/ogld#71 (§9.2, option B). At eight, cold LD regresses to
   1.913 / 5.753 / 5.109 s at G = 4 / 8 / 16, against 1.051–1.169 s where each G was fastest.
-- **The under-1 s LD target moves to #71** (owner, 18 November 2026). The best cold LD is 1.051 s
+- **The under-1 s LD target moves to opengwas/ogld#71** (owner, 18 November 2026). The best cold LD is 1.051 s
   (G = 8) and at G = 16 it is 1.067 s cold and 1.058 s warm, so nothing here claims the target.
-  #71 did not meet it and the owner accepted it (#71's owner decision, recorded on #72): a quiet
+  opengwas/ogld#71 did not meet it and the owner accepted it (opengwas/ogld#71's owner decision, recorded on opengwas/ogld#72): a quiet
   re-time at `cc48a58` on GCST90476460 gave cold LD medians of **2.30 / 1.55 / 2.95 s** at
   1 / 2 / 4 workers, and warm medians of **0.98 / 0.97 / 1.35 s** (EUR k = 10). The follow-up is
-  **#81**, decode and gather plus ALID resolution, and it owns the worker default too.
+  **opengwas/ogld#81**, decode and gather plus ALID resolution, and it owns the worker default too.
 
 §12 records the alternatives that were weighed and what they would have cost.
 
@@ -126,16 +126,16 @@ the absence only to decide that a threshold at or above the matching bound is no
 ```
 
 `partners/` is a node in the store's one Zarr hierarchy, not a directory beside it (D4, refined by
-the owner on 18 November 2026; ADR 0011). So `ld-store.md` §1's envelope stays "one Zarr v3
+the owner on 18 November 2026; ADR 0097). So `ld-store.md` §1's envelope stays "one Zarr v3
 hierarchy", and a reader that lists the store sees the component.
 
 The alternative, plain files in a directory with no group metadata, was measured on the published
-EUR store (#65, zarr-python 3.4.2): `zarr.open_group`, `ogld.open` and all 27 of `ogld.validate`'s
+EUR store (opengwas/ogld#65, zarr-python 3.4.2): `zarr.open_group`, `opengwasdb.ld.open` and all 27 of `ogld.validate`'s
 rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is not recognized as a
 component of a Zarr hierarchy.` The single-chunk form below removes that warning. The committed
-Test Store is that check since #67: `partners/` is a node of its hierarchy, `members()` lists it
-with no warning (`tests/test_partner_rows.py`), and the reader and the ten rules resolve each
-chunk file from the array's own metadata (`tests/test_partner_row_reads.py`).
+Test Store is that check since opengwas/ogld#67: `partners/` is a node of its hierarchy, `members()` lists it
+with no warning (`tests/ld/test_partner_rows.py`), and the reader and the ten rules resolve each
+chunk file from the array's own metadata (`tests/ld/test_partner_row_reads.py`).
 
 Both arrays have **one chunk each**, of the whole array, and no shard index. The `frames` array's
 codec chain is `bytes` alone, with **no compressor**, because the bytes it holds are already zstd
@@ -190,7 +190,7 @@ The `partners/<chrom>/` group's attributes:
 The root provenance (`ld-store.md` §7) gains `t_partner` (float), `partner_code_floor` (int),
 `counts.partner_entries` (int, every chromosome's `entries`) and `software.zstd` (the library
 version, because frame bytes depend on it). `counts.index_entries` went with the Proxy Index in
-#72 (D1): a build writes no index and records no such count, and one that still carries the key is
+opengwas/ogld#72 (D1): a build writes no index and records no such count, and one that still carries the key is
 not failed for it (ld-store §7, §12).
 
 ### 5.4 Why this form
@@ -202,7 +202,7 @@ not failed for it (ld-store §7, §12).
   `os.pread(fd, length, offset)` on a descriptor the reader opens once for the chromosome and keeps
   until it is closed, which costs no store call and no event loop: 10.8 µs a 25,600-byte read on a
   512 MiB file, against 1,257 µs through the store's own path on the same file and page cache
-  (`scripts/bench/frame_read.py`). An HTTP store's frames are one Range request through the store's
+  (`scripts/ld/bench/frame_read.py`). An HTTP store's frames are one Range request through the store's
   interface, which is one event-loop hop and one round trip.
 - **Corruption is loud.** A missing or short `frames` chunk file, a frame whose checksum fails,
   or a payload of the wrong length is refused, naming the chromosome and the frame. It is never
@@ -218,7 +218,7 @@ not failed for it (ld-store §7, §12).
 
 The Partner Rows are a function of the Near Band and the Far Pairs (§3). One emitter makes them
 from codes arriving in row order, block of rows by block of rows, as the Proxy Index's writer did
-before #72 removed it (`ld-store.md` §6, "How a store is written"):
+before opengwas/ogld#72 removed it (`ld-store.md` §6, "How a store is written"):
 
 1. For each block, keep each pair (l, m > l) with |code| at the floor its distance calls for.
 2. Each kept pair goes to row l immediately, and to a carry for row m.
@@ -232,11 +232,11 @@ before #72 removed it (`ld-store.md` §6, "How a store is written"):
    not a chromosome sort. On the Test Store written in blocks of 16 rows, the emitter's peak carry
    is 5,235 pairs — 52,350 bytes at 10 bytes a pair — and 5,277 pairs in blocks of one row, against
    0 written whole, as the committed store is (`pixi run -e dev python
-   scripts/bench/partner_carry.py`).
+   scripts/ld/bench/partner_carry.py`).
 
 Its two producers:
 
-- **The build** (`StoreWriter`): the emitter took the Proxy Index writer's place, which #72 removed
+- **The build** (`StoreWriter`): the emitter took the Proxy Index writer's place, which opengwas/ogld#72 removed
   it, and is fed by the same blocks. No new pass over genotypes.
 - **Derivation** (§6.2): the same emitter fed by reading the Near Band and the Far Pairs back.
 
@@ -252,7 +252,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   `t_far`: a larger one is refused naming both. A store whose provenance already records Partner
   Rows at another threshold is refused too, naming both, because a component at a second floor
   would hold two.
-- Reads `near/<c>/r` with the direct decoder (ADR 0009) in blocks of rows, and the Far Pairs as
+- Reads `near/<c>/r` with the direct decoder (ADR 0095) in blocks of rows, and the Far Pairs as
   their `indptr` whole (n_c + 1 entries) and their `partner` and `r` arrays one block of rows'
   worth at a time (101,886 pairs on EUR chr22). It feeds both to §6.1's emitter, so the `frames`
   and `frames_idx` chunk files are a build's, byte for byte, at any `--threads` and
@@ -275,7 +275,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   run refuses a link at any path it owns — the root `zarr.json`, `partners/`, or any entry of
   `partners/` — even one that stays inside the store, because a claim, a cleanup or a publication
   would then write or delete in the directory the link names. A store's read-only components may
-  be links, which is how the scratch stores #71 and #73 read are laid out. It refuses a
+  be links, which is how the scratch stores opengwas/ogld#71 and opengwas/ogld#73 read are laid out. It refuses a
   `zarr.*.partial` the store already holds, in the root or in `partners/`, once before it writes
   and again immediately before the claim: zarr writes a metadata document through that name and
   follows a link there. The check is not a lock — a concurrent writer to the same store could still
@@ -290,7 +290,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   naming the path, and the count stays: the provenance never claims a removal that did not happen.
   An `index/` that is a symbolic link is unlinked and the directory it names is left whole, which
   is what a scratch store over a published one needs. A store this code writes holds no `index/`,
-  so the option is what finishes one derived before #72; since #72 the store validates and reads
+  so the option is what finishes one derived before opengwas/ogld#72; since opengwas/ogld#72 the store validates and reads
   with or without the leftover (ld-store §12).
 
 ### 6.3 Parallelising the build and the derivation
@@ -311,7 +311,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   the rule on all of them was 37 s of the chromosome's 41 s of selection, the rest being the read:
   the whole chromosome, frames included, is **29.4 s and 640 MiB peak RSS** at eight compressor
   threads (16 cores' box, `taskset -c 0-7`, load 3.4), against 86.1 s and 790 MiB before. It
-  writes 7,477 frames, 153,561,655 bytes and **117,392,902 entries** — which is #65's own chr22
+  writes 7,477 frames, 153,561,655 bytes and **117,392,902 entries** — which is opengwas/ogld#65's own chr22
   output, to the count and the byte: `derive_chr22.json` at `912a9fa` records that many entries at
   G = 16, and its two chunk-file SHA-256s are this run's. The 117,189,130 that §11's `sym_entries`
   records for the chromosome is the Near Band's directed count, twice its 58,594,565 kept pairs,
@@ -319,17 +319,17 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
 - **The ten rules cost more than the derivation.** They read every frame and, through
   `partners.near` and `partners.far`, the whole Near Band and Far Pairs again, on `--threads`:
   on EUR's genome, at eight threads, 25 min 11 s against the 12 min 49 s the derivation took.
-- **Measured cost** (#65's prototype, and #69's derivation). The prototype took 47.9 s for EUR
+- **Measured cost** (opengwas/ogld#65's prototype, and opengwas/ogld#69's derivation). The prototype took 47.9 s for EUR
   chr22 at all four G, with the selection and the sort shared, and 1,179.3 s of group wall time
   for the other 21 chromosomes at two G on two processes; it sorts a whole chromosome, which the
   streaming emitter does not: its 59.23 GB worker high water is the sort's, and §6.1's
-  85,926,574-pair chr6 peak is what a carry-bounded emitter budgets. #69 derived the published
+  85,926,574-pair chr6 peak is what a carry-bounded emitter budgets. opengwas/ogld#69 derived the published
   EUR store's other 21 chromosomes in 12 min 49 s on four processes of eight compressor threads
   (load 5–10), leaving them and chr22 as a 14.8 GB component.
 
 ## 7. Reading
 
-`ogld.store.StoreReader` gains one read, replacing the Proxy Index read and the Near Band
+`opengwasdb.ld.store.StoreReader` gains one read, replacing the Proxy Index read and the Near Band
 partner reads:
 
 ```text
@@ -350,7 +350,7 @@ partner_rows(chrom, l…) -> (indptr, partners, codes)
    frame, of which the decompress is 87 µs either way.
 
 - **The frame cache** is a byte-bounded LRU of frames' decompressed payloads, per reader, which
-  drops the least recently used frame first. **Its 256 MiB default is measured** (#71): GCST90476460
+  drops the least recently used frame first. **Its 256 MiB default is measured** (opengwas/ogld#71): GCST90476460
   and the 37 chr22 Analyses in one reader on a warm page cache made 4,323 frame reads with no cache,
   4,205 at 16 MiB, 4,188 at 64 MiB and 4,132 (191 hits) at 256 MiB, and 1 GiB and 4 GiB made the
   same 4,132. So 256 MiB is the smallest budget that kept every hit the workload offered, and a
@@ -388,7 +388,7 @@ below it (D2). The rest of the table is unchanged.
 
 **Why every answered request is exact** — `ld-store.md` §9's argument, which 0.2.0's rows are the
 reason for. On every request both versions answer, the answers are those of the 0.1.0 reader,
-element for element, which #71's acceptance criteria hold.
+element for element, which opengwas/ogld#71's acceptance criteria hold.
 
 `matrix` and `region` are unchanged and never read the Partner Rows.
 
@@ -415,7 +415,7 @@ ALID, a hit joins a lead at r̂² > r2 and d < W, results in request order inclu
 component's row span, so filtering a row costs O(E_l) vector operations with no hashing.
 Duplicate ALIDs share a row and follow today's scatter rule.
 
-**Cost** (measured in #65 and #71). One frame read and decode per lead that has not hit the frame
+**Cost** (measured in opengwas/ogld#65 and opengwas/ogld#71). One frame read and decode per lead that has not hit the frame
 cache. No speculative reads and no reads for eliminated hits. On the whole of GCST90476460, whose
 3,869 leads fall in 95 components, G = 16 with four component workers made 3,854 frame reads and
 101,810,367 bytes, with 15 cache hits. Its LD work, cold and warm, in seconds, by the reader's
@@ -435,14 +435,14 @@ ALIDs, and the store opens in 0.02–0.05 s. Where the 1.85 s cold goes at four 
 of row gather (2.13 s of `partner_row` CPU less that decode), spread over four threads and so
 bounded by the GIL, plus the component split, the greedy and the cold reads' latency. Serially the
 same parts are 0.87 s of LD CPU: 0.49 s decode, 0.17 s gather, and 0.21 s of the split and the
-greedy. **The under-1 s LD target is not met, and the owner accepted it** (#71's owner decision,
-recorded on #72). The figures to hold the reader to are that quiet re-time, at `cc48a58`, on
+greedy. **The under-1 s LD target is not met, and the owner accepted it** (opengwas/ogld#71's owner decision,
+recorded on opengwas/ogld#72). The figures to hold the reader to are that quiet re-time, at `cc48a58`, on
 GCST90476460 at EUR k = 10: cold LD medians of **2.30 / 1.55 / 2.95 s** at 1 / 2 / 4 workers, and
-warm medians of **0.98 / 0.97 / 1.35 s**. The follow-up is **#81**, decode and gather plus ALID
-resolution; the worker default stays at four here and is #81's to change. The options the numbers
+warm medians of **0.98 / 0.97 / 1.35 s**. The follow-up is **opengwas/ogld#81**, decode and gather plus ALID
+resolution; the worker default stays at four here and is opengwas/ogld#81's to change. The options the numbers
 point at, measured rather than guessed: a reusable
-row buffer in `FramePayload.row` (#70's module) is 31.7 µs a row against 40.8 µs on a 628-entry
-median row, some 35 ms over 3,854 leads; G = 8, which #65 measured a little faster than G = 16; and
+row buffer in `FramePayload.row` (opengwas/ogld#70's module) is 31.7 µs a row against 40.8 µs on a 628-entry
+median row, some 35 ms over 3,854 leads; G = 8, which opengwas/ogld#65 measured a little faster than G = 16; and
 more than four workers, which regresses here as it did there.
 
 ### 8.3 `proxies`
@@ -455,12 +455,12 @@ read a Near Band column.
 ### 8.4 What the proposal deletes
 
 Once D1 and D2 are taken, `clump` and `proxies` never touch `near/` or `index/`. These go, and
-went in #72:
+went in opengwas/ogld#72:
 
 - the Proxy Index (`index/<c>/`), its writer, and its six validation rules, with `far.index`;
 - `StoreReader.clump_warmer`, and `partners` reading the Near Band row and column, with `among`;
 - clump's use of the Near Band chunk cache, single-flight and admission. The machinery from
-  #46/#50/#51 stays only for `matrix` and `region`, which read the Near Band whole-row and
+  opengwas/ogld#46/#50/#51 stays only for `matrix` and `region`, which read the Near Band whole-row and
   contiguously.
 
 ## 9. Parallelisation
@@ -477,32 +477,32 @@ whole sets of components. The options, from simplest:
 
 | | option | what it hides | its cost | use when |
 |---|---|---|---|---|
-| A | **serial**: components one after another, one thread | nothing | none | built and measured first (#71); one worker, when the reader's pool is set to it |
-| B | **component tasks on a bounded thread pool**, capped at 4 for #71 | cold-read latency (local cold, HTTP); zstd decode and `pread` release the GIL | per-lead Python work holds the GIL, so B scales I/O, not CPU; above four tasks the work regresses | cold or remote stores, large Analyses |
+| A | **serial**: components one after another, one thread | nothing | none | built and measured first (opengwas/ogld#71); one worker, when the reader's pool is set to it |
+| B | **component tasks on a bounded thread pool**, capped at 4 for opengwas/ogld#71 | cold-read latency (local cold, HTTP); zstd decode and `pread` release the GIL | per-lead Python work holds the GIL, so B scales I/O, not CPU; above four tasks the work regresses | cold or remote stores, large Analyses |
 | C | **component tasks on a process pool**; workers open the store once, mmap shared | CPU-bound greedy beyond one core | worker start-up, pickling of hit arrays (small) | only if A and B leave the greedy CPU-bound on large Analyses |
 | D | **Analyses in parallel**, each serial, sharing one reader's frame cache | many concurrent users | the frame cache needs a lock | a service handling many requests |
-| E | **read-ahead within a component**: also fetch the frames of the next K open hits in score order | latency on HTTP | reads for hits a stronger lead then takes; #41 measured 66% wasted at depth 8 | HTTP stores only, with the waste counted |
+| E | **read-ahead within a component**: also fetch the frames of the next K open hits in score order | latency on HTTP | reads for hits a stronger lead then takes; opengwas/ogld#41 measured 66% wasted at depth 8 | HTTP stores only, with the waste counted |
 
 **Recommendation.** A was built and measured first, then B, whose pool **is the reader's own and
-capped at four component workers** for #71 (fixed on #65's evidence; §1). There is no caller-facing
-setting: `ogld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
+capped at four component workers** for opengwas/ogld#71 (fixed on opengwas/ogld#65's evidence; §1). There is no caller-facing
+setting: `opengwasdb.ld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
 it, and a test reaches it through a private seam. Four was where G = 8 and G = 16 were fastest,
 1.051 and 1.067 s cold; at eight, cold LD regresses to 5.753 s (G = 8), 5.109 s (G = 16) and
-1.913 s (G = 4), because the per-lead Python work holds the GIL. #71 measured the same answer at 1,
+1.913 s (G = 4), because the per-lead Python work holds the GIL. opengwas/ogld#71 measured the same answer at 1,
 2 and 8 requested workers, one Partner Rows row per lead, and a damaged frame failing the whole
 request. Reach for C only on evidence.
 
 **What will bound latency next.** On GCST90476460 today, ALID resolution (`rows_of`) takes
 2.0–3.2 s, and store open, score and loci 3.4 s together. Those seconds become most of a
-sub-second clump's time. They are out of scope here. They are #50's mmap lookup question, raised
-as its own issue, and **#81** carries the follow-up the owner opened when they accepted #71
+sub-second clump's time. They are out of scope here. They are opengwas/ogld#50's mmap lookup question, raised
+as its own issue, and **opengwas/ogld#81** carries the follow-up the owner opened when they accepted opengwas/ogld#71
 without the < 1 s target.
 
 ## 10. Validation
 
-These rules replaced the six `index.*` rules and `far.index` in `ld-store.md` §12, which #68 added
-beside them and #72 removed, leaving the ten below. Each reads frames in bounded blocks, never a whole chromosome. Each
-has a breaker in `tests/contract/test_store.py`.
+These rules replaced the six `index.*` rules and `far.index` in `ld-store.md` §12, which opengwas/ogld#68 added
+beside them and opengwas/ogld#72 removed, leaving the ten below. Each reads frames in bounded blocks, never a whole chromosome. Each
+has a breaker in `tests/ld/contract/test_store.py`.
 
 | rule | checks |
 |---|---|
@@ -522,7 +522,7 @@ has a breaker in `tests/contract/test_store.py`.
 
 ## 11. Size
 
-**Measured on the published HGDP+1kGP EUR k = 10 store, 18 November 2026** (#65), genome-wide at
+**Measured on the published HGDP+1kGP EUR k = 10 store, 18 November 2026** (opengwas/ogld#65), genome-wide at
 the Partner Floor and the Far Pairs in both directions. Bytes are the `frames` and
 `frames_idx` arrays with the group's attributes, in decimal units; the net column subtracts EUR's
 Proxy Index, 9,381,954,206 bytes.
@@ -541,9 +541,9 @@ Proxy Index, 9,381,954,206 bytes.
 - **The genome keeps 7.268% of Near Band pairs at the Partner Floor, against chr22's 5.027%:**
   6,077,753,140 near pairs plus 132,924,736 Far Pairs, 12,421,355,752 directed entries. A
   projection from chr22 alone therefore understated EUR by 39%.
-- **The other four panels are measured by #73**, when it derives them. The owner's scaling of this
+- **The other four panels are measured by opengwas/ogld#73**, when it derives them. The owner's scaling of this
   measurement puts the five panels at roughly **+53 GB net at G = 64**, against the projection's
-  +33 GB (+6%); #73 returns to the owner before dropping an index whose panel exceeds its
+  +33 GB (+6%); opengwas/ogld#73 returns to the owner before dropping an index whose panel exceeds its
   projection by more than 25%.
 - **AMR is the panel to watch.** At n = 341, 7.2% of unlinked pairs pass r² 0.01 by chance, so
   about 44% of AMR's Partner Rows would be sampling noise at that floor, and chr22 keeps 16.3% of
@@ -578,22 +578,22 @@ subdividing the G = 16 frames) and
   its t_far, for a panel whose chance LD is a larger share of its rows.
 - **Plain files for the frames** (against the refined D4): a directory of plain files serves a
   reader, but it makes zarr's `members()` warn that `partners` is not a component of the
-  hierarchy, as #65 measured (ADR 0011). One chunk per array keeps the frame read one read; a
+  hierarchy, as opengwas/ogld#65 measured (ADR 0097). One chunk per array keeps the frame read one read; a
   Zarr array sharded with a chunk per frame would resolve a shard index first, which is two reads
   rather than one. So the two arrays are Zarr's, with one chunk each.
 - **Fold into 0.1.0** (against D5): no version bump, but a 0.1.0 reader could not tell a store
   with Partner Rows from one without.
-- **Dense symmetric rows** (#41, #50; epic #45's rejected arm): fast, but about 181 GB for the
+- **Dense symmetric rows** (opengwas/ogld#41, opengwas/ogld#50; epic opengwas/ogld#45's rejected arm): fast, but about 181 GB for the
   79.3 GB EUR store. The Partner Rows are the same idea, thresholded: 11.8–14.8 GB for EUR,
   measured.
-- **Framed triangle rows** (#45's other rejected arm): a lead's upstream partners still fan out
+- **Framed triangle rows** (opengwas/ogld#45's other rejected arm): a lead's upstream partners still fan out
   across thousands of earlier rows. Symmetric rows have no upstream fan-out.
 
 ## 13. Plan
 
 Epic [#64](https://github.com/opengwas/ogld/issues/64) carries this design's plan and acceptance
-criteria: #67 writes the rows from `StoreWriter`, #69 derives them for the existing stores, #70
-reads them, #71 moves `clump` and `proxies` onto them, #68 validates them, #72 removes the Proxy
+criteria: opengwas/ogld#67 writes the rows from `StoreWriter`, opengwas/ogld#69 derives them for the existing stores, opengwas/ogld#70
+reads them, opengwas/ogld#71 moves `clump` and `proxies` onto them, opengwas/ogld#68 validates them, opengwas/ogld#72 removes the Proxy
 Index (done: the component, its writer, its arrays, its six rules and `far.index` are gone, and
-`clump`'s Near Band reads with them), and #73 rolls them out to the five HGDP+1kGP stores. This document specifies the format those
+`clump`'s Near Band reads with them), and opengwas/ogld#73 rolls them out to the five HGDP+1kGP stores. This document specifies the format those
 tickets build, and does not restate their acceptance.

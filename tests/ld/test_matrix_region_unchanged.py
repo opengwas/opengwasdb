@@ -1,15 +1,15 @@
-"""`matrix` and `region` answer on the Test Store exactly as they did before #72.
+"""`matrix` and `region` answer on the Test Store exactly as they did before opengwas/ogld#72.
 
 The Proxy Index's removal touched the reader's chromosome-loading path and the arrays a store
 holds, and neither may change a matrix or a region. `FROZEN` holds each answer as a digest of
 every column it carries, recorded by running `fingerprint` against the **integration tip's code**
-(`88b12e7`, before #72) on this same committed Test Store, never against the code this file
-ships with. So a difference here is the removal's, and the digests say nothing about what the new
-code would answer.
+(`88b12e7`, before opengwas/ogld#72) on this same committed Test Store, never against the code this
+file ships with. So a difference here is the removal's, and the digests say nothing about what the
+new code would answer.
 
-The cases are the reads #8's `bench-latency` and the contract make: every variant's matrix, a
-sample, a thin slice of one chromosome; whole-chromosome regions and windows inside them; a
-scattered `pair_r`; `r_of_pairs` on a ladder of one row against many and with its arguments
+The cases are the reads opengwas/ogld#8's `bench-latency` and the contract make: every variant's
+matrix, a sample, a thin slice of one chromosome; whole-chromosome regions and windows inside them;
+a scattered `pair_r`; `r_of_pairs` on a ladder of one row against many and with its arguments
 genuinely reversed; and the far side of both queries: the pairs the store holds as Far Pairs, a
 `region_r` two rows apart by more than `near_bp`, and a public `region` wide enough to reach
 beyond it. `test_the_fixture_reaches_the_far_side` asserts those properties of the cases before

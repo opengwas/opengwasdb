@@ -100,7 +100,7 @@ def test_a_reader_refuses_a_format_version_it_does_not_implement(tmp_path: Path)
 
 
 def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path) -> None:
-    # Spec §13: the bump lands with the writer, so a store published before the Partner Rows is
+    # ld-store §13: the bump lands with the writer, so a store published before the Partner Rows is
     # still read, from its Near Band, its Proxy Index and its Far Pairs.
     def earlier(p: dict[str, Any]) -> None:
         p["format_version"] = "0.1.0"
@@ -114,7 +114,8 @@ def test_a_0_1_0_store_is_read_as_it_was_before_the_partner_rows(tmp_path: Path)
 
 
 def test_the_test_store_reads_the_same_over_http(served_store: str) -> None:
-    # Spec §1: a local path or an HTTP(S) URL. A static Range-serving server, as #9 may use.
+    # ld-store §1: a local path or an HTTP(S) URL. A static Range-serving server, as opengwas/ogld#9
+    # may use.
     remote = opengwasdb.ld.open(served_store)
     assert remote.provenance == opened().provenance
     some = alids(passing_rows()[:40])
@@ -135,7 +136,7 @@ def test_every_array_decodes_as_zarr_over_http(served_store: str) -> None:
         np.testing.assert_array_equal(cache.take(served, np.arange(array.shape[0])), array[:])
 
 
-# ------------------------------------------------------------------ pair answers (spec §8)
+# ------------------------------------------------------------------ pair answers (ld-store §8)
 
 
 def test_a_pair_exactly_3_mb_apart_is_the_near_band_s_exact_r() -> None:
@@ -326,7 +327,7 @@ def test_the_writer_refuses_a_location_that_exists(tmp_path: Path) -> None:
     assert sorted(p.relative_to(copy) for p in copy.rglob("*")) == before
 
 
-# ------------------------------------------------------------------ validation (spec §12)
+# ------------------------------------------------------------------ validation (ld-store §12)
 
 
 @cache
@@ -850,7 +851,7 @@ def a_temporary_group_a_crash_left(store: Path) -> None:
 
 def bytes_appended_to_the_frames_file(store: Path) -> None:
     """Twenty-six bytes appended to chr22's frames chunk file: the metadata and both hashes still
-    name the frames a writer wrote, and the file holds more than them (spec §5.3)."""
+    name the frames a writer wrote, and the file holds more than them (partner-rows §5.3)."""
     group = zarr.open_group(store / "partners" / "22", mode="r")
     file = layout.chunk_file(group["frames"])
     with file.open("ab") as stream:
@@ -967,7 +968,7 @@ def test_a_store_that_breaks_a_rule_fails_that_rule(rule: str, tmp_path: Path) -
 def test_an_index_rule_s_breaker_fails_only_that_rule(rule: str, tmp_path: Path) -> None:
     # The four index rules judge one array each, so a store built to break one must not be
     # refused for another: a reader trusts what they agree on (ogld#42's fix round 1). A rule whose
-    # array the breaker shortened says it cannot be checked, which spec §12 requires of it, and
+    # array the breaker shortened says it cannot be checked, which ld-store §12 requires of it, and
     # that is not a judgement against the store.
     copy = tmp_path / "store"
     shutil.copytree(support.TEST_STORE, copy)
@@ -1031,7 +1032,7 @@ def as_import(k_target: int | None) -> Callable[[dict[str, Any]], None]:
     return edit
 
 
-#: Spec §7 and §12: `k_min` applies only when a PC File was read, and an import has no
+#: ld-store §7 and §12: `k_min` applies only when a PC File was read, and an import has no
 #: `k_target`. Each pair differs in that one field, so the passing one is the control.
 K_RECORDS: dict[str, tuple[Callable[[dict[str, Any]], None], bool]] = {
     "unadjusted, k_min null": (as_unadjusted(None), True),

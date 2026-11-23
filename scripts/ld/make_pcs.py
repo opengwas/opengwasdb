@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute each Source Panel's PC File from the phased HGDP+1kGP v2 genotypes (ADR 0002).
+"""Compute each Source Panel's PC File from the phased HGDP+1kGP v2 genotypes (ADR 0088).
 
 The owner decided (7 November 2026, epic opengwas/ogld#1) that ogld's HGDP+1kGP builds use PCs
 computed by this one recipe for all five panels, not gnomAD's subcontinental PCs, and that ogld
@@ -33,7 +33,7 @@ made it (a checkout that is not that commit's code is refused, `test_panel.check
 Files hold one row per sample, so they are individual-level and never committed. `--scan-only`
 adds the scan to PC Files that already exist, naming its commit as `pc_check_commit`.
 
-    pixi run -e dev python scripts/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
+    pixi run -e dev python scripts/ld/make_pcs.py --work <scratch> --panel EUR=<keep> [...]
 """
 
 from __future__ import annotations

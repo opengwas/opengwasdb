@@ -1,4 +1,5 @@
-"""The pair masks have one owner, and the builder, emitter and Genotype reader call it (#91)."""
+"""The pair masks have one owner, and the builder, emitter and Genotype reader call it
+(opengwas/ogld#91)."""
 
 from __future__ import annotations
 

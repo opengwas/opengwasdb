@@ -1,16 +1,16 @@
 """What the contract tests share: the Test Panel's paths, the Test Store, and the Test Panel
 read as ALIDs and as reference matrices.
 
-The contract tests are epic #1's tickets written as tests before the tickets started, one module
-a ticket. Every ticket has landed, so each test now holds its ticket's behaviour as an ordinary
-test, with no mark, and none may change a public signature (tests/test_surface.py).
+The contract tests are epic opengwas/ogld#1's tickets written as tests before the tickets started,
+one module a ticket. Every ticket has landed, so each test now holds its ticket's behaviour as an
+ordinary test, with no mark, and none may change a public signature (tests/ld/test_surface.py).
 
 Every test calls the ogld function it is about before it reads the Test Panel through lane
-2d's loader, `tests/testdata.py`. A build is given the Test Panel's paths, `PANEL`, which
+2d's loader, `tests/ld/testdata.py`. A build is given the Test Panel's paths, `PANEL`, which
 need no loader; `check_panel_paths` holds them to the loader's once the call has returned.
 So a failing call surfaces as itself, never as a missing loader or file.
 The Test Store is written from `reference_r(10)` by the walking skeleton's script into
-`tests/data/test-panel/store/`; no test writes there.
+`tests/ld/data/test-panel/store/`; no test writes there.
 
 The expected-value helpers are vectorised and cached, so the default tier stays within its
 2 s per test (CONTRIBUTING.md, "Tests").
@@ -92,7 +92,7 @@ def oriented() -> tuple[npt.NDArray[np.str_], npt.NDArray[np.float64]]:
     """Each Test Panel row's ALID, and +1 where A1 is its ALT allele, −1 where it is REF.
 
     The Test Panel's reference r is the correlation of ALT dosages, so a stored r, signed to
-    A1, is the reference r times both rows' signs (spec §3).
+    A1, is the reference r times both rows' signs (ld-store §3).
     """
     v = panel_data().variants()
     rows = zip(v.chrom, v.pos, v.ref, v.alt, strict=True)

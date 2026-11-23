@@ -1,5 +1,5 @@
-"""What the Partner Rows tests read the Test Store with: the pairs it holds, from spec §4's address
-rule written out here, and its Partner Rows decoded frame by frame."""
+"""What the Partner Rows tests read the Test Store with: the pairs it holds, from ld-store §4's
+address rule written out here, and its Partner Rows decoded frame by frame."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def chromosomes(group: zarr.Group) -> dict[str, tuple[int, int]]:
 
 
 def near_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Near Band pair of one chromosome, from spec §4's address rule written out here:
+    """Every Near Band pair of one chromosome, from ld-store §4's address rule written out here:
     r(l, m) is at `r[indptr[l] + (m − l − 1)]`, so a code's address gives its pair."""
     held = group["near"][chrom]
     indptr = np.asarray(held["indptr"][:], dtype=np.int64)
@@ -52,10 +52,13 @@ def decoded_frames(held: zarr.Group, chrom: str) -> Iterator[tuple[int, frames.F
     raw = np.asarray(held["frames"][:], dtype=np.uint8).tobytes()
     for number in range(len(offsets) - 1):
         first = number * per_frame
-        yield first, frames.decode_frame(
-            raw[offsets[number] : offsets[number + 1]],
-            chrom=chrom,
-            number=number,
-            first=first,
-            rows=min(per_frame, rows - first),
+        yield (
+            first,
+            frames.decode_frame(
+                raw[offsets[number] : offsets[number + 1]],
+                chrom=chrom,
+                number=number,
+                first=first,
+                rows=min(per_frame, rows - first),
+            ),
         )

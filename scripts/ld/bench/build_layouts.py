@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """Build HGDP+1kGP EUR chr22 as the published store was built, in each Near Band layout (ogld#8).
 
-Spec §6 named three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
+ld-store §6 named three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). They differ only in that array;
 every other array keeps its one shape. ogld#8 timed the reads on each, and the owner chose C
-(12 November 2026; ADR 0006). So each layout is a real build, by `opengwasdb ld build`, of the
+(12 November 2026; ADR 0092). So each layout is a real build, by `opengwasdb ld build`, of the
 published EUR store's chr22, with `opengwasdb.ld.store.layout.NEAR_R` set for the run, as
-`tests/test_assembly.py`
+`tests/ld/test_assembly.py`
 sets it. The command is the recipe's (`build_hgdp1kgp.build_command`, which owns k, the scale,
 the panel id and the source strings), on its chr22 fileset, keep file and PC File.
 
-    pixi run -e dev python scripts/bench/build_layouts.py [OUT] [--layout A B C] [--threads 8]
+    pixi run -e dev python scripts/ld/bench/build_layouts.py [OUT] [--layout A B C] [--threads 8]
 
-OUT is `$OPENGWASDB_LD_LAYOUTS` unless given (`scripts/test_panel/roots.py`). Each build runs in a
-child process, so its wall time and peak memory are its own, and writes `OUT/chr22-<layout>.store`,
-its provenance as `.json`, and `.time.json` with the wall time, the peak RSS and the node's load
-before and after. `--check` then holds every array of every layout, the variant columns
-included, equal to the first layout's, so a timing compares layouts, not data.
+OUT is `$OPENGWASDB_LD_LAYOUTS` unless given (`scripts/ld/test_panel/roots.py`). Each build runs in
+a child process, so its wall time and peak memory are its own, and writes
+`OUT/chr22-<layout>.store`, its provenance as `.json`, and `.time.json` with the wall time, the peak
+RSS and the node's load before and after. `--check` then holds every array of every layout, the
+variant columns included, equal to the first layout's, so a timing compares layouts, not data.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ if str(SCRIPTS) not in sys.path:
 recipe = importlib.import_module("build_hgdp1kgp")
 roots = importlib.import_module("test_panel.roots")
 
-#: Spec §6's Near Band layouts, as (inner chunk, shard) in codes.
+#: ld-store §6's Near Band layouts, as (inner chunk, shard) in codes.
 LAYOUTS: Final = {
     "A": (4_096, 4_194_304),
     "B": (32_768, 16_777_216),
@@ -133,7 +133,7 @@ def arrays(group: Any, prefix: str = "") -> list[str]:
 def same_data(out: Path, layouts: list[str]) -> None:
     """Every array of every layout decodes to the first layout's values, read in bounded
     windows: the Near Band, the Far Pairs and the Partner Rows, and the variant columns too. No
-    layout this script builds holds a Proxy Index (#72)."""
+    layout this script builds holds a Proxy Index (opengwas/ogld#72)."""
     import numpy as np
     import zarr
 

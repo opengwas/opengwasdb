@@ -1,4 +1,4 @@
-"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0014).
+"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0100).
 
 `GenotypeReader` satisfies `opengwasdb.ld.query.reader.Reader` structurally, as `StoreReader` does:
 it
@@ -137,10 +137,10 @@ class _PgenHandles:
 class GenotypeReader(ComponentWorkers):
     """The query reader interface with computed LD; it composes the variant table and store.
 
-    The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (#94), and the
-    adjustment data and pgen handles are this class's. A pgen handle serves one decoding thread
-    at a time and is kept for the reader's lifetime (pgenlib handles are not shared concurrently);
-    `_PgenHandles` leases it and `close()` closes it.
+    The variant half is `VariantTable`'s, exactly as `StoreReader` composes it (opengwas/ogld#94),
+    and the adjustment data and pgen handles are this class's. A pgen handle serves one decoding
+    thread at a time and is kept for the reader's lifetime (pgenlib handles are not shared
+    concurrently); `_PgenHandles` leases it and `close()` closes it.
     """
 
     _opened: OpenedStore
@@ -207,7 +207,7 @@ class GenotypeReader(ComponentWorkers):
 
     @property
     def provenance(self) -> Provenance:
-        """The root group's `genotype_store` attribute, as recorded (spec §7)."""
+        """The root group's `genotype_store` attribute, as recorded (ld-store §7)."""
         return self._opened.provenance
 
     @property
@@ -243,7 +243,7 @@ class GenotypeReader(ComponentWorkers):
     # ------------------------------------------------------------ the computed LD half
 
     def require_partner_rows(self) -> float:
-        """The Partner Threshold this sidecar recorded (spec §7; partner-rows §3)."""
+        """The Partner Threshold this sidecar recorded (ld-store §7; partner-rows §3)."""
         return float(self.provenance["t_partner"])
 
     def _data(self, rows: npt.NDArray[np.int64]) -> Block:
@@ -262,7 +262,7 @@ class GenotypeReader(ComponentWorkers):
                     calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
         # Completeness was checked by Variant Set selection. Inputs are pinned on open and
         # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
-        # pass without adding integrity beyond that contract (ADR 0014).
+        # pass without adding integrity beyond that contract (ADR 0100).
         return Block(calls, a["projection"][rows], a["norm"][rows], a["sign"][rows])
 
     def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
@@ -279,7 +279,7 @@ class GenotypeReader(ComponentWorkers):
 
         bounds = [(lo, min(lo + _READ_ROWS, len(rows))) for lo in range(0, len(rows), _READ_ROWS)]
         # Native pgen decoding releases the GIL. Four disjoint output slices avoid both the
-        # serial 95 ms dosage decode and a concatenation-sized copy measured in #91.
+        # serial 95 ms dosage decode and a concatenation-sized copy measured in opengwas/ogld#91.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="ogld_pgen") as pool:
             list(pool.map(read, bounds))
         return calls
@@ -334,7 +334,8 @@ class GenotypeReader(ComponentWorkers):
             last = min(first + 128, len(rows))
             raw = r(block[first:last], block[first:])
             # Small stripes keep quantisation's temporary arrays in cache. Compute each
-            # off-diagonal tile only once, then mirror its codes like the LD Store (#91).
+            # off-diagonal tile only once, then mirror its codes like the LD Store
+            # (opengwas/ogld#91).
             for lo in range(first, last, 16):
                 hi = min(lo + 16, last)
                 out[lo:hi, first:] = self._values(
@@ -391,7 +392,7 @@ class GenotypeReader(ComponentWorkers):
 
         The window comes from the store, so the lead is in it; a store whose positions and rows
         disagree must fail here, naming the ALID, rather than read the neighbouring variant's
-        row as the lead's (spec §2).
+        row as the lead's (ld-store §2).
         """
         lo, hi = position_rows(rows, lead, lead)
         if int(hi) - int(lo) != 1:

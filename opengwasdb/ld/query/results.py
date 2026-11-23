@@ -1,4 +1,4 @@
-"""What a query returns: an LD matrix, a proxies table, a clumping (spec §8, §9).
+"""What a query returns: an LD matrix, a proxies table, a clumping (ld-store §8, §9).
 
 Each is a frozen dataclass of numpy arrays plus the store facts that make it
 self-describing: t_far and the distances the store measured. So a result read on its own
@@ -20,7 +20,7 @@ from opengwasdb.variants.normalise import chromosome_rank
 
 @dataclass(frozen=True)
 class LDMatrix:
-    """One signed-r matrix over `variants`, rows and columns in the same order (spec §8).
+    """One signed-r matrix over `variants`, rows and columns in the same order (ld-store §8).
 
     `r[i, j]` is the Stored r of variants i and j, signed to each one's A1, with 1 on the
     diagonal. A pair the store does not hold is NaN, unless the caller passed `fill`, in
@@ -42,7 +42,7 @@ class LDMatrix:
             raise ValueError(f"r is {self.r.shape}, but there are {len(self.variants)} variants")
 
     def kinds(self) -> npt.NDArray[np.str_]:
-        """The `AnswerKind` value of every cell: stored, bound or not_measured (spec §8).
+        """The `AnswerKind` value of every cell: stored, bound or not_measured (ld-store §8).
 
         Recovered from the variants' chromosomes and positions and t_far, and defined only
         for a matrix made without a fill: a filled cell cannot be told from a stored one,
@@ -65,7 +65,7 @@ class LDMatrix:
 
 @dataclass(frozen=True)
 class Proxies:
-    """Every proxy of each query variant: one row per (query, proxy) pair (spec §9).
+    """Every proxy of each query variant: one row per (query, proxy) pair (ld-store §9).
 
     A proxy is another Variant Set variant within the window with r̂² ≥ `r2_min`; a
     variant is never its own proxy. Rows are grouped by query in request order, then by

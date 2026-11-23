@@ -501,7 +501,8 @@ def malformed(tmp_path: Path, what: str) -> tuple[opengwasdb.ld.BuildInputs, str
     ],
 )
 def test_a_malformed_input_is_refused_naming_the_file(tmp_path: Path, what: str) -> None:
-    # Review of #5 (standards a2): each was a traceback, an IndexError or a RuntimeError.
+    # Review of opengwas/ogld#5 (standards a2): each was a traceback, an IndexError or a
+    # RuntimeError.
     given, names = malformed(tmp_path, what)
     with pytest.raises(opengwasdb.ld.InputError, match=names):
         opengwasdb.ld.build(given, tmp_path / "store")
@@ -509,9 +510,9 @@ def test_a_malformed_input_is_refused_naming_the_file(tmp_path: Path, what: str)
 
 
 def test_a_psam_missing_one_sample_is_refused(tmp_path: Path) -> None:
-    # Review of #5 (standards a1): with row 100 of 771 gone from the psam, every later IID names
-    # the genotypes of the sample after it. The keep file lists the 770 the psam still has, so
-    # only the psam's count can tell: it must equal the pgen's.
+    # Review of opengwas/ogld#5 (standards a1): with row 100 of 771 gone from the psam, every later
+    # IID names the genotypes of the sample after it. The keep file lists the 770 the psam still
+    # has, so only the psam's count can tell: it must equal the pgen's.
     pgen = fx.write_fileset(tmp_path / "short", chr22())
     psam = pgen.with_suffix(".psam")
     lines = psam.read_text().splitlines()

@@ -1,23 +1,23 @@
 """ogld#6's realdata contract: clumping on a real store equals plink2 on #403's Analyses, on chr22.
 
-Epic #1's acceptance is the whole panel: the same lead variants as `plink2 --clump` for
+Epic opengwas/ogld#1's acceptance is the whole panel: the same lead variants as `plink2 --clump` for
 opengwas/opengwasdb#403's 37 EUR Analyses, the 5e-8 tier of each, at r² 0.01 and 0.001 with a
 3 Mb window. That comparison reads 8.6 M variants and takes 25 minutes even on the fastest read
 path, so it is an acceptance run outside this tier (`pixi run -e dev acceptance-clump`,
 CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
 
 - build chr22:20–32 Mb of the v2 EUR panel at k = 0 and × 511, the encoding of every HGDP+1kGP
-  store (ADR 0004), on the 665 unrelated samples (`test_build_panel.v2_slice`, once);
+  store (ADR 0090), on the 665 unrelated samples (`test_build_panel.v2_slice`, once);
 - clump each of the 37 Analyses' hits on it that the store holds, at r² 0.01 — the build's
-  Partner Threshold, below which a 0.2.0 store refuses within 3 Mb (#71) — and run
+  Partner Threshold, below which a 0.2.0 store refuses within 3 Mb (opengwas/ogld#71) — and run
   `plink2 --clump` on the same hits and the same genotypes;
-- where the leads differ, `scripts/realdata/clump_rule.py` finds every pair the store and plink2
+- where the leads differ, `scripts/ld/realdata/clump_rule.py` finds every pair the store and plink2
   judge on opposite sides of r2 (plink2's unphased r² against the store's r̂²), requires each to
   lie within the encoding's band, |r̂² − r2| ≤ 2|r̂|·e + e², and replays the greedy: on the
   store's joins it must give our leads, and with exactly those pairs flipped, plink2's.
 
 The input `OPENGWASDB_LD_403_ANALYSES` holds one directory per Analysis with `hits.all.tsv` (ALID,
-z, chromosome, position; the 5e-8 tier), which `scripts/realdata/make_403_inputs.py` makes.
+z, chromosome, position; the 5e-8 tier), which `scripts/ld/realdata/make_403_inputs.py` makes.
 """
 
 from __future__ import annotations
@@ -100,7 +100,8 @@ def explained(
 
 
 #: A 0.2.0 store answers r² 0.01, its Partner Threshold, and refuses 0.001 within 3 Mb (§9,
-#: #71): the tier compares at 0.01 only, and the refusal is the contract tests' to hold.
+#: opengwas/ogld#71): the tier compares at 0.01 only, and the refusal is the contract tests' to
+#: hold.
 @pytest.mark.parametrize("r2", [0.01])
 def test_leads_equal_plink2_s_on_403_s_37_analyses_on_chr22(
     r2: float, chr22: tuple[opengwasdb.ld.LDStore, Path], tmp_path: Path

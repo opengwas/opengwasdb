@@ -1,5 +1,5 @@
-"""`scripts/test_panel/checkout.py`: the one guard the realdata tier and `scripts/make_pcs.py` use
-before they record what ran (review round 2 of ogld#5). On a throwaway git repository."""
+"""`scripts/ld/test_panel/checkout.py`: the one guard the realdata tier and `scripts/ld/make_pcs.py`
+use before they record what ran (review round 2 of ogld#5). On a throwaway git repository."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def git(root: Path, *args: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> tuple[Path, str]:
-    """A repository with ogld/, scripts/ and docs/, one commit; the version naming it."""
+    """A repository with opengwasdb/ld/, scripts/ and docs/, one commit; the version naming it."""
     for name in ("opengwasdb/ld/__init__.py", "scripts/make.py", "docs/notes.md"):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text("x = 1\n")

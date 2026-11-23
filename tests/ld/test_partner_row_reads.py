@@ -6,9 +6,9 @@ the Partner Floor, every Far Pair beyond it, and each kept pair in both variants
 `partner_row` reads none of that — it reads one frame's byte range from `partners/<chrom>/frames` —
 so a second layout of the same codes is held to the codes, not to itself.
 
-The damage cases rewrite a copy of the committed Test Store, whose frames are #67's; nothing here
-writes into `tests/data/`. Each is held on both transport paths — a local directory and the same
-directory over HTTP — because §7 gives them one read.
+The damage cases rewrite a copy of the committed Test Store, whose frames are opengwas/ogld#67's;
+nothing here writes into `tests/ld/data/`. Each is held on both transport paths — a local directory
+and the same directory over HTTP — because §7 gives them one read.
 """
 
 from __future__ import annotations
@@ -38,9 +38,9 @@ from opengwasdb.ld.format import InputError
 from opengwasdb.ld.store import frames, location
 from opengwasdb.ld.store.reader import StoreReader
 
-#: The Test Store's distances (spec §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
-#: the one independent owner of its encoding (ownership.md, "Test oracles"), so the reconstruction
-#: below still depends on nothing in `frames.py`.
+#: The Test Store's distances (ld-store §7). Its scale and Partner Floor are
+#: `tests/ld/store_copies.py`'s, the one independent owner of its encoding (ownership.md, "Test
+#: oracles"), so the reconstruction below still depends on nothing in `frames.py`.
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000
 CHROMOSOMES = ("21", "22")
 #: The frames the Test Store's chr22 has, and the one the damage cases damage.
@@ -50,6 +50,7 @@ DAMAGED_FRAME = 5
 
 #: zstd at a frame's own level, with the content checksum its header carries (§5.2).
 _ZSTD = numcodecs.Zstd(level=frames.ZSTD_LEVEL, checksum=True)
+
 
 @cache
 def expected(chrom: str) -> Pairs:
@@ -758,7 +759,7 @@ def test_a_row_outside_its_chromosome_is_refused() -> None:
         reader.partner_row("23", 0)
 
 
-#: The provenance a 0.2.0 store adds for the Partner Rows (spec §7; partner-rows §5.3): a 0.1.0
+#: The provenance a 0.2.0 store adds for the Partner Rows (ld-store §7; partner-rows §5.3): a 0.1.0
 #: store records none of it, because it holds no Partner Rows.
 PARTNER_KEYS = ("t_partner", "partner_code_floor")
 

@@ -1,4 +1,4 @@
-"""The Test Panel loader: the one way every test reads `tests/data/test-panel/` (ADR 0002).
+"""The Test Panel loader: the one way every test reads `tests/ld/data/test-panel/` (ADR 0088).
 
 The Test Panel is a real slice of HGDP+1kGP EUR (`CONTEXT.md`); its README says what is in it,
 where each edge case is, and how it was made. A test reads it through these functions, never by

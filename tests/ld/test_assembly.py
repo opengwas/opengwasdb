@@ -1,10 +1,10 @@
 """The store assembly behind `StoreWriter` (ogld#17): a producer supplies r; the store, the rest.
 
 Every expected array here is brute force over pairs, written in this file: for each pair (l, m)
-of one chromosome, its code by spec §3's formula (`store_copies.codes_at`, not ogld's), kept in
+of one chromosome, its code by ld-store §3's formula (`store_copies.codes_at`, not ogld's), kept in
 the Near Band when the two lie within near_bp and in the Proxy Index, both ways, when they lie
-within far_bp and |code| reaches the far code floor, spec §3's literal for n = 771 at × 511, and in
-the Far Pairs, once, in the earlier row, when such a pair also lies beyond near_bp. The
+within far_bp and |code| reaches the far code floor, ld-store §3's literal for n = 771 at × 511, and
+in the Far Pairs, once, in the earlier row, when such a pair also lies beyond near_bp. The
 variants are the Test Store's, real positions on chr21 and chr22; r is a structured synthetic
 correlation matrix, so far more pairs reach the floor than in the Test Panel's own.
 """
@@ -43,7 +43,7 @@ from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, fr
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 N_SAMPLES, K = 771, 10
-#: t_far for the Test Store's n and k, spec §3: q / (n − k − 1) with q = 20.84.
+#: t_far for the Test Store's n and k, ld-store §3: q / (n − k − 1) with q = 20.84.
 T_FAR = 20.84 / (N_SAMPLES - K - 1)
 
 
@@ -101,7 +101,7 @@ class Expected:
 def expected(chrom: str) -> Expected:
     """One chromosome's arrays, row by row: each later variant's gap and code, from positions.
     The index is every kept pair in both its rows, sorted by (row, partner), which no store this
-    code writes holds and the migration test writes it into a store built before ADR 0007; the
+    code writes holds and the migration test writes it into a store built before ADR 0093; the
     Far Pairs are the kept pairs beyond near_bp, in the earlier row, row after row; the Partner
     Rows are every pair at its distance's floor (PARTNER_FLOOR within near_bp, FLOOR beyond it),
     both ways."""
@@ -198,7 +198,7 @@ def decoded_partners(
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     """One chromosome's Partner Rows, decoded frame by frame: every row's entry offsets, its
     partners and its codes, row after row. The group's own frames, checked against the frames
-    they must be, which is what a reader (#70) and validation (#68) do."""
+    they must be, which is what a reader (opengwas/ogld#70) and validation (opengwas/ogld#68) do."""
     held = root[f"partners/{chrom}"]
     rows, per_frame = int(held.attrs["rows"]), int(held.attrs["rows_per_frame"])
     offsets = np.asarray(held["frames_idx"][:], dtype=np.int64)
@@ -294,7 +294,7 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
 def test_a_sparse_array_under_one_shard_is_clipped_and_one_over_it_is_whole_shards(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Spec §6: an array shorter than its shard has one shard, clipped to the inner chunks that
+    # ld-store §6: an array shorter than its shard has one shard, clipped to the inner chunks that
     # cover it; a longer one has whole shards. A sparse component's length is known only at its
     # end.
     entries = {chrom: len(expected(chrom).far_partner) for chrom in chromosomes()}
@@ -312,8 +312,8 @@ def test_a_sparse_array_under_one_shard_is_clipped_and_one_over_it_is_whole_shar
 def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Lane #4's design: zarr rewrites a shard without reading it back only when a write covers
-    # it whole, so the band and the Far Pairs are written a whole shard at a time, the rest
+    # Lane opengwas/ogld#4's design: zarr rewrites a shard without reading it back only when a write
+    # covers it whole, so the band and the Far Pairs are written a whole shard at a time, the rest
     # carried.
     monkeypatch.setattr(layout, "NEAR_R", (1_024, 4_096))
     monkeypatch.setattr(layout, "SIDE", (1_024, 4_096))
@@ -390,11 +390,11 @@ def test_the_writer_holds_a_window_of_the_chromosome_not_the_chromosome(
 
 
 def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path) -> None:
-    # A store written before ADR 0007 gains its Far Pairs from its own index (ogld#31). No store
-    # this code writes holds one (#72), so the test writes the index brute force into the store,
-    # as the old one held it. chr22 holds a kept pair exactly near_bp apart: in the index, and
-    # not a Far Pair. So deriving at any other edge than the one the store writes by fails here
-    # (review of #31).
+    # A store written before ADR 0093 gains its Far Pairs from its own index (ogld#31). No store
+    # this code writes holds one (opengwas/ogld#72), so the test writes the index brute force into
+    # the store, as the old one held it. chr22 holds a kept pair exactly near_bp apart: in the
+    # index, and not a Far Pair. So deriving at any other edge than the one the store writes by
+    # fails here (review of opengwas/ogld#31).
     writer = create(tmp_path / "s")
     write_all(writer, 100_000)
     writer.finish(sourced())
@@ -427,9 +427,9 @@ def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path
 
 
 def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path: Path) -> None:
-    # Review of #17 (asked): chr1's three variants are 4 and 4.5 Mb apart, so no pair is within
-    # near_bp and its band is empty; two of its three pairs reach the floor. chr2 holds one
-    # variant, so no pair at all. The store writes both and passes every rule.
+    # Review of opengwas/ogld#17 (asked): chr1's three variants are 4 and 4.5 Mb apart, so no pair
+    # is within near_bp and its band is empty; two of its three pairs reach the floor. chr2 holds
+    # one variant, so no pair at all. The store writes both and passes every rule.
     position = np.array([1_000_000, 5_000_000, 9_500_000, 2_000_000], dtype=np.int64)
     chrom = ["1", "1", "1", "2"]
     table = store_copies.snv_variants(chrom, position)
@@ -470,7 +470,7 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
 
 
 def test_create_refuses_a_store_with_no_partner_threshold(tmp_path: Path) -> None:
-    # A build input with no default (ADR 0011, D3): a store cannot be started without one, and
+    # A build input with no default (ADR 0097, D3): a store cannot be started without one, and
     # nothing is written before the refusal.
     with pytest.raises(TypeError, match="t_partner"):
         StoreWriter.create(
@@ -551,7 +551,8 @@ def test_a_writer_whose_chromosome_failed_never_finishes(
 ) -> None:
     # A frame that will not compress is a chromosome that is not whole: the writer is poisoned, so
     # `finish` refuses naming the failure instead of publishing 0.2.0 provenance over a component
-    # the store does not have (issue #67's acceptance: a truncated component never looks complete).
+    # the store does not have (issue opengwas/ogld#67's acceptance: a truncated component never
+    # looks complete).
     def failing(*args: Any, **kwargs: Any) -> bytes:
         raise RuntimeError("the compressor died")
 
@@ -607,7 +608,8 @@ def test_a_partner_rows_stream_closed_with_rows_not_written_is_refused(tmp_path:
 
 def test_partner_rows_refuse_a_code_no_store_holds(tmp_path: Path) -> None:
     # A code of −32768 is what a chunk the store lost reads as: compared against the Partner
-    # Floor it would quietly drop its pair, so the emitter refuses it (spec §3, partner-rows §6.1).
+    # Floor it would quietly drop its pair, so the emitter refuses it (ld-store §3, partner-rows
+    # §6.1).
     stream = assembly.PartnerRowsStream(
         zarr.open_group(tmp_path / "g", mode="w"),
         "1",
@@ -798,7 +800,7 @@ def test_finish_adds_what_the_store_derives_to_what_the_producer_knows(tmp_path:
     }
     assert {key: written[key] for key in given} == given
     top = list(dict.fromkeys(key.split(".")[0] for key in REQUIRED_KEYS))
-    assert list(written) == top, "spec §7's order"
+    assert list(written) == top, "ld-store §7's order"
     stored = StoreReader.open(tmp_path / "s").provenance
     assert stored == written
 

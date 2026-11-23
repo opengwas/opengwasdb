@@ -1,4 +1,4 @@
-"""The record of the chromosome ranges in `variants.attrs` (spec §2): its keys are layout's."""
+"""The record of the chromosome ranges in `variants.attrs` (ld-store §2): its keys are layout's."""
 
 from __future__ import annotations
 

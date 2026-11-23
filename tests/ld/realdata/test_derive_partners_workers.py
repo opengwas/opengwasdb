@@ -4,12 +4,12 @@ The bytes a derivation writes must not depend on how many workers made them, and
 setting is the one worth holding: eight spawn workers, each an interpreter that imports ogld and
 opens the store itself. That costs about a second of start-up a worker, which the default tier's
 30 s cannot pay for, so it is held here — the tier `CONTRIBUTING.md` gives a suite that is too
-slow for it (`realdata`, which `pixi run -e dev test-realdata` runs and `tests/realdata/run.sh`
+slow for it (`realdata`, which `pixi run -e dev test-realdata` runs and `tests/ld/realdata/run.sh`
 names). The narrower settings, one worker and two, stay in the default tier with the rest of the
 derivation's tests.
 
 Nothing here reads the panels: the store is the committed Test Store, put back to 0.1.0 by
-`tests/store_copies.py`, and the bytes compared are the ones its writer built.
+`tests/ld/store_copies.py`, and the bytes compared are the ones its writer built.
 """
 
 from __future__ import annotations

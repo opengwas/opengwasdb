@@ -18,7 +18,7 @@ SPEC = Path(__file__).resolve().parents[2] / "docs" / "spec" / "ld-store.md"
 def section(number: int) -> str:
     text = SPEC.read_text(encoding="utf-8")
     match = re.search(rf"^## {number}\. .*?(?=^## {number + 1}\. )", text, re.M | re.S)
-    assert match, f"spec §{number} not found"
+    assert match, f"ld-store §{number} not found"
     return match.group(0)
 
 
@@ -40,13 +40,13 @@ def test_the_validation_rules_are_spec_section_12_s_in_order() -> None:
 
 
 def test_the_far_pairs_have_the_four_rules_section_11_named() -> None:
-    # The Far Pairs are their own component again (ADR 0007): the four far.* rules spec §11
+    # The Far Pairs are their own component again (ADR 0093): the four far.* rules ld-store §11
     # named before the merge. `far.index` held them equal to the Proxy Index's far entries, and
-    # went with the index (#72).
+    # went with the index (opengwas/ogld#72).
     far = [rule for rule in fmt.VALIDATION_RULES if rule.startswith("far.")]
     assert far == ["far.rows", "far.codes", "far.distance", "far.threshold"]
 
 
 def test_no_key_names_pca_settings() -> None:
-    # PCs are supplied, not computed (ADR 0002).
+    # PCs are supplied, not computed (ADR 0088).
     assert not [key for key in fmt.REQUIRED_KEYS if key.startswith("pc_adjustment.")]

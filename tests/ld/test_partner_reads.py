@@ -1,4 +1,5 @@
-"""The reads `clump`, `proxies` and `region` make (spec §10; ogld#14), counted where they happen.
+"""The reads `clump`, `proxies` and `region` make (ld-store §10; ogld#14), counted where they
+happen.
 
 Each test counts at the reader's chunk cache: a `Counting` cache is put on one reader instance,
 so no reader is subclassed and no module global is patched. "Resolved" is the Stored r the
@@ -62,7 +63,7 @@ def counted(where: object) -> tuple[StoreReader, Counting]:
     reader = StoreReader.open(str(where))
     cache = Counting()
     # One cache: the reader and the variant table it composes hold the same `OpenedStore`, so this
-    # one assignment is what both halves read through (#94).
+    # one assignment is what both halves read through (opengwas/ogld#94).
     reader._cache = cache
     return reader, cache
 
@@ -73,7 +74,8 @@ def reference_greedy(
     """plink2's greedy over the Test Store's variants from the reference r, quantised: each
     variant's lead; the pairs the leads need, each lead with every hit still open within W
     on its chromosome; and every partner within far_bp whose code reaches the floor, which is
-    the rows' entries at the far code floor (spec §5). Ties go to the row, the engine's order."""
+    the rows' entries at the far code floor (ld-store §5). Ties go to the row, the engine's
+    order."""
     rows = passing_rows()
     pos = panel_data().variants().pos.astype(np.int64)[rows]
     chrom = np.asarray(panel_data().variants().chrom)[rows]
@@ -135,7 +137,7 @@ def test_clump_reads_one_partner_row_per_lead_and_no_near_band_or_index_element(
     assert offending == [], f"clump read {offending[:5]}"
 
 
-#: The Variant Set's string columns (spec §2).
+#: The Variant Set's string columns (ld-store §2).
 STRING_COLUMNS = ("variants/alid", "variants/a1", "variants/a2")
 
 
@@ -167,7 +169,7 @@ def test_a_region_reads_each_row_as_one_contiguous_slice(centre: int, radius: in
     reader, cache = counted(support.TEST_STORE)
     got = matrices.region(reader, "22", centre, radius, fill=None)
     # Where each of chr22's rows begins in near/22/r, and which are in the region, from the
-    # Test Panel's positions and near_bp alone (spec §4).
+    # Test Panel's positions and near_bp alone (ld-store §4).
     pos = panel_data().variants().pos.astype(np.int64)[passing_rows()]
     chrom = np.asarray(panel_data().variants().chrom)[passing_rows()]
     pos = pos[chrom == "22"]
@@ -190,7 +192,7 @@ def test_a_matrix_query_holds_one_float64_copy_of_its_result(
 ) -> None:
     # The matrix is written in place and filled in place (ogld#14): never a second n × n
     # float64 beside the result. A step of 97 pairs keeps the working memory, which the step
-    # bounds (spec §10), out of the measurement.
+    # bounds (ld-store §10), out of the measurement.
     monkeypatch.setattr(reader_module, "_PAIRS_PER_STEP", 97)
     reader = StoreReader.open(str(support.TEST_STORE))
     rows = passing_rows()[468:]  # chr22, so pair_r's per-chromosome block would be n × n

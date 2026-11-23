@@ -1,7 +1,7 @@
-"""What an LD Store says about a pair, and which requests it answers (spec §8, §9).
+"""What an LD Store says about a pair, and which requests it answers (ld-store §8, §9).
 
 These rules are the format's promise to its readers, so they are pure functions of the
-store's recorded numbers: t_far and the distances it measured (spec §7). The reader
+store's recorded numbers: t_far and the distances it measured (ld-store §7). The reader
 (ogld#4) and the queries (ogld#4, ogld#6) call them; none re-derives a boundary.
 """
 
@@ -18,7 +18,7 @@ from opengwasdb.ld.format.geometry import within
 
 
 class AnswerKind(StrEnum):
-    """The Pair Answer for two Variant Set variants (spec §8, `CONTEXT.md`).
+    """The Pair Answer for two Variant Set variants (ld-store §8, `CONTEXT.md`).
 
     Absent is not here: it is a variant's answer, not a pair's, and a reader reports it
     per variant.
@@ -37,7 +37,7 @@ class AnswerKind(StrEnum):
 def answer_kind(
     *, same_chromosome: bool, distance: int, r_hat: float, t_far: float, near_bp: int, far_bp: int
 ) -> AnswerKind:
-    """The kind of answer a store gives for a pair whose Stored r would be `r_hat` (spec §8).
+    """The kind of answer a store gives for a pair whose Stored r would be `r_hat` (ld-store §8).
 
     `distance` is |p_j − p_i| in bp. Boundaries are inclusive: d ≤ near_bp is the Near
     Band, near_bp < d ≤ far_bp is answered when r̂² ≥ t_far, and a larger d is Not
@@ -63,7 +63,7 @@ def answer_kinds(
     near_bp: int,
     far_bp: int,
 ) -> npt.NDArray[np.str_]:
-    """The AnswerKind value of every cell of an unfilled signed-r matrix (spec §8).
+    """The AnswerKind value of every cell of an unfilled signed-r matrix (ld-store §8).
 
     This is how an unstored pair's meaning is recovered from the matrix alone, as the
     owner decided on 7 November 2026: from the rows' chromosomes and positions and the
@@ -85,14 +85,14 @@ def answer_kinds(
     if (~unstored & ~near & ~far).any():
         raise ValueError(
             "a number where the store holds nothing (beyond far_bp, or across chromosomes): "
-            "a fill or a broken read, not a Pair Answer (spec §8)"
+            "a fill or a broken read, not a Pair Answer (ld-store §8)"
         )
     with np.errstate(invalid="ignore"):
         below = ~unstored & far & (r * r < t_far)
     if below.any():
         raise ValueError(
             "a number beyond near_bp below t_far, where no pair is stored: a fill or a broken "
-            "read, not a Pair Answer (spec §8)"
+            "read, not a Pair Answer (ld-store §8)"
         )
     out = np.full(r.shape, AnswerKind.NOT_MEASURED.value, dtype="<U12")
     out[near | (far & ~unstored)] = AnswerKind.STORED.value
@@ -101,7 +101,7 @@ def answer_kinds(
 
 
 class RefusalReason(StrEnum):
-    """Why a request is refused (spec §9). Each names the Pair Answer the store lacks."""
+    """Why a request is refused (ld-store §9). Each names the Pair Answer the store lacks."""
 
     INVALID = "invalid"
     """r2 outside [0, 1], a window or radius that is negative or not finite."""
@@ -120,10 +120,10 @@ class RefusalReason(StrEnum):
 
 
 class Refusal(Exception):
-    """A request the LD Store declines rather than answer approximately (spec §9).
+    """A request the LD Store declines rather than answer approximately (ld-store §9).
 
     It carries its `reason`. It is never replaced by a partial or approximate answer:
-    that is the wrong answer that looks like a right one (ADR 0001).
+    that is the wrong answer that looks like a right one (ADR 0087).
     """
 
     def __init__(self, reason: RefusalReason, detail: str) -> None:
@@ -143,7 +143,7 @@ class InputError(ValueError):
 
 @dataclass(frozen=True)
 class Decision:
-    """Whether a request is answered, and if not why (spec §9).
+    """Whether a request is answered, and if not why (ld-store §9).
 
     `window_bp` is the request's window in bp, W = kb × 1,000, or a region's width.
     """
@@ -163,7 +163,7 @@ class Decision:
 
 
 def judge_request(*, r2: float, kb: float, t_far: float, near_bp: int, far_bp: int) -> Decision:
-    """Answered or refused, for `clump` and `proxies` (spec §9).
+    """Answered or refused, for `clump` and `proxies` (ld-store §9).
 
     The pairs considered are those with d ≤ W = kb × 1,000 bp, and one reaches the
     threshold when r̂² ≥ r2. Answered when W ≤ near_bp, at any r2, because the Near Band
@@ -184,10 +184,10 @@ def judge_window(
     """`judge_request` for a window already in bp, W: the same rule, one copy of it.
 
     It is the format's answer when the window is already a distance rather than a kb: a caller
-    that has one asks it and is answered or refused at the same edges. Nothing in `ogld` calls it
-    since #71 — `clump` and `proxies` ask `judge_partner_request`, which has the Partner
-    Threshold's row too, and a matrix's region is `judge_region`'s — so it is the 0.1.0 table's
-    shape kept for a caller that brings its own window."""
+    that has one asks it and is answered or refused at the same edges. Nothing in `opengwasdb.ld`
+    calls it since opengwas/ogld#71 — `clump` and `proxies` ask `judge_partner_request`, which has
+    the Partner Threshold's row too, and a matrix's region is `judge_region`'s — so it is the 0.1.0
+    table's shape kept for a caller that brings its own window."""
     return _judged_window(
         r2=r2, window=window_bp, t_far=t_far, near_bp=near_bp, far_bp=far_bp, t_partner=None
     )
@@ -203,7 +203,7 @@ def judge_partner_request(
     t_partner: float,
     store: str,
 ) -> Decision:
-    """Answered or refused, for `clump` and `proxies`, which read the Partner Rows (spec §9).
+    """Answered or refused, for `clump` and `proxies`, which read the Partner Rows (ld-store §9).
 
     It is `judge_request`'s rule and one more row: from format 0.2.0 a request within `near_bp`
     whose r2 is below the store's recorded `t_partner` is refused with
@@ -290,7 +290,7 @@ def _threshold(
             f"{near_bp:,} bp: its Partner Rows hold only the pairs at or above the Partner Floor, "
             "and a row's absence there decides nothing below it. Ask at r2 ≥ "
             f"{t_partner}, or read a store derived at a lower Partner Threshold "
-            "(spec §9; partner-rows §8.1)"
+            "(ld-store §9; partner-rows §8.1)"
         )
         return Decision(RefusalReason.THRESHOLD_BELOW_T_PARTNER, detail, window)
     return Decision(None, "answered", window)

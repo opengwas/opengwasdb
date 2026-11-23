@@ -1,14 +1,16 @@
-"""The whole-panel acceptance of #91: the Genotype Store equals the LD Store, code for code.
+"""The whole-panel acceptance of opengwas/ogld#91: the Genotype Store equals the LD Store, code for
+code.
 
 `pixi run -e dev acceptance-genotypes` (CONTRIBUTING.md, "Acceptance runs"), on the IEU nodes.
 It reads two stores over the same HGDP+1kGP v2 EUR panel — the materialised k = 10, × 511 LD
 Store and the Genotype Store sidecar built from the same pgens — and compares every answer:
 
-- the 28 frozen #81 comparisons: each #403 Analysis's chr22 hits, and the target Analysis over
+- the 28 frozen opengwas/ogld#81 comparisons: each #403 Analysis's chr22 hits, and the target
+Analysis over
   the whole panel;
 - all 37 Analyses over the whole panel at r² 0.01 and 0.001 (74 requests; a refusal is compared
   by reason, and within 3 Mb the stores refuse 0.001 at their Partner Threshold);
-- #19's 50 frozen chr22 requests (`chr22_workload_19.json`, from
+- opengwas/ogld#19's 50 frozen chr22 requests (`chr22_workload_19.json`, from
   `9448650:prototypes/19_genotype_store/results/workload.json`): the 500-variant matrix, the
   region, both proxies, the 37 Analyses' chr22 clumps, and the ten edge and refusal requests;
 - per chromosome, a 3 Mb region, plus one whole-genome matrix of 1,000 seeded-random variants.
@@ -19,12 +21,12 @@ proves nothing, so every one asserts its answer is non-empty (or, for the delibe
 requests, exactly what emptiness it expects) before comparing. An input that is unset or missing
 fails the run; it never skips.
 
-Environment (`tests/acceptance/run_genotypes.sh` sets the defaults):
+Environment (`tests/ld/acceptance/run_genotypes.sh` sets the defaults):
 
-- `OPENGWASDB_LD_GENOTYPE_STORE`: the sidecar `ogld build --genotypes` wrote.
+- `OPENGWASDB_LD_GENOTYPE_STORE`: the sidecar `opengwasdb ld build --genotypes` wrote.
 - `OPENGWASDB_LD_81_EUR_STORE`: the k = 10, × 511 whole-panel LD Store over the same panel.
 - `OPENGWASDB_LD_403_ANALYSES`: #403's 37 Analyses, each with `hits.tsv` (ALID, z), as
-  `scripts/realdata/make_403_inputs.py` writes them.
+  `scripts/ld/realdata/make_403_inputs.py` writes them.
 """
 
 from __future__ import annotations
@@ -80,7 +82,7 @@ def analyses() -> list[tuple[str, list[str], np.ndarray]]:
 
 @pytest.fixture(scope="session")
 def frozen() -> dict[str, Any]:
-    """#19's frozen chr22 workload, and the input hashes it names."""
+    """opengwas/ogld#19's frozen chr22 workload, and the input hashes it names."""
     spec: dict[str, Any] = json.loads(FROZEN.read_text())
     assert spec["frozen_from"].endswith("results/workload.json")
     assert len(spec["matrix"]) == 500
@@ -189,14 +191,14 @@ def test_the_chr22_clumps_and_the_target_equal_the_ld_store(
             f"{name}: chr22",
         )
         compared += 1
-    # The target over the whole panel, as #81 measured it.
+    # The target over the whole panel, as opengwas/ogld#81 measured it.
     for name, alids, scores in analyses:
         if name == TARGET:
             compare(
                 genotype, ld, "clump", (alids, scores), {"r2": 0.01, "kb": KB}, f"{name}: whole"
             )
             compared += 1
-    assert compared == 28, f"#81 froze 28 comparisons; this run made {compared}"
+    assert compared == 28, f"opengwas/ogld#81 froze 28 comparisons; this run made {compared}"
 
 
 def test_the_37_analyses_equal_the_ld_store_at_both_thresholds(
@@ -226,7 +228,8 @@ def test_19_s_fifty_chr22_requests_equal_the_ld_store(
     analyses: list[tuple[str, list[str], np.ndarray]],
     frozen: dict[str, Any],
 ) -> None:
-    """#19's frozen suite, request for request: its matrix, region, proxies, clumps and edges."""
+    """opengwas/ogld#19's frozen suite, request for request: its matrix, region, proxies, clumps and
+    edges."""
     genotype, ld = stores
     compared = 0
     compare(genotype, ld, "matrix", (frozen["matrix"],), {}, "19: 500-variant matrix")
@@ -248,7 +251,7 @@ def test_19_s_fifty_chr22_requests_equal_the_ld_store(
         entry = analyses_by_name[name]
         source = named("OPENGWASDB_LD_403_ANALYSES", "#403's 37 Analyses' hits") / name / "hits.tsv"
         assert hashlib.sha256(source.read_bytes()).hexdigest() == entry["source_sha256"], (
-            f"{source} is not the frozen input #19 measured"
+            f"{source} is not the frozen input opengwas/ogld#19 measured"
         )
         indexes = chr22(alids)
         assert len(indexes) == entry["hits_chr22"], f"{name}: the frozen chr22 hit count differs"
@@ -309,7 +312,7 @@ def test_19_s_fifty_chr22_requests_equal_the_ld_store(
         assert theirs[0] == "refusal", f"19: {method} {kwargs} is not the store's refusal"
         assert_equal(outcome(genotype, method, *args, **kwargs), theirs, f"19: refusal {method}")
         compared += 1
-    assert compared == 50, f"#19's suite is 50 requests; this run made {compared}"
+    assert compared == 50, f"opengwas/ogld#19's suite is 50 requests; this run made {compared}"
 
 
 def test_each_chromosome_s_region_and_a_whole_genome_matrix_equal_the_ld_store(

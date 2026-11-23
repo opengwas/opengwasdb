@@ -6,9 +6,9 @@ Two plans, each a list of cases timed on each target:
 - `step1`: the published HGDP+1kGP EUR store (k = 10, layout C). Clumping each of
   opengwas/opengwasdb#403's 37 Analyses' 5e-8 tiers at r² 0.01 and 0.001 within 3 Mb; region
   matrices 3 Mb and 10 Mb wide, the second reading the Far Pairs for its pairs beyond
-  near_bp (spec §11); a matrix of 500 scattered variants, on chr22 and genome-wide; and proxies
+  near_bp (ld-store §11); a matrix of 500 scattered variants, on chr22 and genome-wide; and proxies
   at r² 0.8 within 10 Mb for 1, 10 and 100 variants.
-- `step2`: EUR chr22 built in each Near Band layout of spec §6 (`build_layouts.py`). Clumping
+- `step2`: EUR chr22 built in each Near Band layout of ld-store §6 (`build_layouts.py`). Clumping
   the 37 Analyses' chr22 hits below t_far (the column read), a 3 Mb region, 500 scattered
   variants, and single pairs.
 
@@ -27,16 +27,16 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
 Where things are comes from their owners, never from here: the published EUR store is
 `build_hgdp1kgp.store_path("EUR")` under `$OPENGWASDB_LD_STORES`, #403's Analyses are under
 `$OPENGWASDB_LD_403_ANALYSES` and the layouts' builds under `$OPENGWASDB_LD_LAYOUTS`, each with its
-default in `scripts/test_panel/roots.py`. Each run's first record says which commit's code ran and,
-through `test_panel.checkout.problem`, whether the checkout could be cited as that code.
+default in `scripts/ld/test_panel/roots.py`. Each run's first record says which commit's code ran
+and, through `test_panel.checkout.problem`, whether the checkout could be cited as that code.
 
 Threads: zarr's pool is `--zarr-threads` (6), BLAS 1; the static host and the proxy run one
 event loop and at most two worker threads each. So a timing uses at most 8 threads busy at once
 over HTTP, and 7 locally. Every record carries the node's load average before and after.
 
 `--cache-mib` sets the chunk cache's budget, and `--without` turns off ogld#32's reader levers,
-each as it was before that ticket, from outside `ogld/`: `concurrency` (each run of chunks its
-own Zarr call, one after another), `indexes` (shard indexes unkept), `count` (string chunks
+each as it was before that ticket, from outside `opengwasdb/ld/`: `concurrency` (each run of chunks
+its own Zarr call, one after another), `indexes` (shard indexes unkept), `count` (string chunks
 counted one string at a time) and `cache` (the 256 MiB budget). All four off is the reader
 ogld#8 measured, and reproduces its request counts. ogld#8's `--reader concurrent`, a prototype
 of concurrent fetching that copied the cache's keeping of chunks, is gone: the cache fetches
@@ -175,7 +175,8 @@ def _loading(original: Callable[..., Any]) -> Callable[..., Any]:
 Patch = Callable[[Any, str, Any], None]
 
 
-#: The reader levers ogld#32 added, each of which `--without` turns off from outside `ogld/`.
+#: The reader levers ogld#32 added, each of which `--without` turns off from outside
+#: `opengwasdb/ld/`.
 LEVERS: Final = ("concurrency", "indexes", "count", "cache")
 #: The chunk cache's budget before ogld#32, in MiB.
 CACHE_MIB_BEFORE: Final = 256
@@ -221,7 +222,7 @@ def _index_passed_sync(
 
 
 def without(levers: list[str], cache_mib: int | None, patch: Patch = setattr) -> int | None:
-    """Turn `levers` off, each as it was before ogld#32, from outside `ogld/`: the cache's
+    """Turn `levers` off, each as it was before ogld#32, from outside `opengwasdb/ld/`: the cache's
     budget in MiB that leaves, None for ogld's default."""
     from opengwasdb.ld.store import location
 
@@ -260,7 +261,7 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     _wrap(StoreReader, "_chromosome", _loading, patch)
     for owner, name, label in (
         (StoreReader, "_scatter_far", "far_scatter"),
-        # The string reads and the cache's per-string count, the 7% of #14's profile.
+        # The string reads and the cache's per-string count, the 7% of opengwas/ogld#14's profile.
         (StoreReader, "rows_of", "rows_of"),
         (StoreReader, "variants", "variants"),
         (StoreReader, "loci_of", "loci_of"),
@@ -507,7 +508,7 @@ class Sample:
 
     def near_pairs(self, count: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
         """`count` chr22 pairs within the store's near_bp: a random row, and a random later
-        row within it, by the Near Band's own stop (`geometry.stop_within`, spec §4)."""
+        row within it, by the Near Band's own stop (`geometry.stop_within`, ld-store §4)."""
         from opengwasdb.ld.format.geometry import stop_within
 
         reader = opened(self.store)._reader
@@ -564,7 +565,7 @@ def regions(
     centres: tuple[int, ...] = CENTRES,
 ) -> None:
     """Each region `width` Mb wide at each centre on `chrom`, cold and then warm. A region off
-    chr22 records its chromosome; #8's chr22 records carry none."""
+    chr22 records its chromosome; opengwas/ogld#8's chr22 records carry none."""
     for width in widths:
         for centre in centres:
             meta = {"case": "region", "width_mb": width, "centre": centre}
@@ -611,7 +612,8 @@ def step1(b: Bench, args: argparse.Namespace) -> None:
     cases = set(args.case or CASES["step1"])
     if "proxies" in cases:
         proxies(b, store, sample, args.seeds)
-    # #8 drew lists on chr22 and genome-wide; another chromosome (#31: chr11) is drawn alone.
+    # opengwas/ogld#8 drew lists on chr22 and genome-wide; another chromosome (opengwas/ogld#31:
+    # chr11) is drawn alone.
     lists = ("22", None) if args.chrom == "22" else (args.chrom,)
     if "scattered" in cases:
         scattered(b, store, sample, lists, args.seeds)
@@ -660,8 +662,8 @@ def hosted(root: Path, target: Target) -> Iterator[Host | None]:
 def code_state(installed: str) -> dict[str, Any]:
     """Which commit's code a run ran, and why the checkout cannot be cited as that code ("" when
     it can): `test_panel.checkout.problem`, the one guard `make_pcs.py` and the realdata tier
-    also use. It refuses an installed ogld that does not name HEAD, a changed tracked file under
-    `ogld/` or `scripts/`, and an untracked `.py` there."""
+    also use. It refuses an installed opengwasdb that does not name HEAD, a changed tracked file
+    under `opengwasdb/ld/` or `scripts/`, and an untracked `.py` there."""
     repository = SCRIPTS.parent
     commit = subprocess.run(
         ["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True
@@ -686,8 +688,8 @@ def environment(args: argparse.Namespace) -> dict[str, Any]:
         "argv": sys.argv[1:],
         "commit": code["commit"],
         "code": code,
-        # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as #31
-        # timed the tip's reader beside its own.
+        # The ogld a run imported: this checkout's, or another put first on PYTHONPATH, as
+        # opengwas/ogld#31 timed the tip's reader beside its own.
         "ogld_source": str(Path(opengwasdb.ld.__file__).resolve().parent),
         "versions": {
             "ogld": opengwasdb.ld.__version__,

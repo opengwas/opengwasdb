@@ -1,4 +1,4 @@
-"""Greedy clumping on an LD Store, equal to `plink2 --clump` (spec §9; ogld#6).
+"""Greedy clumping on an LD Store, equal to `plink2 --clump` (ld-store §9; ogld#6).
 
 From format 0.2.0 a lead's partners are its Partner Rows row (partner-rows §7, §8.2): one frame
 read and one decode, filtered to the hits still open in its component. The hits are split into
@@ -40,7 +40,7 @@ def clump(
     Floor or is no pair, and cannot reach an answered r2.
 
     Greedy: the strongest unclumped variant leads, and every unclumped variant within
-    the window (distance < W) with r̂² > r2 of it joins it, as `plink2 --clump` does (spec
+    the window (distance < W) with r̂² > r2 of it joins it, as `plink2 --clump` does (ld-store
     §9). Because leads are taken strongest first, a member joins the strongest lead it
     reaches. Ties go to genomic order, then ALID.
     """
@@ -108,7 +108,7 @@ def _components(
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """Each hit's lead, as an index into `rows`, and its signed r with it.
 
-    A clump cannot cross chromosomes (ADR 0009), and inside one it cannot reach across a gap of W
+    A clump cannot cross chromosomes (ADR 0095), and inside one it cannot reach across a gap of W
     or more (partner-rows §8.2), so the hits are split there and each part clumped on its own. The
     parts are independent, so they run serially or on the reader's bounded pool alike, and the
     results are scattered by hit index: the answer is the same at any concurrency (§9.2). A refusal
@@ -121,7 +121,7 @@ def _components(
     for name in np.unique(chrom):
         members = np.flatnonzero(chrom == name)
         start = reader.chromosome_range(str(name))[0]
-        # Hits on one chromosome ascend with their rows, and so with their positions (spec §2).
+        # Hits on one chromosome ascend with their rows, and so with their positions (ld-store §2).
         cuts = np.flatnonzero(np.diff(position[members]) >= window) + 1
         tasks.extend(
             _Component(
@@ -174,11 +174,12 @@ def _component(
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """One component's greedy: each hit's lead, as an index into `task.rows`, and its signed r.
 
-    Strongest first; ties by the global row, which is the engine's order (spec §2). plink2's edges,
-    which the owner ruled `clump` follows (10 November 2026): a variant joins at r̂² **>** r2 and
-    distance **<** W. Each lead reads its own Partner Rows row once, one frame at most, and keeps
-    the entries that are hits of its component and still open: never a pair with a hit another lead
-    took, and never a square among the hits (ogld#14). A hit that another lead takes is never read.
+    Strongest first; ties by the global row, which is the engine's order (ld-store §2). plink2's
+    edges, which the owner ruled `clump` follows (10 November 2026): a variant joins at r̂² **>** r2
+    and distance **<** W. Each lead reads its own Partner Rows row once, one frame at most, and
+    keeps the entries that are hits of its component and still open: never a pair with a hit another
+    lead took, and never a square among the hits (ogld#14). A hit that another lead takes is never
+    read.
     """
     lo, hi = int(task.rows[0]), int(task.rows[-1])
     # A hit's slot, -1 for a row of the span that is no hit: filtering a row is array indexing.

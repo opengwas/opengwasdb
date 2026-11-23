@@ -1,14 +1,14 @@
-"""The variant table and the ALID lookup: the read every query begins with (spec §2, §10).
+"""The variant table and the ALID lookup: the read every query begins with (ld-store §2, §10).
 
 `VariantTable` is the half of a reader that names variants: the Variant Set's rows, their
 chromosomes, positions, ALIDs and alleles (`variants/`), the search that turns a list of ALIDs
-into rows — the ALID Index (ADR 0010) or the local companion over it (ADR 0012) — and the
+into rows — the ALID Index (ADR 0096) or the local companion over it (ADR 0098) — and the
 chromosome-local loci the LD half needs to place a row. `StoreReader` composes one and delegates
 to it, and the Genotype Store reader composes the same class over its sidecar, so ALID lookup
-has one owner (owner, on epic #18, 21 November 2026; ogld#94). `rows_of`, `rows_in`,
+has one owner (owner, on epic opengwas/ogld#18, 21 November 2026; ogld#94). `rows_of`, `rows_in`,
 `chromosome_range`, `alids_of`, `loci_of` and `variants` are that owner's reads.
 
-A table opens no store: its reader opens the group, refuses what it cannot read (spec §13) and
+A table opens no store: its reader opens the group, refuses what it cannot read (ld-store §13) and
 hands the table the `opengwasdb.ld.store.location.OpenedStore` both halves hold — the group, the
 location
 that names the store in a refusal, the recorded provenance and the one chunk cache every read goes
@@ -46,25 +46,26 @@ from opengwasdb.ld.store.location import OpenedStore, elements_of, kept_array, r
 from opengwasdb.ld.store.tables import Variants
 from opengwasdb.variants.sorted_spelling import refuse_reference_first_indel, sorted_alid_locus
 
-#: The variant table's columns (spec §2).
+#: The variant table's columns (ld-store §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
 #: How long a list of ALIDs makes the index worth reading: a `_INDEX_SHARE`th of the Variant Set's
 #: entries or more (ogld#42). The whole index costs about what the exact scan's ALID string chunks
 #: do at about 4,000 of EUR's 8.59 M ALIDs, and below that a list's loci touch fewer chunks than the
-#: index holds; `docs/benchmarks/alid-index.md` has both sides of it. A small store's list is a
+#: index holds; `docs/benchmarks/ld/alid-index.md` has both sides of it. A small store's list is a
 #: large share of it, so a test store's lookups read the index.
 _INDEX_SHARE: Final = 2_150
 
 
 def _index_pays(count: int, entries: int) -> bool:
-    """Whether `count` keys are worth reading the whole index of `entries` (spec §10; ADR 0010):
+    """Whether `count` keys are worth reading the whole index of `entries` (ld-store §10; ADR 0096):
     a list naming a `_INDEX_SHARE`th of them or more, and never fewer than one."""
     return count >= max(1, entries // _INDEX_SHARE)
 
 
 @dataclass(frozen=True)
 class Loci:
-    """One chromosome's Variant Set rows and positions, and nothing of its LD components (#71).
+    """One chromosome's Variant Set rows and positions, and nothing of its LD components
+    (opengwas/ogld#71).
 
     A query that reads only the Partner Rows still needs each hit's chromosome, position and ALID
     to order it and measure distances, and must not read `near/<chrom>/indptr` to get them
@@ -80,15 +81,15 @@ class Loci:
 
 @dataclass(frozen=True)
 class _AlidIndex:
-    """The ALID search index (spec §2; ADR 0010): one NUL-padded 32-byte key an entry, sorted, and
-    the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
+    """The ALID search index (ld-store §2; ADR 0096): one NUL-padded 32-byte key an entry, sorted,
+    and the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
 
     alid: zarr.Array[Any]
     row: zarr.Array[Any]
 
 
 class _MappedAlids:
-    """One immutable companion bundle, owned by its table (ADR 0012).
+    """One immutable companion bundle, owned by its table (ADR 0098).
 
     Lookup returns independent row arrays; release serializes
     with lookup so no borrowed numpy view survives a mapping. No pool or global cache here.
@@ -141,7 +142,7 @@ class _MappedAlids:
             return found
 
     def release(self) -> None:
-        """Discard views before closing mappings, serialized with lookup (ADR 0012)."""
+        """Discard views before closing mappings, serialized with lookup (ADR 0098)."""
         with self._lock:
             self._closed = True
             self._keys = self._rows = np.empty(0)
@@ -153,7 +154,7 @@ class _MappedAlids:
 def _mapped_keys(
     alids: Sequence[str],
 ) -> tuple[npt.NDArray[Any], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """Encode query bytes without parsing ALIDs or truncating a name into another (ADR 0012)."""
+    """Encode query bytes without parsing ALIDs or truncating a name into another (ADR 0098)."""
     encoded: list[bytes] = []
     fitting: list[int] = []
     wide: list[int] = []
@@ -177,12 +178,12 @@ def _mapped_keys(
 
 
 class VariantTable:
-    """An LD Store's variant table and ALID lookup, over a group its reader opened (spec §2).
+    """An LD Store's variant table and ALID lookup, over a group its reader opened (ld-store §2).
 
     It keeps what a variant read needs and nothing of the LD Store's LD: the chromosome record,
-    the `variants/` columns, a chromosome's positions once it is first touched (spec §10), the
-    ALID index on first search (ADR 0010) and the optional local companion on first fitting
-    lookup (ADR 0012). The companion's lifetime is the table's: `close` releases it, and a
+    the `variants/` columns, a chromosome's positions once it is first touched (ld-store §10), the
+    ALID index on first search (ADR 0096) and the optional local companion on first fitting
+    lookup (ADR 0098). The companion's lifetime is the table's: `close` releases it, and a
     lookup that finds it closed refuses rather than answering from the canonical index.
     """
 
@@ -207,7 +208,7 @@ class VariantTable:
         document, which over HTTP is a request). The table opens no group of its own, so the reader
         that composes it opens the store once, and it holds the reader's `OpenedStore` rather than
         a copy of it, so the one chunk cache and the location a refusal names are one object's
-        (#94)."""
+        (opengwas/ogld#94)."""
         self._opened = opened
         root = opened.root
         listed = chromosomes_listed(_group(root, "variants").attrs["chromosomes"])
@@ -215,7 +216,7 @@ class VariantTable:
         self._names = list(self._ranges)
         self._stops = np.array([stop for _, stop in self._ranges.values()], dtype=np.int64)
         self._located = {}
-        # A chromosome's first use is one load, however many threads make it (#71).
+        # A chromosome's first use is one load, however many threads make it (opengwas/ogld#71).
         self._loci_lock = threading.Lock()
         self._columns = {name: kept_array(root, f"variants/{name}") for name in _VARIANT_COLUMNS}
         self._index_arrays = None
@@ -229,7 +230,7 @@ class VariantTable:
         self._closed = False
 
     def close(self) -> None:
-        """Release the optional ALID companion's mappings (ADR 0012), after any concurrent mapped
+        """Release the optional ALID companion's mappings (ADR 0098), after any concurrent mapped
         lookup finishes, and refuse a later one: closing before a lookup attaches nothing, and
         closing twice is closing once. The store's group and its chunk cache are its reader's."""
         with self._alid_lock:
@@ -245,13 +246,13 @@ class VariantTable:
 
     @property
     def provenance(self) -> Provenance:
-        """The root group's `ld_store` attribute, as recorded (spec §7)."""
+        """The root group's `ld_store` attribute, as recorded (ld-store §7)."""
         return self._opened.provenance
 
     @property
     def ranges(self) -> dict[str, tuple[int, int]]:
         """Each chromosome's Variant Set rows, `[start, stop)`, in the store's recorded order
-        (spec §2), kept as they were opened."""
+        (ld-store §2), kept as they were opened."""
         return self._ranges
 
     @property
@@ -265,7 +266,8 @@ class VariantTable:
         return self._stops
 
     def loci(self, chrom: str) -> Loci:
-        """One chromosome's rows and positions, read on first use and nothing else (#71).
+        """One chromosome's rows and positions, read on first use and nothing else
+        (opengwas/ogld#71).
 
         Positions are the variant table's, one slice a chromosome, so an ALID lookup, a clump and
         a proxies query read no `near/<chrom>/indptr`. A chromosome's positions are loaded once,
@@ -280,7 +282,7 @@ class VariantTable:
             return self._loaded_loci(chrom)
 
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
-        """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
+        """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (ld-store §2).
 
         A malformed ALID is Absent too: it names no variant in the store. A deletion's ALID
         spelt reference first, as a GWAS Store of format 0.2.2 spells it (ADR 0079), is refused
@@ -294,11 +296,11 @@ class VariantTable:
         two alleles (a tandem repeat, `G>GGGGCC` against `GGGGCC>G`) it finds the deletion's row.
         The store records no REF to tell them apart. This is recorded on #462.
 
-        A long list is searched for in the store's ALID index (ADR 0010), which holds every ALID of
+        A long list is searched for in the store's ALID index (ADR 0096), which holds every ALID of
         the table that fits its 32-byte slot, sorted, so one search answers it without reading the
         variant table at all.
         A validated local companion instead answers fitting hits and misses by mmap without
-        parsing loci or reading columns (ADR 0012); only wider names take the exact scan.
+        parsing loci or reading columns (ADR 0098); only wider names take the exact scan.
         Without that companion, every ALID the index does not hold — absent, too wide for the
         slot, or one a broken build left out — takes the exact scan at its own position. A list
         too short for the index to pay for takes that scan for every ALID. So the index
@@ -376,7 +378,7 @@ class VariantTable:
         scanned: npt.NDArray[np.bool_],
     ) -> None:
         """Fill `found` from the ALID index for every ALID it can answer, and clear `scanned`
-        there; what it cannot answer stays for the exact scan (spec §2, §10; ADR 0010).
+        there; what it cannot answer stays for the exact scan (ld-store §2, §10; ADR 0096).
 
         Which ALIDs the index holds a key for is `layout.alid_fits`' question, not this method's:
         an ALID wider than the slot has no key and is scanned, and a store whose key for one row
@@ -398,14 +400,14 @@ class VariantTable:
 
     def _entries(self) -> int:
         """How many entries the Variant Set's index holds: its rows less the ALIDs too wide for its
-        slot, which the store's provenance counts (spec §7). A store written before the index
-        records no count; `_from_index` keeps that store on the exact-scan fallback (ADR 0012)."""
+        slot, which the store's provenance counts (ld-store §7). A store written before the index
+        records no count; `_from_index` keeps that store on the exact-scan fallback (ADR 0098)."""
         counts = self._opened.provenance["counts"]
         return int(self._opened.provenance["n_variants"]) - int(counts.get("alids_left_out", 0))
 
     def _scanned(self, alids: Sequence[str], which: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """The rows of the ALIDs at `which`, in that order: the exact scan of the variant table
-        at each one's own position (spec §2), which is how `rows_of` found every ALID before the
+        at each one's own position (ld-store §2), which is how `rows_of` found every ALID before the
         index. Only the ALID strings at those positions are read, in one read per chromosome."""
         found = np.full(len(which), -1, dtype=np.int64)
         chosen = [alids[int(i)] for i in which]
@@ -432,7 +434,7 @@ class VariantTable:
         order, and each read's keys are searched for the queries that fall within them. So the table
         is never held whole beside the chunk cache: a lookup's transient is one shard of keys — 16
         MiB on EUR, released before the next is fetched — and the queries' own keys, where reading
-        the array in one run holds all 273 MB of EUR's keys twice (spec §10; ogld#42's reviews).
+        the array in one run holds all 273 MB of EUR's keys twice (ld-store §10; ogld#42's reviews).
         """
         index = self._index()
         count = int(index.row.shape[0])
@@ -471,7 +473,7 @@ class VariantTable:
         return keys.view(layout.ALID_KEY_DTYPE).ravel()
 
     def _index(self) -> _AlidIndex:
-        """The ALID index's arrays, opened on first use (spec §10): opening reads their
+        """The ALID index's arrays, opened on first use (ld-store §10): opening reads their
         metadata, and nothing reads them until a search does."""
         if self._index_arrays is None:
             self._index_arrays = _AlidIndex(
@@ -481,7 +483,7 @@ class VariantTable:
         return self._index_arrays
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
-        """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2)."""
+        """The rows on `chrom` with start ≤ position ≤ stop, ascending (ld-store §2)."""
         if sorted_alid_locus(f"{chrom}:1:A:C") is None:
             raise InputError(
                 f"{chrom!r} is not a canonical chromosome label (1–22, X, Y, MT; no 'chr' prefix)"
@@ -493,7 +495,7 @@ class VariantTable:
         return global_rows(np.arange(int(lo), int(hi), dtype=np.int64), c.start)
 
     def chromosome_range(self, chrom: str) -> tuple[int, int]:
-        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (spec §2).
+        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (ld-store §2).
 
         It is what turns a Partner Rows row's chromosome-local partner into a Variant Set row
         (partner-rows §7), so a component split and a greedy can work in the store's own rows. A
@@ -504,11 +506,11 @@ class VariantTable:
         except KeyError:
             raise ValueError(
                 f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
-                f"{', '.join(self._names)} (spec §2)"
+                f"{', '.join(self._names)} (ld-store §2)"
             ) from None
 
     def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
-        """The ALID of each of `rows`, in the order given (spec §2): the one string column a
+        """The ALID of each of `rows`, in the order given (ld-store §2): the one string column a
         query names its rows by, read without the others (ogld#14)."""
         return self._strings("alid", self.checked_rows(rows))
 
@@ -518,9 +520,9 @@ class VariantTable:
         """Chromosomes and positions, without allele columns clump never returns (ogld#40).
 
         It reads the variant table's positions and nothing of the LD components: `clump` and
-        `proxies` call it, and from 0.2.0 their only LD read is the Partner Rows (#71). This is a
-        store-layer read, not a public query or a new caller setting. Geometry and chromosome label
-        dtypes stay identical to the full variant-table read.
+        `proxies` call it, and from 0.2.0 their only LD read is the Partner Rows (opengwas/ogld#71).
+        This is a store-layer read, not a public query or a new caller setting. Geometry and
+        chromosome label dtypes stay identical to the full variant-table read.
         """
         rows = self.checked_rows(rows)
         position = np.empty(len(rows), dtype=np.int64)
@@ -530,7 +532,7 @@ class VariantTable:
         return names[chromosome_index(self._stops, rows)], position
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
-        """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+        """The Variant Set's columns at `rows`, in the order given (ld-store §2)."""
         rows = self.checked_rows(rows)
         chrom, position = self.loci_of(rows)
         frequency = elements_of(self._columns["a1_frequency"], self._opened.cache, rows)
@@ -552,7 +554,7 @@ class VariantTable:
         if bad.any():
             raise ValueError(
                 f"rows {rows[bad][:5].tolist()} are outside the Variant Set of "
-                f"{size} rows: an Absent ALID is not a row (spec §8)"
+                f"{size} rows: an Absent ALID is not a row (ld-store §8)"
             )
         return rows
 
@@ -577,7 +579,7 @@ class VariantTable:
         self, rows: npt.NDArray[np.int64]
     ) -> Iterator[tuple[Loci, npt.NDArray[np.int64]]]:
         """Each chromosome `rows` touch, its rows and positions, and the positions in `rows` that
-        are on it (#71), without opening any of its LD components."""
+        are on it (opengwas/ogld#71), without opening any of its LD components."""
         which = chromosome_index(self._stops, rows)
         for index in np.unique(which):
             yield self.loci(self._names[index]), np.flatnonzero(which == index)

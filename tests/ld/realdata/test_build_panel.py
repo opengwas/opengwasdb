@@ -3,18 +3,19 @@
 The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.md).
 
 - The builds read the phased HGDP+1kGP v2 callset, which has no missing calls (owner,
-  7 November 2026; ADR 0002). `OPENGWASDB_LD_V2_EUR_CHR22` names its chr22 BCF
+  7 November 2026; ADR 0088). `OPENGWASDB_LD_V2_EUR_CHR22` names its chr22 BCF
   (`docs/spec/build-inputs.md` §10), and the suite converts chr22:20–32 Mb once, with §3's flags,
   for EUR's 665 unrelated samples: `OPENGWASDB_LD_EUR_KEEP` names the keep file
-  `scripts/make_keeps.py` writes (ADR 0002, decision 11). On 20–23 Mb of it, the k = 0 Near Band
+  `scripts/ld/make_keeps.py` writes (ADR 0088, decision 11). On 20–23 Mb of it, the k = 0 Near Band
   matches `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants
   compared include every choice build-inputs §6's reversed-indel rule makes there (both records
-  at MAC >= 20, judged here from plink2's own allele counts): each must keep the record whose REF is A1.
+  at MAC >= 20, judged here from plink2's own allele counts): each must keep the record whose REF is
+  A1.
 - Real LD survives PC Adjustment: on the 12 Mb slice, pairs within 100 kb change little from
   k = 0 to k = 10, and each of the provenance's five quantiles of that change is its own
   computation over every such pair, from the two stores' Near Bands. 12 Mb, not 3, because the
   PC Check scans the build's own input and needs windows apart from the best one.
-  `OPENGWASDB_LD_EUR_PC_FILE` names EUR's PC File from `scripts/make_pcs.py` (§10).
+  `OPENGWASDB_LD_EUR_PC_FILE` names EUR's PC File from `scripts/ld/make_pcs.py` (§10).
 - The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
   11,725 of the 15,272 variants of chr22:20–23 Mb. The builder refuses them.
 
@@ -47,9 +48,9 @@ NARROW = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "23000000"]
 WIDE = ["--chr", "22", "--from-bp", "20000000", "--to-bp", "32000000"]
 #: plink2 prints r to six significant digits.
 PRINTED = 5e-7
-#: HGDP+1kGP's encoding, which ogld#7 builds every panel at (ADR 0004): every build here uses it.
+#: HGDP+1kGP's encoding, which ogld#7 builds every panel at (ADR 0090): every build here uses it.
 HGDP_SCALE = 511
-#: Half the bins the PC Diagnostic counts the change in r into, 2⁻²⁰ wide (spec §7).
+#: Half the bins the PC Diagnostic counts the change in r into, 2⁻²⁰ wide (ld-store §7).
 HALF_BIN = 2.0**-21
 _SLICES: dict[str, Path] = {}
 
@@ -208,7 +209,7 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     by_id = {rows[i][2]: found[i] for i in sample}
     sign = np.array([1.0 if by_id[v].a1_is_alt else -1.0 for v in order])
     ours = store.matrix([by_id[v].alid for v in order]).r
-    # r of A1 dosages is r of ALT dosages times both variants' signs (spec §3).
+    # r of A1 dosages is r of ALT dosages times both variants' signs (ld-store §3).
     worst = np.abs(ours - theirs * sign[:, None] * sign[None, :]).max()
     assert worst <= 1 / (2 * HGDP_SCALE) + PRINTED, f"the builder is {worst} from plink2"
 
@@ -232,7 +233,7 @@ def band_within(store: Path, distance: int) -> tuple[npt.NDArray[np.float64], in
 def test_real_ld_survives_pc_adjustment(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    # Epic #1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
+    # Epic opengwas/ogld#1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
     # Regions (none is in chr22:20–32 Mb), and the distribution is recorded.
     pcs = required("OPENGWASDB_LD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
@@ -258,7 +259,7 @@ def test_real_ld_survives_pc_adjustment(
     # The provenance's quantiles are of the computed change; these are of the Stored r's. Each
     # Stored r is within half the store's step of its r, so a change in Stored r is within one
     # step of the computed change, and an order statistic moves no further; the recorded quantile
-    # is the computed one to within half a bin. At × 511 that is 1.96×10⁻³ (#16).
+    # is the computed one to within half a bin. At × 511 that is 1.96×10⁻³ (opengwas/ogld#16).
     tolerance = 1 / scale + HALF_BIN
     for q in (0.0, 0.5, 0.9, 0.99, 1.0):
         ours = float(np.quantile(change, q, method="lower"))

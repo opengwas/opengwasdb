@@ -1,30 +1,30 @@
 # LD Store Format Specification
 
 Status: draft
-Format version described: `0.2.0`, which the code writes (#67); `0.1.0` is the version before the
+Format version described: `0.2.0`, which the code writes (opengwas/ogld#67); `0.1.0` is the version before the
 Partner Rows, which a reader still reads (§13).
 
 This document defines a valid **LD Store**: the arrays, their dtypes and Zarr layout, how r is
 quantised, the provenance an LD Store carries, what a reader answers for a pair, what the four
-queries return, and when a request is refused. The decisions behind it are in ADR 0001
-(`docs/adr/0001-near-band-and-thresholded-far-pairs.md`), including its clarification of
-7 November 2026, each store's encoding of r in ADR 0004
-(`docs/adr/0004-per-store-encoding.md`), the Far Pairs beside the Proxy Index in ADR 0007
-(`docs/adr/0007-far-pairs-beside-the-proxy-index.md`), the ALID search index in ADR 0010
-(`docs/adr/0010-alid-search-index.md`), and the Partner Rows in ADR 0011
-(`docs/adr/0011-partner-rows-replace-the-proxy-index.md`) with their design in
+queries return, and when a request is refused. The decisions behind it are in ADR 0087
+(`docs/adr/0087-near-band-and-thresholded-far-pairs.md`), including its clarification of
+7 November 2026, each store's encoding of r in ADR 0090
+(`docs/adr/0090-per-store-encoding.md`), the Far Pairs beside the Proxy Index in ADR 0093
+(`docs/adr/0093-far-pairs-beside-the-proxy-index.md`), the ALID search index in ADR 0096
+(`docs/adr/0096-alid-search-index.md`), and the Partner Rows in ADR 0097
+(`docs/adr/0097-partner-rows-replace-the-proxy-index.md`) with their design in
 `docs/spec/partner-rows.md`; the build inputs are in `docs/spec/build-inputs.md` (ADR
-0002); the terms are in
+0088); the terms are in
 `CONTEXT.md`. **ALID**, its **A1** and **Reference Assembly** are the engine's
 (opengwas/opengwasdb `CONTEXT.md`, _Variant Identity_), not redefined here. The engine's glossary
 says an ALID is formed after "upper-casing, trimming and left alignment"; its code at `1ab2b09`
-only upper-cases, requires A, C, G, T and sorts the two alleles, and so does ogld (ADR 0003).
+only upper-cases, requires A, C, G, T and sorts the two alleles, and so does ogld (ADR 0089).
 
 The numbers that chose the layout and the codec come from prototypes run on real HGDP+1kGP
 chr22 genotypes. They are on the prototype branch `proto/1-ld-store-layout`, and each is cited as
 `proto/1-ld-store-layout@65f94ca:<path>`, so a citation stays fixed if the branch moves.
 
-The semantics of §3, §8 and §9 are implemented in `ogld/format/`, and `tests/test_format.py`
+The semantics of §3, §8 and §9 are implemented in `opengwasdb/ld/format/`, and `tests/ld/test_format.py`
 holds that code to this document's tables.
 
 Normative language:
@@ -42,13 +42,13 @@ its row, and its upstream partners are its column, one element in each earlier r
 Pairs (§5) hold the pairs drawn as Far Pairs, each in its earlier variant's row, so a matrix reads
 them. The Partner Rows (§5) hold the pairs a lead needs at r̂² ≥ its distance's floor in both
 variants' rows, so a variant's partners on both sides are one frame read. The Proxy Index, which
-held every Far Pair and every Near Band pair at r̂² ≥ t_far in both rows, is gone (#72)._
+held every Far Pair and every Near Band pair at r̂² ≥ t_far in both rows, is gone (opengwas/ogld#72)._
 
 ## 1. Envelope
 
 An LD Store is one directory holding one Zarr v3 hierarchy, with its group metadata at the root.
 Its arrays are written with the `sharding_indexed` codec (§6). There MUST be exactly one LD Store
-per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
+per (**Source Panel**, **Reference Assembly**) (ADR 0087, decision 1).
 
 ```text
 <ld store>/                  Zarr v3 group; attribute "ld_store": format version, encoding, provenance (§7)
@@ -58,7 +58,7 @@ per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
 │   ├── a1                   string (UTF-8)
 │   ├── a2                   string (UTF-8)
 │   ├── a1_frequency         float32
-│   └── alid_index/          the ALID search index (§2; ADR 0010)
+│   └── alid_index/          the ALID search index (§2; ADR 0096)
 │       ├── alid             uint8, 32 bytes an entry: the key, NUL right-padded
 │       └── row              int32, the Variant Set row of each entry
 ├── near/<chrom>/            the Near Band of one chromosome (§4)
@@ -76,14 +76,14 @@ per (**Source Panel**, **Reference Assembly**) (ADR 0001, decision 1).
 `<chrom>` is the engine's canonical chromosome label (`1`–`22`, `X`, `Y`, `MT`, no `chr` prefix).
 The format allows every one of them. For now a builder builds autosomes only and refuses a record
 on X, Y, a PAR or MT, because the diploid dosage model has no rule for a male's hemizygous
-genotypes (ADR 0002, decision 9). Each chromosome of the Variant Set has its own `near/<chrom>`,
+genotypes (ADR 0088, decision 9). Each chromosome of the Variant Set has its own `near/<chrom>`,
 `far/<chrom>` and, from 0.2.0, `partners/<chrom>` groups. No component crosses a
 chromosome, so per-chromosome
 arrays lose nothing. They also let a builder
 write chromosomes in parallel: a Zarr shard is written whole, and no shard can then span two
 chromosomes.
 
-**The Partner Rows** (format 0.2.0; ADR 0011, `docs/spec/partner-rows.md`) are
+**The Partner Rows** (format 0.2.0; ADR 0097, `docs/spec/partner-rows.md`) are
 `partners/<chrom>/`, a Zarr v3 group per chromosome. It holds that chromosome's Partner Rows:
 for each variant, every partner within `far_bp` on either side whose Stored r reaches the Partner
 Floor within `near_bp` and the far code floor beyond it, in both variants' rows with the same code
@@ -94,11 +94,11 @@ back, and `frames_idx`, `uint64`, their F + 1 byte offsets. The group's attribut
 manifest beside them would carry: the rows, the rows to a frame, the frame count, the
 entry count, the chunk files' sizes and SHA-256s, and the zstd level. A reader resolves the chunk
 file's path from the array's metadata, never by assuming one. `clump` and `proxies` read the
-Partner Rows from #71, and the Proxy Index went with them (#72): 0.2.0 holds none, and a store
+Partner Rows from opengwas/ogld#71, and the Proxy Index went with them (opengwas/ogld#72): 0.2.0 holds none, and a store
 that still carries a leftover `index/` is read and validated exactly as one without it (§12).
 A 0.1.0 store has no `partners/`.
 
-An LD Store MUST NOT contain individual-level data (ADR 0001, decision 5): no genotypes, no sample
+An LD Store MUST NOT contain individual-level data (ADR 0087, decision 5): no genotypes, no sample
 identifiers, no per-sample values of any kind. A reader ignores any array or group it does not know.
 
 ## 2. Variant table (`variants/`)
@@ -124,16 +124,16 @@ identifiers, no per-sample values of any kind. A reader ignores any array or gro
 - `a1_frequency` is A1's frequency in the Source Panel's samples, after the variant filters,
   `float32`.
 
-A local Store may also carry the validated mmap companion in §14 (ADR 0012); it copies
+A local Store may also carry the validated mmap companion in §14 (ADR 0098); it copies
 this index, which remains canonical, and changes no row or Pair Answer.
 
-**The ALID search index** (`variants/alid_index/`, owner, 15 November 2026; ADR 0010). It holds
+**The ALID search index** (`variants/alid_index/`, owner, 15 November 2026; ADR 0096). It holds
 the Variant Set's ALIDs again, as fixed-width keys a binary search can run over:
 `alid` is one 32-byte key an entry — the ALID's UTF-8 bytes, NUL right-padded — and `row` the
 Variant Set row of that entry. The entries are sorted by key, bytewise; two ALIDs of one length
 differ only in their own bytes, and padding with NUL sorts an ALID before every ALID it is a
 prefix of, which is the order the engine's own index has. It holds every ALID whose UTF-8 form
-is at most 32 bytes, which is the engine's rule and its width (`is_indexable_alid`; ADR 0010). An ALID wider than the slot MUST be left out of the
+is at most 32 bytes, which is the engine's rule and its width (`is_indexable_alid`; ADR 0096). An ALID wider than the slot MUST be left out of the
 index and counted in `counts.alids_left_out` (§7), never cast into it: the cast truncates, and
 two indels at one position that agree over the slot then share one key, so a lookup by either
 returns whichever row sorts first — one variant answering to another's name, with nothing to
@@ -150,16 +150,16 @@ parses a position or decodes a string. A query naming rows returns the table's A
 matrix or a clump returns them for the rows it chose. The index is what the strings are not: an
 array of fixed-width keys, sorted, that a binary search — or numpy's — runs over. Reading ALIDs
 as strings cost 59 s of the 94 s that finding the variants of #403's 37 Analyses took, through
-Zarr's variable-length path, and the keys cost a fraction of that (`docs/benchmarks/alid-index.md`).
+Zarr's variable-length path, and the keys cost a fraction of that (`docs/benchmarks/ld/alid-index.md`).
 
 Both are stored, not derived from the other columns, so a reader never reimplements identity,
 and validation checks the table against (`chromosome`, `position`, `a1`, `a2`) with the identity
-function #3 settles, and the index against the table (§12). Keeping both as Zarr arrays leaves
+function opengwas/ogld#3 settles, and the index against the table (§12). Keeping both as Zarr arrays leaves
 the whole LD Store one Zarr hierarchy that a client reads over HTTP. A reader in another
 language needs Zarr's variable-length string extension for the table and nothing but a byte
 array for the index, which is why the key is `uint8` and not a fixed-length bytes type: Zarr v3
 has no `|S32` data type of its own, and zarr-python 3.4.2 writes one as `null_terminated_bytes`,
-an extension it marks unstable and that other implementations do not read (ADR 0010).
+an extension it marks unstable and that other implementations do not read (ADR 0096).
 zarr-python 3.4.1 writes and reads these strings inside sharded arrays (the prototype's stores,
 `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/s05_build_stores.py`).
 
@@ -173,7 +173,7 @@ variants i and j, where A1 is each variant's engine A1. A reader that flips one 
 flips the sign of every r it is in.
 
 **Quantisation.** r is stored as an `int16` code at the store's scale s, a whole number from 1
-to 32767 that the store records as `encoding.r_scale` (§7; ADR 0004):
+to 32767 that the store records as `encoding.r_scale` (§7; ADR 0090):
 
 ```text
 code = clamp(rint(r × s), −s, +s)      rint rounds half to even (IEEE 754, numpy.rint)
@@ -186,7 +186,7 @@ r̂    = code / s                          the Stored r a reader gets back
 | −s … +s | r̂ = code / s; r = ±1 is ±s exactly |
 | any other | past the scale: never a correlation, since \|r̂\| would exceed 1. A valid LD Store holds none |
 
-**Each store's scale is its own** (owner, 10 November 2026; ADR 0004). The step is 1/s and the
+**Each store's scale is its own** (owner, 10 November 2026; ADR 0090). The step is 1/s and the
 quantisation error at most half of it, 1/(2s):
 
 | LD Store | encoding | step | max error in r |
@@ -204,13 +204,13 @@ fewer bits a pair than at × 32767; a whole chr22 build at k = 10 measured 1.68�
 - **Every encoding shares one container**: `int16` codes, −32768 reserved, half-to-even rounding.
   The scale is symmetric, so negating a code to flip an allele never overflows, and r = ±1 is
   exact. At × 32767 it is magenpy's `int16` scale (1 / `iinfo(int16).max`). An `int8` container
-  is not built (ADR 0004).
+  is not built (ADR 0090).
 - **The clamp is for float error only.** A computed r that is not finite, or whose magnitude
   exceeds 1 by more than 10⁻⁶, is a builder fault, and quantising refuses it rather than store a
   plausible ±1.
 - **The reserved code is the fill value, so an unwritten chunk can never read as r = 0.** In a
   Zarr array, a chunk that was never written reads as the fill value. With a fill value of 0, a
-  build that lost a chunk would hand readers a run of plausible zeros, which ADR 0001 forbids.
+  build that lost a chunk would hand readers a run of plausible zeros, which ADR 0087 forbids.
   With −32768 the same loss reads as a code that validation (§12) and every reader reject, at
   every scale.
 - **There is no "undefined" code.** r is undefined only for a variant with no genotype variance
@@ -225,7 +225,7 @@ fewer bits a pair than at × 32767; a whole chr22 build at k = 10 measured 1.68�
 - The scale, dtype, reserved code and rounding are recorded in `encoding` (§7). A reader MUST
   refuse an LD Store whose `encoding` it does not implement, and MUST decode every code at the
   scale its own store records: one process reads stores of different scales side by side
-  (`ogld.format.REncoding` is the one place that quantises and decodes).
+  (`opengwasdb.ld.format.REncoding` is the one place that quantises and decodes).
 
 **Thresholds are judged on the Stored r.** A pair reaches an r² threshold t when r̂² ≥ t,
 computed in float64. Every rule below uses this comparison: the Far Pairs' and the Partner Rows'
@@ -240,7 +240,7 @@ reads back as r̂² = 0.0099609 and does not reach it, while 0.0102 is code 52, 
 ogld#6 lists any pair like this, at the store's own step, when it compares clumping with
 `plink2 --clump`.
 
-For imported Pan-UKB EUR (ADR 0015), n = 420,542 and k = 15 named
+For imported Pan-UKB EUR (ADR 0101), n = 420,542 and k = 15 named
 covariates, not only PCs. Thus 20.84 / (420,542 − 15 − 1) = 0.00004955698;
 `t_far = max(0.001, 0.00004955698) = 0.001`. At ×2047,
 √0.001 × 2047 = 64.73182370, giving far code floor 65. The Partner
@@ -266,12 +266,12 @@ Pair when that reaches the floor, and reads as the Bound when it does not. In tr
 between the two is ((`far_code_floor` − ½) / s)². That cut lies within about √t_far / s of
 t_far, on either side. So a pair whose true r² is up to that much above t_far can read
 "r² < t_far". The table gives each panel at its own scale, on the samples each build keeps: the
-unrelated ones (ADR 0002, decision 11), EUR 665, AFR 608, EAS 724, SAS 672 and AMR 341. The Test
+unrelated ones (ADR 0088, decision 11), EUR 665, AFR 608, EAS 724, SAS 672 and AMR 341. The Test
 Panel keeps all 771 EUR members (owner's ruling), so the Test Store has a row of its own. The
 method is the prototype's
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/t_far_edge.tsv`, on the
 gnomAD v3.1.2 counts, at × 32767); each value was computed in 50-digit decimal arithmetic outside
-ogld, and `tests/test_format.py` holds the code to every row.
+ogld, and `tests/ld/test_format.py` holds the code to every row.
 
 | LD Store | scale | n | k | t_far | √t_far × s | far code floor | a pair at exactly t_far | true r² cut |
 |---|---|---|---|---|---|---|---|---|
@@ -294,7 +294,7 @@ AMR it reads as the Bound: a true r² up to 0.0320627 on EUR, 0.0349273 on AFR, 
 and 0.0632360 on AMR reads "r² < t_far". On UK Biobank EUR a pair at exactly t_far is stored, and
 so is one down to 0.0009929. At × 32767 the same rule gives floors of 1037 (UK Biobank EUR) and
 5850 (HGDP+1kGP EUR, k = 10, which the × 32767 chr22 build of §6 records), and cuts within
-8×10⁻⁶ of t_far; `tests/test_format.py` keeps those floors too. The walkthrough "A pair at
+8×10⁻⁶ of t_far; `tests/ld/test_format.py` keeps those floors too. The walkthrough "A pair at
 exactly t_far" in `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` steps
 through these cases at × 32767 on the gnomAD v3.1.2 counts.
 
@@ -311,7 +311,7 @@ For chromosome c with n_c rows, local rows l = 0 … n_c − 1 and positions p_l
 - The **distance** of a pair is d = |p_m − p_l| in base pairs, on one chromosome. Two variants at
   one position (d = 0, such as the records of a split multi-allelic site) are a pair.
 - Each pair is stored once, in the row of its earlier variant: row l holds every m > l with
-  d ≤ `near_bp`, in ascending m. `near_bp` is 3,000,000 (ADR 0001, decision 2; §7). Its length is
+  d ≤ `near_bp`, in ascending m. `near_bp` is 3,000,000 (ADR 0087, decision 2; §7). Its length is
   len_l = |{m > l : p_m − p_l ≤ near_bp}|. A row stops at its chromosome's last variant.
 - `indptr` has n_c + 1 entries: indptr[0] = 0 and indptr[l + 1] = indptr[l] + len_l.
 - `r` holds the rows back to back: r(l, m) is at `r[indptr[l] + (m − l − 1)]`.
@@ -329,7 +329,7 @@ about 3.7×10¹⁰ (`largest_chromosome_mac20` in
 
 **The Far Pairs** (`far/<chrom>/`) hold, once each, in the earlier variant's row, every pair more
 than `near_bp` and at most `far_bp` apart whose Stored r reaches t_far, as the Near Band holds its
-pairs (owner, 12 November 2026; ADR 0007):
+pairs (owner, 12 November 2026; ADR 0093):
 
 - Row l holds every m > l with `near_bp` < p_m − p_l ≤ `far_bp` and |code(l, m)| ≥
   `far_code_floor` (§3), in ascending m. `far_bp` is the distance the store measured: 10,000,000
@@ -346,8 +346,8 @@ pairs (owner, 12 November 2026; ADR 0007):
   and no index entry (§10).
 
 The Proxy Index (`index/<chrom>/`) held every pair within `far_bp` at r̂² ≥ t_far in both
-variants' rows, so a variant's partners on both sides were one read. It is **gone** (#72;
-ADR 0011): the Partner Rows hold every entry it held, and `clump` and `proxies` read them. §11
+variants' rows, so a variant's partners on both sides were one read. It is **gone** (opengwas/ogld#72;
+ADR 0097): the Partner Rows hold every entry it held, and `clump` and `proxies` read them. §11
 keeps the measurements that chose it and the ones that replaced it.
 
 At k = 0, 9.4×10⁻⁵ (EUR) to 2.3×10⁻³ (AMR) of chr22's 3–10 Mb pairs are Far Pairs
@@ -355,7 +355,7 @@ At k = 0, 9.4×10⁻⁵ (EUR) to 2.3×10⁻³ (AMR) of chr22's 3–10 Mb pairs a
 1.0% (AFR) to 2.4% (AMR) of Near Band pairs reach t_far
 (`proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/upstream_alternatives_sizes_inner262144.tsv`).
 
-****The Partner Rows** (`partners/<chrom>/`; format 0.2.0, written by #67, derived by #69) hold,
+****The Partner Rows** (`partners/<chrom>/`; format 0.2.0, written by opengwas/ogld#67, derived by opengwas/ogld#69) hold,
 for each variant, every partner within `far_bp` on either side whose Stored r reaches the
 **Partner Floor** (§3) within `near_bp` and the far code floor beyond it, in both variants' rows
 with the same code. They are the Proxy Index's rule at t_partner instead of t_far, so they hold
@@ -364,7 +364,7 @@ at the far code floor is at the Partner Floor too. Rows are grouped 16 to a zstd
 group, its two arrays and the frame bytes are `docs/spec/partner-rows.md` §5. Every code is a
 copy of one the store already holds, a Near Band code within `near_bp` or a Far Pair beyond it, in
 a second layout chosen so a lead is one positional read; `partners.near` and `partners.far`
-(§12) hold the copies to one code per pair. `clump` and `proxies` read them from #71, and they are
+(§12) hold the copies to one code per pair. `clump` and `proxies` read them from opengwas/ogld#71, and they are
 the only component those two queries read.
 
 ## 6. Physical layout
@@ -380,7 +380,7 @@ array has one codec chain. The shard index is `bytes` then `crc32c`, at the end 
 
 A shard MUST be a whole multiple of its inner chunk. An array shorter than its shard has one
 shard, clipped to the smallest whole number of inner chunks that covers it, as in the engine's
-spec §10a. An inner chunk longer than its array is clipped to the array.
+ld-store §10a. An inner chunk longer than its array is clipped to the array.
 
 | array | dtype | shape | inner chunk | shard | fill value |
 |---|---|---|---|---|---|
@@ -419,7 +419,7 @@ array, no shard index, and `bytes` alone for `frames` (§1, `docs/spec/partner-r
 Their chunk files' sizes and SHA-256s are the group's attributes, so `envelope.fill` and the rest
 of this section's rules apply to them only where §12's Partner Rows rules say so.
 
-**How a store is written** (ogld#17, ADR 0005). Every producer, a build or an import of a
+**How a store is written** (ogld#17, ADR 0091). Every producer, a build or an import of a
 published r, writes through `StoreWriter`, and the store makes its arrays from the r it is given,
 block of rows by block of rows, in row order. Every pair within a row's `far_bp` is judged as it
 is written. A value that is NaN, infinite, or past ±1 beyond §3's float allowance is refused,
@@ -427,7 +427,7 @@ naming the pair. So a pair the producer did not measure is never stored, and nev
 because it was taken to lie below the floor. A chromosome's Near Band `r` and `indptr` are created at its first
 block, since their lengths follow from the positions (§4). Its codes are written a whole shard at
 a time, the only write zarr makes without reading a shard back, and less than one shard is carried
-to the next block. The Far Pairs are written row by row (ADR 0007, decision 2): a cut already
+to the next block. The Far Pairs are written row by row (ADR 0093, decision 2): a cut already
 holds its block's pairs at the floor, ascending, and marks which lie beyond `near_bp`, and a row's
 Far Pairs all lie in its own block. So each block's rows of `far/<chrom>/` are complete when the
 block arrives, nothing is carried and r is not read twice; `partner` and `r` grow a whole shard at
@@ -473,7 +473,7 @@ from `proto/1-ld-store-layout@65f94ca:prototypes/ld-store-layout/results/codecs_
 (§10), as (inner chunk, shard) in codes: A (4,096, 4,194,304), B (32,768, 16,777,216) and C
 (262,144, 67,108,864). The Proxy Index took the variant column read out of the proxies query at
 r2 ≥ t_far then, and with it C's largest lead: C decoded that column 8.0× faster than B (0.39 s
-against 3.13 s). That component is gone (#72); what decides the layout now is the reads that
+against 3.13 s). That component is gone (opengwas/ogld#72); what decides the layout now is the reads that
 remain.
 
 - **A is ruled out.** A 3 Mb LD matrix took 21 s from local disk, against 3.7 s for B and 2.0 s
@@ -496,9 +496,9 @@ remain.
   with 20 ms added per request, in 4 requests, on the shape in the table above (§11) — and from
   0.2.0 it is one frame, one read (§10).
 
-**The layout is C** (owner, 12 November 2026, on ogld#8; ADR 0006). ogld#8 built HGDP+1kGP EUR
+**The layout is C** (owner, 12 November 2026, on ogld#8; ADR 0092). ogld#8 built HGDP+1kGP EUR
 chr22 in each layout and timed the reads that differ, locally and over HTTP from a static host
-with 0, 10 and 50 ms added to every request (`docs/benchmarks/latency.md`). Clumping below t_far,
+with 0, 10 and 50 ms added to every request (`docs/benchmarks/ld/latency.md`). Clumping below t_far,
 the read that costs most, was fastest on C at every latency: 12.3, 44 and 143 s locally, at 10 ms
 and at 50 ms for 27 Analyses' chr22 hits, against B's 17.1, 132 and 488 s, because GWAS hits are
 dense and a C chunk serves many of a lead's hits in one call. C read regions fastest and is the
@@ -512,7 +512,7 @@ HGDP+1kGP EUR's Near Band and 3,457 for AFR's, against the 2,800 and 7,200 the e
 gave at × 32767. The variant table, the Far Pairs and their companion arrays use one shape,
 16,384 inner and 1,048,576 to a shard. These arrays are read whole, by row range, or one sparse
 row at a time, and the prototype's stores used this shape for them. The ALID index added later is
-the exception (ADR 0010): its `alid` byte array uses 262,144 bytes to an inner chunk and
+the exception (ADR 0096): its `alid` byte array uses 262,144 bytes to an inner chunk and
 16,777,216 to a shard, and its `row` array uses 262,144 and 1,048,576 rows. Coarsening a sparse
 component's shard would change no reader; ogld#8 measured no read that needed it.
 
@@ -546,7 +546,7 @@ phased v2 callset converted by `docs/spec/build-inputs.md` §3, the 665 unrelate
 keep file, k = 10 from `/data/opengwasdb/work/ogld/pcs/EUR.eigenvec`, 8 threads, at ogld
 `88cb8e9`: 119,632 variants and 1,165,485,828 Near Band pairs, on layout C. Bytes
 are those of the arrays' files on disk; the Proxy Index's were its `indptr`, `partner` and `r`
-together — the component those stores then held, which #72 removed.
+together — the component those stores then held, which opengwas/ogld#72 removed.
 
 | encoding | Near Band | bits per pair | against × 32767 | Proxy Index entries | Proxy Index | bits per entry |
 |---|---|---|---|---|---|---|
@@ -560,7 +560,7 @@ to within 1.5%, though not with their bits. The index holds slightly fewer entri
 because the far code floor's cut moves with the scale (§3): 101,886 Far Pairs against 105,272.
 
 **Sizes, measured** (ogld#7). The five stores as built, with the Proxy Index they held until
-#72 removed it: the phased v2 callset converted by
+opengwas/ogld#72 removed it: the phased v2 callset converted by
 `docs/spec/build-inputs.md` §3, each panel's unrelated samples (EUR 665, AFR 608, EAS 724, SAS 672,
 AMR 341), MAC ≥ 20, k = 10, × 511, 16 threads, on layout C, at ogld
 `0.0.1.dev230+g5d78804cb`. Bytes are those of each array group's files on disk (`near/`, `index/`;
@@ -578,7 +578,7 @@ entries, which a store now lacks.
 | **Total** | 47.2 M | 539,567,716,377 | 486.1 GB | 7.21 | 24,516,005,900 | 45.2 GB | 14.76 | 531.9 GB |
 
 The five total 532 GB, 0.53 TB, before their Far Pairs (ogld#31). Those were derived in place
-from each store's own index (ADR 0007) and add 1.46 GB, 0.27%: 18.5 bits a pair on disk, 3.2% of
+from each store's own index (ADR 0093) and add 1.46 GB, 0.27%: 18.5 bits a pair on disk, 3.2% of
 the index's bytes. Bytes are those of `far/`'s files; raw, a pair is 6 bytes.
 
 | LD Store | Far Pairs | per variant | `far/` | bits per pair | against the index | of the store |
@@ -626,11 +626,11 @@ That list is a subset of the MAC ≥ 20 set and cannot count it.
 
 The root group attribute `ld_store` is a JSON object. Every key below is REQUIRED, with the type
 shown. A value may be null only where the table says so. Other keys MAY appear, and a reader
-ignores the ones it does not know. The types are `ogld.format.Provenance`, and
-`ogld.format.REQUIRED_KEYS` lists the keys.
+ignores the ones it does not know. The types are `opengwasdb.ld.format.Provenance`, and
+`opengwasdb.ld.format.REQUIRED_KEYS` lists the keys.
 
-**Who records what** (owner, 10 November 2026; ogld#17, ADR 0005). A store's producer gives the keys only
-its source knows, `ogld.format.Sourced`: `source`, `panel`, `reference_assembly`,
+**Who records what** (owner, 10 November 2026; ogld#17, ADR 0091). A store's producer gives the keys only
+its source knows, `opengwasdb.ld.format.Sourced`: `source`, `panel`, `reference_assembly`,
 `variant_filters`, `variants_dropped`, `adjustment`, `pc_diagnostic`, `software` and `build`. The
 store derives the rest from itself when it is finished: `format_version`, `encoding`, `n_variants`,
 `near_bp`, `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It takes t_far's n and k
@@ -641,7 +641,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 |---|---|---|
 | `format_version` | string | `"0.1.0"` before the Partner Rows, `"0.2.0"` with them (§13) |
 | `encoding.r_dtype` | string | `"int16"`, the container of every admitted encoding (§3) |
-| `encoding.r_scale` | int | the store's scale s, a whole number from 1 to 32767: r̂ = code / s. 511 for the HGDP+1kGP stores, 2047 for UK Biobank EUR (ADR 0004); a build records the `r_scale` it was given |
+| `encoding.r_scale` | int | the store's scale s, a whole number from 1 to 32767: r̂ = code / s. 511 for the HGDP+1kGP stores, 2047 for UK Biobank EUR (ADR 0090); a build records the `r_scale` it was given |
 | `encoding.r_reserved_code` | int | −32768 |
 | `encoding.rounding` | string | `"half_to_even"` |
 | `source.kind` | string | `"genotypes"`: built from a Source Panel's genotypes; `"ld_matrix"`: imported from a published LD matrix, such as Pan-UKB's |
@@ -668,12 +668,12 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `far_code_floor` | int | §3 |
 | `t_partner` | float | the **Partner Threshold**: the r² a pair within `near_bp` must reach to be in the Partner Rows, never above `t_far` (0.2.0; `docs/spec/partner-rows.md` §3) |
 | `partner_code_floor` | int | the **Partner Floor**: §3's floor rule at `t_partner` (0.2.0) |
-| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `ogld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
+| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `opengwasdb.ld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
 | `counts.near_pairs` | int | Near Band codes, over all chromosomes |
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them whose \|code\| reaches `far_code_floor`, each counted once; the entries of every `far/<chrom>/` together |
 | `counts.partner_entries` | int | Partner Rows entries, both directions, over all chromosomes: each `partners/<chrom>/` group's `entries` (0.2.0) |
-| `counts.alids_left_out` | int | the table's count of ALIDs wider than the ALID index's 32-byte slot, counted from `variants/alid`, whose rows the index has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0010) |
+| `counts.alids_left_out` | int | the table's count of ALIDs wider than the ALID index's 32-byte slot, counted from `variants/alid`, whose rows the index has no entry for; the index holds the other `n_variants` − this many (`n_variants − len(variants/alid_index/row)`), and each of these is found by the exact scan at its position (§2; ADR 0096) |
 | `software` | object | versions, by package name. A build from genotypes records exactly `ogld`, `numpy`, `zarr`, `zstd` and `pgenlib`, its genotype reader (ogld#5's review); `ogld` is the installed version, which names the commit that built the store when the install is fresh (the realdata tier refuses a stale one) |
 | `software.zstd` | string | the zstd library's version, because the Partner Rows' frame bytes depend on it (0.2.0); a build records it, so it is required with them |
 | `build.created_at` | string | ISO 8601 UTC |
@@ -681,9 +681,9 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `build.peak_memory_bytes` | int | peak memory over the same span: the build's own on Linux, whose high-water mark the build resets when it starts; elsewhere the process's |
 | `build.threads` | int | threads used: the build's worker threads, which bound it, since BLAS runs one thread inside a build |
 
-**The Partner Rows' keys (format 0.2.0; written by #67, derived by #69).** The four keys at
+**The Partner Rows' keys (format 0.2.0; written by opengwas/ogld#67, derived by opengwas/ogld#69).** The four keys at
 `t_partner`, `partner_code_floor`, `counts.partner_entries` and `software.zstd` are in the table
-above, and in `ogld.format.REQUIRED_KEYS` with it. Each is required only of a store whose
+above, and in `opengwasdb.ld.format.REQUIRED_KEYS` with it. Each is required only of a store whose
 `format_version` is `0.2.0`: a 0.1.0 store has no Partner Rows, so it has none of their keys.
 
 - `t_partner` (float): the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
@@ -695,7 +695,7 @@ pairs the Partner Rows hold, as each chromosome's `entries` attribute gives it.
 - `software.zstd` (string): the zstd library's version, because a frame's bytes depend on it.
 
 `counts.index_entries` was the Proxy Index's count — both directions, the Near Band's pairs included
-— and it went with the component in #72. A store that still records it is not failed for it: §7
+— and it went with the component in opengwas/ogld#72. A store that still records it is not failed for it: §7
 lets a store hold keys a reader does not know, and no rule reads this one (§12).
 
 `pc_diagnostic` holds `pairs` (the pair set: `source`, opengwas/opengwasdb#405's seeded
@@ -722,14 +722,14 @@ LD survives").
 The provenance holds counts, hashes and settings, never a sample identifier or a per-sample value.
 
 **Why the source, the covariates and the distances are recorded.** Pan-UKB publishes LD matrices
-that a later epic may import (epic #1, comment of 7 November 2026). They are in-sample dosage r
+that a later epic may import (epic opengwas/ogld#1, comment of 7 November 2026). They are in-sample dosage r
 over ±10 Mb, adjusted for age and sex terms as well as 10 within-ancestry PCs, on GRCh37
-(epic #1, comment "Pan-UKB LD as a source: evidence for a later epic"). An imported store therefore needs to say that it
+(epic opengwas/ogld#1, comment "Pan-UKB LD as a source: evidence for a later epic"). An imported store therefore needs to say that it
 was not built from genotypes here, to name every covariate t_far's k counts, and to record the
 distance it measured, which a lift to GRCh38 can shorten. These keys cost nothing now and would be
 a format change later.
 
-**PCs are supplied, and the builder chooses among them** (owner, 7 November 2026; ADR 0002).
+**PCs are supplied, and the builder chooses among them** (owner, 7 November 2026; ADR 0088).
 ogld's library runs no PCA. The PCs are our own, made outside it by a recipe script that follows
 gnomAD's subcontinental method with the Long-Range LD Regions ±2 Mb excluded, and a build reads
 them from a PC File. The builder then runs the PC Check, the owner's local-PC rule: a PC is
@@ -742,9 +742,9 @@ records the target, the minimum and the k used, the PC File's
 hash and declared source and the whole scan, not a PCA method or LD pruning. A PC that tracks a
 region the rest of the genome also explains, such as EUR's north–south axis through LCT (ratio
 0.104), is ancestry and is kept; an inversion's karyotype axis (ratio 0.007–0.019) is dropped
-(ADR 0002 has the evidence). The ratio cannot fall much below 5 / (n × window share), so the rule
+(ADR 0088 has the evidence). The ratio cannot fall much below 5 / (n × window share), so the rule
 needs a few hundred samples: every HGDP+1kGP panel keeps at least 341, AMR's unrelated samples
-(ADR 0002, decision 11), well above the about 100 below which no ratio reaches 0.05.
+(ADR 0088, decision 11), well above the about 100 below which no ratio reaches 0.05.
 
 **Genotypes are complete.** The builds read the phased HGDP+1kGP v2 callset, which has no missing
 calls, and a build refuses any input with one. So there is no imputation of missing calls and no
@@ -801,7 +801,7 @@ Measured alike.
   and positions, t_far and the store's distances. A NaN between two variants on one chromosome
   more than `near_bp` and at most `far_bp` apart is the Bound; any other NaN is Not Measured. No
   NaN can lie within `near_bp`, because the Near Band is complete. So no second matrix of kinds is
-  returned. `ogld.format.answer_kinds` reads the kinds back from a matrix made without a fill,
+  returned. `opengwasdb.ld.format.answer_kinds` reads the kinds back from a matrix made without a fill,
   and refuses one it cannot vouch for: a NaN within `near_bp`, a number where the store holds
   nothing, or a number beyond `near_bp` below t_far.
 - **`fill` is the caller's.** A reader MUST NOT put a number in place of an unstored pair unless
@@ -815,7 +815,7 @@ Measured alike.
 
 This replaces the earlier rule that a reader returning a plain numeric matrix must refuse when any
 pair is not a Stored r, and the epic's acceptance criterion that no query turns an unstored pair
-into a 0, for a query whose caller asks for a fill (ADR 0001, clarification of 7 November 2026).
+into a 0, for a query whose caller asks for a fill (ADR 0087, clarification of 7 November 2026).
 
 ## 9. Queries and refusals
 
@@ -832,7 +832,7 @@ r̂² (§3).
 `proxies` considers the pairs with d ≤ W, where W = kb × 1,000 bp, and a pair reaches the threshold
 when r̂² ≥ r2 (§3). `clump` is the one exception, following `plink2 --clump` (owner, 10 November
 2026): it considers the pairs with d < W, and a pair reaches the threshold when r̂² > r2. The
-refusals below are the same for both. The refusals are ADR 0001's, compared with the distances the store
+refusals below are the same for both. The refusals are ADR 0087's, compared with the distances the store
 recorded (§7) and its recorded t_far, and from 0.2.0 its recorded t_partner:
 
 | request | format | answer |
@@ -860,7 +860,7 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   with a rounded display of either.
 - A 0.1.0 store records no `t_partner` and holds no `partners/<chrom>/`, so from 0.2.0 `clump` and
   `proxies` refuse it with an `ogld.InputError` naming the missing component and
-  `ogld derive-partners`, before any read. They are never answered from the Near Band and the
+  `opengwasdb ld derive-partners`, before any read. They are never answered from the Near Band and the
   Proxy Index it was answered from in 0.1.0: that fallback is what the Partner Rows exist to
   replace (§13;
   `docs/spec/partner-rows.md` §8.1).
@@ -873,27 +873,27 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
 - **`proxies`.** The defaults, r2 = 0.8 and a 10,000 kb window, are answered on every store with
   `far_bp` = 10 Mb, because every t_far is below 0.8. A variant is never its own proxy. Rows are
   grouped by query, in request order, then by r̂² descending, distance ascending and proxy ALID.
-  From 0.2.0 every answered r2 is one Partner Rows frame read (§10, #71). The two reads that
+  From 0.2.0 every answered r2 is one Partner Rows frame read (§10, opengwas/ogld#71). The two reads that
   answered a 0.1.0 store — the Proxy Index row above t_far, the Near Band's row and column below
-  it — went with the component in #72.
+  it — went with the component in opengwas/ogld#72.
 - **`region`.** Its chromosome passes through the engine's label normalisation
-  (`ogld.identity.normalise_chromosome`), so `chr22` reads as `22`. Its variants are those with
+  (`opengwasdb.variants.normalise.normalise_chromosome`), so `chr22` reads as `22`. Its variants are those with
   centre − radius ≤ position ≤ centre + radius, in the Variant Set's order.
 - **`clump`.** Greedy, strongest score first. The score is |z| or −log10 p, never raw p, which
   underflows to 0 for |z| over 38. Ties go to genomic order, then ALID. Each variant joins the
   strongest lead it reaches. plink2 compares r² with `>` and the window with `<` (checked on plink2 v2.0.0-a.6.9LM and
-  recorded beside the equality test, `tests/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
+  recorded beside the equality test, `tests/ld/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
   and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
 
-`ogld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
-called through `ogld.query.requests.window_of`, and it names the store it judged: a request below
+`opengwasdb.ld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
+called through `opengwasdb.ld.query.requests.window_of`, and it names the store it judged: a request below
 the store's `t_partner` within `near_bp` is answered with the r2 asked for, the `t_partner`
 recorded, and the two ways out — ask at or above that `t_partner`, or read a store derived at a
-lower one. `ogld.format.judge_request` is that table without the Partner Threshold's row — the
-0.1.0 table, which a call through `ogld` no longer reaches — and `ogld.format.judge_window` is the
-same rule for a window already in bp; `ogld.format.judge_region` judges a region. All but
+lower one. `opengwasdb.ld.format.judge_request` is that table without the Partner Threshold's row — the
+0.1.0 table, which a call through `opengwasdb.ld` no longer reaches — and `opengwasdb.ld.format.judge_window` is the
+same rule for a window already in bp; `opengwasdb.ld.format.judge_region` judges a region. All but
 one of them are the judge's: a `clump` score that is not one finite, non-negative number per ALID
-is refused as `invalid` by `ogld.query.clumping._checked_score`, because it depends on the score,
+is refused as `invalid` by `opengwasdb.ld.query.clumping._checked_score`, because it depends on the score,
 which the judges never see. The judge runs first.
 `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` drives them and the answer
 table interactively, with walkthroughs of the edge cases: exactly 3 Mb, exactly 10 Mb, r²
@@ -906,7 +906,7 @@ _Informative._ A reader keeps a chromosome's `position` range and its Near Band'
 once it has opened that chromosome. Its Far Pairs' `indptr` is read when a request first needs
 pairs beyond `near_bp`: 8 bytes a variant each. For HGDP+1kGP EUR's
 8.59 M variants that is 69 MB of positions, which a reader holds as `int64`, and 137 MB of
-`indptr`, raw, and 69 MB more once matrices have been read on every chromosome. Each query makes one of the reader's reads (`ogld.store.StoreReader`, ogld#14),
+`indptr`, raw, and 69 MB more once matrices have been read on every chromosome. Each query makes one of the reader's reads (`opengwasdb.ld.store.StoreReader`, ogld#14),
 and the reads map onto the arrays as follows.
 
 | read | reader | made by | arrays it touches |
@@ -915,10 +915,10 @@ and the reads map onto the arrays as follows.
 | a region | `region_r` | `region` | for each of its rows, one contiguous slice of `near/<c>/r`, from the row's first code to its last partner inside the region, never its partners past the region; for its pairs beyond `near_bp`, the Far Pairs rows of its variants, each pair inside the region scattered into the matrix |
 | a submatrix for any variant list | `pair_r` | `matrix` | one element of `near/<c>/r` per pair within `near_bp`; for the pairs beyond it, the Far Pairs rows of the listed variants, each pair whose partner is listed scattered into the matrix |
 | a list of pairs, or one row against many | `r_of_pairs` | `pair_r`, within `near_bp` only | one element of `near/<c>/r` per pair within `near_bp`; the Far Pairs row of each farther pair's earlier variant, searched. `pair_r`'s pairs beyond `near_bp` are not looked up this way: they are scattered from Far Pairs rows, as its own row says |
-| a variant's Partner Rows row, or many at once | `partner_row`, `partner_rows` | `clump`; `proxies` | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. Many rows are read together only where their frames are physically adjacent. No `near/` array and no shard index. Format 0.2.0, #70 |
+| a variant's Partner Rows row, or many at once | `partner_row`, `partner_rows` | `clump`; `proxies` | the frame that holds the row (§10's Partner Rows paragraph): its byte range from the chromosome's `frames_idx` chunk, read out of the `frames` chunk file, decoded, and cached per reader. Many rows are read together only where their frames are physically adjacent. No `near/` array and no shard index. Format 0.2.0, opengwas/ogld#70 |
 
 In **0.1.0** the stored part a query read depended on its threshold, and the reader chose it; no
-query compared r2 with t_far itself. That reader and that choice are gone (#72): **from 0.2.0
+query compared r2 with t_far itself. That reader and that choice are gone (opengwas/ogld#72): **from 0.2.0
 there is no part to choose**, because `clump` and `proxies` read the Partner Rows at every
 answered r2, and only `matrix` and `region` read the Near Band and the Far Pairs. The Proxy Index
 row read, the Near Band's row and column reads and clump's use of the chunk cache, single-flight
@@ -934,13 +934,13 @@ The record of what a 0.1.0 store held and how a 0.1.0 reader chose it:
 | `proxies` | the Proxy Index row of each query variant | the Near Band row and column of each query variant, within W |
 | `clump` | the Proxy Index row of each lead, among the hits still unclumped | one Near Band element for each lead and each hit still unclumped within W |
 
-**From 0.2.0** (#70, #71), a variant's partners at every answered threshold are one frame read.
+**From 0.2.0** (opengwas/ogld#70, opengwas/ogld#71), a variant's partners at every answered threshold are one frame read.
 `partner_row` finds frame ⌊l / G⌋, reads its byte range from the chromosome's `frames` chunk file,
 verifies the content checksum and content size its zstd header declares and then the checksum,
 checks k and the payload length, and keeps the frame's decompressed payload in a byte-bounded LRU:
 256 MiB unless the caller sets another budget, the least recently used frame dropped first, and a
 row is unshuffled from its frame's payload for the row alone. **The 256 MiB default is measured**
-(#71): on GCST90476460 and the 37 chr22 Analyses in one reader, no cache made 4,323 frame reads,
+(opengwas/ogld#71): on GCST90476460 and the 37 chr22 Analyses in one reader, no cache made 4,323 frame reads,
 16 MiB 4,205, 64 MiB 4,188 and 256 MiB 4,132, and 1 GiB made the same 4,132, so 256 MiB is the
 smallest budget that kept every hit the workload offered (`docs/spec/partner-rows.md` §7). A local store's chunk file is held open and read with
 `os.pread`, one descriptor per chromosome, opened on its first use and closed with the reader; a
@@ -949,15 +949,15 @@ frame's bytes is a refusal. That cache is per reader and separate from the Near 
 cache, which keeps serving `matrix` and `region`: neighbouring leads often share a frame, and
 repeated Analyses on one reader hit it. A store of format 0.1.0, which holds no Partner Rows, is
 refused naming the missing component rather than answered from another one (§13), and a damaged
-frame is refused naming its chromosome and frame, never read as a short row. Measured on GCST90476460 (#65), whose 3,869 leads fall in
+frame is refused naming its chromosome and frame, never read as a short row. Measured on GCST90476460 (opengwas/ogld#65), whose 3,869 leads fall in
 95 components: G = 16 with four component workers read 3,854 frames and 101,810,367 bytes cold,
 with 15 cache hits, and did 1.067 s of LD work cold and 1.058 s warm. The Proxy Index row read,
 the Near Band's row and column reads and clump's use of the chunk cache, single-flight and
-admission went with the component (#72); everything else in this section stays for `matrix` and
-`region`. The owner accepted the LD work without the < 1 s target that #65 set, on a quiet
+admission went with the component (opengwas/ogld#72); everything else in this section stays for `matrix` and
+`region`. The owner accepted the LD work without the < 1 s target that opengwas/ogld#65 set, on a quiet
 re-time at `cc48a58`: cold medians of 2.30 / 1.55 / 2.95 s at 1 / 2 / 4 workers on GCST90476460,
-EUR k10, and warm medians of 0.98 / 0.97 / 1.35 s. The follow-up is #81, decode and gather plus
-the cost of ALID resolution; the worker default is #81's too (`docs/spec/partner-rows.md` §9).
+EUR k10, and warm medians of 0.98 / 0.97 / 1.35 s. The follow-up is opengwas/ogld#81, decode and gather plus
+the cost of ALID resolution; the worker default is opengwas/ogld#81's too (`docs/spec/partner-rows.md` §9).
 
 **From 0.2.0** `clump` splits the present hits into **components** — per chromosome, cut wherever
 two consecutive distinct positions are W or more apart — and runs each component's greedy strongest first inside it,
@@ -969,14 +969,14 @@ or allele frequencies it never returns.
 
 `clump` reads one Partner Rows row per lead — 3,869 for GCST90476460's whole input — and `proxies`
 one per present query variant; neither reads a Near Band element, and neither
-resolves a square among the hits (§9). `tests/test_partner_reads.py` holds the one row a lead, and
+resolves a square among the hits (§9). `tests/ld/test_partner_reads.py` holds the one row a lead, and
 `proxies` reading no string column but the ALIDs it returns. Neither query reads any array under
 `near/`: their positions and ALIDs come from `variants/`, their LD from
-`partners/<chrom>/`, and the chromosome ranges from the store's record (#71). `matrix`, `region`
+`partners/<chrom>/`, and the chromosome ranges from the store's record (opengwas/ogld#71). `matrix`, `region`
 and `pair_r` still read a chromosome's `near/<c>/indptr`, and its Far Pairs' `indptr` when their
 pairs reach beyond `near_bp`, as below.
 
-What the reads hold, measured with tracemalloc and held by `tests/test_partner_reads.py`:
+What the reads hold, measured with tracemalloc and held by `tests/ld/test_partner_reads.py`:
 
 - `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
   that step's Far Pairs rows. One row against many is never copied out to a full list.
@@ -988,9 +988,9 @@ What the reads hold, measured with tracemalloc and held by `tests/test_partner_r
   beside it. `matrix` and `region` apply a `fill` in place, so each holds one float64 copy of
   its result.
 
-**The reads on the built stores are measured in `docs/benchmarks/latency.md`** (ogld#8): the
+**The reads on the built stores are measured in `docs/benchmarks/ld/latency.md`** (ogld#8): the
 published EUR store from local disk and over HTTP at 0, 10 and 50 ms added per request, and EUR
-chr22 built in each layout. Those numbers decided the layout (ADR 0006) and supersede the
+chr22 built in each layout. Those numbers decided the layout (ADR 0092) and supersede the
 prototype's below, which are kept as the record of what chose layout C provisionally.
 
 The prototype timed each read on the EUR chr22 slice, a real Zarr v3 sharded LD Store (1.65 GB,
@@ -1031,14 +1031,14 @@ cold on that region took A 34.25 s, B 10.92 s, C 3.86 s.
 - The Proxy Index row that replaced the column read is in §11's table, and the frame that
   replaced both is §10's.
 
-**Local ALID companion** (ADR 0012). When present, the first fitting lookup validates and maps
+**Local ALID companion** (ADR 0098). When present, the first fitting lookup validates and maps
 §14's companion once; fitting names then use it for both hits and misses without column reads. The
 canonical-index/exact-scan description below applies without it, including on HTTP. Wider
 names retain the exact scan on either path.
 
 **How ogld reads** (ogld#4). Opening a store reads its provenance and its chromosome ranges, and
 refuses a `format_version` or `encoding` it does not implement (§13). A search for ALIDs reads the
-ALID index's two arrays, and only when they pay for themselves (ogld#42, ADR 0010). A list naming
+ALID index's two arrays, and only when they pay for themselves (ogld#42, ADR 0096). A list naming
 about a two-thousandth of the Variant Set's rows or more is searched in the index: an ALID that
 fits the slot finds its row there, without reading `variants/position` or
 `variants/alid` at all. A shorter list takes the exact scan for every ALID, which reads a few
@@ -1048,13 +1048,13 @@ chromosome's positions and the ALID strings there, as every ALID was found befor
 search can only be faster than it was. A chromosome's `position`
 range is read the first time anything touches that chromosome, through the numeric cache, and
 kept — by `loci_of`, the ALID exact scan, and every read of stored pairs alike, and from 0.2.0 once
-however many threads are cold on it (#71). Its Near Band's `indptr` is read the first time a request
+however many threads are cold on it (opengwas/ogld#71). Its Near Band's `indptr` is read the first time a request
 needs a stored pair there, which `clump` and `proxies` never do from 0.2.0. Its Far Pairs' `indptr`
 is read the first time a request needs its pairs beyond `near_bp`, so `proxies` and `clump`, which
-never do, read no more than they did before the Far Pairs (ADR 0007). From 0.2.0 a chromosome's `partners/<chrom>/` adds its group's attributes
+never do, read no more than they did before the Far Pairs (ADR 0093). From 0.2.0 a chromosome's `partners/<chrom>/` adds its group's attributes
 and the `frames_idx` chunk, read the first time a request asks for one of its rows, and a frame
 cache of its own (§10's Partner Rows paragraph). Every other read the reader makes goes through its cache of decoded inner chunks
-(`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
+(`opengwasdb.ld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case. So a query that reads a few
 pairs at a time fetches each chunk once: clumping the Test Store's 1,056 variants, one read per
 lead, took 3.6 s reading through Zarr call by call and 0.7 s with the cache, against 0.6 s for the
@@ -1063,11 +1063,11 @@ which bounds its working memory beside the matrix itself. Validation's rules rea
 directly, in bounded windows: one pass over each chromosome, and a second read of the blocks
 `partners.near` flags in a store it fails (§12).
 
-**Direct numeric decoding** (ogld#40; ADR 0009). For a one-dimensional numeric array whose
+**Direct numeric decoding** (ogld#40; ADR 0095). For a one-dimensional numeric array whose
 metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
 CRC32C in an end-located shard index, `location.py` reads through the store's async interface
 using its `decoding.py` backend. A one-byte dtype's `bytes` codec declares no byte order, and the
-backend reads it as it lies (ADR 0010); that is how the ALID index's keys are decoded directly. That backend owns shard/frame parsing and one process-shared
+backend reads it as it lies (ADR 0096); that is how the ALID index's keys are decoded directly. That backend owns shard/frame parsing and one process-shared
 seven-worker I/O/decode pool. Both declared
 byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
 means an empty chunk, which reads the declared fill value, just like a missing shard. CRC32C
@@ -1086,12 +1086,12 @@ Codec workspace and small index/job bookkeeping are additional to the decoded-by
 the cache budget does not bound RSS. The pool is reset after fork and shared across readers,
 not multiplied per chromosome. Applications budget zarr's I/O helpers separately.
 
-**The warming clump used to need, and its prefetch, are gone** (ogld#40 round 2; ADR 0009;
-removed by #72). Before a chromosome's greedy pass the reader warmed the union of Near Band chunks
+**The warming clump used to need, and its prefetch, are gone** (ogld#40 round 2; ADR 0095;
+removed by opengwas/ogld#72). Before a chromosome's greedy pass the reader warmed the union of Near Band chunks
 its candidate hit pairs could need, and a chromosome that did not fit used a sliding positional
 warm range of W around a lead, halved until it fits; warming had its own 256 MiB credit limit for
 compressed ranges, separate from the decoded flight allowance. `StoreReader.clump_warmer` went
-with the Near Band partner reads it served (#72), and `ChunkCache.prefetch` and everything only it
+with the Near Band partner reads it served (opengwas/ogld#72), and `ChunkCache.prefetch` and everything only it
 reached — the plan, the compressed-range credit and its coroutines, `NumericDecoder.ranges` — went
 with it, because nothing had called it: `clump` reads Partner Rows frames and its own frame cache,
 which the Near Band cache does not hold. What stays for `matrix`, `region` and `pair_r` is the
@@ -1105,7 +1105,7 @@ buffer; unknown-size frames retain allocating decode and output-length validatio
 
 **The cache and its bound** (ogld#4, ogld#32). An opened store's cache keeps decoded chunks and
 shard indexes up to `cache_bytes`, dropping the least recently used first. The caller sets it
-when opening the store, `ogld.open(location, cache_bytes=...)`: 4 GiB by default, and `0` keeps
+when opening the store, `opengwasdb.ld.open(location, cache_bytes=...)`: 4 GiB by default, and `0` keeps
 nothing, so every read fetches its chunks and shard indexes again. Anything but an int ≥ 0 is an
 `InputError`. 4 GiB holds 8,192 of layout C's 512 KiB Near Band chunks. At that size ogld#8
 measured repeated reads warm, and at the earlier 256 MiB not (owner, 12 November 2026):
@@ -1196,21 +1196,21 @@ index and then for the chunks.
   each shard is read once, so no kept index is used. A reader that read whole arrays fetched
   96,582 Near Band bytes. The same read again fetched none.
 - **Read latency at scale** on the published EUR store, from local disk and over HTTP with
-  latency added, is ogld#8's `docs/benchmarks/latency.md`, and the reader after ogld#32's four
-  changes is `docs/benchmarks/fast-reader.md`.
+  latency added, is ogld#8's `docs/benchmarks/ld/latency.md`, and the reader after ogld#32's four
+  changes is `docs/benchmarks/ld/fast-reader.md`.
 
 ## 11. The upstream half: the Proxy Index, and its removal
 
-**The Proxy Index is gone** (#72; ADR 0011, D1). The Partner Rows (§5) hold every entry it held,
+**The Proxy Index is gone** (opengwas/ogld#72; ADR 0097, D1). The Partner Rows (§5) hold every entry it held,
 `clump` and `proxies` read them, a build writes no array of `index/`, and no query or validation
-reads one. One exception is kept deliberately: `derive_far_pairs` (§12, `scripts/derive_far_pairs.py`)
-reads a 0.1.0 store's index to derive its Far Pairs, for a store built before ADR 0007 whose Far
-Pairs are missing — `realdata/EUR-k0.store` is one, and #73 derives it before its Partner Rows. This
+reads one. One exception is kept deliberately: `derive_far_pairs` (§12, `scripts/ld/derive_far_pairs.py`)
+reads a 0.1.0 store's index to derive its Far Pairs, for a store built before ADR 0093 whose Far
+Pairs are missing — `realdata/EUR-k0.store` is one, and opengwas/ogld#73 derives it before its Partner Rows. This
 section keeps the record: the measurements that decided the component, **settled** by the owner on 7 November
-2026 (epic #1, comment of that date) as a sparse symmetric Proxy Index; the merge of the Far Pairs
+2026 (epic opengwas/ogld#1, comment of that date) as a sparse symmetric Proxy Index; the merge of the Far Pairs
 into the index that the owner made on 8 November 2026; its reversal on 12 November 2026, on
-ogld#8's measurements, which put the Far Pairs back beside the index (ADR 0007); and the reason it
-was removed, which is ADR 0011's: the same entries in a layout a lead reads in one frame.
+ogld#8's measurements, which put the Far Pairs back beside the index (ADR 0093); and the reason it
+was removed, which is ADR 0097's: the same entries in a layout a lead reads in one frame.
 
 **The problem.** The Near Band stores row i as r(i, i+1 … the last variant ≤ `near_bp` away): the
 upper triangle. So a variant's upstream partners, the ones before it, are scattered one per row
@@ -1249,7 +1249,7 @@ in both directions. A Far Pair is exactly such a pair more than `near_bp` apart 
 holds every Far Pair, twice. A separate Far Pairs component holds nothing the index does not.
 The index already copies the Near Band's pairs at r̂² ≥ t_far, by design, so merging did not make
 the store copy-free: it removed the Far Pairs' own copy of each 3–10 Mb pair.
-The owner adopted the merged form on 8 November 2026 (epic #1): one dense Near Band and one
+The owner adopted the merged form on 8 November 2026 (epic opengwas/ogld#1): one dense Near Band and one
 sparse, symmetric, thresholded index. Either form gives the same answers and the same
 refusals:
 
@@ -1257,7 +1257,7 @@ refusals:
 - a pair beyond it is a Far Pair exactly when its |code| ≥ `far_code_floor`, the rule that put it
   in either component, so it reads the same Stored r or the same Bound (§8);
 - the refusals depend only on r2, the window, t_far and the distances (§9), none of which the
-  merge touches. `tests/test_format.py` holds the answer and refusal tables, and they do not
+  merge touches. `tests/ld/test_format.py` holds the answer and refusal tables, and they do not
   change with the layout.
 
 The trade-off as the owner weighed it on 8 November, on the prototype's numbers at k = 0, with the
@@ -1277,7 +1277,7 @@ index's pairs within `near_bp` repeat Near Band codes in either form, and `index
 equal. What merging saved was the Far Pairs' own copy of each 3–10 Mb pair, the builder output
 that writes it, and the cross-component rules for 3–10 Mb.
 
-**Merged** by the owner on 8 November 2026 (epic #1), after asking what the merge costs in query
+**Merged** by the owner on 8 November 2026 (epic opengwas/ogld#1), after asking what the merge costs in query
 time. The reasoning was:
 - `proxies`, a single pair, a matrix for a list of ALIDs and `clump` on a list of hits are
   unchanged. Each reads one row per variant, and a row of either component sits in one inner
@@ -1287,9 +1287,9 @@ time. The reasoning was:
   Pairs row. That is about 3–9% more bytes than the Near Band read it already makes: the index's
   share of a store, about 5% for EUR and 9% for AMR.
 
-**Reversed** by the owner on 12 November 2026 (ogld#8, ruling 2; ADR 0007), before any LD Store
+**Reversed** by the owner on 12 November 2026 (ogld#8, ruling 2; ADR 0093), before any LD Store
 was published, on ogld#8's timings of the published HGDP+1kGP EUR store
-(`docs/benchmarks/latency.md`). The bytes held; the requests did not:
+(`docs/benchmarks/ld/latency.md`). The bytes held; the requests did not:
 - **A region 10 Mb wide** read 6.2–9.3% more bytes for its index rows, as estimated. But it
   walked every entry of every row, 11.4–16.6 M of them, to place 6,228–11,651 Far Pairs, and
   that took 13–30% of its local time.
@@ -1301,13 +1301,13 @@ was published, on ogld#8's timings of the published HGDP+1kGP EUR store
   and 50 ms per request.
 
 So the Far Pairs are their own component again (§1, §5). A matrix and a region read them, and no
-index entry; `proxies` and `clump` then read the index, as before, until #72 replaced both reads
+index entry; `proxies` and `clump` then read the index, as before, until opengwas/ogld#72 replaced both reads
 with the Partner Rows; `far.index` held the two to one code per pair (§12) until it went with the
 index. The cost is the one this section's table gives.
 
 chr22 is the best case: 0.85 Far Pairs a variant, against EUR's 15.5 and chr11's 161.5 (ogld#8's
-review; `docs/benchmarks/results/far_pairs.json`). **Measured after** (ogld#31,
-`docs/benchmarks/far-pairs.md`), on the published EUR store with its Far Pairs derived, so before
+review; `docs/benchmarks/ld/results/far_pairs.json`). **Measured after** (ogld#31,
+`docs/benchmarks/ld/far-pairs.md`), on the published EUR store with its Far Pairs derived, so before
 and after read the same bytes:
 - **500 variants drawn uniformly on one chromosome** (seed 8) read 10 Far Pairs chunks on
   chr22 where they read 894 index chunks, and 102 on chr11 where they read 1,058. Requests fell
@@ -1324,7 +1324,7 @@ and after read the same bytes:
 ## 12. Validation rules
 
 Each rule runs on write and on demand, by name. A rule reads in bounded windows and never loads a
-whole Near Band. A rule fails a store when any target breaks it. `ogld.format.VALIDATION_RULES`
+whole Near Band. A rule fails a store when any target breaks it. `opengwasdb.ld.format.VALIDATION_RULES`
 lists the names in this order, and `ogld.validate` returns findings keyed by them.
 
 | rule | checks |
@@ -1364,19 +1364,19 @@ No rule checks the chunk shapes, shards or codecs of §6's arrays; the Partner R
 chunk each by construction (§5.1), which a reader's one range request per frame depends on, and
 `partners.files` holds them to it. No rule can check that every Far Pair was found: that needs the
 genotypes, and ogld#5's tests check it against an independent reference on the Test Panel. Each rule has a store that breaks it, in
-`tests/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 30.
+`tests/ld/contract/test_store.py` (`BREAKERS`), and the Test Store passes all 30.
 
 **An `index/`, of either version, is neither read nor validated.** No rule names it: it is not an
 array §1 lists, `envelope.arrays` checks the arrays in §1's tree, `envelope.fill` walks those
 arrays, and not one of the 30 reads a path under `index/`. It holds for a **0.2.0** store that
-derived its Partner Rows before #72 without `--drop-index` — the derivation removes nothing it is
+derived its Partner Rows before opengwas/ogld#72 without `--drop-index` — the derivation removes nothing it is
 not asked to — and for a **0.1.0** store, whose format describes the component but whose rules went
-with it in #72. Such a store validates exactly as one without it, and a reader answers exactly as
-it does (`tests/test_far_pairs.py`, `tests/test_proxy_index_removed.py`); a 0.1.0 store with every
+with it in opengwas/ogld#72. Such a store validates exactly as one without it, and a reader answers exactly as
+it does (`tests/ld/test_far_pairs.py`, `tests/ld/test_proxy_index_removed.py`); a 0.1.0 store with every
 index chunk lost still passes all 30 and still answers `matrix` and `region`. This is not silent
 damage: no query and no rule this package ships reads an index, so a reader or a validation has
 nothing to get wrong. Two paths do read one, both deliberately: `derive_far_pairs` (§11), for a
-store built before ADR 0007 whose Far Pairs are missing, and `ogld derive-partners --drop-index`,
+store built before ADR 0093 whose Far Pairs are missing, and `opengwasdb ld derive-partners --drop-index`,
 which removes a 0.2.0 store's leftover with its `counts.index_entries` (§7).
 
 **The Partner Rows' rules (format 0.2.0).** The ten rows after `far.threshold` are the component's,
@@ -1401,7 +1401,7 @@ the rules pass (partner-rows §6.2; ogld#69). So the residue of a run killed aft
 became a node and before that write is a store that has no Partner Rows — one that validates as
 the 0.1.0 one it was, and one a reader refuses, since a reader asks the recorded **version** and
 never the presence of a key or a group (§10, §13). Judging the residue instead would fail a store
-no one can read, for keys it has no use for; `ogld derive-partners` completes it (the rules accept
+no one can read, for keys it has no use for; `opengwasdb ld derive-partners` completes it (the rules accept
 it) or removes it and derives it again (they do not).
 
 A 0.2.0 store has the component, and `partners/` is a **node of its one hierarchy**, not a
@@ -1441,7 +1441,7 @@ the eight `partners.*` rules that read frames, share one pass over each chromoso
 rows is read once and handed to all fifteen, so each code, Far Pair and partner entry of a store
 that passes is decoded once per validation. `partners.far` compares the Partner Rows' entries
 beyond `near_bp` with each block's Far Pairs, so it carries nothing from one block to the next. A caller may give the pass t threads
-(`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
+(`opengwasdb ld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
 and checked at once, and no more are held: the pass asks for the next block's plan only once a
 finished block has been handed back, so the block being planned is one of the t. The planner keeps
 one frame beside them — the first frame of the block it plans next, held whole when the entries'
@@ -1471,7 +1471,7 @@ then that it cannot be read or checked, and fails either way. `partners.near` fi
 of later-row entries only at a chromosome's end, so a stop inside a chromosome drops that check's
 findings there, though never the failure.
 
-- `provenance.complete` checks every key §7 names: those of `ogld.format.REQUIRED_KEYS` and the
+- `provenance.complete` checks every key §7 names: those of `opengwasdb.ld.format.REQUIRED_KEYS` and the
   keys inside them, `variant_filters`, `variants_dropped`, `pc_file`, the PC Check's settings and
   its `null`, each `scan` entry's fields, `pc_diagnostic` with its `pairs` and the five quantiles
   of `near_100kb_change`, and `software`'s `ogld`, `numpy` and `zarr`. A null is allowed only
@@ -1493,7 +1493,7 @@ findings there, though never the failure.
   their entries that names such a row is checked against the band's code for its pair, fetched
   by coordinates. So a store that passes reads its band and its Partner Rows once. That such a
   later-row entry exists at all is `partners.symmetric`'s finding.
-- The six `index.*` rules and `far.index` were the Proxy Index's own, and went with it in #72:
+- The six `index.*` rules and `far.index` were the Proxy Index's own, and went with it in opengwas/ogld#72:
   `index.rows`, `index.codes`, `index.distance`, `index.threshold`, `index.symmetric` and
   `index.near`, holding a component whose every entry the Partner Rows now carry, and
   `far.index`, holding the Far Pairs equal to the index's far entries, which `partners.far`
@@ -1508,7 +1508,7 @@ to §8's answers, is a new format version. A change of chunk or shard shape is n
 a store's scale: any whole scale from 1 to 32767 in the `int16` container is version `0.1.0`, and
 each store records its own (§3, §7).
 
-**Version `0.2.0`** (the decision; the bump lands with the writer, #67, and the derivation in #69
+**Version `0.2.0`** (the decision; the bump lands with the writer, opengwas/ogld#67, and the derivation in opengwas/ogld#69
 writes it too). A store has one `format_version`, so what 0.2.0 requires is everything below, not
 a stage of it: a 0.1.0 store is upgraded by deriving its Partner Rows, and a 0.2.0 store without
 them is not one. It:
@@ -1520,10 +1520,10 @@ the store already holds, plus the four provenance keys that describe them and `s
   `near_bp` into a Refusal (§9);
 - reads `partner_row` from a frame cache, in place of the Proxy Index row and the Near Band's row
   and column (§10);
-- has no Proxy Index: `index/`, its writer, its six rules and `far.index` went (#72), and the Far
+- has no Proxy Index: `index/`, its writer, its six rules and `far.index` went (opengwas/ogld#72), and the Far
   Pairs and the Near Band stay as they are. A store that still holds the component — one derived
-  before #72 without `--drop-index` — opens and answers exactly as one without it, and validation
-  ignores it (§12); `ogld derive-partners --drop-index` removes it.
+  before opengwas/ogld#72 without `--drop-index` — opens and answers exactly as one without it, and validation
+  ignores it (§12); `opengwasdb ld derive-partners --drop-index` removes it.
 
 A reader of 0.1.0's vintage **refuses** a 0.2.0 store at open: it reads one version, its own, so a
 store that records another is an `InputError` naming the version and the one this reader reads
@@ -1537,29 +1537,29 @@ decisions of 7 November 2026, the Proxy Index among them (a 0.1.0 store may hold
 validates it and no query opens it, and this package refuses the store's `clump` and `proxies`
 rather than answer from it, §12; only `derive_far_pairs` still reads one, for a store whose Far
 Pairs are missing, §11), of 10 November 2026, the per-store
-encoding (ADR 0004), of 12 November 2026, the Far Pairs beside the index (ADR 0007), and of
-15 November 2026, the ALID index beside the variant table (ADR 0010), are part of `0.1.0` rather
+encoding (ADR 0090), of 12 November 2026, the Far Pairs beside the index (ADR 0093), and of
+15 November 2026, the ALID index beside the variant table (ADR 0096), are part of `0.1.0` rather
 than a new version. The Partner Rows are the first change big enough to be its own version (§5,
-ADR 0011).
+ADR 0097).
 
-## 14. Optional local ALID companion (ADR 0012)
+## 14. Optional local ALID companion (ADR 0098)
 
 The canonical Zarr index of §2 remains authoritative. Local Stores may additionally publish
 `variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and `manifest.json`. Keys copy the
 canonical bytes without another sort; rows copy its rows as signed little-endian int32.
-The exact deterministic manifest schema and source/content pins are defined in ADR 0012
-and owned by `ogld.store.layout`. Schema 2 pins normalized root metadata and every canonical
+The exact deterministic manifest schema and source/content pins are defined in ADR 0098
+and owned by `opengwasdb.ld.store.layout`. Schema 2 pins normalized root metadata and every canonical
 index file (array metadata and all chunk/shard files), not just array metadata. Source inventory
 follows shard-directory links and refuses cycles, repeated directories, walk errors and
 nonregular sources rather than trusting an incomplete file set. Schema 1
 refuses with the Store/generation/manifest and an instruction to re-derive using
-`scripts/derive_alid_mmap.py`. A mismatched source pin also names the concrete canonical file.
+`scripts/ld/derive_alid_mmap.py`. A mismatched source pin also names the concrete canonical file.
 An absent root `alid_mmap` attribute means no companion.
 A present attribute is exactly `{"generation":"<manifest SHA-256>"}` and names complete,
 immutable files. Publication fsyncs a private partial, renames its generation directory,
 then atomically replaces root metadata last. An abandoned partial is unpublished and a
 retry replaces it; a complete generation is validated and reused, never overwritten.
-`StoreWriter.finish` and `scripts/derive_alid_mmap.py` use the same assembly helper from the
+`StoreWriter.finish` and `scripts/ld/derive_alid_mmap.py` use the same assembly helper from the
 Store's validated canonical index. Both paths MUST run the exact canonical correspondence
 check on the new generation's payloads before publishing its root pointer, including entry
 count and full payload lengths. They call the same bounded comparison as `alid_index.count`;
@@ -1577,7 +1577,7 @@ The trust model requires a generation published only by ogld after exact corresp
 The reader checks integrity and content binding at use, not correspondence or producer
 authenticity. A hand-forged, self-consistent generation with recomputed payload hashes,
 manifest and pointer is outside reader detection, as for other derived arrays such as Partner
-Rows frames with forged checksums; `ogld validate` detects the noncorrespondence. Changing a
+Rows frames with forged checksums; `opengwasdb ld validate` detects the noncorrespondence. Changing a
 canonical file after attachment is outside the immutable-Store assumption.
 
 Opening reads no companion payload. On the first fitting lookup, checked attachment verifies

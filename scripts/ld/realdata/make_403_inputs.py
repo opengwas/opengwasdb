@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Make the inputs of `tests/realdata/test_query_panel.py` (opengwas/ogld#6).
+"""Make the inputs of `tests/ld/realdata/test_query_panel.py` (opengwas/ogld#6).
 
 The test compares `clump` on a k = 0 HGDP+1kGP EUR LD Store with `plink2 --clump` for the 37 EUR
 Analyses of opengwas/opengwasdb#403, at r² 0.01 and 0.001, 3,000 kb, on each Analysis's 5e-8 tier.
 Four steps, each a subcommand; the first two need only the standard library plus, for `extract`,
 the opengwasdb package, so run `extract` with that repository's interpreter:
 
-    OUT=/data/opengwasdb/work/ogld/realdata; S=scripts/realdata/make_403_inputs.py
+    OUT=/data/opengwasdb/work/ogld/realdata; S=scripts/ld/realdata/make_403_inputs.py
     python3 $S select  --out $OUT
     ~/repo/opengwasdb/.pixi/envs/default/bin/python $S extract --out $OUT
     pixi run -e dev python $S prepare --out $OUT --store $OUT/EUR-k0.store
@@ -23,11 +23,12 @@ Sources, all read-only:
 - **The rows.** Each Analysis's Observed Associations at p ≤ 5e-8, read from its engine Store under
   `/data/opengwasdb/stores/` as the sweep's `read_tier` does: `top_hits(threshold=5e-8,
   observed_only=True)` then `resolve`. Imputed rows are not clumped, on either side.
-- **The genotypes.** #5's v2 EUR conversions (`--genotypes`), the pgens the store is built from. A
+- **The genotypes.** opengwas/ogld#5's v2 EUR conversions (`--genotypes`), the pgens the store is
+built from. A
   record's ALID is `opengwasdb.variants.sorted_spelling.sorted_identity(chrom, pos, ref,
   alt).alid`, the LD Store's sorted spelling; a record is kept when that ALID is in the store's
   Variant Set, and where an insertion and a deletion share an ALID, the one whose REF the ALID
-  spells first (the Variant Set's own rule, spec §2). `prepare` writes those
+  spells first (the Variant Set's own rule, ld-store §2). `prepare` writes those
   records to `<out>/EUR-k0.plink2/chr<N>` with `--keep` EUR, the ID renamed to the ALID.
 - **Matching.** A hit whose ALID is not in the store's Variant Set is Absent: neither tool can
   clump it, so it is dropped from `hits.tsv` and counted in `manifest.json` as `unmatched`, per
@@ -198,7 +199,7 @@ def sha256_of(path: Path) -> str:
 
 
 def keep_sha256(keep: Path) -> str:
-    """The builder's `panel.samples_sha256` of a keep file (spec §7), through its own reader and
+    """The builder's `panel.samples_sha256` of a keep file (ld-store §7), through its own reader and
     `Samples`, so a keep file the builder refuses is refused here."""
     from opengwasdb.ld.build.inputs import Samples, read_keep
 
@@ -213,7 +214,7 @@ def provenance_sha256(provenance: Any) -> str:
 
 def check_pins(provenance: dict[str, Any], genotypes: Path, keep: Path) -> dict[str, str]:
     """Refuse genotypes or a keep file other than the ones the store was built from: the store's
-    `source.sha256` names each pgen, pvar and psam, and the keep file by its own name (spec §7),
+    `source.sha256` names each pgen, pvar and psam, and the keep file by its own name (ld-store §7),
     and `panel.samples_sha256` the samples. The store is the truth; a comparison on other inputs
     would compare different panels."""
     for name, digest in provenance["source"]["sha256"].items():

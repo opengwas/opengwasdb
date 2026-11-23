@@ -6,7 +6,7 @@ later row and its code, 10 bytes (`assembly.PAIR_BYTES`), with its destination i
 bucket it sits in. What bounds it is the pairs spanning one row within `far_bp` plus one bucket of
 `CARRY_ROWS` rows, not the chromosome's length, so it is the number to watch on a whole genome.
 
-    pixi run -e dev python scripts/bench/partner_carry.py [--out partner_carry.json]
+    pixi run -e dev python scripts/ld/bench/partner_carry.py [--out partner_carry.json]
 
 It writes the committed Test Store again at `--t-partner 0.01`, its rows in blocks of
 `--block-rows` (16 by default: a frame's worth), into a temporary directory, wrapping
