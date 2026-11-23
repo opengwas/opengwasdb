@@ -21,9 +21,9 @@ fails the run; it never skips.
 
 Environment (`tests/acceptance/run_genotypes.sh` sets the defaults):
 
-- `OGLD_GENOTYPE_STORE`: the sidecar `ogld build --genotypes` wrote.
-- `OGLD_81_EUR_STORE`: the k = 10, × 511 whole-panel LD Store over the same panel.
-- `OGLD_403_ANALYSES`: #403's 37 Analyses, each with `hits.tsv` (ALID, z), as
+- `OPENGWASDB_LD_GENOTYPE_STORE`: the sidecar `ogld build --genotypes` wrote.
+- `OPENGWASDB_LD_81_EUR_STORE`: the k = 10, × 511 whole-panel LD Store over the same panel.
+- `OPENGWASDB_LD_403_ANALYSES`: #403's 37 Analyses, each with `hits.tsv` (ALID, z), as
   `scripts/realdata/make_403_inputs.py` writes them.
 """
 
@@ -32,7 +32,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +41,8 @@ import pytest
 import opengwasdb.ld
 from opengwasdb.variants.sorted_spelling import sorted_alid_locus
 
+from .named_inputs import named
+
 TARGET = "OGS-00012__GCST90476460"
 KB = 3000
 REGION_BP = 1_500_000
@@ -50,20 +51,13 @@ SEED = 91
 FROZEN = Path(__file__).with_name("chr22_workload_19.json")
 
 
-def named(variable: str, what: str) -> Path:
-    """The path `$variable` names. An acceptance run with an input missing fails: it was asked
-    for, and a pass would claim it ran."""
-    value = os.environ.get(variable, "")
-    assert value, f"${variable} must name {what}; it is unset"
-    assert Path(value).exists(), f"${variable} must name {what}; {value} is not there"
-    return Path(value)
-
-
 @pytest.fixture(scope="session")
 def stores() -> tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore]:
-    genotype = opengwasdb.ld.open(named("OGLD_GENOTYPE_STORE", "the Genotype Store sidecar"))
+    genotype = opengwasdb.ld.open(
+        named("OPENGWASDB_LD_GENOTYPE_STORE", "the Genotype Store sidecar")
+    )
     ld = opengwasdb.ld.open(
-        named("OGLD_81_EUR_STORE", "the k = 10 EUR LD Store over the same panel")
+        named("OPENGWASDB_LD_81_EUR_STORE", "the k = 10 EUR LD Store over the same panel")
     )
     assert ld.provenance["adjustment"]["k"] == 10, "the two stores must be built alike"
     assert genotype.provenance["adjustment"]["k"] == 10
@@ -72,7 +66,7 @@ def stores() -> tuple[opengwasdb.ld.LDStore, opengwasdb.ld.LDStore]:
 
 @pytest.fixture(scope="session")
 def analyses() -> list[tuple[str, list[str], np.ndarray]]:
-    root = named("OGLD_403_ANALYSES", "#403's 37 Analyses' hits")
+    root = named("OPENGWASDB_LD_403_ANALYSES", "#403's 37 Analyses' hits")
     paths = sorted(root.glob("*/hits.tsv"))
     assert len(paths) == 37, f"#403 has 37 EUR Analyses; {root} holds {len(paths)}"
     loaded = []
@@ -252,7 +246,7 @@ def test_19_s_fifty_chr22_requests_equal_the_ld_store(
     analyses_by_name = {entry["name"]: entry for entry in frozen["analyses"]}
     for name, alids, scores in analyses:
         entry = analyses_by_name[name]
-        source = named("OGLD_403_ANALYSES", "#403's 37 Analyses' hits") / name / "hits.tsv"
+        source = named("OPENGWASDB_LD_403_ANALYSES", "#403's 37 Analyses' hits") / name / "hits.tsv"
         assert hashlib.sha256(source.read_bytes()).hexdigest() == entry["source_sha256"], (
             f"{source} is not the frozen input #19 measured"
         )

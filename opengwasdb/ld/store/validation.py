@@ -128,7 +128,8 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int) -> dict[str, list[Finding]]:
-    """`validate`, reading and checking blocks on `threads` threads (`ogld validate --threads`)."""
+    """`validate`, reading and checking blocks on `threads` threads
+    (`opengwasdb ld validate --threads`)."""
     root = open_group(location)
     return validate_group(root, root.attrs.get("ld_store"), threads=threads)
 
@@ -709,12 +710,14 @@ def _provenance_complete(store: _Store) -> _Problems:
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
-    `REncoding.of` (spec §3, §13). `ogld info` and every reader refuse a store with any other."""
+    `REncoding.of` (spec §3, §13). `opengwasdb ld info` and every reader refuse a store with any
+    other."""
     version = store.value("format_version")
     if version not in READABLE_FORMATS:
         yield (
             "format_version",
-            f"{version!r}: this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)",
+            f"{version!r}: this opengwasdb.ld reads {' and '.join(READABLE_FORMATS)} only "
+            "(spec §13)",
         )
     try:
         REncoding.of(store.value("encoding"))

@@ -92,7 +92,7 @@ def test_out_of_range_options_are_refused_at_parse_time(tmp_path, capsys, option
     with pytest.raises(SystemExit):
         main([*import_args(tmp_path / "a.store", tmp_path / "work"), option, value])
     refusal = capsys.readouterr().err
-    assert f"argument {option}: needs a whole number" in refusal
+    assert f"Invalid value for '{option}'" in refusal
 
 
 def test_options_reach_the_import_and_default_to_the_owner_ruling(tmp_path, monkeypatch) -> None:

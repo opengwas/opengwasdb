@@ -3,24 +3,24 @@
 The Test Panel proves the logic; this proves it survives real genotypes (CLAUDE.md).
 
 - The builds read the phased HGDP+1kGP v2 callset, which has no missing calls (owner,
-  7 November 2026; ADR 0002). `OGLD_V2_EUR_CHR22` names its chr22 BCF
+  7 November 2026; ADR 0002). `OPENGWASDB_LD_V2_EUR_CHR22` names its chr22 BCF
   (`docs/spec/build-inputs.md` §10), and the suite converts chr22:20–32 Mb once, with §3's flags,
-  for EUR's 665 unrelated samples: `OGLD_EUR_KEEP` names the keep file `scripts/make_keeps.py`
-  writes (ADR 0002, decision 11). On 20–23 Mb of it, the k = 0 Near Band matches
-  `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants compared
-  include every choice build-inputs §6's reversed-indel rule makes there (both records at MAC >=
-  20, judged here from plink2's own allele counts): each must keep the record whose REF is A1.
+  for EUR's 665 unrelated samples: `OPENGWASDB_LD_EUR_KEEP` names the keep file
+  `scripts/make_keeps.py` writes (ADR 0002, decision 11). On 20–23 Mb of it, the k = 0 Near Band
+  matches `plink2 --r-unphased` within the quantisation step: epic #1's acceptance. The variants
+  compared include every choice build-inputs §6's reversed-indel rule makes there (both records
+  at MAC >= 20, judged here from plink2's own allele counts): each must keep the record whose REF is A1.
 - Real LD survives PC Adjustment: on the 12 Mb slice, pairs within 100 kb change little from
   k = 0 to k = 10, and each of the provenance's five quantiles of that change is its own
   computation over every such pair, from the two stores' Near Bands. 12 Mb, not 3, because the
   PC Check scans the build's own input and needs windows apart from the best one.
-  `OGLD_EUR_PC_FILE` names EUR's PC File from `scripts/make_pcs.py` (§10).
+  `OPENGWASDB_LD_EUR_PC_FILE` names EUR's PC File from `scripts/make_pcs.py` (§10).
 - The gnomAD v3.1.2 pgens shipped under /data/opengwasdb/reference/ have missing calls, at
   11,725 of the 15,272 variants of chr22:20–23 Mb. The builder refuses them.
 
-An unset or missing `OGLD_PLINK2`, `OGLD_V2_EUR_CHR22`, `OGLD_EUR_KEEP` or `OGLD_EUR_PC_FILE`
-stops a test as an expected failure naming it (`realdata_inputs.required`), before ogld or plink2
-runs.
+An unset or missing `OPENGWASDB_LD_PLINK2`, `OPENGWASDB_LD_V2_EUR_CHR22`, `OPENGWASDB_LD_EUR_KEEP`
+or `OPENGWASDB_LD_EUR_PC_FILE` stops a test as an expected failure naming it
+(`realdata_inputs.required`), before ogld or plink2 runs.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ _SLICES: dict[str, Path] = {}
 
 
 def plink2(*args: str | Path) -> None:
-    exe = required("OGLD_PLINK2", "plink2, the independent reference; run.sh finds one")
+    exe = required("OPENGWASDB_LD_PLINK2", "plink2, the independent reference; run.sh finds one")
     subprocess.run(
         [str(exe), *map(str, args), "--threads", "4", "--memory", "8000"],
         check=True,
@@ -64,7 +64,9 @@ def plink2(*args: str | Path) -> None:
 
 
 def eur_keep() -> Path:
-    return required("OGLD_EUR_KEEP", "EUR's unrelated keep file, scripts/make_keeps.py, §10")
+    return required(
+        "OPENGWASDB_LD_EUR_KEEP", "EUR's unrelated keep file, scripts/make_keeps.py, §10"
+    )
 
 
 def section_3_conversion(source: Path, out: Path) -> list[str]:
@@ -81,7 +83,7 @@ def section_3_conversion(source: Path, out: Path) -> list[str]:
 def v2_slice(name: str, tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The v2 EUR chr22 slice `name` ("wide" 20–32 Mb, "narrow" 20–23 Mb), once per session."""
     if name not in _SLICES:
-        bcf = required("OGLD_V2_EUR_CHR22", "the phased v2 chr22 BCF, build-inputs.md §10")
+        bcf = required("OPENGWASDB_LD_V2_EUR_CHR22", "the phased v2 chr22 BCF, build-inputs.md §10")
         out = tmp_path_factory.mktemp(f"v2-{name}") / "slice"
         if name == "wide":
             plink2(*section_3_conversion(bcf, out), *WIDE)
@@ -232,7 +234,7 @@ def test_real_ld_survives_pc_adjustment(
 ) -> None:
     # Epic #1 and ogld#5: pairs within 100 kb change little outside the Long-Range LD
     # Regions (none is in chr22:20–32 Mb), and the distribution is recorded.
-    pcs = required("OGLD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
+    pcs = required("OPENGWASDB_LD_EUR_PC_FILE", "EUR's PC File from scripts/make_pcs.py, §10")
     slice_ = v2_slice("wide", tmp_path_factory)
     pgen = slice_.with_suffix(".pgen")
     opengwasdb.ld.build(inputs(pgen, "v2 EUR chr22:20-32 Mb", HGDP_SCALE), tmp_path / "k0")

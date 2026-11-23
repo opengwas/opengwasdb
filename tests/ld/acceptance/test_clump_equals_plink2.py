@@ -15,8 +15,8 @@ compare at 0.001, and none of the HGDP+1kGP stores can.
 
 Two inputs, named by environment variables that `tests/acceptance/run.sh` passes on:
 
-- `OGLD_EUR_K0_STORE`: the k = 0 EUR LD Store.
-- `OGLD_403_ANALYSES`: one directory per Analysis, each holding `hits.tsv` (a header, then
+- `OPENGWASDB_LD_EUR_K0_STORE`: the k = 0 EUR LD Store.
+- `OPENGWASDB_LD_403_ANALYSES`: one directory per Analysis, each holding `hits.tsv` (a header, then
   ALID and z per row: the 5e-8 tier) and `leads_r2_0.01.txt` (plink2's index variants, one ALID
   per line, from the same genotypes at k = 0). `scripts/realdata/make_403_inputs.py` makes them,
   and `prepare` then `clump` write the pins that name the store they were made from.
@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from pathlib import Path
 
 import clump_rule
@@ -45,21 +44,14 @@ import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
 from opengwasdb.variants.sorted_spelling import sorted_alid_locus
 
+from .named_inputs import named
+
 EXPLAINED_FILE = Path(__file__).with_name("explained_differences.json")
 KB = 3000
 #: The one threshold this store is compared at: its own t_partner, which is the lowest r2 a
 #: 0.2.0 request within 3 Mb may ask it for (partner-rows §8.1; the module docstring says why
 #: 0.001, which plink2 was also run at, is no longer a comparison here).
 R2 = 0.01
-
-
-def named(variable: str, what: str) -> Path:
-    """The path `$variable` names. An acceptance run with an input missing fails: it was asked
-    for, and a pass would claim it ran."""
-    value = os.environ.get(variable, "")
-    assert value, f"${variable} must name {what}; it is unset"
-    assert Path(value).exists(), f"${variable} must name {what}; {value} is not there"
-    return Path(value)
 
 
 def distance(alid: str, other: str) -> float:
@@ -88,8 +80,8 @@ def check_pair(store: opengwasdb.ld.LDStore, case: dict, pair: dict, differing: 
 def test_the_inputs_say_which_store_and_keep_file_they_were_made_from() -> None:
     """The pins `make_403_inputs.py` writes are read here: inputs without them, or made from
     another store, keep file, or plink2, are refused, not compared."""
-    store = opengwasdb.ld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
-    root = named("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
+    store = opengwasdb.ld.open(named("OPENGWASDB_LD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
+    root = named("OPENGWASDB_LD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
     manifest = json.loads((root / "manifest.json").read_text())
     for key in ("opengwasdb_sha", "plink2_version", "provenance_sha256", "keep_sha256"):
         assert manifest.get(key), f"manifest.json has no {key}: remake the inputs with the script"
@@ -104,8 +96,8 @@ def test_the_inputs_say_which_store_and_keep_file_they_were_made_from() -> None:
 
 
 def test_leads_equal_plink2_s_on_403_s_37_analyses() -> None:
-    store = opengwasdb.ld.open(named("OGLD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
-    root = named("OGLD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
+    store = opengwasdb.ld.open(named("OPENGWASDB_LD_EUR_K0_STORE", "the k = 0 EUR LD Store"))
+    root = named("OPENGWASDB_LD_403_ANALYSES", "#403's 37 Analyses with plink2's leads")
     assert store.provenance["adjustment"]["k"] == 0, "the comparison is with unadjusted LD"
     snapshot = json.loads(EXPLAINED_FILE.read_text())
     assert snapshot["store"]["encoding"] == store.provenance["encoding"], "another encoding"
