@@ -13,7 +13,7 @@ and numcodecs, and the format stores the engine's ALID exactly (`ld-store.md` §
 
 ## Decision
 
-`ogld.identity` holds a **copy** of the engine's identity rules (`orient_to_canonical`,
+`ogld.identity` (gone since #456, below) holds a **copy** of the engine's identity rules (`orient_to_canonical`,
 `normalise_chromosome`, `normalise_allele`), and `tests/ld/data/identity/` holds the **engine's own
 answers** for awkward inputs, which a default-tier test holds the copy to. ogld does not import
 the engine.
@@ -93,19 +93,20 @@ ALIDs are shared this way, and 1,156 of those have both records at EUR MAC ≥ 2
 record whose REF the ALID spells first (REF = A1) is kept, and the other is dropped and counted in
 `variants_dropped.duplicate_reversed_indel`. The engine admits associations by this rule, so an
 LD Store row means the same variant as the engine's association at that ALID. A deletion is kept
-where its REF sorts first (`AT/T` over `T/AT`). `ogld.identity.resolve_reversed_indels` is the
-pure rule, tested against rows of `reversed.tsv` (the engine's own BMI_IRN pair, a v2 pair, a pair
+where its REF sorts first (`AT/T` over `T/AT`). `opengwasdb.variants.sorted_spelling.resolve_sorted_reversed_indels` (formerly
+`ogld.identity.resolve_reversed_indels`) is the pure rule, tested against rows of `reversed.tsv` (the engine's own BMI_IRN pair, a v2 pair, a pair
 with the deletion kept, a lower-case pair). The builder (opengwas/ogld#5) applies it to the records that pass
 the variant filters; the Test Store (opengwas/ogld#12) applies it through the same helper. The Test Panel has no
 such pair.
 
 Two records with identical REF and ALT, and two SNVs sharing an ALID, cannot come from a split of
-one site. The helper refuses them (`IdentityError`, reason `duplicate_record`), and a build stops
+one site. The helper refuses them (`DuplicateRecord`, reason `duplicate_record`; formerly `IdentityError`), and a build stops
 on them, where the engine would drop both as conflicting.
 
 ## Behaviour inherited from the engine
 
-- Refusals raise `ogld.identity.IdentityError(ValueError)`, carrying the engine's `reason`
+- Refusals raise a `VariantNormalisationError` (`opengwasdb.variants.normalise`, a `ValueError`; formerly
+  `ogld.identity.IdentityError`), carrying the engine's `reason`
   (`chromosome_missing`, `allele_invalid`; empty for the engine's other refusals). The CLI exits 2
   for it, so a bad query chromosome is not a traceback.
 - `normalise_chromosome` refuses a missing label (`""`, `.`, `NA`, `NaN`, `None`, a bare `chr`) and

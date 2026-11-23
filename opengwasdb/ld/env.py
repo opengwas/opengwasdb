@@ -1,8 +1,8 @@
 """The one reader of the `OPENGWASDB_LD_*` environment variables, and the refusal of the old names.
 
-`opengwasdb.ld` came from the `opengwasdb.ld` package, whose scripts and tests read `OGLD_*`
-variables. Those are now `OPENGWASDB_LD_*`. A variable under the old name that is still set would be
-read by nothing and its value silently ignored, so the default would apply in its place: a build
+`opengwasdb.ld` came from the `ogld` package, whose scripts and tests read `OGLD_*` variables.
+Those are now `OPENGWASDB_LD_*`. A variable under the old name that is still set would be read
+by nothing and its value silently ignored, so the default would apply in its place: a build
 would run on a root the person did not mean. `read` therefore refuses, naming the new name,
 whenever any old one is set. `OGDB_STORE_TIMEOUT_SECONDS` is not one of them: it is the
 API service's own live setting, which `opengwasdb ld` never reads.

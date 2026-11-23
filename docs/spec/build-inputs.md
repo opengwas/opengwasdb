@@ -184,7 +184,7 @@ Variant Set row per ALID. The builder follows the engine (opengwas/opengwasdb AD
 the record whose REF is spelled first in the ALID (REF = A1) and drops the other**, counting it in
 `variants_dropped.duplicate_reversed_indel`. The engine admits associations by this rule, so an
 LD Store row means the same variant as the engine's association at that ALID. The rule is
-`ogld.identity.resolve_reversed_indels`. Two records that no split of one site gives are refused
+`opengwasdb.variants.sorted_spelling.resolve_sorted_reversed_indels`. Two records that no split of one site gives are refused
 as a malformed input, naming both: two with identical REF and ALT, and two SNVs sharing an ALID.
 On v2 chr22, 11,848 ALIDs are shared by such a pair, 1,156 of them with both records at EUR
 MAC ≥ 20 (spec review of ogld#3); the Test Panel has none.
@@ -460,7 +460,7 @@ reads it.
   an identity collision are dropped under named loss classes, as in opengwas/ogld#89.
 - A non-finite or non-positive covariance diagonal drops its variant, counted
   separately. Surviving covariance is divided by sqrt(C_ii C_jj), then signed
-  with `ogld.identity.orient`. The existing writer alone quantises at ×2047
+  with `opengwasdb.variants.sorted_spelling.sorted_identity`. The existing writer alone quantises at ×2047
   and emits Near Band, Far Pairs, Partner Rows and the ALID companion.
 - The largest complete target radius is measured after liftover per
   chromosome; the store records their minimum, and provenance records all

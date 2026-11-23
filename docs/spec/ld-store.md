@@ -877,7 +877,7 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   answered a 0.1.0 store — the Proxy Index row above t_far, the Near Band's row and column below
   it — went with the component in opengwas/ogld#72.
 - **`region`.** Its chromosome passes through the engine's label normalisation
-  (`ogld.identity.normalise_chromosome`), so `chr22` reads as `22`. Its variants are those with
+  (`opengwasdb.variants.normalise.normalise_chromosome`), so `chr22` reads as `22`. Its variants are those with
   centre − radius ≤ position ≤ centre + radius, in the Variant Set's order.
 - **`clump`.** Greedy, strongest score first. The score is |z| or −log10 p, never raw p, which
   underflows to 0 for |z| over 38. Ties go to genomic order, then ALID. Each variant joins the
