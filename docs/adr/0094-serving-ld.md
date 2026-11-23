@@ -73,14 +73,14 @@ its job contract from here where it fits (Consequences):
 **The engine.** Engine issue opengwas/opengwasdb#419 makes the engine's own Top-Hit Query clump
 on the fly with `ogld.clump`, against an LD Store the caller names, when the configuration is not
 one of the Store's stored Clumps (#418). ogdb-api serves that query, so under either route ogdb-api
-imports ogld and reads LD Stores for top hits. The engine's roadmap holds that a store "should
+imports `opengwasdb.ld` and reads LD Stores for top hits. The engine's roadmap holds that a store "should
 support laptop, HPC, and cloud/API usage" and that "the service layer should route and authorise
 queries, not become the only place the data can be used" (`docs/opengwas-roadmap.md`, principle
 2), and that workers may "mount stores from local disk, object storage, or HPC filesystems"
-(Horizon 4). It has no ADR on serving over HTTP or on where Stores are hosted: its ADR 0018 puts
+(Horizon 4). It has no ADR on serving over HTTP or on where Stores are hosted: the engine's ADR 0018 puts
 remote querying and store discovery in "a separate catalogue or deployment layer", and its Stores
 live under `/data/opengwasdb/stores/OGS-*` on the same node, listed by opengwasdb-stores' Analysis
-Catalog (its ADR 0039), which records no path.
+Catalog (the engine's ADR 0039), which records no path.
 
 **What the reads cost**, on the published EUR store, from local disk and over HTTP with a wait
 added to every request. "Now" is the reader with ogld#31's Far Pairs and ogld#32's changes, timed
