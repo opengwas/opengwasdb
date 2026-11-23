@@ -56,7 +56,6 @@ from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_wor
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
-from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -70,7 +69,6 @@ from opengwasdb.layouts.dense.build import (
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
-    dense_index_metadata,
     dense_layout_records,
     dense_provenance_block,
 )
@@ -218,7 +216,7 @@ def build_dense_from_vcf_manifest(
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
-            staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape,
+            staged, out, manifest_rows, chain_file, liftover_failure_threshold,
             n_workers, variant_reference, rules,
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
@@ -338,20 +336,19 @@ def _axis_metadata(alids: list[str], manifest_rows: Sequence[ManifestRow]) -> _A
     )
 
 
-def _write_axis_and_index(
+def _write_axis(
     staged: StagedRelease,
     routing: VariantRouting,
     axis: _AxisMetadata,
     rsid_by_alid: Mapping[str, str],
-    chunk_shape: tuple[int, int],
 ) -> None:
-    """Write the SQLite index and the tabix variant axis.
+    """Write the tabix variant axis. A 0.3.0 Observed-Only release has no `index.sqlite`
+    (ADR 0102, #471).
 
     The variant axis carries one canonical variant per stored row with its
     rsid (first named wins) and the source-build provenance each row resolved
     from (`VariantRouting.source_alids` -- collisions stay blank, never guessed).
     """
-    write_index(staged, axis.alids, axis.analyses, chunk_shape)
     canonical_variants = [
         CanonicalVariant(
             chromosome=chrom,
@@ -424,12 +421,11 @@ def _prepare_axis(
     manifest_rows: list[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-    chunk_shape: tuple[int, int],
     n_workers: int,
     variant_reference: str | Path | None,
     rules: Mapping[str, AnalysisRules],
 ) -> _PreparedBuild:
-    """Phases 1-4: route, write the axis and index, and build the Pass 2 table.
+    """Phases 1-4: route, write the axis, and build the Pass 2 table.
 
     hg19-declared rows are lifted to GRCh38 once (issue #85), or a precomputed
     ``variant_reference`` supplies the axis directly and Pass 1 only harvests
@@ -454,7 +450,7 @@ def _prepare_axis(
             len(routing.names.rsid_by_alid),
         )
     axis = _axis_metadata(routing.alids, manifest_rows)
-    _write_axis_and_index(staged, routing, axis, routing.names.rsid_by_alid, chunk_shape)
+    _write_axis(staged, routing, axis, routing.names.rsid_by_alid)
     # The table just written must be the table the resolved map describes: a
     # partial harvest loss, an off-reference row dropped from the write, or a
     # table written from a stale map fails here, on the bytes (issue #255).
@@ -847,26 +843,6 @@ def _finalize_store(
         staged.path,
         with_se_out_of_range(add_hit_counts(staged.path, analyses), encoded.se_out_of_range),
     )
-
-
-def write_index(
-    staged: StagedRelease,
-    hg38_alids: list[str],
-    analyses: list[Analysis],
-    chunk_shape: tuple[int, int],
-) -> None:
-    """Write a Dense release's ``index.sqlite``: its schema, counts and Dense layout."""
-    with staged.index_connection() as connection:
-        initialise_schema(connection)
-        set_metadata(connection, "schema_version", 1)
-        set_metadata(connection, "n_variants", len(hg38_alids))
-        set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(
-            connection,
-            "dense",
-            dense_index_metadata((len(hg38_alids), len(analyses)), hint=chunk_shape),
-        )
-        connection.commit()
 
 
 def apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> list[Analysis]:

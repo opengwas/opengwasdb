@@ -8,9 +8,11 @@ was. The rewrite:
 1. refuses a destination that exists, is the source or lies inside it, and a source
    that is not 0.2.3 -- including one already 0.3.0 -- before a byte is written;
 2. stages a copy of the source (`cp -a --reflink=auto`, so an unchanged array costs
-   no space where the filesystem can share it);
+   no space where the filesystem can share it), leaving out every path a step drops
+   (`RewriteStep.leaves_out`): what 0.3.0 no longer carries is never copied;
 3. runs its **steps** on the staged copy, in order. Each is one named change the
-   format makes; #468-#472 each add theirs to `STEPS`;
+   format makes; #468-#472 each add theirs to `STEPS`. A step that reads a component
+   another drops reads it from the source;
 4. stamps every manifest 0.3.0 with a fresh `release_id` and `created_at`, keeps
    `store_id`, and records a `format_rewrite` provenance block naming the source
    `release_id` and the steps (ADR 0038 §5, as the 0.2.0 converter does);
@@ -31,15 +33,19 @@ lacks one or both and no mechanical step can supply them, so it is rebuilt.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.overview import write_overview_html
+from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.convert import (
     copy_path,
     installed_commit,
@@ -47,10 +53,19 @@ from opengwasdb.store.convert import (
     refuse_destination,
     require_valid_staged_release,
 )
-from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store.open import (
+    INDEX_FILENAME,
+    OpenGWASDBStore,
+    connect_index,
+    layout_envelope,
+    open_store,
+    ships_index,
+)
 from opengwasdb.store.query_digests import differences, release_digests
+from opengwasdb.store_reader import top_hits as reader_top_hits
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     CURRENT_FORMAT_VERSION,
     LAST_0_2_FORMAT_VERSION,
@@ -59,11 +74,13 @@ from opengwasdb.store_reader.format import (
     check_format_version,
     format_version_for,
 )
+from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.variant_axis import (
     variant_alid_bytes_path,
     variant_alid_rows_path,
     variant_table_path,
 )
+from opengwasdb.top_hits import STORED_P_ARRAYS, stored_p_agrees
 
 #: The one `format_version` this rewrite reads: every other is refused (module docstring).
 SOURCE_FORMAT_VERSION = LAST_0_2_FORMAT_VERSION
@@ -108,13 +125,24 @@ class RewriteContext:
             yield self.staged / component
 
 
+def _nothing_left_out(_source_component: Path) -> Iterable[str]:
+    return ()
+
+
 @dataclass(frozen=True)
 class RewriteStep:
-    """One named change the rewrite makes to the staged copy."""
+    """One named change the rewrite makes to the staged copy.
+
+    `leaves_out` names, relative to one source component, the paths the step drops:
+    the copy never writes them, so nothing is copied to be deleted. It refuses (raises
+    `RewriteError`) a component whose paths cannot be dropped without changing an
+    answer or losing a record.
+    """
 
     name: str
     summary: str
     run: Callable[[RewriteContext], None]
+    leaves_out: Callable[[Path], Iterable[str]] = _nothing_left_out
 
 
 def _write_alid_sidecar(context: RewriteContext) -> None:
@@ -176,6 +204,185 @@ def _alids_in_row_order(directory: Path) -> Iterator[str]:
         )
 
 
+def _component_manifest(component: Path) -> dict[str, Any]:
+    manifest: dict[str, Any] = json.loads(
+        (component / "manifest.json").read_text(encoding="utf-8")
+    )
+    return manifest
+
+
+def _keeps_index(source: Path, component: str) -> bool:
+    """Whether the 0.3.0 release made of the source's `component` carries `index.sqlite`:
+    only to hold its `completion_quality` (`ships_index`, ADR 0102)."""
+    manifest = _component_manifest(source / component)
+    envelope = layout_envelope(
+        PrimaryStorageLayout(manifest["primary_layout"]), dense_component=component == "dense"
+    )
+    return ships_index(
+        envelope, TARGET_FORMAT_VERSION, CompletionState(manifest["completion_state"])
+    )
+
+
+#: The `index.sqlite` tables a 0.2.3 release carries, by what 0.3.0 does with them.
+_DROPPED_TABLES = frozenset({"metadata", "variant_aliases"})
+_KEPT_TABLES = frozenset({"completion_quality"})
+
+
+def _index_left_out(component: Path) -> Iterable[str]:
+    """`index.sqlite`, after refusing one whose drop would change an answer or lose a record.
+
+    Every source `index.sqlite` is left out of the copy: an Observed-Only release at
+    0.3.0 has none, and a Reference-Completed one gets a new one holding only
+    `completion_quality` (`_write_provenance_index`).
+    """
+    index = component / INDEX_FILENAME
+    if not index.exists():
+        return ()
+    if index.stat().st_size:
+        _refuse_unaccounted_tables(component)
+        _refuse_unindexed_aliases(component)
+        _refuse_disagreeing_dense_blob(component)
+    return (INDEX_FILENAME,)
+
+
+def _refuse_unaccounted_tables(component: Path) -> None:
+    """Refuse an index holding a table 0.3.0 neither keeps nor drops by name."""
+    with ReleaseIndex(component) as index:
+        tables = index.names(tables_only=True)
+    unknown = sorted(
+        name
+        for name in tables - _DROPPED_TABLES - _KEPT_TABLES
+        if not name.startswith("sqlite_")
+    )
+    if unknown:
+        raise RewriteError(
+            f"{component / INDEX_FILENAME} holds {', '.join(unknown)}, which a 0.3.0 release "
+            "does not carry and the rewrite does not know how to drop; it is not rewritten"
+        )
+
+
+def _refuse_unindexed_aliases(component: Path) -> None:
+    """Refuse `variant_aliases` naming an rsID the rsID index does not hold.
+
+    A 0.2 release answers such an rsID from `variant_aliases`; a 0.3.0 one answers it
+    as a miss (ADR 0102). Dropping the table would change that answer, and the proof's
+    questions name only a few rsIDs, so every alias is checked here.
+    """
+    with ReleaseIndex(component) as index:
+        has_table = "variant_aliases" in index.names(tables_only=True)
+        aliases = sorted({str(alias) for alias, _ in index.variant_aliases()}) if has_table else []
+    if not aliases:
+        return
+    with closing(open_store(component).variant_axis(aliases=False)) as axis:
+        unindexed = [alias for alias in aliases if not len(axis.indices_by_alias(alias))]
+    if unindexed:
+        raise RewriteError(
+            f"{component / INDEX_FILENAME}: {len(unindexed)} variant_aliases rsID(s) are not in "
+            f"the rsID index (first, {unindexed[0]!r}); a 0.3.0 release would answer them as "
+            "misses, so the release is not rewritten"
+        )
+
+
+#: The `dense` blob's keys a manifest's layout record also holds (spec §10a).
+_LAYOUT_KEYS = ("chunk_shape", "shard_shape", "compressor", "zarr_format")
+
+
+def _dense_blob(component: Path) -> dict[str, Any]:
+    """The source index's `dense` blob; empty where it records none."""
+    with ReleaseIndex(component) as index:
+        has_table = "metadata" in index.names(tables_only=True)
+        blob = index.metadata("dense", default=None) if has_table else None
+    return blob if isinstance(blob, dict) else {}
+
+
+def _manifest_layout(component: Path) -> dict[str, Any]:
+    """The layout the component's manifest records: a Hybrid's outer `provenance.hybrid`,
+    every other Dense-shaped release's `provenance.dense` (spec §10a)."""
+    provenance = _component_manifest(component).get("provenance", {})
+    recorded = provenance.get("hybrid") if (component / "dense").is_dir() else None
+    layout: dict[str, Any] = recorded or provenance.get("dense") or {}
+    return layout
+
+
+def _refuse_disagreeing_dense_blob(component: Path) -> None:
+    """Refuse a `dense` blob that disagrees with the manifest's layout record.
+
+    0.3.0 keeps the manifest as the one copy (ADR 0102); dropping a blob that said
+    otherwise would drop the evidence that one of the two is wrong.
+    """
+    blob = _dense_blob(component)
+    recorded = _manifest_layout(component)
+    differing = [
+        key for key in _LAYOUT_KEYS if key in blob and blob[key] != recorded.get(key)
+    ]
+    if differing:
+        raise RewriteError(
+            f"{component / INDEX_FILENAME}: its dense blob records {', '.join(differing)} "
+            "otherwise than manifest.json; 0.3.0 keeps the manifest as the one copy, so a "
+            "release whose two copies disagree is not rewritten"
+        )
+
+
+def _write_provenance_index(context: RewriteContext) -> None:
+    """Give each Reference-Completed component an `index.sqlite` holding only its
+    `completion_quality`, copied with its schema from the source's (ADR 0102).
+
+    The source's index was left out of the copy (`_index_left_out`), so its `metadata`
+    table and `variant_aliases` are never written to the staged release.
+    """
+    for component in context.components:
+        source = context.source / component
+        if not _keeps_index(context.source, component):
+            continue
+        with ReleaseIndex(source) as index:
+            schema, rows = index.completion_quality_copy()
+        if not schema:
+            raise RewriteError(
+                f"{source / INDEX_FILENAME} has no completion_quality table, which a "
+                "Reference-Completed release carries"
+            )
+        with closing(connect_index(context.staged / component / INDEX_FILENAME)) as staged:
+            for sql in schema:
+                staged.execute(sql)
+            if rows:
+                marks = ", ".join("?" * len(rows[0]))
+                staged.executemany(f"INSERT INTO completion_quality VALUES ({marks})", rows)
+            staged.commit()
+
+
+def _stored_p_left_out(component: Path) -> Iterable[str]:
+    """Each tier's `abs_z` and `p_value`, after refusing a tier whose stored values are
+    not what its `z` implies, or whose drop a consolidated record would not see."""
+    data = component / "data.zarr"
+    root = release_arrays(component)
+    if not reader_top_hits.has_index(root):
+        return []
+    left_out = []
+    for key in sorted(reader_top_hits.index_group(root)):
+        tier = reader_top_hits.index_group(root)[key]
+        stored = sorted(STORED_P_ARRAYS.intersection(tier.keys()))
+        if not stored:
+            continue
+        where = data / reader_top_hits.TOP_HIT_GROUP / key
+        try:
+            store_arrays.refuse_under_consolidated_metadata(where, "dropping abs_z/p_value in")
+        except store_arrays.ConsolidatedMetadataError as exc:
+            raise RewriteError(str(exc)) from exc
+        if stored != sorted(STORED_P_ARRAYS) or not stored_p_agrees(
+            tier["abs_z"][:], tier["p_value"][:], tier["z"][:]
+        ):
+            raise RewriteError(
+                f"{where}: its stored abs_z and p_value are not what its z implies; 0.3.0 "
+                "recomputes them from z, so a tier that disagrees is not rewritten"
+            )
+        left_out += [f"data.zarr/{reader_top_hits.TOP_HIT_GROUP}/{key}/{name}" for name in stored]
+    return left_out
+
+
+def _nothing_to_run(_context: RewriteContext) -> None:
+    """The step's whole change is what the copy left out (`RewriteStep.leaves_out`)."""
+
+
 #: The rewrite's steps, in the order they run. #468-#472 each add one.
 STEPS: tuple[RewriteStep, ...] = (
     RewriteStep(
@@ -183,6 +390,21 @@ STEPS: tuple[RewriteStep, ...] = (
         "write the variable-length ALID sidecar from the Variant Table and drop the "
         "fixed-width variant_alid_bytes.npy/variant_alid_rows.npy (ADR 0105)",
         _write_alid_sidecar,
+    ),
+    RewriteStep(
+        "provenance_index",
+        "drop index.sqlite's metadata table and variant_aliases, and with them the file "
+        "from an Observed-Only release; a Reference-Completed one keeps completion_quality "
+        "(ADR 0102)",
+        _write_provenance_index,
+        leaves_out=_index_left_out,
+    ),
+    RewriteStep(
+        "tier_stored_p",
+        "drop each Top-Hit tier's abs_z and p_value, which the validator recomputes from z "
+        "(ADR 0102)",
+        _nothing_to_run,
+        leaves_out=_stored_p_left_out,
     ),
 )
 
@@ -202,14 +424,15 @@ def rewrite_release(
     reference = release_digests(source)
     _log_phase(
         f"asked the source {len(reference['shapes'])} questions and "
-        f"{len(reference['alid_probes'])} ALID probes",
+        f"{len(reference['alid_probes'])} ALID probes and {len(reference['misses'])} rsID misses",
         started,
     )
     with OpenGWASDBStore.staging(destination) as staged:
         context = RewriteContext(source=source, staged=staged.path, components=components)
         started = time.perf_counter()
-        _copy_release(source, staged.path)
-        _log_phase("copied the source release", started)
+        left_out = _left_out(context, steps)
+        _copy_release(source, staged.path, left_out)
+        _log_phase(f"copied the source release, leaving out {len(left_out)} path(s)", started)
         for step in steps:
             started = time.perf_counter()
             step.run(context)
@@ -267,11 +490,38 @@ def _refuse_version(manifest: Path, version: str) -> None:
         )
 
 
-def _copy_release(source: Path, staged: Path) -> None:
-    """Copy every top-level entry; a reflink where the filesystem can share the blocks."""
+def _left_out(context: RewriteContext, steps: tuple[RewriteStep, ...]) -> frozenset[Path]:
+    """Every path, relative to the release, a step drops: the copy leaves them out."""
+    return frozenset(
+        Path(component) / relative
+        for component in context.components
+        for step in steps
+        for relative in step.leaves_out(context.source / component)
+    )
+
+
+def _left_out_within(name: str, left_out: frozenset[Path]) -> frozenset[Path]:
+    """The left-out paths beneath the entry `name`, relative to it."""
+    return frozenset(
+        path.relative_to(name) for path in left_out if len(path.parts) > 1 and path.parts[0] == name
+    )
+
+
+def _copy_release(source: Path, staged: Path, left_out: frozenset[Path] = frozenset()) -> None:
+    """Copy every entry but `left_out` (paths relative to `source`); a reflink where the
+    filesystem can share the blocks. A directory holding a left-out path is recreated,
+    its entries copied one by one and then its mode and times, as `cp -a` does; every
+    other entry is copied whole."""
     staged.mkdir(parents=True, exist_ok=True)
     for entry in sorted(source.iterdir()):
-        copy_path(entry, staged / entry.name)
+        if Path(entry.name) in left_out:
+            continue
+        nested = _left_out_within(entry.name, left_out)
+        if nested and entry.is_dir() and not entry.is_symlink():
+            _copy_release(entry, staged / entry.name, nested)
+            shutil.copystat(entry, staged / entry.name)
+        else:
+            copy_path(entry, staged / entry.name)
 
 
 def _stamp(

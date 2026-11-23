@@ -40,6 +40,14 @@ sidecar's four files where it carried `variant_alid_bytes.npy`/`variant_alid_row
 (ADR 0105); the Dense pin's `overview.html` lists them. Re-derived after checking that
 each completed release, turned back into its 0.2.3 form (`format_0_2_3.as_0_2_3`),
 matched the previous pin in every entry but that `overview.html`.
+
+Since #471 no pin holds a tier's `abs_z` or `p_value`, and the Dense pin's
+`index.sqlite` holds `completion_quality` alone, without the `metadata` table or
+`variant_aliases` (ADR 0102); its `overview.html` words `index.sqlite`'s entry anew.
+Re-derived after checking that every other entry matched the previous pin, that the
+Dense `index.sqlite`, with the metadata the code before #471 wrote added back, hashed
+to the previous pin, and that its `overview.html`, re-rendered with the previous
+wording, did too.
 """
 
 from __future__ import annotations

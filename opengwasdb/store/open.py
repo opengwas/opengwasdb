@@ -27,6 +27,7 @@ from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
 from opengwasdb.store_reader.alid_index import ALID_INDEX_FILENAMES, alid_index_kind
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 
 # The version tables and the read check are the Store Reader's (#464); what a writer
 # stamps and refuses builds on them. Re-exported: opengwasdb-stores probes
@@ -39,6 +40,7 @@ from opengwasdb.store_reader.format import (
     check_format_version,
     format_version_for,
     indels_reference_first,
+    index_holds_provenance_only,
     parse_format_version,
     split_format_version,
     zarr_format_for_version,
@@ -251,15 +253,14 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
 # checking that required entries are present but never that unexpected ones
 # are absent -- the gap that let a stray Ragged `traits.tsv.gz` side-file
 # (retired in issue #69) go unnoticed until a human spotted it (issues
-# #69-#73 / PR #78). Reference Completion (§12) does not currently add any
-# new top-level entry for any layout -- it only adds arrays inside
-# `data.zarr/` and a `completion_quality` table inside `index.sqlite` -- so
-# one set per layout covers both Observed-Only and Reference-Completed
-# releases.
+# #69-#73 / PR #78). Reference Completion (§12) adds arrays inside
+# `data.zarr/` and a `completion_quality` table inside `index.sqlite`. From
+# 0.3.0 that table is all `index.sqlite` holds, so the file ships only with it
+# (ADR 0102, #471): the constants leave it out, and `envelope_at` adds it by
+# version and completion state.
 _BASE_ENVELOPE: frozenset[str] = frozenset(
     {
         "manifest.json",
-        "index.sqlite",
         "analyses.tsv",
         "data.zarr",
         "variants.tsv.gz",
@@ -272,6 +273,10 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
         "variant_rsid_rows.npy",
     }
 ) | set(AlidSidecar.FILENAMES)
+
+#: A release's `index.sqlite`: in every 0.2 release; from 0.3.0 only where it holds
+#: `completion_quality` (`ships_index`).
+INDEX_FILENAME = "index.sqlite"
 
 #: Dense Observed-Only/Reference-Completed (§10, §16).
 DENSE_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html"}
@@ -292,16 +297,61 @@ HYBRID_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html", "dense"}
 #: carries.
 HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_shared.npy"}
 
+#: The envelopes of the releases that hold their own `completion_quality` when
+#: Reference-Completed: every one but a Hybrid's outer release, whose Dense Component
+#: holds it (spec §16).
+_HOLDS_COMPLETION_QUALITY: frozenset[frozenset[str]] = frozenset(
+    {DENSE_ENVELOPE, RAGGED_ENVELOPE, HYBRID_DENSE_COMPONENT_ENVELOPE}
+)
 
-def envelope_at(envelope: frozenset[str], format_version: str) -> frozenset[str]:
-    """`envelope`, one of the constants above, as a release of `format_version` carries it:
-    with the ALID index that version carries (`alid_index_kind`) and no other.
 
-    The constants are what this build writes (0.3.0, the sidecar). A 0.2 release
-    carries the fixed-width pair instead, and either one carrying the other's files
-    fails its closed envelope (spec §1, §20).
+def layout_envelope(layout: PrimaryStorageLayout, *, dense_component: bool) -> frozenset[str]:
+    """The envelope constant of a release of `layout`, before its version and state:
+    `dense_component` names a Hybrid's nested Dense Component (spec §16)."""
+    if dense_component:
+        return HYBRID_DENSE_COMPONENT_ENVELOPE
+    return {
+        PrimaryStorageLayout.DENSE: DENSE_ENVELOPE,
+        PrimaryStorageLayout.RAGGED: RAGGED_ENVELOPE,
+        PrimaryStorageLayout.HYBRID: HYBRID_ENVELOPE,
+    }[layout]
+
+
+def envelope_at(
+    envelope: frozenset[str], format_version: str, completion_state: CompletionState
+) -> frozenset[str]:
+    """`envelope`, one of the constants above, as a release of `format_version` and
+    `completion_state` carries it: with the ALID index that version carries
+    (`alid_index_kind`) and no other, and with `index.sqlite` where it ships
+    (`ships_index`).
+
+    The constants are what this build writes (0.3.0, the sidecar, no `index.sqlite`). A
+    0.2 release carries the fixed-width pair instead, and either one carrying the other's
+    files fails its closed envelope (spec §1, §20); so does a 0.3.0 Observed-Only release
+    carrying an `index.sqlite`.
     """
-    return (envelope - ALID_INDEX_FILENAMES) | set(alid_index_kind(format_version).FILENAMES)
+    index = {INDEX_FILENAME} if ships_index(envelope, format_version, completion_state) else set()
+    return (
+        (envelope - ALID_INDEX_FILENAMES) | set(alid_index_kind(format_version).FILENAMES) | index
+    )
+
+
+def ships_index(
+    envelope: frozenset[str], format_version: str, completion_state: CompletionState
+) -> bool:
+    """Whether a release of `envelope` (one of the constants above), `format_version` and
+    `completion_state` carries `index.sqlite`.
+
+    Every 0.2 release does. From 0.3.0 it holds only `completion_quality`
+    (`index_holds_provenance_only`, ADR 0102), so only a Reference-Completed release
+    that holds its own -- not a Hybrid's outer release -- carries one.
+    """
+    if not index_holds_provenance_only(format_version):
+        return True
+    return (
+        completion_state is CompletionState.REFERENCE_COMPLETED
+        and envelope in _HOLDS_COMPLETION_QUALITY
+    )
 
 
 @contextmanager

@@ -24,11 +24,9 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
-    dense_index_metadata,
     dense_layout_records,
     dense_provenance_block,
 )
@@ -179,7 +177,6 @@ def build_dense_observed_store(
             coverage,
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
-        _write_index(staged, variants, analyses, records, chunk_shape)
         _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(
@@ -529,49 +526,6 @@ def _write_manifest(
         },
     )
     staged.write_manifest(manifest)
-
-
-def _write_index(
-    staged: StagedRelease,
-    variants: list[CanonicalVariant],
-    analyses: list[Analysis],
-    records: list[NormalisedAssociation],
-    chunk_shape: tuple[int, int],
-) -> None:
-    with staged.index_connection() as connection:
-        initialise_schema(connection)
-        set_metadata(connection, "schema_version", 2)
-        set_metadata(connection, "n_variants", len(variants))
-        set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(
-            connection,
-            "dense",
-            dense_index_metadata(
-                (len(variants), len(analyses)),
-                hint=chunk_shape,
-                variant_axis={
-                    "format": VARIANT_AXIS_FORMAT,
-                    "table": VARIANT_TABLE_FILENAME,
-                    "tabix_index": VARIANT_TABIX_FILENAME,
-                    "row_offsets": VARIANT_OFFSETS_FILENAME,
-                },
-            ),
-        )
-        # `variant_aliases` is no longer the rsid lookup path -- `write_variant_axis`
-        # writes an rsid search index every layout shares (issue #109), and
-        # `VariantAxis.by_identifier` consults that first. The table is still written
-        # here, and still read as a fallback, so stores built before that index keep
-        # resolving rsids; nothing new depends on it.
-        variant_indices = {variant.alid: i for i, variant in enumerate(variants)}
-        aliases: set[tuple[str, int]] = set()
-        for record in records:
-            if record.rsid:
-                aliases.add((record.rsid, variant_indices[record.variant.alid]))
-        connection.executemany(
-            "INSERT OR IGNORE INTO variant_aliases(alias, variant_index) VALUES (?, ?)",
-            sorted(aliases),
-        )
-        connection.commit()
 
 
 def _write_zarr(

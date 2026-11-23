@@ -91,22 +91,15 @@ EXEMPT_MODULES = {
 #: Functions that write a release's index, or read back what their own module is
 #: writing before it is a release.
 WRITER_FUNCTIONS = {
-    ("opengwasdb/layouts/dense/build.py", "_write_index"): "writes the built release's index",
-    ("opengwasdb/layouts/dense/build_vcf.py", "write_index"): "writes the built release's index",
-    ("opengwasdb/layouts/ragged/build_ssf.py", "_build_variant_axis"): (
-        "writes the built release's index"
-    ),
-    ("opengwasdb/layouts/ragged/build_besd.py", "_build_besd_release"): (
-        "writes the built release's index"
+    ("opengwasdb/store/rewrite.py", "_write_provenance_index"): (
+        "writes the rewritten release's index.sqlite, holding the completion_quality it "
+        "copies from its source (#471)"
     ),
     ("opengwasdb/completion/fill_shards.py", "shard_checkpoint_fills"): (
         "writes the completion_quality rows of the release it is completing"
     ),
     ("opengwasdb/layouts/dense/complete.py", "_write_union_axis_tables"): (
         "writes the completed release's index.sqlite"
-    ),
-    ("opengwasdb/layouts/dense/complete.py", "_record_effective_dense_chunk_shape"): (
-        "records the staged arrays' layout in the staged index.sqlite"
     ),
     ("opengwasdb/layouts/dense/complete.py", "_completed_analysis_rows"): (
         "rolls up the completion_quality rows it staged"

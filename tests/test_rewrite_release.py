@@ -3,9 +3,11 @@
 The six `store_reader_digests` releases -- Dense, Ragged and Hybrid, each Observed-Only
 and Reference-Completed -- are built (0.3.0) and turned back into the 0.2.3 releases
 their builds would have written (`format_0_2_3.as_0_2_3`). Each is rewritten. The
-result is 0.3.0, carries the ALID sidecar and not the fixed-width pair, answers every
-question of `opengwasdb.store.query_digests` exactly as its source does, and validates
-clean; the source's files are byte-identical before and after. The refusals are
+result is 0.3.0, carries the ALID sidecar and not the fixed-width pair, lacks exactly
+what 0.3.0 drops (ADR 0102, #471: `index.sqlite` but where it holds
+`completion_quality`, and every tier's `abs_z` and `p_value`), answers every question
+of `opengwasdb.store.query_digests` exactly as its source does, and validates clean;
+the source's files are byte-identical before and after. The refusals are
 checked by name, and a rewrite whose staged copy answers one question differently is
 refused before anything is published.
 """
@@ -15,6 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -117,11 +121,59 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
         record = manifest["provenance"]["format_rewrite"]
         assert record["source_release_id"] != manifest["release_id"]
         assert (record["from_format_version"], record["to_format_version"]) == ("0.2.3", "0.3.0")
-        assert record["steps"] == ["alid_sidecar"]
+        assert record["steps"] == [step.name for step in rewrite.STEPS]
+        assert record["steps"][:1] == ["alid_sidecar"]
+        assert {"provenance_index", "tier_stored_p"} <= set(record["steps"])
         release_ids.add(manifest["release_id"])
     assert len(release_ids) == 1, "a Hybrid's two manifests name one release"
     result = validate_store(destination)
     assert result.ok, result.errors
+
+
+def _tier_arrays(directory: Path) -> set[str]:
+    """Every `data.zarr/top_hits/<tier>/<array>` the component holds."""
+    return {
+        path.parent.relative_to(directory).as_posix()
+        for path in (directory / "data.zarr" / "top_hits").glob("*/*/zarr.json")
+    }
+
+
+def _tables(index: Path) -> set[str]:
+    with closing(sqlite3.connect(index)) as connection:
+        listed = connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        return {row[0] for row in listed}
+
+
+def _quality_rows(index: Path) -> list[tuple]:
+    with closing(sqlite3.connect(index)) as connection:
+        return sorted(connection.execute("SELECT * FROM completion_quality").fetchall())
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_a_rewrite_drops_exactly_what_0_3_0_does_not_carry(
+    built: dict[str, Path], sources: dict[str, Path], tmp_path: Path, name: str
+):
+    source = sources[name]
+    destination = rewrite_release(source, tmp_path / "rewritten")
+    completed = name.endswith("_completed")
+    for directory in components(source):
+        relative = directory.relative_to(source)
+        staged = destination / relative
+        # Fixtures asserted meaningful: the 0.2.3 source carries every component dropped.
+        stored_p = {t for t in _tier_arrays(directory) if t.endswith(("/abs_z", "/p_value"))}
+        assert stored_p and len(stored_p) == 2 * len({t.rsplit("/", 1)[0] for t in stored_p})
+        if not name.startswith("ragged"):
+            assert {"metadata", "variant_aliases"} <= _tables(directory / "index.sqlite")
+        assert _tier_arrays(staged) == _tier_arrays(directory) - stored_p
+        keeps_index = completed and not (directory / "dense").is_dir()
+        assert (staged / "index.sqlite").exists() is keeps_index, staged
+        if keeps_index:
+            assert _tables(staged / "index.sqlite") == {"completion_quality"}
+            rows = _quality_rows(staged / "index.sqlite")
+            assert rows and rows == _quality_rows(directory / "index.sqlite")
+    # What a 0.3.0 build writes, file for file: the rewrite and the builders agree on
+    # what the format carries.
+    assert set(_files(destination)) == set(_files(built[name]))
 
 
 def test_the_rewritten_sidecar_is_what_a_build_writes(built, sources, tmp_path):
@@ -310,3 +362,76 @@ def test_the_step_refuses_a_table_that_disagrees_with_its_offsets(sources, tmp_p
     np.save(source / "variant_offsets.npy", np.append(offsets, offsets[-1]))
     with pytest.raises(RewriteError, match="rows but variant_offsets.npy has"):
         list(rewrite._alids_in_row_order(source))
+
+
+def _source_copy(sources: dict[str, Path], tmp_path: Path, name: str) -> Path:
+    return Path(shutil.copytree(sources[name], tmp_path / "source"))
+
+
+def _execute(index: Path, *statements: str) -> None:
+    with closing(sqlite3.connect(index)) as connection:
+        for statement in statements:
+            connection.execute(statement)
+        connection.commit()
+
+
+def test_an_alias_the_rsid_index_lacks_is_refused_not_dropped(sources, tmp_path):
+    """Dropping `variant_aliases` would turn this rsID's answer into a miss (#471)."""
+    source = _source_copy(sources, tmp_path, "dense_observed")
+    _execute(
+        source / "index.sqlite",
+        "INSERT INTO variant_aliases(alias, variant_index) VALUES ('rs424242', 0)",
+    )
+    assert len(release_digests(source)["shapes"]), "the source still answers"
+    with pytest.raises(RewriteError, match=r"1 variant_aliases rsID\(s\) are not in the rsID"):
+        rewrite_release(source, tmp_path / "rewritten")
+    assert not (tmp_path / "rewritten").exists()
+
+
+def test_an_alias_the_rsid_index_also_holds_is_dropped(rsid_releases, tmp_path):
+    """The rsID index answers it on both formats: nothing changes, and the rewrite goes on."""
+    import numpy as np
+
+    source = as_0_2_3(Path(shutil.copytree(rsid_releases["dense_observed"], tmp_path / "src")))
+    rows = np.load(source / "variant_rsid_rows.npy")
+    rsids = np.load(source / "variant_rsid_bytes.npy")
+    assert len(rsids), "the fixture names rsIDs"
+    alias = rsids[0].decode()
+    _execute(
+        source / "index.sqlite",
+        f"INSERT INTO variant_aliases(alias, variant_index) VALUES ('{alias}', {int(rows[0])})",
+    )
+    destination = rewrite_release(source, tmp_path / "rewritten")
+    assert not (destination / "index.sqlite").exists()
+
+
+def test_a_dense_blob_that_disagrees_with_the_manifest_is_refused(sources, tmp_path):
+    source = _source_copy(sources, tmp_path, "dense_completed")
+    _execute(
+        source / "index.sqlite",
+        """UPDATE metadata SET value = json_set(value, '$.chunk_shape', json('[7, 7]'))
+           WHERE key = 'dense'""",
+    )
+    with pytest.raises(RewriteError, match="its dense blob records chunk_shape otherwise"):
+        rewrite_release(source, tmp_path / "rewritten")
+
+
+def test_an_unknown_index_table_is_refused(sources, tmp_path):
+    source = _source_copy(sources, tmp_path, "ragged_completed")
+    _execute(source / "index.sqlite", "CREATE TABLE notes (text TEXT)")
+    with pytest.raises(RewriteError, match="holds notes, which a 0.3.0 release does not carry"):
+        rewrite_release(source, tmp_path / "rewritten")
+
+
+def test_a_stored_p_value_that_disagrees_with_z_is_refused(sources, tmp_path):
+    from opengwasdb.store import arrays as store_arrays
+
+    source = _source_copy(sources, tmp_path, "ragged_observed")
+    root = store_arrays.open_group_for_write(source / "data.zarr", "a")
+    tier = root["top_hits"]["p_5e_04"]
+    assert tier["p_value"].shape[0], "the fixture tier holds a row"
+    p_value = tier["p_value"][:]
+    p_value[0] *= 2
+    tier["p_value"][:] = p_value
+    with pytest.raises(RewriteError, match="p_5e_04: its stored abs_z and p_value are not"):
+        rewrite_release(source, tmp_path / "rewritten")

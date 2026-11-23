@@ -233,7 +233,9 @@ def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, sou
     runner = CliRunner()
     store_path, _ = _fixture_store(tmp_path, source_path)
 
-    index_sqlite_before = (store_path / "index.sqlite").read_bytes()
+    # A 0.3.0 Observed-Only release has no index.sqlite (#471); the command must not
+    # make one.
+    assert not (store_path / "index.sqlite").exists()
     analyses_tsv_before = (store_path / "analyses.tsv").read_text(encoding="utf-8")
 
     # Simulate a stale/corrupted overview.html the command must overwrite.
@@ -248,7 +250,7 @@ def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, sou
     assert "stale" not in content
 
     # No rebuild -- analyses.tsv and index.sqlite are untouched (issue #23 AC3).
-    assert (store_path / "index.sqlite").read_bytes() == index_sqlite_before
+    assert not (store_path / "index.sqlite").exists()
     assert (store_path / "analyses.tsv").read_text(encoding="utf-8") == analyses_tsv_before
 
 

@@ -80,7 +80,6 @@ from opengwasdb.layouts.dense.build_vcf import (
     log_progress,
     survey_eaf_spills,
     write_dense_bands,
-    write_index,
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -921,16 +920,11 @@ def _lift_and_partition(
     )
 
 
-def _write_dense_component_skeleton(
-    staged: StagedRelease,
-    axis: _SourceAxis,
-    chunk_shape: tuple[int, int],
-) -> np.ndarray:
-    """Write the Dense Component's valid-store skeleton: index, Store Variant
+def _write_dense_component_skeleton(staged: StagedRelease, axis: _SourceAxis) -> np.ndarray:
+    """Write the Dense Component's valid-store skeleton: its Store Variant
     Table and the dense row -> shared variant_index sidecar. ``dense_to_shared``
     is returned because the EAF survey samples both components on the shared
     axis through it and the query facade reads it back."""
-    write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
     write_variant_table(
         axis.dense_dir,
         axis.partition.panel_sorted,
@@ -2394,7 +2388,7 @@ def _write_shared_metadata(
     n_overflow: int,
 ) -> None:
     """Phase - the shared union table and shared metadata: the Hybrid
-    manifest (again before analyses.tsv), then the root variant axis, index
+    manifest (again before analyses.tsv), then the root variant axis
     and analyses.tsv whose Top-Hit Counts are the Dense Component's and Ragged
     Overflow's counts summed (ADR 0032) -- the two partition an Analysis's
     associations disjointly, so neither alone is the whole picture."""
@@ -2422,12 +2416,6 @@ def _write_shared_metadata(
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
-    write_index(
-        prepared.staged,
-        prepared.partition.shared_sorted,
-        components.analyses,
-        options.chunk_shape,
-    )
     write_analyses_tsv(prepared.staged.path, shared_analyses)
     write_variant_table(
         prepared.staged.path,
@@ -2461,11 +2449,7 @@ def _prepare_build(
     (issue #227), and everything else gets this invocation's private mkdtemp.
     """
     axis = _lift_and_partition(staged, manifest_rows, options)
-    dense_to_shared = _write_dense_component_skeleton(
-        staged,
-        axis,
-        options.chunk_shape,
-    )
+    dense_to_shared = _write_dense_component_skeleton(staged, axis)
     if spill_dir is None:
         spill_dir = Path(
             mkdtemp(

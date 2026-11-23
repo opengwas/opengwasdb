@@ -40,9 +40,6 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("opengwasdb/build/phenotype_sd_pipeline.py", "_gather_evidence"): (
         "a source reader's associations, judged to set the SD before the build stores them"
     ),
-    ("opengwasdb/top_hits.py", "_write_tier"): (
-        "the build-time harvest writing the Top-Hit Index's stored p_value"
-    ),
     ("opengwasdb/build/effect_consistency.py", "log10_two_sided_p"): (
         "a build's check of the values it is writing, before any query"
     ),

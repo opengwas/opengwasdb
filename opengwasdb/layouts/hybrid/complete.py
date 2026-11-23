@@ -56,7 +56,6 @@ from opengwasdb.encoding.association_codec import (
 from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build import write_analyses_tsv
-from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import write_variant_table
@@ -218,11 +217,11 @@ def complete_hybrid_store(
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
         axis = _remap_shared_axis(dense, overflow, ld, ancestry, n_workers)
-        # Phase 3: shared index/variant table/dense_to_shared map, then the
+        # Phase 3: shared variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
         n_overflow, overflow_left_out = _write_shared_tables_and_overflow(
-            staged, src, src_manifest, dense, axis, overflow, analyses
+            staged, src, src_manifest, dense, axis, overflow
         )
         # Phase 4: manifest, overflow top hits and the shared rollups.
         _finalize_completed_hybrid(
@@ -597,9 +596,8 @@ def _write_shared_tables_and_overflow(
     dense: _CompletedDense,
     axis: _SharedAxis,
     overflow: _SourceOverflow,
-    analyses: list[Analysis],
 ) -> tuple[int, np.ndarray]:
-    """Write the shared index, variant table and dense_to_shared map on the
+    """Write the shared variant table and dense_to_shared map on the
     completed axis, then rebuild the overflow CSR on its remapped shared
     indices minus the folded crossovers. Returns the overflow association
     count, and per Analysis the rows the rebuild left out for an SE above
@@ -611,9 +609,6 @@ def _write_shared_tables_and_overflow(
     completed_against; writing it back at the shared root is the one place
     Analysis metadata is written, not a second provenance carry.
     """
-    dense_layout = _dense_component_layout(staged.path)
-    chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
-    write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
@@ -825,15 +820,6 @@ def _refuse_unjudged_crossovers(left_out: np.ndarray) -> None:
             f"the crossover fold was handed {int(left_out.sum()):,} crossover(s) with an SE "
             "above float16's range, which it must not write"
         )
-
-
-def _chunk_shape(manifest: StoreManifest) -> tuple[int, int]:
-    cs = manifest.provenance.get("hybrid", {}).get("chunk_shape")
-    if cs and len(cs) == 2:
-        return (int(cs[0]), int(cs[1]))
-    from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
-
-    return DEFAULT_CHUNK_SHAPE
 
 
 def _read_analyses(dense_dir: Path) -> list[Analysis]:

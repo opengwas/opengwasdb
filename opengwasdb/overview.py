@@ -214,7 +214,11 @@ _FILE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
         "Plain tab-delimited text.",
     ),
     "overview.html": ("human", "This page."),
-    "index.sqlite": ("internal", "Variant alias lookup index. Read via the query API."),
+    "index.sqlite": (
+        "internal",
+        "Reference Completion Quality per LD block and Analysis (provenance); not read by "
+        "queries. A 0.2 release also keeps its layout and rsID aliases here.",
+    ),
     "variants.tsv.gz": ("internal", "Tabix-indexed variant table. Read via the query API."),
     "variants.tsv.gz.tbi": ("internal", "Tabix index for variants.tsv.gz."),
     "variant_offsets.npy": ("internal", "Variant axis row-offset index."),

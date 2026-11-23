@@ -145,8 +145,8 @@ def test_tier_keys_and_attributes_are_the_existing_format(tmp_path):
     assert group.attrs["order"] == "analysis_index,variant_index"
     assert group.attrs["threshold"] == 5e-8
     assert sorted(group.keys()) == sorted(top_hits.TOP_HIT_TIER_ARRAYS)
+    assert not top_hits.STORED_P_ARRAYS & set(group.keys())  # dropped from 0.3.0 (#471)
     assert group["variant_index"].dtype == np.dtype("uint32")
-    assert group["p_value"].dtype == np.dtype("float64")
 
 
 def test_the_module_addresses_its_own_group_and_logs_each_tier(tmp_path, caplog):

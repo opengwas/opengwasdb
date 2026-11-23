@@ -24,6 +24,11 @@ release holds, and one at each length where an ALID index changes how it searche
 longest of them is 15 and 16 bytes -- so without the probes no question would reach
 the sidecar's full-byte compare (#467 review). They are their own section, so the
 store-reader pins, written before it, still name every shape they hold.
+
+The **misses** ask about rsIDs no release names, by PheWAS and inside a lookup of the
+spread identifiers. A 0.2 Dense or Hybrid release looks such an rsID up in
+`index.sqlite`'s `variant_aliases`; a 0.3.0 release has no such table and answers it
+as a miss without opening SQLite (ADR 0102, #471). Their own section, as the probes.
 """
 
 from __future__ import annotations
@@ -64,6 +69,9 @@ N_LONGEST_PROBED = 3
 
 #: Identifiers no release holds: an absent answer must stay absent.
 ABSENT_IDENTIFIERS = ("1:1:A:C", "rs0")
+
+#: rsIDs no release names, which the misses section asks (module docstring).
+ABSENT_RSIDS = ("rs0", "rs999999999")
 
 
 class IncompleteResultError(ValueError):
@@ -246,6 +254,18 @@ def _probe_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dic
     return out
 
 
+def _miss_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Each absent rsID's PheWAS, and a lookup of the spread identifiers with them, digested."""
+    records = [variants[key] for key in sorted(variants)]
+    identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
+    ids = _spread(
+        [row["analysis_id"] for _, row in sorted(q.analyses_table().items())], N_ANALYSES_ASKED
+    )
+    out = {f"phewas/{rsid}": result_digests(dict(q.phewas(rsid))) for rsid in ABSENT_RSIDS}
+    out["lookup"] = result_digests(dict(q.lookup([*identifiers, *ABSENT_RSIDS], ids)))
+    return out
+
+
 def release_digests(path: str | Path) -> dict[str, Any]:
     """Every answer the release at `path` gives, digested; `log10_p` per resolved shape."""
     from opengwasdb.query import query_store
@@ -266,6 +286,7 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
         out["alid_probes"] = _probe_digests(q, variants)
+        out["misses"] = _miss_digests(q, variants)
     return out
 
 
@@ -280,7 +301,7 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found.append(f"adapter: {reference['adapter']} != {candidate['adapter']}")
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
-    for section in ("shapes", "resolved", "alid_probes"):
+    for section in ("shapes", "resolved", "alid_probes", "misses"):
         found += _shape_differences(section, reference[section], candidate[section])
     return found + _log10_p_differences(reference["log10_p"], candidate["log10_p"])
 

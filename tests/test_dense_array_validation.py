@@ -155,7 +155,7 @@ def test_malformed_tiers_are_diagnosed_and_listed_after_the_well_formed_ones(
 
     result = validate_store(dense_store_path)
 
-    missing = "abs_z, analysis_index, analysis_offsets, p_value, se, variant_index, z"
+    missing = "analysis_index, analysis_offsets, se, variant_index, z"  # 0.3.0's (#471)
     assert result.failed() == {
         "associations.se_negative",
         "associations.markers_paired",
@@ -369,7 +369,7 @@ def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
     """The structure rules run after the band scan has released the tiers, from what
     they learned in the same load; the scan holds each tier sorted by row."""
     tiers = reader_top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
-    arrays = [tiers[key][name] for key in tiers for name in ("variant_index", "z", "abs_z")]
+    arrays = [tiers[key][name] for key in tiers for name in ("variant_index", "z", "se")]
     assert all(array.size for array in arrays), "the fixture's tiers must hold cells"
 
     with element_reads(monkeypatch) as reads:
@@ -384,8 +384,8 @@ def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
 def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str]]:
     """Every `top_hits/…` value a target is asked to hold that is more than a fact.
 
-    The structure rules' small facts (a tier's problem, whether its `abs_z` agrees)
-    are kept for the run; what the association scan reads to check the planes
+    The structure rules' small facts (a tier's problem, how many of its rows miss its
+    threshold, whether a 0.2 tier's `abs_z` agrees) are kept for the run; what the association scan reads to check the planes
     against, the tiers' arrays, is not.
     """
     held: list[tuple[Target, str]] = []
@@ -393,7 +393,7 @@ def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str
 
     def recording(self: Target, key: str, read: Any, *, until: str | None = None) -> Any:
         value = remember(self, key, read, until=until)
-        if key.startswith("top_hits/") and not isinstance(value, (bool, str, type(None))):
+        if key.startswith("top_hits/") and not isinstance(value, (bool, int, str, type(None))):
             held.append((self, key))
         return value
 
