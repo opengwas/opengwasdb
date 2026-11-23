@@ -79,17 +79,20 @@ def _copy_chunked_array(
     else:
         assert isinstance(block_cells, int)
         ranges = (
-            (slice(r0, min(r0 + block_cells, shape[0])),)
-            for r0 in range(0, shape[0], block_cells)
+            (slice(r0, min(r0 + block_cells, shape[0])),) for r0 in range(0, shape[0], block_cells)
         )
     for selection in ranges:
         raw = np.asarray(source[selection])
         destination[selection] = raw
         observed = np.asarray(destination[selection])
-        if observed.dtype != raw.dtype or observed.shape != raw.shape or not np.array_equal(
-            observed.view(np.uint8), raw.view(np.uint8)
+        if (
+            observed.dtype != raw.dtype
+            or observed.shape != raw.shape
+            or not np.array_equal(observed.view(np.uint8), raw.view(np.uint8))
         ):
-            raise RuntimeError(f"{name}: copied codes differ in {selection!r}; refusing publication")
+            raise RuntimeError(
+                f"{name}: copied codes differ in {selection!r}; refusing publication"
+            )
         blocks += 1
         print(
             f"{name}: block {blocks}, rows {selection[0].start}:{selection[0].stop}, "
@@ -137,7 +140,11 @@ def rechunk(source_path: Path, destination_path: Path, variant_chunk: int) -> No
         destination_group = open_group_for_write(data_destination, "a", zarr_format=3)
         for name in PLANES:
             array = source_group[name]
-            role = ArrayRole.DENSE_IMPUTED_MASK if name == "imputed" else ArrayRole.DENSE_STATISTIC_PLANE
+            role = (
+                ArrayRole.DENSE_IMPUTED_MASK
+                if name == "imputed"
+                else ArrayRole.DENSE_STATISTIC_PLANE
+            )
             records.append(
                 _copy_chunked_array(
                     array,
