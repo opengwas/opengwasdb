@@ -774,7 +774,7 @@ def _require_release_bound_axis(
     # Index would name a variant the Store does not have, and `resolve_rows`
     # would index the Store Variant Table out of bounds.  The Analysis width is
     # read from the same primary plane so a wrong-width index is refused too.
-    primary_z = release.arrays(mode="r")["z"]
+    primary_z = release.arrays()["z"]
     completed = release.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
     return _require_decodable_subset(
         name,

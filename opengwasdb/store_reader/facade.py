@@ -1,7 +1,7 @@
 """Layout-independent query facade (ADR-0006, ADR-0020, ADR-0033).
 
 Three adapter classes share one result contract but not one method set --
-`query_store()` / `StoreRelease.query()` dispatch to the right one from
+`query_release()` / `StoreRelease.query()` dispatch to the right one from
 the store manifest: `StoreQuery` (Dense), `RaggedStoreQuery` (Ragged),
 `HybridStoreQuery` (Hybrid). See ADR-0033 for the full rationale; in short:
 
@@ -90,11 +90,11 @@ from opengwasdb.store_reader.indexed import (
     IndexedSubsetLayoutError,
     rescope_indexed_subset_error,
 )
-from opengwasdb.store_reader.release import StoreRelease, open_release
+from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.resolve import resolve_rows
 from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
-from opengwasdb.store_reader.variant_axis import LegacyTableOpener, VariantAxis
+from opengwasdb.store_reader.variant_axis import VariantAxis
 
 
 def _ragged_tier_record(
@@ -264,7 +264,7 @@ class StoreQuery(_StoreQueryBase):
     def __init__(self, store: StoreRelease):
         self.store = store
         self._analyses = AnalysesIndex(store.path)
-        self._root = store.arrays(mode="r")
+        self._root = store.arrays()
         # The Store Variant Table, with `index.sqlite`'s `variant_aliases` for an
         # rsid the rsid index does not hold; both closed with the axis.
         self._variant_axis = store.variant_axis(aliases=True)
@@ -507,7 +507,7 @@ class RaggedStoreQuery(_StoreQueryBase):
         self._reader.open_variant_index(self._variant_axis.n_variants)
         self._csr = self._reader.structure
         self._analyses = AnalysesIndex(store.path)
-        self._top_hits = TopHitTiers(store.arrays(mode="r"))
+        self._top_hits = TopHitTiers(store.arrays())
         # Every result carries `n` exactly when the release has the plane, so a
         # caller can tell "no sample sizes here" from "no rows" (ADR 0067).
         self._has_n = self._reader.carries_n
@@ -728,7 +728,7 @@ class HybridStoreQuery(_StoreQueryBase):
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
         self._variant_axis = store.variant_axis(aliases=True)  # shared union table
         self._overflow.open_variant_index(self._variant_axis.n_variants)
-        self._top_hits = TopHitTiers(store.arrays(mode="r"))  # overflow's own tiers
+        self._top_hits = TopHitTiers(store.arrays())  # overflow's own tiers
 
     def close(self) -> None:
         self._dense.close()
@@ -939,17 +939,6 @@ class HybridStoreQuery(_StoreQueryBase):
         overflow = self._overflow_top_hits(threshold, analysis_index)
         merged = Associations.concat([dense, overflow.observed_only(observed_only)])
         return merged.in_genomic_order().head(limit)
-
-
-def query_store(
-    path: str | Path, *, legacy: LegacyTableOpener | None = None
-) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
-    """Open a store and return the layout-independent query facade.
-
-    `legacy` reads the release's 0.2.x Store Variant Table (`LegacyTableOpener`);
-    `opengwasdb.query.query_store` supplies opengwasdb's.
-    """
-    return query_release(open_release(path, legacy=legacy))
 
 
 def query_release(store: StoreRelease) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:

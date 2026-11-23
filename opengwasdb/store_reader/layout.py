@@ -8,6 +8,12 @@ here, at the bottom of the import graph, because the Store Reader checks it on
 open -- an Indexed Variant Subset whose plane chunks span Analyses is refused
 before it is read (#263, #464). Creating an array on it is
 `opengwasdb.store.arrays`'s, the array-creation seam, which imports it.
+
+These are the format's per-role chunk and shard facts, and all of them: readers
+use them to check an array's layout, writers to create one. The writer-side
+arithmetic -- a build's hint, the Dense shard override, `require_shard_multiple`
+-- is here too, because splitting the table would give one fact two owners
+(owner's ruling on #464).
 """
 
 from __future__ import annotations

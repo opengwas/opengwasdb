@@ -4,13 +4,13 @@
 build cannot interpret before anything else is read (ADR 0038 §2).
 `StoreRelease` is the opened release every reader holds: where its artifacts
 live, its Zarr data group opened read-only, its Hybrid Dense Component, its
-its Variant Axis, and the query facade over it.
+Variant Axis, and the query facade over it.
 
 Writing to a release -- staging, publishing, amending its provenance, opening
 its arrays for writing or its `index.sqlite` -- is `opengwasdb.store.open`'s,
 whose `OpenGWASDBStore` is this class with those added (#464). So is the Store
-Variant Table's 0.2.x access: a release opened with no `legacy` opener has no
-Variant Axis, and says so.
+Variant Table's 0.2.x access (`opengwasdb.variants.legacy_table`): a release
+opened with no `legacy` opener has no Variant Axis, and `variant_axis` says so.
 """
 
 from __future__ import annotations
@@ -114,9 +114,9 @@ class StoreRelease(ReleasePaths):
                 f"(primary_layout={self.manifest.primary_layout})"
             )
 
-    def arrays(self, mode: str = "r") -> Any:
+    def arrays(self) -> Any:
         """Open this release's ``data.zarr`` group read-only."""
-        return open_group(self.data_path, mode)
+        return open_group(self.data_path)
 
     def variant_axis(self, *, aliases: bool) -> VariantAxis:
         """This release's Variant Axis; `aliases` also consults `variant_aliases`."""

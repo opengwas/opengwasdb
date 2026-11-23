@@ -4,7 +4,7 @@ The query facade and result resolution are the Store Reader's
 (`opengwasdb.store_reader.facade`, `.resolve`, #464). This package keeps the
 names opengwasdb's CLI, ogdb-api and opengwasdb-stores import, and opens a
 release the way opengwasdb does: with its reader of the 0.2.x Store Variant
-Table (`opengwasdb.variants.axis.open_legacy_variant_table`).
+Table (`opengwasdb.variants.legacy_table.open_legacy_variant_table`).
 """
 
 from __future__ import annotations
@@ -25,5 +25,10 @@ __all__ = ["StoreQuery", "log10_p_two_sided", "query_store", "resolve_rows"]
 
 
 def query_store(path: str | Path) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
-    """Open a store and return the layout-independent query facade."""
+    """Open a store and return the layout-independent query facade.
+
+    The injector: it opens the release with `opengwasdb.store.open.open_store`,
+    which supplies opengwasdb's reader of the 0.2.x Store Variant Table, and
+    hands it to the Store Reader's `opengwasdb.store_reader.facade.query_release`.
+    """
     return query_release(open_store(path))

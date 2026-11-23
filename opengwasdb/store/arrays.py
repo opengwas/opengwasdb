@@ -8,13 +8,17 @@ change it -- the switch to Zarr v3 sharding (#247) and the converter that has
 to reproduce the same layout (#245) -- cannot disagree about how an array is
 laid out.
 
-The seam owns five things:
+The seam owns what follows. The layout facts it creates arrays on -- each
+`ArrayRole`'s inner chunk and shard, and their clipping -- are the format's, and
+live in `opengwasdb.store_reader.layout` (#464), which readers check them
+against; this module applies them at creation.
 
 * **the compressor**, `compressor()`, one Blosc zstd / clevel 3 / bitshuffle
   configuration described by `COMPRESSOR_RECORD`.  The record is the same dict
   the manifest and `index.sqlite` publish, so the bytes a plane is stored with
   and the bytes the manifest claims it was stored with cannot drift apart.
-* **the chunk layout**, through the role -> policy table `_LAYOUTS`.  A caller
+* **the chunk layout**, through the role -> policy table
+  (`opengwasdb.store_reader.layout._LAYOUTS`).  A caller
   names its array's `ArrayRole`; the role, the array's shape and -- for the one
   role that depends on a sibling, `PER_VARIANT` -- the component plane's
   variant-axis chunk fix the default chunks.  The component chunk is an
@@ -41,8 +45,8 @@ The seam owns five things:
   ADR 0056).  That module also opens a group read-only; this one opens it in
   every other mode.
 
-The role -> layout policy is one table in this module (`_LAYOUTS`) and nothing
-else chooses chunks.  A role that does not fit an existing entry gets a new
+The role -> layout policy is one table (`opengwasdb.store_reader.layout`, #464)
+and nothing else chooses chunks.  A role that does not fit an existing entry gets a new
 one rather than a call site that passes `chunks=` by hand.
 """
 
@@ -1501,17 +1505,18 @@ def _open_group_format(mode: str, zarr_format: int | None = None) -> Literal[2, 
 def open_group(
     path: str | Path, mode: str = "r", *, zarr_format: int | None = None
 ) -> Any:
-    """Open a Zarr group, read-only by default.
+    """Open a Zarr group in any mode, read-only by default.
 
-    With the read-only open, `opengwasdb.store_reader.arrays.open_group`, which
-    mode ``r`` hands to, the one place `zarr.open_group` is called, so the Store
-    format is declared once.  `mode` may be a creating mode here; `open_group_for_write` is the
-    named entry point for those, and this general form exists for `r`/`r+` and
-    for the release-envelope ``arrays(mode=...)`` methods that forward their
-    mode.  A creating mode is pinned to `STORE_ZARR_FORMAT` unless `zarr_format`
-    overrides it (the converter's v3 output, #245); a read mode leaves the
-    format to the stored metadata.  Any mode but ``r`` refuses a group that
-    consolidated metadata describes (`refuse_under_consolidated_metadata`).
+    Mode ``r`` is a forwarder: it calls the Store Reader's read-only open,
+    `opengwasdb.store_reader.arrays.open_group`. Every other mode opens here,
+    the one place outside it that calls `zarr.open_group`, so the Store format
+    is declared in two places only. `open_group_for_write` is the named entry
+    point for a creating mode; this general form exists for ``r+`` and for the
+    release-envelope ``arrays(mode=...)`` methods that forward their mode. A
+    creating mode is pinned to `STORE_ZARR_FORMAT` unless `zarr_format`
+    overrides it (the converter's v3 output, #245). Any mode but ``r`` refuses a
+    group that consolidated metadata describes
+    (`refuse_under_consolidated_metadata`).
     """
     zarr_mode = _zarr_mode(mode)
     if zarr_mode == "r":

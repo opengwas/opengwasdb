@@ -158,18 +158,13 @@ def inner_chunk_of(array: Any) -> tuple[int, ...]:
     return tuple(int(size) for size in array.chunks)
 
 
-def open_group(path: str | Path, mode: str = "r") -> Any:
+def open_group(path: str | Path) -> Any:
     """Open a Store Release's Zarr group read-only.
 
     The one place a reader calls `zarr.open_group`. The stored metadata decides
     the Zarr format, so a 0.1.0 (Zarr v2) release opens as a 0.2.x (v3) one
-    does. `mode` exists to be refused: anything but ``r`` is a write, and writes
-    go through `opengwasdb.store.arrays` (`open_group`, `open_group_for_write`).
+    does. Every write -- and every other open mode -- goes through
+    `opengwasdb.store.arrays` (`open_group`, `open_group_for_write`).
     """
-    if mode != "r":
-        raise ValueError(
-            f"the Store Reader opens a group read-only, not in mode {mode!r}; open it for "
-            "writing through opengwasdb.store.arrays"
-        )
     store: LocalStore = zarr_sync(LocalStore.open(root=Path(path), mode="r", read_only=True))
     return zarr.open_group(store, mode="r", zarr_format=None)
