@@ -45,7 +45,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 STAGES = ("axis_resolution", "decode", "end_to_end")
-KINDS = ("python-fused", "python-zarrs", "rust")
+KINDS = ("python-fused", "python-fused-threads", "python-zarrs", "rust")
 ZARRS_PIPELINE = "zarrs.ZarrsCodecPipeline"
 
 
@@ -82,7 +82,12 @@ def _child(args: argparse.Namespace) -> None:
         raise SystemExit(f"opengwasdb imported from {opengwasdb.__file__}, not {REPO}")
     import zarr
 
-    if args.kind == "python-zarrs":
+    if args.kind == "python-fused-threads":
+        # zarr's own pool, which the seam pins to 1 because a forked worker hangs on
+        # it (ADR 0056); a lookup in one process never forks.  Measured, not shipped.
+        zarr.config.set({"codec_pipeline.max_workers": 16})
+        zarrs_version = None
+    elif args.kind == "python-zarrs":
         import zarrs
 
         zarr.config.set({"codec_pipeline.path": ZARRS_PIPELINE})
