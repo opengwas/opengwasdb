@@ -93,12 +93,499 @@
       "*/target/*",
       "*/tests/*",
       "*/vendor/*",
-      "*/venv/*"
+      "*/venv/*",
+      "*/opengwasdb/ld/*"
     ],
     "ceilings": {
       "cc": 8,
       "lines": 60
     },
     "baseline": "quality/complexity-baseline.json"
-  }
+  },
+  "gates": [
+    {
+      "name": "complexity:ld",
+      "check": "complexity",
+      "with": {
+        "tool": "lizard",
+        "sources": [
+          "opengwasdb/ld"
+        ],
+        "languages": [
+          "python"
+        ],
+        "exclude": [
+          "*/.build/*",
+          "*/.claude/*",
+          "*/.git/*",
+          "*/.github/*",
+          "*/.idea/*",
+          "*/.next/*",
+          "*/.venv/*",
+          "*/.vscode/*",
+          "*/DerivedData/*",
+          "*/Pods/*",
+          "*/__pycache__/*",
+          "*/benchmarks/*",
+          "*/coverage/*",
+          "*/dist/*",
+          "*/fixtures/*",
+          "*/node_modules/*",
+          "*/out/*",
+          "*/quality/*",
+          "*/target/*",
+          "*/vendor/*",
+          "*/venv/*"
+        ],
+        "ceilings": {
+          "cc": 8,
+          "lines": 60
+        },
+        "baseline": "quality/complexity-ld-baseline.json"
+      }
+    }
+  ],
+  "conventions": {
+    "rules": [
+      {
+        "name": "zero-filled unstored pair",
+        "pattern": "\\b(?:nan_to_num|fillna|zeros_like)\\b|\\b(?:np|numpy)\\.zeros\\(|\\b(?:np|numpy)\\.full(?:_like)?\\(.*,\\s*-?0(?:\\.0*)?\\s*\\)(?!\\s*,)|\\.fill\\(\\s*-?0(?:\\.0*)?\\s*\\)|is(?:nan|finite)\\([^)]*\\)\\]\\s*=\\s*-?[\\d.]|\\b(?:np|numpy)\\.where\\(\\s*~?\\s*(?:(?:np|numpy)\\.)?is(?:nan|finite)\\([^)]*\\)\\s*,\\s*(?:-?[\\d.]+\\s*,|[^,]+,\\s*-?[\\d.]+\\s*\\))",
+        "roots": [
+          "opengwasdb/ld/query"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "message": "An unstored pair is NaN, and only the caller's `fill` replaces it (spec \u00a78). Allocate a matrix with np.full(shape, np.nan) and apply `fill` in one place."
+      },
+      {
+        "name": "zero-filled read",
+        "pattern": "\\b(?:nan_to_num|fillna|zeros_like)\\b|\\b(?:np|numpy)\\.zeros\\(|\\b(?:np|numpy)\\.full(?:_like)?\\(.*,\\s*-?0(?:\\.0*)?\\s*\\)(?!\\s*,)|\\.fill\\(\\s*-?0(?:\\.0*)?\\s*\\)|is(?:nan|finite)\\([^)]*\\)\\]\\s*=\\s*-?[\\d.]|\\b(?:np|numpy)\\.where\\(\\s*~?\\s*(?:(?:np|numpy)\\.)?is(?:nan|finite)\\([^)]*\\)\\s*,\\s*(?:-?[\\d.]+\\s*,|[^,]+,\\s*-?[\\d.]+\\s*\\))",
+        "roots": [
+          "opengwasdb/ld/store"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "message": "The reader reports an unstored pair as NaN (spec \u00a78): allocate with np.full(shape, np.nan) and build indptr arrays with np.concatenate/np.cumsum. A number in a NaN's place here reaches every query."
+      },
+      {
+        "name": "int16 cast outside ogld.format",
+        "pattern": "\\b(?:np|numpy)\\.int16\\b(?!\\s*\\])|['\\\"][<>=|]?(?:int16|i2)['\\\"]|\\b(?:astype|view)\\(\\s*(?:int16|i2)\\b|\\bdtype\\s*=\\s*(?:int16|i2)\\b|\\bfrom\\s+numpy\\s+import\\b.*\\bint16\\b",
+        "roots": [
+          "opengwasdb/ld"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "exclude": [
+          "*/opengwasdb/ld/format/*"
+        ],
+        "message": "Codes are made by opengwasdb.ld.format.quantise, and an r array's dtype is opengwasdb.ld.format.ENCODING's r_dtype: one place rounds half to even, never writes -32768 and refuses a value that is not a correlation (spec \u00a73)."
+      },
+      {
+        "name": "the r scale outside ogld.format",
+        "pattern": "\\b3276[78]\\b",
+        "roots": [
+          "opengwasdb/ld"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "exclude": [
+          "*/opengwasdb/ld/format/*"
+        ],
+        "message": "Use opengwasdb.ld.format's R_SCALE, RESERVED_CODE, quantise and dequantise; a second copy of the scale is a second encoding (spec \u00a73)."
+      },
+      {
+        "name": "t_far recomputed",
+        "pattern": "\\b20\\.84\\b",
+        "roots": [
+          "opengwasdb/ld"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "exclude": [
+          "*/opengwasdb/ld/format/*"
+        ],
+        "message": "A store records its t_far and every reader uses that record (spec \u00a73); a build calls opengwasdb.ld.format.t_far."
+      },
+      {
+        "name": "a distance hard-coded",
+        "pattern": "\\b(?:3_?000_?000|10_?000_?000)\\b",
+        "roots": [
+          "opengwasdb/ld"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "exclude": [
+          "*/opengwasdb/ld/format/*"
+        ],
+        "message": "Use the distances the store recorded, near_bp and far_bp (spec \u00a77), or opengwasdb.ld.format.NEAR_BP and FAR_BP for a build's defaults."
+      },
+      {
+        "name": "print in the package",
+        "pattern": "^\\s*print\\(",
+        "roots": [
+          "opengwasdb/ld"
+        ],
+        "extensions": [
+          ".py"
+        ],
+        "exclude": [
+          "*/opengwasdb/ld/cli/*"
+        ],
+        "message": "Only opengwasdb.ld.cli writes to the terminal. Return the value, or raise with the variant and the panel named."
+      }
+    ],
+    "baseline": "quality/conventions-ld-baseline.json"
+  },
+  "public_api": [
+    {
+      "name": "ld",
+      "language": "python",
+      "roots": [
+        "opengwasdb/ld"
+      ],
+      "baseline": "quality/public-api-ld.json"
+    }
+  ],
+  "guard_suites": {
+    "preflight": "tests/ld/realdata/run.sh",
+    "patterns": [
+      "test_*.py"
+    ],
+    "roots": [
+      "tests/ld/realdata"
+    ],
+    "exempt": {},
+    "not_suites": {}
+  },
+  "doc_citations": [
+    {
+      "file": "docs/spec/ld-store.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/spec/build-inputs.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/spec/genotype-store.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/spec/partner-rows.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0087-near-band-and-thresholded-far-pairs.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0088-build-inputs.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0089-variant-identity.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0090-per-store-encoding.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0091-producers-supply-r.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0092-near-band-layout-c.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0093-far-pairs-beside-the-proxy-index.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0094-serving-ld.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0095-direct-numeric-decoding.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0096-alid-search-index.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0097-partner-rows-replace-the-proxy-index.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0098-local-alid-mmap.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0099-shared-genotype-arithmetic.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0100-genotype-sidecar.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    },
+    {
+      "file": "docs/adr/0101-imported-ld.md",
+      "roots": [
+        "."
+      ],
+      "extensions": [
+        ".py",
+        ".sh",
+        ".md",
+        ".json",
+        ".toml",
+        ".yml",
+        ".svg",
+        ".tsv",
+        ".html"
+      ]
+    }
+  ]
 }
