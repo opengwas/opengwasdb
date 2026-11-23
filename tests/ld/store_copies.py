@@ -21,8 +21,8 @@ import zarr
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore
 
-from opengwasdb.ld.format import Sourced
-from opengwasdb.ld.store import StoreReader, Variants
+from opengwasdb.ld.format import REncoding, Sourced
+from opengwasdb.ld.store import StoreReader, StoreWriter, Variants
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -244,3 +244,17 @@ def private_sidecar_copy(
     if "alid_mmap" in root.attrs:
         del root.attrs["alid_mmap"]
     return copy, root, record
+
+
+def writer_for_test_store(path: Path, variants: Variants, **more: Any) -> StoreWriter:
+    """A writer with the Test Store's geometry and encoding: near_bp 3 Mb, far_bp 10 Mb, n = 771,
+    k = 10, the Test Store's scale and `T_PARTNER`; `more` adds or replaces arguments."""
+    arguments: dict[str, Any] = {
+        "encoding": REncoding(R_SCALE),
+        "near_bp": 3_000_000,
+        "far_bp": 10_000_000,
+        "n": 771,
+        "k": 10,
+        "t_partner": T_PARTNER,
+    }
+    return StoreWriter.create(path, variants=variants, **{**arguments, **more})

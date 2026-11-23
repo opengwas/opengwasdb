@@ -31,16 +31,16 @@ from store_copies import (
     FLOOR,
     PARTNER_FLOOR,
     R_SCALE,
-    T_PARTNER,
     TEST_STORE,
     arrays,
     copy_store,
     sourced,
+    writer_for_test_store,
 )
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding
+from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout, validation
 from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
@@ -869,16 +869,7 @@ def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> Stor
     if frequency is not None:
         v = variants
         variants = Variants(v.chrom, v.position, v.alid, v.a1, v.a2, np.full(4, frequency))
-    writer = StoreWriter.create(
-        tmp_path / name,
-        variants=variants,
-        encoding=REncoding(R_SCALE),
-        near_bp=3_000_000,
-        far_bp=10_000_000,
-        n=771,
-        k=10,
-        t_partner=0.01,
-    )
+    writer = writer_for_test_store(tmp_path / name, variants)
     r = np.full((4, 4), np.nan)
     r[np.triu_indices(4, k=1)] = np.array([10, -20, 30, 40, -50, 60]) / R_SCALE
     writer.write(writer.cut(0, r))
@@ -1078,17 +1069,7 @@ def adverse_store(path: Path, n: int = 1500) -> Path:
     )
     r = np.full((n, n), PARTNER_FLOOR / R_SCALE)
     np.fill_diagonal(r, 1.0)
-    writer = StoreWriter.create(
-        path,
-        variants=variants,
-        encoding=REncoding(R_SCALE),
-        near_bp=3_000_000,
-        far_bp=10_000_000,
-        n=771,
-        k=10,
-        t_partner=T_PARTNER,
-        compress_workers=4,
-    )
+    writer = writer_for_test_store(path, variants, compress_workers=4)
     writer.write(writer.cut(0, r))
     writer.finish(sourced(), threads=8)
     return path
