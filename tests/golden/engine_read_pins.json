@@ -422,6 +422,40 @@
    "variants.tsv.gz": "9b82e867ceec8ea0a4ad"
   }
  },
+ "eaf_audit": {
+  "flipped": {
+   "disagreements": [],
+   "evidence": [
+    {
+     "analysis_id": "GCST005076",
+     "n_overlap": 900,
+     "outcome": "failed",
+     "r": "-0.9996032572"
+    }
+   ],
+   "n_sites": 900,
+   "ok": false,
+   "recorded": {
+    "GCST005076": "unverified"
+   }
+  },
+  "oriented": {
+   "disagreements": [],
+   "evidence": [
+    {
+     "analysis_id": "GCST005076",
+     "n_overlap": 900,
+     "outcome": "passed",
+     "r": "0.9996032573"
+    }
+   ],
+   "n_sites": 900,
+   "ok": true,
+   "recorded": {
+    "GCST005076": "unverified"
+   }
+  }
+ },
  "findings": {
   "dense_completed": [
    {
@@ -574,6 +608,32 @@
    },
    {
     "message": "sqlite.variant_aliases",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_observed/alid_duplicated": [
+   {
+    "message": "duplicate canonical variants in variant table",
+    "rule": "variant_table.sequence",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "variant_table.sequence",
     "rule": "fidelity.source",
     "severity": "skip",
     "target": "data.zarr"
@@ -751,6 +811,62 @@
     "target": "."
    }
   ],
+  "hybrid_observed/wrong_outer_recording": [
+   {
+    "message": "manifest.json provenance.hybrid (dense/data.zarr/z) records chunk_shape [7, 1], which describes [7, 1] for a (200, 2) plane, but data.zarr/z is chunked [200, 2]; a manifest and arrays that disagree are a silent failure class (issue #245)",
+    "rule": "hybrid.recordings",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "manifest.json provenance.hybrid (dense/data.zarr/z) records shard_shape [200, 2], which cannot describe a (200, 2) plane chunked [7, 1]: the Dense variant-axis inner chunk 7 does not tile the decided shard axis 200 (shard (200, 2)); a build writes the format's shard, not one it chose. Allowed variant-axis inner chunks: 1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 200",
+    "rule": "hybrid.recordings",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "manifest.json provenance.hybrid (dense/data.zarr/se) records chunk_shape [7, 1], which describes [7, 1] for a (200, 2) plane, but data.zarr/z is chunked [200, 2]; a manifest and arrays that disagree are a silent failure class (issue #245)",
+    "rule": "hybrid.recordings",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "manifest.json provenance.hybrid (dense/data.zarr/se) records shard_shape [200, 2], which cannot describe a (200, 2) plane chunked [7, 1]: the Dense variant-axis inner chunk 7 does not tile the decided shard axis 200 (shard (200, 2)); a build writes the format's shard, not one it chose. Allowed variant-axis inner chunks: 1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 200",
+    "rule": "hybrid.recordings",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "manifest.json provenance.hybrid (dense/data.zarr/eaf) records chunk_shape [7, 1], which describes [7, 1] for a (200, 2) plane, but data.zarr/z is chunked [200, 2]; a manifest and arrays that disagree are a silent failure class (issue #245)",
+    "rule": "hybrid.recordings",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "manifest.json provenance.hybrid (dense/data.zarr/eaf) records shard_shape [200, 2], which cannot describe a (200, 2) plane chunked [7, 1]: the Dense variant-axis inner chunk 7 does not tile the decided shard axis 200 (shard (200, 2)); a build writes the format's shard, not one it chose. Allowed variant-axis inner chunks: 1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 200",
+    "rule": "hybrid.recordings",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "analysis 'trait_a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'trait_b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "hybrid.recordings",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "dense/data.zarr"
+   }
+  ],
   "ragged_completed": [
    {
     "message": "index.sqlite has no variant_aliases table",
@@ -787,6 +903,38 @@
    {
     "message": "completion_quality analysis 0: n_imputed + n_missing=0 but the planes hold 4 imputed or missing panel cell(s)",
     "rule": "completion.quality_counts",
+    "severity": "error",
+    "target": "data.zarr/ragged"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "ragged_completed/quality_table_dropped": [
+   {
+    "message": "index.sqlite has no variant_aliases table",
+    "rule": "sqlite.variant_aliases",
+    "severity": "skip",
+    "target": "."
+   },
+   {
+    "message": "validation failed: completion_quality cannot be counted: index.sqlite is missing the completion_quality table for a reference-completed store",
+    "rule": "completion.quality_counts",
+    "severity": "error",
+    "target": "data.zarr/ragged"
+   },
+   {
+    "message": "index.sqlite is missing the completion_quality table for a reference-completed store",
+    "rule": "completion.quality_table",
     "severity": "error",
     "target": "data.zarr/ragged"
    },
@@ -1304,6 +1452,33 @@
     "z_mismatch": 0,
     "z_se_missingness_mismatch": 0
    }
+  },
+  "ragged/quality_table_dropped": {
+   "refused": "target store has no completion_quality table: no such table: completion_quality"
   }
+ },
+ "sourced_findings": {
+  "dense_sourced": [
+   {
+    "message": "no frequencies",
+    "rule": "associations.eaf_range",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_sourced/z_sign_flipped": [
+   {
+    "message": "no frequencies",
+    "rule": "associations.eaf_range",
+    "severity": "skip",
+    "target": "data.zarr"
+   },
+   {
+    "message": "source-fidelity: 1 of 6 compared associations disagree with the source (e.g. 1:900000:A:G: store z=-1.0000 se=0.1500 vs source z=1.0000 se=0.1500)",
+    "rule": "fidelity.source",
+    "severity": "error",
+    "target": "data.zarr"
+   }
+  ]
  }
 }

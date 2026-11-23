@@ -171,24 +171,100 @@ def _flip_first_code(store: Path, plane: str) -> None:
     array[index] = value + 1 if value < np.iinfo(array.dtype).max - 1 else value - 1
 
 
-#: Corrupted copies: name -> (the release to copy, what is done to the copy).
-CORRUPTIONS: dict[str, tuple[str, Callable[[Path], None]]] = {
-    "dense_completed/quality_row_out_of_range": ("dense_completed", _quality_row_out_of_range),
-    "ragged_completed/quality_row_dropped": ("ragged_completed", _drop_quality_row),
-    "dense_observed/stray_analyses_table": ("dense_observed", _stray_analyses_table),
-    "dense_observed/wrong_recorded_layout": ("dense_observed", _wrong_recorded_layout),
-    "dense_observed/alias_to_nowhere": ("dense_observed", _alias_to_nowhere),
-    "dense_completed/top_hit_offsets_dropped": ("dense_completed", _drop_top_hit_offsets),
-    "ragged_observed/top_hit_offsets_dropped": ("ragged_observed", _drop_top_hit_offsets),
+def _duplicate_an_alid(store: Path) -> None:
+    """A Variant Table row names the ALID of the row after it (the variant-table scan's
+    read)."""
+    import pysam
+
+    table = store / "variants.tsv.gz"
+    with pysam.BGZFile(str(table), "r") as handle:
+        lines = handle.read().decode("utf-8").splitlines(keepends=True)
+    body = [i for i, line in enumerate(lines) if not line.startswith("#")]
+    first, second = body[2], body[3]
+    fields = lines[first].split("\t")
+    fields[5] = lines[second].split("\t")[5]
+    lines[first] = "\t".join(fields)
+    with pysam.BGZFile(str(table), "w") as handle:
+        handle.write("".join(lines).encode("utf-8"))
+    pysam.tabix_index(str(table), seq_col=0, start_col=1, end_col=1, force=True, zerobased=False)
+
+
+def _wrong_outer_recording(store: Path) -> None:
+    """A Hybrid's outer manifest records a chunk shape its Dense Component does not have
+    (the Hybrid recordings rule's read)."""
+    manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
+    manifest["provenance"]["hybrid"]["chunk_shape"] = [7, 1]
+    (store / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _drop_quality_table(store: Path) -> None:
+    """`completion_quality` is gone (the completion rules' and the observed view's read)."""
+    _sql(store, "DROP TABLE completion_quality")
+
+
+def _flip_first_z_sign(store: Path) -> None:
+    """The first stored z code changes sign: internally consistent, wrong against the
+    source (source fidelity's read)."""
+    array = zarr.open_group(str(store / "data.zarr"), mode="r+")["z"]
+    array[0, 0] = -array[0, 0]
+
+
+#: Corrupted copies: name -> (the release to copy, what is done to the copy, the
+#: rule that must report it).
+CORRUPTIONS: dict[str, tuple[str, Callable[[Path], None], str]] = {
+    "dense_completed/quality_row_out_of_range": (
+        "dense_completed", _quality_row_out_of_range, "completion.quality_table"
+    ),
+    "ragged_completed/quality_row_dropped": (
+        "ragged_completed", _drop_quality_row, "completion.quality_counts"
+    ),
+    "ragged_completed/quality_table_dropped": (
+        "ragged_completed", _drop_quality_table, "completion.quality_table"
+    ),
+    "dense_observed/stray_analyses_table": (
+        "dense_observed", _stray_analyses_table, "sqlite.analyses_table"
+    ),
+    "dense_observed/wrong_recorded_layout": (
+        "dense_observed", _wrong_recorded_layout, "layout.recorded"
+    ),
+    "hybrid_observed/wrong_outer_recording": (
+        "hybrid_observed", _wrong_outer_recording, "hybrid.recordings"
+    ),
+    "dense_observed/alias_to_nowhere": (
+        "dense_observed", _alias_to_nowhere, "sqlite.variant_aliases"
+    ),
+    "dense_observed/alid_duplicated": (
+        "dense_observed", _duplicate_an_alid, "variant_table.sequence"
+    ),
+    "dense_completed/top_hit_offsets_dropped": (
+        "dense_completed", _drop_top_hit_offsets, "top_hits.arrays"
+    ),
+    "ragged_observed/top_hit_offsets_dropped": (
+        "ragged_observed", _drop_top_hit_offsets, "top_hits.arrays"
+    ),
     "dense_completed/mask_value_two": (
-        "dense_completed", lambda s: _mask_value_two(s, "imputed")
+        "dense_completed", lambda s: _mask_value_two(s, "imputed"), "completion.mask_binary"
     ),
     "hybrid_completed/mask_value_two": (
-        "hybrid_completed", lambda s: _mask_value_two(s / "dense", "imputed")
+        "hybrid_completed",
+        lambda s: _mask_value_two(s / "dense", "imputed"),
+        "completion.mask_binary",
     ),
     "ragged_observed/z_code_flipped": (
-        "ragged_observed", lambda s: _flip_first_code(s, "ragged/z")
+        "ragged_observed", lambda s: _flip_first_code(s, "ragged/z"), "by_variant.sample"
     ),
+}
+
+#: Copies of the release built from a source file, validated against that source:
+#: name -> (what is done to the copy, or None, and the rule that must report it).
+SOURCED: dict[str, tuple[Callable[[Path], None] | None, str | None]] = {
+    "dense_sourced": (None, None),
+    "dense_sourced/z_sign_flipped": (_flip_first_z_sign, "fidelity.source"),
+}
+
+#: Observed views of a corrupted completed release: name -> (layout, corruption).
+REFUSED_VIEWS = {
+    "ragged/quality_table_dropped": ("ragged", "ragged_completed/quality_table_dropped")
 }
 
 
@@ -199,11 +275,62 @@ def releases_and_corruptions(root: Path) -> tuple[dict[str, Path], dict[str, Any
     for layout, (observed, completed, _) in pairs.items():
         releases[f"{layout}_observed"] = observed
         releases[f"{layout}_completed"] = completed
-    for name, (base, corrupt) in CORRUPTIONS.items():
+    for name, (base, corrupt, _rule) in CORRUPTIONS.items():
         copy = Path(shutil.copytree(releases[base], root / "corrupt" / name))
         corrupt(copy)
         releases[name] = copy
     return releases, pairs
+
+
+def build_sourced(root: Path) -> tuple[Path, Path]:
+    """A Dense release built from a source file, and the manifest naming that source."""
+    from dense_sources import build_dense_fixture, write_dense_manifest
+    from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS
+
+    root.mkdir(parents=True)
+    source = root / "associations.tsv"
+    source.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", encoding="utf-8")
+    store = root / "obs.opengwasdb"
+    build_dense_fixture(
+        [source], store, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
+    )
+    return store, write_dense_manifest(source)
+
+
+def eaf_audits(root: Path) -> dict[str, Any]:
+    """The EAF orientation audit of a correctly and a wrongly oriented Dense release."""
+    from eaf_fixtures import dense_manifest, frequencies, reference_table, write_ssf
+
+    from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+    from opengwasdb.validation.eaf_audit import audit_eaf_orientation
+
+    freqs = frequencies(seed=3)
+    found: dict[str, Any] = {}
+    for name, flipped in (("oriented", False), ("flipped", True)):
+        directory = root / name
+        directory.mkdir(parents=True)
+        reference = reference_table(directory / "reference.tsv", freqs)
+        source = write_ssf(directory / "a.tsv.gz", freqs, flipped=flipped, seed=1)
+        manifest = dense_manifest(directory / "manifest.tsv", {"GCST005076": source})
+        store = directory / "store.opengwasdb"
+        build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
+        audit = audit_eaf_orientation(store, reference)
+        found[name] = {
+            "ok": audit.ok,
+            "recorded": audit.recorded,
+            "disagreements": list(audit.disagreements),
+            "n_sites": audit.report.n_sites,
+            "evidence": [
+                {
+                    "analysis_id": e.analysis_id,
+                    "outcome": e.outcome.value,
+                    "n_overlap": e.n_overlap,
+                    "r": f"{e.r:.{REAL_DIGITS}g}",
+                }
+                for e in audit.report.evidence
+            ],
+        }
+    return found
 
 
 # ── what is pinned ───────────────────────────────────────────────────────────
@@ -215,7 +342,7 @@ def _scrub(text: str, roots: list[Path]) -> str:
     return text
 
 
-def findings(path: Path) -> list[dict[str, str]]:
+def findings(path: Path, source: Path | None = None) -> list[dict[str, str]]:
     """Every finding `validate_store` reports, paths scrubbed, in the order reported."""
     from opengwasdb.validation import validate_store
 
@@ -227,7 +354,7 @@ def findings(path: Path) -> list[dict[str, str]]:
             "target": _scrub(f.target, roots),
             "message": _scrub(f.message, roots),
         }
-        for f in validate_store(path).findings
+        for f in validate_store(path, source=source).findings
     ]
 
 
@@ -323,12 +450,25 @@ def release_digests(path: Path) -> dict[str, str]:
 
 def pins(root: Path) -> dict[str, Any]:
     releases, pairs = releases_and_corruptions(root)
+    sourced, manifest = build_sourced(root / "sourced")
+    sourced_findings = {}
+    for name, (corrupt, _rule) in SOURCED.items():
+        copy = Path(shutil.copytree(sourced, root / "sourced-copies" / name))
+        if corrupt is not None:
+            corrupt(copy)
+        sourced_findings[name] = findings(copy, source=manifest)
+    views = {
+        layout: observed_view(observed, completed, extra)
+        for layout, (observed, completed, extra) in pairs.items()
+    }
+    for name, (layout, corrupted) in REFUSED_VIEWS.items():
+        observed, _completed, extra = pairs[layout]
+        views[name] = observed_view(observed, releases[corrupted], extra)
     found = {
         "findings": {name: findings(path) for name, path in releases.items()},
-        "observed_view": {
-            layout: observed_view(observed, completed, extra)
-            for layout, (observed, completed, extra) in pairs.items()
-        },
+        "sourced_findings": sourced_findings,
+        "eaf_audit": eaf_audits(root / "audit"),
+        "observed_view": views,
         "completed": {
             layout: release_digests(completed) for layout, (_o, completed, _e) in pairs.items()
         },
