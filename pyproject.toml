@@ -328,3 +328,11 @@ ld-acceptance-clump = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run.sh"
 ld-acceptance-stores = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run_stores.sh"
 # The whole-panel comparison of the Genotype Store with the LD Store, code for code.
 ld-acceptance-genotypes = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run_genotypes.sh"
+# ogld#8's read-latency benchmark, from local disk and over HTTP (docs/benchmarks/ld/latency.md):
+# `pixi run -e dev ld-bench-latency step1 --target local http0 http10 http50 --out …`. BLAS keeps one
+# thread and zarr's pool `--zarr-threads`, so a timing stays within the shared node's 8 threads.
+ld-bench-latency = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/ld/bench/latency.py"
+# ogld#9's serving measurements (docs/benchmarks/ld/serving.md): `pixi run -e dev ld-bench-serving memory
+# --out …`, `lag --out …`, and `tables docs/benchmarks/ld/results/9/*.jsonl.gz`. BLAS keeps one
+# thread, as for ld-bench-latency, and the records carry it.
+ld-bench-serving = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/ld/bench/serving.py"
