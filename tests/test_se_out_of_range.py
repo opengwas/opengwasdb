@@ -368,12 +368,15 @@ def test_the_schema_types_the_count_as_a_non_negative_integer_or_unknown() -> No
 # ── format_version ───────────────────────────────────────────────────────────
 
 
-def test_a_build_and_a_completion_write_0_2_3() -> None:
-    assert store_format.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
-    assert store_format.CURRENT_FORMAT_VERSION == "0.2.3"
+def test_a_build_and_a_completion_count_what_they_leave_out() -> None:
+    """0.2.3 added the count; 0.3.0 (#467) keeps it, and is what a build and a
+    completion write, a 0.2.2 or 0.2.3 source's completion included."""
+    assert store_format.WRITTEN_FORMAT_VERSIONS[:4] == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
+    assert store_format.CURRENT_FORMAT_VERSION == "0.3.0"
     assert dict(store_format.SUPPORTED_FORMAT_VERSIONS)[(0, 2)] == (3,)
-    assert store_open.completed_format_version("0.2.2", carries_regions=False) == "0.2.3"
-    assert store_open.completed_format_version("0.2.3", carries_regions=True) == "0.2.3"
+    assert store_open.records_se_out_of_range("0.3.0")
+    assert store_open.completed_format_version("0.2.2", carries_regions=False) == "0.3.0"
+    assert store_open.completed_format_version("0.2.3", carries_regions=True) == "0.3.0"
 
 
 def test_0_2_3_is_the_newest_release_read_without_a_warning(caplog) -> None:

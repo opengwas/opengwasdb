@@ -211,7 +211,7 @@ def test_a_dense_completion_leaves_out_a_source_cell_above_the_bound(dense_pair)
 
     z, se_value, imputed = _dense_cell(completed, *OVER_CELL)
     assert np.isnan(z) and np.isnan(se_value) and imputed == 0
-    assert open_store(completed).manifest.format_version == "0.2.3"
+    assert open_store(completed).manifest.format_version == "0.3.0"
     assert _recorded(completed) == ["1", "0"]
     assert _parts(completed) == {"observed": [1, 0], "imputed": [0, 0]}
     _validates_cleanly(completed)

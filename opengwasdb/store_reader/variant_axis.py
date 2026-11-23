@@ -33,6 +33,7 @@ from opengwasdb.store_reader.alid import (
     is_indexable_rsid,
     parse_canonical_alid,
 )
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.identity import normalise_chromosome
 
 VARIANT_TABLE_FILENAME = "variants.tsv.gz"
@@ -164,6 +165,9 @@ class VariantAxis:
         # Falls back gracefully to tabix-per-call if absent (older stores).
         _bytes_path = variant_alid_bytes_path(self.store_path)
         _rows_path = variant_alid_rows_path(self.store_path)
+        # Format 0.3.0's variable-length ALID sidecar (#467): every ALID, however long,
+        # in both directions. Where it is present the fixed-width pair is not.
+        self._alid_sidecar = AlidSidecar.open(self.store_path)
         if _bytes_path.exists() and _rows_path.exists():
             self._alid_bytes: np.ndarray | None = np.load(_bytes_path, mmap_mode="r")
             self._alid_rows: np.ndarray | None = np.load(_rows_path, mmap_mode="r")
@@ -186,6 +190,11 @@ class VariantAxis:
     @property
     def n_variants(self) -> int:
         return int(len(self._offsets))
+
+    @property
+    def alid_sidecar(self) -> AlidSidecar | None:
+        """The variable-length ALID sidecar (format 0.3.0), None on a 0.2 release."""
+        return self._alid_sidecar
 
     def close(self) -> None:
         self._legacy.close()
@@ -259,6 +268,9 @@ class VariantAxis:
 
     def _indices_of_alids(self, parsed_pairs: list[tuple[str, ParsedAlid]]) -> list[int]:
         """The rows the ALIDs name: the mmap'd index first, the exact scan otherwise."""
+        if self._alid_sidecar is not None:
+            rows = self._alid_sidecar.rows_of([query for query, _ in parsed_pairs])
+            return [int(row) for row in rows if row >= 0]
         alid_bytes, alid_rows = self._alid_bytes, self._alid_rows
         indices: list[int] = []
         if alid_bytes is not None and alid_rows is not None:
@@ -296,6 +308,9 @@ class VariantAxis:
         return indices
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
+        if self._alid_sidecar is not None:
+            row = self._alid_sidecar.row_of(_canonical(parsed))
+            return None if row is None else self.by_index(row)
         if not self._alid_is_indexable(parsed):
             return self._scanned_record(parsed)
         index = self._indexed_row(parsed)
@@ -443,7 +458,8 @@ class VariantAxis:
         built before issue 029) -- callers should fall back to
         `by_indices()` there.
         """
-        if self._alid_bytes is None or self._alid_rows is None:
+        sidecar = self._alid_sidecar
+        if sidecar is None and (self._alid_bytes is None or self._alid_rows is None):
             return None
         vi = np.asarray(variant_index, dtype="int64")
         if vi.size == 0:
@@ -455,20 +471,14 @@ class VariantAxis:
                 "other_allele": empty,
                 "alid": empty,
             }
+        if sidecar is not None:
+            return _identity_of(sidecar.alids(vi))
         if self._alid_inverse is None:
             rows = np.asarray(self._alid_rows, dtype="int64")
             inverse = np.full(self.n_variants, -1, dtype="int64")
             inverse[rows] = np.arange(rows.size, dtype="int64")
             self._alid_inverse = inverse
-        alids = self._alids_by_indices(self._alid_inverse[vi], vi)
-        parts = np.array([a.split(":") for a in alids], dtype=object)
-        return {
-            "chromosome": parts[:, 0],
-            "position": parts[:, 1].astype("int64"),
-            "effect_allele": parts[:, 2],
-            "other_allele": parts[:, 3],
-            "alid": alids,
-        }
+        return _identity_of(self._alids_by_indices(self._alid_inverse[vi], vi))
 
     def all(self) -> list[VariantRecord]:
         return [parse_variant_line(line) for line in self._legacy.rows()]
@@ -498,6 +508,18 @@ def parse_variant_line(line: str) -> VariantRecord:
         rsid=None if rsid in {"", "."} else rsid,
         source_alid=None if source_alid in {"", "."} else source_alid,
     )
+
+
+def _identity_of(alids: np.ndarray) -> dict[str, np.ndarray]:
+    """The four identity fields an ALID spells, and the ALID itself, per row."""
+    parts = np.array([a.split(":") for a in alids], dtype=object)
+    return {
+        "chromosome": parts[:, 0],
+        "position": parts[:, 1].astype("int64"),
+        "effect_allele": parts[:, 2],
+        "other_allele": parts[:, 3],
+        "alid": alids,
+    }
 
 
 def _canonical(parsed: ParsedAlid) -> str:

@@ -54,7 +54,8 @@ from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
-from opengwasdb.store_reader.alid import is_indexable_alid
+from opengwasdb.store_reader.alid import ALID_DTYPE, ALID_WIDTH, is_indexable_alid
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
@@ -437,12 +438,27 @@ class _AlidIndex(NamedTuple):
 
     @classmethod
     def load(cls, store_path: Path) -> _AlidIndex:
+        sidecar = AlidSidecar.open(store_path)
+        if sidecar is not None:
+            return cls.from_sidecar(sidecar)
         bytes_path = variant_alid_bytes_path(store_path)
         rows_path = variant_alid_rows_path(store_path)
         if not (bytes_path.exists() and rows_path.exists()):
             # A Store built before the index existed: every row is resolved by scan.
             return cls(np.empty(0, dtype=f"S{_CHROMOSOME_WIDTH}"), np.empty(0, dtype="int64"))
         return cls(np.load(bytes_path, mmap_mode="r"), np.load(rows_path, mmap_mode="r"))
+
+    @classmethod
+    def from_sidecar(cls, sidecar: AlidSidecar) -> _AlidIndex:
+        """A 0.3.0 release's index, as the 0.2 pair would hold it: every ALID that fits
+        `ALID_WIDTH`, whole, in the sidecar's order, which is the full bytes' order. The
+        rest are read from the table, as on a 0.2 release (ADR 0105)."""
+        order = np.asarray(sidecar.order, dtype=np.int64)
+        offsets = np.asarray(sidecar.offsets, dtype=np.int64)
+        fits = (offsets[order + 1] - offsets[order]) <= ALID_WIDTH
+        rows = order[fits]
+        encoded = [alid.encode("utf-8") for alid in sidecar.alids(rows).tolist()]
+        return cls(np.array(encoded, dtype=ALID_DTYPE), rows)
 
     def unindexed_rows(self, n_rows: int) -> np.ndarray:
         indexed = np.zeros(n_rows, dtype=bool)

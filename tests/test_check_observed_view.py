@@ -19,6 +19,7 @@ import pytest
 import test_dense_completion as tdc
 from cli_output import normalize_cli_output
 from dense_sources import build_dense_fixture
+from format_0_2_3 import with_fixed_width_alid_index
 from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
@@ -27,7 +28,7 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
-from opengwasdb.validation.observed_view import check_observed_view
+from opengwasdb.validation.observed_view import _AlidIndex, check_observed_view
 
 HEADER = tdc.SOURCE_HEADER + "\teaf"
 # The `test_dense_completion` source, one frequency per row. Five distinct variants
@@ -281,6 +282,7 @@ def test_imputed_cells_are_not_failures(tmp_path, pair):
 
 
 def _point_alids_at_each_others_rows(store: Path, first: bytes, second: bytes) -> None:
+    with_fixed_width_alid_index(store)  # the fixed-width pair is the one corrupted here
     alids = np.load(store / "variant_alid_bytes.npy")
     rows = np.load(store / "variant_alid_rows.npy")
     i, j = (int(np.flatnonzero(alids == alid)[0]) for alid in (first, second))
@@ -313,6 +315,7 @@ def _rename_an_alid(store: Path, alid: bytes, replacement: bytes) -> None:
     source row finds nothing to map to. The new key sorts between the same neighbours as
     the old one, so the index stays searchable and only that one row's identity moves.
     """
+    with_fixed_width_alid_index(store)  # the fixed-width pair is the one corrupted here
     path = store / "variant_alid_bytes.npy"
     alids = np.load(path)
     at = int(np.flatnonzero(alids == alid)[0])
@@ -722,9 +725,17 @@ def _with_a_long_substitution(root: Path) -> tuple[Path, Path]:
     return _build_pair(root, [*ROWS, long_row], tdc._make_ld_panel(root))
 
 
-def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path):
+@pytest.mark.parametrize("form", ["sidecar", "fixed_width"])
+def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path, form):
+    """On a 0.3.0 pair the check takes the sidecar's ALIDs that fit `ALID_WIDTH` as its
+    index, and reads the rest from the table, as it does the 0.2 pair (ADR 0105)."""
     observed, completed = _with_a_long_substitution(tmp_path)
-    indexed = len(np.load(observed / "variant_alid_bytes.npy"))
+    if form == "fixed_width":
+        for store in (observed, completed):
+            with_fixed_width_alid_index(store)
+        indexed = len(np.load(observed / "variant_alid_bytes.npy"))
+    else:
+        indexed = len(_AlidIndex.load(observed).alids)
     assert indexed == N_PARENT, "fixture must leave the long ALID out of the index"
 
     verdict = check_observed_view(observed, completed, seed=1).record
@@ -743,6 +754,8 @@ def test_a_store_with_no_alid_index_is_still_checked(pair, absent):
     observed, completed = pair
     stores = {"source": [observed], "target": [completed], "both": [observed, completed]}[absent]
     for store in stores:
+        # A 0.2 release built before the ALID index: no pair, and no 0.3.0 sidecar.
+        with_fixed_width_alid_index(store)
         (store / "variant_alid_bytes.npy").unlink()
         (store / "variant_alid_rows.npy").unlink()
 

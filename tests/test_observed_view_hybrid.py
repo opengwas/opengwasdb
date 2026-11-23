@@ -45,6 +45,7 @@ import numpy as np
 import plane_edits
 import pytest
 from cli_output import normalize_cli_output
+from format_0_2_3 import with_fixed_width_alid_index
 from presence_fixtures import (
     DENSE_Z_GROUP,
     RAGGED_Z_GROUP,
@@ -643,6 +644,7 @@ def _rename_a_dense_alid(store: Path, alid: bytes, replacement: bytes) -> None:
     cannot be mapped. The new key sorts between the same neighbours as the old one, so
     the component's index stays searchable and only that one row's identity moves.
     """
+    with_fixed_width_alid_index(store / "dense")  # the fixed-width pair is the one corrupted
     path = store / "dense" / "variant_alid_bytes.npy"
     alids = np.load(path)
     at = int(np.flatnonzero(alids == alid)[0])

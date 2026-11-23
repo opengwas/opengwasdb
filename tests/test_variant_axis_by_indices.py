@@ -14,6 +14,8 @@ at all) must match what `by_index()` reads from the file.
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from format_0_2_3 import with_fixed_width_alid_index
 
 from opengwasdb.store_reader.variant_axis import (
     _BULK_SCAN_FRACTION,
@@ -140,7 +142,8 @@ def test_identity_by_indices_empty_returns_empty_arrays(tmp_path):
         axis.close()
 
 
-def test_identity_by_indices_with_non_indexable_alids(tmp_path):
+@pytest.mark.parametrize("form", ["sidecar", "fixed_width"])
+def test_identity_by_indices_with_non_indexable_alids(tmp_path, form):
     """Long-allele ALIDs (issue #127) leave the mmap'd index a PARTIAL
     permutation of the axis, not a permutation (this is what broke OGS-00010,
     whose 115k long-allele rows sit outside the fixed-width index).
@@ -161,6 +164,8 @@ def test_identity_by_indices_with_non_indexable_alids(tmp_path):
         for i in range(60)
     ]
     write_variant_axis(tmp_path, variants, {})
+    if form == "fixed_width":
+        with_fixed_width_alid_index(tmp_path)
     axis = VariantAxis(tmp_path)
     try:
         assert not is_indexable_alid(f"1:5000:{long_allele}:G")
@@ -181,6 +186,8 @@ def test_identity_by_indices_with_non_indexable_alids(tmp_path):
 def test_identity_by_indices_none_without_mmap_alid_index(tmp_path):
     axis = _build_axis(tmp_path)
     try:
+        # A 0.2 release built before the ALID index: no pair, and no 0.3.0 sidecar.
+        with_fixed_width_alid_index(tmp_path)
         variant_alid_bytes_path(tmp_path).unlink()
         variant_alid_rows_path(tmp_path).unlink()
         axis_no_index = VariantAxis(tmp_path)

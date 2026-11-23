@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from format_0_2_3 import with_fixed_width_alid_index
+
 from opengwasdb.index.sqlite import connect, initialise_schema
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
@@ -91,6 +93,9 @@ def test_matches_by_identifier_row_for_row(tmp_path):
 
 def test_falls_back_without_mmap_alid_index(tmp_path):
     connection = _build_axis(tmp_path)
+    # A 0.2 release built before the ALID index existed: neither the fixed-width
+    # pair nor, as no 0.2 release carries one, the 0.3.0 sidecar.
+    with_fixed_width_alid_index(tmp_path)
     variant_alid_bytes_path(tmp_path).unlink()
     variant_alid_rows_path(tmp_path).unlink()
     axis = VariantAxis(tmp_path, connection)

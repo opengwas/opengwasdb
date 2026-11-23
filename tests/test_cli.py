@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from cli_output import normalize_cli_output
 from dense_sources import write_dense_manifest
+from format_0_2_3 import follow_stamp
 from residual_fixtures import write_gwas_vcf_with_eaf
 from typer.testing import CliRunner
 
@@ -362,7 +363,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     }
     assert info_data["store_id"] == "cf"
     assert info_data["release_id"] == "ov1"
-    assert info_data["format_version"] == "0.2.3"
+    assert info_data["format_version"] == "0.3.0"
     assert info_data["primary_layout"] == "dense"
     assert info_data["association_coverage"] == "gwas"
     assert info_data["completion_state"] == "observed_only"
@@ -502,6 +503,7 @@ def test_validate_format_json_reports_ok_errors_and_warnings_as_before(
     (warning / "manifest.json").write_text(
         json.dumps({**manifest, "format_version": "0.2.2"}), encoding="utf-8"
     )
+    follow_stamp(warning)
     open_store(warning).arrays(mode="a")["se"][0, 0] = float("inf")
 
     def before_378(store_path) -> dict:

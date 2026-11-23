@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from format_0_2_3 import with_fixed_width_alid_index
 
 from opengwasdb.store_reader.alid import ALID_WIDTH, is_indexable_alid
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
@@ -46,10 +47,21 @@ def test_the_fixture_alids_are_wider_than_the_index_slot():
     assert not is_indexable_alid(long_.alid)
 
 
-def test_a_long_indel_resolves_to_itself_not_its_neighbour(tmp_path):
+#: The ALID index a release carries: 0.3.0's sidecar, or the 0.2 series' fixed-width pair.
+FORMS = ["sidecar", "fixed_width"]
+
+
+def _write(tmp_path, variants, form: str) -> None:
+    write_variant_axis(tmp_path, variants, {})
+    if form == "fixed_width":
+        with_fixed_width_alid_index(tmp_path)
+
+
+@pytest.mark.parametrize("form", FORMS)
+def test_a_long_indel_resolves_to_itself_not_its_neighbour(tmp_path, form):
     """Each ALID returns its own row, or nothing -- never the other variant's."""
     short, long_ = _shared_prefix_pair()
-    write_variant_axis(tmp_path, [short, long_], {})
+    _write(tmp_path, [short, long_], form)
 
     va = VariantAxis(tmp_path)
     try:
@@ -69,6 +81,7 @@ def test_variants_that_fit_the_slot_still_use_the_fast_index(tmp_path):
     short, long_ = _shared_prefix_pair()
     ordinary = _variant("10", 2_000_000, "A", "G")
     write_variant_axis(tmp_path, [short, long_, ordinary], {})
+    with_fixed_width_alid_index(tmp_path)  # the 0.2 series' index, which this is about
 
     va = VariantAxis(tmp_path)
     try:
@@ -80,7 +93,8 @@ def test_variants_that_fit_the_slot_still_use_the_fast_index(tmp_path):
         va.close()
 
 
-def test_the_batched_lookup_path_resolves_long_indels_too(tmp_path):
+@pytest.mark.parametrize("form", FORMS)
+def test_the_batched_lookup_path_resolves_long_indels_too(tmp_path, form):
     """`indices_by_identifiers` is the fast path dense `lookup()` uses (#3).
 
     It cast every query to the slot width in one vectorised `searchsorted`, so
@@ -89,7 +103,7 @@ def test_the_batched_lookup_path_resolves_long_indels_too(tmp_path):
     """
     short, long_ = _shared_prefix_pair()
     ordinary = _variant("10", 2_000_000, "A", "G")
-    write_variant_axis(tmp_path, [short, long_, ordinary], {})
+    _write(tmp_path, [short, long_, ordinary], form)
 
     va = VariantAxis(tmp_path)
     try:

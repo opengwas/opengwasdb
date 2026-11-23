@@ -174,7 +174,7 @@ class _ArrayPlan:
     codec: tuple[str, int, str] | None
 
 
-def _manifest_paths(release: Path) -> list[Path]:
+def manifest_paths(release: Path) -> list[Path]:
     """A release's known manifests, outermost first.
 
     A Hybrid release nests a Dense Component with a manifest of its own, and
@@ -210,7 +210,7 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
     this tool's business.  A layout it does not know is refused by name, because
     a wrong conversion of an unknown layout would produce a plausible store.
     """
-    manifests = _manifest_paths(source)
+    manifests = manifest_paths(source)
     if not manifests:
         raise ConversionError(f"{source}: no manifest.json; this is not a Store Release")
     for path in manifests:
@@ -785,7 +785,7 @@ def _conversion_provenance(
         "target_zarr_format": 3,
         "tool": "scripts/convert_store_to_0_2_0.py",
         "at": now,
-        "opengwasdb_git_hash": _installed_commit(),
+        "opengwasdb_git_hash": installed_commit(),
         "dense_analysis_chunk": dense_analysis_chunk,
         "dense_shard": list(dense_shard),
         "top_hit_shard_chunks": top_hit_shard_chunks,
@@ -830,7 +830,7 @@ def _rewrite_manifest(
     # reference, so it converts to 0.2.0: its ALIDs are 0.2.0's, never 0.2.2's
     # reference-first ones (ADR 0079).
     data["format_version"] = format_version_for(
-        carries_regions="regions" in data, reference_first_indels=False
+        carries_regions="regions" in data, reference_first_indels=False, alid_sidecar=False
     )
     provenance = {**data.get("provenance", {})}
     if component.kind in {"dense", "hybrid"} and dense_plane is not None:
@@ -858,7 +858,7 @@ def _rewrite_manifest(
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _installed_commit() -> str:
+def installed_commit() -> str:
     """The installed opengwasdb commit, via the fingerprint #176 added.
 
     Imported here rather than at module scope: `resolve_manifest` pulls in the
@@ -1124,7 +1124,7 @@ def _reflink_copy(source: Path, destination: Path, zarr_rels: list[str]) -> None
         if nested and entry.is_dir():
             _copy_directory_without(entry, destination / entry.name, _nested_children(nested))
         else:
-            _copy_path(entry, destination / entry.name)
+            copy_path(entry, destination / entry.name)
 
 
 def _top_level_zarr_rels(zarr_rels: list[str]) -> set[str]:
@@ -1148,26 +1148,62 @@ def _copy_directory_without(source: Path, destination: Path, skip: set[str]) -> 
     for entry in sorted(source.iterdir()):
         if entry.name in skip:
             continue
-        _copy_path(entry, destination / entry.name)
+        copy_path(entry, destination / entry.name)
 
 
-def _copy_path(source: Path, destination: Path) -> None:
+def copy_path(source: Path, destination: Path) -> None:
     """Reflink-copy one path, falling back to a full copy where it cannot."""
     subprocess.run(
         ["cp", "-a", "--reflink=auto", str(source), str(destination)], check=True
     )
 
 
-def _require_valid_staged_release(staged_path: Path, destination: Path) -> None:
-    """Publish only a staged copy that validates with no errors (issue #164)."""
+def require_valid_staged_release(
+    staged_path: Path,
+    destination: Path,
+    *,
+    error: type[Exception] = ConversionError,
+    what: str = "converted",
+) -> None:
+    """Publish only a staged copy that validates with no errors (issue #164).
+
+    Shared with the rewrite to 0.3.0 (`opengwasdb.store.rewrite`), which raises its
+    own `error` and names itself as `what`.
+    """
     result = validate_store(staged_path)
     if not result.ok:
-        for error in result.errors:
-            print(f"  ERROR {error}")
-        raise ConversionError(
-            f"the converted release has {len(result.errors)} validation error(s); a release "
+        for message in result.errors:
+            print(f"  ERROR {message}")
+        raise error(
+            f"the {what} release has {len(result.errors)} validation error(s); a release "
             "that does not validate is never published. The staging directory was removed, "
             f"the source is unchanged, and nothing was published to {destination}."
+        )
+
+
+def refuse_destination(
+    source: Path, destination: Path, *, error: type[Exception] = ConversionError
+) -> None:
+    """Refuse a destination that is the source, lies inside it, or already exists.
+
+    A derived release never writes its source and never replaces an existing release
+    (spec §21.4). Both paths are resolved by the caller. Shared with the rewrite to
+    0.3.0 (`opengwasdb.store.rewrite`), which raises its own `error`.
+    """
+    if source == destination:
+        raise error(
+            f"source and destination are the same path ({source}); a derived release cannot "
+            "be written into the one it was given (spec §21.4)"
+        )
+    if source in destination.parents:
+        raise error(
+            f"{destination} lies inside the source release {source}; a derived release "
+            "never writes inside its source (spec §21.4)"
+        )
+    if destination.exists():
+        raise error(
+            f"{destination}: already exists; refusing to overwrite. A derived release never "
+            "replaces an existing release."
         )
 
 
@@ -1183,16 +1219,7 @@ def convert_release(
     """Derive a 0.2.0 release at `destination` from a 0.1.0 one at `source`."""
     source = Path(source).resolve()
     destination = Path(destination).resolve()
-    if source == destination:
-        raise ConversionError(
-            f"source and --into are the same path ({source}); a conversion derives a new "
-            "release and cannot write into the one it was given (spec §21.4)"
-        )
-    if destination.exists():
-        raise ConversionError(
-            f"{destination}: already exists; refusing to overwrite. A conversion never "
-            "replaces an existing release."
-        )
+    refuse_destination(source, destination)
     if int(dense_analysis_chunk) < 1:
         raise ConversionError("--dense-analysis-chunk must be at least 1")
     if int(top_hit_shard_chunks) < 1:
@@ -1272,7 +1299,7 @@ def _stage_and_convert(
         _log_phase("verified the conversion bit-exact", started)
         started = time.perf_counter()
         _refresh_overviews(source, staged.path, components)
-        _require_valid_staged_release(staged.path, destination)
+        require_valid_staged_release(staged.path, destination)
         _log_phase("regenerated overview.html and validated the release", started)
 
 

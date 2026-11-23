@@ -19,16 +19,14 @@ import pysam
 
 from opengwasdb.store_reader import variant_axis as reader_axis
 from opengwasdb.store_reader.alid import (
-    ALID_DTYPE,
-    ALID_WIDTH,
     RSID_DTYPE,
     RSID_WIDTH,
-    is_indexable_alid,
     is_indexable_rsid,
 )
 
 # Re-exported: opengwasdb-stores imports it from here.
 from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
+from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
 from opengwasdb.store_reader.identity import normalise_chromosome
 
 # Re-exported: opengwasdb-stores imports these three from here.
@@ -119,7 +117,9 @@ def write_variant_axis(
     rsid_by_alid: Mapping[str, str],
     source_alids: Sequence[str | None] | None = None,
 ) -> None:
-    """Write the Store Variant Table, row-offset sidecar, and tabix index.
+    """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
+    row offsets, the ALID sidecar (`opengwasdb.store_reader.alid_sidecar`) and the rsid
+    index. The one writer of each: every build and completion path calls it.
 
     ``source_alids`` (optional, parallel to ``variants``) records the source-
     assembly canonical ALID that each row was lifted from — provenance back to
@@ -157,22 +157,11 @@ def write_variant_axis(
         zerobased=False,
         force=True,
     )
-    # Write mmap'd ALID search index: two parallel arrays sorted by ALID bytes.
-    # Over-wide ALIDs are left out rather than truncated in -- see `ALID_WIDTH`.
-    indexable = [(v.alid, i) for i, v in enumerate(variants) if is_indexable_alid(v.alid)]
-    n_too_long = len(variants) - len(indexable)
-    if n_too_long:
-        log.warning(
-            "%d ALID(s) longer than %d bytes left out of the ALID search index: "
-            "they resolve by exact scan instead, which is slower and correct",
-            n_too_long,
-            ALID_WIDTH,
-        )
-    alid_bytes = np.array([alid for alid, _ in indexable], dtype=ALID_DTYPE)
-    row_indices = np.array([i for _, i in indexable], dtype="int32")
-    sort_order = np.argsort(alid_bytes, kind="stable")
-    np.save(variant_alid_bytes_path(store), alid_bytes[sort_order])
-    np.save(variant_alid_rows_path(store), row_indices[sort_order])
+    # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
+    # however long, by row and by search. The 0.2 series' fixed-width pair
+    # (`variant_alid_bytes.npy`/`variant_alid_rows.npy`) left out each ALID wider than
+    # 32 bytes and is no longer written.
+    write_alid_sidecar(store, [variant.alid for variant in variants])
     _write_rsid_index(store, variants, rsid_by_alid)
 
 

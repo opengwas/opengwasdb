@@ -20,7 +20,9 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
+from opengwasdb.store_reader.alid_sidecar import sidecar_problems
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.format import carries_alid_sidecar
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
@@ -141,6 +143,67 @@ def _judge_alid_index(target: Target, counts: Counter[str]) -> Iterator[str]:
             "This is what silently truncating an over-wide ALID produced before "
             "issue #127 — rebuild the store"
         )
+
+
+@dataclass(frozen=True)
+class _SidecarRows:
+    """How many table rows a block held, and the first whose sidecar ALID differs."""
+
+    rows: int = 0
+    differing: int = 0
+    first: str = ""
+
+    def __add__(self, other: _SidecarRows) -> _SidecarRows:
+        return _SidecarRows(
+            self.rows + other.rows, self.differing + other.differing, self.first or other.first
+        )
+
+
+def _sidecar_rows(target: Target, block: TableBlock) -> _SidecarRows:
+    """Each row's ALID in the sidecar against the table's, over the rows both hold."""
+    sidecar = target.variant_axis.alid_sidecar
+    n_rows = len(block.records)
+    if sidecar is None:
+        return _SidecarRows(n_rows)
+    shared = max(0, min(n_rows, sidecar.n_rows - block.start))
+    named = sidecar.alids(np.arange(block.start, block.start + shared, dtype=np.int64))
+    differing = [
+        k for k in range(shared) if named[k] != block.records[k].alid
+    ]
+    first = ""
+    if differing:
+        k = differing[0]
+        first = (
+            f"row {block.start + k}: the sidecar names {named[k]!r}, "
+            f"variants.tsv.gz {block.records[k].alid!r}"
+        )
+    return _SidecarRows(n_rows, len(differing), first)
+
+
+def _judge_alid_sidecar(target: Target, total: _SidecarRows) -> Iterator[str]:
+    """The ALID sidecar names every row's ALID and indexes every one (format 0.3.0, ADR 0105)."""
+    sidecar = target.variant_axis.alid_sidecar
+    if sidecar is None:
+        yield "a 0.3.0 release has no ALID sidecar (variant_alid_*.npy)"
+        return
+    problems = list(sidecar_problems(sidecar))
+    yield from problems
+    if problems:
+        return
+    if sidecar.n_rows != total.rows:
+        yield (
+            f"the ALID sidecar names {sidecar.n_rows} rows but variants.tsv.gz has "
+            f"{total.rows}"
+        )
+    if total.differing:
+        yield (
+            f"the ALID sidecar names {total.differing} row(s) by another ALID than "
+            f"variants.tsv.gz does; first, {total.first}"
+        )
+
+
+def _carries_alid_sidecar(target: Target) -> bool:
+    return carries_alid_sidecar(target.store.manifest.format_version)
 
 
 #: Keys one collision window compares: 1,000,000 32-byte keys is 32 MB.
@@ -449,6 +512,16 @@ RULES: tuple[Rule, ...] = (
         zero=Counter[str](),
         measure=_indexable,
         judge=_judge_alid_index,
+    ),
+    Fold(
+        name="variant_table.alid_sidecar",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_carries_alid_sidecar,
+        scan=VARIANT_TABLE,
+        zero=_SidecarRows(),
+        measure=_sidecar_rows,
+        judge=_judge_alid_sidecar,
     ),
     Fold(
         name="variant_table.rsid_index",

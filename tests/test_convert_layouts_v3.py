@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from legacy_fixtures import relayout_as_0_1_0
 from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS
 from test_dense_completion import _make_ld_panel as _make_dense_ld_panel
@@ -733,6 +734,7 @@ def _set_format_version(manifest: Path, version: str) -> None:
     data = json.loads(manifest.read_text())
     data["format_version"] = version
     manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    follow_stamp(manifest.parent)
 
 
 def test_a_hybrid_with_an_unconverted_outer_manifest_is_invalid(

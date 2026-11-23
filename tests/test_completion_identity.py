@@ -34,6 +34,12 @@ to the pin it had.
 Since #366 the five Ragged SSF pins' `analyses.tsv` also records `declared_standardised`:
 an SSF manifest row states its scale and method, and the fixtures' sources are already
 in SD Units (`tests/ssf_builds.py`). Re-derived with every other pinned entry unchanged.
+
+Since #467 every pin's `format_version` is 0.3.0 and the release carries the ALID
+sidecar's four files where it carried `variant_alid_bytes.npy`/`variant_alid_rows.npy`
+(ADR 0105); the Dense pin's `overview.html` lists them. Re-derived after checking that
+each completed release, turned back into its 0.2.3 form (`format_0_2_3.as_0_2_3`),
+matched the previous pin in every entry but that `overview.html`.
 """
 
 from __future__ import annotations

@@ -10,6 +10,7 @@ import numpy as np
 import plane_edits
 import pytest
 from dense_sources import build_dense_from_records
+from format_0_2_3 import as_0_2_3, follow_stamp, write_fixed_width_alid_index
 from residual_fixtures import model_se
 
 from opengwasdb.layouts.dense.build import NormalisedAssociation
@@ -18,6 +19,7 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES, AlidSidecar
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.codec import SeExceptionTable, se_float16
 from opengwasdb.store_reader.encoding.planes import DenseSePlane
@@ -42,7 +44,7 @@ def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request,
 
     store = request.getfixturevalue(fixture)
     assert validate_store(store).ok, "the fixture must validate before it is restamped"
-    assert open_store(store).manifest.format_version == "0.2.3"
+    assert open_store(store).manifest.format_version == "0.3.0"
     edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.1"})
 
     result = validate_store(store)
@@ -218,8 +220,8 @@ def test_the_zarr_format_rule_reports_nodes_in_name_order(
 
     assert result.failed() == {"zarr.format"}
     assert result.errors == [
-        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.3; a "
-        "0.2.3 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.3.0; a "
+        "0.3.0 release is Zarr v3, and a half-converted release is invalid (issue #245)"
         for node in ("se", "z")
     ]
 
@@ -235,6 +237,7 @@ def test_validator_rejects_missing_variant_axis_file(dense_store_path):
 
 @pytest.mark.parametrize("name", ["variant_alid_bytes.npy", "variant_alid_rows.npy"])
 def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, name):
+    as_0_2_3(dense_store_path)  # the fixed-width pair is a 0.2 release's
     (dense_store_path / name).unlink()
 
     result = validate_store(dense_store_path)
@@ -244,6 +247,32 @@ def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, n
         error == f"missing {name} — rebuild the store to generate the ALID search index"
         for error in result.errors
     )
+
+
+@pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
+@pytest.mark.parametrize("name", ALID_SIDECAR_FILENAMES)
+def test_validator_rejects_a_missing_alid_sidecar_file(request, fixture, name):
+    """A 0.3.0 release requires each of the sidecar's four files (ADR 0105)."""
+    store = request.getfixturevalue(fixture)
+    (store / name).unlink()
+
+    result = validate_store(store)
+
+    assert result.failed() == {"envelope.required"}
+    assert f"missing {name} (ALID sidecar)" in result.errors
+
+
+def test_a_0_3_0_release_carrying_the_fixed_width_pair_fails_its_envelope(dense_store_path):
+    """The pair is a 0.2 release's; a 0.3.0 one left carrying it is refused, not ignored."""
+    sidecar = AlidSidecar.open(dense_store_path)
+    assert sidecar is not None
+    alids = sidecar.alids(np.arange(sidecar.n_rows)).tolist()
+    write_fixed_width_alid_index(dense_store_path, alids)
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"envelope.closed"}
+    assert sum("variant_alid_" in error for error in result.errors) == 2, result.errors
 
 
 def test_validator_rejects_bad_variant_offset(dense_store_path):
@@ -547,7 +576,7 @@ def test_a_0_2_3_release_holding_an_infinite_se_fails(dense_store_path):
 
     Mutation that makes this fail: keep the old warning for a 0.2.3 release.
     """
-    assert open_store(dense_store_path).manifest.format_version == "0.2.3"  # fixture sanity
+    assert open_store(dense_store_path).manifest.format_version == "0.3.0"  # fixture sanity
     root = open_store(dense_store_path).arrays(mode="a")
     root["se"][0, 0] = float("inf")
 
@@ -1329,6 +1358,7 @@ def test_a_rounded_se_exception_table_warns_on_an_earlier_release(
     manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
     manifest["format_version"] = "0.2.0"
     (store / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    follow_stamp(store)
     _exception_values(store)
 
     result = validate_store(store)

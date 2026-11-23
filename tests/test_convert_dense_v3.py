@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from legacy_fixtures import relayout_dense_as_0_1_0
 
 from benchmarks import _query_shapes
@@ -604,6 +605,7 @@ def _set_format_version(root: Path, version: str) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     data["format_version"] = version
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    follow_stamp(root)
 
 
 def _set_dense_chunk_shape(root: Path, chunk_shape: list[int]) -> None:
