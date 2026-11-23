@@ -17,7 +17,7 @@ CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
   store's joins it must give our leads, and with exactly those pairs flipped, plink2's.
 
 The input `OPENGWASDB_LD_403_ANALYSES` holds one directory per Analysis with `hits.all.tsv` (ALID,
-z, chromosome, position; the 5e-8 tier), which `scripts/realdata/make_403_inputs.py` makes.
+z, chromosome, position; the 5e-8 tier), which `scripts/ld/realdata/make_403_inputs.py` makes.
 """
 
 from __future__ import annotations

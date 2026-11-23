@@ -13,13 +13,13 @@ exits 0 and the fileset holds exactly the keep file's samples, so a conversion t
 was cut short, has none and is converted again. A conversion that finishes with other samples
 than the keep file's stops the run.
 
-`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0004) and
-`--t-partner` PANEL_T_PARTNER (ADR 0011), the panel's PC File,
+`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0090) and
+`--t-partner` PANEL_T_PARTNER (ADR 0097), the panel's PC File,
 keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) threads, `--builds`
 (2) panels at once. It refuses a store that already exists. When a panel fails, panels not yet
 started are cancelled and the one still running finishes; the run then stops with that failure.
 
-Where things live, each overridable and each in `scripts/test_panel/roots.py`:
+Where things live, each overridable and each in `scripts/ld/test_panel/roots.py`:
 `$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_PCS`, `$OPENGWASDB_LD_KEEP`, `$OPENGWASDB_LD_PLINK2`,
 and the recipe's `$OPENGWASDB_LD_PGEN_V2` (the filesets), `$OPENGWASDB_LD_STORES` and
 `$OPENGWASDB_LD_SCRATCH` (the logs; each timing line carries `uptime`).
@@ -93,7 +93,7 @@ def build_command(
         "--pcs",
         str(pcs),
         "--pc-source",
-        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
+        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0088)",
         "--panel-id",
         panel_id(panel),
         "--ancestry",

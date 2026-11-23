@@ -22,13 +22,14 @@ import zarr
 from partner_oracle import Pairs, chromosomes, decoded_frames, far_pairs, near_pairs, store
 from store_copies import FLOOR, TEST_STORE
 
-#: The Test Store's distances (spec §7).
+#: The Test Store's distances (ld-store §7).
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000
 #: Its Partner Threshold, and the Partner Floor that is the smallest code c ≥ 0 with
 #: (c / 511)² ≥ 0.01, computed here rather than read from the store (ld-store §3; partner-rows §3).
 T_PARTNER = 0.01
 PARTNER_FLOOR = 52
 CHROMOSOMES = ("21", "22")
+
 
 def kept(group: zarr.Group, chrom: str) -> Pairs:
     """The pairs the Partner Rows must hold of one chromosome, each once and both ways: every

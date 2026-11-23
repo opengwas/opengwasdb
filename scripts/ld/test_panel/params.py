@@ -1,7 +1,7 @@
 """Every setting the Test Panel is made with, recorded whole in its manifest.
 
 The genotype source, the PC File and every filter are parameters, so a changed decision is one
-run with a new value (ADR 0002). Paths default to the documented roots of `test_panel.roots`
+run with a new value (ADR 0088). Paths default to the documented roots of `test_panel.roots`
 (`$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_PCS`, `$OPENGWASDB_LD_REFERENCE`) and tools to
 `$OPENGWASDB_LD_PLINK2`, `$OPENGWASDB_LD_BCFTOOLS` and `$OPENGWASDB_LD_BGZIP`, or `PATH`.
 """

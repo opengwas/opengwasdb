@@ -4,19 +4,19 @@
 ld-store §6 named three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). They differ only in that array;
 every other array keeps its one shape. ogld#8 timed the reads on each, and the owner chose C
-(12 November 2026; ADR 0006). So each layout is a real build, by `opengwasdb ld build`, of the
+(12 November 2026; ADR 0092). So each layout is a real build, by `opengwasdb ld build`, of the
 published EUR store's chr22, with `opengwasdb.ld.store.layout.NEAR_R` set for the run, as
-`tests/test_assembly.py`
+`tests/ld/test_assembly.py`
 sets it. The command is the recipe's (`build_hgdp1kgp.build_command`, which owns k, the scale,
 the panel id and the source strings), on its chr22 fileset, keep file and PC File.
 
     pixi run -e dev python scripts/ld/bench/build_layouts.py [OUT] [--layout A B C] [--threads 8]
 
-OUT is `$OPENGWASDB_LD_LAYOUTS` unless given (`scripts/test_panel/roots.py`). Each build runs in a
-child process, so its wall time and peak memory are its own, and writes `OUT/chr22-<layout>.store`,
-its provenance as `.json`, and `.time.json` with the wall time, the peak RSS and the node's load
-before and after. `--check` then holds every array of every layout, the variant columns
-included, equal to the first layout's, so a timing compares layouts, not data.
+OUT is `$OPENGWASDB_LD_LAYOUTS` unless given (`scripts/ld/test_panel/roots.py`). Each build runs in
+a child process, so its wall time and peak memory are its own, and writes
+`OUT/chr22-<layout>.store`, its provenance as `.json`, and `.time.json` with the wall time, the peak
+RSS and the node's load before and after. `--check` then holds every array of every layout, the
+variant columns included, equal to the first layout's, so a timing compares layouts, not data.
 """
 
 from __future__ import annotations

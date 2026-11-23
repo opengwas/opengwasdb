@@ -23,11 +23,12 @@ Sources, all read-only:
 - **The rows.** Each Analysis's Observed Associations at p ≤ 5e-8, read from its engine Store under
   `/data/opengwasdb/stores/` as the sweep's `read_tier` does: `top_hits(threshold=5e-8,
   observed_only=True)` then `resolve`. Imputed rows are not clumped, on either side.
-- **The genotypes.** #5's v2 EUR conversions (`--genotypes`), the pgens the store is built from. A
+- **The genotypes.** opengwas/ogld#5's v2 EUR conversions (`--genotypes`), the pgens the store is
+built from. A
   record's ALID is `opengwasdb.variants.sorted_spelling.sorted_identity(chrom, pos, ref,
   alt).alid`, the LD Store's sorted spelling; a record is kept when that ALID is in the store's
   Variant Set, and where an insertion and a deletion share an ALID, the one whose REF the ALID
-  spells first (the Variant Set's own rule, spec §2). `prepare` writes those
+  spells first (the Variant Set's own rule, ld-store §2). `prepare` writes those
   records to `<out>/EUR-k0.plink2/chr<N>` with `--keep` EUR, the ID renamed to the ALID.
 - **Matching.** A hit whose ALID is not in the store's Variant Set is Absent: neither tool can
   clump it, so it is dropped from `hits.tsv` and counted in `manifest.json` as `unmatched`, per

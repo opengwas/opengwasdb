@@ -711,14 +711,14 @@ def _provenance_complete(store: _Store) -> _Problems:
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
-    `REncoding.of` (spec §3, §13). `opengwasdb ld info` and every reader refuse a store with any
+    `REncoding.of` (ld-store §3, §13). `opengwasdb ld info` and every reader refuse a store with any
     other."""
     version = store.value("format_version")
     if version not in READABLE_FORMATS:
         yield (
             "format_version",
             f"{version!r}: this opengwasdb.ld reads {' and '.join(READABLE_FORMATS)} only "
-            "(spec §13)",
+            "(ld-store §13)",
         )
     try:
         REncoding.of(store.value("encoding"))

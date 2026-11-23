@@ -296,7 +296,7 @@ class VariantTable:
         two alleles (a tandem repeat, `G>GGGGCC` against `GGGGCC>G`) it finds the deletion's row.
         The store records no REF to tell them apart. This is recorded on #462.
 
-        A long list is searched for in the store's ALID index (ADR 0010), which holds every ALID of
+        A long list is searched for in the store's ALID index (ADR 0096), which holds every ALID of
         the table that fits its 32-byte slot, sorted, so one search answers it without reading the
         variant table at all.
         A validated local companion instead answers fitting hits and misses by mmap without
@@ -483,7 +483,7 @@ class VariantTable:
         return self._index_arrays
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
-        """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2)."""
+        """The rows on `chrom` with start ≤ position ≤ stop, ascending (ld-store §2)."""
         if sorted_alid_locus(f"{chrom}:1:A:C") is None:
             raise InputError(
                 f"{chrom!r} is not a canonical chromosome label (1–22, X, Y, MT; no 'chr' prefix)"

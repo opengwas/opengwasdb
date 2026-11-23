@@ -2,7 +2,7 @@
 
 The Test Store is written once per module (about a second) from the Test Panel's `reference_r(10)`;
 every expected value here is the reference r, quantised and signed to A1 by
-`opengwasdb.variants.sorted_spelling.sorted_identity`, or a literal from spec §6.
+`opengwasdb.variants.sorted_spelling.sorted_identity`, or a literal from ld-store §6.
 """
 
 from __future__ import annotations

@@ -2,14 +2,15 @@
 rule passes on each, each records what a reader of its provenance needs, and the direct decoder
 returns the same bytes as zarr on each (ogld#40, ADR 0095).
 
-The stores are the ones `scripts/build_hgdp1kgp.py build` writes under `$OPENGWASDB_LD_STORES`; its
-constants and paths (`recipe`) say the scale, k, names and roots, and `$OPENGWASDB_LD_STORE_<ANC>`
-names one elsewhere. `$OPENGWASDB_LD_KEEP` holds the keep files, so n is checked against the
-unrelated samples, not against what the store says of itself. Each store must hold chromosomes 1 to
-22. Validating all five takes about an hour of the node (`pixi run -e dev acceptance-stores`),
-which is why this is an acceptance run and not the realdata tier. The decoder equality reads every
-array of each store, so it belongs here too: it took the realdata tier over its five-minute budget.
-An input missing fails the run; it never skips (CONTRIBUTING.md, "Acceptance runs").
+The stores are the ones `scripts/ld/build_hgdp1kgp.py build` writes under `$OPENGWASDB_LD_STORES`;
+its constants and paths (`recipe`) say the scale, k, names and roots, and
+`$OPENGWASDB_LD_STORE_<ANC>` names one elsewhere. `$OPENGWASDB_LD_KEEP` holds the keep files, so n
+is checked against the unrelated samples, not against what the store says of itself. Each store must
+hold chromosomes 1 to 22. Validating all five takes about an hour of the node (`pixi run -e dev
+acceptance-stores`), which is why this is an acceptance run and not the realdata tier. The decoder
+equality reads every array of each store, so it belongs here too: it took the realdata tier over its
+five-minute budget. An input missing fails the run; it never skips (CONTRIBUTING.md, "Acceptance
+runs").
 """
 
 from __future__ import annotations

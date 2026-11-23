@@ -199,7 +199,7 @@ def unpartnered(to: Path) -> Path:
     return to
 
 
-#: The store-derived keys `finish` adds (spec §7), every other key being the producer's.
+#: The store-derived keys `finish` adds (ld-store §7), every other key being the producer's.
 DERIVED = frozenset(
     {
         "format_version",

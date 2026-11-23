@@ -51,6 +51,7 @@ DAMAGED_FRAME = 5
 #: zstd at a frame's own level, with the content checksum its header carries (§5.2).
 _ZSTD = numcodecs.Zstd(level=frames.ZSTD_LEVEL, checksum=True)
 
+
 @cache
 def expected(chrom: str) -> Pairs:
     """Each row's partners and codes as partner-rows §3 requires them: every Near Band pair at the

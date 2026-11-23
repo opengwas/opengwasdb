@@ -27,8 +27,8 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
 Where things are comes from their owners, never from here: the published EUR store is
 `build_hgdp1kgp.store_path("EUR")` under `$OPENGWASDB_LD_STORES`, #403's Analyses are under
 `$OPENGWASDB_LD_403_ANALYSES` and the layouts' builds under `$OPENGWASDB_LD_LAYOUTS`, each with its
-default in `scripts/test_panel/roots.py`. Each run's first record says which commit's code ran and,
-through `test_panel.checkout.problem`, whether the checkout could be cited as that code.
+default in `scripts/ld/test_panel/roots.py`. Each run's first record says which commit's code ran
+and, through `test_panel.checkout.problem`, whether the checkout could be cited as that code.
 
 Threads: zarr's pool is `--zarr-threads` (6), BLAS 1; the static host and the proxy run one
 event loop and at most two worker threads each. So a timing uses at most 8 threads busy at once
