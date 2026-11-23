@@ -159,7 +159,7 @@ from opengwasdb.store_reader.indexed import (
 from opengwasdb.store_reader.indexed import open_indexed_subset as open_indexed_subset
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.store_reader.stored import release_arrays
+from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.variant_axis import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version

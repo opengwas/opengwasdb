@@ -163,10 +163,9 @@ def connect_index(path: Path) -> sqlite3.Connection:
     """An `index.sqlite` connection with named columns; `sqlite3` is imported here, on use,
     so opening a Store Release does not load it (#465).
 
-    The one place a release's or a staged release's `index.sqlite` is opened: the
-    writers' `index_connection` and the validator's `ReleaseIndex` (#473) both open it
-    here. (The 0.2.x alias lookup opens its own read-only handle behind the Store
-    Reader's `LegacyVariantTable` seam.)"""
+    Read-write, for the writers (`index_connection`), so it creates an index that
+    is not there. Every read of a release's index opens it read-only instead,
+    through `opengwasdb.variants.legacy_table.open_index_read_only` (#473)."""
     import sqlite3
 
     conn = sqlite3.connect(str(path))

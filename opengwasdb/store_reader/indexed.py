@@ -52,6 +52,7 @@ from opengwasdb.store_reader.layout import (
 )
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.release import open_release
+from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients
 
 #: The group under `data.zarr` that holds every Indexed Variant Subset.
 INDEXED_SUBSETS_GROUP = "indexed_subsets"
@@ -940,14 +941,9 @@ def _decode_eaf_column(
     """
     reference = _index_reference(group)
     if "eaf" in group:
-        baseline = (
-            np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
-            if EAF_BASELINE in group
-            else None
-        )
         return codec.decode_eaf(
             np.asarray(group["eaf"][analysis_index, :]),
-            baseline=baseline,
+            baseline=eaf_baseline(group),
             positions=positions,
             imputed=imputed,
             reference=reference,
@@ -980,9 +976,17 @@ def _decode_se_column(
         se_raw,
         eaf=eaf if eaf is not None else np.empty(n_subset, dtype=np.float32),
         analysis_index=np.full(n_subset, analysis_index, dtype=np.int64),
-        coefficients=np.asarray(group[SE_COEFFICIENTS][:], dtype=np.float32),
+        coefficients=_required_coefficients(group),
         positions=positions,
     )
+
+
+def _required_coefficients(group: Any) -> np.ndarray:
+    """A residual subset's `se_coefficients`; `_expected_arrays` requires the array."""
+    coefficients = se_coefficients(group)
+    if coefficients is None:
+        raise KeyError(SE_COEFFICIENTS)
+    return coefficients
 
 
 def _expected_arrays(encoding: StoreEncoding, *, completed: bool) -> frozenset[str]:

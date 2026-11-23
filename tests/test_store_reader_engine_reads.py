@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 import zarr
 
+from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stored import (
     eaf_baseline,
-    release_arrays,
     se_coefficients,
     sequence_arrays,
     stored_attributes,
@@ -85,6 +85,9 @@ def test_source_alids_resolve_to_their_rows_and_the_scan_stops_once_all_are_foun
 def test_a_blank_source_alid_matches_nothing(tmp_path: Path):
     axis, _ = _axis(tmp_path, [_row(0, "."), _row(1, "1:7:C:T")])
     assert axis.indices_by_source_alid({"1:7:C:T"}) == {"1:7:C:T": 1}
+    # `.` is how the table spells a row with no source ALID, not an ALID to match.
+    assert axis.indices_by_source_alid({"."}) == {}
+    assert axis.indices_by_source_alid({".", "1:7:C:T"}) == {"1:7:C:T": 1}
     assert axis.indices_by_source_alid({"1:8:C:T"}) == {}
 
 

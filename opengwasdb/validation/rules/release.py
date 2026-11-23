@@ -336,7 +336,7 @@ def _reject_stray_analyses_table(index: ReleaseIndex, errors: list[str]) -> None
     the sole source of truth for Analytical Metadata, so a leftover SQL
     ``analyses`` table -- Dense/Hybrid retired theirs in issue #68, Ragged in
     issue #69 -- is a validation failure, not a harmless relic."""
-    if "analyses" in index.table_names():
+    if "analyses" in index.names(tables_only=True):
         errors.append(
             "index.sqlite still contains an analyses table -- analyses.tsv is the sole "
             "source of truth for Analytical Metadata (ADR 0030, issue #22)"

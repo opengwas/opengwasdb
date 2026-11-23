@@ -419,7 +419,7 @@ def variant_aliases(target: Target) -> Iterator[str]:
     for it to check, which is not the same as passing it.
     """
     with ReleaseIndex(target.store.path) as index:
-        if "variant_aliases" not in index.schema_names():
+        if "variant_aliases" not in index.names(tables_only=False):
             raise Skip("index.sqlite has no variant_aliases table")
         rows = index.variant_aliases()
     n_variants = target.variant_axis.n_variants

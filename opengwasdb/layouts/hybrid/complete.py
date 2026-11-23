@@ -77,12 +77,8 @@ from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.store_reader.stored import (
-    eaf_baseline,
-    release_arrays,
-    se_coefficients,
-    sequence_arrays,
-)
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
 from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.variants.axis import sorted_alids
 

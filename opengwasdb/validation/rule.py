@@ -27,7 +27,8 @@ from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.stored import release_arrays, sequence_arrays
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.stored import sequence_arrays
 from opengwasdb.store_reader.variant_axis import VariantAxis
 
 #: What one scan yields: a block of the data it reads.

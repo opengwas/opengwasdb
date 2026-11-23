@@ -329,7 +329,7 @@ def _validate_completion_quality_table(
     constraint, and it is shared by Dense and Ragged Reference-Completed
     stores so a quality row can never describe an Analysis that does not exist.
     """
-    if "completion_quality" not in index.table_names():
+    if "completion_quality" not in index.names(tables_only=True):
         errors.append(
             "index.sqlite is missing the completion_quality table for a reference-completed store"
         )

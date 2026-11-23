@@ -61,7 +61,7 @@ from opengwasdb.completion.regions import (
     inside,
     region_blocks,
 )
-from opengwasdb.index.release_index import ReleaseIndex, UnreadableIndex
+from opengwasdb.index.release_index import QUALITY_BLOCKS, ReleaseIndex, UnreadableIndex
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
 from opengwasdb.store.open import OpenGWASDBStore, open_store
@@ -419,7 +419,7 @@ def _quality_blocks(target: OpenGWASDBStore) -> dict[int, set[str]]:
     blocks: dict[int, set[str]] = {}
     with ReleaseIndex(target.path) as index:
         try:
-            rows = index.completion_quality_blocks()
+            rows = index.completion_quality(QUALITY_BLOCKS)
         except UnreadableIndex as exc:
             raise ObservedViewRefused(
                 f"target store has no completion_quality table: {exc}"

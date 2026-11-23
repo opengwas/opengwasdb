@@ -25,7 +25,7 @@ from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.store_reader.stored import release_arrays
+from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE
 

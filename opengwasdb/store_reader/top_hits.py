@@ -73,6 +73,36 @@ def analysis_hit_counts(root: Any, threshold: float, n_analyses: int) -> list[in
     return counted
 
 
+def tier_arrays(group: Any) -> dict[str, Any]:
+    """One tier's index arrays, in their compact contract dtypes.
+
+    ``Array[:]`` already returns an ndarray. ``np.asarray`` therefore avoids
+    ``astype``'s unconditional full-size copy on a valid tier while retaining
+    the coercion that lets the validation logic diagnose malformed contents.
+    Keeping the uint32 coordinates compact is material: OGS-00010's nominal
+    tier alone has 45.7 million hits (issue #254). The tier must not be missing
+    any of `opengwasdb.top_hits.TOP_HIT_TIER_ARRAYS` (see its `missing_arrays`).
+
+    What the validator's Top-Hit rules read: they check the tier's structure and
+    cross-check its values against the planes, so they want every array as stored,
+    in these dtypes, rather than `TopHitTier.read`'s rows (#473).
+    """
+    return {
+        "rows": np.asarray(group["variant_index"][:], dtype=np.uint32),
+        "cols": np.asarray(group["analysis_index"][:], dtype=np.uint32),
+        "z_values": np.asarray(group["z"][:], dtype=np.float32),
+        "se_values": np.asarray(group["se"][:], dtype=np.float32),
+        "abs_z": np.asarray(group["abs_z"][:], dtype=np.float32),
+        "offsets": np.asarray(group["analysis_offsets"][:], dtype=np.uint64),
+        "imputed_values": (
+            np.asarray(group["imputed"][:], dtype=np.uint8) if "imputed" in group else None
+        ),
+        "eaf_values": (
+            np.asarray(group["eaf"][:], dtype=np.float32) if "eaf" in group else None
+        ),
+    }
+
+
 class TierRows(NamedTuple):
     """The rows of one tier (or one Analysis's slice of it), in index order.
 

@@ -48,8 +48,9 @@ from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX
 from opengwasdb.store_reader.analyses import AnalysesTable, analysis_label
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.store_reader.indexed import IndexedSubsetError, open_indexed_subset
+from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.rho import DenseRhoReader
-from opengwasdb.store_reader.stored import release_arrays, stored_attributes
+from opengwasdb.store_reader.stored import stored_attributes
 
 # scipy publishes no type stubs, so mypy sees nothing of `scipy.cluster.
 # hierarchy` or `scipy.spatial.distance` -- the same reason `layouts/dense/

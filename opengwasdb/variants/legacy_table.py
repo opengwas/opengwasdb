@@ -56,6 +56,24 @@ def _table_lines(table_path: str | Path) -> Iterator[str]:
             yield line
 
 
+def open_index_read_only(path: Path) -> sqlite3.Connection:
+    """A release's `index.sqlite`, opened read-only, rows as `sqlite3.Row`.
+
+    The one read-only opener of `index.sqlite`: the alias lookup here and the
+    validator's `opengwasdb.index.release_index.ReleaseIndex` both open it through
+    this (#473). Read-only means a missing index is an error, never a new empty
+    file (#334). `sqlite3` is imported on use, so opening a release does not load
+    it (#465). Writers open the index read-write through
+    `opengwasdb.store.open.connect_index`.
+    """
+    import sqlite3
+
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
 class TabixVariantTable:
     """A Store's 0.2.x Variant Table, read through pysam, and its `variant_aliases`.
 
@@ -127,12 +145,7 @@ class TabixVariantTable:
         with self._lock:
             self._require_open()
             if self._aliases is None and self._aliases_path is not None:
-                import sqlite3
-
-                # Read-only: a missing `index.sqlite` is an error, not a new empty file.
-                uri = f"{self._aliases_path.resolve().as_uri()}?mode=ro"
-                self._aliases = sqlite3.connect(uri, uri=True, check_same_thread=False)
-                self._aliases.row_factory = sqlite3.Row
+                self._aliases = open_index_read_only(self._aliases_path)
             if self._aliases is None:
                 return None
             row = self._aliases.execute(

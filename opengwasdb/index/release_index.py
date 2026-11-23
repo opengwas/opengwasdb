@@ -12,10 +12,11 @@ Writing it -- the schema, metadata and quality rows a build or a completion
 writes -- is `opengwasdb.index.sqlite`'s and the writers'. #476 removes SQLite
 from every read path.
 
-The connection is opened where every `index.sqlite` connection is,
-`opengwasdb.store.open.connect_index`, as the readers before it opened it (rows
-as `sqlite3.Row`), so what a read returns, and what a missing table or column
-raises (`UnreadableIndex`), are as they were.
+The index is opened read-only, by the one read-only opener the alias lookup also
+uses (`opengwasdb.variants.legacy_table.open_index_read_only`), with rows as
+`sqlite3.Row` as the readers before it had them: what a read returns, and what a
+missing table or column raises (`UnreadableIndex`), are as they were, and a read
+never creates a missing index (#334).
 """
 
 from __future__ import annotations
@@ -26,12 +27,18 @@ from types import TracebackType
 from typing import Any
 
 from opengwasdb.index.sqlite import get_metadata
-from opengwasdb.store.open import connect_index
 from opengwasdb.store_reader.release import release_paths
+from opengwasdb.variants.legacy_table import open_index_read_only
 
 #: What a read of a table or column the index lacks raises: sqlite3's own error,
 #: named here so a caller can catch it without importing sqlite3.
 UnreadableIndex = sqlite3.OperationalError
+
+#: The `completion_quality` columns a count of its rows reads, in this order.
+QUALITY_COUNTS = ("analysis_index", "block_id", "n_imputed", "n_missing")
+#: The `completion_quality` columns that say which blocks it records.
+QUALITY_BLOCKS = ("analysis_index", "block_id")
+
 
 class ReleaseIndex:
     """The `index.sqlite` of the release at `release`, open for reading.
@@ -40,7 +47,7 @@ class ReleaseIndex:
     """
 
     def __init__(self, release: str | Path) -> None:
-        self._connection = connect_index(release_paths(Path(release))["index"])
+        self._connection = open_index_read_only(release_paths(Path(release))["index"])
 
     def __enter__(self) -> ReleaseIndex:
         return self
@@ -56,18 +63,13 @@ class ReleaseIndex:
     def close(self) -> None:
         self._connection.close()
 
-    def table_names(self) -> set[str]:
-        """The tables the index holds."""
-        return {
-            row[0]
-            for row in self._connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
-
-    def schema_names(self) -> set[str]:
-        """Every named object the index holds: its tables, indexes and views."""
-        return {row[0] for row in self._connection.execute("SELECT name FROM sqlite_master")}
+    def names(self, *, tables_only: bool) -> set[str]:
+        """The named objects the index holds: its tables, or with `tables_only` false
+        its indexes and views as well."""
+        query = "SELECT name FROM sqlite_master"
+        if tables_only:
+            query += " WHERE type='table'"
+        return {row[0] for row in self._connection.execute(query)}
 
     def metadata(self, key: str, default: Any = None) -> Any:
         """One `metadata` value, decoded, or `default` when the index records none."""
@@ -89,26 +91,20 @@ class ReleaseIndex:
         ).fetchone()[0]
         return count
 
-    def completion_quality(self) -> list[tuple[Any, Any, Any, Any]]:
-        """Every `completion_quality` row as ``(analysis_index, block_id, n_imputed,
-        n_missing)``, the values as stored. `UnreadableIndex` when there is no such
-        table."""
-        return [
-            (row[0], row[1], row[2], row[3])
-            for row in self._connection.execute(
-                "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
-            )
-        ]
+    def completion_quality(
+        self, columns: tuple[str, ...] = QUALITY_COUNTS
+    ) -> list[tuple[Any, ...]]:
+        """Every `completion_quality` row's `columns`, the values as stored.
 
-    def completion_quality_blocks(self) -> list[tuple[Any, Any]]:
-        """Every `completion_quality` row's ``(analysis_index, block_id)``, as stored.
-        `UnreadableIndex` when there is no such table."""
-        return [
-            (row[0], row[1])
-            for row in self._connection.execute(
-                "SELECT analysis_index, block_id FROM completion_quality"
-            )
-        ]
+        `columns` is `QUALITY_COUNTS` -- what a count of the rows needs -- or
+        `QUALITY_BLOCKS`, which reads only the two key columns, so a table missing
+        a count column still says which blocks it records. `UnreadableIndex` when
+        the table, or one of the columns, is not there.
+        """
+        if columns not in (QUALITY_COUNTS, QUALITY_BLOCKS):
+            raise ValueError(f"completion_quality reads {QUALITY_COUNTS} or {QUALITY_BLOCKS}")
+        query = f"SELECT {', '.join(columns)} FROM completion_quality"
+        return [tuple(row) for row in self._connection.execute(query)]
 
     def variant_aliases(self) -> list[tuple[Any, Any]]:
         """Every `variant_aliases` row as ``(alias, variant_index)``, the values as
