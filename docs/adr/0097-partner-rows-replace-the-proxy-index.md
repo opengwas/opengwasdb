@@ -12,7 +12,7 @@ format"). The terms are in `CONTEXT.md`.
 > store's one hierarchy, not a directory of plain files, because the plain files make zarr's
 > `members()` warn. Everything else in decision 5 stands: G rows to a zstd frame, one positional
 > read or Range request per frame, and a failed check a refusal naming the chromosome and the
-> frame. The consequence below that `partners/` has no `zarr.json` and zarr does not see it is
+> frame. The consequence below that `partners/` has no Zarr metadata document and zarr does not see it is
 > superseded, and so is the one that §11's sizes are projections: the clarification records the
 > measured ones.
 
@@ -86,7 +86,7 @@ sampling alone, so about 90% of the passing pairs are noise.
   only `matrix` and `region`.
 - Clumping's unit of parallel work is the component: hits with no gap of W or more between
   neighbours. Components are independent, so results do not depend on concurrency.
-- The store directory is no longer only a Zarr hierarchy. `partners/` has no `zarr.json`, and
+- The store directory is no longer only a Zarr hierarchy. `partners/` has no Zarr metadata document, and
   zarr does not see it.
 - ALID resolution (`rows_of`, 3.18 s on GCST90476460) becomes most of a clump's time. It is
   opengwas/ogld#45's mmap ALID work (opengwas/ogld#47, #471), not this decision.

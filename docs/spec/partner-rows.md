@@ -272,7 +272,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   residue, and one they accept is claimed while one they refuse is removed and derived again —
   never trusted, and never derived again for nothing.
 - Writes only inside the store, and never through a symbolic link: before anything is written, a
-  run refuses a link at any path it owns — the root `zarr.json`, `partners/`, or any entry of
+  run refuses a link at any path it owns — the store's root Zarr metadata document, `partners/`, or any entry of
   `partners/` — even one that stays inside the store, because a claim, a cleanup or a publication
   would then write or delete in the directory the link names. A store's read-only components may
   be links, which is how the scratch stores opengwas/ogld#71 and opengwas/ogld#73 read are laid out. It refuses a
@@ -312,7 +312,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   the whole chromosome, frames included, is **29.4 s and 640 MiB peak RSS** at eight compressor
   threads (16 cores' box, `taskset -c 0-7`, load 3.4), against 86.1 s and 790 MiB before. It
   writes 7,477 frames, 153,561,655 bytes and **117,392,902 entries** — which is opengwas/ogld#65's own chr22
-  output, to the count and the byte: `derive_chr22.json` at `912a9fa` records that many entries at
+  output, to the count and the byte: [ogld's chr22 derivation record](https://github.com/opengwas/ogld/blob/912a9fab30c59b478487258f1c8b6a6766398eb9/prototypes/partner-rows/results/derive_chr22.json) at `912a9fa` records that many entries at
   G = 16, and its two chunk-file SHA-256s are this run's. The 117,189,130 that §11's `sym_entries`
   records for the chromosome is the Near Band's directed count, twice its 58,594,565 kept pairs,
   and the difference is exactly the 101,886 Far Pairs in both directions.
