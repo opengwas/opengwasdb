@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import math
 import shutil
@@ -65,7 +66,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from opengwasdb.ld import env
+#: `scripts/`, where the roots live.
+SCRIPTS = Path(__file__).resolve().parent.parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+roots = importlib.import_module("test_panel.roots")
 
 OPENGWASDB = Path.home() / "repo" / "opengwasdb"
 BRANCH = "origin/orch/62-locus-leads"
@@ -171,7 +176,7 @@ def extract(out: Path) -> None:
 def plink2_exe() -> Path:
     """The one plink2 every step runs: `$OPENGWASDB_LD_PLINK2`, else the one on PATH
     (CONTRIBUTING)."""
-    found = env.read("OPENGWASDB_LD_PLINK2", "") or shutil.which("plink2")
+    found = roots.read("OPENGWASDB_LD_PLINK2", "") or shutil.which("plink2")
     if not found or not Path(found).exists():
         raise SystemExit(
             "plink2 not found: set OPENGWASDB_LD_PLINK2 (tests/realdata/run.sh finds one)"

@@ -119,6 +119,7 @@ def test_an_old_variable_is_refused_by_the_cli_naming_its_replacement(
     assert cli.main(["info", str(STORE)]) == 2
     err = capsys.readouterr().err
     assert err.startswith("opengwasdb ld info: ") and f"{old} is now {new}" in err
+    assert err.count("is now") == 1 and len(err.splitlines()) == 1, "reported once"
 
 
 def test_the_api_services_timeout_variable_is_not_an_old_name(
@@ -142,10 +143,21 @@ def test_the_scripts_roots_refuse_an_old_variable(
     monkeypatch.syspath_prepend(str(SCRIPTS))
     roots = importlib.import_module("test_panel.roots")
     monkeypatch.setenv(old, "x")
-    with pytest.raises(env.LegacyVariable) as refused:
+    with pytest.raises(SystemExit) as refused:
         roots.root("OPENGWASDB_LD_KEEP")
     assert refused.value.code == 2, "a refusal, not 'the store breaks a rule' (1)"
     assert f"{old} is now OPENGWASDB_LD_" in capsys.readouterr().err
+
+
+def test_env_read_raises_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The package reports nothing: only what faces the terminal does."""
+    monkeypatch.setenv("OGLD_KEEP", "x")
+    with pytest.raises(env.LegacyVariable, match="OGLD_KEEP is now OPENGWASDB_LD_KEEP"):
+        env.read("OPENGWASDB_LD_KEEP", "dflt")
+    captured = capsys.readouterr()
+    assert captured.err == "" and captured.out == ""
 
 
 def test_the_new_name_is_read_and_the_old_one_is_not_a_fallback(
