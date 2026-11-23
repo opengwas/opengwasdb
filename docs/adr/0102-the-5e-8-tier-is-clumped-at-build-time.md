@@ -36,7 +36,8 @@ Exact clumping is affordable. The LD engine is now this package's `opengwasdb.ld
 `LDStore.clump` is greedy and equal to `plink2 --clump`: a variant joins the strongest lead it
 reaches at r̂² > r2 and distance < W. Measured on #62 (23 Nov 2026) against the HGDP+1kGP EUR
 Genotype Store at r² 0.0319 (its t_far) and kb 10,000, observed rows only, ranked by |z|, in
-one process (`/data/opengwasdb/work/clump-62/`, `time_clumps.py` and `store_clumps.py`):
+one process (the scripts time_clumps.py and store_clumps.py and their raw records, in
+`/data/opengwasdb/work/clump-62/` on the IEU node):
 
 | Store | Tier | Rows clumped | Clump time | Per Analysis median / p99 / max | Leads per Analysis |
 |---|---|---|---|---|---|
