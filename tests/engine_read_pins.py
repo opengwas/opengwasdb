@@ -43,24 +43,13 @@ from typing import Any, cast
 import numpy as np
 import pytest
 import zarr
+from store_reader_digests import _Factory
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "engine_read_pins.json"
 
 #: The observed-view check's seed and sample, fixed so its verdict is reproducible.
 SEED = 7
 N_RANDOM = 50
-
-
-class _Factory:
-    """The one method `RaggedResidualScenario` asks of pytest's factory."""
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-
-    def mktemp(self, name: str) -> Path:
-        path = self.root / name
-        path.mkdir(parents=True)
-        return path
 
 
 def build_pairs(root: Path) -> dict[str, tuple[Path, Path, dict[str, Any]]]:
@@ -159,7 +148,8 @@ def _drop_top_hit_offsets(store: Path) -> None:
 
 
 def _quality_row_out_of_range(store: Path) -> None:
-    """A `completion_quality` row names an Analysis past `analyses.tsv` (the completion rules' read)."""
+    """A `completion_quality` row names an Analysis past `analyses.tsv` (the completion
+    rules' read)."""
     _sql(
         store,
         "UPDATE completion_quality SET analysis_index = 99 "
@@ -196,7 +186,9 @@ CORRUPTIONS: dict[str, tuple[str, Callable[[Path], None]]] = {
     "hybrid_completed/mask_value_two": (
         "hybrid_completed", lambda s: _mask_value_two(s / "dense", "imputed")
     ),
-    "ragged_observed/z_code_flipped": ("ragged_observed", lambda s: _flip_first_code(s, "ragged/z")),
+    "ragged_observed/z_code_flipped": (
+        "ragged_observed", lambda s: _flip_first_code(s, "ragged/z")
+    ),
 }
 
 
@@ -266,7 +258,8 @@ def _array_digest(values: np.ndarray) -> str:
 
 
 def _attrs(node: Any, roots: list[Path]) -> str:
-    return _digest(_scrub(json.dumps(dict(node.attrs), sort_keys=True, default=str), roots).encode())
+    text = json.dumps(dict(node.attrs), sort_keys=True, default=str)
+    return _digest(_scrub(text, roots).encode())
 
 
 def _walk(group: Any, prefix: str, out: dict[str, str], roots: list[Path]) -> None:
@@ -280,6 +273,17 @@ def _walk(group: Any, prefix: str, out: dict[str, str], roots: list[Path]) -> No
             out[f"{path}@attrs"] = _attrs(member, roots)
 
 
+#: The significant digits a stored REAL is digested to. `completion_quality.pearson_r`
+#: is a correlation BLAS sums in whatever order its threads finish, so its last
+#: bits move with the load on the machine; a change in what completion computes
+#: moves far more than the 11th digit.
+REAL_DIGITS = 10
+
+
+def _cell(value: Any) -> str:
+    return f"{value:.{REAL_DIGITS}g}" if isinstance(value, float) else repr(value)
+
+
 def _sqlite_digests(path: Path, roots: list[Path]) -> dict[str, str]:
     out: dict[str, str] = {}
     with sqlite3.connect(str(path)) as connection:
@@ -290,7 +294,10 @@ def _sqlite_digests(path: Path, roots: list[Path]) -> dict[str, str]:
             )
         ]
         for table in tables:
-            rows = sorted(repr(row) for row in connection.execute(f"SELECT * FROM {table}"))
+            rows = sorted(
+                "(" + ", ".join(_cell(v) for v in row) + ")"
+                for row in connection.execute(f"SELECT * FROM {table}")
+            )
             out[f"index.sqlite/{table}"] = _digest(_scrub("\n".join(rows), roots).encode())
     return out
 
@@ -302,11 +309,13 @@ def release_digests(path: Path) -> dict[str, str]:
     for store in sorted([path, *[p.parent for p in path.glob("*/manifest.json")]]):
         prefix = "" if store == path else f"{store.name}/"
         _walk(zarr.open_group(str(store / "data.zarr"), mode="r"), f"{prefix}data.zarr", out, roots)
-        out.update({prefix + k: v for k, v in _sqlite_digests(store / "index.sqlite", roots).items()})
+        tables = _sqlite_digests(store / "index.sqlite", roots)
+        out.update({prefix + k: v for k, v in tables.items()})
         for name in ("analyses.tsv", "regions.tsv"):
             if (store / name).exists():
                 out[prefix + name] = _digest((store / name).read_bytes())
-        out[prefix + "variants.tsv.gz"] = _digest(gzip.decompress((store / "variants.tsv.gz").read_bytes()))
+        table = gzip.decompress((store / "variants.tsv.gz").read_bytes())
+        out[prefix + "variants.tsv.gz"] = _digest(table)
         for npy in sorted(store.glob("*.npy")):
             out[prefix + npy.name] = _array_digest(np.load(npy))
     return out
