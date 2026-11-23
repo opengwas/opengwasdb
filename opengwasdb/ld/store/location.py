@@ -334,10 +334,10 @@ class ChunkCache:
         offsets = (at % size)[order]
         starts = np.searchsorted(which[order], wanted)
         stops = np.append(starts[1:], len(at))
-        grouped = np.concatenate(
+        grouped: npt.NDArray[Any] = np.concatenate(
             [chunk[offsets[a:b]] for chunk, a, b in zip(chunks, starts, stops, strict=True)]
         )
-        found = np.empty_like(grouped)
+        found: npt.NDArray[Any] = np.empty_like(grouped)
         found[order] = grouped
         return found
 
