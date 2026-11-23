@@ -7,10 +7,11 @@ No test writes into `tests/data/`; each works on a copy under its own `tmp_path`
 from __future__ import annotations
 
 import contextlib
+import json
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
@@ -19,7 +20,8 @@ import zarr
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore
 
-from opengwasdb.ld.store import Variants
+from opengwasdb.ld.format import Sourced
+from opengwasdb.ld.store import StoreReader, Variants
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -193,3 +195,30 @@ def unpartnered(to: Path) -> Path:
                 fill_value=fill,
             )
     return to
+
+
+#: The store-derived keys `finish` adds (spec §7), every other key being the producer's.
+DERIVED = frozenset(
+    {
+        "format_version",
+        "encoding",
+        "n_variants",
+        "near_bp",
+        "far_bp",
+        "t_far",
+        "t_far_q",
+        "far_code_floor",
+        "t_partner",
+        "partner_code_floor",
+        "counts",
+    }
+)
+
+
+def sourced(**changes: Any) -> Sourced:
+    """The Test Store's provenance without the keys the store derives, with `changes`."""
+    p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
+    for key in DERIVED:
+        del p[key]
+    p.update(changes)
+    return cast(Sourced, p)

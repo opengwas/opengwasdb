@@ -12,7 +12,6 @@ correlation matrix, so far more pairs reach the floor than in the Test Panel's o
 from __future__ import annotations
 
 import itertools
-import json
 import shutil
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +26,16 @@ import pytest
 import store_copies
 import zarr
 from partner_oracle import decoded_frames
-from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
+from store_copies import (
+    DERIVED,
+    FLOOR,
+    PARTNER_FLOOR,
+    R_SCALE,
+    T_PARTNER,
+    TEST_STORE,
+    codes_at,
+    sourced,
+)
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
 from opengwasdb.ld.format.geometry import near_row_lengths
@@ -37,21 +45,6 @@ from opengwasdb.variants.sorted_spelling import sorted_identity
 N_SAMPLES, K = 771, 10
 #: t_far for the Test Store's n and k, spec §3: q / (n − k − 1) with q = 20.84.
 T_FAR = 20.84 / (N_SAMPLES - K - 1)
-#: The store-derived keys `finish` adds (spec §7; ownership.md, "Provenance and what goes in a
-#: store"), every other key being the producer's.
-DERIVED = {
-    "format_version",
-    "encoding",
-    "n_variants",
-    "near_bp",
-    "far_bp",
-    "t_far",
-    "t_far_q",
-    "far_code_floor",
-    "t_partner",
-    "partner_code_floor",
-    "counts",
-}
 
 
 # ------------------------------------------------------------------ fixtures
@@ -154,15 +147,6 @@ def expected(chrom: str) -> Expected:
         held_partner[held_order],
         np.concatenate([held_code, held_code])[held_order],
     )
-
-
-def sourced(**changes: Any) -> Sourced:
-    """The Test Store's provenance without the keys the store derives, with `changes`."""
-    p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
-    for key in DERIVED:
-        del p[key]
-    p.update(changes)
-    return cast(Sourced, p)
 
 
 def create(out: Path, table: Variants | None = None, **settings: Any) -> StoreWriter:

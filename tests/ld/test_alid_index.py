@@ -28,6 +28,7 @@ import numpy.typing as npt
 import pytest
 import zarr
 from ld_script_modules import load_script
+from store_copies import DERIVED
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, layout
@@ -146,20 +147,7 @@ SOURCED: dict[str, Any] = {
     for key, value in json.loads((TEST_STORE / "zarr.json").read_text())["attributes"][
         "ld_store"
     ].items()
-    if key
-    not in {
-        "format_version",
-        "encoding",
-        "n_variants",
-        "near_bp",
-        "far_bp",
-        "t_far",
-        "t_far_q",
-        "far_code_floor",
-        "t_partner",
-        "partner_code_floor",
-        "counts",
-    }
+    if key not in DERIVED
 }
 SOURCED["panel"]["n"] = 771
 SOURCED["adjustment"]["k"] = 10

@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from functools import cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any
 
 import numcodecs
 import numpy as np
@@ -35,11 +35,12 @@ from store_copies import (
     TEST_STORE,
     arrays,
     copy_store,
+    sourced,
 )
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding, Sourced
+from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError, REncoding
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout, validation
 from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
@@ -868,23 +869,6 @@ def test_ogld_validate_exits_1_naming_the_rule_a_store_breaks(
 # ------------------------------------------------------------------ on write
 
 
-#: The Store-derived keys `finish` adds itself (ogld#17); the rest of provenance is the
-#: producer's.
-DERIVED = (
-    "format_version",
-    "encoding",
-    "n_variants",
-    "near_bp",
-    "far_bp",
-    "t_far",
-    "t_far_q",
-    "far_code_floor",
-    "t_partner",
-    "partner_code_floor",
-    "counts",
-)
-
-
 def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> StoreWriter:
     """A writer over the Test Store's first four variants, chr21, each within 3 Mb of the rest,
     with their r written below the far code floor, so an empty Proxy Index. `frequency`, when
@@ -909,15 +893,6 @@ def four_rows(tmp_path: Path, name: str, frequency: float | None = None) -> Stor
     r[np.triu_indices(4, k=1)] = np.array([10, -20, 30, 40, -50, 60]) / R_SCALE
     writer.write(writer.cut(0, r))
     return writer
-
-
-def sourced(**changes: Any) -> Sourced:
-    """The Test Store's provenance without the keys the store derives, with `changes`."""
-    p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
-    for key in DERIVED:
-        del p[key]
-    p.update(changes)
-    return cast(Sourced, p)
 
 
 def test_finish_writes_the_provenance_of_a_store_that_passes_every_rule(tmp_path: Path) -> None:
