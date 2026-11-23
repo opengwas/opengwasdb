@@ -1,7 +1,7 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version written (on the epic #450 branch, released once #468-#472 are in): `0.3.0`, `0.2.3`'s features with the variable-length ALID sidecar (§4, ADR 0105), which every build and completion writes and `ogdb rewrite-release` derives from a `0.2.3` release (§21.4)  
+Format version written (on the epic #450 branch, released once #468-#472 are in): `0.3.0`, `0.2.3`'s features with the variable-length ALID sidecar and the position sidecar (§4, ADR 0105), which every build and completion writes and `ogdb rewrite-release` derives from a `0.2.3` release (§21.4)  
 Also readable: `0.2.3`, `0.2.2`, `0.2.1` and `0.2.0` (Zarr v3 with sharding, §10a; the fixed-width ALID index; indels spelt reference first from `0.2.2`, sorted before it), and `0.1.0` (Zarr v2); nothing else (§21). Sections below that name no version describe `0.2.2` and every later one.
 
 This document defines the contract for valid OpenGWASDB Store Releases. On the
@@ -62,6 +62,9 @@ variant_alid_utf8.npy      (0.3.0: the ALID sidecar, §4)
 variant_alid_offsets.npy   (0.3.0)
 variant_alid_keys.npy      (0.3.0)
 variant_alid_order.npy     (0.3.0)
+variant_position.npy                     (0.3.0: the position sidecar, §4)
+variant_position_chromosomes.npy         (0.3.0)
+variant_position_chromosome_offsets.npy  (0.3.0)
 variant_alid_bytes.npy     (0.2 and 0.1 only)
 variant_alid_rows.npy      (0.2 and 0.1 only)
 variant_rsid_bytes.npy
@@ -83,7 +86,8 @@ layout stores its high-cardinality variant axis in `variants.tsv.gz`, indexed
 by `variants.tsv.gz.tbi`, with `variant_offsets.npy` mapping Store-local
 Variant Indices to BGZF row offsets, the ALID sidecar (from 0.3.0; §4) or, in
 the 0.2 and 0.1 series, `variant_alid_bytes.npy`/`variant_alid_rows.npy`
-supporting ALID lookup, and
+supporting ALID lookup, the position sidecar (from 0.3.0; §4) answering a
+genomic range, which the 0.2 and 0.1 series answer through the tabix index, and
 `variant_rsid_bytes.npy`/`variant_rsid_rows.npy` supporting rsid lookup
 (issue #109). The rsid pair is written by every layout and MAY be empty — a
 source that names no variants indexes none — but a release whose
@@ -172,10 +176,10 @@ keep their envelope.
 | `variant_rsid_bytes.npy`, `variant_rsid_rows.npy` | every release | Store Reader | read (and inverted, for the rsID of a row) | #469 |
 | `variant_alid_bytes.npy`, `variant_alid_rows.npy` | every 0.2 release; none from 0.3.0 | Store Reader (0.2.x); validator | dropped: replaced by the variable-length ALID sidecar, which is read | #467 |
 | `variant_alid_utf8.npy`, `variant_alid_offsets.npy`, `variant_alid_keys.npy`, `variant_alid_order.npy` (the variable-length ALID sidecar, §4) | every release from 0.3.0 | Store Reader (`by_alid`, `lookup`, `identity_by_indices`); validator | read | #467 |
-| position sidecar, with chromosome offsets (new) | every release | — | read | #468 |
+| `variant_position.npy`, `variant_position_chromosomes.npy`, `variant_position_chromosome_offsets.npy` (the position sidecar, §4) | every release from 0.3.0 | Store Reader (`range_phewas`, `range`); validator | read | #468 |
 | `source_alid` sidecar (new) | every release | — | read | #470 |
 | `variants.tsv.gz` | every release | Store Reader (`by_index`, `variants_table()`); validator | convenience: derived from the sidecars, for tabix, bedtools and R | #465, #469 |
-| `variants.tsv.gz.tbi` | every release | Store Reader (`range_phewas`, through tabix) | convenience: rebuilt with `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`, or `Rsamtools::indexTabix()` | #468, #469 |
+| `variants.tsv.gz.tbi` | every release | Store Reader (`range_phewas` on 0.2.x, through tabix; 0.3.0 asks the position sidecar); validator | convenience: rebuilt with `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`, or `Rsamtools::indexTabix()` | #468, #469 |
 | `variant_offsets.npy` | every release | Store Reader (the variant count; `by_index`) | dropped | #469 |
 | `overview.html` | Dense; Hybrid | nothing | convenience: derived from `analyses.tsv` and `manifest.json`, rewritten by `ogdb regenerate-overview` | — |
 | `regions.tsv` | Ragged, optional | completion; validator; `ogdb info` | provenance: the build's region boundaries and leads (§17) | — |
@@ -185,7 +189,7 @@ keep their envelope.
 | `index.sqlite` table `variant_aliases` | Dense; Hybrid | Store Reader (fallback after an rsID index miss); validator | dropped: empty in every release measured, and the rsID sidecar covers it | #471 |
 | `dense` (the Dense Component), with its `manifest.json` and `data.zarr` | Hybrid | Store Reader | read | — |
 | `dense_to_shared.npy` (in `dense`) | Hybrid | Store Reader; validator | read | — |
-| `dense/variants.tsv.gz` and its `.tbi`, `dense/variant_offsets.npy`, `dense/variant_alid_*.npy`, `dense/variant_rsid_*.npy` | Hybrid | Store Reader (the nested query) | dropped: the shared sidecars through `dense_to_shared.npy` replace them | #472 |
+| `dense/variants.tsv.gz` and its `.tbi`, `dense/variant_offsets.npy`, `dense/variant_alid_*.npy`, `dense/variant_position*.npy`, `dense/variant_rsid_*.npy` | Hybrid | Store Reader (the nested query) | dropped: the shared sidecars through `dense_to_shared.npy` replace them | #472 |
 | `dense/analyses.tsv` | Hybrid | Store Reader (the nested query) | dropped: it repeats the root `analyses.tsv` and undercounts Top-Hit Counts (issue #107) | #472 |
 | `dense/overview.html` | Hybrid | nothing | dropped: the root `overview.html` presents the same Analyses | #472 |
 | `dense/index.sqlite` | Hybrid | the nested query facade | provenance, as `index.sqlite` above (Reference-Completed only) | #471, #472 |
@@ -644,6 +648,9 @@ variant_alid_utf8.npy       (from 0.3.0)
 variant_alid_offsets.npy    (from 0.3.0)
 variant_alid_keys.npy       (from 0.3.0)
 variant_alid_order.npy      (from 0.3.0)
+variant_position.npy                     (from 0.3.0)
+variant_position_chromosomes.npy         (from 0.3.0)
+variant_position_chromosome_offsets.npy  (from 0.3.0)
 variant_alid_bytes.npy      (0.2 and 0.1)
 variant_alid_rows.npy       (0.2 and 0.1)
 variant_rsid_bytes.npy
@@ -691,6 +698,40 @@ ALID wider than 32 bytes) are not written from 0.3.0, and a 0.3.0 release that
 carries them fails its closed envelope; a 0.2 release keeps them, and a reader
 reads them there. A reader opens the index a release's `format_version` carries and no
 other, whatever other files lie beside it, and refuses a release missing it (ADR 0105 §5).
+
+**The position sidecar** (format 0.3.0, issue #468, ADR 0105 §6). Three plain
+`.npy` files, each memory-mappable and read with numpy alone, give every row's
+position and each chromosome's rows:
+
+| file | dtype | length | holds |
+|---|---|---|---|
+| `variant_position.npy` | `<u4` | rows | every row's position, in row order; each is at least 1 |
+| `variant_position_chromosomes.npy` | `\|S<n>` | chromosomes | each chromosome the release holds, once, as the table spells it, in the order its rows come |
+| `variant_position_chromosome_offsets.npy` | `<u8` | chromosomes + 1 | chromosome `k`'s rows are `offsets[k]:offsets[k+1]`; `offsets[0]` is 0, each later one is greater than the one before (no chromosome is empty), and the last is the row count |
+
+The rows are the table's, in its order, so the chromosomes run in the canonical
+chromosome order (`1`-`22`, `X`, `Y`, `MT`, then any other label by its text) and
+within one chromosome the positions never fall. A writer refuses rows that are not
+so, and `variant_table.position_sidecar` (§20.0) holds a release to it: the sidecar
+places each row at the chromosome and position the table gives it.
+
+**How a range is answered.** A genomic range is a chromosome and an inclusive
+`[start, end]`, and its answer is every row on that chromosome at a position in
+it, ascending. The chromosome is normalised as an ALID's is (`chr1` is `1`, `23`
+is `X`). From 0.3.0 the reader finds the chromosome's slice of the position sidecar
+and binary-searches it twice: the first position at or after `start`, and the
+first after `end`. The rows between are the answer, read without the Variant Table,
+its tabix index or pysam. A chromosome the release lacks, or an `end` before
+`start`, answers no rows. A 0.2 or 0.1 release answers the same range by a tabix
+fetch of `variants.tsv.gz` (`fetch(chromosome, max(0, start - 1), end)`), and the
+two answer every range identically (ADR 0105 §6). A Hybrid answers from its
+shared axis and its Dense Component's, each by its own sidecar. A reader opens the
+position sidecar when the release's `format_version` carries it, never because the
+files are present, and refuses a 0.3.0 release missing it rather than reading
+the range through tabix. It also refuses a sidecar whose chromosomes cannot slice
+its rows: offsets that do not number the chromosomes plus one, a chromosome named
+twice, or a label that is not UTF-8. A sidecar like that would answer one
+chromosome's ranges from another's rows, or from none.
 
 Long alleles MAY use deterministic hashed ALIDs as compact identifiers, but the complete normalised alleles MUST be retained once per variant so exact export and validation do not depend on an irreversible hash.
 
@@ -2471,9 +2512,10 @@ change to this table, which the test suite holds to the registry, in its order.
 | `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
 | `variant_table.alid_index` | release | fold | the 0.2 series' fixed-width ALID search index covers exactly the indexable ALIDs, collision-free; not judged on a 0.3.0 release, which carries the sidecar instead |
 | `variant_table.alid_sidecar` | release | fold | from format 0.3.0, the ALID sidecar names each row by the ALID the table gives it, its offsets start at 0, rise with every row and end at its byte array's end, its order names every row once, each key is the first 24 bytes of its row's ALID, and the keys run in the strict order of the full ALID bytes (§4, ADR 0105); not judged on an earlier release |
+| `variant_table.position_sidecar` | release | fold | from format 0.3.0, the position sidecar places each row at the chromosome and position the table gives it; each array has its dtype; its chromosome offsets start at 0, rise with every chromosome and end at the row count; each chromosome is named once, in the canonical chromosome order; and every position is at least 1 and never falls within a chromosome (§4, ADR 0105 §6); not judged on an earlier release |
 | `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
-| `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
+| `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds; on 0.3.0, where no query reads the tabix index, it is still checked as the convenience it is (§1.1) |
 | `variant_table.indel_order` | release | fold | from format 0.2.2, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.1, 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
 | `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.2, a warning on an earlier release, 0.9.0's 0.2.1 included, which #367 owns; a row with no `source_alid` is not judged |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
@@ -3160,11 +3202,11 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 | `0.2.1` | a Ragged release's optional `regions.tsv`, declared by the manifest's `regions` entry (§1, §2, §17; issue #430) | no release this build writes: package 0.9.0's, for a Ragged release carrying one |
 | `0.2.2` | an indel's ALID spelt reference first (§4, ADR 0079; issue #381), `regions.tsv` still optional | no release this build writes: package 0.11's, and earlier builds since #381 |
 | `0.2.3` | `analyses.tsv`'s `n_missing_se_out_of_range` on every row, and no association whose SE is above 65,504 (§7a, §15; ADR 0068, issue #338), on 0.2.2's features | no release this build writes: every build and completion from #338 to #467 |
-| `0.3.0` | the variable-length ALID sidecar in place of the fixed-width ALID index (§4; ADR 0105, issue #467), on 0.2.3's features; in development on the epic #450 branch | every release this build builds, completes or rewrites from `0.2.3` (§21.4) |
+| `0.3.0` | the variable-length ALID sidecar in place of the fixed-width ALID index (§4; ADR 0105, issue #467), and the position sidecar a range is answered from (§4; ADR 0105 §6, issue #468), on 0.2.3's features; in development on the epic #450 branch | every release this build builds, completes or rewrites from `0.2.3` (§21.4) |
 
 A package before 0.2.1 reads a 0.2.1 release, warned that it is newer than it fully understands (§21.2), and ignores the `regions` entry; its `validate` refuses `regions.tsv` as an entry outside the envelope, and its completion refuses the release, whose format it reads but cannot write (§21.4), so it cannot complete one outside its regions or drop its table (`docs/store-format-compatibility.md`). A package before 0.2.2 reads a 0.2.2 release the same way, warned, and its completion refuses it too, so it cannot spell its panel's indels sorted beside the release's reference-first ones. Package 0.9.0's `validate` also fails a 0.2.2 release, on its stamp rule (§21.2): upgrade the package, do not re-stamp the release. A package before 0.2.3 reads a 0.2.3 release, warned, and its completion refuses it. Its `validate` does not judge the newer stamp: packages 0.10.0 to 0.12.0 warn that the package must be upgraded (§21.2), and 0.9.0, whose stamp rule judges every 0.2 release, fails it, as it fails a 0.2.2 one (`docs/store-format-compatibility.md`). The remedy is again to upgrade, not to re-stamp.
 
-**Since #467**, every builder and Reference Completion write `0.3.0` (`CURRENT_FORMAT_VERSION`): `write_variant_axis`, which every build and completion path calls, writes the ALID sidecar, so a completion of a `0.2.2` or `0.2.3` source is `0.3.0` too. 0.3.0 carries every feature of 0.2.3, so a release with the sidecar whose indels are sorted, or whose `analyses.tsv` does not count what it left out, is no version, and `format_version_for` refuses to stamp one. The converter still writes `0.2.0`, and copies its source's fixed-width pair. A release newer than this build writes *in its series* (a `0.2.4` one) is still not judged by its stamp rule (§21.2).
+**Since #467**, every builder and Reference Completion write `0.3.0` (`CURRENT_FORMAT_VERSION`): `write_variant_axis`, which every build and completion path calls, writes the ALID sidecar and, since #468, the position sidecar, so a completion of a `0.2.2` or `0.2.3` source is `0.3.0` too. 0.3.0 carries every feature of 0.2.3, so a release with the sidecar whose indels are sorted, or whose `analyses.tsv` does not count what it left out, is no version, and `format_version_for` refuses to stamp one. The converter still writes `0.2.0`, and copies its source's fixed-width pair. A release newer than this build writes *in its series* (a `0.2.4` one) is still not judged by its stamp rule (§21.2).
 
 **From #338 to #467**, every builder and Reference Completion wrote `0.2.3`: 0.2.3 is 0.2.2 with the count, so a release is stamped it exactly when its indels are spelt reference first, and a completion of a `0.2.2` source is stamped `0.2.3` -- it carries every feature its source has, and adds the count, which it records for every Analysis (§12). The converter is unchanged: its copy of a `0.1.0` source sorts its indels, so it is `0.2.0`, whose `analyses.tsv` need not carry the count, and it carries none. It refuses a source holding an SE above 65,504, naming each Analysis and array, because it copies stored codes and cannot leave an association out (§21.4).
 
@@ -3181,7 +3223,7 @@ association data and no Analytical Metadata, and every edited Store is
 re-validated.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `ogdb rewrite-release SOURCE DESTINATION` (`opengwasdb.store.rewrite`, issue #467) derives a new `0.3.0` release from a `0.2.3` one: it copies the source (by reflink where the filesystem can), runs its named steps on the copy — #467's writes the ALID sidecar from the Variant Table and drops the fixed-width pair; #468–#472 each add one — and stamps every manifest `0.3.0` with a fresh `release_id` and `created_at`, `store_id` kept, and a `format_rewrite` provenance block naming the source `release_id` and the steps. Before it publishes, it asks the source and the staged copy the same deterministic set of questions (`opengwasdb.store.query_digests`: each Analysis, PheWAS and lookups of variants spread over the axis, a range, the top hits at five thresholds, Observed-Only and not, and the ALID probes: the release's longest ALIDs and one at each of 23, 24, 25, 32 and 33 bytes) and refuses on any difference in any array of any answer; #467's step also refuses unless every ALID it wrote resolves to its own row; then it validates the copy and publishes by rename only if it is clean. It never writes its source, refuses a destination that exists or lies inside the source, and refuses every source but `0.2.3`: 0.3.0 keeps 0.2.3's reference-first indels and its count of associations left out for an SE above 65,504, which an earlier release lacks and no rewrite can add, so such a release is rebuilt. Hosted releases are not rewritten: every Store is rebuilt from source at `0.3.0` once #467–#472 are in (the owner, 23 Nov 2026, in the #450 run; opengwas/opengwasdb-stores#498). The rewrite is the proof that each format step changes no answer, sized for the fixture releases and small real ones; on a large Dense release some of its questions cannot run (ADR 0105 §3). `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `ogdb rewrite-release SOURCE DESTINATION` (`opengwasdb.store.rewrite`, issue #467) derives a new `0.3.0` release from a `0.2.3` one: it copies the source (by reflink where the filesystem can), runs its named steps on the copy — #467's writes the ALID sidecar from the Variant Table and drops the fixed-width pair; #468's writes the position sidecar from the same table; #469–#472 each add one — and stamps every manifest `0.3.0` with a fresh `release_id` and `created_at`, `store_id` kept, and a `format_rewrite` provenance block naming the source `release_id`, the steps, and the range probes the release could not pose (`range_questions_not_posed`, which the log line also names). Before it publishes, it asks the source and the staged copy the same deterministic set of questions (`opengwasdb.store.query_digests`: each Analysis, PheWAS and lookups of variants spread over the axis, a range, the top hits at five thresholds, Observed-Only and not, the ALID probes: the release's longest ALIDs and one at each of 23, 24, 25, 32 and 33 bytes, and the range probes: ranges at the first and last variant, either side of a chromosome boundary, between two variants, on a chromosome the release lacks, and on a position several variants share) and refuses on any difference in any array of any answer; #467's step also refuses unless every ALID it wrote resolves to its own row, and #468's unless the sidecar places every row where the table does; then it validates the copy and publishes by rename only if it is clean. It never writes its source, refuses a destination that exists or lies inside the source, and refuses every source but `0.2.3`: 0.3.0 keeps 0.2.3's reference-first indels and its count of associations left out for an SE above 65,504, which an earlier release lacks and no rewrite can add, so such a release is rebuilt. Hosted releases are not rewritten: every Store is rebuilt from source at `0.3.0` once #467–#472 are in (the owner, 23 Nov 2026, in the #450 run; opengwas/opengwasdb-stores#498). The rewrite is the proof that each format step changes no answer, sized for the fixture releases and small real ones; on a large Dense release some of its questions cannot run (ADR 0105 §3). `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.

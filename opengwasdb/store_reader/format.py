@@ -146,6 +146,18 @@ def carries_alid_sidecar(version: str) -> bool:
     return parse_format_version(version) >= ALID_SIDECAR_SINCE
 
 
+#: The first `format_version` that answers a range from the position sidecar
+#: (`opengwasdb.store_reader.position_sidecar`, ADR 0105 §6) and not through tabix.
+#: 0.3.0 is one format version: every release that carries the ALID sidecar carries
+#: this one too.
+POSITION_SIDECAR_SINCE = ALID_SIDECAR_SINCE
+
+
+def carries_position_sidecar(version: str) -> bool:
+    """Whether a Store of ``version`` carries the position sidecar a range is answered from."""
+    return parse_format_version(version) >= POSITION_SIDECAR_SINCE
+
+
 def zarr_format_for_version(version: str, *, source: str = "release") -> int:
     """The Zarr on-disk format a readable ``format_version`` is stored in.
 

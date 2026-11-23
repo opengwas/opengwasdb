@@ -24,6 +24,13 @@ release holds, and one at each length where an ALID index changes how it searche
 longest of them is 15 and 16 bytes -- so without the probes no question would reach
 the sidecar's full-byte compare (#467 review). They are their own section, so the
 store-reader pins, written before it, still name every shape they hold.
+
+The **range probes** ask `range_phewas` where a position index can go wrong
+(`range_questions`, #468): a range at the first and at the last variant; either side of
+the first chromosome boundary; an empty range between two variants and one on a
+chromosome the release lacks; and a range starting and ending on a position several
+variants share. Each is chosen from the release's own rows, so it is deterministic, and
+each is asked Observed-Only and with imputed cells. They are their own section too.
 """
 
 from __future__ import annotations
@@ -64,6 +71,13 @@ N_LONGEST_PROBED = 3
 
 #: Identifiers no release holds: an absent answer must stay absent.
 ABSENT_IDENTIFIERS = ("1:1:A:C", "rs0")
+
+#: The chromosomes a range probe looks for one the release lacks in, in their order.
+PROBED_CHROMOSOMES = (*(str(n) for n in range(1, 23)), "X", "Y", "MT")
+
+#: The end of a range that runs to a chromosome's end: past every human position, and
+#: within what a tabix index addresses (2**29), so a 0.2 release answers it too.
+CHROMOSOME_END = 500_000_000
 
 
 class IncompleteResultError(ValueError):
@@ -235,6 +249,117 @@ def probed_alids(variants: dict[int, dict[str, Any]]) -> list[str]:
     return chosen
 
 
+#: Every range question `range_questions` can pose, in the order it names them.
+RANGE_QUESTIONS: tuple[str, ...] = (
+    "first",
+    "to_first",
+    "last",
+    "from_last",
+    "boundary/before",
+    "boundary/after",
+    "empty/between",
+    "empty/chromosome",
+    "shared",
+    "shared/from_before",
+    "shared/to_after",
+)
+
+
+def range_questions(variants: dict[int, dict[str, Any]]) -> dict[str, tuple[str, int, int]]:
+    """The ranges the range probes ask, by name, as ``(chromosome, start, end)``.
+
+    Chosen from the rows of `variants` (`variants_table()`), in row order, which is
+    genomic order. A case the release cannot pose -- one chromosome, so no boundary;
+    no shared position; no gap; every listed chromosome held -- is left out, and named
+    by `unposed_range_questions`, which the rewrite logs and records in its provenance.
+    """
+    rows = [
+        (str(variants[k]["chromosome"]), int(variants[k]["position"])) for k in sorted(variants)
+    ]
+    if not rows:
+        return {}
+    (first_chrom, first_pos), (last_chrom, last_pos) = rows[0], rows[-1]
+    asked = {
+        "first": (first_chrom, first_pos, first_pos),
+        "to_first": (first_chrom, 1, first_pos),
+        "last": (last_chrom, last_pos, last_pos),
+        "from_last": (last_chrom, last_pos, CHROMOSOME_END),
+    }
+    asked.update(_boundary_questions(rows))
+    asked.update(_empty_questions(rows))
+    asked.update(_shared_questions(rows))
+    return asked
+
+
+def unposed_range_questions(asked: Mapping[str, Any]) -> list[str]:
+    """The names in `RANGE_QUESTIONS` that `asked` (`range_questions`) leaves out, in order."""
+    return [name for name in RANGE_QUESTIONS if name not in asked]
+
+
+def _boundary_questions(rows: list[tuple[str, int]]) -> dict[str, tuple[str, int, int]]:
+    """Either side of the first chromosome boundary: from the last variant before it to
+    its chromosome's end, and from its chromosome's start to the first variant after it."""
+    for (before_chrom, before_pos), (after_chrom, after_pos) in zip(rows, rows[1:], strict=False):
+        if before_chrom != after_chrom:
+            return {
+                "boundary/before": (before_chrom, before_pos, CHROMOSOME_END),
+                "boundary/after": (after_chrom, 1, after_pos),
+            }
+    return {}
+
+
+def _empty_questions(rows: list[tuple[str, int]]) -> dict[str, tuple[str, int, int]]:
+    """Between the first two variants of one chromosome with a position free between
+    them, and on the first of `PROBED_CHROMOSOMES` the release lacks."""
+    asked: dict[str, tuple[str, int, int]] = {}
+    for (chrom, pos), (next_chrom, next_pos) in zip(rows, rows[1:], strict=False):
+        if chrom == next_chrom and next_pos - pos >= 2:
+            asked["empty/between"] = (chrom, pos + 1, next_pos - 1)
+            break
+    held = {chrom for chrom, _ in rows}
+    lacked = next((chrom for chrom in PROBED_CHROMOSOMES if chrom not in held), None)
+    if lacked is not None:
+        asked["empty/chromosome"] = (lacked, 1, CHROMOSOME_END)
+    return asked
+
+
+def _shared_questions(rows: list[tuple[str, int]]) -> dict[str, tuple[str, int, int]]:
+    """At the first position several variants share: the position alone, from the
+    position before it on its chromosome, and to the position after it."""
+    at = next((i for i in range(len(rows) - 1) if rows[i] == rows[i + 1]), None)
+    if at is None:
+        return {}
+    chrom, pos = rows[at]
+    before, after = _neighbouring_positions(rows, at)
+    return {
+        "shared": (chrom, pos, pos),
+        "shared/from_before": (chrom, before, pos),
+        "shared/to_after": (chrom, pos, after),
+    }
+
+
+def _neighbouring_positions(rows: list[tuple[str, int]], at: int) -> tuple[int, int]:
+    """The positions either side of row `at`'s on its chromosome: the last before it
+    (1 if none) and the first after it (`CHROMOSOME_END` if none)."""
+    chrom, pos = rows[at]
+    same = [p for c, p in rows if c == chrom]
+    lower = [p for p in same if p < pos]
+    higher = [p for p in same if p > pos]
+    return max(lower, default=1), min(higher, default=CHROMOSOME_END)
+
+
+def _range_digests(
+    q: Any, asked: dict[str, tuple[str, int, int]]
+) -> dict[str, dict[str, str]]:
+    """Each range probe's `range_phewas`, Observed-Only and not, digested."""
+    out = {}
+    for name, (chrom, start, end) in asked.items():
+        for observed_only, flag in ((False, "all"), (True, "observed_only")):
+            result = q.range_phewas(chrom, start, end, observed_only=observed_only)
+            out[f"range_phewas/{name}/{flag}"] = result_digests(dict(result))
+    return out
+
+
 def _probe_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
     """Each probed ALID's PheWAS, and one lookup of them all, digested."""
     alids = probed_alids(variants)
@@ -266,6 +391,9 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
         out["alid_probes"] = _probe_digests(q, variants)
+        asked = range_questions(variants)
+        out["range_probes"] = _range_digests(q, asked)
+        out["unposed_range_questions"] = unposed_range_questions(asked)
     return out
 
 
@@ -280,7 +408,7 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found.append(f"adapter: {reference['adapter']} != {candidate['adapter']}")
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
-    for section in ("shapes", "resolved", "alid_probes"):
+    for section in ("shapes", "resolved", "alid_probes", "range_probes"):
         found += _shape_differences(section, reference[section], candidate[section])
     return found + _log10_p_differences(reference["log10_p"], candidate["log10_p"])
 
@@ -314,10 +442,13 @@ def _differing(reference: Mapping[str, str], candidate: Mapping[str, str]) -> li
 
 __all__ = [
     "IncompleteResultError",
+    "RANGE_QUESTIONS",
     "RESULT_ARRAY_NAMES",
     "differences",
     "digest_array",
     "query_shapes",
+    "range_questions",
     "release_digests",
     "result_digests",
+    "unposed_range_questions",
 ]

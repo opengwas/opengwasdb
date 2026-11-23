@@ -171,6 +171,13 @@ and the rewrite is the proof, on fixture and small releases, that each format st
 changes no answer. A 0.2.4 Store is still newer than this package writes in its series, and
 its stamp is not judged.
 
+**#468 adds the position sidecar to 0.3.0 (ADR 0105 §6)**, in the same unreleased
+version: `variant_position.npy`, `variant_position_chromosomes.npy` and
+`variant_position_chromosome_offsets.npy` (spec §4). A 0.3.0 release answers
+`range_phewas` from them by binary search, without tabix or pysam; a 0.2 release
+answers by tabix as before. A 0.3.0 release written on the integration branch before
+#468 lacks them and is refused by name: rebuild or rewrite it.
+
 ## Keeping this page true
 
 A pull request that moves `format_version`, or changes which formats the

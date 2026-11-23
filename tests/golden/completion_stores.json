@@ -53,6 +53,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -161,12 +164,15 @@
     "release_id": "comp-signal-v1",
     "store_id": "test"
    },
-   "overview.html": "f85a63a25d51cecbb9bebf98288a0f8ea923aa9c7a491836a38a04c5ab4d0e92",
+   "overview.html": "718634e434432322c3a3ce8583a5256006fa54637ee4109c60208467a1eeed34",
    "variant_alid_keys.npy": "2d89f7184c60c52d454caf2640c95cdf4a421047c8c19702c094204da9317552",
    "variant_alid_offsets.npy": "4e6c1683c05267e12bef5a0eb051c0f70747aac3cf15844d0c91d45e965ebf7d",
    "variant_alid_order.npy": "9ccf3e85bb79bd039402a5a311525246f94bfe8b513da8488538b7f6653b7f62",
    "variant_alid_utf8.npy": "8f4c2d2615d1b7931a8a6ce9ffb3d59c631531cc4d26627e67e5745486c2fa44",
    "variant_offsets.npy": "822301c55ee68d54cfeaf60599429aca7d7e05c18a5accfd845e7a5ee5eb656c",
+   "variant_position.npy": "350d3311eb65267198b1a3e100eeb7a5320e80d20269f0b04f039ba0517ac078",
+   "variant_position_chromosome_offsets.npy": "8a54289d96e2e7bab2076c029388211ef70e28f30e373c04ce9b3596e0adb1b6",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "107ec1b2e38ebc648ea2b396d14b6cba2ea700b6f74cd316bf27849321974186",
    "variant_rsid_rows.npy": "8af39e45c00652bf313bb23722ffa3dad6772451476a56708ef25ee6dcc0e2fa",
    "variants.tsv.gz": "3bafb7e3ef96930ad1a1953932bf78930ba5611e93f890aa1204d9b909299784",
@@ -934,7 +940,7 @@
    "n_missing_off_panel": 0,
    "n_variants": 12
   },
-  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_besd": {
   "store": {
@@ -977,6 +983,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -1076,6 +1085,9 @@
    "variant_alid_order.npy": "3f7c5f11c6d38f164cb3cef1ac88a2a119a8556e3c9a14c32e2f24d8cba2521c",
    "variant_alid_utf8.npy": "bcd58d24c18120d5eedafaf8223e6c72bd70fd12b74207170f7bf1d3cd283391",
    "variant_offsets.npy": "da0db177ae4492a2c68cc17b09ed1faee9e43bb7806df4b876012ecda3610919",
+   "variant_position.npy": "825e3b843792f3ae3ed8735828d3d035dfa4b096f7672b15c8e782c651bae373",
+   "variant_position_chromosome_offsets.npy": "69f0276f416184a9b0546b15109e72d6211b9501102b56df87bdce1707c69e85",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "cf7d893723942af178680f4fb9bf7414827e853e344f0fac202413fd14624987",
    "variant_rsid_rows.npy": "b2af8d0eead6cc6f8b2a4dee207b4bdd4a467be8ebb32349de1b80da5ae3b889",
    "variants.tsv.gz": "ba81b2edeac4b6f8c359836d784758b6acd5d412b06200e768998011f3041a6d",
@@ -2006,7 +2018,7 @@
    "n_missing": 3,
    "n_variants": 4
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_nothing_imputed": {
   "store": {
@@ -2049,6 +2061,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -2201,6 +2216,9 @@
    "variant_alid_order.npy": "060dcb8dd46355c0fed135df467d3cd6713713825d6f1bffd453ced5ed85db13",
    "variant_alid_utf8.npy": "3ab6af6de549b18383dfcb87202622beb77b2f54e2623d9c0b32a287117aa010",
    "variant_offsets.npy": "b9be64ce70a0609a8a33e13a662553f743418db6e33706bc073c752669b2c271",
+   "variant_position.npy": "25e8b4213a26488ff51e92faeec94e45f768f2852317667c93ac2829b5a1918b",
+   "variant_position_chromosome_offsets.npy": "1b26e58add4eb07800ab46dc7e20c7153bf704acdac43b781e2b1ac96e50b974",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
    "variants.tsv.gz": "ee47a5b1d8768a980e5f4ef49b3151dcc8090d612a63f372d122e06e88c71350",
@@ -3382,7 +3400,7 @@
   "totals": {
    "n_imputed": 0
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_off_grid": {
   "store": {
@@ -3425,6 +3443,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -3577,6 +3598,9 @@
    "variant_alid_order.npy": "7657507c1498f9254ca13f3f6363a6125fb7ecce1ab37f8072facb4491500779",
    "variant_alid_utf8.npy": "8e239c83ad9f329dd7d4c7bea7ed77e6ad5c0e1a766527f37091505bd0c4da57",
    "variant_offsets.npy": "91b00dd38112592637d18bb5ee56535a436fc647bc8d95682c06ac7e2ecad8d8",
+   "variant_position.npy": "80d34a02808d8eee2e03cbcfc802cf6f463c15ac3c50ad771a601709a48688d3",
+   "variant_position_chromosome_offsets.npy": "9edc08475cc9a93e78a7ff864c85b37b44d577e4e50e2e07e707a123b3a5a238",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
    "variants.tsv.gz": "9b82e867ceec8ea0a4adc6dd15b7aea557d5d74361c27481b02826a4d0455ff1",
@@ -4758,7 +4782,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_out_of_range": {
   "store": {
@@ -4801,6 +4825,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -4955,6 +4982,9 @@
    "variant_alid_order.npy": "7549d5d9403c4c11000eb7221a7f415916e0aa8268a404ecdb93285d1f7f4bf8",
    "variant_alid_utf8.npy": "39f351e103c5bc391f1f5585b853dcd3ed41f10fbfe8d51851ab1c40b2e732a8",
    "variant_offsets.npy": "4685c1e489d319575163821cd8d143dc92888ea981be8dcfc8b8acd7a9d69782",
+   "variant_position.npy": "70bdd7ff24724dbf8578417b5e4f4c6635be45bc7bb7ee008a9aa426fa50a1b5",
+   "variant_position_chromosome_offsets.npy": "b4274d0b151248ab90a990d62bc30ac4f36be4ce29c12d0dbcc79d1aa2c44485",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
    "variants.tsv.gz": "6513f7c74cbab3465cf75375d08da1e8ec6dfa340a076708f19c053d1966815d",
@@ -6136,7 +6166,7 @@
   "totals": {
    "n_imputed": 16
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_overlap": {
   "store": {
@@ -6180,6 +6210,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -6282,6 +6315,9 @@
    "variant_alid_order.npy": "7aa3c4515205667d5940578732273ee0ab006248e1575de797a9edb8adf497d2",
    "variant_alid_utf8.npy": "c9b3c145da70c91afa9a360c91afa1a706f0b8b01f0fcb871e1b2a5deb635bcb",
    "variant_offsets.npy": "7d60ac86cb290fba6f02ba7b37c75fe7f88ab03273f31079e86e23416c7499b6",
+   "variant_position.npy": "a89e757a0a417c91309d0a1e4f43593cbfe9dfc3f29a0aa56fa14d2737b6ab11",
+   "variant_position_chromosome_offsets.npy": "a3de3e191ae02864dffdcad1ac305e0b848390e8b8fc85f1b59ac90bc8ad81f7",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "1092a994cc94be12846c9fc2ba069e7a255bc0c61fd38146ff3b23e8d84d2c04",
    "variant_rsid_rows.npy": "6f46a8554f1d546045c0553af6c3700e84d324d90b5e012a20b77f0fea0011b2",
    "variants.tsv.gz": "f3da8f24fc0cd9a8a2bba185e5585df0d5030b158af18e85f7cb37c838eb6b00",
@@ -7212,7 +7248,7 @@
    "n_missing": 1,
    "n_variants": 7
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_panel_only_eaf": {
   "store": {
@@ -7256,6 +7292,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -7409,6 +7448,9 @@
    "variant_alid_order.npy": "fcf3e376923b0ac59e7b8073aa8d637d112b6ef442191e0a7e1c77ee3d2ab3e2",
    "variant_alid_utf8.npy": "c7698671f189d8b3d0b7b710ecb16f23ce386b52397e79b6dcad2f328a248250",
    "variant_offsets.npy": "b20f43c15c4a031e64f34ece60b5694c8df25a387658b1037fe55d8083b039b0",
+   "variant_position.npy": "620b4dcc5f905ac56bf8e79b360bbbfef8cb47790d86888b158f28c673da1343",
+   "variant_position_chromosome_offsets.npy": "d0d40caaee2b83f7eb01a1b711df5d438ef9c760c4b2a10bf2e3f7f10727b5b6",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
    "variants.tsv.gz": "149b23fa09ac027a5edb8900c04d1d5fc352f84c97e09d7db34da456eba661a9",
@@ -8333,7 +8375,7 @@
    }
   },
   "totals": {},
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_residual": {
   "store": {
@@ -8376,6 +8418,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -8528,6 +8573,9 @@
    "variant_alid_order.npy": "7657507c1498f9254ca13f3f6363a6125fb7ecce1ab37f8072facb4491500779",
    "variant_alid_utf8.npy": "8e239c83ad9f329dd7d4c7bea7ed77e6ad5c0e1a766527f37091505bd0c4da57",
    "variant_offsets.npy": "91b00dd38112592637d18bb5ee56535a436fc647bc8d95682c06ac7e2ecad8d8",
+   "variant_position.npy": "80d34a02808d8eee2e03cbcfc802cf6f463c15ac3c50ad771a601709a48688d3",
+   "variant_position_chromosome_offsets.npy": "9edc08475cc9a93e78a7ff864c85b37b44d577e4e50e2e07e707a123b3a5a238",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
    "variants.tsv.gz": "9b82e867ceec8ea0a4adc6dd15b7aea557d5d74361c27481b02826a4d0455ff1",
@@ -9709,7 +9757,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  },
  "ragged_trait_less": {
   "store": {
@@ -9753,6 +9801,9 @@
     "variant_alid_order.npy",
     "variant_alid_utf8.npy",
     "variant_offsets.npy",
+    "variant_position.npy",
+    "variant_position_chromosome_offsets.npy",
+    "variant_position_chromosomes.npy",
     "variant_rsid_bytes.npy",
     "variant_rsid_rows.npy",
     "variants.tsv.gz",
@@ -9855,6 +9906,9 @@
    "variant_alid_order.npy": "ff78661dafefc001ff9c09676aaab415b99b516abc17f67204cf7764dccc5c23",
    "variant_alid_utf8.npy": "f1ed82f87bb1edc545e3e7a56f38fcdaffeff8707f6d93ae99545b7cdd8a3d01",
    "variant_offsets.npy": "c4b013689a3aecd1642e890d2fd76f71dd40a796913af3cf52a5ed48d118beca",
+   "variant_position.npy": "388e4ad15889316215032dcb1bc64c0c3835ef5af1547f6009fd0de184334425",
+   "variant_position_chromosome_offsets.npy": "8c261dcb5b9b60866dcf9e83eab26e2797ad60cf6e2329fbb8d620a5a3b6c76e",
+   "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "1092a994cc94be12846c9fc2ba069e7a255bc0c61fd38146ff3b23e8d84d2c04",
    "variant_rsid_rows.npy": "b5e35b87da9b43654a9807e6e945d10290c1b3093a59d4935729f730a661665c",
    "variants.tsv.gz": "0329bfe6148aadd57534226b71816ee5eec3ff5ce1f81e5419fd271a11834fb9",
@@ -10785,6 +10839,6 @@
    "n_missing": 0,
    "n_variants": 6
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
  }
 }
