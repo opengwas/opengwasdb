@@ -14,7 +14,24 @@ every module of `opengwasdb/` holds that. Outside the Store Reader no module
   release's `index.sqlite` (`index_connection`) to query it.
 
 The Store Reader's injected 0.2.x Variant Table implementation counts as the
-Store Reader (#473 ruling 1). Writers, the rewrite command's 0.2.x source side
+Store Reader (#473 ruling 1), as do the validator's `index.sqlite` reads beside it
+(`opengwasdb.index.release_index`), which open the index through the one opener
+every `index.sqlite` connection uses, `opengwasdb.store.open.connect_index`.
+
+`StoreRelease.arrays()` -- a release's `data.zarr` group, read-only -- is the Store
+Reader's own accessor, so a call to it is compliant by design and is not checked
+(ruling 2 on #473's decisions). The read-mode calls outside the Store Reader, as of
+#473's merge of the integration tip:
+
+- `layouts/dense/complete.py`: `_make_reader.make_reader`,
+  `_record_effective_dense_chunk_shape`, `_run_completion`, `_dense_shard_rows`;
+- `layouts/dense/rho.py`: `build_dense_rho`;
+- `layouts/hybrid/complete.py`: `_crossover_cells`;
+- `validation/observed_view.py`: `_Planes.__init__`;
+- `validation/observed_view_hybrid.py`: `_open_overflow`, `_DenseCodec.of`;
+- `validation/rules/layout.py`: `_validate_hybrid_recordings`;
+- `validation/rules/top_hits.py`: `tier_root`;
+- `validation/validate.py`: `_fidelity_blocks`. Writers, the rewrite command's 0.2.x source side
 and inputs that are not Store Releases are exempt, each named below with its
 reason: a whole module in `EXEMPT_MODULES`, or one function of a module that
 also reads in `WRITER_FUNCTIONS` -- a writer reading back what it is writing,
@@ -53,7 +70,8 @@ EXEMPT_MODULES = {
         "Store Reader's"
     ),
     "opengwasdb/store/open.py": (
-        "the writer's release envelope: index_connection and arrays(mode) for writes, and "
+        "the writer's release envelope: index_connection and arrays(mode) for writes; "
+        "connect_index, the one opener of index.sqlite (for ReleaseIndex too); and "
         "open_store, which hands the Store Reader its 0.2.x Variant Table"
     ),
     "opengwasdb/store/convert.py": (

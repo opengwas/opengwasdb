@@ -12,9 +12,10 @@ Writing it -- the schema, metadata and quality rows a build or a completion
 writes -- is `opengwasdb.index.sqlite`'s and the writers'. #476 removes SQLite
 from every read path.
 
-The connection is opened as the readers before it opened it
-(`sqlite3.connect`, rows as `sqlite3.Row`), so what a read returns, and what a
-missing table or column raises (`UnreadableIndex`), are as they were.
+The connection is opened where every `index.sqlite` connection is,
+`opengwasdb.store.open.connect_index`, as the readers before it opened it (rows
+as `sqlite3.Row`), so what a read returns, and what a missing table or column
+raises (`UnreadableIndex`), are as they were.
 """
 
 from __future__ import annotations
@@ -25,14 +26,12 @@ from types import TracebackType
 from typing import Any
 
 from opengwasdb.index.sqlite import get_metadata
+from opengwasdb.store.open import connect_index
+from opengwasdb.store_reader.release import release_paths
 
 #: What a read of a table or column the index lacks raises: sqlite3's own error,
 #: named here so a caller can catch it without importing sqlite3.
 UnreadableIndex = sqlite3.OperationalError
-
-#: The name every release keeps its index under.
-INDEX_FILE = "index.sqlite"
-
 
 class ReleaseIndex:
     """The `index.sqlite` of the release at `release`, open for reading.
@@ -41,8 +40,7 @@ class ReleaseIndex:
     """
 
     def __init__(self, release: str | Path) -> None:
-        self._connection = sqlite3.connect(str(Path(release) / INDEX_FILE))
-        self._connection.row_factory = sqlite3.Row
+        self._connection = connect_index(release_paths(Path(release))["index"])
 
     def __enter__(self) -> ReleaseIndex:
         return self

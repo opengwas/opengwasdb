@@ -159,9 +159,14 @@ def check_writable_zarr_layout(version: str, *, source: str = "release") -> int:
 log = logging.getLogger(__name__)
 
 
-def _connect_index(path: Path) -> sqlite3.Connection:
+def connect_index(path: Path) -> sqlite3.Connection:
     """An `index.sqlite` connection with named columns; `sqlite3` is imported here, on use,
-    so opening a Store Release does not load it (#465)."""
+    so opening a Store Release does not load it (#465).
+
+    The one place a release's or a staged release's `index.sqlite` is opened: the
+    writers' `index_connection` and the validator's `ReleaseIndex` (#473) both open it
+    here. (The 0.2.x alias lookup opens its own read-only handle behind the Store
+    Reader's `LegacyVariantTable` seam.)"""
     import sqlite3
 
     conn = sqlite3.connect(str(path))
@@ -502,7 +507,7 @@ class OpenGWASDBStore(StoreRelease):
 
     def index_connection(self) -> sqlite3.Connection:
         """Open a connection to this release's ``index.sqlite``."""
-        return _connect_index(self.index_path)
+        return connect_index(self.index_path)
 
     # ---- provenance amendment -------------------------------------------
 
@@ -635,7 +640,7 @@ class StagedRelease(ReleasePaths):
         return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
-        return _connect_index(self.index_path)
+        return connect_index(self.index_path)
 
     def write_manifest(self, manifest: StoreManifest) -> None:
         self.manifest_path.write_text(
