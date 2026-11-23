@@ -2,9 +2,9 @@
 """ogld#32's reads against ogld#8's: requests and seconds per read, before and after.
 
     pixi run -e dev python scripts/ld/bench/deltas.py \
-        --before docs/benchmarks/results/step1-*.jsonl.gz \
-        --after docs/benchmarks/results/32/step1-*.jsonl.gz \
-        --levers docs/benchmarks/results/32/lever-*.jsonl.gz >
+        --before docs/benchmarks/ld/results/step1-*.jsonl.gz \
+        --after docs/benchmarks/ld/results/32/step1-*.jsonl.gz \
+        --levers docs/benchmarks/ld/results/32/lever-*.jsonl.gz >
         docs/benchmarks/ld/fast-reader-tables.md
 
 Records are read and aggregated by `report.py`, as ogld#8's tables are: a sum over the Analyses

@@ -130,9 +130,10 @@ ORIENT_CASES: list[tuple[str, int | str, str, str]] = [
 
 # Reversed indels, one pair per group: (group, chrom, position, ref, alt, kept). `kept` is the
 # engine's ADR 0072 rule, `duplicate_reversed_indel`: the record whose REF its ALID spells first
-# is kept. The first pair is the engine's own test (tests/test_reversed_indels.py, FinnGen r13
-# BMI_IRN); the second is chr22:16029124 in HGDP+1kGP v2; the third has a deletion kept, since
-# `AT` sorts before `T`. The ALID and flip of each record are the engine's.
+# is kept. The first pair was the engine's own test (`tests/test_reversed_indels.py` until
+# opengwas/ogld#316 removed it; FinnGen r13 BMI_IRN); the second is chr22:16029124 in HGDP+1kGP v2;
+# the third has a deletion kept, since `AT` sorts before `T`. The ALID and flip of each record are
+# the engine's.
 REVERSED_PAIRS: list[tuple[str, str, int, str, str, bool]] = [
     ("bmi_irn", "1", 827587, "G", "GGGGCC", True),
     ("bmi_irn", "1", 827587, "GGGGCC", "G", False),

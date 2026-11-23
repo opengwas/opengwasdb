@@ -564,7 +564,7 @@ def _companion_document(raw: bytes, pointer: Any) -> dict[str, Any]:
         raise ValueError("manifest must be an object")
     schema = manifest["schema"]
     if type(schema) is int and schema == 1:
-        raise ValueError("schema 1 is unsupported; re-derive with scripts/derive_alid_mmap.py")
+        raise ValueError("schema 1 is unsupported; re-derive with scripts/ld/derive_alid_mmap.py")
     count = manifest["count"]
     if type(count) is not int or count < 0:
         raise ValueError("count must be a nonnegative integer")
