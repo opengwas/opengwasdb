@@ -8,6 +8,7 @@ import threading
 import tracemalloc
 import weakref
 from concurrent.futures import Future
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -63,8 +64,6 @@ def test_big_endian_shard_index_equals_zarr(tmp_path: Path) -> None:
 
 
 def test_non_regular_or_multidimensional_arrays_are_not_recognised(tmp_path: Path) -> None:
-    from dataclasses import replace
-
     matrix = zarr.create_array(store=tmp_path / "matrix", shape=(8, 8), dtype="int32")
     assert decoding.NumericDecoder.of(matrix) is None
     array = numbers(tmp_path)

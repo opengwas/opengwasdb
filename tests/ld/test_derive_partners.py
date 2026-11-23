@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -199,8 +200,6 @@ raise SystemExit(main())
 
 def run_killed(script: str, store: Path) -> None:
     """`derive-partners` over `store` in a process that runs `script` first, which kills it."""
-    import subprocess
-
     done = subprocess.run(
         [
             sys.executable,
