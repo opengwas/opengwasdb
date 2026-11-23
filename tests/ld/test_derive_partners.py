@@ -198,16 +198,13 @@ raise SystemExit(main())
 """
 
 
-@pytest.fixture(scope="module")
-def killed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, Any]]:
-    """A Test Store copy whose derivation was killed mid-chromosome, and its provenance before."""
-    store = unpartnered(tmp_path_factory.mktemp("killed") / "store")
-    before = provenance(store)
+def run_killed(script: str, store: Path) -> None:
+    """`derive-partners` over `store` in a process that runs `script` first, which kills it."""
     done = subprocess.run(
         [
             sys.executable,
             "-c",
-            KILLED,
+            script,
             "derive-partners",
             str(store),
             "--t-partner",
@@ -218,6 +215,14 @@ def killed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, An
         check=False,
     )
     assert done.returncode == -9, f"the run was killed, not finished: {done.returncode}"
+
+
+@pytest.fixture(scope="module")
+def killed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, Any]]:
+    """A Test Store copy whose derivation was killed mid-chromosome, and its provenance before."""
+    store = unpartnered(tmp_path_factory.mktemp("killed") / "store")
+    before = provenance(store)
+    run_killed(KILLED, store)
     temporaries = list((store / "partners").glob(".*.tmp-*"))
     assert temporaries, "the killed run left the chromosome's group unpublished, as it must"
     written = list(temporaries[0].glob("frames.bin"))
@@ -352,21 +357,7 @@ def unclaimed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Test Store copy killed between `partners/` becoming a node and the provenance that
     claims it, with the provenance it had before."""
     store = unpartnered(tmp_path_factory.mktemp("unclaimed") / "store")
-    done = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            UNCLAIMED,
-            "derive-partners",
-            str(store),
-            "--t-partner",
-            str(T_PARTNER),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert done.returncode == -9, f"the run was killed, not finished: {done.returncode}"
+    run_killed(UNCLAIMED, store)
     assert (store / "partners" / "zarr.json").exists(), "the node was published before the kill"
     assert "t_partner" not in provenance(store), "and the claim was not written"
     return store

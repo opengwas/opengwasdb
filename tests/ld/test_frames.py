@@ -15,6 +15,7 @@ import hashlib
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numcodecs
 import numpy as np
@@ -274,13 +275,7 @@ def test_a_failed_compression_poisons_the_group_and_leaves_nothing(
 def test_a_failed_frame_in_line_poisons_the_group_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing(
-        first: int,
-        rows: list[tuple[np.ndarray, np.ndarray]],
-        *,
-        chrom: str,
-        number: int,
-    ) -> bytes:
+    def failing(*_args: Any, **_kwargs: Any) -> bytes:
         raise RuntimeError("bad partners")
 
     monkeypatch.setattr(frames, "encode_frame", failing)

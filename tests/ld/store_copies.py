@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -222,3 +223,24 @@ def sourced(**changes: Any) -> Sourced:
         del p[key]
     p.update(changes)
     return cast(Sourced, p)
+
+
+def private_sidecar_copy(
+    genotype_store: Path, tmp_path: Path
+) -> tuple[Path, zarr.Group, dict[str, Any]]:
+    """A private copy of a Genotype Store whose pins point at the original inputs (relative paths
+    survive the copy into another directory), its ALID companion dropped, with its root group and
+    its genotype record, whose edits the caller writes back."""
+    copy = tmp_path / "sidecar"
+    shutil.copytree(genotype_store, copy)
+    root = zarr.open_group(copy, mode="a")
+    record = dict(root.attrs["genotype_store"])
+    for fileset in record["filesets"]:
+        for name in ("pgen", "psam", "pvar"):
+            pin = fileset[name]
+            pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    for pin in record["inputs"]:
+        pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    if "alid_mmap" in root.attrs:
+        del root.attrs["alid_mmap"]
+    return copy, root, record

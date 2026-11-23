@@ -54,9 +54,8 @@ def test_the_partner_mask_chooses_the_floor_at_the_distance() -> None:
     np.testing.assert_array_equal(kept, [True, False, True, False, False])
 
 
-def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def counted_masks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Counts each call of the encoding's two masks, by `stored` and `partner`."""
     calls = {"stored": 0, "partner": 0}
     stored, partner = REncoding.stored_mask, REncoding.partner_mask
 
@@ -70,6 +69,13 @@ def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
 
     monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
     monkeypatch.setattr(REncoding, "partner_mask", counted_partner)
+    return calls
+
+
+def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = counted_masks(monkeypatch)
     out = tmp_path / "store"
     opengwasdb.ld.build(build_fixtures.inputs(testdata.panel().pgen), out)
     assert not any(opengwasdb.ld.validate(out).values())
@@ -80,19 +86,7 @@ def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
 def test_the_genotype_reader_calls_the_masks(
     genotype_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = {"stored": 0, "partner": 0}
-    stored, partner = REncoding.stored_mask, REncoding.partner_mask
-
-    def counted_stored(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
-        calls["stored"] += 1
-        return stored(self, *args, **kwargs)
-
-    def counted_partner(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
-        calls["partner"] += 1
-        return partner(self, *args, **kwargs)
-
-    monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
-    monkeypatch.setattr(REncoding, "partner_mask", counted_partner)
+    calls = counted_masks(monkeypatch)
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[:20])
     store = opengwasdb.ld.open(genotype_store)
     assert store.matrix(names).r.shape == (len(names), len(names))
