@@ -82,6 +82,9 @@ class LegacyTableOpener(Protocol):
 # resolution -- see that method's docstring for the measured costs behind it.
 _BULK_SCAN_FRACTION = 0.01
 
+#: `_indexed_row`'s answer when the ALID index cannot be asked at all.
+_NOT_INDEXED = object()
+
 
 @dataclass(frozen=True)
 class VariantRecord(Mapping[str, Any]):
@@ -203,32 +206,20 @@ class VariantAxis:
         A caller that needs only the row's index wants `index_of`, which reads
         no Variant Table row.
         """
+        parsed = parse_canonical_alid(identifier)
+        if parsed is not None:
+            return self.by_alid(parsed)
         index = self.index_of(identifier)
         return None if index is None else self.by_index(index)
 
     def index_of(self, identifier: str) -> int | None:
-        """The Store-local Variant Index one ALID or rsid names, or None.
+        """The one Variant Index `by_identifier` resolves `identifier` to, or None.
 
-        What `by_identifier` resolves before it reads the row. An identifier a
-        search index holds is answered from the mmap'd index alone; only a long
-        ALID (over `ALID_WIDTH` bytes, in no index), or an rsid the rsid index
-        lacks and `variant_aliases` may name, reaches the legacy Variant Table.
+        The lowest row among those `indices_by_identifiers` finds, so it reads no
+        Variant Table row a search index could answer.
         """
-        parsed = parse_canonical_alid(identifier)
-        if parsed is not None:
-            return self._index_of_alid(parsed)
-        indices = self.indices_by_alias(identifier)
-        if len(indices):
-            return int(indices[0])
-        return self._legacy.alias_index(identifier)
-
-    def alid_of(self, variant_index: int) -> str | None:
-        """The canonical ALID of one row, from the ALID index when it holds the row."""
-        identity = self.identity_by_indices(np.array([variant_index], dtype="int64"))
-        if identity is not None:
-            return str(identity["alid"][0])
-        record = self.by_index(variant_index)
-        return None if record is None else record.alid
+        indices = self.indices_by_identifiers([identifier])
+        return int(indices.min()) if len(indices) else None
 
     def indices_by_alias(self, alias: str) -> np.ndarray:
         """Every Store-local Variant Index the rsid `alias` names, ascending.
@@ -284,7 +275,7 @@ class VariantAxis:
         else:
             scanned = [p for _, p in parsed_pairs]
         for parsed in scanned:
-            record = self.by_alid(parsed)
+            record = self._scanned_record(parsed)
             if record is not None:
                 indices.append(record.variant_index)
         return indices
@@ -304,29 +295,40 @@ class VariantAxis:
         return indices
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
-        index = self._index_of_alid(parsed)
+        index = self._indexed_row(parsed)
+        if index is _NOT_INDEXED:
+            return self._scanned_record(parsed)
+        assert index is None or isinstance(index, int)
         return None if index is None else self.by_index(index)
 
-    def _index_of_alid(self, parsed: ParsedAlid) -> int | None:
+    def _indexed_row(self, parsed: ParsedAlid) -> int | None | object:
+        """The row the ALID index names; None if the index lacks the ALID;
+        `_NOT_INDEXED` if it cannot be asked (absent, or an over-wide ALID).
+
+        Only ask the index about ALIDs it could hold. A wider one was never
+        indexed (issue #127), and casting it to the slot width to ask would
+        match a *different* variant's truncated key -- the defect itself.
+        """
         alid = (
             f"{parsed.chromosome}:{parsed.position}:"
             f"{parsed.effect_allele}:{parsed.other_allele}"
         )
-        # Only ask the index about ALIDs it could hold. A wider one was never
-        # indexed (issue #127), and casting it to the slot width to ask would
-        # match a *different* variant's truncated key -- the defect itself.
-        if self._alid_bytes is not None and is_indexable_alid(alid):
-            query = np.array([alid], dtype=ALID_DTYPE)
-            idx = int(np.searchsorted(self._alid_bytes, query[0]))
-            if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
-                return int(self._alid_rows[idx])
-            return None
+        if self._alid_bytes is None or not is_indexable_alid(alid):
+            return _NOT_INDEXED
+        query = np.array([alid], dtype=ALID_DTYPE)
+        idx = int(np.searchsorted(self._alid_bytes, query[0]))
+        if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
+            return int(self._alid_rows[idx])
+        return None
+
+    def _scanned_record(self, parsed: ParsedAlid) -> VariantRecord | None:
+        """The exact scan of the table at the ALID's position, for one the index lacks."""
         for record in self.range(parsed.chromosome, parsed.position, parsed.position):
             if (
                 record.effect_allele == parsed.effect_allele
                 and record.other_allele == parsed.other_allele
             ):
-                return record.variant_index
+                return record
         return None
 
     def range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:

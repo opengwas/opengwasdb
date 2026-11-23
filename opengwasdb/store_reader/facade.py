@@ -339,7 +339,11 @@ class StoreQuery(_StoreQueryBase):
         index = self._variant_axis.index_of(identifier)
         if index is None:
             return Associations.empty()
-        return self._grid.read(Cells.variants([index]), observed_only=observed_only)
+        return self.phewas_at(index, observed_only=observed_only)
+
+    def phewas_at(self, variant_index: int, *, observed_only: bool = False) -> Associations:
+        """One variant, named by its Store-local Variant Index, across all analyses."""
+        return self._grid.read(Cells.variants([variant_index]), observed_only=observed_only)
 
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
@@ -356,7 +360,16 @@ class StoreQuery(_StoreQueryBase):
         """Return present associations for a specific variant × analysis set, Analysis-major."""
         # Row-index resolution only -- no VariantRecord materialisation, no
         # per-identifier variants.tsv.gz open (issue #3).
-        rows = self._variant_axis.indices_by_identifiers(identifiers)
+        return self.lookup_at(
+            self._variant_axis.indices_by_identifiers(identifiers),
+            analysis_ids,
+            observed_only=observed_only,
+        )
+
+    def lookup_at(
+        self, rows: np.ndarray, analysis_ids: list[str], *, observed_only: bool = False
+    ) -> Associations:
+        """`lookup` for variants already named by Store-local Variant Index."""
         cols = [i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None]
         if not len(rows) or not cols:
             return Associations.empty()
@@ -683,12 +696,10 @@ class RaggedStoreQuery(_StoreQueryBase):
         Requested Analysis order and duplicates carry through; a request that
         resolves nothing yields the empty result.
         """
-        found = [
-            i for id_ in identifiers if (i := self._variant_axis.index_of(id_)) is not None
-        ]
-        if not found:
+        found = self._variant_axis.indices_by_identifiers(identifiers)
+        if not len(found):
             return self._empty()
-        wanted = np.array(sorted(set(found)), dtype=np.int32)
+        wanted = np.array(sorted({int(i) for i in found}), dtype=np.int32)
         analyses = [
             idx for aid in analysis_ids if (idx := self._resolve_analysis_id(aid)) is not None
         ]
@@ -849,10 +860,10 @@ class HybridStoreQuery(_StoreQueryBase):
         if index is None:
             return Associations.empty()
         if self._shared_is_on_panel(index):
-            alid = self._variant_axis.alid_of(index)
-            if alid is None:
-                raise ValueError(f"the shared Variant Axis has no row {index}")
-            return self._remap_dense(self._dense.phewas(alid, observed_only=observed_only))
+            panel_row = int(np.searchsorted(self._dense_to_shared, index))
+            return self._remap_dense(
+                self._dense.phewas_at(panel_row, observed_only=observed_only)
+            )
         return self._overflow_read(Cells.variants([index]), observed_only=observed_only)
 
     def range_phewas(
@@ -871,10 +882,16 @@ class HybridStoreQuery(_StoreQueryBase):
     def lookup(
         self, identifiers: list[str], analysis_ids: list[str], *, observed_only: bool = False
     ) -> Associations:
+        # Resolved once, against the shared Variant Axis: an identifier its index
+        # holds never reaches a Dense Component whose own index lacks it (an
+        # off-panel variant), which would consult `variant_aliases`.
+        shared = np.unique(self._variant_axis.indices_by_identifiers(identifiers)).astype(np.int64)
+        on_panel = self._on_panel_mask(shared)
+        panel_rows = np.searchsorted(self._dense_to_shared, shared[on_panel])
         dense = self._remap_dense(
-            self._dense.lookup(identifiers, analysis_ids, observed_only=observed_only)
+            self._dense.lookup_at(panel_rows, analysis_ids, observed_only=observed_only)
         )
-        off_panel = self._off_panel_indices(identifiers)
+        off_panel = [int(i) for i in shared[~on_panel]]
         if not off_panel:
             return dense
         # Each requested Analysis's sorted segment is binary-searched for the
@@ -887,16 +904,6 @@ class HybridStoreQuery(_StoreQueryBase):
         )
         requested = [i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None]
         return _analysis_major(Associations.concat([dense, overflow]), requested)
-
-    def _off_panel_indices(self, identifiers: list[str]) -> list[int]:
-        """The shared indices of the identifiers that resolve off the panel, ascending."""
-        found = [
-            i for id_ in identifiers if (i := self._variant_axis.index_of(id_)) is not None
-        ]
-        if not found:
-            return []
-        shared = np.array(found, dtype=np.int64)
-        return sorted({int(i) for i in shared[~self._on_panel_mask(shared)]})
 
     def _analysis_index(self, analysis_id: str) -> int | None:
         analysis = self._analyses.by_id(analysis_id)

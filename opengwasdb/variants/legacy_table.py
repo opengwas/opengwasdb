@@ -15,6 +15,7 @@ answers never loads either. #476 deletes this module with the 0.2.x table.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -68,6 +69,13 @@ class TabixVariantTable:
     `aliases_path` names the file to open on first use (and close with the
     table); or neither, for a Store whose rsids are not looked up there (a
     Ragged release).
+
+    Threads: one lock guards the first open of each handle and every use of the
+    connection this table opens, which is created with `check_same_thread=False`
+    and read-only, so any thread may call `alias_index` and none runs two
+    statements at once. A pysam `TabixFile` is not shared between threads here
+    either: `fetch` holds the same lock. After `close()` every read raises
+    `ValueError`, as a closed handle did before the handles were lazy.
     """
 
     def __init__(
@@ -83,22 +91,27 @@ class TabixVariantTable:
         self._tabix_handle: pysam.TabixFile | None = None
         self._aliases = aliases
         self._aliases_path = aliases_path
+        self._lock = threading.Lock()
+        self._closed = False
 
-    @property
-    def _tabix(self) -> pysam.TabixFile:
-        if self._tabix_handle is None:
-            import pysam
-
-            self._tabix_handle = pysam.TabixFile(str(self.table_path))
-        return self._tabix_handle
+    def _require_open(self) -> None:
+        if self._closed:
+            raise ValueError(f"the Variant Table of {self.table_path.parent} is closed")
 
     def fetch(self, chromosome: str, start: int, end: int) -> Iterable[str]:
-        try:
-            return list(self._tabix.fetch(chromosome, start, end))
-        except ValueError:
-            return []
+        with self._lock:
+            self._require_open()
+            if self._tabix_handle is None:
+                import pysam
+
+                self._tabix_handle = pysam.TabixFile(str(self.table_path))
+            try:
+                return list(self._tabix_handle.fetch(chromosome, start, end))
+            except ValueError:
+                return []
 
     def line_at(self, offset: int) -> str:
+        self._require_open()
         import pysam
 
         with pysam.BGZFile(str(self.table_path), "r", None) as handle:
@@ -107,35 +120,43 @@ class TabixVariantTable:
         return line
 
     def rows(self) -> Iterator[str]:
+        self._require_open()
         return _table_lines(self.table_path)
 
     def alias_index(self, alias: str) -> int | None:
-        if self._aliases is None and self._aliases_path is not None:
-            import sqlite3
+        with self._lock:
+            self._require_open()
+            if self._aliases is None and self._aliases_path is not None:
+                import sqlite3
 
-            self._aliases = sqlite3.connect(str(self._aliases_path))
-            self._aliases.row_factory = sqlite3.Row
-        if self._aliases is None:
-            return None
-        row = self._aliases.execute(
-            """
-            SELECT variant_index
-            FROM variant_aliases
-            WHERE alias = ?
-            ORDER BY variant_index
-            LIMIT 1
-            """,
-            (alias,),
-        ).fetchone()
+                # Read-only: a missing `index.sqlite` is an error, not a new empty file.
+                self._aliases = sqlite3.connect(
+                    f"file:{self._aliases_path}?mode=ro", uri=True, check_same_thread=False
+                )
+                self._aliases.row_factory = sqlite3.Row
+            if self._aliases is None:
+                return None
+            row = self._aliases.execute(
+                """
+                SELECT variant_index
+                FROM variant_aliases
+                WHERE alias = ?
+                ORDER BY variant_index
+                LIMIT 1
+                """,
+                (alias,),
+            ).fetchone()
         return None if row is None else int(row["variant_index"])
 
     def close(self) -> None:
-        if self._tabix_handle is not None:
-            self._tabix_handle.close()
-            self._tabix_handle = None
-        if self._aliases_path is not None and self._aliases is not None:
-            self._aliases.close()
-            self._aliases = None
+        with self._lock:
+            self._closed = True
+            if self._tabix_handle is not None:
+                self._tabix_handle.close()
+                self._tabix_handle = None
+            if self._aliases_path is not None and self._aliases is not None:
+                self._aliases.close()
+                self._aliases = None
 
 
 def open_legacy_variant_table(store_path: Path, *, aliases: bool) -> TabixVariantTable:

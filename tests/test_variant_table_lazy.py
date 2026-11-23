@@ -11,22 +11,20 @@ is a tabix fetch); it must still answer as before, with pysam loaded.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
-from residual_stores import copied
 from store_reader_digests import build_releases
 
-from opengwasdb.query import query_store
+from opengwasdb.store_reader.alid import ALID_WIDTH
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAVY = ("pysam", "sqlite3")
 RELEASES = [
     f"{layout}_{state}"
     for layout in ("dense", "hybrid", "ragged")
@@ -34,17 +32,11 @@ RELEASES = [
 ]
 
 PROBE = r"""
-import hashlib, json, sys
+import json, sys
 from opengwasdb.query import query_store
 
-def result_digests(result):
-    # Not `benchmarks.benchmark_store_comparison`'s: importing that loads pysam.
-    return {
-        k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest()
-        for k, v in sorted(result.items())
-    }
-
-path, alid, rsid = sys.argv[1:4]
+path, chromosome = sys.argv[1], sys.argv[4]
+alids, rsids = json.loads(sys.argv[2]), json.loads(sys.argv[3])
 loaded = lambda: sorted(n for n in ("pysam", "sqlite3") if n in sys.modules)
 seen = {}
 with query_store(path) as q:
@@ -54,41 +46,26 @@ with query_store(path) as q:
     shapes = {
         "analysis": lambda: q.analysis(ids[0]),
         "top_hits": lambda: q.top_hits(threshold=0.2),
-        "phewas_alid": lambda: q.phewas(alid),
-        "phewas_rsid": lambda: q.phewas(rsid),
-        "lookup_alid": lambda: q.lookup([alid], ids),
-        "lookup_rsid": lambda: q.lookup([rsid], ids),
     }
+    for kind, names in (("alid", alids), ("rsid", rsids)):
+        for i, name in enumerate(names):
+            shapes[f"phewas_{kind}_{i}"] = lambda n=name: q.phewas(n)
+            shapes[f"lookup_{kind}_{i}"] = lambda n=name: q.lookup([n], ids)
     if hasattr(q, "range_by_analysis"):
-        shapes["range_by_analysis"] = lambda: q.range_by_analysis(
-            alid.split(":")[0], 1, 10**9
-        )
-    answers = {}
+        shapes["range_by_analysis"] = lambda: q.range_by_analysis(chromosome, 1, 10**9)
+    sizes = {}
     for name, shape in shapes.items():
         result = shape()
-        answers[name] = result_digests(dict(result))
+        sizes[name] = len(result["variant_index"])
         seen[name] = loaded()
-        if name in ("phewas_alid", "lookup_rsid"):
-            rows = list(q.resolve(result))
-            answers[name + "_rows"] = len(rows)
+        if name.startswith(("phewas_alid_0", "lookup_rsid_0")):
+            sizes[name + "_rows"] = len(list(q.resolve(result)))
             seen[name + "_resolved"] = loaded()
-print(json.dumps({"loaded": seen, "answers": {k: str(v) for k, v in answers.items()}}))
-"""
-
-RANGE_PROBE = r"""
-import hashlib, json, sys
-from opengwasdb.query import query_store
-
-def result_digests(result):
-    return {
-        k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest()
-        for k, v in sorted(result.items())
-    }
-
-path, chromosome = sys.argv[1:3]
-with query_store(path) as q:
-    digest = str(result_digests(dict(q.range_phewas(chromosome, 1, 10**9))))
-print(json.dumps({"pysam": "pysam" in sys.modules, "digest": digest}))
+    # The one question that needs the table: a position range is a tabix fetch.
+    ranged = q.range_phewas(chromosome, 1, 10**9)
+    sizes["range_phewas"] = len(ranged["variant_index"])
+    after = loaded()
+print(json.dumps({"loaded": seen, "sizes": sizes, "after_range_phewas": after}))
 """
 
 
@@ -125,13 +102,11 @@ def _with_rsids(store: Path) -> None:
 
 @pytest.fixture(scope="module")
 def releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    # The builders' output is private to this module, so it is rewritten in place.
     built = build_releases(tmp_path_factory.mktemp("lazy-variant-table"))
-    private = tmp_path_factory.mktemp("lazy-variant-table-rsids")
-    out = {}
-    for name, path in built.items():
-        out[name] = copied(path, private / name) if (private / name).mkdir() is None else path
-        _with_rsids(out[name])
-    return out
+    for path in built.values():
+        _with_rsids(path)
+    return built
 
 
 def _run(code: str, *args: str) -> dict:
@@ -141,52 +116,51 @@ def _run(code: str, *args: str) -> dict:
     return json.loads(out.stdout)
 
 
-def _asked(path: Path) -> tuple[str, str]:
-    """An ALID and an indexed rsid that name a row of the release."""
-    # A Hybrid resolves every identifier in its Dense Component first, and an
-    # rsid that component's index lacks (an off-panel variant) is the one case
-    # that consults `variant_aliases`: ask for a variant the panel holds.
-    axis = VariantAxis(path / "dense" if (path / "dense").is_dir() else path)
+def _asked(path: Path) -> list[dict]:
+    """Variants that name a row of the release and carry an rsid: for a Hybrid, one the
+    Dense Component's panel holds and one it does not (an off-panel variant, whose rsid
+    the Dense Component's own indexes lack)."""
+    axis = VariantAxis(path)
     try:
-        table = axis.all()
+        records = [dict(r) for r in axis.all() if r.rsid]
     finally:
         axis.close()
-    records = [dict(r) for r in table if r.rsid]
-    # Fixtures asserted meaningful: a release with no rsid or only long ALIDs would
-    # make every answer below an empty one.
-    assert records, "the fixture release carries no rsid"
-    record = records[len(records) // 2]
-    assert len(record["alid"].encode()) <= 32
-    return record["alid"], record["rsid"]
+    panel_file = path / "dense_to_shared.npy"
+    if panel_file.exists():
+        panel = {int(i) for i in np.load(panel_file)}
+        on = [r for r in records if r["variant_index"] in panel]
+        off = [r for r in records if r["variant_index"] not in panel]
+        # Fixtures asserted meaningful: a Hybrid with no off-panel variant would
+        # leave the case this test exists for unasked.
+        assert on and off, (len(on), len(off))
+        chosen = [on[len(on) // 2], off[len(off) // 2]]
+    else:
+        assert records, "the fixture release carries no rsid"
+        chosen = [records[len(records) // 2]]
+    for record in chosen:
+        assert len(record["alid"].encode()) <= ALID_WIDTH
+    return chosen
 
 
 @pytest.mark.parametrize("name", RELEASES)
 def test_questions_a_search_index_answers_never_load_pysam_or_sqlite(
     releases: dict[str, Path], name: str
 ):
-    alid, rsid = _asked(releases[name])
-    probe = _run(PROBE, str(releases[name]), alid, rsid)
+    chosen = _asked(releases[name])
+    probe = _run(
+        PROBE,
+        str(releases[name]),
+        json.dumps([r["alid"] for r in chosen]),
+        json.dumps([r["rsid"] for r in chosen]),
+        chosen[0]["chromosome"],
+    )
     assert probe["loaded"] == {key: [] for key in probe["loaded"]}
-    assert len(probe["loaded"]) >= 9, probe["loaded"]
-    # The questions were answered, not empty: one row at least, resolved.
-    assert probe["answers"]["phewas_alid_rows"] != "0"
-    assert probe["answers"]["lookup_rsid_rows"] != "0"
-
-
-@pytest.mark.parametrize("name", RELEASES)
-def test_range_phewas_still_answers_and_does_load_the_table(
-    releases: dict[str, Path], name: str
-):
-    alid, _ = _asked(releases[name])
-    probe = _run(RANGE_PROBE, str(releases[name]), alid.split(":")[0])
-    assert probe["pysam"] is True
-    with query_store(releases[name]) as q:
-        result = dict(q.range_phewas(alid.split(":")[0], 1, 10**9))
-        want = str(
-            {
-                k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest()
-                for k, v in sorted(result.items())
-            }
-        )
-    assert len(result["variant_index"]) > 0
-    assert probe["digest"] == want
+    assert len(probe["loaded"]) >= 8, probe["loaded"]
+    # The questions were answered, not empty: every phewas and lookup found its row.
+    sizes = probe["sizes"]
+    assert all(n > 0 for key, n in sizes.items() if key.startswith(("phewas", "lookup")))
+    assert sizes["phewas_alid_0_rows"] > 0 and sizes["lookup_rsid_0_rows"] > 0
+    # `range_phewas` answers (its digests are pinned in tests/golden/store_reader_digests.json,
+    # written by the code before #464) and is the one question that opens the table.
+    assert sizes["range_phewas"] > 0
+    assert probe["after_range_phewas"] == ["pysam"]
