@@ -41,9 +41,11 @@ from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.stats import z_critical as z_critical
+from opengwasdb.store_reader.stored import release_arrays
 from opengwasdb.store_reader.top_hits import (
     TOP_HIT_GROUP,
     TOP_HIT_THRESHOLDS,
+    analysis_hit_counts,
     threshold_key,
 )
 
@@ -189,25 +191,17 @@ def read_top_hit_counts(
     ``analyses.tsv`` column each tier persists to (ADR 0032), in
     ``analysis_index`` order.
 
-    ``n_analyses`` is needed for the fallback path below, not just for
-    sizing a zero-filled result: real pre-issue-#22-era stores (e.g. ukb-b)
-    have a top-hit index that predates the ``analysis_offsets`` array this
-    function otherwise reads directly, so it falls back to counting the
+    ``n_analyses`` is needed for the fallback, not just for sizing a
+    zero-filled result: real pre-issue-#22-era stores (e.g. ukb-b) have a
+    top-hit index that predates the ``analysis_offsets`` array the count is
+    otherwise read from, so the Store Reader's `analysis_hit_counts` counts the
     flat ``analysis_index`` array by hand for those.
     """
-    root = store_arrays.open_group(Path(store_path) / "data.zarr")
-    top = root[TOP_HIT_GROUP]
-    counts: dict[str, list[int]] = {}
-    for threshold in thresholds:
-        column = _THRESHOLD_COLUMNS[threshold]
-        group = top[threshold_key(threshold)]
-        if "analysis_offsets" in group:
-            offsets = np.asarray(group["analysis_offsets"], dtype=np.int64)
-            counts[column] = (offsets[1:] - offsets[:-1]).tolist()
-        else:
-            analysis_index = np.asarray(group["analysis_index"], dtype=np.int64)
-            counts[column] = np.bincount(analysis_index, minlength=n_analyses)[:n_analyses].tolist()
-    return counts
+    root = release_arrays(store_path)
+    return {
+        _THRESHOLD_COLUMNS[threshold]: analysis_hit_counts(root, threshold, n_analyses)
+        for threshold in thresholds
+    }
 
 
 def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Analysis]:

@@ -159,7 +159,8 @@ from opengwasdb.store_reader.indexed import (
 from opengwasdb.store_reader.indexed import open_indexed_subset as open_indexed_subset
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants.axis import VariantAxis
+from opengwasdb.store_reader.stored import release_arrays
+from opengwasdb.store_reader.variant_axis import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 
@@ -473,7 +474,7 @@ def resolve_variant_list(
     Store order, because the Variant Index is the store's axis and the index's
     arrays are written against the store's order.
     """
-    axis = VariantAxis(Path(store_path))
+    axis = open_store(store_path).variant_axis(aliases=False)
     try:
         resolved = axis.indices_by_identifiers(list(alids))
     finally:
@@ -1021,7 +1022,7 @@ def _off_panel_candidates(
     """
     if dense_resolved.resolved == 0:
         return list(alids)
-    dense_axis = VariantAxis(dense_path)
+    dense_axis = open_store(dense_path).variant_axis(aliases=False)
     try:
         dense_alids = _matched_alids(dense_axis, dense_resolved.variant_index)
     finally:
@@ -1043,7 +1044,7 @@ def _overflow_only_alids(hybrid_root: Path, candidates: list[str]) -> list[str]:
     something is present does the per-ALID pass pay for names to report.  The
     result keeps the candidate order, which is the variant list's order.
     """
-    shared_axis = VariantAxis(hybrid_root)
+    shared_axis = open_store(hybrid_root).variant_axis(aliases=False)
     try:
         if len(shared_axis.indices_by_identifiers(candidates)) == 0:
             return []
@@ -1169,7 +1170,7 @@ def _prepare_subset(
         hybrid_root,
         overflow_only,
     )
-    root = store_arrays.open_group(target_path / "data.zarr")
+    root = release_arrays(target_path)
     _check_layout(manifest, root)
     n_analyses = int(root["z"].shape[1])
     n_variants = int(root["z"].shape[0])

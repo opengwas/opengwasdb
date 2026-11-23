@@ -354,7 +354,8 @@ def test_render_overview_html_renders_a_hand_built_value_without_reading_a_store
     monkeypatch.setattr(Path, "read_text", forbidden)
     monkeypatch.setattr(Path, "open", forbidden)
     monkeypatch.setattr(builtins, "open", forbidden)
-    monkeypatch.setattr(overview_module, "open_group", forbidden)
+    monkeypatch.setattr(overview_module, "release_arrays", forbidden)
+    monkeypatch.setattr(overview_module, "stored_attributes", forbidden)
     monkeypatch.setattr(overview_module.json, "loads", forbidden)
 
     content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
@@ -491,7 +492,7 @@ def test_gather_store_overview_lets_an_unexpected_failure_propagate(
     def explode(*_args: object, **_kwargs: object) -> NoReturn:
         raise RuntimeError("the zarr stack is broken")
 
-    monkeypatch.setattr(overview_module, "open_group", explode)
+    monkeypatch.setattr(overview_module, "release_arrays", explode)
 
     with pytest.raises(RuntimeError, match="the zarr stack is broken"):
         gather_store_overview(tmp_path, _table())

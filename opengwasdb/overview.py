@@ -45,11 +45,11 @@ import numpy as np
 
 from opengwasdb.layouts.dense.indexed_subsets import indexed_subset_namespace_path
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX
-from opengwasdb.store.arrays import open_group
 from opengwasdb.store_reader.analyses import AnalysesTable, analysis_label
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.store_reader.indexed import IndexedSubsetError, open_indexed_subset
 from opengwasdb.store_reader.rho import DenseRhoReader
+from opengwasdb.store_reader.stored import release_arrays, stored_attributes
 
 # scipy publishes no type stubs, so mypy sees nothing of `scipy.cluster.
 # hierarchy` or `scipy.spatial.distance` -- the same reason `layouts/dense/
@@ -342,16 +342,6 @@ def _manifest_summary(store_path: Path) -> tuple[str, str, str]:
     )
 
 
-def _open_optional_group(path: Path) -> Any | None:
-    """A Zarr group opened read-only, or None when it is absent/unreadable.
-
-    Rho and Indexed Variant Subsets are opt-in derived artifacts; overview.html
-    is regenerable presentation and must degrade gracefully rather than fail to
-    render when one is missing or damaged (issues #23, #267).
-    """
-    return _degrade(lambda: open_group(path), None)
-
-
 def _load_rho_group(store_path: Path) -> Any | None:
     """The optional `data.zarr/rho` group (ADR 0025), or None if absent/unreadable.
 
@@ -359,7 +349,7 @@ def _load_rho_group(store_path: Path) -> Any | None:
     won't have one, and `overview.html` must degrade gracefully rather than
     fail to render (issue #23 AC3 applies here too).
     """
-    root = _open_optional_group(store_path / "data.zarr")
+    root = _degrade(lambda: release_arrays(store_path), None)
     return root["rho"] if root is not None and "rho" in root else None
 
 
@@ -625,9 +615,11 @@ def _read_subset_attrs(path: Path) -> dict[str, Any] | None:
 
     Overview presents the group's own recorded facts and never recomputes a
     value; a damaged group is omitted rather than shown with invented values.
+    Like Rho, a subset is opt-in, so one missing or damaged degrades the page
+    rather than failing it (issues #23, #267).
     """
-    group = _open_optional_group(path)
-    return dict(group.attrs) if group is not None else None
+    attrs: dict[str, Any] | None = _degrade(lambda: stored_attributes(path), None)
+    return attrs
 
 
 def _indexed_subset_value(attrs: dict[str, Any], key: str) -> str:
