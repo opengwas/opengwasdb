@@ -50,7 +50,7 @@ its job contract from here where it fits (Consequences):
   (`ogdb_api/operations.py`); more throughput means more API processes on one Redis, whose
   admission is shared (its #18). Its stress run measured 0.2 jobs/s for one process, and "latency
   grows with queue depth, not with memory" (DEVLOG, its #10).
-- **Limits a job meets.** A store query that runs past `OPENGWASDB_STORE_TIMEOUT_SECONDS` (30 s) fails
+- **Limits a job meets.** A store query that runs past `OGDB_STORE_TIMEOUT_SECONDS` (30 s) fails
   terminally; the query cannot be interrupted, so its thread and release slot stay held until it
   returns (`ogdb_api/planner.py`, `BackendLimiter`).
 - **How a result is returned.** The client polls `GET /api/jobs/{id}` at the interval the API

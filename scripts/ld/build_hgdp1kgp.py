@@ -93,7 +93,7 @@ def build_command(
         "--pcs",
         str(pcs),
         "--pc-source",
-        f"ogld scripts/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
+        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0002)",
         "--panel-id",
         panel_id(panel),
         "--ancestry",

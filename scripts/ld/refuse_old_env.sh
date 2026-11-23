@@ -4,7 +4,6 @@
 for name in $(compgen -e); do
   case "$name" in
     OGLD_*) new="OPENGWASDB_LD_${name#OGLD_}" ;;
-    OGDB_STORE_TIMEOUT_SECONDS) new="OPENGWASDB_STORE_TIMEOUT_SECONDS" ;;
     *) continue ;;
   esac
   echo "opengwasdb ld: an old environment variable is set: $name is now $new" >&2

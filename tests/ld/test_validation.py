@@ -324,7 +324,7 @@ WAYS: dict[str, tuple[str, Callable[[Path], None], str]] = {
     "a format version this ogld does not read": (
         "provenance.encoding",
         edit_ld_store(lambda p: p.update(format_version="0.3.0")),
-        "'0.3.0': this ogld reads 0.1.0 and 0.2.0 only",
+        "'0.3.0': this opengwasdb.ld reads 0.1.0 and 0.2.0 only",
     ),
     "n_variants one short of the variant table": (
         "envelope.arrays",

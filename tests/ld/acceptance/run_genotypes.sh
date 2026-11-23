@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The whole-panel acceptance of #91 (CONTRIBUTING.md, "Acceptance runs"):
-# `pixi run -e dev acceptance-genotypes`. It compares every answer of the Genotype Store sidecar
+# `pixi run -e dev ld-acceptance-genotypes`. It compares every answer of the Genotype Store sidecar
 # with the k = 10, x 511 EUR LD Store over the same panel: #81's 28 clump fingerprints, the 37
 # #403 Analyses at both thresholds, #19's chr22 suite, and per chromosome a 3 Mb region plus a
 # 1,000-variant whole-genome matrix. It fails, never skips, when an input is missing.

@@ -2,10 +2,11 @@
 
 A thin shell over the public functions, so a job and a person run exactly what a caller of the
 package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners` (ogld#69).
-Exit status: 0 done, 1 the store breaks a rule, 2 a `Refusal`, an `InputError`, an
-`IdentityError`, an environment variable under an old name, or a command line the parser refuses,
-printed as `opengwasdb ld <command>: <problem>`. Any other exception is a fault inside
-`opengwasdb.ld` and propagates with its traceback.
+Exit status: 0 done, 1 the store breaks a rule, 2 a refusal: a `Refusal`, an `InputError`, an
+`IdentityError` or an environment variable under an old name, printed as
+`opengwasdb ld <command>: <problem>`. A command line the parser refuses also exits 2, but prints
+Click's own `Usage: … Error: …`. Any other exception is a fault inside `opengwasdb.ld` and
+propagates with its traceback.
 
 An option left out takes the default `BuildInputs`, `ImportInputs` and the functions declare, so
 no default is written twice: an option the command line did not set is None here and is not
@@ -66,8 +67,7 @@ def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:
 
 
 def _message(problem: BaseException) -> str:
-    # A SystemExit's `code` is the message it was raised with.
-    return str(problem.code) if isinstance(problem, SystemExit) else str(problem)
+    return problem.message if isinstance(problem, env.LegacyVariable) else str(problem)
 
 
 def _given(**options: Any) -> dict[str, Any]:
@@ -143,6 +143,8 @@ def build_command(
     return 0
 
 
+# The defaults quoted below are `ImportInputs`' own: its `far_target_bp` and `displaced_cap` default
+# to these same policy constants, so the help text names the one source.
 _FarTarget = Annotated[
     int | None,
     typer.Option(

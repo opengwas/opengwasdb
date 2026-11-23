@@ -58,8 +58,9 @@ OPENGWASDB_LD_PLINK2=<plink2> OPENGWASDB_LD_BCFTOOLS=<bcftools> OPENGWASDB_LD_BG
 
 Inputs come from documented roots (`scripts/test_panel/roots.py`): `$OPENGWASDB_LD_PHASED_V2`
 for the BCFs, `$OPENGWASDB_LD_PCS` for the PC File and `$OPENGWASDB_LD_REFERENCE` for the keep
-file. `manifest.json` records each by root, name and hash, never by host path. A cached conversion, genotype count or row-ID
-pvar is reused only when the stamp beside it records the same inputs.
+file. `manifest.json` records each by root, name and hash, never by host path. A cached
+conversion, genotype count or row-ID pvar is reused only when the stamp beside it records the
+same inputs.
 
 It converts chr21 and chr22 for the EUR samples with the documented command
 (`docs/spec/build-inputs.md`), chooses the records below, cuts exactly those records out of the

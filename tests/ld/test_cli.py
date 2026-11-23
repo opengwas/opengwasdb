@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -94,7 +96,6 @@ def test_a_thread_count_below_one_is_a_usage_error() -> None:
     [
         ("OGLD_KEEP", "OPENGWASDB_LD_KEEP"),
         ("OGLD_STORE_EUR", "OPENGWASDB_LD_STORE_EUR"),
-        ("OGDB_STORE_TIMEOUT_SECONDS", "OPENGWASDB_STORE_TIMEOUT_SECONDS"),
     ],
 )
 def test_an_old_variable_is_refused_by_the_cli_naming_its_replacement(
@@ -106,6 +107,14 @@ def test_an_old_variable_is_refused_by_the_cli_naming_its_replacement(
     assert err.startswith("opengwasdb ld info: ") and f"{old} is now {new}" in err
 
 
+def test_the_api_services_timeout_variable_is_not_an_old_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OGDB_STORE_TIMEOUT_SECONDS is ogdb-api's live setting; `opengwasdb ld` has no say in it.
+    monkeypatch.setenv("OGDB_STORE_TIMEOUT_SECONDS", "30")
+    assert cli.main(["info", str(STORE)]) == 0
+
+
 def test_an_old_variable_is_refused_through_the_engine_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OGLD_KEEP", "x")
     result = CliRunner().invoke(app, ["ld", "validate", str(STORE)])
@@ -114,13 +123,15 @@ def test_an_old_variable_is_refused_through_the_engine_cli(monkeypatch: pytest.M
 
 @pytest.mark.parametrize("old", ["OGLD_KEEP", "OGLD_STORE_EUR", "OGLD_PLINK2"])
 def test_the_scripts_roots_refuse_an_old_variable(
-    old: str, monkeypatch: pytest.MonkeyPatch
+    old: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.syspath_prepend(str(SCRIPTS))
     roots = importlib.import_module("test_panel.roots")
     monkeypatch.setenv(old, "x")
-    with pytest.raises(env.LegacyVariable, match="OPENGWASDB_LD_"):
+    with pytest.raises(env.LegacyVariable) as refused:
         roots.root("OPENGWASDB_LD_KEEP")
+    assert refused.value.code == 2, "a refusal, not 'the store breaks a rule' (1)"
+    assert f"{old} is now OPENGWASDB_LD_" in capsys.readouterr().err
 
 
 def test_the_new_name_is_read_and_the_old_one_is_not_a_fallback(
@@ -135,12 +146,15 @@ def test_the_new_name_is_read_and_the_old_one_is_not_a_fallback(
 
 
 @pytest.mark.parametrize(
-    "script", ["acceptance/run.sh", "acceptance/run_genotypes.sh", "realdata/run.sh"]
+    "script",
+    [
+        "acceptance/run.sh",
+        "acceptance/run_stores.sh",
+        "acceptance/run_genotypes.sh",
+        "realdata/run.sh",
+    ],
 )
 def test_the_shell_runners_refuse_an_old_variable(script: str) -> None:
-    import os
-    import subprocess
-
     root = Path(__file__).resolve().parents[2]
     ran = subprocess.run(
         ["bash", str(root / "tests" / "ld" / script)],
