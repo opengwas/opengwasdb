@@ -24,16 +24,9 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import pytest
+import store_copies
 import zarr
-from store_copies import (
-    FLOOR,
-    PARTNER_FLOOR,
-    R_SCALE,
-    T_PARTNER,
-    TEST_STORE,
-    codes_at,
-    snv_variants,
-)
+from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
 from opengwasdb.ld.format.geometry import near_row_lengths
@@ -464,7 +457,7 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
     # variant, so no pair at all. The store writes both and passes every rule.
     position = np.array([1_000_000, 5_000_000, 9_500_000, 2_000_000], dtype=np.int64)
     chrom = ["1", "1", "1", "2"]
-    table = snv_variants(chrom, position)
+    table = store_copies.snv_variants(chrom, position)
     writer = create(tmp_path / "s", table)
     r = np.full((3, 3), np.nan)
     r[0, 1], r[0, 2], r[1, 2] = 0.5, -0.3, 0.01
