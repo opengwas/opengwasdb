@@ -282,3 +282,31 @@ def test_the_proof_asks_the_long_alids_and_refuses_the_same_bug(
 def test_the_long_alid_source_rewrites_clean_without_the_bug(long_alid_source, tmp_path):
     destination = rewrite_release(long_alid_source, tmp_path / "rewritten")
     assert differences(release_digests(long_alid_source), release_digests(destination)) == []
+
+
+def test_the_step_refuses_a_table_out_of_variant_index_order(sources, tmp_path):
+    """The sidecar is written in row order from the table, so a table whose rows are
+    out of order is refused rather than indexed."""
+    from test_indel_alid import _rewrite_table
+
+    source = Path(shutil.copytree(sources["dense_observed"], tmp_path / "source"))
+
+    def first_row_names_row_1(line: str) -> str:
+        fields = line.split("\t")
+        if fields[2] == "0":
+            fields[2] = "1"
+        return "\t".join(fields)
+
+    _rewrite_table(source, first_row_names_row_1)
+    with pytest.raises(RewriteError, match="row 0 has variant_index 1; a table out of order"):
+        list(rewrite._alids_in_row_order(source))
+
+
+def test_the_step_refuses_a_table_that_disagrees_with_its_offsets(sources, tmp_path):
+    import numpy as np
+
+    source = Path(shutil.copytree(sources["dense_observed"], tmp_path / "source"))
+    offsets = np.load(source / "variant_offsets.npy")
+    np.save(source / "variant_offsets.npy", np.append(offsets, offsets[-1]))
+    with pytest.raises(RewriteError, match="rows but variant_offsets.npy has"):
+        list(rewrite._alids_in_row_order(source))

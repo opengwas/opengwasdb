@@ -200,7 +200,11 @@ def rewrite_release(
     components = _refuse_unrewritable(source)
     started = time.perf_counter()
     reference = release_digests(source)
-    _log_phase(f"asked the source {len(reference['shapes'])} questions", started)
+    _log_phase(
+        f"asked the source {len(reference['shapes'])} questions and "
+        f"{len(reference['alid_probes'])} ALID probes",
+        started,
+    )
     with OpenGWASDBStore.staging(destination) as staged:
         context = RewriteContext(source=source, staged=staged.path, components=components)
         started = time.perf_counter()
