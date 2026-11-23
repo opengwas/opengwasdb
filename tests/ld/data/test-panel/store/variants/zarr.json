@@ -1,0 +1,18 @@
+{
+  "attributes": {
+    "chromosomes": [
+      {
+        "name": "21",
+        "row_start": 0,
+        "row_stop": 468
+      },
+      {
+        "name": "22",
+        "row_start": 468,
+        "row_stop": 1056
+      }
+    ]
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

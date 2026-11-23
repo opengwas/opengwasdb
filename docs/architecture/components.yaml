@@ -156,6 +156,17 @@ components:
     stages: [cross]
     summary: Representation-only repairs, the SE re-encode of existing Store Releases, and layout conversion.
     paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py]
+  # Imported from opengwas/ogld whole (#455). Its own internal layering (identity
+  # and format at the bottom, then store, genotypes, build and query, cli on top)
+  # becomes the cleat `ld` area; until then it is one component, placed where
+  # its imports from the rest of the engine (opengwasdb.version) all go down.
+  - id: ld
+    name: LD Stores
+    container: engine
+    layer: 4
+    stages: [build, query]
+    summary: Per-ancestry LD Stores and Genotype Stores, imported from ogld; their format, build, validation and queries (matrix, region, proxies, clump).
+    paths: [opengwasdb/ld/]
   - id: cli
     name: Engine CLI
     container: engine

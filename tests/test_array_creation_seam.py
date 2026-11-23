@@ -49,6 +49,10 @@ from opengwasdb.store.arrays import (
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "opengwasdb"
 SEAM = PACKAGE_ROOT / "store" / "arrays.py"
+#: opengwasdb.ld writes LD Stores and Genotype Stores, a different format with its
+#: own writer (`opengwasdb/ld/store/writer.py`, docs/spec/ld-store.md); this seam
+#: is the GWAS Store's, so it does not scan them (#455).
+LD_ENGINE = PACKAGE_ROOT / "ld"
 
 #: The seam's own module path, whose creation helpers other modules import.
 _SEAM_MODULE = "opengwasdb.store.arrays"
@@ -665,7 +669,7 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     scanned = 0
     offenders: list[str] = []
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        if path == SEAM or "__pycache__" in path.parts:
+        if path == SEAM or "__pycache__" in path.parts or LD_ENGINE in path.parents:
             continue
         scanned += 1
         offenders.extend(

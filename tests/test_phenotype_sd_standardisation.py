@@ -25,6 +25,10 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
 _PACKAGE = Path(opengwasdb.__file__).parent
 _OWNER = _PACKAGE / "encoding" / "sd_units.py"
+#: opengwasdb.ld computes LD from genotypes and has no phenotype SD; the scan's
+#: name match finds a genotype SD there (`ld/build/pc_check.py`), so it does not
+#: scan it (#455).
+_LD_ENGINE = _PACKAGE / "ld"
 #: A divisor whose spelling names a standard deviation.
 _SD_NAMED = re.compile(r"divisor|original_sd|phenotype_sd|\bsd\b|_sd\b", re.IGNORECASE)
 
@@ -51,7 +55,7 @@ def test_nothing_outside_the_owner_divides_by_a_phenotype_sd() -> None:
     elsewhere = [
         hit
         for path in sorted(_PACKAGE.rglob("*.py"))
-        if path != _OWNER
+        if path != _OWNER and _LD_ENGINE not in path.parents
         for hit in _divisions_by_an_sd(path)
     ]
     assert elsewhere == [], f"SE divided by a phenotype SD outside {_OWNER.name}: {elsewhere}"

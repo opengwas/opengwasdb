@@ -1,0 +1,82 @@
+{
+ "store": {
+  "name": "EUR-k0.store",
+  "encoding": {
+   "r_dtype": "int16",
+   "r_scale": 32767,
+   "r_reserved_code": -32768,
+   "rounding": "half_to_even"
+  },
+  "provenance_sha256": "1f27ef31020fd2c366de47315bf514e2980f3037f3cb6166b9f4ab12c37a3877"
+ },
+ "cases": [
+  {
+   "r2": 0.01,
+   "analysis": "OGS-00011__GCST90025947",
+   "ogld_only": [],
+   "plink2_only": [
+    "6:24456674:A:G"
+   ],
+   "threshold_pairs": [
+    {
+     "a": "6:24456674:A:G",
+     "b": "6:24441518:A:G",
+     "store_r2": 0.0100018,
+     "plink2_r2": 0.0099992
+    }
+   ]
+  },
+  {
+   "r2": 0.01,
+   "analysis": "OGS-00011__GCST90271559",
+   "ogld_only": [],
+   "plink2_only": [
+    "3:170775382:C:T"
+   ],
+   "threshold_pairs": [
+    {
+     "a": "3:170775382:C:T",
+     "b": "3:170491697:A:G",
+     "store_r2": 0.0100018,
+     "plink2_r2": 0.00999912
+    }
+   ]
+  },
+  {
+   "r2": 0.01,
+   "analysis": "OGS-00012__GCST90475442",
+   "ogld_only": [
+    "15:65441989:A:G"
+   ],
+   "plink2_only": [
+    "15:65484095:A:G"
+   ],
+   "threshold_pairs": [
+    {
+     "a": "15:65484095:A:G",
+     "b": "15:65694449:C:CA",
+     "store_r2": 0.0100018,
+     "plink2_r2": 0.0099997
+    }
+   ]
+  },
+  {
+   "r2": 0.01,
+   "analysis": "OGS-00012__GCST90475446",
+   "ogld_only": [
+    "15:65441989:A:G"
+   ],
+   "plink2_only": [
+    "15:65484095:A:G"
+   ],
+   "threshold_pairs": [
+    {
+     "a": "15:65484095:A:G",
+     "b": "15:65694449:C:CA",
+     "store_r2": 0.0100018,
+     "plink2_r2": 0.0099997
+    }
+   ]
+  }
+ ]
+}
