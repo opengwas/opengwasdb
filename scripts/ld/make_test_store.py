@@ -7,9 +7,9 @@ builder exists. Its variants are the rows that pass the build's filters, with th
 A1 and A2 (`opengwasdb.ld.identity`), reversed indels resolved by the engine's rule; its r is the
 reference r signed to A1. The script supplies that r and what only its source knows, and the
 store makes the rest (`StoreWriter`, ogld#17). That is its codes,
-quantised at × 511, HGDP+1kGP EUR's encoding (spec §3; ADR 0004), the Near Band, the Far Pairs at
-t_far for n = 771 and the k it was written at (spec §4, §5), the Partner Rows, and the counts. It
-holds no Proxy Index: #72 removed the component (ADR 0011). It is "import a
+quantised at × 511, HGDP+1kGP EUR's encoding (ld-store §3; ADR 0090), the Near Band, the Far Pairs at
+t_far for n = 771 and the k it was written at (ld-store §4, §5), the Partner Rows, and the counts. It
+holds no Proxy Index: #72 removed the component (ADR 0097). It is "import a
 precomputed r" in miniature. It is deterministic: the same inputs write the same bytes.
 
     pixi run -e dev python scripts/make_test_store.py --r-scale=<scale> --t-partner=<r²> \
@@ -94,7 +94,7 @@ def alt_counts(rows: npt.NDArray[np.int64], pgen: Path | None = None) -> npt.NDA
     """The ALT allele count (0, 1, 2) of each row of the Test Panel (or of `pgen`, a fileset
     of rows of it), for the kept samples: [rows, samples], read by the pgen reader
     (`opengwasdb.ld.genotypes.Genotypes`). A missing call is refused, never averaged in (ADR
-    0002)."""
+    0088)."""
     panel = panel_data().panel()
     name = "the Test Panel"
     first = fileset(pgen or panel.pgen, read_keep(panel.keep, name), None, name)
@@ -258,7 +258,7 @@ def build_record(started: float) -> dict[str, object]:
 
 def unit_columns(vs: VariantSet, k: int) -> npt.NDArray[np.float64]:
     """Each variant's A1 dosages across the kept samples, after regressing out an intercept and
-    the first `k` PCs, as a unit vector: a row product is r signed to A1 (spec §3)."""
+    the first `k` PCs, as a unit vector: a row product is r signed to A1 (ld-store §3)."""
     alt = alt_counts(vs.panel_rows).astype(np.float64)
     z = alt - alt.mean(axis=1, keepdims=True)
     if k:
@@ -289,7 +289,7 @@ def residual_fit(z: npt.NDArray[np.float64], design: npt.NDArray[np.float64]) ->
 def change_pairs(vs: VariantSet) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     """The PC Diagnostic's pairs for the change in r, as rows (i, j) of the Variant Set: within
     100 kb, both variants outside the Long-Range LD Regions. The build's own definition, called
-    rather than copied: `tiles.change_pairs` over `diagnostic.outside_regions` (spec §7)."""
+    rather than copied: `tiles.change_pairs` over `diagnostic.outside_regions` (ld-store §7)."""
     first, second = [], []
     for chrom, (start, stop) in chromosome_ranges(vs.variants.chrom).items():
         position = vs.variants.position[start:stop]
@@ -302,7 +302,7 @@ def change_pairs(vs: VariantSet) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.
 
 
 def pc_diagnostic(vs: VariantSet, k: int) -> dict[str, object]:
-    """What PC Adjustment did to chance LD, measured on the Test Panel (spec §7): every
+    """What PC Adjustment did to chance LD, measured on the Test Panel (ld-store §7): every
     chr21 × chr22 pair, the share at r² ≥ 0.01 before and after, what sampling predicts, and the
     exact quantiles of the change in r over `change_pairs`. The rate, the window, the regions,
     the quantiles and the sampling formula are `opengwasdb.ld.build.diagnostic`'s; only the pairs
@@ -363,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         "--r-scale",
         type=int,
         required=True,
-        help="the store's r scale: 511 for the committed Test Store, HGDP+1kGP EUR's (ADR 0004)",
+        help="the store's r scale: 511 for the committed Test Store, HGDP+1kGP EUR's (ADR 0090)",
     )
     parser.add_argument(
         "--t-partner",

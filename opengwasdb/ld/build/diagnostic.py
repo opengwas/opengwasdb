@@ -1,4 +1,4 @@
-"""The PC Diagnostic: what PC Adjustment did to chance LD, and to real LD (spec §7).
+"""The PC Diagnostic: what PC Adjustment did to chance LD, and to real LD (ld-store §7).
 
 **Chance LD.** opengwas/opengwasdb#405 measured chance LD on unlinked pairs drawn this way
 (`prototypes/locus_leads/panel_chance.py` at `6b97e57`): at most 3,000 variants drawn without
@@ -82,7 +82,7 @@ def require_change_pairs(
     positions: Sequence[tuple[str, npt.NDArray[np.int64]]], panel: str
 ) -> None:
     """Refuse a Variant Set with no pair within 100 kb outside the Long-Range LD Regions, such as
-    an MHC-only slice: its change in r cannot be measured (spec §7). Each chromosome's sorted
+    an MHC-only slice: its change in r cannot be measured (ld-store §7). Each chromosome's sorted
     positions say so before the build writes anything, so nothing is left half-written.
 
     The pairs are listed a tile of rows at a time, as the tiles list them, and the first clear
@@ -95,7 +95,7 @@ def require_change_pairs(
                 return
     raise InputError(
         f"panel {panel}: no two variants within 100 kb lie outside the Long-Range LD Regions, "
-        "so the PC diagnostic's change in r cannot be measured (spec §7)"
+        "so the PC diagnostic's change in r cannot be measured (ld-store §7)"
     )
 
 
@@ -135,7 +135,7 @@ class ChanceRates:
 
 
 def chance_rate(r: npt.NDArray[np.float64]) -> float:
-    """The share of the pairs whose r is `r` at r² ≥ 0.01: a chance-LD rate (spec §7)."""
+    """The share of the pairs whose r is `r` at r² ≥ 0.01: a chance-LD rate (ld-store §7)."""
     return float((r * r >= RATE_R2).mean())
 
 
@@ -170,7 +170,7 @@ class ChangeHistogram:
         self.most = max(self.most, float(change.max()))
 
     def quantiles(self) -> dict[str, float]:
-        """`near_100kb_change`: quantiles 0, 0.5, 0.9, 0.99 and 1, keyed as spec §7 names them."""
+        """`near_100kb_change`: quantiles 0, 0.5, 0.9, 0.99 and 1, keyed as ld-store §7 names them."""
         if not self.n:
             raise ValueError(
                 "no change was counted: a builder fault, since the build refuses a Variant Set "
@@ -188,7 +188,7 @@ class ChangeHistogram:
 
 
 def pc_diagnostic(rates: ChanceRates, n: int, k: int, change: ChangeHistogram) -> PcDiagnostic:
-    """The provenance's `pc_diagnostic` (spec §7)."""
+    """The provenance's `pc_diagnostic` (ld-store §7)."""
     return {
         "pairs": {
             "source": PAIR_SOURCE if rates.pairs else NO_PAIR_SOURCE,

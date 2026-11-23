@@ -1,6 +1,6 @@
 """Epic #1's acceptance for the five HGDP+1kGP LD Stores (ogld#7): every validation rule passes
 on each, each records what a reader of its provenance needs, and the direct decoder returns the
-same bytes as zarr on each (ogld#40, ADR 0009).
+same bytes as zarr on each (ogld#40, ADR 0095).
 
 The stores are the ones `scripts/build_hgdp1kgp.py build` writes under `$OGLD_STORES`; its
 constants and paths (`recipe`) say the scale, k, names and roots, and `$OGLD_STORE_<ANC>` names one
@@ -28,7 +28,7 @@ from opengwasdb.ld.store.layout import chromosomes_listed
 from opengwasdb.ld.store.location import ChunkCache, open_group
 from opengwasdb.ld.store.validation import validate_at
 
-#: ADR 0002, decision 11: each panel's unrelated samples (`scripts/make_keeps.py`).
+#: ADR 0088, decision 11: each panel's unrelated samples (`scripts/make_keeps.py`).
 PANELS = {"EUR": 665, "AFR": 608, "EAS": 724, "SAS": 672, "AMR": 341}
 K_MIN = 5  # build-inputs §1's default `k_min`
 AUTOSOMES = [str(c) for c in recipe.CHROMS]
@@ -49,7 +49,7 @@ def keep_count(panel: str) -> int:
 @pytest.mark.parametrize("panel", PANELS)
 def test_sampled_chunks_of_published_stores_equal_zarr(panel: str) -> None:
     """The direct decoder's first, middle and last chunk of every array in the store equals
-    zarr's own read of it (ogld#40, ADR 0009)."""
+    zarr's own read of it (ogld#40, ADR 0095)."""
     import zarr
 
     path = store_path(panel)

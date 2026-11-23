@@ -1,8 +1,8 @@
-"""Reading an LD Store: the seam every query is built on (spec §1–§6, §10; ogld#4).
+"""Reading an LD Store: the seam every query is built on (ld-store §1–§6, §10; ogld#4).
 
 `StoreReader` is the store layer's whole read interface. It hides Zarr, the chunk and
 shard shapes, chromosome-local rows and the codes, which it decodes at the scale the store
-records (`opengwasdb.ld.format.REncoding`; ADR 0004): callers pass and receive global Variant Set
+records (`opengwasdb.ld.format.REncoding`; ADR 0090): callers pass and receive global Variant Set
 rows
 and Stored r as float64. Every unstored pair it reports is NaN, never a
 number, and the meaning of a NaN is the format's to say (`opengwasdb.ld.format.answer_kinds`).
@@ -15,14 +15,14 @@ second reader composes the same one and #87's change to `rows_of` lands once for
 epic #18, 21 November 2026). What is below is the LD half: pairs, matrices, regions and the
 Partner Rows.
 
-Reads are bounded (spec §10). Opening reads the provenance and the chromosome ranges, and
+Reads are bounded (ld-store §10). Opening reads the provenance and the chromosome ranges, and
 nothing else. A chromosome's positions and its Near Band's `indptr` are read on first touch,
 and its Far Pairs' `indptr` when a request needs pairs beyond near_bp. Each is kept. Every
 other read goes through `ChunkCache`,
 which fetches only the inner chunks holding the elements a request needs, from disk or over
 HTTP alike, and keeps them, so a query that reads a few pairs at a time fetches each once.
 
-A chunk the store lost reads as its array's fill value, and spec §6 chose each fill value
+A chunk the store lost reads as its array's fill value, and ld-store §6 chose each fill value
 as one a valid LD Store never holds. So every read refuses that value, naming the array,
 rather than decode it: a lost Near Band chunk is a refusal, never a run of r = 0.
 
@@ -32,7 +32,7 @@ the decoded frame, which the reader's frame cache keeps. It reads no Near Band c
 index, and a store that holds no Partner Rows is refused naming the component.
 
 No read here opens a Proxy Index: format 0.2.0 stores hold none (#72), and a 0.2.0 store that
-still carries a leftover `index/` answers exactly as one without it does (spec §12).
+still carries a leftover `index/` answers exactly as one without it does (ld-store §12).
 """
 
 from __future__ import annotations
@@ -86,13 +86,13 @@ from opengwasdb.ld.store.tables import Variants
 from opengwasdb.ld.store.variants import VariantTable
 from opengwasdb.ld.store.workers import COMPONENT_WORKERS_MAX, ComponentWorkers
 
-#: Each chromosome's arrays a request touching it opens (spec §1), in the order `_Chromosome`
+#: Each chromosome's arrays a request touching it opens (ld-store §1), in the order `_Chromosome`
 #: takes them. Its Far Pairs are opened apart, when a request first needs them (`_far_pairs`).
 _CHROMOSOME_ARRAYS: Final = (
     ("near", "indptr"),
     ("near", "r"),
 )
-#: A sparse component's arrays, as `far/<chrom>/` holds them (spec §5).
+#: A sparse component's arrays, as `far/<chrom>/` holds them (ld-store §5).
 _SPARSE_ARRAYS: Final = ("indptr", "partner", "r")
 #: The pairs one step of `pair_r` resolves at once, which bounds its working memory.
 _PAIRS_PER_STEP: Final = 1 << 22
@@ -115,7 +115,7 @@ class _Sparse:
 
 @dataclass(frozen=True)
 class _Chromosome:
-    """One chromosome: its rows, the positions and `indptr` arrays a reader keeps (spec §10),
+    """One chromosome: its rows, the positions and `indptr` arrays a reader keeps (ld-store §10),
     and handles on its code arrays, read element by element as requests need them."""
 
     name: str
@@ -137,10 +137,10 @@ class _Placed:
 
 
 class StoreReader(ComponentWorkers):
-    """An opened LD Store, local or over HTTP (spec §2, §10).
+    """An opened LD Store, local or over HTTP (ld-store §2, §10).
 
     Opening reads the provenance and the chromosome ranges and refuses a store whose
-    `format_version` or `encoding` this package does not implement (spec §13), naming
+    `format_version` or `encoding` this package does not implement (ld-store §13), naming
     it, before anything is decoded. Every code is decoded with the store's own encoding, so
     one process reads stores of different scales side by side.
 
@@ -207,7 +207,7 @@ class StoreReader(ComponentWorkers):
         frame_cache_bytes: int | None = None,
     ) -> StoreReader:
         """Open the LD Store at a local path or an HTTP(S) URL (ogld#4), keeping at most
-        `cache_bytes` of its Near Band chunks (spec §10; the default if None, ogld#32) and
+        `cache_bytes` of its Near Band chunks (ld-store §10; the default if None, ogld#32) and
         `frame_cache_bytes` of its decoded Partner Rows frames (partner-rows §7; its own default
         if None). The two are separate budgets, because the two reads serve different queries."""
         return cls.from_opened(
@@ -265,7 +265,7 @@ class StoreReader(ComponentWorkers):
 
     @property
     def cache_bytes(self) -> int:
-        """The bytes of chunks and shard indexes this reader keeps at most (spec §10)."""
+        """The bytes of chunks and shard indexes this reader keeps at most (ld-store §10)."""
         return self._cache.budget
 
     @property
@@ -280,7 +280,7 @@ class StoreReader(ComponentWorkers):
     def close(self) -> None:
         """Close the reader: after it returns no Partner Rows read is answered, and every chunk file
         it kept open is closed (partner-rows §7). The variant table's optional ALID mappings are
-        released too (ADR 0012), after any concurrent mapped lookup finishes.
+        released too (ADR 0098), after any concurrent mapped lookup finishes.
 
         A first use that is racing `close` cannot publish a source that outlives it: it holds the
         chromosome lock `close` waits on and re-checks the closed state under it, so either the
@@ -312,7 +312,7 @@ class StoreReader(ComponentWorkers):
 
     @property
     def provenance(self) -> Provenance:
-        """The root group's `ld_store` attribute, as recorded (spec §7)."""
+        """The root group's `ld_store` attribute, as recorded (ld-store §7)."""
         return self._provenance
 
     @property
@@ -328,20 +328,20 @@ class StoreReader(ComponentWorkers):
     # second reader and this one cannot drift apart on what an ALID, a region or a chromosome means.
 
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
-        """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
+        """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (ld-store §2).
 
-        The table's search: the ALID index (ADR 0010) for a long list, the validated local
-        companion where one is published (ADR 0012), and the exact scan for what neither answers.
+        The table's search: the ALID index (ADR 0096) for a long list, the validated local
+        companion where one is published (ADR 0098), and the exact scan for what neither answers.
         A malformed ALID is Absent too. See `VariantTable.rows_of`.
         """
         return self._variant_table.rows_of(alids)
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
-        """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2).
+        """The rows on `chrom` with start ≤ position ≤ stop, ascending (ld-store §2).
 
         The rows are the variant table's answer; the chromosome is opened here first, as this has
         always been the reader's first touch of a chromosome that `region` will read from its Near
-        Band, so each of its arrays' fill values is judged before any element is decoded (spec §6).
+        Band, so each of its arrays' fill values is judged before any element is decoded (ld-store §6).
         `loci_of` is the variant read that must open none of them (#71).
         """
         if chrom in self._ranges:
@@ -349,12 +349,12 @@ class StoreReader(ComponentWorkers):
         return self._variant_table.rows_in(chrom, start, stop)
 
     def chromosome_range(self, chrom: str) -> tuple[int, int]:
-        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (spec §2), which is
+        """The Variant Set rows chromosome `chrom` occupies, `[start, stop)` (ld-store §2), which is
         what turns a Partner Rows row's local partner into a Variant Set row (partner-rows §7)."""
         return self._variant_table.chromosome_range(chrom)
 
     def alids_of(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.str_]:
-        """The ALID of each of `rows`, in the order given (spec §2): the one string column a
+        """The ALID of each of `rows`, in the order given (ld-store §2): the one string column a
         query names its rows by, read without the others (ogld#14)."""
         return self._variant_table.alids_of(rows)
 
@@ -366,16 +366,16 @@ class StoreReader(ComponentWorkers):
         return self._variant_table.loci_of(rows)
 
     def variants(self, rows: npt.NDArray[np.int64]) -> Variants:
-        """The Variant Set's columns at `rows`, in the order given (spec §2)."""
+        """The Variant Set's columns at `rows`, in the order given (ld-store §2)."""
         return self._variant_table.variants(rows)
 
     def pair_r(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
-        """The square matrix of Stored r among `rows`, in the order given (spec §8, §10).
+        """The square matrix of Stored r among `rows`, in the order given (ld-store §8, §10).
 
         Pairs within near_bp come from the Near Band, resolved as `r_of_pairs` resolves
         them; farther ones from the Far Pairs rows of the listed variants, each pair whose
         partner is listed scattered into the matrix, rather than searched for pair by pair
-        (ADR 0007).
+        (ADR 0093).
         The diagonal is 1. Every pair the store does not hold, the Bound and Not Measured
         alike, is NaN. The matrix is written in place, so `matrix` holds one float64 copy of
         its result (ogld#14); a row asked for twice is copied from its first.
@@ -401,13 +401,13 @@ class StoreReader(ComponentWorkers):
     def r_of_pairs(
         self, first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
     ) -> npt.NDArray[np.float64]:
-        """The Stored r of each pair (first[k], second[k]), as one array (spec §8, §10; ogld#14).
+        """The Stored r of each pair (first[k], second[k]), as one array (ld-store §8, §10; ogld#14).
 
         `first` and `second` broadcast against each other, so one row in `first` is one row
         against many. A row with itself is 1. Every pair the store does not hold, the Bound,
         Not Measured and a pair across chromosomes alike, is NaN. A pair within near_bp is one
         element of the Near Band; a pair farther apart is looked up in the Far Pairs row of
-        its earlier variant (spec §8). `partners` (below t_far, with `among`) and `pair_r`
+        its earlier variant (ld-store §8). `partners` (below t_far, with `among`) and `pair_r`
         resolve their pairs as it does, so a pair is resolved in one place.
 
         Memory: the result, 8 bytes a pair, and one step of at most `_PAIRS_PER_STEP` pairs
@@ -440,13 +440,13 @@ class StoreReader(ComponentWorkers):
 
     def region_r(self, start: int, stop: int) -> npt.NDArray[np.float64]:
         """The square matrix of Stored r among the contiguous rows [start, stop) of one
-        chromosome, in row order (spec §8, §10; ogld#14): the read `region` makes.
+        chromosome, in row order (ld-store §8, §10; ogld#14): the read `region` makes.
 
         Each row's Near Band pairs inside the region are one contiguous slice of
         `near/<c>/r`, from the row's first code to its last partner before `stop`, never a
         gather pair by pair, and never the row's partners past the region. The region's pairs
         beyond near_bp come from its rows' Far Pairs rows, each pair inside the region scattered
-        into the matrix (ADR 0007). The diagonal is 1 and every unstored pair is NaN. A span
+        into the matrix (ADR 0093). The diagonal is 1 and every unstored pair is NaN. A span
         that leaves its chromosome or the Variant Set raises; start == stop is 0 × 0.
 
         Memory: the n × n float64 result, and one block of rows at a time, at most
@@ -472,14 +472,14 @@ class StoreReader(ComponentWorkers):
 
     # ------------------------------------------------------------ partner rows
     def require_partner_rows(self) -> float:
-        """The Partner Threshold this store recorded (spec §7; partner-rows §3).
+        """The Partner Threshold this store recorded (ld-store §7; partner-rows §3).
 
         From format 0.2.0 `clump` and `proxies` read the Partner Rows and nothing else, so a
         store that holds none — every 0.1.0 store — is refused here, naming the store, the missing
         component and the way to derive it, before any read. It is never answered from the Near
         Band: that is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
 
-        The recorded **format version** decides, and the key alone does not: spec §7 lets a store
+        The recorded **format version** decides, and the key alone does not: ld-store §7 lets a store
         hold other keys, and a 0.1.0 store's extra `t_partner` is no claim to a component whose
         frames nothing has judged. Reading one would answer a query from an unclaimed residue — a
         wrong answer that looks like a right one (ogld#69).
@@ -490,7 +490,7 @@ class StoreReader(ComponentWorkers):
                 f"{self._provenance['format_version']}, which has no "
                 f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
                 "naming the missing component; a store built before 0.2.0 derives them with "
-                "`ogld derive-partners` (spec §13; partner-rows §5.1)"
+                "`ogld derive-partners` (ld-store §13; partner-rows §5.1)"
             )
         return float(self._provenance["t_partner"])
 
@@ -500,7 +500,7 @@ class StoreReader(ComponentWorkers):
         `opengwasdb.ld.format.claims_partner_rows`: the recorded format version is 0.2.0 or later
         **and**
         the Partner Threshold is recorded, which is what a derivation writes in its one claim
-        (partner-rows §6.2; spec §13). The reader, validation and the derivation ask that one
+        (partner-rows §6.2; ld-store §13). The reader, validation and the derivation ask that one
         rule, so a store one of them calls claimed is one they all do.
 
         A version this package reads (0.1.0 or 0.2.0, refused at open otherwise) that is below
@@ -551,7 +551,7 @@ class StoreReader(ComponentWorkers):
         return self._frames(chrom).rows_of(local_rows)
 
     def _frames(self, chrom: str) -> PartnerFrames:
-        """One chromosome's Partner Rows, opened on first use (spec §10; partner-rows §7).
+        """One chromosome's Partner Rows, opened on first use (ld-store §10; partner-rows §7).
 
         Opening one reads its group's attributes, its `frames_idx` chunk and its `frames` metadata:
         a request that never asks for a Partner Rows row — `matrix`, `region` — reads none of them.
@@ -566,10 +566,10 @@ class StoreReader(ComponentWorkers):
         if chrom not in self._ranges:
             raise ValueError(
                 f"no chromosome {chrom} in this LD Store, whose Variant Set is on "
-                f"{', '.join(self._names)} (spec §2)"
+                f"{', '.join(self._names)} (ld-store §2)"
             )
         # A 0.1.0 store records none of the Partner Rows' keys, because it holds no Partner Rows
-        # (spec §13): the read is refused naming the component, never answered from another one.
+        # (ld-store §13): the read is refused naming the component, never answered from another one.
         self.require_partner_rows()
         with self._partner_lock:
             if self._closed:
@@ -597,7 +597,7 @@ class StoreReader(ComponentWorkers):
     def _resolved(
         self, c: _Chromosome, lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64]
     ) -> npt.NDArray[np.float64]:
-        """The Stored r of local pairs lo ≤ hi (spec §8, Figure 2): 1 for a row with itself,
+        """The Stored r of local pairs lo ≤ hi (ld-store §8, Figure 2): 1 for a row with itself,
         the Near Band within near_bp, the earlier row's Far Pairs row out to far_bp, and NaN
         for the Bound and Not Measured."""
         p = self._provenance
@@ -626,7 +626,7 @@ class StoreReader(ComponentWorkers):
         """Write the Far Pairs among the placed rows into the square: each placed row's Far
         Pairs whose partner is placed. Pairs beyond near_bp that the Far Pairs lack stay NaN:
         the Bound, or Not Measured. A Far Pair never answers a pair within near_bp, which is
-        the Near Band's (spec §8)."""
+        the Near Band's (ld-store §8)."""
         local, at, out = placed.local, placed.at, placed.out
         near_bp = self._provenance["near_bp"]
         position = c.position[local]
@@ -647,7 +647,7 @@ class StoreReader(ComponentWorkers):
         self, c: _Chromosome, lo: npt.NDArray[np.int64], hi: npt.NDArray[np.int64]
     ) -> tuple[npt.NDArray[np.bool_], npt.NDArray[Any]]:
         """For local pairs lo < hi beyond near_bp: whether each is a Far Pair, and its code;
-        read from each lo's Far Pairs row (spec §8)."""
+        read from each lo's Far Pairs row (ld-store §8)."""
         held_by = np.unique(lo)
         partner, codes, length = self._rows(self._far_pairs(c), held_by)
         size = c.stop - c.start
@@ -687,12 +687,12 @@ class StoreReader(ComponentWorkers):
     def _runs(
         self, array: zarr.Array[Any], first: npt.NDArray[np.int64], length: npt.NDArray[np.int64]
     ) -> list[npt.NDArray[Any]]:
-        """The ragged runs of `array` (spec §10), each one slice, through the chunk cache;
+        """The ragged runs of `array` (ld-store §10), each one slice, through the chunk cache;
         a lost chunk refused. One read, which the variant table makes too (`runs_of`)."""
         return runs_of(array, self._cache, first, length)
 
     def _chromosome(self, name: str) -> _Chromosome:
-        """One chromosome's kept arrays, read on first use (spec §10). Each of its three arrays'
+        """One chromosome's kept arrays, read on first use (ld-store §10). Each of its three arrays'
         fill values is judged before any element of the chromosome is decoded.
 
         It takes its positions from the table's published `Loci`, so the LD half and the variant
@@ -724,7 +724,7 @@ class StoreReader(ComponentWorkers):
 
     def _far_pairs(self, c: _Chromosome) -> _Sparse:
         """One chromosome's Far Pairs, opened and their `indptr` kept the first time a request
-        needs its pairs beyond near_bp (spec §10). `proxies` and `clump` never do, because they
+        needs its pairs beyond near_bp (ld-store §10). `proxies` and `clump` never do, because they
         read the Partner Rows, so a chromosome they touch pays nothing for the Far Pairs. Each
         array's fill value is judged before any of its elements is decoded."""
         if c.name not in self._far:
@@ -749,7 +749,7 @@ class StoreReader(ComponentWorkers):
 
     def _checked(self, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.int64]:
         """`rows`, if every one is a row of the Variant Set: the table's guard. An Absent ALID is
-        −1 from `rows_of` and is no row (spec §8; `VariantTable.checked_rows`)."""
+        −1 from `rows_of` and is no row (ld-store §8; `VariantTable.checked_rows`)."""
         return self._variant_table.checked_rows(rows)
 
 
@@ -761,7 +761,7 @@ def open_variant_table(
     A reader that composes a table hands it the group it opened, so `StoreReader` does not come
     through here: this is for a caller that wants the variant table alone, which is how a test
     holds it to `StoreReader`'s own answers. It refuses what `StoreReader.open` refuses — a Zarr
-    v3 hierarchy, a finished store, a format this package reads (spec §1, §13) — and says nothing
+    v3 hierarchy, a finished store, a format this package reads (ld-store §1, §13) — and says nothing
     about the encoding, which no variant read decodes a code with.
     """
     return VariantTable(_opened_store(location, cache_bytes))
@@ -770,14 +770,14 @@ def open_variant_table(
 def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> OpenedStore:
     """An opened store this package can read: its group, the location naming it, its `ld_store`
     provenance and the one chunk cache its reads go through, refused naming the store and what is
-    wrong with it (spec §1, §7, §13). It reads the root's metadata and nothing else, so it is the
+    wrong with it (ld-store §1, §7, §13). It reads the root's metadata and nothing else, so it is the
     same work whether a reader or a bare variant table follows."""
     cache = ChunkCache(cache_bytes)
     return opened_ld(open_group(location, cache=cache), str(location), cache)
 
 
 def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore:
-    """`OpenedStore` for an already opened root, checked as an LD Store (spec §1, §7, §13).
+    """`OpenedStore` for an already opened root, checked as an LD Store (ld-store §1, §7, §13).
 
     The kind dispatcher (`opengwasdb.ld.query.kind`) opens a root once and hands it here or to the
     Genotype Store reader, so one open is one metadata read whichever kind it holds (#91).
@@ -785,7 +785,7 @@ def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore
     if root.metadata.zarr_format != 3:
         raise InputError(
             f"{location} is a Zarr v{root.metadata.zarr_format} hierarchy; an LD Store is "
-            "Zarr v3 (spec §1)"
+            "Zarr v3 (ld-store §1)"
         )
     recorded = root.attrs.get("ld_store")
     if not isinstance(recorded, dict):
@@ -793,6 +793,6 @@ def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore
     if recorded.get("format_version") not in READABLE_FORMATS:
         raise InputError(
             f"{location} is LD Store format {recorded.get('format_version')!r}; "
-            f"this ogld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
+            f"this ogld reads {' and '.join(READABLE_FORMATS)} only (ld-store §13)"
         )
     return OpenedStore(root, location, cast(Provenance, recorded), cache)

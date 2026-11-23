@@ -1,8 +1,10 @@
 # A validated local mmap companion of the canonical ALID index
 
+Formerly ogld ADR 0012.
+
 Ported for [#81](https://github.com/opengwas/ogld/issues/81) from #47 at `9b6fdb6`
-(PR #59 on epic #45, not previously on main). This extends ADR 0010; it changes neither
-ADR 0011's Partner Rows nor the Store format version.
+(PR #59 on epic #45, not previously on main). This extends ADR 0096; it changes neither
+ADR 0097's Partner Rows nor the Store format version.
 
 **Decision authority:** the owner's #81 brief requests this isolated port of #47's
 representation, publication and local lookup behavior onto main.
@@ -89,7 +91,7 @@ charging only lookups that need it, not row-based matrices/regions or unused ope
 UTF-8 queries use vectorized binary search and equality, preserving order, misses and duplicates
 without parsing loci or reading string/position columns. Embedded NUL and unencodable names
 are Absent. Over-width names take the exact scan. Since construction/validation establish
-completeness, fitting misses need no scan. This extends ADR 0010's always-scan-misses rule
+completeness, fitting misses need no scan. This extends ADR 0096's always-scan-misses rule
 only for the validated companion. Missing pointers and HTTP retain the canonical fallback;
 a present broken publication refuses rather than silently falling back.
 
@@ -109,7 +111,7 @@ helper from #47 is unnecessary. Main's explicit reader close also releases the m
 The Proxy Index remains retired. No public signatures change.
 
 #46's benchmark harness and #50's shared generation/request leases are not on main. This ADR
-does not claim either, or cite their different ADR 0011 as main's contract. Cross-reader
+does not claim either, or cite their different ADR 0097 as main's contract. Cross-reader
 sharing and process admission remain possible later epic #45 work, not guarantees of this port.
 #47's historical lookup numbers are not this port's timing evidence; #81 measures end-to-end
 clumping separately. The committed Test Store remains companion-less, exercising compatibility;
@@ -122,7 +124,7 @@ cache budgets. First use hashes those bytes and about 64 MB of EUR's canonical i
 which can cost cold I/O; this cost is reported separately from the search. Zarr remains canonical and
 interoperable; HTTP never fetches companion files.
 
-A second producer sort is rejected because it can drift from ADR 0010. Mutable fixed payload
+A second producer sort is rejected because it can drift from ADR 0096. Mutable fixed payload
 paths are rejected because existing mmaps could see partial replacement. Process-global mapping
 caches are rejected here because sharing/admission is separate work. Hashing canonical arrays
 by decoding on every lookup is rejected: construction and exact validation establish

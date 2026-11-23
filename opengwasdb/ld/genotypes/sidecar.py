@@ -1,4 +1,4 @@
-"""Local Genotype Store storage: relative input pins and shareable adjustment arrays (ADR 0014)."""
+"""Local Genotype Store storage: relative input pins and shareable adjustment arrays (ADR 0100)."""
 
 from __future__ import annotations
 

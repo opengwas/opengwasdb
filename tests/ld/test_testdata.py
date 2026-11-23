@@ -1,4 +1,4 @@
-"""The Test Panel is what its manifest and README say it is (tests/testdata.py; ADR 0002).
+"""The Test Panel is what its manifest and README say it is (tests/testdata.py; ADR 0088).
 
 Expected values come from outside the loader: the SHA-256s from manifest.json, plink2's own r,
 plink2's `--export A` dosages recomputed here by a different route (`numpy.linalg.lstsq`
@@ -17,7 +17,7 @@ import pytest
 import testdata as td
 
 HALF_STEP = 1 / 65534  # half of one int16 step: the quantisation tolerance (ld-store.md §3)
-T_FAR_K10 = 20.84 / (771 - 10 - 1)  # t_far for 771 samples at k = 10 (ADR 0001, decision 3)
+T_FAR_K10 = 20.84 / (771 - 10 - 1)  # t_far for 771 samples at k = 10 (ADR 0087, decision 3)
 SCALE = 32767
 
 # Literals from tests/data/test-panel/README.md, "The edge cases, and where they are".
@@ -123,7 +123,7 @@ def test_reference_r_at_k0_equals_plink2_s() -> None:
     assert np.array_equal(ref.row_j, plink2.row_j)
     strong = np.abs(plink2.r) > 0.9
     assert strong.sum() > 100, "the fixture must hold strong LD for this to mean anything"
-    # Complete genotypes: numpy's Pearson r and plink2's agree to rounding (ADR 0002), far
+    # Complete genotypes: numpy's Pearson r and plink2's agree to rounding (ADR 0088), far
     # inside the quantisation step the builder is held to.
     assert np.max(np.abs(ref.r - plink2.r)) <= HALF_STEP
     assert np.max(np.abs(ref.r - plink2.r)) < 1e-12

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Give an LD Store written before ADR 0007 its Far Pairs, derived from its own Proxy Index.
+"""Give an LD Store written before ADR 0093 its Far Pairs, derived from its own Proxy Index.
 
     pixi run -e dev python scripts/derive_far_pairs.py STORE [STORE ...] [--threads 8]
 
 ogld#7 wrote the five HGDP+1kGP stores before the owner brought the Far Pairs back beside the
-Proxy Index (ADR 0007, 12 November 2026). A store's Far Pairs are its index's entries beyond
-near_bp in each pair's earlier row (spec §5), so each chromosome's are derived from its own
+Proxy Index (ADR 0093, 12 November 2026). A store's Far Pairs are its index's entries beyond
+near_bp in each pair's earlier row (ld-store §5), so each chromosome's are derived from its own
 index by the store assembly (`opengwasdb.ld.store.assembly.derive_far_pairs`), which writes them
 through
 the stream a build writes them through. On HGDP+1kGP EUR chr22 the derived `far/` was
@@ -18,7 +18,7 @@ or finds another count, leaves the store as it was, with nothing to clean up, an
 killed run left is this script's own and is replaced. A store that holds `far/` is refused.
 Validate each store afterwards: `ogld validate`, or `pixi run -e dev acceptance-stores` for the
 five. The store's other files are only read, so a reader may read it while this runs: a reader
-ignores a group it does not know (spec §1), and `far/` appears whole.
+ignores a group it does not know (ld-store §1), and `far/` appears whole.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from opengwasdb.ld.store.assembly import derive_far_pairs
 from opengwasdb.ld.store.layout import chromosomes_listed
 
 #: Where the Far Pairs are written until every chromosome's are, and counted: then it is renamed
-#: `far/`. A reader ignores it (spec §1), and no other writer makes it.
+#: `far/`. A reader ignores it (ld-store §1), and no other writer makes it.
 PARTIAL = "far-partial"
 
 

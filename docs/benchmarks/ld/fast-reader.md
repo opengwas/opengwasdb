@@ -27,7 +27,7 @@ With all four of ogld#32's changes, against ogld#8's tables, on the draws both t
 ## What changed
 
 ogld#32 made four changes to how the reader fetches, and none to an answer or a stored byte
-(spec §10):
+(ld-store §10):
 
 - **Concurrent runs.** A read's missing runs of chunks are cut where a shard ends and fetched
   in batches, every piece of a batch at once on zarr's event loop: at most zarr's

@@ -134,7 +134,7 @@ def drop_flat(the_plan: Plan, found: Pass, chosen: Covariates) -> list[Chromosom
 
 
 def variants_table(chromosomes: list[Chromosome]) -> Variants:
-    """The store's variant table (spec §2): the chromosomes in order, strings of any length."""
+    """The store's variant table (ld-store §2): the chromosomes in order, strings of any length."""
     oriented = [o for c in chromosomes for o in c.oriented]
     return Variants(
         chrom=_strings(oriented, "chrom"),
@@ -196,7 +196,7 @@ def write_ld(
     chosen: Covariates,
     threads: int,
 ) -> ChangeHistogram:
-    """Each chromosome's r, tile by tile, through `writer`, which makes the store of it (spec §3,
+    """Each chromosome's r, tile by tile, through `writer`, which makes the store of it (ld-store §3,
     §4, §5); return the change in r PC Adjustment made, for the PC Diagnostic (§7)."""
     change = ChangeHistogram()
     ranges = chromosome_ranges(_labels(chromosomes))

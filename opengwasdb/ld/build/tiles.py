@@ -1,4 +1,4 @@
-"""One chromosome's r, tile by tile, from a window of prepared genotypes (ADR 0013).
+"""One chromosome's r, tile by tile, from a window of prepared genotypes (ADR 0099).
 
 A tile is a block of rows against every later variant within `far_bp`, computed by
 `opengwasdb.ld.genotypes.r`. The build hands the product to the store, `StoreWriter.cut`,
@@ -41,7 +41,7 @@ GenotypeBlock = tuple[int, Block, Block | None]
 class Band:
     """One chromosome's geometry for the build: for each local row l, the first row past far_bp
     and past `change_bp` (exclusive stops), and how many later rows lie within `change_bp`, all
-    from `opengwasdb.ld.format.geometry` (spec §5; §7's change in r)."""
+    from `opengwasdb.ld.format.geometry` (ld-store §5; §7's change in r)."""
 
     change_length: npt.NDArray[np.int64]
     far_stop: npt.NDArray[np.int64]
@@ -197,7 +197,7 @@ def change_pairs(
     """The pairs within `change_bp` of rows `first` … `last − 1`, row after row, as (t, partner,
     clear): t the row's offset from `first`, partner its row, and clear when both variants lie
     outside the Long-Range LD Regions. The one definition of the PC diagnostic's 100 kb pairs
-    (spec §7): the tiles measure the change on them, and the build refuses a Variant Set with
+    (ld-store §7): the tiles measure the change on them, and the build refuses a Variant Set with
     none before it writes (`diagnostic.require_change_pairs`)."""
     starts = np.arange(first + 1, last + 1, dtype=np.int64)
     length = band.change_length[first:last]

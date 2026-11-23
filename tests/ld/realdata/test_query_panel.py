@@ -7,7 +7,7 @@ path, so it is an acceptance run outside this tier (`pixi run -e dev acceptance-
 CONTRIBUTING.md, "Acceptance runs"). The tier keeps its rule, on chr22:
 
 - build chr22:20–32 Mb of the v2 EUR panel at k = 0 and × 511, the encoding of every HGDP+1kGP
-  store (ADR 0004), on the 665 unrelated samples (`test_build_panel.v2_slice`, once);
+  store (ADR 0090), on the 665 unrelated samples (`test_build_panel.v2_slice`, once);
 - clump each of the 37 Analyses' hits on it that the store holds, at r² 0.01 — the build's
   Partner Threshold, below which a 0.2.0 store refuses within 3 Mb (#71) — and run
   `plink2 --clump` on the same hits and the same genotypes;

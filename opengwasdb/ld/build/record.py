@@ -1,4 +1,4 @@
-"""What a build records about itself: its inputs, settings, diagnostic and cost (spec §7).
+"""What a build records about itself: its inputs, settings, diagnostic and cost (ld-store §7).
 
 What only the build knows is assembled in one place and handed to `StoreWriter.finish`, which
 adds what the store derives from itself and writes it beside the arrays it describes
@@ -107,7 +107,7 @@ def adjustment(
     pc_check: PcCheck | None,
 ) -> Adjustment:
     """`adjustment`. With no PC File read (k = 0), `k_min`, `pc_file` and `pc_check` are null:
-    the minimum applies only when PCs are used (spec §7)."""
+    the minimum applies only when PCs are used (ld-store §7)."""
     if pc_file is None:
         return {
             "covariates": [],
@@ -155,7 +155,7 @@ def software() -> dict[str, str]:
 
 
 def sourced(head: Head, adjusted: Adjustment, made: Made, build: Build) -> Sourced:
-    """What only the build knows of the store's provenance (spec §7). `StoreWriter.finish` adds
+    """What only the build knows of the store's provenance (ld-store §7). `StoreWriter.finish` adds
     what the store derives from itself: the encoding, the distances, t_far and its floor, the
     counts and the Variant Set's size (ogld#17)."""
     return {

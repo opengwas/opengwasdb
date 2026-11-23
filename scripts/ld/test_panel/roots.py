@@ -4,13 +4,13 @@ Each root has a default for the IEU nodes. The manifest records an input as its 
 variable plus the rest of its path, and by hash, so no host path is committed.
 
 - `OGLD_PHASED_V2`, default `/data/opengwasdb/work/ogld/phased_v2`: the phased HGDP+1kGP v2
-  BCFs, each with its `.complete` record (ADR 0002);
+  BCFs, each with its `.complete` record (ADR 0088);
 - `OGLD_PCS`, default `/data/opengwasdb/work/ogld/pcs`: `scripts/make_pcs.py`'s PC Files and
   reports;
 - `OGLD_REFERENCE`, default `/data/opengwasdb/reference`: the panels' members files and gnomAD's
   sample metadata (`META_NAME` under it);
 - `OGLD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/make_keeps.py`'s keep files,
-  each panel's unrelated samples (ADR 0002);
+  each panel's unrelated samples (ADR 0088);
 - `OGLD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`: `scripts/build_hgdp1kgp.py`'s
   conversions, one directory per panel (ogld#7);
 - `OGLD_STORES`, default `/data/opengwasdb/work/ogld/stores`: the five HGDP+1kGP LD Stores, staged

@@ -1,4 +1,4 @@
-"""Residual covariance to A1-signed correlation (ADR 0015; #89 ruling)."""
+"""Residual covariance to A1-signed correlation (ADR 0101; #89 ruling)."""
 
 from __future__ import annotations
 

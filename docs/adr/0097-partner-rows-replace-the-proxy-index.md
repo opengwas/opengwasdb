@@ -1,5 +1,7 @@
 # Partner Rows replace the Proxy Index for clumping and proxies
 
+Formerly ogld ADR 0011.
+
 Part of epic [#64](https://github.com/opengwas/ogld/issues/64). The design is `docs/spec/partner-rows.md`. It supersedes, for
 `clump` and `proxies`, decision 1 of epic [#45](https://github.com/opengwas/ogld/issues/45)
 ("keep the upper triangle and Zarr v3; no symmetric duplication and no independent row-frame
@@ -18,7 +20,7 @@ format"). The terms are in `CONTEXT.md`.
 and #72 removed the Proxy Index: `index/`, its writer, its arrays, its six validation rules and
 `far.index`, with `clump`'s Near Band reads, `StoreReader.clump_warmer` and `partners`'s row,
 column and `among` reads. A 0.2.0 store holds no `index/`; one that still carries a leftover is
-read and validated exactly as one without it (spec §12). Pending: #73, which derives the Partner
+read and validated exactly as one without it (ld-store §12). Pending: #73, which derives the Partner
 Rows for the five published stores and drops each `index/`, and #81, the follow-up to the LD
 work's timing (below).
 

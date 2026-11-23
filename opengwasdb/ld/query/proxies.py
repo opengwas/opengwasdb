@@ -1,4 +1,4 @@
-"""Proxies: each query variant's partners above an r², within a window (spec §9; ogld#6)."""
+"""Proxies: each query variant's partners above an r², within a window (ld-store §9; ogld#6)."""
 
 from __future__ import annotations
 

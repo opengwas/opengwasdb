@@ -92,7 +92,7 @@ def oriented() -> tuple[npt.NDArray[np.str_], npt.NDArray[np.float64]]:
     """Each Test Panel row's ALID, and +1 where A1 is its ALT allele, −1 where it is REF.
 
     The Test Panel's reference r is the correlation of ALT dosages, so a stored r, signed to
-    A1, is the reference r times both rows' signs (spec §3).
+    A1, is the reference r times both rows' signs (ld-store §3).
     """
     v = panel_data().variants()
     rows = zip(v.chrom, v.pos, v.ref, v.alt, strict=True)

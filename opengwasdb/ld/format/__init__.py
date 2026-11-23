@@ -1,7 +1,7 @@
 """The LD Store format as code: encoding, thresholds, answers, refusals, provenance (layer 0).
 
 The semantics core of `docs/spec/ld-store.md`, implemented and complete: a store's encoding
-of r, `REncoding`, which owns quantisation and the far code floor (§3; ADR 0004), t_far (§3),
+of r, `REncoding`, which owns quantisation and the far code floor (§3; ADR 0090), t_far (§3),
 the row and band geometry (§2, §4, §5, in `opengwasdb.ld.format.geometry`), the answer kind of a
 pair
 (§8) and the decision for a request (§9). It also names the provenance types (§7) and the

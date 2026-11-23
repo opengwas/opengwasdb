@@ -4,7 +4,7 @@ _Measured 13 November 2026 on the published HGDP+1kGP stores: the clump and read
 `6bae783` (ogld#31's Far Pairs and ogld#32's reader, both merged), the memory and lag runs at
 `1dcd548`, whose `ogld/` is the same. The records are in [`results/9/`](results/9/), and
 [`serving-tables.md`](serving-tables.md) is every one of them rendered by `bench-serving tables`.
-ogld#8's method, targets and states are in [`latency.md`](latency.md). ADR 0008 uses these
+ogld#8's method, targets and states are in [`latency.md`](latency.md). ADR 0094 uses these
 numbers._
 
 ## In brief
@@ -30,7 +30,7 @@ numbers._
 
 ## What was measured, and why
 
-ogld#9 decides how LD is served (ADR 0008). ogld#8 and ogld#32 timed the reads; four things the
+ogld#9 decides how LD is served (ADR 0094). ogld#8 and ogld#32 timed the reads; four things the
 decision turns on were not measured:
 
 1. **How long a clump job runs on the server**, against ogdb-api's 30 s store timeout. ogld#8

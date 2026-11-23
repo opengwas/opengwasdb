@@ -5,10 +5,10 @@ Three seams, each observed to fail against the code before #72:
 - **No `index/`.** The package source names no array of the component, and a store this code
   writes has no such key: the store's own keys are listed and none begins with `index`. The one
   place that still names it is the removal `ogld derive-partners --drop-index` makes, and a
-  migration that writes Far Pairs from a store too old to read (ADR 0007).
+  migration that writes Far Pairs from a store too old to read (ADR 0093).
 - **A leftover `index/`.** A 0.2.0 store derived before #72 without `--drop-index` holds the
   component. It opens, answers exactly as the store without one does, and validation ignores it
-  rather than reporting it (spec §12) — even when every entry of it is gone, which a read of it
+  rather than reporting it (ld-store §12) — even when every entry of it is gone, which a read of it
   would have to refuse.
 - **A 0.1.0 store** still opens and answers `matrix` and `region`, which read the Near Band and
   the Far Pairs; `clump` and `proxies` are refused, as they are now, naming the Partner Rows.
@@ -251,7 +251,7 @@ def test_validation_ignores_a_leftover_index(tmp_path: Path) -> None:
 
 
 def test_a_leftover_index_whose_entries_are_lost_is_still_not_read(tmp_path: Path) -> None:
-    # A read of any of its arrays would refuse them (spec §6): a matrix and a region answer on.
+    # A read of any of its arrays would refuse them (ld-store §6): a matrix and a region answer on.
     copy = copy_store(tmp_path / "store")
     write_a_leftover_index(copy)
     for chunk in sorted(copy.glob("index/*/*/c/*")):

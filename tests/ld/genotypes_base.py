@@ -1,6 +1,6 @@
 """PC Adjustment: each variant's A1 dosages, the covariates regressed out, as a unit vector.
 
-r(i, j) is then the dot product of two variants' vectors (spec §3). The covariates are an
+r(i, j) is then the dot product of two variants' vectors (ld-store §3). The covariates are an
 intercept and the PCs the PC Check chose, in the sample order; at k = 0 the intercept alone,
 which centres the dosages, so r is Pearson's r of the dosages, as `plink2 --r-unphased`
 computes it on complete genotypes (build-inputs §7).
@@ -67,7 +67,7 @@ def unit_vectors(
     """Each variant's residual A1 dosages as a unit vector: a row product is r signed to A1.
 
     The dosages count ALT; A1's are 2 − ALT where A1 is REF, so its vector changes sign, and so
-    does every r it is in (spec §3). A variant with no residual variance is a builder fault
+    does every r it is in (ld-store §3). A variant with no residual variance is a builder fault
     here: the Variant Set dropped them all before r is computed.
     """
     resid, flat = residuals(dosages, covariates)

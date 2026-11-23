@@ -1,4 +1,4 @@
-"""Row and band geometry (spec §2, §4, §5) against loops over positions, one pair at a time:
+"""Row and band geometry (ld-store §2, §4, §5) against loops over positions, one pair at a time:
 what the spec says in words, written the slow way, never by calling the code under test."""
 
 from __future__ import annotations

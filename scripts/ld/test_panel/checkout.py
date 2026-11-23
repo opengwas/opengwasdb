@@ -1,6 +1,6 @@
 """Whether a checkout can be cited as the code that ran: the one guard for evidence.
 
-An LD Store records the installed ogld's version (spec §7), and `scripts/make_pcs.py`'s reports
+An LD Store records the installed ogld's version (ld-store §7), and `scripts/make_pcs.py`'s reports
 record the commit that made them (build-inputs §8). Either is true only when the code that ran
 is that commit's: the editable install's version names HEAD (CLAUDE.md: it is frozen when it is
 built), and nothing under `ogld/` or `scripts/` differs from HEAD, tracked or not. The realdata

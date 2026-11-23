@@ -75,7 +75,7 @@ def _build_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]
         "--r-scale",
         type=int,
         required=True,
-        help="the store's r scale, r̂ = code / r_scale, as ADR 0004 sets it for the panel; "
+        help="the store's r scale, r̂ = code / r_scale, as ADR 0090 sets it for the panel; "
         "no default",
     )
     b.add_argument(
@@ -94,7 +94,7 @@ def _build_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]
 
 
 def _import_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    command = commands.add_parser("import", help="import Pan-UKB published LD (ADR 0015)")
+    command = commands.add_parser("import", help="import Pan-UKB published LD (ADR 0101)")
     command.add_argument("out", type=Path)
     for name in ("metadata", "variants", "chain", "fasta", "work"):
         command.add_argument("--" + name, type=Path, required=True)
@@ -169,7 +169,7 @@ def _import(args: argparse.Namespace) -> int:
 
 
 def _validate_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """`ogld validate`: every rule of spec §12 against a store."""
+    """`ogld validate`: every rule of ld-store §12 against a store."""
     v = commands.add_parser("validate", help="run every validation rule")
     v.add_argument("location")
     v.add_argument("--threads", type=_threads, default=1, help="blocks read and checked at once")

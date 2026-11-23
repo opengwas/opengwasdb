@@ -5,7 +5,7 @@ Status: draft
 This document defines what an LD Store build reads and the rules it applies before computing r:
 the genotype fileset, how to convert other formats to it, the keep file, the PC File, the variant
 filters, missing genotypes, and the PC Check. The decisions behind it are in
-[ADR 0002](../adr/0002-build-inputs.md); the LD Store it writes is
+[ADR 0088](../adr/0088-build-inputs.md); the LD Store it writes is
 [`docs/spec/ld-store.md`](./ld-store.md); the terms are in `CONTEXT.md`.
 
 Normative language: **MUST** is a requirement a build enforces by refusing; **SHOULD** is a
@@ -29,7 +29,7 @@ field is recorded in the store's provenance (`ld-store.md` §7).
 | `panel_id` | string | — | the Source Panel's identifier, such as `hgdp1kgp-v2-EUR` |
 | `ancestry` | string | — | the ancestry label, such as `EUR` |
 | `genotype_source` | string | — | what the genotypes are: the release and its files |
-| `r_scale` | int | — | the scale of the store's encoding of r, r̂ = code / r_scale, a whole number from 1 to 32767 (`ld-store.md` §3): 511 for the HGDP+1kGP panels, 2047 for UK Biobank EUR (ADR 0004). There is no default: a build without one is refused, naming it. Provenance records it as `encoding.r_scale` |
+| `r_scale` | int | — | the scale of the store's encoding of r, r̂ = code / r_scale, a whole number from 1 to 32767 (`ld-store.md` §3): 511 for the HGDP+1kGP panels, 2047 for UK Biobank EUR (ADR 0090). There is no default: a build without one is refused, naming it. Provenance records it as `encoding.r_scale` |
 | `k` | int | 10 | the target: the first `k` PCs the PC Check keeps are regressed out (§8). If fewer survive, the build uses those. Provenance records it as `k_target` |
 | `k_min` | int | 5 | the fewest kept PCs a build accepts; below it the build is refused, naming the dropped PCs (§8). Provenance records it, and `k`, the number used, which is t_far's k. It applies only when PCs are used: with `k` = 0 no PC File is read, nothing is refused for want of PCs, and provenance records k = 0 and `k_min` as null |
 | `mac_min` | int | 20 | the minor allele count floor (§6) |
@@ -39,8 +39,8 @@ field is recorded in the store's provenance (`ld-store.md` §7).
 There is **no call-rate field**: genotypes must be complete (§7). A missing call is a refusal,
 not a filter, so there is nothing to tune.
 
-**`t_partner` is set per Source Panel, as `t_far` is** (owner, 18 November 2026; ADR 0011).
-`t_far` follows from n and k (ADR 0001); `t_partner` does not, because it decides how much LD a
+**`t_partner` is set per Source Panel, as `t_far` is** (owner, 18 November 2026; ADR 0097).
+`t_far` follows from n and k (ADR 0087); `t_partner` does not, because it decides how much LD a
 row must hold to be worth storing for `clump` and `proxies`, and a small panel keeps more pairs by
 chance at the same threshold: at n = 341, 7.2% of AMR's unlinked pairs pass r² 0.01, against EUR's
 1.05% at n = 665. So from format 0.2.0 a build must be told it, and a build without it is refused
@@ -51,7 +51,7 @@ request at r2 ≥ t_far within `near_bp` could not be answered exactly
 
 ## 2. The pgen
 
-A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
+A build reads PLINK 2 pgen filesets only (ADR 0088, decision 1).
 
 - **Assembly.** GRCh38. Positions are 1-based. The builder cannot check the assembly from the
   file; `genotype_source` names it, and an LD Store records `reference_assembly` GRCh38.
@@ -65,7 +65,7 @@ A build reads PLINK 2 pgen filesets only (ADR 0002, decision 1).
   ALT MUST be strings of `A`, `C`, `G` or `T`, in either case; the builder passes them unchanged
   to the engine's identity function (ogld#3), which upper-cases them, requires nothing outside
   A, C, G, T (an `N`, an empty allele or any other character is refused, naming the record) and
-  sorts the pair. It does not trim or left-align (ADR 0003): the ALID spells the alleles as the
+  sorts the pair. It does not trim or left-align (ADR 0089): the ALID spells the alleles as the
   pgen holds them.
   A record with `*`, a symbolic allele or `.` is refused.
 - **Chromosome names.** `#CHROM` is mapped to the engine's labels: a leading `chr` (any case) is
@@ -113,7 +113,7 @@ builder reads the dosages.
 **Multi-allelic records**: split and left-align with bcftools before plink2:
 `bcftools norm -m -any -f GRCh38.fa in.vcf.gz -Ob -o split.bcf`. This is the only normalisation a
 conversion does, and only for a source that needs the split: the v2 command above has no `norm`,
-and v2 holds no multi-allelic record. ogld itself neither trims nor left-aligns (§2, ADR 0003), so
+and v2 holds no multi-allelic record. ogld itself neither trims nor left-aligns (§2, ADR 0089), so
 the ALID spells the alleles as that step left them.
 
 **PLINK 1 bed**: `plink2 --bfile in --fa GRCh38.fa --ref-from-fa force --set-all-var-ids
@@ -135,7 +135,7 @@ after the header. Every listed sample MUST be in every fileset's `.psam` and hav
 a duplicate IID is refused. The keep file's SHA-256 of sorted IDs is `panel.samples_sha256`
 (`ld-store.md` §7).
 
-**A Source Panel's samples are unrelated** (owner, 10 November 2026; ADR 0002, decision 11): its
+**A Source Panel's samples are unrelated** (owner, 10 November 2026; ADR 0088, decision 11): its
 keep file holds no first- or second-degree pair. Relatives share long haplotypes on every
 chromosome, so they put LD between unlinked variants that n does not predict: with the
 HGDP+1kGP members files' 1kGP trios (197 first-degree pairs among EUR's 771), the share of
@@ -190,21 +190,21 @@ On v2 chr22, 11,848 ALIDs are shared by such a pair, 1,156 of them with both rec
 MAC ≥ 20 (spec review of ogld#3); the Test Panel has none.
 
 MAC ≥ 20 is Pan-UKB's floor. A site where every kept sample is heterozygous passes it and has no
-variance; ADR 0001's prototype found 9 such sites on AFR chr22 of the unfiltered VCF. v2's pooled
+variance; ADR 0087's prototype found 9 such sites on AFR chr22 of the unfiltered VCF. v2's pooled
 ExcHet filter removes most; EUR chr21 and chr22 have none at MAC ≥ 20.
 
 **What the filters leave in HGDP+1kGP v2.** EUR chr22 has 1,093,149 records; 124,449 pass (all
-FILTER `.`, none without variance), 50.9% of the 244,656 that ADR 0001's sizes counted from the
+FILTER `.`, none without variance), 50.9% of the 244,656 that ADR 0087's sizes counted from the
 unfiltered gnomAD VCF. Those counts included non-PASS sites and applied no call-rate floor, for
 every panel but AMR. Near Band bytes go roughly with the square of variant density, so the builds
-came out well below what ADR 0001's counts predicted: ogld#7 measured EUR's Near Band at 69.4 GB,
+came out well below what ADR 0087's counts predicted: ogld#7 measured EUR's Near Band at 69.4 GB,
 and the five stores at 532 GB in all (`ld-store.md` §6).
 
 ## 7. Missing genotypes and dosages
 
 **Rule: genotypes MUST be complete.** A build refuses an input with any missing genotype among
 the kept samples, naming the number of missing genotypes, the first variant by ID and the panel.
-No genotype is imputed and there is no call-rate floor (ADR 0002, decision 2). A build reads the
+No genotype is imputed and there is no call-rate floor (ADR 0088, decision 2). A build reads the
 records in blocks of 65,536, in file order, and refuses the first fault it meets, in this order:
 
 - **A malformed pvar line** (fields that do not match the header, a POS that is not an integer)
@@ -228,7 +228,7 @@ numpy's pairwise-complete r to 1.1×10⁻¹⁶
 cannot be combined with regressing out PCs, which needs one complete vector per variant; mean
 imputation can, but matches plink2 only when both variants are fully called. One missing call in
 771 moves r by up to 0.0235, and no call-rate floor below 1.0 brings it within the quantisation
-step (`proto/1-build-inputs@96312d8:…/results/missing_window_floors.tsv`; ADR 0002's table). With
+step (`proto/1-build-inputs@96312d8:…/results/missing_window_floors.tsv`; ADR 0088's table). With
 complete genotypes, every r equals plink2's, so **the epic's k = 0 criterion holds for every pair**.
 
 **Dosages.** Where a pgen carries dosages, r is computed on them, as plink2 does ("Dosages are
@@ -241,7 +241,7 @@ it holds no missing or unphased call (§10).
 ## 8. The PC Check
 
 The builder runs the PC Check on every PC File before PC Adjustment, so it judges any PC File,
-whatever made it (ADR 0002, decision 5). It asks whether a PC is a **local** axis, one stretch
+whatever made it (ADR 0088, decision 5). It asks whether a PC is a **local** axis, one stretch
 of genome such as an inversion or the MHC, rather than ancestry.
 
 **The rule** (the owner's, 7 November 2026). PC j is local, and dropped from the covariates,
@@ -278,7 +278,7 @@ is 2.0 GB, against 10.4 GB.
 **The covariates** are the first `k` = 10 (`BuildInputs.k`) PCs of the PC File that are not local,
 in PC order. If fewer than 10 survive, the build uses all that do, as long as at least
 `BuildInputs.k_min` = 5 do; with fewer than 5 it is refused, naming the dropped PCs. t_far's k is
-the number of covariates actually used (owner, 7 November 2026; ADR 0002, decision 5).
+the number of covariates actually used (owner, 7 November 2026; ADR 0088, decision 5).
 
 **The scan.**
 
@@ -405,7 +405,7 @@ pruning window. The regions also define "outside the excluded regions" for ogld#
   MD5) and has a `.complete` record (`proto/1-build-inputs@28b5380:…/m09_download_v2.py`).
   ogld#7 decides their permanent home.
 - **Samples:** the members files under `/data/opengwasdb/reference/hgdp1kgp-hg38*/members/`; the
-  v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0002 lists the five absent).
+  v2 counts are EUR 771, AFR 801, EAS 816, SAS 782, AMR 345 (ADR 0088 lists the five absent).
   These are the PC Files' samples (below).
 - **Keep files:** `scripts/make_keeps.py` writes `/data/opengwasdb/work/ogld/keep/<panel>.keep`
   (`$OGLD_KEEP`), plink2's `#IID` layout: each panel's PC File samples that gnomAD v3.1.2's sample
@@ -439,7 +439,7 @@ reads it.
 
 `ogld import OUT --work WORK --metadata metadata.json --variants variants.tsv.bgz
 --chain hg19ToHg38.over.chain.gz --fasta GRCh38.fa.gz` imports Pan-UKB EUR
-(ADR 0015). Its dependencies are `ogld[import]`, not Hail. The fixed source is
+(ADR 0101). Its dependencies are `ogld[import]`, not Hail. The fixed source is
 `https://pan-ukb-us-east-1.s3.us-east-1.amazonaws.com/ld_release/UKBB.EUR.ldadj.bm`.
 
 - `--metadata` supplies Hail BlockMatrix metadata (`blockSize`, `nRows`, `nCols`,

@@ -1,9 +1,9 @@
 """The store assembly behind `StoreWriter` (ogld#17): a producer supplies r; the store, the rest.
 
 Every expected array here is brute force over pairs, written in this file: for each pair (l, m)
-of one chromosome, its code by spec §3's formula (`store_copies.codes_at`, not ogld's), kept in
+of one chromosome, its code by ld-store §3's formula (`store_copies.codes_at`, not ogld's), kept in
 the Near Band when the two lie within near_bp and in the Proxy Index, both ways, when they lie
-within far_bp and |code| reaches the far code floor, spec §3's literal for n = 771 at × 511, and in
+within far_bp and |code| reaches the far code floor, ld-store §3's literal for n = 771 at × 511, and in
 the Far Pairs, once, in the earlier row, when such a pair also lies beyond near_bp. The
 variants are the Test Store's, real positions on chr21 and chr22; r is a structured synthetic
 correlation matrix, so far more pairs reach the floor than in the Test Panel's own.
@@ -33,9 +33,9 @@ from opengwasdb.ld.identity import orient
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
 
 N_SAMPLES, K = 771, 10
-#: t_far for the Test Store's n and k, spec §3: q / (n − k − 1) with q = 20.84.
+#: t_far for the Test Store's n and k, ld-store §3: q / (n − k − 1) with q = 20.84.
 T_FAR = 20.84 / (N_SAMPLES - K - 1)
-#: The store-derived keys `finish` adds (spec §7; ownership.md, "Provenance and what goes in a
+#: The store-derived keys `finish` adds (ld-store §7; ownership.md, "Provenance and what goes in a
 #: store"), every other key being the producer's.
 DERIVED = {
     "format_version",
@@ -106,7 +106,7 @@ class Expected:
 def expected(chrom: str) -> Expected:
     """One chromosome's arrays, row by row: each later variant's gap and code, from positions.
     The index is every kept pair in both its rows, sorted by (row, partner), which no store this
-    code writes holds and the migration test writes it into a store built before ADR 0007; the
+    code writes holds and the migration test writes it into a store built before ADR 0093; the
     Far Pairs are the kept pairs beyond near_bp, in the earlier row, row after row; the Partner
     Rows are every pair at its distance's floor (PARTNER_FLOOR within near_bp, FLOOR beyond it),
     both ways."""
@@ -312,7 +312,7 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
 def test_a_sparse_array_under_one_shard_is_clipped_and_one_over_it_is_whole_shards(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Spec §6: an array shorter than its shard has one shard, clipped to the inner chunks that
+    # ld-store §6: an array shorter than its shard has one shard, clipped to the inner chunks that
     # cover it; a longer one has whole shards. A sparse component's length is known only at its
     # end.
     entries = {chrom: len(expected(chrom).far_partner) for chrom in chromosomes()}
@@ -408,7 +408,7 @@ def test_the_writer_holds_a_window_of_the_chromosome_not_the_chromosome(
 
 
 def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path) -> None:
-    # A store written before ADR 0007 gains its Far Pairs from its own index (ogld#31). No store
+    # A store written before ADR 0093 gains its Far Pairs from its own index (ogld#31). No store
     # this code writes holds one (#72), so the test writes the index brute force into the store,
     # as the old one held it. chr22 holds a kept pair exactly near_bp apart: in the index, and
     # not a Far Pair. So deriving at any other edge than the one the store writes by fails here
@@ -502,7 +502,7 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
 
 
 def test_create_refuses_a_store_with_no_partner_threshold(tmp_path: Path) -> None:
-    # A build input with no default (ADR 0011, D3): a store cannot be started without one, and
+    # A build input with no default (ADR 0097, D3): a store cannot be started without one, and
     # nothing is written before the refusal.
     with pytest.raises(TypeError, match="t_partner"):
         StoreWriter.create(
@@ -639,7 +639,7 @@ def test_a_partner_rows_stream_closed_with_rows_not_written_is_refused(tmp_path:
 
 def test_partner_rows_refuse_a_code_no_store_holds(tmp_path: Path) -> None:
     # A code of −32768 is what a chunk the store lost reads as: compared against the Partner
-    # Floor it would quietly drop its pair, so the emitter refuses it (spec §3, partner-rows §6.1).
+    # Floor it would quietly drop its pair, so the emitter refuses it (ld-store §3, partner-rows §6.1).
     stream = assembly.PartnerRowsStream(
         zarr.open_group(tmp_path / "g", mode="w"),
         "1",
@@ -830,7 +830,7 @@ def test_finish_adds_what_the_store_derives_to_what_the_producer_knows(tmp_path:
     }
     assert {key: written[key] for key in given} == given
     top = list(dict.fromkeys(key.split(".")[0] for key in REQUIRED_KEYS))
-    assert list(written) == top, "spec §7's order"
+    assert list(written) == top, "ld-store §7's order"
     stored = StoreReader.open(tmp_path / "s").provenance
     assert stored == written
 

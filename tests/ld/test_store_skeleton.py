@@ -3,7 +3,7 @@
 The Test Store is written once per module (about a second) from the Test Panel's `reference_r(10)`;
 every expected value here is the reference r, quantised and signed to A1 by
 `opengwasdb.ld.identity.orient`,
-or a literal from spec §6.
+or a literal from ld-store §6.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def test_every_array_has_the_fill_value_and_codecs_spec_6_says(written: Path) ->
             assert array.chunks == array.shape, name
             continue
         if name == "variants/alid_index/alid":
-            # Keys are judged whole: no ALID is empty, which a key of 0 bytes would be (ADR 0010).
+            # Keys are judged whole: no ALID is empty, which a key of 0 bytes would be (ADR 0096).
             assert array.fill_value == 0, name
         elif leaf == "a1_frequency":
             assert np.isnan(array.fill_value), name

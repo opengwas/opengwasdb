@@ -1,9 +1,11 @@
 # A local sidecar over existing pgens
 
+Formerly ogld ADR 0014.
+
 Issue #91, epic #18. Authority: the owner's 20–21 November 2026 rulings on #18
 and the #91 resume ruling on relative paths. This records those rulings and the
-implementation choices they leave to the reader ticket. ADR 0013 remains the
-single arithmetic owner; ADR 0012 remains the ALID companion contract.
+implementation choices they leave to the reader ticket. ADR 0099 remains the
+single arithmetic owner; ADR 0098 remains the ALID companion contract.
 
 ## Context
 

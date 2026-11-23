@@ -1,4 +1,4 @@
-"""One-time Hail export; Hail is intentionally not an ogld dependency (ADR 0015).
+"""One-time Hail export; Hail is intentionally not an ogld dependency (ADR 0101).
 
 Run in a separately provisioned Hail environment. Never add/recompute an index:
 Pan-UKB's existing `idx` is the matrix coordinate, even for a chromosome subset.

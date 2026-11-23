@@ -1,13 +1,13 @@
-"""How r is stored, and which pairs beyond the Near Band an LD Store keeps (spec §3).
+"""How r is stored, and which pairs beyond the Near Band an LD Store keeps (ld-store §3).
 
-An LD Store records its encoding (spec §7), and `REncoding` is that record as a value: the one
+An LD Store records its encoding (ld-store §7), and `REncoding` is that record as a value: the one
 owner of the dtype, the scale, the reserved code and the rounding, and so of quantising,
-dequantising, the step and the far code floor (ADR 0004). The builder (ogld#5) quantises with
+dequantising, the step and the far code floor (ADR 0090). The builder (ogld#5) quantises with
 the encoding it was given, the reader (ogld#4) decodes with the one the store records, and
 validation recomputes the floor with it. No other module holds a scale, a dtype or a reserved
 code of its own, so no component can round, decode or threshold at another store's scale.
 
-t_far and the distances are not the encoding's: they depend on the panel and on ADR 0001, and a
+t_far and the distances are not the encoding's: they depend on the panel and on ADR 0087, and a
 store records them beside it.
 """
 
@@ -23,14 +23,14 @@ import numpy.typing as npt
 from opengwasdb.ld.format.provenance import Encoding
 from opengwasdb.ld.format.semantics import InputError
 
-#: The χ²₁ upper quantile at p = 5×10⁻⁶ in t_far = max(0.001, q / (n − k − 1)) (ADR 0001).
+#: The χ²₁ upper quantile at p = 5×10⁻⁶ in t_far = max(0.001, q / (n − k − 1)) (ADR 0087).
 T_FAR_Q: Final = 20.84
 
-#: t_far's floor: MR's default r² threshold (ADR 0001).
+#: t_far's floor: MR's default r² threshold (ADR 0087).
 T_FAR_MIN: Final = 0.001
 
-#: The builder's distances (ADR 0001): the Near Band is complete up to NEAR_BP, and the
-#: Far Pairs and Partner Rows reach FAR_BP. A store records the distances it measured (spec §7)
+#: The builder's distances (ADR 0087): the Near Band is complete up to NEAR_BP, and the
+#: Far Pairs and Partner Rows reach FAR_BP. A store records the distances it measured (ld-store §7)
 #: and readers use those, never these.
 NEAR_BP: Final = 3_000_000
 FAR_BP: Final = 10_000_000
@@ -39,15 +39,15 @@ FAR_BP: Final = 10_000_000
 # not rounding error but a builder fault, and clamping it would store a plausible r = ±1.
 _R_SLACK: Final = 1e-6
 
-#: An array of codes, in the dtype every admitted encoding's container has (ADR 0004).
+#: An array of codes, in the dtype every admitted encoding's container has (ADR 0090).
 type Codes = npt.NDArray[np.int16]
 
 
 @dataclass(frozen=True)
 class REncoding:
-    """One LD Store's encoding of r: r̂ = code / `scale`, in an int16 container (spec §3).
+    """One LD Store's encoding of r: r̂ = code / `scale`, in an int16 container (ld-store §3).
 
-    Every admitted encoding shares the container (owner, 10 November 2026; ADR 0004): int16
+    Every admitted encoding shares the container (owner, 10 November 2026; ADR 0090): int16
     codes, −32768 reserved and every `r` array's fill value, and rounding half to even. Only
     the scale differs, a whole number from 1 to 32767, so the scale is symmetric: negating a
     code never overflows, r = ±1 is exact, and a lost chunk still reads as a code that is never
@@ -60,7 +60,7 @@ class REncoding:
     #: The container's dtype, the same for every admitted encoding.
     dtype: ClassVar[np.dtype[np.int16]] = np.dtype(np.int16)
     #: Never a correlation. Every `r` array's fill value, so a chunk that was never written
-    #: cannot read as r = 0 (spec §3, §6).
+    #: cannot read as r = 0 (ld-store §3, §6).
     reserved_code: ClassVar[int] = int(np.iinfo(np.int16).min)
     #: The largest scale the container holds symmetrically: the other end from the reserved code.
     largest_scale: ClassVar[int] = int(np.iinfo(np.int16).max)
@@ -71,7 +71,7 @@ class REncoding:
         if not self.admits(self.scale):
             raise InputError(
                 f"an r scale is a whole number from 1 to {self.largest_scale}, not "
-                f"{self.scale!r} (spec §3)"
+                f"{self.scale!r} (ld-store §3)"
             )
 
     @classmethod
@@ -81,15 +81,15 @@ class REncoding:
 
     @classmethod
     def of(cls, record: object) -> REncoding:
-        """The encoding a store's `encoding` record names (spec §7), or an `InputError` naming
-        the record when this package does not implement it (spec §13): another dtype, reserved
+        """The encoding a store's `encoding` record names (ld-store §7), or an `InputError` naming
+        the record when this package does not implement it (ld-store §13): another dtype, reserved
         code or rounding, a scale outside 1–32767, or a key it does not know."""
         if not cls._implements(record):
             raise InputError(
                 f"the encoding {record!r} is not one this ogld implements: exactly the keys "
                 f"{sorted(Encoding.__required_keys__)}, an int16 container with "
                 f"{cls.reserved_code} reserved, rounded {cls.rounding}, at a whole scale from 1 to "
-                f"{cls.largest_scale} (spec §3, §13)"
+                f"{cls.largest_scale} (ld-store §3, §13)"
             )
         return cls(record["r_scale"])
 
@@ -104,7 +104,7 @@ class REncoding:
         return container == expected and cls.admits(record["r_scale"])
 
     def record(self) -> Encoding:
-        """The store's `encoding` provenance record of this encoding (spec §7)."""
+        """The store's `encoding` provenance record of this encoding (ld-store §7)."""
         return {
             "r_dtype": self.dtype.name,
             "r_scale": self.scale,
@@ -119,15 +119,15 @@ class REncoding:
 
     @property
     def max_error(self) -> float:
-        """Half a step, 1 / (2 × scale): |r̂ − r| never exceeds it (spec §3)."""
+        """Half a step, 1 / (2 × scale): |r̂ − r| never exceeds it (ld-store §3)."""
         return 1 / (2 * self.scale)
 
     def quantise(self, r: npt.ArrayLike) -> Codes:
-        """The code of each r: clamp(rint(r × scale), −scale, +scale) (spec §3).
+        """The code of each r: clamp(rint(r × scale), −scale, +scale) (ld-store §3).
 
         `numpy.rint` rounds half to even, as the spec requires. A value that is not finite,
         or whose magnitude exceeds 1 by more than float error, raises: r is undefined only
-        for a zero-variance variant, which the builder drops (spec §3), so such a value means
+        for a zero-variance variant, which the builder drops (ld-store §3), so such a value means
         the computation went wrong, and a clamped code would hide it.
         """
         values = np.asarray(r, dtype=np.float64)
@@ -135,16 +135,16 @@ class REncoding:
         if bad.any():
             raise ValueError(
                 f"not a correlation, so it has no code: {values[bad].ravel()[:5].tolist()} "
-                "(spec §3)"
+                "(ld-store §3)"
             )
         codes = np.clip(np.rint(values * self.scale), -self.scale, self.scale)
         return codes.astype(self.dtype)
 
     def holds(self, codes: npt.ArrayLike) -> npt.NDArray[np.bool_]:
         """Where `codes` are codes of this encoding, |code| ≤ scale: the reserved code never is,
-        and neither is a code past the scale, which would decode to |r̂| > 1 (spec §12)."""
+        and neither is a code past the scale, which would decode to |r̂| > 1 (ld-store §12)."""
         # Compared in the codes' own dtype: every scale fits int16, and a validation block of 8 Mi
-        # codes would otherwise hold a 64 MiB copy (spec §12).
+        # codes would otherwise hold a 64 MiB copy (ld-store §12).
         values = np.asarray(codes)
         return np.asarray((values >= -self.scale) & (values <= self.scale))
 
@@ -159,18 +159,18 @@ class REncoding:
             found = values[~held].ravel()[:5].tolist()
             raise ValueError(
                 f"codes {found} are not codes of r at × {self.scale}: {self.reserved_code} is "
-                "reserved for an unwritten chunk, and any other is past the scale (spec §3)"
+                "reserved for an unwritten chunk, and any other is past the scale (ld-store §3)"
             )
 
     def dequantise(self, codes: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """The Stored r of each code: code / scale (spec §3). A code this encoding never writes
+        """The Stored r of each code: code / scale (ld-store §3). A code this encoding never writes
         raises, naming it (`require_codes`)."""
         values = np.asarray(codes)
         self.require_codes(values)
         return values.astype(np.float64) / self.scale
 
     def far_code_floor(self, t_far: float) -> int:
-        """The smallest code c ≥ 0 with (c / scale)² ≥ t_far, in float64 (spec §3).
+        """The smallest code c ≥ 0 with (c / scale)² ≥ t_far, in float64 (ld-store §3).
 
         A pair more than `near_bp` apart is a Far Pair exactly when |code| reaches it, which is
         the same as r̂² ≥ t_far. Computed from an estimate and then stepped to
@@ -186,10 +186,10 @@ class REncoding:
 
     def partner_code_floor(self, t_partner: float, t_far: float) -> int:
         """The Partner Floor: the smallest code c ≥ 0 with (c / scale)² ≥ t_partner, in float64,
-        the same rule as the far code floor at the Partner Threshold (spec §3; partner-rows §3,
+        the same rule as the far code floor at the Partner Threshold (ld-store §3; partner-rows §3,
         §5.3).
 
-        `t_partner` is a build input with no default (ADR 0011, D3), and it is never above the
+        `t_partner` is a build input with no default (ADR 0097, D3), and it is never above the
         store's t_far: a partner threshold above it would leave a pair between the two in neither
         component, and a request at r2 ≥ t_far could not be answered (partner-rows §3). So a
         `t_partner` above `t_far` is refused here, naming both, before anything is written.
@@ -198,7 +198,7 @@ class REncoding:
             raise InputError(
                 f"t_partner = {t_partner!r} is above t_far = {t_far!r}: the Partner Threshold is "
                 "never above the Far Threshold, or a pair between the two within near_bp would "
-                "be in neither component (spec §3; partner-rows §3)"
+                "be in neither component (ld-store §3; partner-rows §3)"
             )
         return self.far_code_floor(t_partner)
 
@@ -217,7 +217,7 @@ class REncoding:
         far_bp: int,
         far_code_floor: int,
     ) -> npt.NDArray[np.bool_]:
-        """Whether each pair is Stored at its distance, from its code (spec §8).
+        """Whether each pair is Stored at its distance, from its code (ld-store §8).
 
         Every pair within `near_bp` is Stored; beyond it, one is Stored exactly when it is
         within `far_bp` and its |code| reaches `far_code_floor`. The builder, the Partner Rows
@@ -265,10 +265,10 @@ def _whole(value: object) -> TypeGuard[int]:
 
 
 def t_far(n: int, k: int) -> float:
-    """The Far Threshold: max(0.001, q / (n − k − 1)), in float64 (ADR 0001, spec §3).
+    """The Far Threshold: max(0.001, q / (n − k − 1)), in float64 (ADR 0087, ld-store §3).
 
     `n` is the samples the LD was computed from and `k` the covariates adjusted for,
-    counted by name in provenance (spec §7). A store records this value and every reader
+    counted by name in provenance (ld-store §7). A store records this value and every reader
     uses the record; the builder and validation are the only callers. A panel with
     n − k − 1 ≤ q would have t_far ≥ 1, which no pair can reach, so it raises (§12).
     """
@@ -277,6 +277,6 @@ def t_far(n: int, k: int) -> float:
     dof = n - k - 1
     if dof <= T_FAR_Q:
         raise ValueError(
-            f"n − k − 1 = {dof} must exceed q = {T_FAR_Q} for t_far < 1: n={n}, k={k} (spec §12)"
+            f"n − k − 1 = {dof} must exceed q = {T_FAR_Q} for t_far < 1: n={n}, k={k} (ld-store §12)"
         )
     return max(T_FAR_MIN, T_FAR_Q / dof)

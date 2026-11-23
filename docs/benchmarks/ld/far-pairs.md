@@ -30,7 +30,7 @@ ogld#8's own are in [`results/`](results/), and its method, targets and states a
 ## What was measured, and on what
 
 The store is `hgdp1kgp-v2-EUR-k10.store`, whose Far Pairs were derived in place from its own
-index (ADR 0007): every array the index-only store held is unchanged, so **before** and
+index (ADR 0093): every array the index-only store held is unchanged, so **before** and
 **after** read the same bytes and differ only in the reader.
 
 - **Before** is the reader at `orch/1-ld-stores@1cb5c6e`, which reads a matrix's and a
@@ -177,8 +177,8 @@ the same Far Pairs again in their later rows, and the Near Band's pairs at r̂²
 
 ## How the Far Pairs are chunked
 
-They keep the index's shape, 16,384 entries an inner chunk and 64 to a shard (spec §6;
-ADR 0007, decision 6). The counts below are from each chromosome's `indptr`, for the same 500
+They keep the index's shape, 16,384 entries an inner chunk and 64 to a shard (ld-store §6;
+ADR 0093, decision 6). The counts below are from each chromosome's `indptr`, for the same 500
 rows (seed 8): chunks of each array, `partner` and `r` alike, the runs of neighbouring chunks
 among them, each one Zarr call, and what the chunks decode to.
 
@@ -198,7 +198,7 @@ removes few and decodes 2.6–8 times the bytes. On the clustered draw the Far P
 chunks is 10–91 (10–29 on the eight chromosomes with more than 10 Far Pairs a variant), and the
 spec review's list, 300 of its 500 rows at 44–56 Mb, gave 2.8 (438 against 1,248). The shape is
 kept for the uniform lists: ogld#32 fetches a read's runs together, and a chunk shape is not a
-format version (spec §13). Shards of 1,048,576 to 16,777,216 entries leave chr11's 28 runs
+format version (ld-store §13). Shards of 1,048,576 to 16,777,216 entries leave chr11's 28 runs
 at 28 within shards, and a writer holds one shard of each array, so the shard stays 64 chunks.
 Draws with seeds 9 and 10 touch 32 and 45 Far Pairs chunks on chr11, and 6 on chr22
 (`results/far_pairs.json`).

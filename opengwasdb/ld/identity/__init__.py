@@ -4,7 +4,7 @@ ogld must form exactly the engine's ALID (opengwas/opengwasdb `CONTEXT.md`, _Var
 Identity_) and sign r against its A1. A mismatch is silent: it flips the sign of r for
 some variants, the allele-flip error fine-mapping diagnostics exist to catch. This module
 is a copy of the engine's rules at `1ab2b09`, held to the engine's own answers by the
-fixture in `tests/data/identity/` (ADR 0003). The engine upper-cases, validates A, C, G, T
+fixture in `tests/data/identity/` (ADR 0089). The engine upper-cases, validates A, C, G, T
 and sorts the two alleles. It does not trim or left-align, though its glossary says it does.
 """
 
@@ -30,7 +30,7 @@ _CHROMOSOME_ALIASES = {
     "M": "MT",
     "MT": "MT",
 }
-#: A position an int32 column holds (spec §2), spelt with at most this many digits.
+#: A position an int32 column holds (ld-store §2), spelt with at most this many digits.
 _MAX_POSITION = 2**31 - 1
 _MAX_POSITION_DIGITS = 10
 
@@ -52,7 +52,7 @@ class IdentityError(ValueError):
 
 @dataclass(frozen=True)
 class Orientation:
-    """A genotype record's engine identity (spec §2, §3).
+    """A genotype record's engine identity (ld-store §2, §3).
 
     `position` is the position the ALID carries, after any normalisation the engine
     applies, and the one the Variant Set is ordered by. `a1_is_alt` says which allele the
@@ -72,7 +72,7 @@ def normalise_chromosome(label: str) -> str:
     """The engine's canonical chromosome label (`1`–`22`, `X`, `Y`, `MT`; no `chr` prefix).
 
     Raises IdentityError for a label the engine refuses: a missing one, or a number outside
-    `1`–`26`. LD Store groups are named by this label (spec §1), and a query's `chrom`
+    `1`–`26`. LD Store groups are named by this label (ld-store §1), and a query's `chrom`
     passes through it (ogld#3). Like the engine, anything else passes through, trimmed of a
     `chr` prefix only: a contig such as `HLA-A`, and `-1`, `+22`, `22.0` or `chr 22` (which
     keeps its space). The build's autosomes-only rule (build-inputs §2) refuses those, not
@@ -106,10 +106,10 @@ def orient(chrom: str, position: int, ref: str, alt: str) -> Orientation:
     """The engine's identity of the biallelic record `ref`/`alt` at `chrom`:`position` (ogld#3).
 
     A1 is the allele the engine puts first: alphabetically first after upper-casing. The
-    engine does no trimming or left alignment (ADR 0003), and neither does this. Raises
+    engine does no trimming or left alignment (ADR 0089), and neither does this. Raises
     IdentityError for a record the engine cannot identify, judged in the engine's order: the
     chromosome, then ALT, then REF (the engine's effect allele is the ALT), then the position
-    (an integer above 0), then identical alleles. Never truncates an allele (spec §2).
+    (an integer above 0), then identical alleles. Never truncates an allele (ld-store §2).
     """
     canonical_chrom = normalise_chromosome(chrom)
     alt_allele = _identity_allele(alt)
@@ -134,12 +134,12 @@ def orient(chrom: str, position: int, ref: str, alt: str) -> Orientation:
 
 
 def alid_locus(alid: str) -> tuple[str, int] | None:
-    """The chromosome and position an ALID names, or None when it is not an ALID (spec §2).
+    """The chromosome and position an ALID names, or None when it is not an ALID (ld-store §2).
 
     A reader finds an ALID by this locus, then compares full ALID strings at that
     position, so a malformed one is Absent rather than an error, and this never raises. An
     ALID is `chrom:position:A1:A2`: a chromosome label of the format (`1`–`22`, `X`, `Y`, `MT`,
-    spec §2), a position of at most 10 ASCII digits, positive, unpadded and within int32, and
+    ld-store §2), a position of at most 10 ASCII digits, positive, unpadded and within int32, and
     two distinct alleles over A, C, G, T with A1 sorted before A2.
     """
     parts = alid.split(":")
@@ -157,7 +157,7 @@ _CHROMOSOME_RANK = {name: rank for rank, name in enumerate((*AUTOSOMES, "X", "Y"
 
 
 def chromosome_rank(chrom: str) -> int:
-    """A chromosome's place in the engine's order, `1`–`22`, then `X`, `Y`, `MT` (spec §2): the
+    """A chromosome's place in the engine's order, `1`–`22`, then `X`, `Y`, `MT` (ld-store §2): the
     first field of `order_key`, so chromosomes are ordered by it alone, with no position or ALID
     made up to call `order_key` with. The label passes through `normalise_chromosome` first, so
     `chr1` ranks as `1`; a chromosome off that list has no rank and raises KeyError."""
@@ -167,7 +167,7 @@ def chromosome_rank(chrom: str) -> int:
 def order_key(chrom: str, position: int, alid: str) -> tuple[int, int, str]:
     """The engine's variant order, as a sort key: chromosome (`chromosome_rank`), then
     position ascending, then ALID ascending (bytewise: an ALID is ASCII) at one position
-    (spec §2). A chromosome with no rank raises KeyError.
+    (ld-store §2). A chromosome with no rank raises KeyError.
 
     It takes the three fields the order is defined on, so a caller holding them, as a
     clumping's result does, orders by the engine's rule without re-forming an identity

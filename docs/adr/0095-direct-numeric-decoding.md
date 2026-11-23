@@ -1,6 +1,8 @@
 # Decode recognised numeric chunks directly on a bounded pool
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0009.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. **Round 2's chromosome prefetch went with
@@ -9,7 +11,7 @@
 > shared-pool and single-flight decisions stand, and those are what serve `matrix` and `region`.
 
 Issue [#40](https://github.com/opengwas/ogld/issues/40), part of epic
-[#1](https://github.com/opengwas/ogld/issues/1). Spec §6 defines the bytes; §10 defines reads.
+[#1](https://github.com/opengwas/ogld/issues/1). ld-store §6 defines the bytes; §10 defines reads.
 
 **Who decided.** The owner, 13 November 2026, on
 [epic #1's diagnosis](https://github.com/opengwas/ogld/issues/1#issuecomment-6866202125):
@@ -30,7 +32,7 @@ recognises a one-dimensional numeric array only when its declared
 codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
 CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. A one-byte
 element has no byte order and zarr declares none for it, so a `bytes` codec without an `endian`
-is read as it lies — that is how the ALID index's `uint8` keys decode directly (ADR 0010). Other
+is read as it lies — that is how the ALID index's `uint8` keys decode directly (ADR 0096). Other
 chains, strings included, still use zarr. Shapes and keys come from the opened array's
 metadata, never the layout defaults or an array path.
 

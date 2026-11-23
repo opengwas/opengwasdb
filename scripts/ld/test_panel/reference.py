@@ -2,7 +2,7 @@
 
 **Reference r** is the short numpy implementation of PC Adjustment that a builder is tested
 against: each passing variant's ALT count, residualised on an intercept and PC1...PCk by least
-squares, then correlated. With k = 0 that is Pearson r. Genotypes are complete (ADR 0002), so no
+squares, then correlated. With k = 0 that is Pearson r. Genotypes are complete (ADR 0088), so no
 missing-call rule is involved. Signs are ALT-allele: the engine A1 is ogld#3's to form, and
 re-signing is the builder's job.
 
@@ -130,7 +130,7 @@ def clump(
     """plink2 --clump lead rows, k = 0, on the passing variants; p = erfc(|z| / sqrt 2).
 
     `--clump-unphased`: plink2 clumps on phased r^2 when the pgen holds phase, as v2's does, but
-    an LD Store's r is unphased (ADR 0002), and #6 is held to equal these leads."""
+    an LD Store's r is unphased (ADR 0088), and #6 is held to equal these leads."""
     sumstats = params.work / "gwas.sumstats"
     sumstats.write_text(
         "ID\tP\n"

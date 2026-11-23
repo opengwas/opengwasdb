@@ -45,7 +45,7 @@ class Samples:
         return len(self.iids)
 
     def sha256(self) -> str:
-        """`panel.samples_sha256`: SHA-256 of the sorted IIDs, one per line (spec §7)."""
+        """`panel.samples_sha256`: SHA-256 of the sorted IIDs, one per line (ld-store §7)."""
         return hashlib.sha256(("\n".join(sorted(self.iids)) + "\n").encode()).hexdigest()
 
 

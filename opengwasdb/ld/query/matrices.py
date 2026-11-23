@@ -1,4 +1,4 @@
-"""LD matrices: for a list of ALIDs, and for a region (spec §8; ogld#4).
+"""LD matrices: for a list of ALIDs, and for a region (ld-store §8; ogld#4).
 
 Both return one signed-r matrix (owner, 7 November 2026). Every pair the store does not
 hold is NaN, the Bound and Not Measured alike, and the matrix's positions and t_far say
@@ -21,7 +21,7 @@ from opengwasdb.ld.query.results import LDMatrix
 
 
 def matrix(reader: Reader, alids: Sequence[str], *, fill: float | None) -> LDMatrix:
-    """The signed-r matrix of the present `alids`, in request order (spec §8; ogld#4).
+    """The signed-r matrix of the present `alids`, in request order (ld-store §8; ogld#4).
 
     Unstored pairs are NaN, replaced by `fill` only when the caller passed one. Never a
     refusal: a pair more than far_bp apart is a NaN whose kind is Not Measured.
@@ -34,7 +34,7 @@ def matrix(reader: Reader, alids: Sequence[str], *, fill: float | None) -> LDMat
 
 def region(reader: Reader, chrom: str, centre: int, radius: int, *, fill: float | None) -> LDMatrix:
     """The signed-r matrix of every variant with |position − centre| ≤ radius on `chrom`,
-    in genomic order (spec §8; ogld#4). Refused unless 2 × radius ≤ far_bp."""
+    in genomic order (ld-store §8; ogld#4). Refused unless 2 × radius ≤ far_bp."""
     judge_region(radius=radius, far_bp=reader.provenance["far_bp"]).raise_if_refused()
     rows = reader.rows_in(normalise_chromosome(chrom), centre - radius, centre + radius)
     # The region's rows are contiguous, so the reader reads each one as one slice (ogld#14).

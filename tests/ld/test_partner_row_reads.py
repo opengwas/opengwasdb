@@ -39,7 +39,7 @@ from opengwasdb.ld.format import InputError
 from opengwasdb.ld.store import frames, location
 from opengwasdb.ld.store.reader import StoreReader
 
-#: The Test Store's distances (spec §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
+#: The Test Store's distances (ld-store §7). Its scale and Partner Floor are `tests/store_copies.py`'s,
 #: the one independent owner of its encoding (ownership.md, "Test oracles"), so the reconstruction
 #: below still depends on nothing in `frames.py`.
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000
@@ -65,7 +65,7 @@ def chromosomes(group: zarr.Group) -> dict[str, tuple[int, int]]:
 
 
 def near_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Near Band pair of one chromosome, from spec §4's address rule written out here: the
+    """Every Near Band pair of one chromosome, from ld-store §4's address rule written out here: the
     code of pair (l, m) is at `r[indptr[l] + (m − l − 1)]`, so its address gives its pair."""
     held = group["near"][chrom]
     indptr = np.asarray(held["indptr"][:], dtype=np.int64)
@@ -791,7 +791,7 @@ def test_a_row_outside_its_chromosome_is_refused() -> None:
         reader.partner_row("23", 0)
 
 
-#: The provenance a 0.2.0 store adds for the Partner Rows (spec §7; partner-rows §5.3): a 0.1.0
+#: The provenance a 0.2.0 store adds for the Partner Rows (ld-store §7; partner-rows §5.3): a 0.1.0
 #: store records none of it, because it holds no Partner Rows.
 PARTNER_KEYS = ("t_partner", "partner_code_floor")
 

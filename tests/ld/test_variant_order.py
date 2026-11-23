@@ -1,6 +1,6 @@
 """The engine's variant order, as `opengwasdb.ld.identity.order_key` and `variant_order_key` sort
 it, and
-a chromosome's place in it, `chromosome_rank` (spec §2)."""
+a chromosome's place in it, `chromosome_rank` (ld-store §2)."""
 
 from __future__ import annotations
 

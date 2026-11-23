@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute each Source Panel's PC File from the phased HGDP+1kGP v2 genotypes (ADR 0002).
+"""Compute each Source Panel's PC File from the phased HGDP+1kGP v2 genotypes (ADR 0088).
 
 The owner decided (7 November 2026, epic opengwas/ogld#1) that ogld's HGDP+1kGP builds use PCs
 computed by this one recipe for all five panels, not gnomAD's subcontinental PCs, and that ogld

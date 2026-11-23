@@ -1,4 +1,4 @@
-"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0014).
+"""On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0100).
 
 `GenotypeReader` satisfies `opengwasdb.ld.query.reader.Reader` structurally, as `StoreReader` does:
 it
@@ -207,7 +207,7 @@ class GenotypeReader(ComponentWorkers):
 
     @property
     def provenance(self) -> Provenance:
-        """The root group's `genotype_store` attribute, as recorded (spec §7)."""
+        """The root group's `genotype_store` attribute, as recorded (ld-store §7)."""
         return self._opened.provenance
 
     @property
@@ -243,7 +243,7 @@ class GenotypeReader(ComponentWorkers):
     # ------------------------------------------------------------ the computed LD half
 
     def require_partner_rows(self) -> float:
-        """The Partner Threshold this sidecar recorded (spec §7; partner-rows §3)."""
+        """The Partner Threshold this sidecar recorded (ld-store §7; partner-rows §3)."""
         return float(self.provenance["t_partner"])
 
     def _data(self, rows: npt.NDArray[np.int64]) -> Block:
@@ -262,7 +262,7 @@ class GenotypeReader(ComponentWorkers):
                     calls[at] = genotypes.rows(a["pgen_row"][rows[at]])
         # Completeness was checked by Variant Set selection. Inputs are pinned on open and
         # immutable thereafter, as for LD arrays; rescanning every dosage costs a full memory
-        # pass without adding integrity beyond that contract (ADR 0014).
+        # pass without adding integrity beyond that contract (ADR 0100).
         return Block(calls, a["projection"][rows], a["norm"][rows], a["sign"][rows])
 
     def _calls(self, fileset: int, rows: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
@@ -391,7 +391,7 @@ class GenotypeReader(ComponentWorkers):
 
         The window comes from the store, so the lead is in it; a store whose positions and rows
         disagree must fail here, naming the ALID, rather than read the neighbouring variant's
-        row as the lead's (spec §2).
+        row as the lead's (ld-store §2).
         """
         lo, hi = position_rows(rows, lead, lead)
         if int(hi) - int(lo) != 1:

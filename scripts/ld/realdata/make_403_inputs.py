@@ -27,7 +27,7 @@ Sources, all read-only:
   record's ALID is `opengwasdb.ld.identity.orient(chrom, pos, ref, alt).alid`; a record is kept when
   that
   ALID is in the store's Variant Set, and where an insertion and a deletion share an ALID, the one
-  whose REF the ALID spells first (the Variant Set's own rule, spec §2). `prepare` writes those
+  whose REF the ALID spells first (the Variant Set's own rule, ld-store §2). `prepare` writes those
   records to `<out>/EUR-k0.plink2/chr<N>` with `--keep` EUR, the ID renamed to the ALID.
 - **Matching.** A hit whose ALID is not in the store's Variant Set is Absent: neither tool can
   clump it, so it is dropped from `hits.tsv` and counted in `manifest.json` as `unmatched`, per
@@ -193,7 +193,7 @@ def sha256_of(path: Path) -> str:
 
 
 def keep_sha256(keep: Path) -> str:
-    """The builder's `panel.samples_sha256` of a keep file (spec §7), through its own reader and
+    """The builder's `panel.samples_sha256` of a keep file (ld-store §7), through its own reader and
     `Samples`, so a keep file the builder refuses is refused here."""
     from opengwasdb.ld.build.inputs import Samples, read_keep
 
@@ -208,7 +208,7 @@ def provenance_sha256(provenance: Any) -> str:
 
 def check_pins(provenance: dict[str, Any], genotypes: Path, keep: Path) -> dict[str, str]:
     """Refuse genotypes or a keep file other than the ones the store was built from: the store's
-    `source.sha256` names each pgen, pvar and psam, and the keep file by its own name (spec §7),
+    `source.sha256` names each pgen, pvar and psam, and the keep file by its own name (ld-store §7),
     and `panel.samples_sha256` the samples. The store is the truth; a comparison on other inputs
     would compare different panels."""
     for name, digest in provenance["source"]["sha256"].items():

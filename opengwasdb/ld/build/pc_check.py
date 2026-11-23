@@ -1,4 +1,4 @@
-"""The PC Check: the owner's local-PC rule (7 November 2026; ADR 0002, decision 5).
+"""The PC Check: the owner's local-PC rule (7 November 2026; ADR 0088, decision 5).
 
 `docs/spec/build-inputs.md` §8 is the authority, and this is its one implementation: the
 builder runs it on every PC File, and `scripts/make_pcs.py` and the Test Panel's script import
@@ -355,7 +355,7 @@ def check(
 
 
 def _record(w: Windows, scan: list[PcScan]) -> PcCheck:
-    """The PC Check's provenance record (spec §7, `adjustment.pc_check`)."""
+    """The PC Check's provenance record (ld-store §7, `adjustment.pc_check`)."""
     return {
         "window_bp": WINDOW_BP,
         "step_bp": STEP_BP,

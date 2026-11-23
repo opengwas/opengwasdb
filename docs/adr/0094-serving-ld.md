@@ -1,6 +1,8 @@
 # LD is served by a separate service, ogld-api, from local disk; the LD Stores will also be public as static Zarr
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0008.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
@@ -33,7 +35,7 @@ record had left open: ogdb-api's live server runs on this IEU node, app-dc3-ogws
 **The stores.** The five stores of ogld#7 hold 533.4 GB in 58,123 files: Near Bands 486.1 GB,
 Proxy Indexes 45.2 GB, Far Pairs 1.46 GB (ogld#31) and variant tables 0.56 GB, over 47.2 M
 variants. AFR alone is 241.2 GB in 17,009 files. Each is immutable once validated, format
-`0.1.0` (§13), layout C (ADR 0006).
+`0.1.0` (§13), layout C (ADR 0092).
 
 **ogdb-api as it is** (opengwas/ogdb-api at `3f70e0e`, read on 13 November 2026). ogld-api takes
 its job contract from here where it fits (Consequences):
@@ -199,7 +201,7 @@ confirm it. Until then, the stores are at `/data/opengwasdb/work/ogld/stores/` a
 - **Yes, behind authentication** (signed URLs, or a gateway in front of the static host). It
   keeps the usage record, at the cost of a token every client must obtain. Possible later for
   a store whose terms need it; the HGDP+1kGP stores do not (their genotypes are public under
-  gnomAD's terms, ADR 0002 decision 7; ADR 0001 decision 5 allows LD Stores to be published).
+  gnomAD's terms, ADR 0088 decision 7; ADR 0087 decision 5 allows LD Stores to be published).
 
 ### Where
 
@@ -299,10 +301,10 @@ Sources, each read on 13 November 2026:
   panel-wide map exists in ogld, the engine or ogdb-api; ogdb-api reads rsIDs from each engine
   Store's variant table.
 - **ieugwasr's `ld_clump` default is refused by every HGDP+1kGP store.** r² 0.001 within 10 Mb is
-  below every store's t_far (0.029–0.063), so it is a Refusal (ADR 0001). ogld-api passes it on;
+  below every store's t_far (0.029–0.063), so it is a Refusal (ADR 0087). ogld-api passes it on;
   which configuration each ancestry offers by default is opengwasdb#416's.
 - **Whether UK Biobank's LD Store (ogld#10) may be public as static Zarr.** This record covers
-  the five HGDP+1kGP stores, whose genotypes are public (ADR 0002, decision 7).
+  the five HGDP+1kGP stores, whose genotypes are public (ADR 0088, decision 7).
 - **The public host,** and with it when decision 2 takes effect. The options are above.
 - **The served copy's directory:** `/data/opengwasdb/ld-stores/`, as proposed above, until the
   owner confirms it or names another.

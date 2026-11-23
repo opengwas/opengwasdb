@@ -66,7 +66,7 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
     )
     writer.write(writer.cut(0, k0_r(script.alt_counts(rows), vs.sign[on22] > 0)))
     sub = script.VariantSet(rows, table, vs.sign[on22], 0)
-    # finish validates (spec §12), and a genotypes store's pc_diagnostic is never null: this one
+    # finish validates (ld-store §12), and a genotypes store's pc_diagnostic is never null: this one
     # is the Test Panel's own, measured at k = 0 on its chr21 × chr22 pairs.
     diagnostic = script.pc_diagnostic(vs, 0)
     written = writer.finish(script.sourced(0, sub, diagnostic, script.build_record(0.0)))

@@ -6,7 +6,7 @@
   "source": "$OGLD_PHASED_V2/hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf",
   "keep": "$OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep",
   "pcs": "$OGLD_PCS/EUR.eigenvec",
-  "pcs_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)",
+  "pcs_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0088)",
   "chromosomes": [
    "21",
    "22"
@@ -155,7 +155,7 @@
   "pcs": {
    "path": "$OGLD_PCS/EUR.eigenvec",
    "sha256": "8ea02cdc208b334278d348b0d53e46cb6c6d322ea69b89c8e26d72ad52915e79",
-   "declared_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
+   "declared_source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0088)"
   }
  },
  "tools": {

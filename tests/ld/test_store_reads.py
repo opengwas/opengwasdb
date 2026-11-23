@@ -1,4 +1,4 @@
-"""Bounded reads (spec §10; ogld#4): a reader takes only the chunks a request needs, reads a
+"""Bounded reads (ld-store §10; ogld#4): a reader takes only the chunks a request needs, reads a
 re-sharded store the same, and refuses whatever a lost chunk reads as.
 
 The committed Test Store holds each array in one shard of one inner chunk, so every read of it
@@ -197,7 +197,7 @@ def test_a_region_reads_the_same_from_any_layout(small_chunks: Path) -> None:
 @pytest.mark.parametrize(("start", "stop"), [(6, 39), (36, 221), (840, 1020)])
 def test_a_region_keeps_none_of_its_rows_far_pairs_that_leave_it(start: int, stop: int) -> None:
     # Each span has rows with a Far Pair outside it, which the scatter must not place on a
-    # row inside it; (840, 1020) also holds one inside (spec §10; ogld#14).
+    # row inside it; (840, 1020) also holds one inside (ld-store §10; ogld#14).
     every = np.arange(1056)
     expected = reference_pairs(every)
     _, pos = stored_positions()
@@ -551,7 +551,7 @@ class Sent(list[tuple[str, int]]):
     """The path and body length of every response a server sent, and each response's status.
 
     A list of the pairs the tests already read, so a server that answers a range past a file's end
-    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (spec §5.1).
+    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (ld-store §5.1).
     """
 
     def __init__(self) -> None:
@@ -744,7 +744,7 @@ def test_a_read_has_at_most_its_bounds_in_flight(
     # Six runs in six shards; zarr's async concurrency, or the bytes in flight, allows two at
     # once. The server holds each request until three are in flight or 0.15 s pass, so it sees
     # every request a batch makes at once, and no more: two. What the read holds is measured
-    # as it fetches each batch, the earlier batches' pieces gone (spec §10; ogld#32).
+    # as it fetches each batch, the earlier batches' pieces gone (ld-store §10; ogld#32).
     near = zarr.open_array(small_chunks / "near" / "22" / "r", mode="r")
     everything = np.asarray(near[:])
     chunk_bytes = INNER * near.dtype.itemsize
@@ -840,7 +840,7 @@ def test_a_shard_index_is_fetched_once_and_kept_in_the_budget(
 ) -> None:
     # Two reads of one shard, of chunks that are not neighbours: each fetches its chunk, and
     # the first the shard's index too, which the second finds kept. Kept nothing, the second
-    # fetches the index again: two round trips a read, not one (spec §10; ogld#32).
+    # fetches the index again: two round trips a read, not one (ld-store §10; ogld#32).
     url, sent = served
     cache = location.ChunkCache(budget)
     near = location.open_group(url, cache=cache)["near/22/r"]
@@ -850,7 +850,7 @@ def test_a_shard_index_is_fetched_once_and_kept_in_the_budget(
     for chunk in (20, 22):  # shard 5's first and third chunks
         cache.take(near, [chunk * INNER])
     assert [path for path, _ in sent[before:]] == ["/near/22/r/c/5"] * requests
-    # A shard index is 16 bytes a chunk and a 4-byte checksum (spec §6).
+    # A shard index is 16 bytes a chunk and a 4-byte checksum (ld-store §6).
     shard = location._ShardIndex("near/22/r/c/5", PER_SHARD * 16 + 4)
     indexes = [kept for key, kept in cache._kept.items() if key == shard]
     assert len(indexes) == (1 if budget else 0), "kept when there is room, and only then"
@@ -943,7 +943,7 @@ def test_at_every_answered_r2_the_partner_rows_are_read_and_no_near_band_or_inde
 def test_the_test_store_passes_every_rule_over_http() -> None:
     # The chunk files' ends are probed one byte past their length, which a server answers with 416
     # (RFC 9110 §15.5.17): an unsatisfiable range says the file ends there, and a store must not be
-    # refused for it (spec §5.1, §5.3). This store passed only when the probe read an empty 206.
+    # refused for it (ld-store §5.1, §5.3). This store passed only when the probe read an empty 206.
     with serving(TEST_STORE) as (url, sent):
         found = opengwasdb.ld.validate(url)
     assert not any(found.values()), {rule: f for rule, f in found.items() if f}

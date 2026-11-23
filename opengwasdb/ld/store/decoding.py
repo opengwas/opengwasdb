@@ -1,4 +1,4 @@
-"""The narrow numeric codec backend behind location's bounded reads (ADR 0009; ogld#40).
+"""The narrow numeric codec backend behind location's bounded reads (ADR 0095; ogld#40).
 
 This module owns codec recognition, shard/frame parsing, decoded-buffer ownership and the
 single executor shared by local range I/O and decoding. Location owns transport wrapping,
@@ -25,7 +25,7 @@ from zarr.core.buffer import default_buffer_prototype
 from zarr.core.metadata.v3 import ArrayV3Metadata, RegularChunkGridMetadata
 
 # Local range I/O and numeric decoding share seven workers, not two nested pools.
-# Zarr's separately configured helper handles fallback codecs (ADR 0009, round 2).
+# Zarr's separately configured helper handles fallback codecs (ADR 0095, round 2).
 # numcodecs is a runtime dependency without type stubs, as in build.inputs.
 _NUMCODECS = importlib.import_module("numcodecs")
 _DECODE_WORKERS: Final = 7
@@ -50,13 +50,13 @@ class DecodedChunk(np.ndarray[Any, np.dtype[Any]]):
     """Ownership token: one decoded chunk's buffer, never a view of a multi-chunk run.
 
     Only the direct decoder constructs these; the cache can adopt them without copying,
-    unlike a zarr run whose views retain uncounted neighbouring chunks (ADR 0009).
+    unlike a zarr run whose views retain uncounted neighbouring chunks (ADR 0095).
     """
 
 
 @dataclass(frozen=True)
 class NumericDecoder:
-    """Only the declared bytes/zstd chain, with a bytes/CRC32C suffix index (ADR 0009).
+    """Only the declared bytes/zstd chain, with a bytes/CRC32C suffix index (ADR 0095).
 
     No zarr private codec or index API is called. Offsets are absolute uint64 byte offsets,
     paired with lengths, and both all-ones means absent, as sharding_indexed specifies.
@@ -138,7 +138,7 @@ class NumericDecoder:
         """At most seven jobs per range. Drain running jobs even if another piece fails.
 
         Cancelling a future cannot stop zstd on a worker. Shielding and draining keeps that
-        worker's buffers inside this read's lifetime and in-flight bound (ADR 0009).
+        worker's buffers inside this read's lifetime and in-flight bound (ADR 0095).
         """
         jobs = [
             asyncio.create_task(
@@ -237,7 +237,7 @@ def _numeric_shard(array: zarr.Array[Any]) -> ShardingCodec | None:
 
 def _bytes_chain(codecs: tuple[Any, ...], last: type[Any], dtype: np.dtype[Any]) -> bool:
     """Bytes then `last`. A one-byte element has no byte order, and zarr declares none for it
-    (ADR 0010); every wider one must declare the order it was written in (ADR 0009)."""
+    (ADR 0096); every wider one must declare the order it was written in (ADR 0095)."""
     return (
         len(codecs) == 2
         and type(codecs[0]) is BytesCodec

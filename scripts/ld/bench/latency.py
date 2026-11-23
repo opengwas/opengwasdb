@@ -6,9 +6,9 @@ Two plans, each a list of cases timed on each target:
 - `step1`: the published HGDP+1kGP EUR store (k = 10, layout C). Clumping each of
   opengwas/opengwasdb#403's 37 Analyses' 5e-8 tiers at r² 0.01 and 0.001 within 3 Mb; region
   matrices 3 Mb and 10 Mb wide, the second reading the Far Pairs for its pairs beyond
-  near_bp (spec §11); a matrix of 500 scattered variants, on chr22 and genome-wide; and proxies
+  near_bp (ld-store §11); a matrix of 500 scattered variants, on chr22 and genome-wide; and proxies
   at r² 0.8 within 10 Mb for 1, 10 and 100 variants.
-- `step2`: EUR chr22 built in each Near Band layout of spec §6 (`build_layouts.py`). Clumping
+- `step2`: EUR chr22 built in each Near Band layout of ld-store §6 (`build_layouts.py`). Clumping
   the 37 Analyses' chr22 hits below t_far (the column read), a 3 Mb region, 500 scattered
   variants, and single pairs.
 
@@ -507,7 +507,7 @@ class Sample:
 
     def near_pairs(self, count: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
         """`count` chr22 pairs within the store's near_bp: a random row, and a random later
-        row within it, by the Near Band's own stop (`geometry.stop_within`, spec §4)."""
+        row within it, by the Near Band's own stop (`geometry.stop_within`, ld-store §4)."""
         from opengwasdb.ld.format.geometry import stop_within
 
         reader = opened(self.store)._reader

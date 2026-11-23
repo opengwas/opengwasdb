@@ -1,7 +1,9 @@
 # Each LD Store records its encoding of r, and its width is chosen from its Source Panel
 
+Formerly ogld ADR 0004.
+
 Issue [#16](https://github.com/opengwas/ogld/issues/16), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
-It supersedes [ADR 0001](./0001-near-band-and-thresholded-far-pairs.md) decision 2's "quantised to
+It supersedes [ADR 0087](./0087-near-band-and-thresholded-far-pairs.md) decision 2's "quantised to
 `int16`", which the format had read as one encoding, `int16` × 32767, for every store. The format
 itself is in `docs/spec/ld-store.md` (§3, §6, §7, §12, §13); the terms are in `CONTEXT.md`.
 
@@ -17,7 +19,7 @@ The Near Band is about 96% of every LD Store, and at `int16` × 32767 each of it
 12 bits after zstd. That step records r to about 1/1,180 of its own sampling error at n = 771,
 precision no use of an HGDP+1kGP store can see. Measured on real HGDP+1kGP EUR chr22 (24–30 Mb,
 the MAC ≥ 50 pgen, k = 0, 140 M Near Band pairs, zstd level 3 at 262,144-code chunks; the issue's
-table). Its n = 771 is all of EUR's v2 members; a build keeps the 665 unrelated ones (ADR 0002,
+table). Its n = 771 is all of EUR's v2 members; a build keeps the 665 unrelated ones (ADR 0088,
 decision 11), where each share below is about 7% smaller:
 
 | encoding | bits per pair | against × 32767 | max error in r | as a share of r's sampling SE at n = 771 |
@@ -28,7 +30,7 @@ decision 11), where each share below is about 7% smaller:
 | `int16` × 511 | 7.11 | 1.70× | 9.8×10⁻⁴ | 0.03 |
 | `int8` × 127 | 3.97 | 3.03× | 3.9×10⁻³ | 0.11 |
 
-The format already recorded `encoding` per store (spec §7), but the code held one constant,
+The format already recorded `encoding` per store (ld-store §7), but the code held one constant,
 `ENCODING`, that the reader, the writer, the layout and validation each compared with, so a
 store at any other scale could be neither written nor read.
 
@@ -39,7 +41,7 @@ store at any other scale could be neither written nor read.
    the far code floor. The reader, the writer, the layout and validation ask it; none holds a
    dtype, a scale or a reserved code of its own.
 2. **The reader takes a store's encoding from its provenance** and refuses one it does not
-   implement, naming it (spec §13). One process reads stores of different scales side by side.
+   implement, naming it (ld-store §13). One process reads stores of different scales side by side.
 3. **The admitted encodings** are symmetric scales in an `int16` container: any whole scale s
    from 1 to 32767, r̂ = code / s, with −32768 reserved and used as every `r` array's fill value,
    and half-to-even rounding. So the dtype, the reserved code and the fill value never change;
@@ -55,7 +57,7 @@ store at any other scale could be neither written nor read.
 | the five HGDP+1kGP panels | `int16` × 511 (10 bits) | 1.96×10⁻³ | 9.8×10⁻⁴ | 0.00104 |
 | UK Biobank EUR | `int16` × 2047 (12 bits) | 4.89×10⁻⁴ | 2.4×10⁻⁴ | 0.00099 |
 
-`format_version` stays `0.1.0`: no LD Store has been written in it (spec §13).
+`format_version` stays `0.1.0`: no LD Store has been written in it (ld-store §13).
 
 ## Considered options
 
@@ -77,13 +79,13 @@ store at any other scale could be neither written nor read.
 
 - **The step is the store's own.** CONTEXT.md's **Stored r** is exact to half the step its store
   records: 9.8×10⁻⁴ in r on an HGDP+1kGP store, 2.4×10⁻⁴ on UK Biobank EUR.
-- **Thresholds are still judged on the Stored r** (spec §3), so a reader's view stays
+- **Thresholds are still judged on the Stored r** (ld-store §3), so a reader's view stays
   self-consistent. A wider step widens the band of pairs that can fall on either side of a
   threshold, to about 2|r| × half a step. The comparisons with plink2 list such pairs, and use
   the store's own step.
 - **The far code floor moves with the scale.** At × 511 the floor for HGDP+1kGP EUR at k = 10
   (n = 665) is 92, against 5850 at × 32767, and the true r² a pair at the floor's edge stands for
-  moves with it: spec §3's table gives it per panel at its own scale, on the samples each build
+  moves with it: ld-store §3's table gives it per panel at its own scale, on the samples each build
   keeps. At k = 10 a pair at exactly t_far is stored on SAS and on UK Biobank EUR, and reads as
   the Bound on EUR, AFR, EAS and AMR, for a true r² up to 2×10⁻⁵–2×10⁻⁴ above t_far.
 - **The Test Store is × 511**, HGDP+1kGP EUR's encoding, and the tests write × 2047 and × 32767
@@ -93,7 +95,7 @@ store at any other scale could be neither written nor read.
   way, and move no lead.
 - **The sizes are re-derived** from the bits per pair measured on a real EUR chr22 build at
   k = 10: 6.88 a Near Band pair at × 511, 8.58 at × 2047 and 11.53 at × 32767. The five
-  HGDP+1kGP stores were estimated at about 1.20 TB, from 1.99 TB; built (ogld#7), they come to 0.53 TB (spec §6).
+  HGDP+1kGP stores were estimated at about 1.20 TB, from 1.99 TB; built (ogld#7), they come to 0.53 TB (ld-store §6).
 - **The public API changes.** `BuildInputs` gains the required `r_scale`. `ogld.format` loses
   `ENCODING`, `R_SCALE`, `RESERVED_CODE`, `QUANTISATION_ERROR` and the module functions
   `quantise`, `dequantise` and `far_code_floor`, whose one scale was the default this decision

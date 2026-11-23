@@ -3,9 +3,9 @@
 A build reads dosages, not hard calls: for a pgen of hard calls they are the ALT counts 0, 1
 and 2, and for one that carries dosages they are those, as plink2 uses them ("Dosages are used
 when present", build-inputs §7). Phase is ignored. A missing genotype reads as −9 and is the
-caller's to refuse: a build never imputes one (ADR 0002, decision 2).
+caller's to refuse: a build never imputes one (ADR 0088, decision 2).
 
-pgenlib is imported here, inside the read path only (ADR 0002, decision 10).
+pgenlib is imported here, inside the read path only (ADR 0088, decision 10).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class PgenFileset(Protocol):
 
 
 def import_pgenlib() -> Any:
-    """pgenlib, or a refusal naming the extra that installs it (ADR 0002, decision 10)."""
+    """pgenlib, or a refusal naming the extra that installs it (ADR 0088, decision 10)."""
     try:
         import pgenlib
     except ImportError as missing:
@@ -156,7 +156,7 @@ class Genotypes:
     def range_int8(self, first: int, stop: int) -> npt.NDArray[np.int8]:
         """Hard calls only, with missing calls still −9 for the caller's named refusal.
 
-        This path deliberately does not substitute for float64 dosage reads (ADR 0013).
+        This path deliberately does not substitute for float64 dosage reads (ADR 0099).
         """
         out = np.empty((stop - first, len(self._fileset.subset)), dtype=np.int8)
         if stop > first:

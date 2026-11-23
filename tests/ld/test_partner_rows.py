@@ -1,7 +1,7 @@
 """The Partner Rows a store holds, on the committed Test Store (partner-rows §3, §5, §6; ogld#67).
 
 Every expected entry is reconstructed here from the store's own Near Band and Far Pairs with plain
-zarr and numpy, by spec §4's and §5's rules written out in this file: the Near Band's addresses,
+zarr and numpy, by ld-store §4's and §5's rules written out in this file: the Near Band's addresses,
 the Far Pairs' later rows, the Partner Floor at t_partner 0.01, and every kept pair in both
 variants' rows. The emitter's selection is never called, so a second layout of the same codes is
 held to the codes, not to itself.
@@ -23,10 +23,10 @@ from store_copies import FLOOR, TEST_STORE
 
 from opengwasdb.ld.store import frames
 
-#: The Test Store's distances (spec §7).
+#: The Test Store's distances (ld-store §7).
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000
 #: Its Partner Threshold, and the Partner Floor that is the smallest code c ≥ 0 with
-#: (c / 511)² ≥ 0.01, computed here rather than read from the store (spec §3; partner-rows §3).
+#: (c / 511)² ≥ 0.01, computed here rather than read from the store (ld-store §3; partner-rows §3).
 T_PARTNER = 0.01
 PARTNER_FLOOR = 52
 CHROMOSOMES = ("21", "22")
@@ -44,7 +44,7 @@ def chromosomes(group: zarr.Group) -> dict[str, tuple[int, int]]:
 
 
 def near_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Near Band pair of one chromosome, from spec §4's address rule written out here:
+    """Every Near Band pair of one chromosome, from ld-store §4's address rule written out here:
     r(l, m) is at `r[indptr[l] + (m − l − 1)]`, so a code's address gives its pair."""
     held = group["near"][chrom]
     indptr = np.asarray(held["indptr"][:], dtype=np.int64)
@@ -123,7 +123,7 @@ def test_every_row_is_the_near_band_and_the_far_pairs_at_their_floors(chrom: str
 def test_the_partner_rows_hold_every_entry_a_proxy_index_held(chrom: str) -> None:
     # t_partner is never above t_far, so every entry the Proxy Index held is an entry here: the
     # Near Band's pairs at the far code floor, and the Far Pairs, each with its own code, both
-    # ways (partner-rows §3; ADR 0011, D1). No store holds an index since #72, so the set is
+    # ways (partner-rows §3; ADR 0097, D1). No store holds an index since #72, so the set is
     # built from the two components the index held (#72): a second reading of the same codes,
     # not the emitter's selection.
     group = store()

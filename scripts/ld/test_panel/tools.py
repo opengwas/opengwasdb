@@ -102,7 +102,7 @@ def stamp_digest(target: Path) -> str:
 
 
 def source_checksum(path: Path) -> str:
-    """A downloaded source's verified checksum (`.complete`, ADR 0002), or its SHA-256."""
+    """A downloaded source's verified checksum (`.complete`, ADR 0088), or its SHA-256."""
     complete = Path(f"{path}.complete")
     if complete.exists():
         return "crc32c:" + str(json.loads(complete.read_text())["crc32c"])

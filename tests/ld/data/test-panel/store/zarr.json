@@ -60,7 +60,7 @@
         "k_min": 5,
         "pc_file": {
           "sha256": "8ea02cdc208b334278d348b0d53e46cb6c6d322ea69b89c8e26d72ad52915e79",
-          "source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
+          "source": "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0088)"
         },
         "pc_check": {
           "window_bp": 4000000,

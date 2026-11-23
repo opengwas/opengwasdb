@@ -1,4 +1,4 @@
-"""Join immutable chromosome outputs behind StoreWriter (ADR 0015)."""
+"""Join immutable chromosome outputs behind StoreWriter (ADR 0101)."""
 
 from __future__ import annotations
 

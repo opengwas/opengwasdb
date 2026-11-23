@@ -3,7 +3,7 @@ of `leads()`, and the Far Pairs `proxies` reads, each against an independent com
 
 plink2 v2.0.0-a.6.9LM compares r² with `>` and the window with `<` (checked on a constructed
 pair whose r² is exactly 0.25, and on partners exactly 3,000,000 bp and one bp nearer). The
-owner ruled on 10 November 2026 that `clump` follows it and `proxies` keeps ≥ and ≤ (spec §9).
+owner ruled on 10 November 2026 that `clump` follows it and `proxies` keeps ≥ and ≤ (ld-store §9).
 A stored r̂² equals r2 exactly only at 0 or 1, so the r² edge is tested on a perfect-LD pair.
 """
 

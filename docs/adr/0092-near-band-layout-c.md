@@ -1,6 +1,8 @@
 # The Near Band is chunked by layout C: 262,144 codes an inner chunk, 256 to a shard
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0006.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
@@ -15,12 +17,12 @@ the measurements are in `docs/benchmarks/latency.md`, rendered from the records 
 component of their own (ogld#31) and moves the reader's speed-ups to ogld#32. Each of those is
 its own decision; this record is the layout's.
 
-**Partly superseded by ADR 0010.** Decision 2 describes the arrays that existed when layout C
+**Partly superseded by ADR 0096.** Decision 2 describes the arrays that existed when layout C
 was chosen. The later ALID search index has its own chunk and shard shapes.
 
 ## Context
 
-Spec §6 named three shapes for the Near Band's `near/<c>/r`, as (inner chunk, shard) in codes:
+ld-store §6 named three shapes for the Near Band's `near/<c>/r`, as (inner chunk, shard) in codes:
 A (4,096, 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). The prototype chose C
 provisionally on a 12 Mb slice, where C's lead was the variant column read that the Proxy Index
 then took away (§11). §6 left the choice to ogld#8, because B read 2.5–7× fewer bytes on small
@@ -40,7 +42,7 @@ read's runs of chunks together.
    holds the shape (`NEAR_R`), and the writer takes it from there.
 2. **Every other array present at this decision keeps its one shape**, 16,384 to an inner chunk
    and 1,048,576 to a shard. ogld#8 measured no read the Proxy Index's or the variant table's
-   shape held back. ADR 0010 later gives the ALID search index different shapes.
+   shape held back. ADR 0096 later gives the ALID search index different shapes.
 3. **A shape is not a format version** (§13). A store re-sharded for serving (ogld#9) reads the
    same, and a reader depends on no shape: each array's metadata records its own.
 

@@ -1,7 +1,7 @@
 """Every setting the Test Panel is made with, recorded whole in its manifest.
 
 The genotype source, the PC File and every filter are parameters, so a changed decision is one
-run with a new value (ADR 0002). Paths default to the documented roots of `test_panel.roots`
+run with a new value (ADR 0088). Paths default to the documented roots of `test_panel.roots`
 (`$OGLD_PHASED_V2`, `$OGLD_PCS`, `$OGLD_REFERENCE`) and tools to `$OGLD_PLINK2`,
 `$OGLD_BCFTOOLS` and `$OGLD_BGZIP`, or `PATH`.
 """
@@ -33,7 +33,7 @@ class Params:
     keep: Path
     # The PC File, `#IID PC1 ... PC20`: make_pcs.py's for EUR.
     pcs: Path
-    pcs_source: str = "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0002)"
+    pcs_source: str = "ogld scripts/make_pcs.py on HGDP+1kGP v2 EUR (ADR 0088)"
     chromosomes: tuple[str, ...] = ("21", "22")
     # Variant filters (docs/spec/build-inputs.md). Genotypes must be complete: a missing call is
     # refused, never imputed.
@@ -44,7 +44,7 @@ class Params:
     # Recorded in the manifest; t_far itself is opengwasdb.ld.format's.
     t_far_q: float = T_FAR_Q
     # The r scale the far-pair selection judges Stored r at: × 32767, the one encoding there was
-    # when the committed panel was made. The Test Store is × 511 (ogld#16, ADR 0004); the panel's
+    # when the committed panel was made. The Test Store is × 511 (ogld#16, ADR 0090); the panel's
     # Far Pairs reach t_far at both, and a regenerated panel may move this.
     r_scale: int = 32767
     # Selection. Each window was picked on the converted chromosomes (README, "Selection").
@@ -86,7 +86,7 @@ class Params:
     memory_mb: int = 32000
 
     def t_far(self, n: int, k: int) -> float:
-        """t_far = max(0.001, q / (n - k - 1)) (ADR 0001), as opengwasdb.ld.format has it."""
+        """t_far = max(0.001, q / (n - k - 1)) (ADR 0087), as opengwasdb.ld.format has it."""
         return format_t_far(n, k)
 
 

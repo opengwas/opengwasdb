@@ -24,7 +24,7 @@ import zarr
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store import frames
 
-#: The frame's decompressed payload, field by field (spec §5.2), little-endian:
+#: The frame's decompressed payload, field by field (ld-store §5.2), little-endian:
 #: k = 2, lengths (2, 1), then the partner deltas (−2, 4, 2) and the codes (52, −90, 120),
 #: each array stored as planes: every element's byte 0, then every element's byte 1, and so on.
 K = bytes.fromhex("02000000")
@@ -70,8 +70,8 @@ def test_a_frame_is_one_zstd_frame_with_its_checksum_and_its_content_size() -> N
     raw = encoded(FIRST, ROWS)
     assert raw[:4] == b"\x28\xb5\x2f\xfd", "a zstd frame's magic number"
     descriptor = raw[4]
-    assert descriptor & 0x04, "the content checksum is set (spec §5.2)"
-    assert descriptor >> 6 or descriptor & 0x20, "the content size is in the header (spec §5.2)"
+    assert descriptor & 0x04, "the content checksum is set (ld-store §5.2)"
+    assert descriptor >> 6 or descriptor & 0x20, "the content size is in the header (ld-store §5.2)"
     assert ZSTD.decode(raw) == PAYLOAD
 
 
@@ -144,7 +144,7 @@ def open_store(path: Path) -> zarr.Group:
 
 
 def chunk_file(array: zarr.Array) -> Path:
-    """Where the array's one chunk is written, from its own metadata (spec §5.1): never assumed."""
+    """Where the array's one chunk is written, from its own metadata (ld-store §5.1): never assumed."""
     key = array.metadata.encode_chunk_key((0,))
     return Path(array.store_path.store.root) / array.store_path.path / key
 

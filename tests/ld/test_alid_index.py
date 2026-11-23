@@ -1,4 +1,4 @@
-"""ogld#42: the ALID search index, held to the engine's own writer (ADR 0010).
+"""ogld#42: the ALID search index, held to the engine's own writer (ADR 0096).
 
 `tests/data/alid_index/index.tsv` holds the engine's answers (opengwasdb at the commit named on
 the file's first line) for five Variant Sets, made by `make_fixture.py` from the engine's
@@ -204,7 +204,7 @@ def built(out: Path, rows: list[tuple[str, int, str, str]]) -> Path:
 def _template() -> Path:
     """`WIDTH_ROWS`' store, built once per test process and copied by every test that reads it.
 
-    A build publishes an ALID companion (ADR 0012), which end to end — the canonical index's
+    A build publishes an ALID companion (ADR 0098), which end to end — the canonical index's
     arrays, their pins, the payloads and the exact correspondence check before the pointer —
     costs several times what copying the finished tree does. Only a test whose subject is that
     publication calls `built` for itself; `test_a_written_store_publishes_its_companion`
@@ -242,7 +242,7 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
 
 
 def test_a_written_store_publishes_its_companion(tmp_path: Path) -> None:
-    """ADR 0012's writer publication, on a build of its own (the other tests copy the result).
+    """ADR 0098's writer publication, on a build of its own (the other tests copy the result).
 
     The pointer names one generation whose payloads are the canonical index's own bytes, the
     manifest pins every canonical file, and the exact correspondence rule passes before anything
@@ -274,7 +274,7 @@ def test_a_written_store_publishes_its_companion(tmp_path: Path) -> None:
 
 
 def without_companion(store: Path) -> None:
-    """Exercise ADR 0010's canonical fallback independently of ADR 0012's companion."""
+    """Exercise ADR 0096's canonical fallback independently of ADR 0098's companion."""
     root = zarr.open_group(store, mode="r+")
     if layout.ALID_MMAP_ATTR in root.attrs:
         del root.attrs[layout.ALID_MMAP_ATTR]
@@ -282,7 +282,7 @@ def without_companion(store: Path) -> None:
 
 
 def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
-    # The rule is the table's, not the producer's (ADR 0005): the store reads back its own ALID
+    # The rule is the table's, not the producer's (ADR 0091): the store reads back its own ALID
     # column and indexes it, so a store written before the index gets the same one.
     store = written(tmp_path / "store")
     without_companion(store)
@@ -376,14 +376,14 @@ def test_rows_of_is_right_on_an_unsorted_index(tmp_path: Path) -> None:
 
 def test_a_present_alid_is_found_without_loading_its_chromosome(tmp_path: Path) -> None:
     # The index is the variant table's, not the positions': a search reads keys and nothing
-    # else, so the chromosome's positions and Near Band indptr stay unread (spec §10).
+    # else, so the chromosome's positions and Near Band indptr stay unread (ld-store §10).
     built = crafted(tmp_path)
     reader = StoreReader.open(built.path)
     assert reader.rows_of([built.alids[2]]).tolist() == [2]
     assert reader._loaded == {}
     assert reader._variant_table._located == {}, "the search read no positions either"
     # An ALID at the slot's width is indexed like any other: validation guarantees its key is
-    # the full ALID (ADR 0010; ogld#42's fix round 1).
+    # the full ALID (ADR 0096; ogld#42's fix round 1).
     assert reader.rows_of([built.alids[0]]).tolist() == [0]
     assert reader._loaded == {}
     assert reader._variant_table._located == {}
@@ -406,8 +406,8 @@ def test_the_derivation_writes_the_group_whole_or_leaves_nothing(tmp_path: Path)
     store = written(tmp_path / "store")
     without_companion(store)
     shutil.rmtree(store / layout.ALID_INDEX)
-    # A store written before ADR 0010 records no count of what its index leaves out; the
-    # derivation adds it (spec §7).
+    # A store written before ADR 0096 records no count of what its index leaves out; the
+    # derivation adds it (ld-store §7).
     meta = store / "zarr.json"
     document = json.loads(meta.read_text())
     del document["attributes"]["ld_store"]["counts"]["alids_left_out"]

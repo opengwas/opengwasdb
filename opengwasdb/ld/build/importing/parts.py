@@ -1,4 +1,4 @@
-"""Native Hail 0.2.64 BlockMatrix decoding (ADR 0015).
+"""Native Hail 0.2.64 BlockMatrix decoding (ADR 0101).
 
 Wire definitions: StreamBlockInputBuffer/LZ4InputBlockBuffer in InputBuffers.scala
 and RichDenseMatrixDouble.scala at hail-is/hail tag 0.2.64. Unallocated parts

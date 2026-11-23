@@ -2,8 +2,8 @@
 
 Measured 19 November 2026, porting #47 (`9b6fdb6`) onto main `f65f000`. The current
 schema-2, first-use measurements are at production-code commit `5a6600e`; the original
-schema-1 measurements at `903824c` are retained below as historical evidence. ADR 0012
-defines the representation; ADR 0011's Partner Rows, frame codec, thresholds and worker
+schema-1 measurements at `903824c` are retained below as historical evidence. ADR 0098
+defines the representation; ADR 0097's Partner Rows, frame codec, thresholds and worker
 default are unchanged. This is the mmap part of #81, not its remaining decode/gather work.
 
 **Round-2 trust-model clarification:** these answer comparisons concern trusted ogld
@@ -61,7 +61,7 @@ and sticky failure are once per reader under a lock shared with close. Source in
 follows shard-directory links: extending the foreign-companion breaker to linked shards was
 observed failing before fixing the incomplete walk. Cycles and broken/nonregular sources
 refuse, rather than silently disappearing from the pin set. Ordinary open and
-row-based matrix/region reads do not hash the companion. ADR 0012 records the revised contract.
+row-based matrix/region reads do not hash the companion. ADR 0098 records the revised contract.
 
 New artifacts are in `results/fix1/`: `prepare.py`, `benchmark.py`, `time.sh`, `summary.json`,
 `execution.json`, `e2e-*.json`, `*-exactness.json`, `head-*-fingerprints.json`, `validate-*.log`
@@ -192,7 +192,7 @@ disabling release makes the new reader-close breaker fail. Restoring the impleme
 green. The committed Test Store remains unchanged and companion-less; regenerating a Store
 now produces a companion. Generic recursive Zarr listings of newly written Stores emit the
 inherited #47 warning about the plain-file `alid_mmap` directory; normal opening and complete
-validation do not. This port retains #47's representation rather than changing ADR 0011.
+validation do not. This port retains #47's representation rather than changing ADR 0097.
 
 Base default tier: 1,552 passed in 14.63 s. Final head: 1,584 passed in 28.22 s (longest call
 1.86 s); coverage runs 21.29–23.46 s (final longest call 1.55 s), 97% coverage. The five realdata tests pass

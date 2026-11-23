@@ -59,7 +59,7 @@ def test_an_absent_a_malformed_and_a_wider_alid_are_not_this_store_s_rows() -> N
 def test_an_alid_at_the_slot_s_width_is_found(tmp_path: Path) -> None:
     # A slot-width ALID is indexed like any other: `alid_index.keys` refuses an index whose key is
     # not its row's full ALID, so a truncating build is a store validation fails, not one the
-    # reader second-guesses (ADR 0010).
+    # reader second-guesses (ADR 0096).
     store = copy_store(tmp_path / "store")
     rows = oracle(store)
     alid = next(a for a in rows if len(a.encode("utf-8")) == layout.ALID_INDEX_WIDTH)

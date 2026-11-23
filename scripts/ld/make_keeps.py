@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write each HGDP+1kGP panel's keep file: its unrelated samples (ADR 0002, decision 11).
+"""Write each HGDP+1kGP panel's keep file: its unrelated samples (ADR 0088, decision 11).
 
 The owner decided (10 November 2026, epic opengwas/ogld#1) that an LD Store is built from
 unrelated samples only. The HGDP+1kGP members files include 1kGP's trios: EUR has 197

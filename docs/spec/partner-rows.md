@@ -1,7 +1,7 @@
 # Partner Rows: a clump-and-proxy component for the LD Store
 
 Status: **accepted, and normative beside `docs/spec/ld-store.md`**, which takes the sections this
-document amends. The decisions are the owner's, of 18 November 2026 (§1; ADR 0011), revised by the
+document amends. The decisions are the owner's, of 18 November 2026 (§1; ADR 0097), revised by the
 measurements of #65 and its fixed G (§11).
 Format version described: `0.2.0` (decision D5); the version bump lands with the writer, #67.
 
@@ -48,7 +48,7 @@ decision 1. The triangle stays for `matrix` and `region`.
 | D1 | **The Partner Rows replace the Proxy Index.** | They hold every index entry (§3), so `proxies` reads them too. Measured on EUR: 14.76 GB at G = 16 (11.82 GB at G = 64), which is +5.38 GB (+2.44 GB) net of its 9.38 GB index; the owner's scaling puts the five panels at about +53 GB net at G = 64 (§11) |
 | D2 | **`clump` and `proxies` with r2 below t_partner and W ≤ `near_bp` are refused**, `threshold_below_t_partner`. | On HGDP+1kGP at r² 0.001, 90% of the pairs that pass are sampling noise (§11). Today's answered r² 0.001 clumps on those stores become Refusals: a breaking change |
 | D3 | **t_partner is set per reference dataset and recorded in the store's metadata**, as t_far is. | A build input with no default: each Source Panel's build names its own (0.01 for HGDP+1kGP, 0.001 = t_far for UK Biobank EUR), and a build without one refuses. It never exceeds t_far (§3) |
-| D4 | **A Zarr group** per chromosome, inside the store's one hierarchy (§5; refined by the owner on 18 November 2026, ADR 0011). | `partners/<chrom>/` holds two arrays, `frames` and `frames_idx`, each one chunk, and the manifest's keys as the group's attributes. One read per frame, with no shard index. Plain files make zarr's `members()` warn; a node in the hierarchy is what removes it, and #67 measures that on a real store |
+| D4 | **A Zarr group** per chromosome, inside the store's one hierarchy (§5; refined by the owner on 18 November 2026, ADR 0097). | `partners/<chrom>/` holds two arrays, `frames` and `frames_idx`, each one chunk, and the manifest's keys as the group's attributes. One read per frame, with no shard index. Plain files make zarr's `members()` warn; a node in the hierarchy is what removes it, and #67 measures that on a real store |
 | D5 | **Format version 0.2.0.** | A new component, a removed one and a changed refusal table |
 | D6 | **Derive** the five existing stores' Partner Rows from their Near Band and Far Pairs (§6.2). | No genotypes needed. Byte-identical to a build |
 
@@ -126,7 +126,7 @@ the absence only to decide that a threshold at or above the matching bound is no
 ```
 
 `partners/` is a node in the store's one Zarr hierarchy, not a directory beside it (D4, refined by
-the owner on 18 November 2026; ADR 0011). So `ld-store.md` §1's envelope stays "one Zarr v3
+the owner on 18 November 2026; ADR 0097). So `ld-store.md` §1's envelope stays "one Zarr v3
 hierarchy", and a reader that lists the store sees the component.
 
 The alternative, plain files in a directory with no group metadata, was measured on the published
@@ -252,7 +252,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
   `t_far`: a larger one is refused naming both. A store whose provenance already records Partner
   Rows at another threshold is refused too, naming both, because a component at a second floor
   would hold two.
-- Reads `near/<c>/r` with the direct decoder (ADR 0009) in blocks of rows, and the Far Pairs as
+- Reads `near/<c>/r` with the direct decoder (ADR 0095) in blocks of rows, and the Far Pairs as
   their `indptr` whole (n_c + 1 entries) and their `partner` and `r` arrays one block of rows'
   worth at a time (101,886 pairs on EUR chr22). It feeds both to §6.1's emitter, so the `frames`
   and `frames_idx` chunk files are a build's, byte for byte, at any `--threads` and
@@ -578,7 +578,7 @@ subdividing the G = 16 frames) and
   its t_far, for a panel whose chance LD is a larger share of its rows.
 - **Plain files for the frames** (against the refined D4): a directory of plain files serves a
   reader, but it makes zarr's `members()` warn that `partners` is not a component of the
-  hierarchy, as #65 measured (ADR 0011). One chunk per array keeps the frame read one read; a
+  hierarchy, as #65 measured (ADR 0097). One chunk per array keeps the frame read one read; a
   Zarr array sharded with a chunk per frame would resolve a shard index first, which is two reads
   rather than one. So the two arrays are Zarr's, with one chunk each.
 - **Fold into 0.1.0** (against D5): no version bump, but a 0.1.0 reader could not tell a store

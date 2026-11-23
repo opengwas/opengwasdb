@@ -1,4 +1,4 @@
-"""PC Adjustment and one A1-signed r for tiles and on-demand rows (ADR 0013).
+"""PC Adjustment and one A1-signed r for tiles and on-demand rows (ADR 0099).
 
 The covariates are an intercept and the kept PCs in sample order. At k = 0 the
 intercept alone centres the dosages, giving Pearson r on complete genotypes.
@@ -56,7 +56,7 @@ def residuals(
 
 @dataclass(frozen=True)
 class Block:
-    """ALT dosages and their PC projections, residual norms and A1 signs (ADR 0013).
+    """ALT dosages and their PC projections, residual norms and A1 signs (ADR 0099).
 
     Rows retain the sample order of the covariate basis. Two blocks passed to `r` must use
     the same samples and basis; a row-against-window call is a one-row slice of a block.
@@ -79,10 +79,10 @@ def prepare(
     covariates: Covariates,
     a1_is_alt: npt.NDArray[np.bool_],
 ) -> Block:
-    """Project ALT dosages once; refuse the same FLAT residuals as the builder (spec §6).
+    """Project ALT dosages once; refuse the same FLAT residuals as the builder (ld-store §6).
 
     Keeping the residual calculation (rather than subtracting squared norms) avoids
-    cancellation in the FLAT check. Only projections and norms survive it (ADR 0013).
+    cancellation in the FLAT check. Only projections and norms survive it (ADR 0099).
     """
     projection = dosages @ covariates.basis
     resid, flat = residuals(dosages, covariates)
@@ -97,7 +97,7 @@ def r(rows: Block, span: Block) -> npt.NDArray[np.float64]:
 
     For complete hard calls the float64 BLAS raw dot is exact: every partial sum is a
     whole number at most 4n. Only the (k + 1)-term correction and normalisation round.
-    Dosage inputs use the same formula, without the integer exactness claim (ADR 0013).
+    Dosage inputs use the same formula, without the integer exactness claim (ADR 0099).
     Quantise the result only through `opengwasdb.ld.format.REncoding`.
     """
     out = rows.calls @ span.calls.T

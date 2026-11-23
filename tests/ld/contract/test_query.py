@@ -1,4 +1,4 @@
-"""ogld#6's contract: proxies and clumping on the Test Store, with the refusals of spec §9.
+"""ogld#6's contract: proxies and clumping on the Test Store, with the refusals of ld-store §9.
 
 Expected proxies come from the Test Panel's reference r, quantised and judged on r̂² as the
 spec says. Expected clumps are plink2's leads at k = 0 (lane 2d's `clump_leads`), made with
@@ -22,9 +22,9 @@ from opengwasdb.ld.format import RefusalReason
 
 #: plink2's unphased leads at r² 0.001 on the Test Panel (tests/data/test-panel/README.md) are
 #: held there, but a 0.2.0 store refuses r² 0.001 within 3 Mb: its t_partner is 0.01, so the
-#: comparison that used them is answered at r² 0.01 only (spec §9; the refusal is tested below).
+#: comparison that used them is answered at r² 0.01 only (ld-store §9; the refusal is tested below).
 
-#: The band the plink2 comparison lists (spec §3; ogld#16): candidate pairs (p ≤ p1, under
+#: The band the plink2 comparison lists (ld-store §3; ogld#16): candidate pairs (p ≤ p1, under
 #: 3,000 kb, k = 0) whose true r², plink2's, and whose r̂² at the Test Store's × 511 lie on two
 #: sides of r2. Each is within 2|r| × half a step of it: true r² 0.00101–0.00104, read as code 16,
 #: r̂² 0.00098. None moves a lead. At × 32767 there were none.
@@ -97,7 +97,7 @@ def test_proxies_are_ordered_and_never_the_query_itself() -> None:
 
 
 def test_proxies_below_t_far_within_3_mb_read_the_near_band() -> None:
-    # r2 = 0.01 < t_far is answered within 3 Mb: every pair there is stored (spec §9).
+    # r2 = 0.01 < t_far is answered within 3 Mb: every pair there is stored (ld-store §9).
     store = opengwasdb.ld.open(support.TEST_STORE)
     query = busiest_query(0.01, 3_000_000)
     found = store.proxies(alids([query]), r2=0.01, kb=3000)
@@ -185,7 +185,7 @@ def test_clump_leads_equal_plink2_s_at_k0(
 @pytest.mark.parametrize("r2", [0.01, 0.001])
 def test_the_pairs_the_store_s_step_moves_across_r2_are_listed_and_within_it(r2: float) -> None:
     # Reference r and the store's own step, with no query: the pairs are listed at both
-    # thresholds, though a 0.2.0 store answers only the first (spec §9).
+    # thresholds, though a 0.2.0 store answers only the first (ld-store §9).
     # Every pair of the Test Panel the step moves across r2 lies within 2|r| × half a step of it;
     # among the plink2 comparison's candidates they are exactly CROSSING's.
     opengwasdb.ld.open(support.TEST_STORE)

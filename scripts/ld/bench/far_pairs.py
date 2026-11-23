@@ -2,10 +2,10 @@
 """Each chromosome's Far Pairs, and the chunks a list matrix's far read touches (ogld#8).
 
 Before ogld#31, `pair_r` read the Proxy Index row of every listed variant once a list spanned
-more than near_bp (spec §10). This measured what a separate Far Pairs component, the index's
+more than near_bp (ld-store §10). This measured what a separate Far Pairs component, the index's
 entries more than near_bp apart in their earlier row, would save, and its output,
 `docs/benchmarks/results/far_pairs.json`, is the evidence `docs/benchmarks/latency.md`,
-`docs/benchmarks/far-pairs.md` and spec §11 cite for ogld#31's `far/`. It is kept so those
+`docs/benchmarks/far-pairs.md` and ld-store §11 cite for ogld#31's `far/`. It is kept so those
 figures can be made again. Per chromosome it counts the Far Pairs from the Proxy Index by the
 store's own rule (`_beyond_near`, which `far/` is written by), and for the benchmark's
 500-variant draws (`latency.Sample`, seeds 8–10) the distinct chunks of one array each would

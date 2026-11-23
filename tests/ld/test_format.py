@@ -28,7 +28,7 @@ T = st.floats(min_value=0.001, max_value=0.999, allow_nan=False)
 # ------------------------------------------------------------------ §3 quantisation
 
 #: The scales the decisions name: HGDP+1kGP's, UK Biobank EUR's and the container's widest
-#: (owner, 10 November 2026; ADR 0004).
+#: (owner, 10 November 2026; ADR 0090).
 SCALES = [511, 2047, 32767]
 
 
@@ -177,7 +177,7 @@ def test_quantise_is_monotone(scale: int, a: float, b: float) -> None:
 
 # ------------------------------------------------------------------ §3, §7 the record
 
-#: spec §7's `encoding` of the HGDP+1kGP stores.
+#: ld-store §7's `encoding` of the HGDP+1kGP stores.
 HGDP = {"r_dtype": "int16", "r_scale": 511, "r_reserved_code": -32768, "rounding": "half_to_even"}
 
 
@@ -214,8 +214,8 @@ def test_an_encoding_ogld_does_not_implement_is_refused_naming_it(case: str) -> 
 
 # (n, k, the store's scale, t_far as the spec's §3 table prints it, far code floor, code of a
 # pair at exactly t_far, whether that pair is stored, the true r² cut). From docs/spec/ld-store.md
-# §3, each panel at its own scale (ADR 0004), on the samples each build keeps: the unrelated ones
-# (ADR 0002, decision 11), EUR 665, AFR 608, EAS 724, SAS 672, AMR 341. The Test Panel keeps all
+# §3, each panel at its own scale (ADR 0090), on the samples each build keeps: the unrelated ones
+# (ADR 0088, decision 11), EUR 665, AFR 608, EAS 724, SAS 672, AMR 341. The Test Panel keeps all
 # 771 EUR members (owner's ruling), so the Test Store's rows are its own. The values were computed
 # in 50-digit decimal arithmetic, outside ogld.
 T_FAR_TABLE = [
@@ -265,8 +265,8 @@ def test_t_far_and_its_floor_match_the_spec_table(
 
 
 # The floors at × 32767, the one scale before ogld#16: the floor is the encoding's, so one t_far
-# gives each scale its own. 5850 is what the real EUR chr22 build at × 32767 records (spec §6);
-# the rows at 771, 816 and 345 are spec §3's former table, on all of each panel's v2 members.
+# gives each scale its own. 5850 is what the real EUR chr22 build at × 32767 records (ld-store §6);
+# the rows at 771, 816 and 345 are ld-store §3's former table, on all of each panel's v2 members.
 WIDEST_FLOORS = [
     (49766, 10, 1037),
     (665, 10, 5850),
@@ -360,10 +360,10 @@ def test_every_r_whose_code_reaches_the_floor_is_above_least_r(
 
 # ------------------------------------------------------------------ §8 pair answers
 
-#: t_far at k = 10 on the samples the EUR and AMR builds keep (ADR 0002, decision 11).
+#: t_far at k = 10 on the samples the EUR and AMR builds keep (ADR 0088, decision 11).
 EUR_K10 = fmt.t_far(665, 10)
 AMR_K10 = fmt.t_far(341, 10)
-#: The HGDP+1kGP stores' encoding, in which §8's walkthroughs read r (ADR 0004).
+#: The HGDP+1kGP stores' encoding, in which §8's walkthroughs read r (ADR 0090).
 HGDP_R = fmt.REncoding(511)
 
 
@@ -430,7 +430,7 @@ def test_amr_s_t_far_bounds_a_pair_eur_stores() -> None:
 
 
 def test_a_store_that_measured_less_than_10_mb_says_so() -> None:
-    # An imported store may record far_bp below 10 Mb (spec §7); the reader uses the record.
+    # An imported store may record far_bp below 10 Mb (ld-store §7); the reader uses the record.
     out = fmt.answer_kind(
         same_chromosome=True,
         distance=9_000_000,
@@ -623,16 +623,16 @@ def test_the_refusal_table(
 @pytest.mark.parametrize(
     ("r2", "kb", "t_partner", "refusal"),
     [
-        # r² equal to t_partner is answered: the Partner Rows keep r̂² ≥ t_partner (spec §9)
+        # r² equal to t_partner is answered: the Partner Rows keep r̂² ≥ t_partner (ld-store §9)
         (0.01, 3_000, 0.01, None),
         # One code step below the Partner Floor, at × 511: code 52 is the floor at t_partner
-        # 0.01, and code 51's r̂² 0.00996 is below it (spec §3; partner-rows §3)
+        # 0.01, and code 51's r̂² 0.00996 is below it (ld-store §3; partner-rows §3)
         ((51 / 511) ** 2, 3_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
         (math.nextafter(0.01, 0.0), 3_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
         (0.0, 3_000, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
         (0.0, 0, 0.01, fmt.RefusalReason.THRESHOLD_BELOW_T_PARTNER),
         # A store whose t_partner is 0.001, as UK Biobank EUR's is, answers r² 0.001 within 3 Mb,
-        # and beyond it only above t_far (spec §9)
+        # and beyond it only above t_far (ld-store §9)
         (0.001, 3_000, 0.001, None),
         (0.001, 5_000, 0.001, fmt.RefusalReason.THRESHOLD_BELOW_T_FAR),
         # Above near_bp the table is unchanged by t_partner

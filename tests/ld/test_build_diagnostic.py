@@ -1,5 +1,5 @@
 """ogld#5: the PC diagnostic, dosages and PC Adjustment's edge, each against a computation of its
-own (spec §7; build-inputs §6, §7, §9).
+own (ld-store §7; build-inputs §6, §7, §9).
 
 - `near_100kb_change` is the change in the Test Panel's independent reference r from k = 0 to
   k = 10, signed to A1, over its pairs within 100 kb: its quantiles to within one bin.

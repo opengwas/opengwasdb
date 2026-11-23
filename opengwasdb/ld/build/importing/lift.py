@@ -1,4 +1,4 @@
-"""GRCh37 to GRCh38 with explicit allele and measurement losses (ADR 0015)."""
+"""GRCh37 to GRCh38 with explicit allele and measurement losses (ADR 0101)."""
 
 from __future__ import annotations
 

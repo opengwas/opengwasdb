@@ -128,7 +128,7 @@ def test_a_t_partner_above_the_stores_t_far_is_refused(tmp_path: Path) -> None:
 
 
 def test_t_partner_is_required(tmp_path: Path) -> None:
-    """There is no default: a command without one does not run (partner-rows §3; ADR 0011, D3)."""
+    """There is no default: a command without one does not run (partner-rows §3; ADR 0097, D3)."""
     with pytest.raises(SystemExit) as stopped:
         cli.main(["derive-partners", str(unpartnered(tmp_path / "store"))])
     assert stopped.value.code == 2, "argparse refuses the missing option"
@@ -157,7 +157,7 @@ def test_chromosomes_derive_part_of_a_store_without_claiming_it(tmp_path: Path) 
 
 def test_drop_index_removes_the_index_of_a_derived_store(tmp_path: Path) -> None:
     """`--drop-index` is a step of its own, taken once the Partner Rows hold every entry the
-    Proxy Index had (partner-rows §6.2; ADR 0011, D1)."""
+    Proxy Index had (partner-rows §6.2; ADR 0097, D1)."""
     store = unpartnered(tmp_path / "store")
     made = derive_partners(store, t_partner=T_PARTNER, drop_index=True)
     assert made is not None
@@ -400,7 +400,7 @@ def test_a_rerun_claims_an_unclaimed_component_once_the_rules_accept_it(unclaime
 def unclaimed_keeping_keys(to: Path) -> Path:
     """A copy of the committed Test Store that keeps its Partner Rows' keys and frames but records
     format 0.1.0: a component no provenance claims, whatever keys a store carries beside it
-    (spec §7, §13; partner-rows §6.2).
+    (ld-store §7, §13; partner-rows §6.2).
 
     It is the residue `_settle` exists for, and the one the final review reproduced: a 0.1.0 store
     whose `partners/` is whole and whose `t_partner` is recorded still has no Partner Rows, so
@@ -419,7 +419,7 @@ def test_a_0_1_0_store_that_keeps_the_keys_is_settled_not_refused(tmp_path: Path
     """The recorded **format version** decides whether a store has Partner Rows, so a 0.1.0 store
     that keeps the keys and the frames is unclaimed: `derive-partners` settles the residue rather
     than claiming there is nothing to derive, and the store is the 0.2.0 one it was, byte for
-    byte, clump included (spec §7, §13; partner-rows §6.2; ogld#64)."""
+    byte, clump included (ld-store §7, §13; partner-rows §6.2; ogld#64)."""
     store = unclaimed_keeping_keys(tmp_path / "store")
     alid = first_alid(store)
     with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows"):
@@ -528,10 +528,10 @@ def test_a_failed_index_removal_keeps_its_count(tmp_path: Path) -> None:
 
 
 def test_a_0_1_0_store_that_keeps_the_keys_answers_no_partner_read(tmp_path: Path) -> None:
-    """A store's provenance may hold extra keys (spec §7), and one of them does not make it a
+    """A store's provenance may hold extra keys (ld-store §7), and one of them does not make it a
     store with Partner Rows: the recorded **format version** does. A 0.1.0 store carrying a
     whole component nothing claims is refused by both reads that would use it, rather than
-    answered from frames no rule has judged (partner-rows §6.2; spec §13; ogld#69)."""
+    answered from frames no rule has judged (partner-rows §6.2; ld-store §13; ogld#69)."""
     store = unpartnered(tmp_path / "store")
     derive_partners(store, t_partner=T_PARTNER)
     recorded = json.loads((store / "zarr.json").read_text())

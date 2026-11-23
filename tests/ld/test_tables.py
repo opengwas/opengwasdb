@@ -272,7 +272,7 @@ def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Owner, 10 November 2026: a build takes its scale as an input, and there is no default it
-    # could fall back on silently (ADR 0004).
+    # could fall back on silently (ADR 0090).
     field = next(f for f in dataclasses.fields(opengwasdb.ld.BuildInputs) if f.name == "r_scale")
     assert field.default is dataclasses.MISSING
     given = {
@@ -296,7 +296,7 @@ def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
 def test_a_build_with_no_partner_threshold_is_refused_naming_what_is_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # A build input with no default (ADR 0011, D3): each Source Panel's build names its own, and
+    # A build input with no default (ADR 0097, D3): each Source Panel's build names its own, and
     # the store refuses one above t_far once the panel's n and k give it (partner-rows §3).
     field = next(f for f in dataclasses.fields(opengwasdb.ld.BuildInputs) if f.name == "t_partner")
     assert field.default is dataclasses.MISSING

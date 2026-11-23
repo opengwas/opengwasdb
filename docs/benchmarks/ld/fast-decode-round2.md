@@ -38,7 +38,7 @@ compressed ranges have a separate 256 MiB credit limit held until decode complet
 oversized chunks remain the documented exception. Ranges coalesce at most 512 KiB gaps into
 16 MiB reads; only requested chunks decode. Actual requests are semaphore-bounded by zarr's
 async concurrency. Positions, indptr, request/results, codec workspace and cache bookkeeping
-are additional, as in spec §10; this is not an RSS limit.
+are additional, as in ld-store §10; this is not an RSS limit.
 
 The wrapper bridges exact LocalStore's public get_sync through its async interface on the
 same seven-worker pool as decompression. HTTP and subclasses keep their own async interface.

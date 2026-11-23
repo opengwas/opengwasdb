@@ -1,5 +1,7 @@
 # Variant identity: a tested copy of the engine's function, not an import
 
+Formerly ogld ADR 0003.
+
 Issue [#3](https://github.com/opengwas/ogld/issues/3), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 The engine is opengwas/opengwasdb at `1ab2b09`.
 

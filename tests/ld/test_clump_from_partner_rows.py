@@ -33,7 +33,7 @@ from opengwasdb.ld.store.workers import COMPONENT_WORKERS_MAX
 
 #: The Test Store's rows, all of them: a clump of every variant, and a proxies query on each.
 ALL = np.arange(1056, dtype=np.int64)
-#: The Test Store's Far Threshold, which its own record holds (n = 771 at k = 10; spec §3, §7).
+#: The Test Store's Far Threshold, which its own record holds (n = 771 at k = 10; ld-store §3, §7).
 T_FAR = t_far(771, 10)
 #: Every seventh row, and the first forty: the smaller requests the frozen answers also cover.
 SAMPLE = ALL[::7]
@@ -44,7 +44,7 @@ SCORE = np.abs(np.random.default_rng(71).normal(4.0, 1.5, len(ALL)))
 SMALL_SCORE = np.abs(np.linspace(1.0, 6.0, len(SMALL)))
 
 #: A list that names one row twice with the same score, another twice with different ones, and a
-#: tie across two rows: the scatter rule and the strongest-first tie rule (spec §9).
+#: tie across two rows: the scatter rule and the strongest-first tie rule (ld-store §9).
 DUPLICATES = np.array([SMALL[0], SMALL[5], SMALL[5], SMALL[17], SMALL[0], SMALL[30], SMALL[30]])
 DUPLICATE_SCORE = np.array([3.0, 5.0, 5.0, 2.0, 3.0, 9.0, 9.0])
 
@@ -263,7 +263,7 @@ def _ask(
 
 def test_a_threshold_one_code_step_below_the_partner_floor_is_refused() -> None:
     """At the Partner Floor's own code the request is answered; one code step below it is
-    refused, W ≤ near_bp, for both queries (spec §9; partner-rows §8.1)."""
+    refused, W ≤ near_bp, for both queries (ld-store §9; partner-rows §8.1)."""
     store = opengwasdb.ld.open(TEST_STORE)
     floor = PARTNER_FLOOR
     assert store.provenance["partner_code_floor"] == floor
@@ -284,7 +284,7 @@ def test_a_threshold_one_code_step_below_the_partner_floor_is_refused() -> None:
 def test_the_t_partner_refusal_names_the_store_both_thresholds_and_the_way_out() -> None:
     """A refusal is actionable: it names the request's r2, the t_partner the store records and
     the store it is, and what to do — ask at or above the store's t_partner, or read a store
-    derived at a lower one (spec §9; partner-rows §8.1; ogld#64)."""
+    derived at a lower one (ld-store §9; partner-rows §8.1; ogld#64)."""
     store = opengwasdb.ld.open(TEST_STORE)
     names, score = _subset("small", store)
     asked = 0.001
@@ -333,7 +333,7 @@ def test_the_refusal_is_decided_before_any_read(monkeypatch: pytest.MonkeyPatch)
 
 def _without_partner_rows(tmp_path: Path) -> Path:
     """A copy of the Test Store made into the 0.1.0 store it is read as: no Partner Rows, and no
-    provenance for them, which is what a store built before 0.2.0 holds (spec §13)."""
+    provenance for them, which is what a store built before 0.2.0 holds (ld-store §13)."""
     copy = copy_store(tmp_path / "v010")
     shutil.rmtree(copy / "partners")
     root = copy / "zarr.json"

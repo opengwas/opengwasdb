@@ -1,12 +1,14 @@
 # Build inputs: a PLINK 2 pgen of complete genotypes, and a PC File ogld does not compute
 
+Formerly ogld ADR 0002.
+
 Issue [#2](https://github.com/opengwas/ogld/issues/2), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
 This ADR records the owner's decisions of 7 November 2026 on what an LD Store build reads, with
 the evidence that led to them and the options rejected. It **supersedes the PC wording of
-[ADR 0001](./0001-near-band-and-thresholded-far-pairs.md), decision 4** ("The PCs come from
+[ADR 0087](./0087-near-band-and-thresholded-far-pairs.md), decision 4** ("The PCs come from
 LD-pruned common variants, with the Long-Range LD Regions excluded"): the PCs are still computed
 that way, but outside ogld, by one recipe, and the builder checks every PC File it is given.
-Lane 2c adds the matching clarification to ADR 0001 (#2). The formats and rules are in
+Lane 2c adds the matching clarification to ADR 0087 (#2). The formats and rules are in
 [`docs/spec/build-inputs.md`](../spec/build-inputs.md); the terms are in `CONTEXT.md`.
 
 Every number below is from the prototype branch `proto/1-build-inputs`, cited as
@@ -15,7 +17,7 @@ Every number below is from the prototype branch `proto/1-build-inputs`, cited as
 
 ## Context
 
-ADR 0001 decided what an LD Store holds. The builder (ogld#5) needs to know what it reads:
+ADR 0087 decided what an LD Store holds. The builder (ogld#5) needs to know what it reads:
 which genotype formats, which PCs, and what a missing genotype means. Three facts forced the
 decisions.
 
@@ -91,7 +93,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    | SAS | 783 | 782 | HGDP00175 | 0.0270298 |
    | AMR | 345 | 345 | none | 0.0623952 |
 
-   t_far = max(0.001, 20.84 / (n − k − 1)) on the v2 sample count (ADR 0001, decision 3).
+   t_far = max(0.001, 20.84 / (n − k − 1)) on the v2 sample count (ADR 0087, decision 3).
 4. **PCs are precomputed and supplied in a PC File; ogld runs no PCA.** For all five HGDP+1kGP
    panels they are **our own**, from the same v2 genotypes, by one recipe script,
    `scripts/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
@@ -128,14 +130,14 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    On our v2 PCs it drops no PC in any of the five panels: each keeps 20 of 20 and uses
    PC1–PC10. The smallest ratio of any PC is EUR PC2's, 0.104, which LCT's window explains 0.195
    of (`proto/1-build-inputs@8c25ab3:…/results/pc_check_v2_scan.tsv`).
-6. **Superseded by [ADR 0015](./0015-imported-ld.md)** (owner, #88/#93,
+6. **Superseded by [ADR 0101](./0101-imported-ld.md)** (owner, #88/#93,
    20–21 November 2026): published Pan-UKB covariance may now be imported.
    **Originally: imported LD matrices (Pan-UKB) are a later epic.** This epic's provenance already records
    the source kind and every covariate adjusted for (epic #1 comment of 7 November 2026).
 7. **The test data is a committed real slice**, the Test Panel: v2 chr21 and chr22 for the 771
    EUR samples, with the EUR PC File and independent reference answers
    ([`tests/data/test-panel/README.md`](../../tests/data/test-panel/README.md)). The owner approved
-   committing this public slice on 7 November 2026. ADR 0001's decision 5, "Genotypes never leave
+   committing this public slice on 7 November 2026. ADR 0087's decision 5, "Genotypes never leave
    the host they are built on", still holds for every non-public Source Panel, such as UK Biobank.
    It does not hold for HGDP+1kGP, whose genotypes are already public under gnomAD's CC0 terms.
 8. **An INFO floor needs INFO** (accepted at the review of #2). With `info_min` set, a pgen that
@@ -214,7 +216,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 - **The epic's k = 0 criterion stands.** With complete genotypes, numpy's Pearson r equals
   `plink2 --r-unphased` (the Test Panel's `reference_r(0)` against its `plink2_r()`: at most 1.0×10⁻¹⁴ on all 146,593 pairs).
 - **Fewer variants, so smaller stores.** v2 EUR chr22 has 124,449 sites at MAC ≥ 20, 50.9% of
-  the 244,656 that ADR 0001's size estimates counted from the unfiltered VCF, which included
+  the 244,656 that ADR 0087's size estimates counted from the unfiltered VCF, which included
   non-PASS sites and applied no call-rate floor (AMR's count alone was PASS-only). Near Band bytes
   scale roughly with the square of variant density, so EUR's Near Band would be roughly 26% of the
   spec's 308 GB, about 80 GB: a rough figure, from one chromosome; ogld#7 measures it.

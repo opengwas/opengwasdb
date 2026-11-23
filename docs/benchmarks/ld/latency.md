@@ -13,7 +13,7 @@ _Measured 12 November 2026. Every table below is rendered from the records in
 - **Layout C** clumps below t_far fastest at every latency: EUR chr22 in 12.3 s locally, 44 s at
   10 ms and 143 s at 50 ms, against B's 17.1, 132 and 488 s and A's 37.8, 585 and 2,243 s. It
   reads regions fastest and is the smallest store. B reads 3–6× fewer bytes on small reads, which
-  take the same time on every layout here. **Decided: layout C is final** (ADR 0006).
+  take the same time on every layout here. **Decided: layout C is final** (ADR 0092).
 - **The Far Pairs, merged into the Proxy Index,** cost a 10 Mb region the 6–9% more bytes §11
   estimated, and 13–30% of its time. They cost a matrix of 500 variants on chr22 58–60% of its time
   over HTTP: about 890 index chunks, where a Far Pairs component reads about 11. chr22 holds few
@@ -30,19 +30,19 @@ component of their own (ogld#31), and the reader's speed-ups are ogld#32 ("Decis
 
 **Step 1** times the four queries on the published HGDP+1kGP EUR LD Store,
 `/data/opengwasdb/work/ogld/stores/hgdp1kgp-v2-EUR-k10.store`. It has 8,586,889 variants and is
-at × 511 and k = 10, in layout C, then spec §6's provisional choice and now its final one
-(ADR 0006). The queries:
+at × 511 and k = 10, in layout C, then ld-store §6's provisional choice and now its final one
+(ADR 0092). The queries:
 
 - clumping each of opengwas/opengwasdb#403's 37 Analyses' 5e-8 tiers at r² 0.01 and 0.001
   within 3 Mb, the inputs of ogld#6's acceptance run (`hits.tsv`, |z| as the score);
 - region matrices 3 Mb and 10 Mb wide on chr22, centred at 25, 32 and 40 Mb. The 10 Mb one reads
-  the Proxy Index rows of its variants for its pairs beyond `near_bp` (spec §10, §11);
+  the Proxy Index rows of its variants for its pairs beyond `near_bp` (ld-store §10, §11);
 - `matrix` for 500 variants drawn at random, on chr22 and genome-wide (seeds 8, 9 and 10);
 - `proxies` at r² 0.8 within 10 Mb for 1, 10 and 100 variants drawn genome-wide.
 
 **Step 2** times the reads that differ between the Near Band layouts on HGDP+1kGP EUR chr22,
 built three times by `ogld build` (× 511, k = 10, the published store's inputs), once in each
-of spec §6's layouts:
+of ld-store §6's layouts:
 
 | layout | `near/<c>/r` inner chunk | shard |
 |---|---|---|
@@ -244,7 +244,7 @@ and 352 ms at 50 ms: six requests, three reads of two requests each. For 100 var
 | C | 1,002,545,575 B | — | 19 | 225 KB | 4 KiB | 37.6 s | 214 s | 2.87 GiB |
 
 Each build ran on 8 threads at a load of 39–41. At × 511 a smaller chunk compresses much worse
-than spec §6's codec table, measured at × 32767, suggests: 1.76× (A), 1.96× (B) and 2.33× (C)
+than ld-store §6's codec table, measured at × 32767, suggests: 1.76× (A), 1.96× (B) and 2.33× (C)
 here, against 1.15–1.21× there. The five published stores' Near Bands are 486 GB, at C. At EUR
 chr22's ratios, B would add about 92 GB to them and A about 157 GB.
 
@@ -297,7 +297,7 @@ they cost with concurrent reads at 10 ms (9 s) and 50 ms (40 s). So on a slow li
 concurrent reader, B and C clump about equally fast.
 
 **A region is fastest on C, and A is ruled out again.** A region reads each row's codes inside
-the region as one slice (spec §10). On B and C the slices of a block of rows fall in contiguous
+the region as one slice (ld-store §10). On B and C the slices of a block of rows fall in contiguous
 chunks, read in one call per block: 65 and 57 requests. On A the gap between one row's slice and
 the next spans whole 8 KiB chunks, so the chunks are not contiguous, and the read makes 10,959
 requests. That is 166 s at 10 ms against 2.1–2.9 s. A's 16 KiB shard index is also larger than its
@@ -317,7 +317,7 @@ cache's size is the lever there, not the layout (below).
 
 ## The Far Pairs: what merging them into the Proxy Index costs
 
-Spec §11 merged the Far Pairs into the Proxy Index on 8 November. It said a region wider than
+ld-store §11 merged the Far Pairs into the Proxy Index on 8 November. It said a region wider than
 `near_bp` would read about 3–9% more bytes. It also said a matrix for a list of ALIDs would be
 unchanged: "each reads one row per variant, and a row of either component sits in one inner
 chunk, so the requests are the same". The first holds; the second does not.
@@ -434,9 +434,9 @@ index would remove the first of the two round trips a call makes; that was not m
 The owner ruled on 12 November 2026, on ogld#8, from this benchmark's recommendations, which follow
 as they were made, with their numbers corrected where the review of ogld#8 found them wrong:
 
-1. **Layout C is final** (ADR 0006; spec §6).
+1. **Layout C is final** (ADR 0092; ld-store §6).
 2. **The Far Pairs come back** as a component of their own, before the first release (ogld#31,
-   which rewrites spec §11).
+   which rewrites ld-store §11).
 3. **The reader's speed-ups are ogld#32**: fetching a read's runs of chunks together, the chunk
    cache's budget and `ChunkCache._counted`.
 

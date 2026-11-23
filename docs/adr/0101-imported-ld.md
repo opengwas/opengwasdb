@@ -1,5 +1,7 @@
 # Import published covariance as adjusted-genotype correlation
 
+Formerly ogld ADR 0015.
+
 Issue #93, epic #88. Authority: the owner's 20 November 2026 rulings on #88,
 #89's diagonal-normalisation ruling, and #93's kickoff ruling (21 November).
 

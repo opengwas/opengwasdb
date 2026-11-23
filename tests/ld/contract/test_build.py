@@ -8,7 +8,7 @@ it keeps, except where a pair's code lies on the far code floor's rounding edge.
 The builder also refuses an input with a missing call, and its PC Check (the owner's
 local-PC rule, `docs/spec/build-inputs.md` §8) drops a Local PC, keeps a PC with a strong
 window that the rest of the genome also explains, and uses the first up to 10 PCs kept,
-refusing with fewer than 5 (owner, 7 November 2026; ADR 0002). The hand-built PCs use the
+refusing with fewer than 5 (owner, 7 November 2026; ADR 0088). The hand-built PCs use the
 Test Panel's 771 samples: the ratio cannot drop any PC below about 100.
 
 Every test calls `opengwasdb.ld.build` before it reads the Test Panel: a build is given `PANEL`'s
@@ -163,7 +163,7 @@ def test_the_provenance_records_what_was_built(tmp_path_factory: pytest.TempPath
 def test_an_unadjusted_build_records_k0_and_no_minimum(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    # k_min applies only when PCs are used (spec §7): at k = 0 the default k_min = 5 refuses
+    # k_min applies only when PCs are used (ld-store §7): at k = 0 the default k_min = 5 refuses
     # nothing, and provenance records it as null.
     provenance, _ = built(0, tmp_path_factory)
     assert inputs(0).k_min == 5, "the build was given the default minimum"

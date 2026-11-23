@@ -2,8 +2,8 @@
 
 Stores of the Test Panel's reference r at k = 10 are written at × 511 (the HGDP+1kGP stores'),
 × 2047 (UK Biobank EUR's) and × 32767 by the Test Store's own script, once per worker each.
-Expected values are the reference r and each scale's literals: a code is computed here as spec §3
-writes it (`support.codes`), and each floor is spec §3's, never ogld's arithmetic.
+Expected values are the reference r and each scale's literals: a code is computed here as ld-store §3
+writes it (`support.codes`), and each floor is ld-store §3's, never ogld's arithmetic.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from opengwasdb.ld.store import layout
 CONTRACT = Path(__file__).resolve().parent / "contract"
 REPOSITORY = Path(__file__).resolve().parents[2]
 SCALES = (511, 2047, 32767)
-#: The far code floor at the Test Panel's t_far(771, 10) = 0.0274211, per scale (spec §3; the
+#: The far code floor at the Test Panel's t_far(771, 10) = 0.0274211, per scale (ld-store §3; the
 #: Test Panel keeps all 771 EUR members by the owner's ruling).
 FLOORS = {511: 85, 2047: 339, 32767: 5426}
 SLACK = 1e-9
@@ -82,7 +82,7 @@ def test_a_store_reads_back_every_pair_within_half_its_own_step(
     np.fill_diagonal(stored, False)
     assert stored.sum() > 1000, "the store must hold many pairs for this to mean anything"
     assert np.all(np.abs(m.r[stored] - ref[stored]) <= 1 / (2 * scale) + SLACK)
-    # Exactly the code spec §3 gives the reference r, read back at this store's scale.
+    # Exactly the code ld-store §3 gives the reference r, read back at this store's scale.
     np.testing.assert_array_equal(m.r[stored], contract("support").stored_at(ref[stored], scale))
 
 
@@ -179,7 +179,7 @@ def test_the_far_pairs_and_the_bound_follow_the_store_s_own_floor(
     assert np.isnan(m.r[far & ~reaches]).all(), "a Bound is never a number"
 
 
-#: The Partner Floor at the Partner Thresholds the owner set per dataset (CONTEXT.md; spec §3), and
+#: The Partner Floor at the Partner Thresholds the owner set per dataset (CONTEXT.md; ld-store §3), and
 #: the t_far each pair of them is judged under: t_partner 0.01 on the HGDP+1kGP stores at × 511 and
 #: × 32767, and 0.001 = t_far on UK Biobank EUR at × 2047. The floors are literals computed here.
 PARTNER_FLOORS = {
@@ -257,7 +257,7 @@ def test_a_breaker_fails_the_same_rules_at_another_scale(
     here = shutil.copytree(TEST_STORE, tmp_path / "committed")
     there = shutil.copytree(store_at(2047, tmp_path_factory), tmp_path / "x2047")
     # Compare canonical Stores in the same representation state. A fresh build also has
-    # ADR 0012 companions, whose intentional staleness is tested separately in test_alid_mmap.
+    # ADR 0098 companions, whose intentional staleness is tested separately in test_alid_mmap.
     for store in (here, there):
         root = zarr.open_group(store, mode="r+")
         if layout.ALID_MMAP_ATTR in root.attrs:
@@ -304,7 +304,7 @@ OWNED = re.compile(
     r"|\b(?:R_SCALE|RESERVED_CODE|R_DTYPE|QUANTISATION_ERROR|ENCODING)\b"
     r"|['\"](?:r_scale|r_dtype|r_reserved_code|rounding)['\"]"
 )
-#: The encoding's owner (spec §3; docs/architecture/ownership.md).
+#: The encoding's owner (ld-store §3; docs/architecture/ownership.md).
 OWNER = "opengwasdb/ld/format/encoding.py"
 #: The phrases that name a scale on purpose, per file: the scale the Test Panel's selection judged
 #: Stored r at, and the Test Store script's documentation of the scale it is run at. A literal is
@@ -313,7 +313,7 @@ OWNER = "opengwasdb/ld/format/encoding.py"
 NAMED_ON_PURPOSE = {
     "scripts/ld/test_panel/params.py": (
         "× 32767, the one encoding there was",
-        "The Test Store is × 511 (ogld#16, ADR 0004)",
+        "The Test Store is × 511 (ogld#16, ADR 0090)",
         "r_scale: int = 32767",
     ),
     "scripts/ld/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),

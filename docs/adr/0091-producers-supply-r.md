@@ -1,11 +1,13 @@
 # A producer supplies r; the LD Store makes the rest of itself
 
-> **The Proxy Index is gone** ([ADR 0011](./0011-partner-rows-replace-the-proxy-index.md), #72).
+Formerly ogld ADR 0005.
+
+> **The Proxy Index is gone** ([ADR 0097](./0097-partner-rows-replace-the-proxy-index.md), #72).
 > Where this record speaks of it in the present tense — as a component a store holds, a stream a
 > build writes or a read a query makes — read it in the past tense: the Partner Rows hold every
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
-> **ADR 0013 supersedes §5's builder unit vectors** ([ADR 0013](./0013-shared-genotype-arithmetic.md), #90).
+> **ADR 0099 supersedes §5's builder unit vectors** ([ADR 0099](./0099-shared-genotype-arithmetic.md), #90).
 > The builder computes r through `ogld.genotypes.r(rows, span)` over prepared `Block`s, not from
 > an array of unit vectors; §5's memory bound and the rest of the record stand.
 
@@ -43,7 +45,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
 
 1. **A producer supplies r, for blocks of rows in order, and what only its source knows.** The
    store does the rest:
-   - quantising at the store's encoding (ADR 0004);
+   - quantising at the store's encoding (ADR 0090);
    - the Near Band's row lengths;
    - the threshold at the far code floor;
    - both directions of the Proxy Index;

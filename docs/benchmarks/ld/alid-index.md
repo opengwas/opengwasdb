@@ -1,6 +1,6 @@
 # An ALID search index: what a lookup costs, and what it saves
 
-_Ticket [#42](https://github.com/opengwas/ogld/issues/42), ADR [0010](../adr/0010-alid-search-index.md).
+_Ticket [#42](https://github.com/opengwas/ogld/issues/42), ADR [0010](../adr/0096-alid-search-index.md).
 Measured 15 November 2026 on the IEU node, against #40's baseline
 [`fast-decode-round2.md`](./fast-decode-round2.md) and #8's
 [`latency.md`](./latency.md)._
@@ -135,7 +135,7 @@ counts, which do not vary, are the same, because a list this short takes the exa
   ALID the index does not hold, and every ALID of a short list, takes the exact scan.
 - A one-byte `bytes` codec declares no byte order, which `ogld/store/decoding.py` now accepts for
   a one-byte element only, so the keys decode through #40's direct decoder as every numeric array
-  does (ADR 0009).
+  does (ADR 0095).
 
 ## What was rejected
 
@@ -146,7 +146,7 @@ counts, which do not vary, are the same, because a list this short takes the exa
 - **Sending short lists to the index.** 0.9 s of index for an ALID whose scan is 0.07 s.
 - **A `(n, 32)` `uint8` array, or a fixed-width `|S32` Zarr array.** The first is not
   one-dimensional, so the direct decoder does not read it; the second is an unstable Zarr
-  extension (ADR 0010).
+  extension (ADR 0096).
 
 ## The records
 

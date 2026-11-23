@@ -21,12 +21,12 @@ from zarr.storage import LocalStore
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 #: The Test Store's encoding, r̂ = code / R_SCALE, as a literal: every test that needs the Test
 #: Store's step, or builds the Test Panel to compare with it, takes it from here, never from
-#: ogld (spec §3; ADR 0004). A test holds the store's record to it.
+#: ogld (ld-store §3; ADR 0090). A test holds the store's record to it.
 R_SCALE = 511
 #: Half a step: |r̂ − r| never exceeds it.
 HALF_STEP = 1 / (2 * R_SCALE)
 #: The far code floor at R_SCALE for the Test Panel's n = 771, all of EUR's v2 members by the
-#: owner's ruling, where a panel's build keeps 665 (spec §3's table): FLOOR at the Test Store's
+#: owner's ruling, where a panel's build keeps 665 (ld-store §3's table): FLOOR at the Test Store's
 #: k = 10, FLOOR_K0 at k = 0, and FLOOR_K7 at k = 7, where a build that drops a local PC lands.
 #: At × 511 the three t_far (0.0274211, 0.0270649, 0.0273132) share a floor; at × 32767 they
 #: were 5426, 5391 and 5416.
@@ -42,7 +42,7 @@ PARTNER_FLOOR = 52
 
 
 def codes_at(r: npt.ArrayLike, scale: int = R_SCALE) -> npt.NDArray[np.int64]:
-    """r as a store at × `scale` codes it, computed here rather than by ogld: spec §3's
+    """r as a store at × `scale` codes it, computed here rather than by ogld: ld-store §3's
     clamp(rint(r × scale), −scale, +scale), half to even."""
     return np.clip(np.rint(np.asarray(r, dtype=np.float64) * scale), -scale, scale).astype(np.int64)
 
@@ -99,7 +99,7 @@ def arrays(group: zarr.Group, prefix: str = "") -> Iterator[tuple[str, zarr.Arra
 
 def resharded(to: Path, inner: int, per_shard: int) -> Path:
     """The Test Store rewritten with inner chunks of `inner` elements and `per_shard` of them
-    to a shard: the same data and metadata on another layout, as ogld#9 may serve it (spec §6).
+    to a shard: the same data and metadata on another layout, as ogld#9 may serve it (ld-store §6).
     """
     copy_store(to)
     source = zarr.open_group(TEST_STORE, mode="r")

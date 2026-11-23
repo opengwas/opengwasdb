@@ -1,4 +1,4 @@
-"""What `proxies` and `clump` share: judging a request against the store (spec §9; ogld#6)."""
+"""What `proxies` and `clump` share: judging a request against the store (ld-store §9; ogld#6)."""
 
 from __future__ import annotations
 
