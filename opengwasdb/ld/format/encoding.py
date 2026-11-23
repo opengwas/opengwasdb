@@ -277,6 +277,7 @@ def t_far(n: int, k: int) -> float:
     dof = n - k - 1
     if dof <= T_FAR_Q:
         raise ValueError(
-            f"n − k − 1 = {dof} must exceed q = {T_FAR_Q} for t_far < 1: n={n}, k={k} (ld-store §12)"
+            f"n − k − 1 = {dof} must exceed q = {T_FAR_Q} for t_far < 1: n={n}, k={k} "
+            "(ld-store §12)"
         )
     return max(T_FAR_MIN, T_FAR_Q / dof)

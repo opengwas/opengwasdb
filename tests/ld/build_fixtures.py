@@ -140,8 +140,8 @@ def copy_panel(prefix: Path) -> Path:
 
 
 def a1_signs() -> npt.NDArray[np.float64]:
-    """+1 where a Test Panel row's A1 is its ALT, −1 where it is REF (ld-store §3): the test oracle's,
-    `tests/ld/contract/support.py` (`docs/architecture/ownership.md`, "Test oracles")."""
+    """+1 where a Test Panel row's A1 is its ALT, −1 where it is REF (ld-store §3): the test
+    oracle's, `tests/ld/contract/support.py` (`docs/architecture/ownership.md`, "Test oracles")."""
     return support.oriented()[1]
 
 

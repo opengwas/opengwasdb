@@ -15,8 +15,8 @@ store"). It handles:
   through the same emitter a build feeds (partner-rows §6.2; ogld#69);
 - the counts, and the rest of the provenance a store derives from itself (ld-store §7).
 
-Validation at `finish` runs every rule of ld-store §12 through `validate_group`. A producer supplies r
-for blocks of rows in order, and at `finish` it supplies what only the source knows
+Validation at `finish` runs every rule of ld-store §12 through `validate_group`. A producer supplies
+r for blocks of rows in order, and at `finish` it supplies what only the source knows
 (`opengwasdb.ld.format.Sourced`).
 
 **Memory is bounded by the block and the far_bp window, never the chromosome.** These are
@@ -108,9 +108,9 @@ class Cut:
     """A block of rows cut from its producer's r: what `StoreWriter.write` writes.
 
     `first` is the block's first global row and `rows` how many it holds, all on one chromosome.
-    `near` holds their Near Band codes, row after row (ld-store §4). `lo`, `hi` and `codes` are their
-    Far Pairs, as local rows lo < hi: each partner hi more than near_bp and at most far_bp from
-    row lo whose code `REncoding.stored_mask` keeps, once, with its one code (ld-store §3, §5),
+    `near` holds their Near Band codes, row after row (ld-store §4). `lo`, `hi` and `codes` are
+    their Far Pairs, as local rows lo < hi: each partner hi more than near_bp and at most far_bp
+    from row lo whose code `REncoding.stored_mask` keeps, once, with its one code (ld-store §3, §5),
     ascending by (lo, hi). `far` marks those more than near_bp apart — every one of them, and it
     is kept so a reader of a Cut can name the half it reads. `far_candidates`
     counts the block's pairs more than near_bp and at most far_bp apart, all judged, and
@@ -139,8 +139,8 @@ class Cut:
 class Cutter:
     """What every block of one store is cut by, fixed when the store is created: the Variant
     Set's positions and chromosome ranges, near_bp and far_bp, the encoding, and t_far with its
-    far code floor and t_partner with its Partner Floor (ld-store §3–§5; partner-rows §3). Nothing in
-    it changes after `create`, so blocks are cut on any thread, in any order."""
+    far code floor and t_partner with its Partner Floor (ld-store §3–§5; partner-rows §3). Nothing
+    in it changes after `create`, so blocks are cut on any thread, in any order."""
 
     def __init__(
         self,
@@ -421,7 +421,8 @@ _Pairs = tuple[_Rows, _Rows, Codes]
 
 
 def _entries(group: zarr.Group, encoding: REncoding) -> tuple[Appender, Appender]:
-    """A sparse component's `partner` and `r` (ld-store §5, §6), each grown a whole shard at a time."""
+    """A sparse component's `partner` and `r` (ld-store §5, §6), each grown a whole shard at a
+    time."""
     side = layout.SIDE
     partner = Appender(
         lambda n: layout.new_numbers(group, "partner", n, np.int32, layout.PARTNER_FILL, side),
@@ -761,14 +762,14 @@ def derive_far_pairs(
 ) -> int:
     """Write one chromosome's Far Pairs into the empty group `far`, from its Proxy Index group
     `index`, for a store written before they came back (ADR 0093), and return how many. They are
-    the index's entries beyond near_bp (`_beyond_near`) in each pair's earlier row (ld-store §5), read
-    a block of rows at a time and written in row order through `FarPairsStream`, as a store being
-    built writes them, so the arrays are a build's, byte for byte. The index is not changed. An
-    index element no store holds, which is what a lost chunk reads as, is refused, naming its
+    the index's entries beyond near_bp (`_beyond_near`) in each pair's earlier row (ld-store §5),
+    read a block of rows at a time and written in row order through `FarPairsStream`, as a store
+    being built writes them, so the arrays are a build's, byte for byte. The index is not changed.
+    An index element no store holds, which is what a lost chunk reads as, is refused, naming its
     array, rather than read as a row without Far Pairs.
 
-    This is the one place left in `opengwasdb/ld/` that reads the Proxy Index (#72), and it has a live
-    caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
+    This is the one place left in `opengwasdb/ld/` that reads the Proxy Index (#72), and it has a
+    live caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
     holds an index and no `far/`, and #73 derives its Far Pairs before its Partner Rows. A store
     this package writes never needs it, and no other code path names the component's arrays
     (`tests/ld/test_proxy_index_removed.py`).
@@ -911,8 +912,8 @@ def _only_what_the_producer_knows(sourced: Sourced) -> dict[str, Any]:
     unknown = sorted(set(given) - _PRODUCER_KEYS)
     if unknown:
         raise ValueError(
-            f"{', '.join(unknown)}: not a key of `Sourced`; ld-store §7 lets a store hold other keys, "
-            "but this writer records only the producer's and its own"
+            f"{', '.join(unknown)}: not a key of `Sourced`; ld-store §7 lets a store hold other "
+            "keys, but this writer records only the producer's and its own"
         )
     missing = sorted(_PRODUCER_KEYS - set(given))
     if missing:
@@ -943,9 +944,9 @@ def provenance(
     partner-rows §5.3). `software` is the producer's list of versions, which the store adds `zstd`
     to, the library that compressed its Partner Rows' frames (§7).
 
-    ld-store §7 lets a store hold other keys, which a reader ignores. This writer records none: a key
-    `Sourced` does not name is refused, whether it is one the store derives, which a producer may
-    not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
+    ld-store §7 lets a store hold other keys, which a reader ignores. This writer records none: a
+    key `Sourced` does not name is refused, whether it is one the store derives, which a producer
+    may not give, or one no reader knows, which would otherwise be stored unread and unchecked. A
     `sourced` that lacks a key of the producer's, or records an n or k other than the threshold's,
     is refused too."""
     given = _only_what_the_producer_knows(sourced)
@@ -1313,7 +1314,8 @@ def _claimed_at(recorded: dict[str, Any], t_partner: float, floor: int, store: P
 
 
 def _ranges(root: zarr.Group) -> dict[str, tuple[int, int]]:
-    """Each chromosome's rows in the Variant Set, as the `variants` group records them (ld-store §2)."""
+    """Each chromosome's rows in the Variant Set, as the `variants` group records them (ld-store
+    §2)."""
     variants = root.get("variants")
     if not isinstance(variants, zarr.Group):
         raise InputError("the store has no variants group: it is not an LD Store")
@@ -1549,8 +1551,8 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     (partner-rows §6.2; ADR 0097, D1): its `index/` group and its `counts.index_entries`.
 
     From #72 a store this package writes has none, and no rule expects one: the removal is what
-    finishes a store derived by an earlier `opengwasdb ld derive-partners`, and a store without one is left
-    as it is. The count goes with the arrays, in that order, and only after they are gone: a
+    finishes a store derived by an earlier `opengwasdb ld derive-partners`, and a store without one
+    is left as it is. The count goes with the arrays, in that order, and only after they are gone: a
     removal that fails leaves the count in place and raises, naming the path, and a run killed
     between the two leaves a count with no arrays, which validation reads as an extra provenance
     key and ignores (ld-store §7).

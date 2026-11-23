@@ -341,8 +341,8 @@ class StoreReader(ComponentWorkers):
 
         The rows are the variant table's answer; the chromosome is opened here first, as this has
         always been the reader's first touch of a chromosome that `region` will read from its Near
-        Band, so each of its arrays' fill values is judged before any element is decoded (ld-store §6).
-        `loci_of` is the variant read that must open none of them (#71).
+        Band, so each of its arrays' fill values is judged before any element is decoded (ld-store
+        §6). `loci_of` is the variant read that must open none of them (#71).
         """
         if chrom in self._ranges:
             self._chromosome(chrom)
@@ -401,7 +401,8 @@ class StoreReader(ComponentWorkers):
     def r_of_pairs(
         self, first: npt.NDArray[np.int64], second: npt.NDArray[np.int64]
     ) -> npt.NDArray[np.float64]:
-        """The Stored r of each pair (first[k], second[k]), as one array (ld-store §8, §10; ogld#14).
+        """The Stored r of each pair (first[k], second[k]), as one array (ld-store §8, §10;
+        ogld#14).
 
         `first` and `second` broadcast against each other, so one row in `first` is one row
         against many. A row with itself is 1. Every pair the store does not hold, the Bound,
@@ -479,10 +480,10 @@ class StoreReader(ComponentWorkers):
         component and the way to derive it, before any read. It is never answered from the Near
         Band: that is the fallback the Partner Rows exist to replace (partner-rows §8.1, §8.4).
 
-        The recorded **format version** decides, and the key alone does not: ld-store §7 lets a store
-        hold other keys, and a 0.1.0 store's extra `t_partner` is no claim to a component whose
-        frames nothing has judged. Reading one would answer a query from an unclaimed residue — a
-        wrong answer that looks like a right one (ogld#69).
+        The recorded **format version** decides, and the key alone does not: ld-store §7 lets a
+        store hold other keys, and a 0.1.0 store's extra `t_partner` is no claim to a component
+        whose frames nothing has judged. Reading one would answer a query from an unclaimed residue
+        — a wrong answer that looks like a right one (ogld#69).
         """
         if not self.has_partner_rows:
             raise InputError(
@@ -761,8 +762,8 @@ def open_variant_table(
     A reader that composes a table hands it the group it opened, so `StoreReader` does not come
     through here: this is for a caller that wants the variant table alone, which is how a test
     holds it to `StoreReader`'s own answers. It refuses what `StoreReader.open` refuses — a Zarr
-    v3 hierarchy, a finished store, a format this package reads (ld-store §1, §13) — and says nothing
-    about the encoding, which no variant read decodes a code with.
+    v3 hierarchy, a finished store, a format this package reads (ld-store §1, §13) — and says
+    nothing about the encoding, which no variant read decodes a code with.
     """
     return VariantTable(_opened_store(location, cache_bytes))
 
@@ -770,8 +771,8 @@ def open_variant_table(
 def _opened_store(location: str | os.PathLike[str], cache_bytes: int | None) -> OpenedStore:
     """An opened store this package can read: its group, the location naming it, its `ld_store`
     provenance and the one chunk cache its reads go through, refused naming the store and what is
-    wrong with it (ld-store §1, §7, §13). It reads the root's metadata and nothing else, so it is the
-    same work whether a reader or a bare variant table follows."""
+    wrong with it (ld-store §1, §7, §13). It reads the root's metadata and nothing else, so it is
+    the same work whether a reader or a bare variant table follows."""
     cache = ChunkCache(cache_bytes)
     return opened_ld(open_group(location, cache=cache), str(location), cache)
 

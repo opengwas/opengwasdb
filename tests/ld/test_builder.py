@@ -1,8 +1,8 @@
 """ogld#5's builder against the Test Panel's independent reference r, read back through the store
 layer (`opengwasdb.ld.store.StoreReader`), and the inputs that must not change what it builds.
 
-The contract tests (tests/ld/contract/test_build.py) read through `opengwasdb.ld.LDStore.matrix`, which
-ogld#4 builds; these read through the reader the walking skeleton built, so they hold the
+The contract tests (tests/ld/contract/test_build.py) read through `opengwasdb.ld.LDStore.matrix`,
+which ogld#4 builds; these read through the reader the walking skeleton built, so they hold the
 builder to the reference whether or not ogld#4 has landed.
 
 - **The Near Band** at k = 10 and k = 0 is the reference r signed to A1, within half a

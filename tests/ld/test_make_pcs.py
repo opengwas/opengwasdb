@@ -1,5 +1,5 @@
-"""`scripts/ld/make_pcs.py` at its seams (review round 2 of ogld#5, standards a6), with no PCA run and
-no plink2: the commit its report records, its refusal of a checkout that is not that commit's
+"""`scripts/ld/make_pcs.py` at its seams (review round 2 of ogld#5, standards a6), with no PCA run
+and no plink2: the commit its report records, its refusal of a checkout that is not that commit's
 code, the scan's input (every variant, the PC Check choosing the common ones itself) and the
 fields of the PC Check record it writes."""
 

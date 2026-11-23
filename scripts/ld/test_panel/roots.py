@@ -11,7 +11,8 @@ variable plus the rest of its path, and by hash, so no host path is committed.
   sample metadata (`META_NAME` under it);
 - `OGLD_KEEP`, default `/data/opengwasdb/work/ogld/keep`: `scripts/ld/make_keeps.py`'s keep files,
   each panel's unrelated samples (ADR 0088);
-- `OGLD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`: `scripts/ld/build_hgdp1kgp.py`'s
+- `OGLD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`:
+`scripts/ld/build_hgdp1kgp.py`'s
   conversions, one directory per panel (ogld#7);
 - `OGLD_STORES`, default `/data/opengwasdb/work/ogld/stores`: the five HGDP+1kGP LD Stores, staged
   there until ogld#9 chooses where they are published;

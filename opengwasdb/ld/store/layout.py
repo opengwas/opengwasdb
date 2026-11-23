@@ -42,9 +42,9 @@ def _create_array(group: zarr.Group, name: str, **spec: Any) -> zarr.Array[Any]:
     return group.create_array(name, config={"write_empty_chunks": False}, **spec)
 
 
-#: The ALID search index (ld-store §2, §6; ADR 0096): the variant table's ALIDs in one array a search
-#: can run over. A key is an ALID's UTF-8 bytes, NUL right-padded to `ALID_INDEX_WIDTH`; an ALID
-#: wider than that is left out of the index and found by an exact scan at its position, never
+#: The ALID search index (ld-store §2, §6; ADR 0096): the variant table's ALIDs in one array a
+#: search can run over. A key is an ALID's UTF-8 bytes, NUL right-padded to `ALID_INDEX_WIDTH`; an
+#: ALID wider than that is left out of the index and found by an exact scan at its position, never
 #: truncated into it: two indels at one position that agree over the slot would then share a key,
 #: and one would answer to the other's name (opengwasdb issue #127, its ALID width).
 ALID_INDEX_WIDTH: Final = 32

@@ -95,8 +95,8 @@ def test_a_variant_table_gives_the_same_answers_as_the_reader_it_leaves_out(stor
         for chrom in table.names:
             assert table.chromosome_range(chrom) == reader.chromosome_range(chrom)
 
-        # A literal region of the Test Store and the rows its positions alone give (ld-store §2): three
-        # rows, so an empty answer fails here, and the delegate is not compared with itself.
+        # A literal region of the Test Store and the rows its positions alone give (ld-store §2):
+        # three rows, so an empty answer fails here, and the delegate is not compared with itself.
         assert table.rows_in("22", 16_020_000, 16_030_000).tolist() == [468, 469, 470]
         np.testing.assert_array_equal(table.alids_of(rows), reader.alids_of(rows))
 
@@ -116,10 +116,10 @@ def test_a_variant_table_gives_the_same_answers_as_the_reader_it_leaves_out(stor
 def test_a_replaced_chunk_cache_reaches_every_variant_read() -> None:
     """The chunk cache has one owner, so a replaced cache is the one both halves read through.
 
-    `tests/ld/test_bench.py` and `scripts/ld/bench/latency.py` replace `reader._cache` to measure what
-    a read holds, and a variant read that kept the cache it was constructed with would be measured
-    against the wrong budget — and one reader would keep its positions and its pairs in two caches
-    under two budgets (ld-store §10). So the test replaces it exactly as the bench does.
+    `tests/ld/test_bench.py` and `scripts/ld/bench/latency.py` replace `reader._cache` to measure
+    what a read holds, and a variant read that kept the cache it was constructed with would be
+    measured against the wrong budget — and one reader would keep its positions and its pairs in two
+    caches under two budgets (ld-store §10). So the test replaces it exactly as the bench does.
     """
     reader = StoreReader.open(TEST_STORE)
     present = next(a for a in table_alids(TEST_STORE) if len(a.encode("utf-8")) < ALID_INDEX_WIDTH)

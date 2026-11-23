@@ -144,7 +144,8 @@ def open_store(path: Path) -> zarr.Group:
 
 
 def chunk_file(array: zarr.Array) -> Path:
-    """Where the array's one chunk is written, from its own metadata (ld-store §5.1): never assumed."""
+    """Where the array's one chunk is written, from its own metadata (ld-store §5.1): never
+    assumed."""
     key = array.metadata.encode_chunk_key((0,))
     return Path(array.store_path.store.root) / array.store_path.path / key
 

@@ -1,4 +1,5 @@
-"""Writing an LD Store: the seam every producer writes through (ld-store §1–§7, §12; ogld#4, ogld#17).
+"""Writing an LD Store: the seam every producer writes through (ld-store §1–§7, §12; ogld#4,
+ogld#17).
 
 A producer supplies r and what only its source knows; the store assembly behind this seam
 (`opengwasdb/ld/store/assembly.py`) does the rest (owner, 10 November 2026). That covers quantising
@@ -161,8 +162,8 @@ class StoreWriter:
         """Cut the block of rows `first`, `first + 1`, … `first + len(r) − 1` (global rows, one
         chromosome) from their r, ready to `write` (ld-store §3–§5).
 
-        `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (ld-store §3). It runs
-        for every column c up to the last variant within far_bp of the block's last row, and no
+        `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (ld-store §3). It
+        runs for every column c up to the last variant within far_bp of the block's last row, and no
         further: `r.shape[1]` is that variant's row + 1 − first. That is what
         `opengwasdb.ld.genotypes.r(rows, span)` gives for the block against those rows, and the
         chromosome's whole matrix for a block of all its rows. Only each row's later partners
@@ -188,8 +189,8 @@ class StoreWriter:
 
         The Near Band's codes are written in whole shards of `near/<chrom>/r`, the rest carried;
         its `indptr` comes from the positions when the chromosome's first cut arrives (ld-store §4).
-        The Far Pairs are written row by row, each in its earlier row (ld-store §5); the Partner Rows
-        are framed as their rows complete. The counts are added up. When the chromosome's last
+        The Far Pairs are written row by row, each in its earlier row (ld-store §5); the Partner
+        Rows are framed as their rows complete. The counts are added up. When the chromosome's last
         row arrives, what is carried is written and the chromosome is complete.
 
         A write that fails — a frame that will not compress, a stream that will not close —
@@ -256,8 +257,9 @@ class StoreWriter:
                 f"the rows of chromosome {', '.join(unwritten)} were not written, from row "
                 f"{self._next}"
             )
-        # The ALID index is the store's, from the table it wrote (ld-store §2; ADR 0096): no producer
-        # supplies or orders one, and a store is unreadable until `finish` writes its provenance.
+        # The ALID index is the store's, from the table it wrote (ld-store §2; ADR 0096): no
+        # producer supplies or orders one, and a store is unreadable until `finish` writes its
+        # provenance.
         variants = self._root["variants"]
         assert isinstance(variants, zarr.Group)
         left_out = derive_alid_index(variants, variants.create_group("alid_index"))

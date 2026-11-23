@@ -170,7 +170,8 @@ class ChangeHistogram:
         self.most = max(self.most, float(change.max()))
 
     def quantiles(self) -> dict[str, float]:
-        """`near_100kb_change`: quantiles 0, 0.5, 0.9, 0.99 and 1, keyed as ld-store §7 names them."""
+        """`near_100kb_change`: quantiles 0, 0.5, 0.9, 0.99 and 1, keyed as ld-store §7 names
+        them."""
         if not self.n:
             raise ValueError(
                 "no change was counted: a builder fault, since the build refuses a Variant Set "

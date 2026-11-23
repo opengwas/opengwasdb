@@ -134,10 +134,10 @@ def unpartnered(to: Path) -> Path:
     the four keys that describe it dropped, and the Proxy Index a 0.1.0 store holds with its
     `counts.index_entries` (partner-rows §6.2, §13; ld-store §13).
 
-    It is what `opengwasdb ld derive-partners` derives into, so a test holds the derived component against
-    the committed one — the build's — byte for byte, and `--drop-index` has something to remove.
-    The index's arrays are empty placeholders: nothing reads a Proxy Index since #72, and a test
-    that reads one is testing the component this fixture stands for, not its data.
+    It is what `opengwasdb ld derive-partners` derives into, so a test holds the derived component
+    against the committed one — the build's — byte for byte, and `--drop-index` has something to
+    remove. The index's arrays are empty placeholders: nothing reads a Proxy Index since #72, and a
+    test that reads one is testing the component this fixture stands for, not its data.
     """
     copy_store(to)
     shutil.rmtree(to / "partners")

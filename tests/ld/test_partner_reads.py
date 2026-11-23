@@ -1,4 +1,5 @@
-"""The reads `clump`, `proxies` and `region` make (ld-store §10; ogld#14), counted where they happen.
+"""The reads `clump`, `proxies` and `region` make (ld-store §10; ogld#14), counted where they
+happen.
 
 Each test counts at the reader's chunk cache: a `Counting` cache is put on one reader instance,
 so no reader is subclassed and no module global is patched. "Resolved" is the Stored r the
@@ -73,7 +74,8 @@ def reference_greedy(
     """plink2's greedy over the Test Store's variants from the reference r, quantised: each
     variant's lead; the pairs the leads need, each lead with every hit still open within W
     on its chromosome; and every partner within far_bp whose code reaches the floor, which is
-    the rows' entries at the far code floor (ld-store §5). Ties go to the row, the engine's order."""
+    the rows' entries at the far code floor (ld-store §5). Ties go to the row, the engine's
+    order."""
     rows = passing_rows()
     pos = panel_data().variants().pos.astype(np.int64)[rows]
     chrom = np.asarray(panel_data().variants().chrom)[rows]

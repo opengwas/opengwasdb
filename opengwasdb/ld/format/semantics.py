@@ -184,8 +184,8 @@ def judge_window(
     """`judge_request` for a window already in bp, W: the same rule, one copy of it.
 
     It is the format's answer when the window is already a distance rather than a kb: a caller
-    that has one asks it and is answered or refused at the same edges. Nothing in `opengwasdb.ld` calls it
-    since #71 — `clump` and `proxies` ask `judge_partner_request`, which has the Partner
+    that has one asks it and is answered or refused at the same edges. Nothing in `opengwasdb.ld`
+    calls it since #71 — `clump` and `proxies` ask `judge_partner_request`, which has the Partner
     Threshold's row too, and a matrix's region is `judge_region`'s — so it is the 0.1.0 table's
     shape kept for a caller that brings its own window."""
     return _judged_window(

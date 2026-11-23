@@ -2,8 +2,8 @@
 
 Stores of the Test Panel's reference r at k = 10 are written at × 511 (the HGDP+1kGP stores'),
 × 2047 (UK Biobank EUR's) and × 32767 by the Test Store's own script, once per worker each.
-Expected values are the reference r and each scale's literals: a code is computed here as ld-store §3
-writes it (`support.codes`), and each floor is ld-store §3's, never ogld's arithmetic.
+Expected values are the reference r and each scale's literals: a code is computed here as ld-store
+§3 writes it (`support.codes`), and each floor is ld-store §3's, never ogld's arithmetic.
 """
 
 from __future__ import annotations
@@ -179,9 +179,10 @@ def test_the_far_pairs_and_the_bound_follow_the_store_s_own_floor(
     assert np.isnan(m.r[far & ~reaches]).all(), "a Bound is never a number"
 
 
-#: The Partner Floor at the Partner Thresholds the owner set per dataset (CONTEXT.md; ld-store §3), and
-#: the t_far each pair of them is judged under: t_partner 0.01 on the HGDP+1kGP stores at × 511 and
-#: × 32767, and 0.001 = t_far on UK Biobank EUR at × 2047. The floors are literals computed here.
+#: The Partner Floor at the Partner Thresholds the owner set per dataset (CONTEXT.md; ld-store §3),
+#: and the t_far each pair of them is judged under: t_partner 0.01 on the HGDP+1kGP stores at × 511
+#: and × 32767, and 0.001 = t_far on UK Biobank EUR at × 2047. The floors are literals computed
+#: here.
 PARTNER_FLOORS = {
     (511, 0.01, 0.0318654): 52,
     (2047, 0.001, 0.001): 65,

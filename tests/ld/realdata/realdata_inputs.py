@@ -28,9 +28,9 @@ def required(name: str, what: str) -> Path:
 
 def installed_mismatch() -> str:
     """Why this checkout cannot be cited as the code the stores it builds record, or "" when it
-    can: `scripts/ld/test_panel/checkout.py`'s `problem`, the one guard `scripts/ld/make_pcs.py` uses
-    too. The installed opengwasdb must name HEAD, and nothing under `opengwasdb/ld/` or `scripts/` may differ
-    from it, tracked or untracked Python."""
+    can: `scripts/ld/test_panel/checkout.py`'s `problem`, the one guard `scripts/ld/make_pcs.py`
+    uses too. The installed opengwasdb must name HEAD, and nothing under `opengwasdb/ld/` or
+    `scripts/` may differ from it, tracked or untracked Python."""
     import importlib
     import sys
     from importlib.metadata import version

@@ -1,5 +1,5 @@
-"""The `opengwasdb ld` commands: `opengwasdb ld build`, `opengwasdb ld validate`, `opengwasdb ld info`, `opengwasdb ld derive-partners`
-(layer 3).
+"""The `opengwasdb ld` commands: `opengwasdb ld build`, `opengwasdb ld validate`, `opengwasdb ld
+info`, `opengwasdb ld derive-partners` (layer 3).
 
 A thin shell over the public functions, so a job and a person run exactly what a caller
 of the package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners`

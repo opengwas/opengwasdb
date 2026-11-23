@@ -3,8 +3,8 @@
 Every expected array here is brute force over pairs, written in this file: for each pair (l, m)
 of one chromosome, its code by ld-store §3's formula (`store_copies.codes_at`, not ogld's), kept in
 the Near Band when the two lie within near_bp and in the Proxy Index, both ways, when they lie
-within far_bp and |code| reaches the far code floor, ld-store §3's literal for n = 771 at × 511, and in
-the Far Pairs, once, in the earlier row, when such a pair also lies beyond near_bp. The
+within far_bp and |code| reaches the far code floor, ld-store §3's literal for n = 771 at × 511, and
+in the Far Pairs, once, in the earlier row, when such a pair also lies beyond near_bp. The
 variants are the Test Store's, real positions on chr21 and chr22; r is a structured synthetic
 correlation matrix, so far more pairs reach the floor than in the Test Panel's own.
 """
@@ -639,7 +639,8 @@ def test_a_partner_rows_stream_closed_with_rows_not_written_is_refused(tmp_path:
 
 def test_partner_rows_refuse_a_code_no_store_holds(tmp_path: Path) -> None:
     # A code of −32768 is what a chunk the store lost reads as: compared against the Partner
-    # Floor it would quietly drop its pair, so the emitter refuses it (ld-store §3, partner-rows §6.1).
+    # Floor it would quietly drop its pair, so the emitter refuses it (ld-store §3, partner-rows
+    # §6.1).
     stream = assembly.PartnerRowsStream(
         zarr.open_group(tmp_path / "g", mode="w"),
         "1",

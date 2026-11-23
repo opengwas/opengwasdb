@@ -40,7 +40,8 @@ def test_a_lower_case_base_is_the_same_base() -> None:
 
 
 def test_an_alid_is_never_truncated() -> None:
-    # The engine's |S32 index drops ALIDs over 32 bytes; an LD Store stores them whole (ld-store §2).
+    # The engine's |S32 index drops ALIDs over 32 bytes; an LD Store stores them whole (ld-store
+    # §2).
     long = "A" + "CGT" * 15
     o = orient("21", 5_000_000, long, "A")
     assert len(o.alid) > 32

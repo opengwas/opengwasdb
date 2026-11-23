@@ -22,8 +22,8 @@ Two inputs, named by environment variables that `tests/ld/acceptance/run.sh` pas
   and `prepare` then `clump` write the pins that name the store they were made from.
 
 Every lead that differs is listed in `explained_differences.json` with the pairs that explain it
-(ld-store §3): a pair whose stored r̂² and plink2's true r² lie on opposite sides of the threshold. The
-file names the store it was made on, by its encoding and a hash of its provenance, and the test
+(ld-store §3): a pair whose stored r̂² and plink2's true r² lie on opposite sides of the threshold.
+The file names the store it was made on, by its encoding and a hash of its provenance, and the test
 asserts that first. Then it asserts the differences equal the file's, and that every listed pair
 touches a differing lead, lies within the window, takes its r̂² from the store, has plink2's r² on
 the other side of the threshold, and is within the store's own encoding band.

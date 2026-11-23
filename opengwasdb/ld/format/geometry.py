@@ -38,7 +38,9 @@ def chromosome_ranges(chrom: npt.ArrayLike) -> dict[str, tuple[int, int]]:
     for start, stop in zip(starts, stops, strict=True):
         name = str(labels[start])
         if name in ranges:
-            raise ValueError(f"chromosome {name} is not contiguous in the Variant Set (ld-store §2)")
+            raise ValueError(
+                f"chromosome {name} is not contiguous in the Variant Set (ld-store §2)"
+            )
         ranges[name] = (int(start), int(stop))
     return ranges
 
@@ -55,7 +57,9 @@ def chromosome_ranges_from_counts(
     total = 0
     for name, count in chromosomes:
         if name in ranges:
-            raise ValueError(f"chromosome {name} is not contiguous in the Variant Set (ld-store §2)")
+            raise ValueError(
+                f"chromosome {name} is not contiguous in the Variant Set (ld-store §2)"
+            )
         if type(count) is not int or count <= 0:
             raise ValueError(f"chromosome {name} count must be a positive integer, not {count!r}")
         ranges[name] = (total, total + count)

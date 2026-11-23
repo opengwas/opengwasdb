@@ -551,7 +551,8 @@ class Sent(list[tuple[str, int]]):
     """The path and body length of every response a server sent, and each response's status.
 
     A list of the pairs the tests already read, so a server that answers a range past a file's end
-    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (ld-store §5.1).
+    with 416 (a length of 0) is told apart from one that answers it with an empty 206 (ld-store
+    §5.1).
     """
 
     def __init__(self) -> None:

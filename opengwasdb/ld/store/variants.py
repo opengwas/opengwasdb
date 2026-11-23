@@ -80,8 +80,8 @@ class Loci:
 
 @dataclass(frozen=True)
 class _AlidIndex:
-    """The ALID search index (ld-store §2; ADR 0096): one NUL-padded 32-byte key an entry, sorted, and
-    the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
+    """The ALID search index (ld-store §2; ADR 0096): one NUL-padded 32-byte key an entry, sorted,
+    and the Variant Set row each entry names. Keys are bytes, so a search compares bytes."""
 
     alid: zarr.Array[Any]
     row: zarr.Array[Any]

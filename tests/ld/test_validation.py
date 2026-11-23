@@ -1164,8 +1164,8 @@ def test_a_crash_s_temporary_group_is_named_and_refused(tmp_path: Path) -> None:
 
 
 def test_a_0_1_0_store_with_no_partner_rows_passes_its_ten_rules(tmp_path: Path) -> None:
-    # ld-store §12, §13: a store has one format version, 0.1.0 has no Partner Rows, and a 0.1.0 store
-    # has none — so there is nothing for the ten rules to judge, and they pass.
+    # ld-store §12, §13: a store has one format version, 0.1.0 has no Partner Rows, and a 0.1.0
+    # store has none — so there is nothing for the ten rules to judge, and they pass.
     earlier = copy_store(tmp_path / "earlier")
     shutil.rmtree(earlier / "partners")
 

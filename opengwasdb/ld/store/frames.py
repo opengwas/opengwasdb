@@ -92,7 +92,8 @@ def zstd_version() -> str:
     version = getattr(_NUMCODECS.zstd, "__version__", None)
     if not isinstance(version, str):
         raise ValueError(
-            "numcodecs does not say which zstd it holds, and a frame's bytes depend on it (ld-store §7)"
+            "numcodecs does not say which zstd it holds, and a frame's bytes depend on it "
+            "(ld-store §7)"
         )
     return version
 
@@ -353,7 +354,9 @@ def _partners(
     partners += np.repeat(first + nonempty - before, lengths[nonempty])
     bounds = np.iinfo(np.int32)
     if len(partners) and (partners.min() < 0 or partners.max() > bounds.max):
-        raise ValueError("a Partner Rows frame decodes to a partner that is not a row (ld-store §5.2)")
+        raise ValueError(
+            "a Partner Rows frame decodes to a partner that is not a row (ld-store §5.2)"
+        )
     return partners.astype(np.int32)
 
 
@@ -883,8 +886,8 @@ class FramesGroup:
     chromosome is written again.
 
     `container` is the directory the group is built in and published into; left out, it is the
-    store's `partners/` group, which this then creates. `opengwasdb ld derive-partners` gives a plain
-    directory that is not yet a node of the store's hierarchy, so a derivation killed part-way
+    store's `partners/` group, which this then creates. `opengwasdb ld derive-partners` gives a
+    plain directory that is not yet a node of the store's hierarchy, so a derivation killed part-way
     leaves the store it was: a `partners/` node is one validation judges and a reader trusts
     (partner-rows §5.1, §6.2; issue #69).
     """

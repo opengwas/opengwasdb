@@ -13,10 +13,10 @@ exits 0 and the fileset holds exactly the keep file's samples, so a conversion t
 was cut short, has none and is converted again. A conversion that finishes with other samples
 than the keep file's stops the run.
 
-`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0090) and `--t-partner`
-PANEL_T_PARTNER (ADR 0097), the panel's PC File,
-keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) threads, `--builds` (2)
-panels at once. It refuses a store that already exists. When a panel fails, panels not yet
+`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0090) and
+`--t-partner` PANEL_T_PARTNER (ADR 0097), the panel's PC File,
+keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) threads, `--builds`
+(2) panels at once. It refuses a store that already exists. When a panel fails, panels not yet
 started are cancelled and the one still running finishes; the run then stops with that failure.
 
 Where things live, each overridable and each in `scripts/ld/test_panel/roots.py`: `$OGLD_PHASED_V2`,
@@ -80,7 +80,8 @@ def store_path(panel: str) -> Path:
 def build_command(
     panel: str, pgens: list[Path], store: Path, keep: Path, pcs: Path, threads: int
 ) -> list[str]:
-    """`opengwasdb ld build` for one panel: k = K, r scale PANEL_SCALE, the unrelated keep, its PC File."""
+    """`opengwasdb ld build` for one panel: k = K, r scale PANEL_SCALE, the unrelated keep, its PC
+    File."""
     command = ["ogld", "build", str(store)]
     for pgen in pgens:
         command += ["--pgen", str(pgen)]

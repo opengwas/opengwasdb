@@ -78,9 +78,9 @@ _FRAMES_PER_BLOCK: Final = 256
 #: Partner Rows entries a block holds at most. A later row holds an entry for every earlier
 #: partner within far_bp, so the entries a block carries are not bounded by its own band codes:
 #: a few thousand rows at the end of a chromosome whose pairs are all in LD carry every pair
-#: before them (ld-store §12). A frame is the component's unit of reading, so a block holds one frame
-#: at least. 524,288 entries cost the ten rules about 42 MB at their worst (measured), which keeps
-#: a block's working arrays near the 150 MiB the band's own limit is sized for.
+#: before them (ld-store §12). A frame is the component's unit of reading, so a block holds one
+#: frame at least. 524,288 entries cost the ten rules about 42 MB at their worst (measured), which
+#: keeps a block's working arrays near the 150 MiB the band's own limit is sized for.
 _PARTNER_ENTRIES: Final = 1 << 19
 #: Offending elements a finding names; it counts the rest.
 _NAMED: Final = 5
@@ -127,7 +127,8 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int) -> dict[str, list[Finding]]:
-    """`validate`, reading and checking blocks on `threads` threads (`opengwasdb ld validate --threads`)."""
+    """`validate`, reading and checking blocks on `threads` threads (`opengwasdb ld validate
+    --threads`)."""
     root = open_group(location)
     return validate_group(root, root.attrs.get("ld_store"), threads=threads)
 
@@ -318,7 +319,8 @@ class _Store:
         killed between making `partners/` a node of the hierarchy and writing the provenance that
         claims it. Nothing may read those frames — a reader refuses a store whose provenance has
         no `t_partner` — so judging them here would fail a store no one can use and complete
-        nothing; the device that completes or rebuilds it is `opengwasdb ld derive-partners` (ogld#69).
+        nothing; the device that completes or rebuilds it is `opengwasdb ld derive-partners`
+        (ogld#69).
         """
         return claims_partner_rows(self.provenance)
 
@@ -706,7 +708,8 @@ def _provenance_complete(store: _Store) -> _Problems:
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
-    `REncoding.of` (ld-store §3, §13). `opengwasdb ld info` and every reader refuse a store with any other."""
+    `REncoding.of` (ld-store §3, §13). `opengwasdb ld info` and every reader refuse a store with any
+    other."""
     version = store.value("format_version")
     if version not in READABLE_FORMATS:
         yield (
@@ -980,7 +983,8 @@ def _alid_index_rows(store: _Store) -> _Problems:
 
 @_rule("alid_index.order")
 def _alid_index_order(store: _Store) -> _Problems:
-    """The keys ascend bytewise: the order every search over them depends on (ld-store §2; ADR 0096)."""
+    """The keys ascend bytewise: the order every search over them depends on (ld-store §2; ADR
+    0096)."""
     path = layout.ALID_INDEX_ALID
     width = layout.ALID_INDEX_WIDTH
     count = int(store.array(layout.ALID_INDEX_ALID).shape[0]) // width
@@ -1030,7 +1034,8 @@ def _alid_index_count(store: _Store) -> _Problems:
     if held != entries * width:
         yield (
             layout.ALID_INDEX_ALID,
-            f"holds {held:,} bytes, not {entries:,} keys of {width}: one key an entry (ld-store §6)",
+            f"holds {held:,} bytes, not {entries:,} keys of {width}: one key an entry "
+            "(ld-store §6)",
         )
     wide = sum(int((~_table_alids(store, lo, hi)[1]).sum()) for lo, hi in windows(0, size, _ROWS))
     recorded = store.integer("counts.alids_left_out")
@@ -1881,7 +1886,8 @@ class _Counted:
 
     def __init__(self, rows: int) -> None:
         # A count of none is a count, not an absence: every row has an entry count, and it is 0
-        # until an entry names it (ld-store §8's NaN is for an unstored pair's r, which this is not).
+        # until an entry names it (ld-store §8's NaN is for an unstored pair's r, which this is
+        # not).
         self.counts = np.full(rows, 0, dtype=np.int64)
         self.lock = threading.Lock()
 

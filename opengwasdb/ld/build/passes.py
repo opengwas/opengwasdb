@@ -196,8 +196,8 @@ def write_ld(
     chosen: Covariates,
     threads: int,
 ) -> ChangeHistogram:
-    """Each chromosome's r, tile by tile, through `writer`, which makes the store of it (ld-store §3,
-    §4, §5); return the change in r PC Adjustment made, for the PC Diagnostic (§7)."""
+    """Each chromosome's r, tile by tile, through `writer`, which makes the store of it (ld-store
+    §3, §4, §5); return the change in r PC Adjustment made, for the PC Diagnostic (§7)."""
     change = ChangeHistogram()
     ranges = chromosome_ranges(_labels(chromosomes))
     for chromosome in chromosomes:

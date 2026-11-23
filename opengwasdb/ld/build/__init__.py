@@ -69,8 +69,8 @@ class BuildInputs:
     - `panel_id`, `ancestry`: the Source Panel, as provenance names it.
     - `genotype_source`: what the genotypes are, such as the release and its files.
     - `r_scale`: the scale of the store's encoding, r̂ = code / r_scale, any whole number
-      `opengwasdb.ld.format.REncoding` admits (ld-store §3). ADR 0090 sets each Source Panel's (owner,
-      10 November 2026). There is no default, so no build falls back on a scale it was not
+      `opengwasdb.ld.format.REncoding` admits (ld-store §3). ADR 0090 sets each Source Panel's
+      (owner, 10 November 2026). There is no default, so no build falls back on a scale it was not
       given; provenance records it in `encoding`.
     - `t_partner`: the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
       the store's Partner Rows (CONTEXT.md; partner-rows §3). A build input with no default
