@@ -15,7 +15,8 @@ measurement here is a fresh interpreter, repeated, and reported as median and ra
 
     benchmark_process_start.py --store S --selection sel.json --tree T --runs 7 --output out.json
 
-``--selection`` (optional; without it only the other measurements run) is a store-comparison artifact (its ``selection`` block) or a bare
+``--selection`` is optional (without it only the other measurements run): a
+store-comparison artifact (its ``selection`` block) or a bare
 ``{random_alids, random_analyses}`` file.
 """
 
