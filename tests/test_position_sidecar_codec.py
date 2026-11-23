@@ -21,6 +21,7 @@ from opengwasdb.store_reader.position_sidecar import (
     POSITION_FILENAME,
     POSITION_MAX,
     POSITION_SIDECAR_FILENAMES,
+    MalformedPositionSidecar,
     PositionSidecar,
     UnorderedPositionsError,
     encode_positions,
@@ -161,6 +162,44 @@ def test_a_half_written_sidecar_is_refused(tmp_path: Path) -> None:
     for name in (POSITION_FILENAME, CHROMOSOME_OFFSETS_FILENAME):
         (tmp_path / name).unlink()
     assert PositionSidecar.open(tmp_path) is None
+
+
+def _edit(store: Path, name: str, array: np.ndarray) -> None:
+    np.save(store / name, array)
+
+
+@pytest.mark.parametrize(
+    ("name", "array", "says"),
+    [
+        (CHROMOSOME_OFFSETS_FILENAME, np.array([0, 2, 5, 6, 9], dtype="<u8"),
+         "has 5 offsets for 3 chromosome"),
+        (CHROMOSOME_OFFSETS_FILENAME, np.array([0, 5, 9], dtype="<u8"),
+         "has 3 offsets for 3 chromosome"),
+        (CHROMOSOMES_FILENAME, np.array([b"1", b"2", b"1"]), "names chromosome '1' twice"),
+        (CHROMOSOMES_FILENAME, np.array([b"1", b"\xff", b"X"]), "chromosome 1 is not UTF-8"),
+    ],
+)
+def test_a_sidecar_whose_chromosomes_cannot_slice_the_rows_is_refused_at_open(
+    tmp_path: Path, name: str, array: np.ndarray, says: str
+) -> None:
+    """Read as it stands, each would answer some chromosome's ranges from another's rows,
+    or from none: an answer that looks like no association."""
+    _sidecar(tmp_path)
+    _edit(tmp_path, name, array)
+    with pytest.raises(MalformedPositionSidecar, match=says):
+        PositionSidecar.open(tmp_path)
+
+
+def test_misplaced_names_each_row_the_sidecar_places_elsewhere(tmp_path: Path) -> None:
+    sidecar = _sidecar(tmp_path)
+    assert sidecar.misplaced(0, CHROMOSOMES, POSITIONS) == []
+    moved, renamed = list(POSITIONS), list(CHROMOSOMES)
+    moved[3], renamed[5] = 251, "3"
+    assert sidecar.misplaced(0, renamed, moved) == [3, 5]
+    assert sidecar.misplaced(5, renamed[5:], POSITIONS[5:]) == [5], "rows count from `start`"
+    # A row past the sidecar's end is not compared: `n_rows` says the sidecar is short.
+    assert sidecar.misplaced(8, ["X", "Y"], [4_000_000_000, 1]) == []
+    assert sidecar.placements([3, 5, len(ROWS)]) == [("1", 250), ("2", 5), (None, None)]
 
 
 def test_the_codec_imports_numpy_and_the_standard_library_only() -> None:

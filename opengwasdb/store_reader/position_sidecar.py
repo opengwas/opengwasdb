@@ -32,6 +32,8 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from opengwasdb.store_reader.npy_sidecar import holds_sidecar, open_sidecar_arrays
+
 POSITION_FILENAME = "variant_position.npy"
 CHROMOSOMES_FILENAME = "variant_position_chromosomes.npy"
 CHROMOSOME_OFFSETS_FILENAME = "variant_position_chromosome_offsets.npy"
@@ -55,6 +57,11 @@ ChromosomeKey = Callable[[str], Any]
 
 class MissingPositionSidecar(FileNotFoundError):
     """A release's `format_version` carries a position sidecar whose files are not there."""
+
+
+class MalformedPositionSidecar(ValueError):
+    """A sidecar whose chromosomes cannot slice its rows: offsets that do not number the
+    chromosomes plus one, a chromosome named twice, or a label that is not UTF-8."""
 
 
 class UnorderedPositionsError(ValueError):
@@ -201,33 +208,38 @@ class PositionSidecar:
     FILENAMES: ClassVar[tuple[str, ...]] = POSITION_SIDECAR_FILENAMES
 
     def __init__(self, positions: np.ndarray, chromosomes: np.ndarray, offsets: np.ndarray) -> None:
+        """Refuses chromosomes that cannot slice the rows (`MalformedPositionSidecar`):
+        read as they stand, they would answer one chromosome's ranges from another's
+        rows, or from none. A check of the chromosomes alone, a few dozen; the rows'
+        order is the validator's (`sidecar_problems`)."""
         self.positions = positions
         self.chromosomes = chromosomes
         self.offsets = offsets
+        self.labels: list[str] = _labels(chromosomes)
         bounds = np.asarray(offsets, dtype=np.int64).tolist()
-        labels = [bytes(label).decode("utf-8", "replace") for label in np.asarray(chromosomes)]
-        # Read once: a few dozen chromosomes. A sidecar whose labels repeat or whose
-        # offsets do not match them is the validator's to report (`sidecar_problems`).
+        fault = _slicing_fault(self.labels, len(bounds))
+        if fault:
+            raise MalformedPositionSidecar(f"the position sidecar cannot be read: {fault}")
         self._slices: dict[str, tuple[int, int]] = {
-            label: (lo, hi) for label, lo, hi in zip(labels, bounds, bounds[1:], strict=False)
+            label: (lo, hi)
+            for label, lo, hi in zip(self.labels, bounds[:-1], bounds[1:], strict=True)
         }
 
     @classmethod
     def open(cls, store_path: str | Path) -> PositionSidecar | None:
         """The sidecar in `store_path`; None when it holds none of the three files.
 
-        A directory holding some of them and not the others is refused: a half-written
-        sidecar answers some ranges and not others, which reads as absence.
+        A directory holding some of them and not the others is refused
+        (`npy_sidecar.holds_sidecar`).
         """
-        store = Path(store_path)
-        present = [name for name in POSITION_SIDECAR_FILENAMES if (store / name).exists()]
-        if not present:
-            return None
-        if len(present) != len(POSITION_SIDECAR_FILENAMES):
-            missing = sorted(set(POSITION_SIDECAR_FILENAMES) - set(present))
-            raise FileNotFoundError(f"{store}: position sidecar is incomplete, missing {missing}")
-        arrays = [np.load(store / name, mmap_mode="r") for name in POSITION_SIDECAR_FILENAMES]
-        return cls(*arrays)
+        arrays = open_sidecar_arrays(store_path, POSITION_SIDECAR_FILENAMES, _WHAT)
+        return None if arrays is None else cls(*arrays)
+
+    @staticmethod
+    def held_in(store_path: str | Path) -> bool:
+        """Whether `store_path` holds the sidecar's files, without reading them; a
+        partial set is refused."""
+        return holds_sidecar(store_path, POSITION_SIDECAR_FILENAMES, _WHAT)
 
     @property
     def n_rows(self) -> int:
@@ -249,14 +261,45 @@ class PositionSidecar:
         last = int(np.searchsorted(block, POSITION_DTYPE.type(hi_value), side="right"))
         return np.arange(lo + first, lo + last, dtype=np.int64)
 
-    def chromosomes_of(self, rows: np.ndarray) -> list[str | None]:
+    def chromosomes_of(self, rows: np.ndarray | Sequence[int]) -> list[str | None]:
         """Each row's chromosome, as its slice names it; None for a row in no slice."""
         rows = np.asarray(rows, dtype=np.int64)
         offsets = np.asarray(self.offsets, dtype=np.int64)
-        labels = [bytes(label).decode("utf-8", "replace") for label in np.asarray(self.chromosomes)]
+        labels = self.labels
         at = np.searchsorted(offsets, rows, side="right") - 1
         held = (at >= 0) & (at < len(labels)) & (rows < (offsets[-1] if offsets.size else 0))
         return [labels[k] if ok else None for k, ok in zip(at.tolist(), held.tolist(), strict=True)]
+
+    def placements(self, rows: np.ndarray | Sequence[int]) -> list[tuple[str | None, int | None]]:
+        """Each row's ``(chromosome, position)``; ``(None, None)`` past the sidecar's end."""
+        rows = np.asarray(rows, dtype=np.int64)
+        chromosomes = self.chromosomes_of(rows)
+        held = rows[rows < self.n_rows]
+        positions = dict(zip(held.tolist(), np.asarray(self.positions[held]).tolist(), strict=True))
+        return [
+            (chromosome, positions.get(row)) if chromosome is not None else (None, None)
+            for row, chromosome in zip(rows.tolist(), chromosomes, strict=True)
+        ]
+
+    def misplaced(
+        self, start: int, chromosomes: Sequence[str], positions: Sequence[int]
+    ) -> list[int]:
+        """The rows from `start`, one per given chromosome and position, that this
+        sidecar places elsewhere, ascending.
+
+        The one comparison of the sidecar against the Variant Table: the rewrite's
+        read-back and the validator's `variant_table.position_sidecar` both make it.
+        A row past the sidecar's end is not compared; `n_rows` says the sidecar is short.
+        """
+        held = max(min(start + len(chromosomes), self.n_rows) - start, 0)
+        stored = np.asarray(self.positions[start : start + held], dtype=np.int64)
+        given = np.asarray(positions[:held], dtype=np.int64)
+        named = self.chromosomes_of(np.arange(start, start + held))
+        return [
+            start + k
+            for k in range(held)
+            if stored[k] != given[k] or named[k] != chromosomes[k]
+        ]
 
     def problems(
         self, table_rows: int, *, chromosome_key: ChromosomeKey | None
@@ -290,22 +333,18 @@ def sidecar_problems(
     if positions.size and int(positions.min()) < 1:
         yield f"{POSITION_FILENAME} holds position 0 at row {int(np.argmin(positions))}"
         return
-    labels = [bytes(label).decode("utf-8", "replace") for label in np.asarray(sidecar.chromosomes)]
     starts = np.asarray(sidecar.offsets, dtype=np.int64)[:-1]
-    fault = _first_fault(labels, starts, positions, chromosome_key)
+    fault = _first_fault(sidecar.labels, starts, positions, chromosome_key)
     if fault:
         yield f"the position sidecar is not in genomic order: {fault}"
 
 
 def _offset_problem(sidecar: PositionSidecar) -> str:
-    """Why the chromosome offsets do not slice the rows into the chromosomes, or ``""``."""
+    """Why the chromosome offsets do not slice the rows into the chromosomes, or ``""``.
+
+    That they number the chromosomes plus one is checked at open (`_slicing_fault`).
+    """
     offsets = np.asarray(sidecar.offsets, dtype=np.int64)
-    n_chromosomes = len(sidecar.chromosomes)
-    if len(offsets) != n_chromosomes + 1:
-        return (
-            f"{CHROMOSOME_OFFSETS_FILENAME} has {len(offsets)} offsets for "
-            f"{n_chromosomes} chromosome(s); it holds one more than the chromosomes"
-        )
     if int(offsets[0]) != 0 or int(offsets[-1]) != sidecar.n_rows:
         return (
             f"{CHROMOSOME_OFFSETS_FILENAME} runs from {int(offsets[0])} to {int(offsets[-1])}, "
@@ -314,6 +353,40 @@ def _offset_problem(sidecar: PositionSidecar) -> str:
     if np.any(offsets[1:] <= offsets[:-1]):
         at = int(np.flatnonzero(offsets[1:] <= offsets[:-1])[0])
         return f"{CHROMOSOME_OFFSETS_FILENAME} does not rise at chromosome {at}: each holds a row"
+    return ""
+
+
+_WHAT = "position sidecar"
+
+
+def _labels(chromosomes: np.ndarray) -> list[str]:
+    """Each stored chromosome label, decoded. A label that is not UTF-8 is refused,
+    never replaced: a replaced label would match no chromosome a caller asks for."""
+    labels = []
+    for k, label in enumerate(np.asarray(chromosomes).tolist()):
+        try:
+            labels.append(bytes(label).decode("utf-8"))
+        except (TypeError, UnicodeDecodeError) as exc:
+            raise MalformedPositionSidecar(
+                f"the position sidecar cannot be read: {CHROMOSOMES_FILENAME}'s chromosome "
+                f"{k} is not UTF-8 bytes ({label!r})"
+            ) from exc
+    return labels
+
+
+def _slicing_fault(labels: list[str], n_offsets: int) -> str:
+    """Why chromosomes `labels`, with `n_offsets` row offsets, cannot slice the rows;
+    else ``""``. Only the chromosomes are read."""
+    if n_offsets != len(labels) + 1:
+        return (
+            f"{CHROMOSOME_OFFSETS_FILENAME} has {n_offsets} offsets for {len(labels)} "
+            "chromosome(s); it holds one more than the chromosomes"
+        )
+    seen: set[str] = set()
+    for label in labels:
+        if label in seen:
+            return f"{CHROMOSOMES_FILENAME} names chromosome {label!r} twice"
+        seen.add(label)
     return ""
 
 

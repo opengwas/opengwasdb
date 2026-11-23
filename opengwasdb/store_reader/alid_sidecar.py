@@ -33,6 +33,8 @@ from typing import ClassVar
 
 import numpy as np
 
+from opengwasdb.store_reader.npy_sidecar import open_sidecar_arrays
+
 ALID_UTF8_FILENAME = "variant_alid_utf8.npy"
 ALID_OFFSETS_FILENAME = "variant_alid_offsets.npy"
 ALID_KEYS_FILENAME = "variant_alid_keys.npy"
@@ -176,15 +178,8 @@ class AlidSidecar:
         A directory holding some of them and not the others is refused: a half-written
         sidecar answers some lookups and not others, which reads as absence.
         """
-        store = Path(store_path)
-        present = [name for name in ALID_SIDECAR_FILENAMES if (store / name).exists()]
-        if not present:
-            return None
-        if len(present) != len(ALID_SIDECAR_FILENAMES):
-            missing = sorted(set(ALID_SIDECAR_FILENAMES) - set(present))
-            raise FileNotFoundError(f"{store}: ALID sidecar is incomplete, missing {missing}")
-        arrays = [np.load(store / name, mmap_mode="r") for name in ALID_SIDECAR_FILENAMES]
-        return cls(*arrays)
+        arrays = open_sidecar_arrays(store_path, ALID_SIDECAR_FILENAMES, "ALID sidecar")
+        return None if arrays is None else cls(*arrays)
 
     @property
     def n_rows(self) -> int:
