@@ -340,3 +340,27 @@ def test_a_moved_claim_sits_on_the_component_decision_8_moved_it_to(path: str, o
 )
 def test_admission_and_routing_are_components_of_their_own(path: str, owner: str) -> None:
     assert component_for_path(claims(load_model(MODEL_PATH)), path) == owner
+
+
+@pytest.mark.parametrize(
+    ("path", "owner"),
+    [
+        # The Store Reader (#464) claims the read halves it absorbed ...
+        ("opengwasdb/store_reader/facade.py", "store_reader"),
+        ("opengwasdb/store_reader/associations/record.py", "store_reader"),
+        ("opengwasdb/store_reader/encoding/codec.py", "store_reader"),
+        # ... and the components that lost them keep their remaining paths.
+        ("opengwasdb/query/__init__.py", "query"),
+        ("opengwasdb/encoding/codec.py", "encoding"),
+        ("opengwasdb/store/open.py", "store"),
+        ("opengwasdb/variants/axis.py", "variants"),
+        ("opengwasdb/layouts/dense/indexed_subsets.py", "dense"),
+        ("opengwasdb/lazy_exports.py", "model"),
+    ],
+)
+def test_the_store_reader_is_a_component_of_its_own(path: str, owner: str) -> None:
+    assert component_for_path(claims(load_model(MODEL_PATH)), path) == owner
+    assert next(
+        component["layer"] for component in load_model(MODEL_PATH)["components"]
+        if component["id"] == "store_reader"
+    ) == 0
