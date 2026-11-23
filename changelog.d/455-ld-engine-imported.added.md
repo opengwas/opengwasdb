@@ -14,10 +14,10 @@
   `software.ogld`, now with this package's version, until the next LD Store
   format version. The `opengwasdb ld` commands and the shared variant identity
   follow in #456 and #457.
-- **pytest runs with `--strict-markers` and `-m "not realdata and not
-  acceptance"` by default, for the engine's tests as well as the LD tests
-  (issue #455).** A misspelt mark is now a collection error rather than a test
-  that runs in no tier, and a test marked `realdata` or `acceptance` (the LD
-  tiers that read the IEU nodes' panels) is deselected unless a command line's
-  own `-m` asks for it. No engine test carries either mark; ogld's 5 s per-test
-  timeout and strict xfail apply to `tests/ld/` only.
+- **pytest runs with `--strict-markers`, for the engine's tests as well as the LD
+  tests (issue #455).** A misspelt mark is now a collection error rather than a test
+  that runs in no tier. A test marked `realdata` or `acceptance` (the LD tiers that
+  read the IEU nodes' panels) is deselected unless the run's `-m` asks for it:
+  `tests/conftest.py` does that, not an `addopts` `-m` (#459). No engine test
+  carries either mark; ogld's 5 s per-test timeout and strict xfail apply to
+  `tests/ld/` only.

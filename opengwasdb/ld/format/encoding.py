@@ -86,7 +86,7 @@ class REncoding:
         code or rounding, a scale outside 1–32767, or a key it does not know."""
         if not cls._implements(record):
             raise InputError(
-                f"the encoding {record!r} is not one this ogld implements: exactly the keys "
+                f"the encoding {record!r} is not one opengwasdb.ld implements: exactly the keys "
                 f"{sorted(Encoding.__required_keys__)}, an int16 container with "
                 f"{cls.reserved_code} reserved, rounded {cls.rounding}, at a whole scale from 1 to "
                 f"{cls.largest_scale} (ld-store §3, §13)"

@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 from contract.support import RangeHandler
 from partner_oracle import Pairs, chromosomes, far_pairs, near_pairs, store
-from store_copies import PARTNER_FLOOR, TEST_STORE
+from store_copies import PARTNER_FLOOR, TEST_STORE, copy_store
 from zarr.abc.store import RangeByteRequest
 
 from opengwasdb.ld.format import InputError
@@ -169,7 +169,7 @@ def test_store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Serve
     """A copy of the committed Test Store, as a local path and over HTTP: both are one read path
     (§7), so each damage case is held on both."""
     copied = tmp_path / "store"
-    shutil.copytree(TEST_STORE, copied)
+    copy_store(copied)
     if request.param == "local":
         yield str(copied), copied
     else:
@@ -766,7 +766,7 @@ PARTNER_KEYS = ("t_partner", "partner_code_floor")
 
 def test_a_0_1_0_store_is_refused_naming_the_missing_component(tmp_path: Path) -> None:
     copied = tmp_path / "store"
-    shutil.copytree(TEST_STORE, copied)
+    copy_store(copied)
     root = copied / "zarr.json"
     provenance = json.loads(root.read_text())
     recorded = provenance["attributes"]["ld_store"]
