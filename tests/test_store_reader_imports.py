@@ -79,8 +79,8 @@ def test_the_check_refuses_what_it_should():
 
 def test_the_store_reader_imports_only_numpy_zarr_numcodecs_stdlib_and_itself():
     sources = store_reader_sources()
-    # The subpackage the ticket moves is about 7,500 lines; a check over a
-    # handful of files would pass whatever had not moved yet.
+    # The Store Reader is some 9,600 lines in 31 modules; a check over a handful
+    # of files would pass a read path that had not reached the subpackage.
     assert len(sources) >= 20, sorted(sources)
     assert sum(len(text.splitlines()) for text in sources.values()) > 7000
     refused = {

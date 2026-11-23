@@ -115,9 +115,10 @@ CSR_DECODE_CALLERS = {
     "store_reader/associations/csr.py": "the CSR adapter",
     "store_reader/csr.py": "the reader that defines them",
     "layouts/ragged/top_hits.py": (
-        "the Top-Hit harvest, a Layout the builders call, which harvests a tier's "
-        "candidates from the decode members directly (it was written when the "
-        "association readers sat above the Layouts, before the Store Reader, #464)"
+        "the Top-Hit harvest, which decodes each slice's z alone, keeps the cells "
+        "clearing the loosest tier, and decodes SE, EAF and the imputed mask for those "
+        "cells only (#233); `CsrReader` reads a region's every field, so a harvest "
+        "through it would decode every cell's SE and EAF to keep a few"
     ),
 }
 

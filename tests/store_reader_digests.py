@@ -12,14 +12,16 @@ from a `git archive 5d600a1d` of the repository, never by the code it checks:
 
     git archive 5d600a1d | tar -x -C <scratch>
     cp tests/store_reader_digests.py <scratch>/tests/
-    cd <scratch> && PYTHONPATH=tests:. python tests/store_reader_digests.py <out.json>
+    cd <scratch> && PYTHONPATH=tests:. python tests/store_reader_digests.py <out> 5d600a1d
+
+and `<out>` is the committed file, byte for byte, header included.
 
 It touches only names that are public on both sides of the move
 (`opengwasdb.query.query_store`, the builders the fixtures already call), so the
 same file runs against either.
 
 The resolved rows' `log10_p` is the one value not digested: the move replaced
-scipy's `norm.logsf` with `math.erfc` (ticket #464), which agrees to 1e-12
+scipy's `norm.logsf` with `math.erfc`, which agrees with it to 1e-12
 relative error rather than bit for bit. It is kept as numbers and compared with
 that tolerance; every other resolved field is digested.
 """
@@ -188,14 +190,20 @@ def digests(root: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str]) -> None:
-    import opengwasdb
-
-    out = Path(argv[1])
+    """``store_reader_digests.py OUT COMMIT``: write the digests, headed by the
+    commit whose code wrote them -- exactly the file that is committed."""
     import tempfile
 
+    out, commit = Path(argv[1]), argv[2]
     with tempfile.TemporaryDirectory() as scratch:
         found = digests(Path(scratch))
-    found["__written_by__"] = {"opengwasdb": str(Path(opengwasdb.__file__).parent)}
+    found["__written_by__"] = {
+        "commit": commit,
+        "how": (
+            f"tests/store_reader_digests.py run from a git archive of {commit}; "
+            "see its docstring"
+        ),
+    }
     out.write_text(json.dumps(found, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 

@@ -50,6 +50,11 @@ if TYPE_CHECKING:
     from opengwasdb.encoding.se import write_dense_se_side_arrays as write_dense_se_side_arrays
     from opengwasdb.store.arrays import component_variant_chunk as component_variant_chunk
     from opengwasdb.store.arrays import per_variant_chunk_size as per_variant_chunk_size
+
+    #: Each re-exported name, by the module it comes from; imported on first use
+    #: (`opengwasdb.lazy_exports`, #464).
+    # A renamed re-export: an assignment, so the type checker sees its type.
+    from opengwasdb.store_reader import layout as _layout
     from opengwasdb.store_reader.encoding.codec import EAF_BASELINE as EAF_BASELINE
     from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX as EAF_EXCEPTION_INDEX
     from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_VALUE as EAF_EXCEPTION_VALUE
@@ -101,8 +106,9 @@ if TYPE_CHECKING:
     from opengwasdb.store_reader.encoding.planes import RaggedSePlane as RaggedSePlane
     from opengwasdb.store_reader.layout import component_chunk_size as component_chunk_size
 
-#: Each re-exported name, by the module it comes from; imported on first use
-#: (`opengwasdb.lazy_exports`, #464).
+    DEFAULT_PER_VARIANT_CHUNK = _layout.PER_VARIANT_CHUNK
+
+
 _EXPORTS = {
     "opengwasdb.encoding.association_codec": (
         "AssociationCodec",
@@ -199,9 +205,11 @@ _EXPORTS = {
         "optimise_dense_se_joint",
         "write_dense_se_side_arrays",
     ),
-    "opengwasdb.store.arrays": (
+    "opengwasdb.store_reader.layout": (
         "PER_VARIANT_CHUNK as DEFAULT_PER_VARIANT_CHUNK",
         "component_chunk_size",
+    ),
+    "opengwasdb.store.arrays": (
         "component_variant_chunk",
         "per_variant_chunk_size",
     ),

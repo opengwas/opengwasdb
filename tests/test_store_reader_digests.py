@@ -20,8 +20,9 @@ from store_reader_digests import GOLDEN, build_releases, release_digests
 PINS: dict[str, Any] = json.loads(GOLDEN.read_text(encoding="utf-8"))
 RELEASES = sorted(name for name in PINS if not name.startswith("__"))
 
-#: The relative tolerance `log10_p` is held to: the move replaced scipy's
-#: `norm.logsf` with `math.erfc` (ticket #464's acceptance criteria).
+#: The relative tolerance `log10_p` is held to: the Store Reader computes it with
+#: `math.erfc` where the code before computed scipy's `norm.logsf`, and the two
+#: agree to this, not bit for bit (`tests/test_store_reader_stats.py`).
 LOG10_P_RTOL = 1e-12
 
 
