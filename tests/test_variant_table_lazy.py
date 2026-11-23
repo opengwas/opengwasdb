@@ -125,7 +125,7 @@ def _asked(path: Path) -> list[dict]:
         records = [dict(r) for r in axis.all() if r.rsid]
     finally:
         axis.close()
-    panel_file = path / "dense_to_shared.npy"
+    panel_file = path / "dense" / "dense_to_shared.npy"
     if panel_file.exists():
         panel = {int(i) for i in np.load(panel_file)}
         on = [r for r in records if r["variant_index"] in panel]
