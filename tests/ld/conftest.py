@@ -36,7 +36,8 @@ from .tier_markers import refuse_misplaced
 # `from realdata_inputs import …`). tests/ld is a package (tests/ld/__init__.py), so pytest no
 # longer puts these directories on `sys.path`; they go at its end, after tests/, so a name
 # tests/ also has is tests/'s.
-for _directory in (".", "contract", "realdata"):
+SYS_PATH_APPENDS = (".", "contract", "realdata")
+for _directory in SYS_PATH_APPENDS:
     _path = str((Path(__file__).resolve().parent / _directory).resolve())
     if _path not in sys.path:
         sys.path.append(_path)

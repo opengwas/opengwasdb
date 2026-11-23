@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from tier_markers import misplaced, refuse_misplaced
+from tests.ld.tier_markers import misplaced, refuse_misplaced, unasked
 
 ROOT = Path(__file__).resolve().parent
 
@@ -20,6 +20,7 @@ def item(path: str, *marks: str) -> SimpleNamespace:
         path=ROOT / path,
         nodeid=path,
         get_closest_marker=lambda name: name if name in marks else None,
+        iter_markers=lambda: iter(SimpleNamespace(name=name) for name in marks),
     )
 
 
@@ -51,44 +52,51 @@ def test_a_misplaced_test_is_a_collection_error_naming_it() -> None:
         refuse_misplaced([item("test_x.py", "realdata")], ROOT)
 
 
-def test_a_run_that_does_not_name_an_opt_in_tier_deselects_it() -> None:
-    from tier_markers import unasked
-
+def _dropped(expression: str) -> list[str]:
     items = [item("realdata/a.py", "ld", "realdata"), item("acceptance/b.py", "ld", "acceptance")]
     items.append(item("test_c.py", "ld"))
-    for expression in ("", "ld", "not ld", "ld and not slow"):
-        assert [i.nodeid for i in unasked(items, expression)] == [
-            "realdata/a.py",
-            "acceptance/b.py",
-        ]
-    assert [i.nodeid for i in unasked(items, "realdata")] == ["acceptance/b.py"]
-    assert unasked(items, "realdata or acceptance") == []
+    return [i.nodeid for i in unasked(items, expression)]
 
 
-@pytest.mark.timeout(60)  # a fresh pytest process importing the engine
-def test_a_command_line_m_cannot_bring_the_opt_in_tiers_back() -> None:
-    import re
+# What the hook takes out. An item it keeps may still be deselected by pytest's own `-m`.
+BOTH = ["realdata/a.py", "acceptance/b.py"]
+
+
+@pytest.mark.parametrize(
+    ("expression", "dropped"),
+    [
+        ("", BOTH),
+        ("ld", BOTH),
+        ("ld and not slow", BOTH),
+        ("ld or not acceptance", BOTH),  # the old rule brought acceptance back
+        ("ld or realdata", BOTH),  # `ld` already selects realdata: not asked for
+        ("not ld", []),  # nothing for the hook: the expression itself drops them
+        ("not acceptance", BOTH),  # realdata is not asked for either
+        ("realdata", []),  # the expression drops the others
+        ("acceptance", []),
+        ("realdata or acceptance", []),
+    ],
+)
+def test_a_tier_is_kept_only_when_the_run_s_m_needs_it(expression: str, dropped: list[str]) -> None:
+    assert _dropped(expression) == dropped
+
+
+def _collect(*arguments: str) -> str:
     import subprocess
     import sys
 
-    root = ROOT.parent.parent
-    for expression in ("ld",):
-        done = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "tests/ld/realdata",
-                "-m",
-                expression,
-                "-q",
-                "-p",
-                "no:cacheprovider",
-                "--collect-only",
-            ],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert re.search(r"no tests collected \(\d+ deselected\)", done.stdout), done.stdout[-400:]
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/ld/realdata", "-q", "-p", "no:cacheprovider",
+         "--collect-only", *arguments],
+        cwd=ROOT.parent.parent, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    return done.stdout
+
+
+@pytest.mark.timeout(60)  # fresh pytest processes importing the engine
+def test_a_command_line_m_cannot_bring_the_opt_in_tiers_back_but_can_ask_for_one() -> None:
+    import re
+
+    assert re.search(r"no tests collected \(\d+ deselected\)", _collect("-m", "ld")), "ld"
+    selected = _collect("-m", "realdata")
+    assert "test_" in selected and "deselected" not in selected, selected[-400:]

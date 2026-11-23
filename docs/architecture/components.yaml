@@ -181,14 +181,14 @@ components:
     container: engine
     layer: 1
     stages: [build, query]
-    summary: The LD Store's arrays, tables, variant axis and partner rows, and the code that reads, assembles, writes and validates them.
+    summary: The LD Store's arrays, tables, variant axis and Partner Rows, and the code that reads, assembles, writes and validates them.
     paths: [opengwasdb/ld/store/]
   - id: ld-genotypes
     name: Genotype Store
     container: engine
     layer: 2
     stages: [build, query]
-    summary: The Genotype Store sidecar, its PC adjustment, pgen reading and validation.
+    summary: The Genotype Store sidecar, its PC Adjustment, pgen reading and validation.
     paths: [opengwasdb/ld/genotypes/]
   - id: ld-build
     name: LD Store build
