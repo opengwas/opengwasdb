@@ -14,6 +14,9 @@ What this ADR changes in other documents:
   sidecar's four files from 0.3.0 and the fixed-width pair before it; §4 states the layout.
 - Spec §20.0: a new rule, `variant_table.alid_sidecar`.
 - Spec §21.1-§21.4: 0.3.0 in each table, and `ogdb rewrite-release` among the migrations.
+- From #471 (the dated section below): spec §1, §1.1, §10a, §18, §20 and §20.0 for what
+  0.3.0 drops, and banners on [ADR 0001](0001-hybrid-sqlite-zarr-store-envelope.md) and
+  [ADR 0057](0057-store-format-0-2-0-zarr-v3-with-sharding.md) §5.
 - [ADR 0038](0038-store-format-versioning-and-migration-policy.md) and
   [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md) stand: this applies them.
 
@@ -224,6 +227,57 @@ change that.
 - **Tests build 0.2.3 releases** by turning a 0.3.0 build back (`tests/format_0_2_3.py`). The nine
   completion pins, turned back so, match their previous pins in every entry but the Dense
   `overview.html`, which lists the files.
+
+## 23 Nov 2026 (#471): what else 0.3.0 drops
+
+[ADR 0102](0102-what-a-store-release-ships.md) classifies every component a release ships.
+Issue [#471](https://github.com/opengwas/opengwasdb/issues/471) carries its drops into 0.3.0,
+the same format version as the sidecar, so there is still one backfill. From 0.3.0:
+
+- **`index.sqlite` holds only `completion_quality`**, and ships only where that table does: in
+  a Reference-Completed release, a Hybrid's in its Dense Component. The envelope is therefore
+  a function of layout, version and completion state (`envelope_at`, `ships_index`). An
+  Observed-Only release, and a Hybrid's outer release, carrying one fails `envelope.closed`.
+  An `index.sqlite` holding anything else fails `sqlite.provenance_only`.
+- **The `metadata` table is gone**: its `dense` layout blob and the unread `schema_version`,
+  `n_variants` and `n_analyses`. `manifest.json` is the one copy of the layout the blob held,
+  and `layout.recorded` and `hybrid.recordings` read the manifest and the root attributes.
+- **`variant_aliases` is gone.** On 0.3.0 the Store Reader never opens `index.sqlite`: an
+  rsID the rsID index lacks is a miss, and SQLite is not loaded. On 0.2 the fallback stays
+  until #476 retires it.
+- **The Top-Hit tiers' `abs_z` and `p_value` are gone.** The validator recomputes both from
+  `z` through `opengwasdb.store_reader.stats`. `top_hits.threshold` fails a tier row whose
+  recomputed |z| does not clear its threshold, on every format. `top_hits.abs_z` holds a 0.2
+  tier's stored pair to the recomputed one: `abs_z` within the 1e-3 it always used, and
+  `p_value` within 1e-3 relative.
+
+`completion_quality` and `on_panel` stay, as provenance.
+
+Builds and completion write 0.3.0's tiers. Rebuilding the index of an existing 0.2 release
+(`ogdb build-dense-top-hits`, `build-ragged-top-hits`) keeps that release's format, as #313
+requires: its tiers get `abs_z` and `p_value` back, recomputed from `z`
+(`top_hits.write_stored_p`).
+
+**The rewrite** drops all four in two steps after `alid_sidecar`. `provenance_index` writes a
+Reference-Completed component a new `index.sqlite` holding only `completion_quality`, copied
+with its schema. `tier_stored_p` drops each tier's pair. Neither copies what it drops. A step
+names the paths it drops (`RewriteStep.leaves_out`), and the copy leaves them out, so a later
+step that needed one would read it from the source. Each refuses a source whose drop would
+change an answer or lose evidence:
+- a `variant_aliases` rsID the rsID index lacks;
+- a `dense` blob that disagrees with the manifest;
+- a tier whose stored pair is not what its `z` implies;
+- a table it does not know;
+- a consolidated-metadata record over a tier.
+
+The proof also asks about rsIDs no release names, by PheWAS and inside a lookup (its
+`misses` section). On 0.2 those reach `variant_aliases`; on 0.3.0 they are misses.
+
+On OGS-00007 (Ragged Observed-Only, 0.2.1, rewritten with the version refusal bypassed, as for
+#467), the rewrite took 21.6 s. All 146 questions, 9 ALID probes and 3 misses matched. It left
+out 71,412 B: `abs_z` 24,224 B and `p_value` 47,188 B over three tiers, and an empty
+`index.sqlite`. ADR 0102's Consequences gives the same drops on the large releases: 575 MB of
+tier arrays on OGS-00009, and 2.09 GB on OGS-00011's Dense Component.
 
 ## Alternatives considered
 
