@@ -49,3 +49,46 @@ def test_an_unmarked_test_is_none_of_its_business() -> None:
 def test_a_misplaced_test_is_a_collection_error_naming_it() -> None:
     with pytest.raises(pytest.UsageError, match="not under tests/realdata/"):
         refuse_misplaced([item("test_x.py", "realdata")], ROOT)
+
+
+def test_a_run_that_does_not_name_an_opt_in_tier_deselects_it() -> None:
+    from tier_markers import unasked
+
+    items = [item("realdata/a.py", "ld", "realdata"), item("acceptance/b.py", "ld", "acceptance")]
+    items.append(item("test_c.py", "ld"))
+    for expression in ("", "ld", "not ld", "ld and not slow"):
+        assert [i.nodeid for i in unasked(items, expression)] == [
+            "realdata/a.py",
+            "acceptance/b.py",
+        ]
+    assert [i.nodeid for i in unasked(items, "realdata")] == ["acceptance/b.py"]
+    assert unasked(items, "realdata or acceptance") == []
+
+
+@pytest.mark.timeout(60)  # a fresh pytest process importing the engine
+def test_a_command_line_m_cannot_bring_the_opt_in_tiers_back() -> None:
+    import re
+    import subprocess
+    import sys
+
+    root = ROOT.parent.parent
+    for expression in ("ld",):
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/ld/realdata",
+                "-m",
+                expression,
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--collect-only",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert re.search(r"no tests collected \(\d+ deselected\)", done.stdout), done.stdout[-400:]
