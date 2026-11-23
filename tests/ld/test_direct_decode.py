@@ -66,15 +66,12 @@ def test_non_regular_or_multidimensional_arrays_are_not_recognised(tmp_path: Pat
     matrix = zarr.create_array(store=tmp_path / "matrix", shape=(8, 8), dtype="int32")
     assert decoding.NumericDecoder.of(matrix) is None
     array = numbers(tmp_path)
-    # zarr 3.4.0, opengwasdb's lock, refuses to make a rectilinear grid unless it is switched on;
-    # 3.4.2, which ogld locked, did not ask (#455). The decoder is asked about one either way.
-    with zarr.config.set({"array.rectilinear_chunks": True}):
-        meta = replace(
-            array.metadata,
-            shape=(32,),
-            chunk_grid=RectilinearChunkGridMetadata(chunk_shapes=((16, 16),)),
-        )
-        rectilinear = zarr.Array(zarr.AsyncArray(meta, array.store_path))
+    meta = replace(
+        array.metadata,
+        shape=(32,),
+        chunk_grid=RectilinearChunkGridMetadata(chunk_shapes=((16, 16),)),
+    )
+    rectilinear = zarr.Array(zarr.AsyncArray(meta, array.store_path))
     assert decoding.NumericDecoder.of(rectilinear) is None
 
 
