@@ -11,52 +11,15 @@ The residual is the dosages minus their projection on an orthonormal basis of th
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Final
-
 import numpy as np
 import numpy.typing as npt
 
-#: A residual whose squared length is this small a share of the centred dosages' has no
-#: variance after PC Adjustment, to float error: r with it is undefined (build-inputs §6, 4).
-FLAT: Final = 1e-12
+# The covariates and the residual are the production functions (one QR, one FLAT test), not a copy
+# of them; what this file keeps of the frozen builder is `unit_vectors` below, the one-vector-
+# per-variant arithmetic `prepare` and `r` replaced.
+from opengwasdb.ld.genotypes.adjust import Covariates, covariates, residuals
 
-
-@dataclass(frozen=True)
-class Covariates:
-    """The covariates regressed out, by name, and an orthonormal basis of them with the
-    intercept, (samples, k + 1), in the sample order."""
-
-    names: list[str]
-    basis: npt.NDArray[np.float64]
-
-    @property
-    def k(self) -> int:
-        return len(self.names)
-
-
-def covariates(
-    names: list[str], values: npt.NDArray[np.float64] | None, samples: int
-) -> Covariates:
-    """The intercept and the named PCs' `values` (samples, k), or the intercept alone."""
-    columns = [np.ones(samples)]
-    if values is not None:
-        columns += [values[:, j] for j in range(values.shape[1])]
-    basis, _ = np.linalg.qr(np.column_stack(columns))
-    return Covariates(list(names), basis)
-
-
-def residuals(
-    dosages: npt.NDArray[np.float64], covariates: Covariates
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.bool_]]:
-    """Each row of `dosages` (variants × samples) with the covariates regressed out, and which
-    rows have no variance left: their residual is at most `FLAT` of their centred dosages'."""
-    q = covariates.basis
-    resid = dosages - (dosages @ q) @ q.T
-    centred = dosages - dosages.mean(axis=1, keepdims=True)
-    left = np.einsum("ij,ij->i", resid, resid)
-    flat = left <= FLAT * np.einsum("ij,ij->i", centred, centred)
-    return resid, flat
+__all__ = ["covariates", "unit_vectors"]
 
 
 def unit_vectors(
