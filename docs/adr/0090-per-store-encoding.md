@@ -36,7 +36,7 @@ store at any other scale could be neither written nor read.
 
 ## Decision
 
-1. **One owner for the codes.** An encoding value, `ogld.format.REncoding`, holds the dtype, the
+1. **One owner for the codes.** An encoding value, `opengwasdb.ld.format.REncoding`, holds the dtype, the
    scale, the reserved code and the rounding, and owns quantising, dequantising, the step and
    the far code floor. The reader, the writer, the layout and validation ask it; none holds a
    dtype, a scale or a reserved code of its own.
@@ -49,7 +49,7 @@ store at any other scale could be neither written nor read.
    that is never a correlation. A code past the scale, which the container can hold, is no
    correlation either: the reader and the writer refuse it, and `near.codes` and `partners.codes`
    fail it (`index.codes` failed it too, until #72 removed that rule with the Proxy Index).
-4. **A build takes its scale as an input** (`BuildInputs.r_scale`, `ogld build --r-scale`) and
+4. **A build takes its scale as an input** (`BuildInputs.r_scale`, `opengwasdb ld build --r-scale`) and
    records it. There is no default a build could fall back on silently.
 
 | LD Store | encoding | step | max error in r | where an r² threshold of 0.001 cuts, in true r² |
@@ -96,7 +96,7 @@ store at any other scale could be neither written nor read.
 - **The sizes are re-derived** from the bits per pair measured on a real EUR chr22 build at
   k = 10: 6.88 a Near Band pair at × 511, 8.58 at × 2047 and 11.53 at × 32767. The five
   HGDP+1kGP stores were estimated at about 1.20 TB, from 1.99 TB; built (ogld#7), they come to 0.53 TB (ld-store §6).
-- **The public API changes.** `BuildInputs` gains the required `r_scale`. `ogld.format` loses
+- **The public API changes.** `BuildInputs` gains the required `r_scale`. `opengwasdb.ld.format` loses
   `ENCODING`, `R_SCALE`, `RESERVED_CODE`, `QUANTISATION_ERROR` and the module functions
   `quantise`, `dequantise` and `far_code_floor`, whose one scale was the default this decision
   removes; `REncoding` and its methods replace them.

@@ -36,7 +36,7 @@ path, and the strings were the cost.
 holds one 32-byte key an entry — an ALID's UTF-8 bytes, NUL right-padded — sorted bytewise, and
 `variants/alid_index/row` the Variant Set row of each entry, in 262 KiB inner chunks and 16 MiB
 shards: 8.55 M keys are 273 MB decoded, which is 16,693 chunk decodes in 16 KiB chunks (4.6 s for
-a whole read) and 1,044 in these (0.2–0.7 s). `ogld.store.layout` owns the width,
+a whole read) and 1,044 in these (0.2–0.7 s). `opengwasdb.ld.store.layout` owns the width,
 the padding and the order: `alid_keys`, `ordered_index` and `alid_index`. The entries are the
 ALIDs whose UTF-8 form is at most 32 bytes, which is the engine's rule and its width
 (`is_indexable_alid`), and its ordering: `np.array(..., dtype="|S32")` with a stable argsort,
@@ -63,7 +63,7 @@ the element is one byte and no order is declared, and every wider dtype still mu
 order. The shard index's `bytes` codec declares `little` as before.
 
 **A reader searches the index and still scans what it misses.** `StoreWriter.finish` derives the
-index from the store's own ALID column (`ogld.store.assembly.derive_alid_index`), so no producer
+index from the store's own ALID column (`opengwasdb.ld.store.assembly.derive_alid_index`), so no producer
 supplies or orders one and a store written before the index gets the same one (ADR 0091).
 
 - An ALID shorter than the slot is looked for in the index — but only in a list long enough to

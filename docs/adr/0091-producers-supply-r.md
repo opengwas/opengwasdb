@@ -8,7 +8,7 @@ Formerly ogld ADR 0005.
 > entry it held, and `clump` and `proxies` read them. Everything else here stands.
 
 > **ADR 0099 supersedes §5's builder unit vectors** ([ADR 0099](./0099-shared-genotype-arithmetic.md), #90).
-> The builder computes r through `ogld.genotypes.r(rows, span)` over prepared `Block`s, not from
+> The builder computes r through `opengwasdb.ld.genotypes.r(rows, span)` over prepared `Block`s, not from
 > an array of unit vectors; §5's memory bound and the rest of the record stand.
 
 Issue [#17](https://github.com/opengwas/ogld/issues/17), part of epic [#1](https://github.com/opengwas/ogld/issues/1).
@@ -17,7 +17,7 @@ The format is in `docs/spec/ld-store.md` (§3–§7, §12); the owners are in
 
 **Who decided.** The owner. On 10 November 2026, from the architecture review of
 `orch/1-ld-stores@bd40f52` (candidate B2), they decided that what goes in an LD Store belongs to
-`ogld.store`, behind the writer. On 11 November 2026, on ogld#17, they confirmed the signatures
+`opengwasdb.ld.store`, behind the writer. On 11 November 2026, on ogld#17, they confirmed the signatures
 proposed in `orch/1/17-store-assembly@b54ab09`, and ruled on three points:
 - `software`, `reference_assembly` and `variants_dropped` are the producer's;
 - the builder's unit vectors are windowed too;
@@ -53,7 +53,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
    - the provenance a store derives from itself;
    - validation.
 
-   `ogld/store/assembly.py` holds all of it, behind `StoreWriter`.
+   `opengwasdb/ld/store/assembly.py` holds all of it, behind `StoreWriter`.
 2. **The seam is four calls.**
    - `StoreWriter.create(location, *, variants, encoding, near_bp, far_bp, n, k)` writes the
      Variant Set. It fixes the encoding, the distances, and t_far(n, k) with its floor, before
@@ -67,7 +67,7 @@ fourth copy of each rule. And neither the writer nor the builder survives UK Bio
      the store, and only then writes the provenance.
 
    The writer exposes its `encoding` and `far_bp` read-only, so a producer gives each once.
-3. **Provenance is split in two.** The producer gives `ogld.format.Sourced`: `source`, `panel`,
+3. **Provenance is split in two.** The producer gives `opengwasdb.ld.format.Sourced`: `source`, `panel`,
    `reference_assembly`, `variant_filters`, `variants_dropped`, `adjustment`, `pc_diagnostic`,
    `software` and `build`. The store derives the rest: `format_version`, `encoding`,
    `n_variants`, `near_bp`, `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It

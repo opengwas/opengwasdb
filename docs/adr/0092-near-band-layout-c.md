@@ -28,7 +28,7 @@ provisionally on a 12 Mb slice, where C's lead was the variant column read that 
 then took away (§11). §6 left the choice to ogld#8, because B read 2.5–7× fewer bytes on small
 reads, which could matter to a client limited by bandwidth rather than by requests.
 
-ogld#8 built HGDP+1kGP EUR chr22 three times by `ogld build` (× 511, k = 10, the published
+ogld#8 built HGDP+1kGP EUR chr22 three times by `opengwasdb ld build` (× 511, k = 10, the published
 store's inputs; `scripts/bench/build_layouts.py`), once in each layout. The three decode to the
 same arrays, and C's shards are byte-identical to the published store's chr22. It timed each read
 that differs, locally and over HTTP from a static host on loopback with 0, 10 and 50 ms added to
@@ -38,7 +38,7 @@ read's runs of chunks together.
 ## Decision
 
 1. **`near/<c>/r` is chunked 262,144 codes an inner chunk and 67,108,864 to a shard** (256 inner
-   chunks, 128 MiB raw), zstd level 3 inside the shard, as §6's table says. `ogld.store.layout`
+   chunks, 128 MiB raw), zstd level 3 inside the shard, as §6's table says. `opengwasdb.ld.store.layout`
    holds the shape (`NEAR_R`), and the writer takes it from there.
 2. **Every other array present at this decision keeps its one shape**, 16,384 to an inner chunk
    and 1,048,576 to a shard. ogld#8 measured no read the Proxy Index's or the variant table's

@@ -301,16 +301,16 @@ the number of covariates actually used (owner, 7 November 2026; ADR 0088, decisi
   99th percentile of the largest window share; `rest_null_q99` their 99th percentile of the rest
   share.
 
-**Provenance** (`adjustment.pc_check`, `ogld.format.PcCheck`): `window_bp` (4,000,000),
+**Provenance** (`adjustment.pc_check`, `opengwasdb.ld.format.PcCheck`): `window_bp` (4,000,000),
 `step_bp` (2,000,000), `windows` (the number of windows scanned), `min_share` (0.10), `max_ratio` (0.05), `scan` (one `PcScan` per PC of the file, in order), `dropped` (the local PCs'
-names), and `null` (`ogld.format.PcNull`, how chance was made: `kind`, the integer `permutations`
+names), and `null` (`opengwasdb.ld.format.PcNull`, how chance was made: `kind`, the integer `permutations`
 and `seed`, and `quantile`). `adjustment`
 records `k_target` (10), `k_min` (5) and `k`, the number used, and `covariates` names them. At
 `k` = 0 no PC Check runs: `pc_file`, `pc_check` and `k_min` are null, and `k_target` = k = 0.
 
 **What it found on the HGDP+1kGP PC Files** (the JSON report beside each PC File in
 `/data/opengwasdb/work/ogld/pcs/` on the IEU nodes, each naming the commit that made it: `scripts/make_pcs.py` at `bb38fbb`, run whole on all
-five panels on 10 November 2026 with the adopted `ogld.build.pc_check`, which selects the MAF ≥
+five panels on 10 November 2026 with the adopted `opengwasdb.ld.build.pc_check`, which selects the MAF ≥
 0.05 variants itself. It wrote the five PC Files again byte for byte, and its scans equal the
 earlier `--scan-only` reports, `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pcs_v2/<panel>.json` and
 `proto/1-build-inputs@8c25ab3:prototypes/build-inputs/results/pc_check_v2_scan.tsv`, to 4×10⁻¹⁶ in every share, null and
@@ -351,7 +351,7 @@ PC1–PC9 and scanned as if each were a PC: they are what a PC that tracks an in
   meet the first condition.
 - **Two implementations agree** on the shares: the prototype's `proto/1-build-inputs@28b5380:prototypes/build-inputs/m10_local_pc_rule.py`, written
   separately, gives the same windows, window shares and rest shares on EUR as lane 2d's reference
-  to every printed digit. ogld#5 adopted that reference as `ogld/build/pc_check.py`, the one
+  to every printed digit. ogld#5 adopted that reference as `opengwasdb/ld/build/pc_check.py`, the one
   implementation: the builder, `scripts/make_pcs.py` and the Test Panel's script all run it, and
   it selects the MAF ≥ 0.05 variants itself. `tests/test_pc_check.py` holds it to the three real
   verdicts above (EUR 17q21.31 dropped, EUR PC2 kept, AMR PC7 kept), and to the Test Panel's
@@ -367,7 +367,7 @@ rest of the genome explains the PC, and keeps it.
 
 ## 9. Long-Range LD Regions
 
-[`ogld/build/long-range-ld-regions-grch38.tsv`](../../ogld/build/long-range-ld-regions-grch38.tsv),
+[`opengwasdb/ld/build/long-range-ld-regions-grch38.tsv`](../../ogld/build/long-range-ld-regions-grch38.tsv),
 data of the package, which owns it, lists the regions in
 GRCh38, 1-based inclusive, each with its source and its source coordinates:
 
@@ -437,9 +437,9 @@ reads it.
 
 ## 12. Published LD import inputs
 
-`ogld import OUT --work WORK --metadata metadata.json --variants variants.tsv.bgz
+`opengwasdb ld import OUT --work WORK --metadata metadata.json --variants variants.tsv.bgz
 --chain hg19ToHg38.over.chain.gz --fasta GRCh38.fa.gz` imports Pan-UKB EUR
-(ADR 0101). Its dependencies are `ogld[import]`, not Hail. The fixed source is
+(ADR 0101). Its dependencies are `opengwasdb[ld-import]`, not Hail. The fixed source is
 `https://pan-ukb-us-east-1.s3.us-east-1.amazonaws.com/ld_release/UKBB.EUR.ldadj.bm`.
 
 - `--metadata` supplies Hail BlockMatrix metadata (`blockSize`, `nRows`, `nCols`,
@@ -528,4 +528,4 @@ holds every part and the metadata, TSV, chain and FASTA pins. The panel is
 Pan-UKB EUR, n = 420,542, with 15 named covariates (age, sex, age×sex, age²,
 age²×sex and PC1–PC10); k is not described as 15 PCs. Losses are in
 `variants_dropped`. Thresholds follow `ld-store.md` §3: `t_partner = t_far =
-0.001`, far code floor 65. The existing `ogld validate` is the sole validator.
+0.001`, far code floor 65. The existing `opengwasdb ld validate` is the sole validator.

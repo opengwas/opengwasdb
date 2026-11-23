@@ -24,7 +24,7 @@ The numbers that chose the layout and the codec come from prototypes run on real
 chr22 genotypes. They are on the prototype branch `proto/1-ld-store-layout`, and each is cited as
 `proto/1-ld-store-layout@65f94ca:<path>`, so a citation stays fixed if the branch moves.
 
-The semantics of §3, §8 and §9 are implemented in `ogld/format/`, and `tests/test_format.py`
+The semantics of §3, §8 and §9 are implemented in `opengwasdb/ld/format/`, and `tests/test_format.py`
 holds that code to this document's tables.
 
 Normative language:
@@ -219,7 +219,7 @@ fewer bits a pair than at × 32767; a whole chr22 build at k = 10 measured 1.68�
 - The scale, dtype, reserved code and rounding are recorded in `encoding` (§7). A reader MUST
   refuse an LD Store whose `encoding` it does not implement, and MUST decode every code at the
   scale its own store records: one process reads stores of different scales side by side
-  (`ogld.format.REncoding` is the one place that quantises and decodes).
+  (`opengwasdb.ld.format.REncoding` is the one place that quantises and decodes).
 
 **Thresholds are judged on the Stored r.** A pair reaches an r² threshold t when r̂² ≥ t,
 computed in float64. Every rule below uses this comparison: the Far Pairs' and the Partner Rows'
@@ -620,11 +620,11 @@ That list is a subset of the MAC ≥ 20 set and cannot count it.
 
 The root group attribute `ld_store` is a JSON object. Every key below is REQUIRED, with the type
 shown. A value may be null only where the table says so. Other keys MAY appear, and a reader
-ignores the ones it does not know. The types are `ogld.format.Provenance`, and
-`ogld.format.REQUIRED_KEYS` lists the keys.
+ignores the ones it does not know. The types are `opengwasdb.ld.format.Provenance`, and
+`opengwasdb.ld.format.REQUIRED_KEYS` lists the keys.
 
 **Who records what** (owner, 10 November 2026; ogld#17, ADR 0091). A store's producer gives the keys only
-its source knows, `ogld.format.Sourced`: `source`, `panel`, `reference_assembly`,
+its source knows, `opengwasdb.ld.format.Sourced`: `source`, `panel`, `reference_assembly`,
 `variant_filters`, `variants_dropped`, `adjustment`, `pc_diagnostic`, `software` and `build`. The
 store derives the rest from itself when it is finished: `format_version`, `encoding`, `n_variants`,
 `near_bp`, `far_bp`, `t_far`, `t_far_q`, `far_code_floor` and `counts`. It takes t_far's n and k
@@ -662,7 +662,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 | `far_code_floor` | int | §3 |
 | `t_partner` | float | the **Partner Threshold**: the r² a pair within `near_bp` must reach to be in the Partner Rows, never above `t_far` (0.2.0; `docs/spec/partner-rows.md` §3) |
 | `partner_code_floor` | int | the **Partner Floor**: §3's floor rule at `t_partner` (0.2.0) |
-| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `ogld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
+| `pc_diagnostic` | object or null | what PC Adjustment did to chance LD (below); null only for an `ld_matrix` source. A Variant Set with no cross-chromosome pair (one chromosome) records `pairs.n_pairs` 0 and null for the two measured rates, `rate_r2_ge_0_01_unadjusted` and `rate_r2_ge_0_01_adjusted`: each is null only when `n_pairs` is 0, and a number otherwise (10 November 2026). `rate_r2_ge_0_01_sampling` is a formula of n and k, and always a number. `opengwasdb.ld.format.PcDiagnostic` types the two measured rates `float \| None` and the sampling rate `float` |
 | `counts.near_pairs` | int | Near Band codes, over all chromosomes |
 | `counts.far_candidates` | int | pairs more than `near_bp` and at most `far_bp` apart that were examined |
 | `counts.far_pairs` | int | Far Pairs: those of them whose \|code\| reaches `far_code_floor`, each counted once; the entries of every `far/<chrom>/` together |
@@ -677,7 +677,7 @@ when it is created, since it thresholds as rows arrive, and refuses a producer's
 
 **The Partner Rows' keys (format 0.2.0; written by #67, derived by #69).** The four keys at
 `t_partner`, `partner_code_floor`, `counts.partner_entries` and `software.zstd` are in the table
-above, and in `ogld.format.REQUIRED_KEYS` with it. Each is required only of a store whose
+above, and in `opengwasdb.ld.format.REQUIRED_KEYS` with it. Each is required only of a store whose
 `format_version` is `0.2.0`: a 0.1.0 store has no Partner Rows, so it has none of their keys.
 
 - `t_partner` (float): the **Partner Threshold**, the r² a pair within `near_bp` must reach to be in
@@ -795,7 +795,7 @@ Measured alike.
   and positions, t_far and the store's distances. A NaN between two variants on one chromosome
   more than `near_bp` and at most `far_bp` apart is the Bound; any other NaN is Not Measured. No
   NaN can lie within `near_bp`, because the Near Band is complete. So no second matrix of kinds is
-  returned. `ogld.format.answer_kinds` reads the kinds back from a matrix made without a fill,
+  returned. `opengwasdb.ld.format.answer_kinds` reads the kinds back from a matrix made without a fill,
   and refuses one it cannot vouch for: a NaN within `near_bp`, a number where the store holds
   nothing, or a number beyond `near_bp` below t_far.
 - **`fill` is the caller's.** A reader MUST NOT put a number in place of an unstored pair unless
@@ -854,7 +854,7 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   with a rounded display of either.
 - A 0.1.0 store records no `t_partner` and holds no `partners/<chrom>/`, so from 0.2.0 `clump` and
   `proxies` refuse it with an `ogld.InputError` naming the missing component and
-  `ogld derive-partners`, before any read. They are never answered from the Near Band and the
+  `opengwasdb ld derive-partners`, before any read. They are never answered from the Near Band and the
   Proxy Index it was answered from in 0.1.0: that fallback is what the Partner Rows exist to
   replace (§13;
   `docs/spec/partner-rows.md` §8.1).
@@ -879,15 +879,15 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   recorded beside the equality test, `tests/contract/test_query.py`), so `clump` joins a variant to a lead at r̂² > r2
   and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
 
-`ogld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
-called through `ogld.query.requests.window_of`, and it names the store it judged: a request below
+`opengwasdb.ld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
+called through `opengwasdb.ld.query.requests.window_of`, and it names the store it judged: a request below
 the store's `t_partner` within `near_bp` is answered with the r2 asked for, the `t_partner`
 recorded, and the two ways out — ask at or above that `t_partner`, or read a store derived at a
-lower one. `ogld.format.judge_request` is that table without the Partner Threshold's row — the
-0.1.0 table, which a call through `ogld` no longer reaches — and `ogld.format.judge_window` is the
-same rule for a window already in bp; `ogld.format.judge_region` judges a region. All but
+lower one. `opengwasdb.ld.format.judge_request` is that table without the Partner Threshold's row — the
+0.1.0 table, which a call through `ogld` no longer reaches — and `opengwasdb.ld.format.judge_window` is the
+same rule for a window already in bp; `opengwasdb.ld.format.judge_region` judges a region. All but
 one of them are the judge's: a `clump` score that is not one finite, non-negative number per ALID
-is refused as `invalid` by `ogld.query.clumping._checked_score`, because it depends on the score,
+is refused as `invalid` by `opengwasdb.ld.query.clumping._checked_score`, because it depends on the score,
 which the judges never see. The judge runs first.
 `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` drives them and the answer
 table interactively, with walkthroughs of the edge cases: exactly 3 Mb, exactly 10 Mb, r²
@@ -900,7 +900,7 @@ _Informative._ A reader keeps a chromosome's `position` range and its Near Band'
 once it has opened that chromosome. Its Far Pairs' `indptr` is read when a request first needs
 pairs beyond `near_bp`: 8 bytes a variant each. For HGDP+1kGP EUR's
 8.59 M variants that is 69 MB of positions, which a reader holds as `int64`, and 137 MB of
-`indptr`, raw, and 69 MB more once matrices have been read on every chromosome. Each query makes one of the reader's reads (`ogld.store.StoreReader`, ogld#14),
+`indptr`, raw, and 69 MB more once matrices have been read on every chromosome. Each query makes one of the reader's reads (`opengwasdb.ld.store.StoreReader`, ogld#14),
 and the reads map onto the arrays as follows.
 
 | read | reader | made by | arrays it touches |
@@ -1048,7 +1048,7 @@ is read the first time a request needs its pairs beyond `near_bp`, so `proxies` 
 never do, read no more than they did before the Far Pairs (ADR 0093). From 0.2.0 a chromosome's `partners/<chrom>/` adds its group's attributes
 and the `frames_idx` chunk, read the first time a request asks for one of its rows, and a frame
 cache of its own (§10's Partner Rows paragraph). Every other read the reader makes goes through its cache of decoded inner chunks
-(`ogld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
+(`opengwasdb.ld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case. So a query that reads a few
 pairs at a time fetches each chunk once: clumping the Test Store's 1,056 variants, one read per
 lead, took 3.6 s reading through Zarr call by call and 0.7 s with the cache, against 0.6 s for the
@@ -1099,7 +1099,7 @@ buffer; unknown-size frames retain allocating decode and output-length validatio
 
 **The cache and its bound** (ogld#4, ogld#32). An opened store's cache keeps decoded chunks and
 shard indexes up to `cache_bytes`, dropping the least recently used first. The caller sets it
-when opening the store, `ogld.open(location, cache_bytes=...)`: 4 GiB by default, and `0` keeps
+when opening the store, `opengwasdb.ld.open(location, cache_bytes=...)`: 4 GiB by default, and `0` keeps
 nothing, so every read fetches its chunks and shard indexes again. Anything but an int ≥ 0 is an
 `InputError`. 4 GiB holds 8,192 of layout C's 512 KiB Near Band chunks. At that size ogld#8
 measured repeated reads warm, and at the earlier 256 MiB not (owner, 12 November 2026):
@@ -1318,7 +1318,7 @@ and after read the same bytes:
 ## 12. Validation rules
 
 Each rule runs on write and on demand, by name. A rule reads in bounded windows and never loads a
-whole Near Band. A rule fails a store when any target breaks it. `ogld.format.VALIDATION_RULES`
+whole Near Band. A rule fails a store when any target breaks it. `opengwasdb.ld.format.VALIDATION_RULES`
 lists the names in this order, and `ogld.validate` returns findings keyed by them.
 
 | rule | checks |
@@ -1370,7 +1370,7 @@ it does (`tests/test_far_pairs.py`, `tests/test_proxy_index_removed.py`); a 0.1.
 index chunk lost still passes all 30 and still answers `matrix` and `region`. This is not silent
 damage: no query and no rule this package ships reads an index, so a reader or a validation has
 nothing to get wrong. Two paths do read one, both deliberately: `derive_far_pairs` (§11), for a
-store built before ADR 0093 whose Far Pairs are missing, and `ogld derive-partners --drop-index`,
+store built before ADR 0093 whose Far Pairs are missing, and `opengwasdb ld derive-partners --drop-index`,
 which removes a 0.2.0 store's leftover with its `counts.index_entries` (§7).
 
 **The Partner Rows' rules (format 0.2.0).** The ten rows after `far.threshold` are the component's,
@@ -1395,7 +1395,7 @@ the rules pass (partner-rows §6.2; ogld#69). So the residue of a run killed aft
 became a node and before that write is a store that has no Partner Rows — one that validates as
 the 0.1.0 one it was, and one a reader refuses, since a reader asks the recorded **version** and
 never the presence of a key or a group (§10, §13). Judging the residue instead would fail a store
-no one can read, for keys it has no use for; `ogld derive-partners` completes it (the rules accept
+no one can read, for keys it has no use for; `opengwasdb ld derive-partners` completes it (the rules accept
 it) or removes it and derives it again (they do not).
 
 A 0.2.0 store has the component, and `partners/` is a **node of its one hierarchy**, not a
@@ -1435,7 +1435,7 @@ the eight `partners.*` rules that read frames, share one pass over each chromoso
 rows is read once and handed to all fifteen, so each code, Far Pair and partner entry of a store
 that passes is decoded once per validation. `partners.far` compares the Partner Rows' entries
 beyond `near_bp` with each block's Far Pairs, so it carries nothing from one block to the next. A caller may give the pass t threads
-(`ogld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
+(`opengwasdb ld validate --threads t`, or `StoreWriter.finish(sourced, threads=t)`); t blocks are then read
 and checked at once, and no more are held: the pass asks for the next block's plan only once a
 finished block has been handed back, so the block being planned is one of the t. The planner keeps
 one frame beside them — the first frame of the block it plans next, held whole when the entries'
@@ -1465,7 +1465,7 @@ then that it cannot be read or checked, and fails either way. `partners.near` fi
 of later-row entries only at a chromosome's end, so a stop inside a chromosome drops that check's
 findings there, though never the failure.
 
-- `provenance.complete` checks every key §7 names: those of `ogld.format.REQUIRED_KEYS` and the
+- `provenance.complete` checks every key §7 names: those of `opengwasdb.ld.format.REQUIRED_KEYS` and the
   keys inside them, `variant_filters`, `variants_dropped`, `pc_file`, the PC Check's settings and
   its `null`, each `scan` entry's fields, `pc_diagnostic` with its `pairs` and the five quantiles
   of `near_100kb_change`, and `software`'s `ogld`, `numpy` and `zarr`. A null is allowed only
@@ -1517,7 +1517,7 @@ the store already holds, plus the four provenance keys that describe them and `s
 - has no Proxy Index: `index/`, its writer, its six rules and `far.index` went (#72), and the Far
   Pairs and the Near Band stay as they are. A store that still holds the component — one derived
   before #72 without `--drop-index` — opens and answers exactly as one without it, and validation
-  ignores it (§12); `ogld derive-partners --drop-index` removes it.
+  ignores it (§12); `opengwasdb ld derive-partners --drop-index` removes it.
 
 A reader of 0.1.0's vintage **refuses** a 0.2.0 store at open: it reads one version, its own, so a
 store that records another is an `InputError` naming the version and the one this reader reads
@@ -1542,7 +1542,7 @@ The canonical Zarr index of §2 remains authoritative. Local Stores may addition
 `variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and `manifest.json`. Keys copy the
 canonical bytes without another sort; rows copy its rows as signed little-endian int32.
 The exact deterministic manifest schema and source/content pins are defined in ADR 0098
-and owned by `ogld.store.layout`. Schema 2 pins normalized root metadata and every canonical
+and owned by `opengwasdb.ld.store.layout`. Schema 2 pins normalized root metadata and every canonical
 index file (array metadata and all chunk/shard files), not just array metadata. Source inventory
 follows shard-directory links and refuses cycles, repeated directories, walk errors and
 nonregular sources rather than trusting an incomplete file set. Schema 1
@@ -1571,7 +1571,7 @@ The trust model requires a generation published only by ogld after exact corresp
 The reader checks integrity and content binding at use, not correspondence or producer
 authenticity. A hand-forged, self-consistent generation with recomputed payload hashes,
 manifest and pointer is outside reader detection, as for other derived arrays such as Partner
-Rows frames with forged checksums; `ogld validate` detects the noncorrespondence. Changing a
+Rows frames with forged checksums; `opengwasdb ld validate` detects the noncorrespondence. Changing a
 canonical file after attachment is outside the immutable-Store assumption.
 
 Opening reads no companion payload. On the first fitting lookup, checked attachment verifies

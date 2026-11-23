@@ -21,10 +21,10 @@ normalised as r_ij = C_ij / sqrt(C_ii C_jj); non-finite and non-positive
 diagonals drop variants under separate counted loss classes. Identity,
 quantisation, thresholds and assembly remain their existing owners'.
 
-The importer lives under `ogld.build.importing`. Hail is not a dependency:
+The importer lives under `opengwasdb.ld.build.importing`. Hail is not a dependency:
 Hail 0.2.64 BlockMatrix parts are read natively. The variant table is exported
 once with Hail by a script outside the package and supplied as TSV. `lz4` and
-`pyliftover` are optional `ogld[import]` dependencies, loaded only on the import
+`pyliftover` are optional `opengwasdb[ld-import]` dependencies, loaded only on the import
 path with a refusal naming the extra. All Pixi test environments install them.
 
 GRCh37 coordinates are lifted to GRCh38 and REF alleles checked against FASTA,
@@ -56,7 +56,7 @@ directory. These are restart checkpoints, each validated by the existing
 writer. The additive `StoreWriter.join` hard-links their immutable LD
 components, concatenates the variant half in bounded slices, derives the
 combined index/companion and validates before publishing. Joined row ranges
-come from `ogld.format.geometry.chromosome_ranges_from_counts`: closed
+come from `opengwasdb.ld.format.geometry.chromosome_ranges_from_counts`: closed
 chromosome counts avoid allocating a genome-wide chromosome-label array.
 Work and output
 must share a filesystem. A failed final join is rebuilt from closed inputs;
@@ -93,7 +93,7 @@ block as zero. A tiny worked-literal fixture pins Hail's binary format without
 committing genotypes. Using covariance unchanged was rejected because it is
 not correlation. Assuming a 10 Mb target radius was rejected because liftover
 can join unmeasured pairs. Whole-genome staging was rejected on disk cost.
-The existing `ogld validate` remains the sole validator. The matched 511/0.01
+The existing `opengwasdb ld validate` remains the sole validator. The matched 511/0.01
 analysis view, benchmarking and the whole-genome run belong elsewhere.
 
 ## Concurrent downloads and dead addresses (#97)

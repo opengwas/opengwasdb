@@ -21,7 +21,7 @@ fails the run; it never skips.
 
 Environment (`tests/acceptance/run_genotypes.sh` sets the defaults):
 
-- `OGLD_GENOTYPE_STORE`: the sidecar `ogld build --genotypes` wrote.
+- `OGLD_GENOTYPE_STORE`: the sidecar `opengwasdb ld build --genotypes` wrote.
 - `OGLD_81_EUR_STORE`: the k = 10, × 511 whole-panel LD Store over the same panel.
 - `OGLD_403_ANALYSES`: #403's 37 Analyses, each with `hits.tsv` (ALID, z), as
   `scripts/realdata/make_403_inputs.py` writes them.

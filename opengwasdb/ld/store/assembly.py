@@ -767,7 +767,7 @@ def derive_far_pairs(
     index element no store holds, which is what a lost chunk reads as, is refused, naming its
     array, rather than read as a row without Far Pairs.
 
-    This is the one place left in `ogld/` that reads the Proxy Index (#72), and it has a live
+    This is the one place left in `opengwasdb/ld/` that reads the Proxy Index (#72), and it has a live
     caller: `/data/opengwasdb/work/ogld/realdata/EUR-k0.store` is a readable 0.1.0 store that
     holds an index and no `far/`, and #73 derives its Far Pairs before its Partner Rows. A store
     this package writes never needs it, and no other code path names the component's arrays
@@ -1549,7 +1549,7 @@ def _drop_index(root: zarr.Group, store: Path, recorded: Provenance) -> Provenan
     (partner-rows §6.2; ADR 0097, D1): its `index/` group and its `counts.index_entries`.
 
     From #72 a store this package writes has none, and no rule expects one: the removal is what
-    finishes a store derived by an earlier `ogld derive-partners`, and a store without one is left
+    finishes a store derived by an earlier `opengwasdb ld derive-partners`, and a store without one is left
     as it is. The count goes with the arrays, in that order, and only after they are gone: a
     removal that fails leaves the count in place and raises, naming the path, and a run killed
     between the two leaves a count with no arrays, which validation reads as an extra provenance

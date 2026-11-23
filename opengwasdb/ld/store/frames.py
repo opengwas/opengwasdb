@@ -883,7 +883,7 @@ class FramesGroup:
     chromosome is written again.
 
     `container` is the directory the group is built in and published into; left out, it is the
-    store's `partners/` group, which this then creates. `ogld derive-partners` gives a plain
+    store's `partners/` group, which this then creates. `opengwasdb ld derive-partners` gives a plain
     directory that is not yet a node of the store's hierarchy, so a derivation killed part-way
     leaves the store it was: a `partners/` node is one validation judges and a reader trusts
     (partner-rows §5.1, §6.2; issue #69).

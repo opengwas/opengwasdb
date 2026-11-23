@@ -4,7 +4,7 @@ Three seams, each observed to fail against the code before #72:
 
 - **No `index/`.** The package source names no array of the component, and a store this code
   writes has no such key: the store's own keys are listed and none begins with `index`. The one
-  place that still names it is the removal `ogld derive-partners --drop-index` makes, and a
+  place that still names it is the removal `opengwasdb ld derive-partners --drop-index` makes, and a
   migration that writes Far Pairs from a store too old to read (ADR 0093).
 - **A leftover `index/`.** A 0.2.0 store derived before #72 without `--drop-index` holds the
   component. It opens, answers exactly as the store without one does, and validation ignores it

@@ -20,7 +20,7 @@ that is fully derived is left as it is. This is not one transaction across two r
 may open the store between them, so run this when no reader does. No array is written but the
 index's two, and no other file but the root metadata document.
 
-Validate each store afterwards: `ogld validate`, or `pixi run -e dev acceptance-stores` for the
+Validate each store afterwards: `opengwasdb ld validate`, or `pixi run -e dev acceptance-stores` for the
 five.
 """
 

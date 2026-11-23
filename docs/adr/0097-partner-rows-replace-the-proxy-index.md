@@ -111,7 +111,7 @@ decisions left open (`proto/partner-rows@912a9fa:prototypes/partner-rows/`, reco
 - The manifest's keys are the group's attributes.
 
 The reason is the compatibility check, not a measurement of speed. `zarr.open_group` and
-`ogld.open` on a store with a plain-file `partners/` are clean, and `ogld.validate` passes all 27
+`opengwasdb.ld.open` on a store with a plain-file `partners/` are clean, and `ogld.validate` passes all 27
 rules, none of which looks at the new component. But zarr-python 3.4.2's `members()` emits
 `ZarrUserWarning: Object at partners is not recognized as a component of a Zarr hierarchy.` A node
 in the hierarchy removes the warning. The single-chunk form was checked only by a small synthetic

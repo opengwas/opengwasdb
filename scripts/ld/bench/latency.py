@@ -35,7 +35,7 @@ event loop and at most two worker threads each. So a timing uses at most 8 threa
 over HTTP, and 7 locally. Every record carries the node's load average before and after.
 
 `--cache-mib` sets the chunk cache's budget, and `--without` turns off ogld#32's reader levers,
-each as it was before that ticket, from outside `ogld/`: `concurrency` (each run of chunks its
+each as it was before that ticket, from outside `opengwasdb/ld/`: `concurrency` (each run of chunks its
 own Zarr call, one after another), `indexes` (shard indexes unkept), `count` (string chunks
 counted one string at a time) and `cache` (the 256 MiB budget). All four off is the reader
 ogld#8 measured, and reproduces its request counts. ogld#8's `--reader concurrent`, a prototype
@@ -175,7 +175,7 @@ def _loading(original: Callable[..., Any]) -> Callable[..., Any]:
 Patch = Callable[[Any, str, Any], None]
 
 
-#: The reader levers ogld#32 added, each of which `--without` turns off from outside `ogld/`.
+#: The reader levers ogld#32 added, each of which `--without` turns off from outside `opengwasdb/ld/`.
 LEVERS: Final = ("concurrency", "indexes", "count", "cache")
 #: The chunk cache's budget before ogld#32, in MiB.
 CACHE_MIB_BEFORE: Final = 256
@@ -221,7 +221,7 @@ def _index_passed_sync(
 
 
 def without(levers: list[str], cache_mib: int | None, patch: Patch = setattr) -> int | None:
-    """Turn `levers` off, each as it was before ogld#32, from outside `ogld/`: the cache's
+    """Turn `levers` off, each as it was before ogld#32, from outside `opengwasdb/ld/`: the cache's
     budget in MiB that leaves, None for ogld's default."""
     from opengwasdb.ld.store import location
 
@@ -659,7 +659,7 @@ def code_state(installed: str) -> dict[str, Any]:
     """Which commit's code a run ran, and why the checkout cannot be cited as that code ("" when
     it can): `test_panel.checkout.problem`, the one guard `make_pcs.py` and the realdata tier
     also use. It refuses an installed ogld that does not name HEAD, a changed tracked file under
-    `ogld/` or `scripts/`, and an untracked `.py` there."""
+    `opengwasdb/ld/` or `scripts/`, and an untracked `.py` there."""
     repository = SCRIPTS.parent
     commit = subprocess.run(
         ["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True

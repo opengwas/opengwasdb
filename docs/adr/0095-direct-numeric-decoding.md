@@ -27,7 +27,7 @@ owns chunk planning, the cache budget, concurrent runs and kept shard indexes.
 
 ## Decision
 
-`ogld/store/location.py` calls the numeric backend in `ogld/store/decoding.py`, which
+`opengwasdb/ld/store/location.py` calls the numeric backend in `opengwasdb/ld/store/decoding.py`, which
 recognises a one-dimensional numeric array only when its declared
 codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
 CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. A one-byte

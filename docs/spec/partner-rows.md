@@ -130,7 +130,7 @@ the owner on 18 November 2026; ADR 0097). So `ld-store.md` §1's envelope stays 
 hierarchy", and a reader that lists the store sees the component.
 
 The alternative, plain files in a directory with no group metadata, was measured on the published
-EUR store (#65, zarr-python 3.4.2): `zarr.open_group`, `ogld.open` and all 27 of `ogld.validate`'s
+EUR store (#65, zarr-python 3.4.2): `zarr.open_group`, `opengwasdb.ld.open` and all 27 of `ogld.validate`'s
 rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is not recognized as a
 component of a Zarr hierarchy.` The single-chunk form below removes that warning. The committed
 Test Store is that check since #67: `partners/` is a node of its hierarchy, `members()` lists it
@@ -245,7 +245,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
 
 ### 6.2 Deriving the existing stores (D6)
 
-`ogld derive-partners <store> --t-partner T [--threads t] [--processes p] [--chromosomes …]
+`opengwasdb ld derive-partners <store> --t-partner T [--threads t] [--processes p] [--chromosomes …]
 [--drop-index]` (ogld#69):
 
 - `--t-partner` is required and has no default (D3), and it is never above the store's recorded
@@ -329,7 +329,7 @@ Rows reproduces its `frames` chunk file exactly, and a test holds this on the Te
 
 ## 7. Reading
 
-`ogld.store.StoreReader` gains one read, replacing the Proxy Index read and the Near Band
+`opengwasdb.ld.store.StoreReader` gains one read, replacing the Proxy Index read and the Near Band
 partner reads:
 
 ```text
@@ -485,7 +485,7 @@ whole sets of components. The options, from simplest:
 
 **Recommendation.** A was built and measured first, then B, whose pool **is the reader's own and
 capped at four component workers** for #71 (fixed on #65's evidence; §1). There is no caller-facing
-setting: `ogld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
+setting: `opengwasdb.ld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
 it, and a test reaches it through a private seam. Four was where G = 8 and G = 16 were fastest,
 1.051 and 1.067 s cold; at eight, cold LD regresses to 5.753 s (G = 8), 5.109 s (G = 16) and
 1.913 s (G = 4), because the per-lead Python work holds the GIL. #71 measured the same answer at 1,

@@ -42,7 +42,7 @@ def bounded(threads: int) -> AbstractContextManager[object]:
     thread per core in each matrix product, and zarr's default pool adds 28 to the write.
 
     The caller's zarr setting is restored on exit. zarr makes its pool once, on first use, so
-    the cap holds when the build is its process's first zarr work, as `ogld build` is.
+    the cap holds when the build is its process's first zarr work, as `opengwasdb ld build` is.
     threadpoolctl is a dependency of opengwasdb itself, so a build never lacks it (#455)."""
     stack = ExitStack()
     stack.enter_context(threadpool_limits(limits=1, user_api="blas"))

@@ -10,7 +10,7 @@ ADR 0097's Partner Rows nor the Store format version.
 representation, publication and local lookup behavior onto main.
 
 > **The bundle's owner moved, and kept its behaviour** (see "Clarification, 21 November 2026" at
-> the end). It is `_MappedAlids`, a module-level class in `ogld/store/variants.py`, owned and
+> the end). It is `_MappedAlids`, a module-level class in `opengwasdb/ld/store/variants.py`, owned and
 > released by the `VariantTable` that composes it (#94); `reader._MappedAlids` below names it as
 > this ADR first wrote it.
 
@@ -71,7 +71,7 @@ published only by ogld, after exact canonical correspondence. At use, the reader
 integrity and content binding (every canonical index file's pin), not correspondence and not
 producer authenticity. A hand-forged generation whose payloads, manifest and pointer were all
 rewritten consistently is outside what the reader detects, just as re-hashed forged Partner
-Rows frames are. `ogld validate` detects the noncorrespondence. A canonical file changed after
+Rows frames are. `opengwasdb ld validate` detects the noncorrespondence. A canonical file changed after
 a reader has attached is likewise outside the immutable-files assumption. No per-lookup
 correspondence pass or mandatory prevalidation is added for trusted ogld publications. The existing `alid_index.count`
 rule includes integrity and bounded exact comparison; there are still 30 validation rules.
@@ -95,7 +95,7 @@ completeness, fitting misses need no scan. This extends ADR 0096's always-scan-m
 only for the validated companion. Missing pointers and HTTP retain the canonical fallback;
 a present broken publication refuses rather than silently falling back.
 
-`reader._MappedAlids` — `_MappedAlids` in `ogld/store/variants.py` since #94, and owned by the
+`reader._MappedAlids` — `_MappedAlids` in `opengwasdb/ld/store/variants.py` since #94, and owned by the
 `VariantTable` that composes it — owns its mappings and their diagnostic path. Lookup returns
 independent int64 rows. Release serializes with lookup, discards views, then closes mappings, and
 is idempotent. `StoreReader.close` releases the bundle with its Partner Rows resources, by closing
@@ -139,10 +139,10 @@ tracebacks and event-gated concurrent lookup/release rather than timing guesses.
 ## Clarification, 21 November 2026
 
 Epic [#18](https://github.com/opengwas/ogld/issues/18)'s owner decision of 21 November 2026 took the
-variant table and the ALID lookup out of `StoreReader` into `ogld.store.VariantTable`
-(`ogld/store/variants.py`, #94) as a pure move, so a second reader composes the same lookup. The
+variant table and the ALID lookup out of `StoreReader` into `opengwasdb.ld.store.VariantTable`
+(`opengwasdb/ld/store/variants.py`, #94) as a pure move, so a second reader composes the same lookup. The
 companion's owner is unchanged in what it does and named by where it now lives: `_MappedAlids` is a
-module-level class in `ogld/store/variants.py`, and the `VariantTable` owns and releases it, which
+module-level class in `opengwasdb/ld/store/variants.py`, and the `VariantTable` owns and releases it, which
 `StoreReader.close` does by closing that table. First-use verification, the sticky refusal, the
 lookup/release lock, the cost of the first use and the absence of any process-global registry are
 as written above.

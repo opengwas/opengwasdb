@@ -127,7 +127,7 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int) -> dict[str, list[Finding]]:
-    """`validate`, reading and checking blocks on `threads` threads (`ogld validate --threads`)."""
+    """`validate`, reading and checking blocks on `threads` threads (`opengwasdb ld validate --threads`)."""
     root = open_group(location)
     return validate_group(root, root.attrs.get("ld_store"), threads=threads)
 
@@ -318,7 +318,7 @@ class _Store:
         killed between making `partners/` a node of the hierarchy and writing the provenance that
         claims it. Nothing may read those frames — a reader refuses a store whose provenance has
         no `t_partner` — so judging them here would fail a store no one can use and complete
-        nothing; the device that completes or rebuilds it is `ogld derive-partners` (ogld#69).
+        nothing; the device that completes or rebuilds it is `opengwasdb ld derive-partners` (ogld#69).
         """
         return claims_partner_rows(self.provenance)
 
@@ -706,7 +706,7 @@ def _provenance_complete(store: _Store) -> _Problems:
 @_rule("provenance.encoding")
 def _provenance_encoding(store: _Store) -> _Problems:
     """The format version is the one this package reads, and the encoding one it implements,
-    `REncoding.of` (ld-store §3, §13). `ogld info` and every reader refuse a store with any other."""
+    `REncoding.of` (ld-store §3, §13). `opengwasdb ld info` and every reader refuse a store with any other."""
     version = store.value("format_version")
     if version not in READABLE_FORMATS:
         yield (

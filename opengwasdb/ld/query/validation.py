@@ -18,7 +18,7 @@ def validate(location: str | os.PathLike[str]) -> dict[str, list[Finding]]:
 
 
 def validate_at(location: str | os.PathLike[str], *, threads: int = 1) -> dict[str, list[Finding]]:
-    """`validate` on `threads` threads, which is what `ogld validate --threads` asks for."""
+    """`validate` on `threads` threads, which is what `opengwasdb ld validate --threads` asks for."""
     return _validate(location, threads=threads)
 
 

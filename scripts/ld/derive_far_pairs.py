@@ -16,7 +16,7 @@ already (`counts.far_pairs`). They are written under `PARTIAL` and renamed to `f
 every chromosome's are written and number the store's `counts.far_pairs`. So a run that fails,
 or finds another count, leaves the store as it was, with nothing to clean up, and a `PARTIAL` a
 killed run left is this script's own and is replaced. A store that holds `far/` is refused.
-Validate each store afterwards: `ogld validate`, or `pixi run -e dev acceptance-stores` for the
+Validate each store afterwards: `opengwasdb ld validate`, or `pixi run -e dev acceptance-stores` for the
 five. The store's other files are only read, so a reader may read it while this runs: a reader
 ignores a group it does not know (ld-store §1), and `far/` appears whole.
 """

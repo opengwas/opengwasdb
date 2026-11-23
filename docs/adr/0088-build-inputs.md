@@ -98,7 +98,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    panels they are **our own**, from the same v2 genotypes, by one recipe script,
    `scripts/make_pcs.py`: gnomAD's subcontinental method (PCA on gnomAD's unrelated samples,
    relateds projected; SNVs with AF 5–95%; LD-pruned at r² < 0.1 in 500 kb), excluding the
-   Long-Range LD Regions of `ogld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
+   Long-Range LD Regions of `opengwasdb/ld/build/long-range-ld-regions-grch38.tsv` ±2 Mb; 20 PCs.
 5. **The PC Check is the local-PC rule, and the builder runs it on every PC File.** A PC is
    local, and dropped from the covariates, when all three hold (the owner's rule, adopted
    7 November 2026 at the review of #2):
@@ -146,7 +146,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
 9. **Only autosomes are built** (owner, 8 November 2026, epic #1; chrX is a later ticket). A record on X, Y,
    a PAR or MT is refused: a male's X and Y genotypes are hemizygous, the diploid dosage model has
    no rule for them, and the HGDP+1kGP psam files carry no sex to apply one.
-10. **pgenlib is an optional `ogld[build]` extra** (owner, 8 November 2026). Reading an LD Store
+10. **pgenlib is an optional `opengwasdb[ld-build]` extra** (owner, 8 November 2026). Reading an LD Store
    needs numpy, zarr and numcodecs only. Building one needs pgenlib, which conda-forge does not
    carry, so `import ogld` works without it and the builder refuses, naming the extra, when it is
    missing.
@@ -161,7 +161,7 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    and an install that cannot read a published store over HTTP would be a reader that half works.
 
    _Addition, 10 November 2026 (orchestrator's fix brief for #5, at its review):_ **threadpoolctl
-   joins pgenlib in the `ogld[build]` extra.** A build's `threads` must bound it, and each LD
+   joins pgenlib in the `opengwasdb[ld-build]` extra.** A build's `threads` must bound it, and each LD
    tile is a matrix product on which OpenBLAS starts a thread per core unless told otherwise:
    the review measured 64 under `build.threads` = 16. threadpoolctl holds BLAS to one thread
    for the build's duration, so the build's own workers are its whole thread count. Only a

@@ -3,7 +3,7 @@
 An LD Store records the installed ogld's version (ld-store §7), and `scripts/make_pcs.py`'s reports
 record the commit that made them (build-inputs §8). Either is true only when the code that ran
 is that commit's: the editable install's version names HEAD (CLAUDE.md: it is frozen when it is
-built), and nothing under `ogld/` or `scripts/` differs from HEAD, tracked or not. The realdata
+built), and nothing under `opengwasdb/ld/` or `scripts/` differs from HEAD, tracked or not. The realdata
 tier and `make_pcs.py` both call `problem` (review round 2 of ogld#5), so they agree on what
 "clean" means.
 """
@@ -41,7 +41,7 @@ def _git(root: Path, *args: str) -> str:
 def problem(root: Path, installed: str) -> str:
     """Why the checkout at `root`, with ogld `installed`, cannot be cited as the code that ran,
     or "" when it can. It refuses an installed version that does not name HEAD, a tracked file
-    changed under `ogld/` or `scripts/`, and an untracked `.py` file there."""
+    changed under `opengwasdb/ld/` or `scripts/`, and an untracked `.py` file there."""
     head = _git(root, "rev-parse", "HEAD").strip()
     return _install_problem(root, installed, head) or _tree_problem(root, head)
 

@@ -26,7 +26,7 @@ record had left open: ogdb-api's live server runs on this IEU node, app-dc3-ogws
 1. **The serving route.** (a) ogdb-api runs `ogld` as a library in its job workers, which
    already run queries as jobs; or (b) a separate service in `opengwas/ogld-api`.
 2. **Static Zarr.** Whether the LD Stores are also served as static Zarr that clients read
-   themselves with `ogld.open("https://…")`.
+   themselves with `opengwasdb.ld.open("https://…")`.
 3. **Where the five HGDP+1kGP LD Stores are published.** This moved here from ogld#7 (owner,
    11 November 2026).
 
@@ -116,7 +116,7 @@ failure, an OOM included, cannot take association queries with it.
 
 ### 2. Static Zarr: yes, public
 
-Anyone may open an HGDP+1kGP LD Store directly with `ogld.open("https://…")` (owner). The
+Anyone may open an HGDP+1kGP LD Store directly with `opengwasdb.ld.open("https://…")` (owner). The
 store directories are published as they are, where a static host serves them with byte ranges,
 and the reader reads them as it reads a local store (§10: "a static host that honours byte
 ranges is enough"). No code is needed: the reader, its refusals and its answers are the same over
@@ -292,7 +292,7 @@ Sources, each read on 13 November 2026:
   directories: each is checked by `ogld.validate` after it is written, and a store is
   republished whole, under a new name, never edited in place. Until then the stores are at
   `/data/opengwasdb/work/ogld/stores/`, which is not that: the final lane replaces it by a swap.
-  Before a public copy is announced, `ogld.open` on its URL runs the realdata reads: zarr reads a
+  Before a public copy is announced, `opengwasdb.ld.open` on its URL runs the realdata reads: zarr reads a
   shard's index as a suffix range (§10).
 
 ## Open items this record does not settle

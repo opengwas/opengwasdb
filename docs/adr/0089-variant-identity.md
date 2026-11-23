@@ -42,7 +42,7 @@ identity function forms it", and a Store whose ALIDs differ from the engine's is
 no reader sees. So an engine change to identity (a new commit that changes
 `opengwasdb.variants.normalise`, or issue 012) is a cross-repo contract change. It becomes an
 ogld ticket that re-runs `make_fixture.py` on the new commit, reads the TSV diff, and changes
-`ogld/identity` and the fixture together. It does not wait for a failing build, because nothing
+`opengwasdb/ld/identity` and the fixture together. It does not wait for a failing build, because nothing
 fails: the copy still agrees with the fixture it was held to.
 
 **Hashed long ALIDs.** The engine's issue 012 and its ADR 0017 would hash a long allele into a

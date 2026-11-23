@@ -7,7 +7,7 @@ Status: implementation of #91; authority: #18's owner rulings of 20–21 Novembe
 
 A local Zarr v3 root has `genotype_store` provenance, format `0.1.0`, and no
 `ld_store` attribute. Opening it as an LD Store is refused; opening an LD Store
-as a Genotype Store is refused. `ogld.open` dispatches by the root key.
+as a Genotype Store is refused. `opengwasdb.ld.open` dispatches by the root key.
 
 `variants/`, its chromosome ranges, ALID Index and companion are exactly
 ld-store.md §2/§14, written by the same writer and assembly and read by
@@ -66,7 +66,7 @@ The builder runs these same checks before writing `genotype_store`. A failed
 candidate remains unreadable. Once the claim is written, the shared companion
 assembly validates correspondence and publishes its optional pointer atomically
 as in ADR 0098. Its failure can leave a complete sidecar without a companion,
-never a half-published mapping. `ogld validate` and public `ogld.validate`
+never a half-published mapping. `opengwasdb ld validate` and public `ogld.validate`
 dispatch by kind; the LD Store validator's rules and behaviour are unchanged.
 
 ## Pair answers

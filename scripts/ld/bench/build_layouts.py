@@ -4,7 +4,7 @@
 ld-store §6 named three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). They differ only in that array;
 every other array keeps its one shape. ogld#8 timed the reads on each, and the owner chose C
-(12 November 2026; ADR 0092). So each layout is a real build, by `ogld build`, of the published
+(12 November 2026; ADR 0092). So each layout is a real build, by `opengwasdb ld build`, of the published
 EUR store's chr22, with `opengwasdb.ld.store.layout.NEAR_R` set for the run, as
 `tests/test_assembly.py`
 sets it. The command is the recipe's (`build_hgdp1kgp.build_command`, which owns k, the scale,
@@ -52,7 +52,7 @@ CHROM: Final = 22
 
 
 def build_command(store: Path, threads: int) -> list[str]:
-    """The recipe's `ogld build` for the panel's one chromosome, without the program name."""
+    """The recipe's `opengwasdb ld build` for the panel's one chromosome, without the program name."""
     pgen = Path(f"{recipe.prefix(PANEL, CHROM)}.pgen")
     pcs = roots.root("OGLD_PCS") / f"{PANEL}.eigenvec"
     command: list[str] = recipe.build_command(
@@ -74,7 +74,7 @@ def store_bytes(path: Path) -> int:
 
 
 def build_one(layout: str, out: Path, threads: int) -> None:
-    """Build chr22 in `layout`, in this process: `NEAR_R` is set before `ogld build` runs. The
+    """Build chr22 in `layout`, in this process: `NEAR_R` is set before `opengwasdb ld build` runs. The
     child process exits after, so no other build sees the layout."""
     from opengwasdb.ld import cli
     from opengwasdb.ld.store import layout as store_layout

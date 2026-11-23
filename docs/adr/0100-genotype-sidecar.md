@@ -31,7 +31,7 @@ There is no override argument. Moving the sidecar and pgens together preserves
 resolution; moving the sidecar alone does not.
 
 Small adjustment arrays use uncompressed NumPy `.npy` files opened read-only
-with mmap, so processes share their pages. `ogld.genotypes` owns these paths,
+with mmap, so processes share their pages. `opengwasdb.ld.genotypes` owns these paths,
 dtypes and descriptors. The arrays hold pgen row, fileset index, projections,
 residual norms, A1 signs and the common PC basis. A request reads dosages through
 Genotypes and calls `adjust.r`; it never caches decoded calls. BLAS runs one
@@ -52,9 +52,9 @@ emitter and this reader all call them, so the Bound and Not Measured cannot drif
 between a materialised store and a computed one.
 
 The reader composes rather than subclasses: it holds its own `OpenedStore` and composes
-`VariantTable` exactly as `StoreReader` does, and both satisfy `ogld.query.reader.Reader`
+`VariantTable` exactly as `StoreReader` does, and both satisfy `opengwasdb.ld.query.reader.Reader`
 structurally. So a genotype reader has no LD reader's members that mean nothing here
-(`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `ogld.open` and `ogld.validate`
+(`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `opengwasdb.ld.open` and `ogld.validate`
 read the root once and hand the opened metadata to the kind that owns it.
 
 The clump seam is a request-local context manager yielding a row callable.
