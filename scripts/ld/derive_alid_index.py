@@ -26,18 +26,16 @@ five.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import zarr
+from derive_common import derive_each
 
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.assembly import ALID_ROWS, derive_alid_index
@@ -138,25 +136,8 @@ def write_partial(store: Path) -> tuple[int, int]:
     return left_out, int(group["row"].shape[0])
 
 
-def uptime() -> str:
-    return subprocess.run(["uptime"], capture_output=True, text=True, check=True).stdout.strip()
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("stores", nargs="+", type=Path)
-    parser.add_argument("--threads", type=int, default=8, help="zarr's threads (8)")
-    args = parser.parse_args(argv)
-    zarr.config.set({"threading.max_workers": args.threads})
-    for store in args.stores:
-        print(f"{store}: start  {uptime()}", flush=True)
-        started = time.perf_counter()
-        entries = derive(store)
-        print(
-            f"{store}: {entries:,} entries in {time.perf_counter() - started:.1f} s  {uptime()}",
-            flush=True,
-        )
-    return 0
+    return derive_each(__doc__.split("\n\n")[0], derive, "entries", argv)
 
 
 if __name__ == "__main__":

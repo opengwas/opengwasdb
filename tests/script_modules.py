@@ -16,8 +16,10 @@ from types import ModuleType
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
-def load_script(name: str) -> ModuleType:
-    path = SCRIPTS / f"{name}.py"
+def load_script(name: str, directory: Path = SCRIPTS) -> ModuleType:
+    """The script `directory`/`name`.py as a module. `directory` is on `sys.path` while it loads,
+    as it is when the script is run, so a script may import a sibling by name."""
+    path = directory / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None, f"cannot load {path}"
     module = importlib.util.module_from_spec(spec)
@@ -25,5 +27,9 @@ def load_script(name: str) -> ModuleType:
     # its own namespace -- a dataclass reads `sys.modules[cls.__module__]` --
     # finds it. Without this a script defining a dataclass cannot be loaded.
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(directory))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(directory))
     return module
