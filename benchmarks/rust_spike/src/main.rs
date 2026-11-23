@@ -54,8 +54,11 @@ struct Measurement {
     times_ms: Vec<f64>,
     result_count: Option<usize>,
     arrays: BTreeMap<String, EncodedArray>,
-    zarrs_crate: &'static str,
+    zarrs_crate: String,
     wide_alid_fallback: usize,
+    threads: usize,
+    zarrs_codec_concurrent_target: usize,
+    rayon_num_threads_env: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -203,7 +206,13 @@ impl AnalysisResolver {
     fn open(store: &Path) -> Result<Self, Box<dyn Error>> {
         let text = fs::read_to_string(store.join("analyses.tsv"))?;
         let mut by_id = HashMap::new();
-        for line in text.lines().skip(1) {
+        let mut lines = text.lines();
+        let header = lines.next().ok_or("analyses.tsv is empty")?;
+        let mut names = header.split('\t');
+        if names.next() != Some("analysis_index") || names.next() != Some("analysis_id") {
+            return Err("analyses.tsv must start with analysis_index, analysis_id".into());
+        }
+        for line in lines {
             let mut fields = line.split('\t');
             let index = fields.next().ok_or("missing analysis_index")?;
             let id = fields.next().ok_or("missing analysis_id")?;
@@ -469,11 +478,7 @@ impl Reader {
             }
         }
         let groups: Vec<&Vec<(usize, usize)>> = groups.values().collect();
-        let threads = std::env::var("SPIKE_THREADS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(16)
-            .max(1);
+        let threads = spike_threads();
         let per = groups.len().div_ceil(threads).max(1);
         let rows_ref = rows;
         let cols_ref = cols;
@@ -529,7 +534,26 @@ fn timed<T>(mut call: impl FnMut() -> Result<T, Box<dyn Error>>) -> Result<(f64,
     Ok((started.elapsed().as_secs_f64() * 1000.0, result))
 }
 
+/// The zarrs version this binary was built against, read from the committed lock file.
+fn zarrs_version() -> Result<String, Box<dyn Error>> {
+    let lock = include_str!("../Cargo.lock");
+    let marker = "name = \"zarrs\"\nversion = \"";
+    let start = lock.find(marker).ok_or("Cargo.lock has no zarrs entry")? + marker.len();
+    Ok(lock[start..].split('"').next().ok_or("malformed Cargo.lock")?.to_string())
+}
+
+fn spike_threads() -> usize {
+    std::env::var("SPIKE_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(16)
+        .max(1)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    // Concurrency comes only from the explicit threads in `read_cross`; zarrs' own
+    // codec parallelism is capped at one so "1 thread" is one thread.
+    zarrs::config::global_config_mut().set_codec_concurrent_target(1);
     let mut args = std::env::args().skip(1);
     let request_path = args.next().ok_or("usage: rust-spike REQUEST.json [cold|warm]")?;
     let cache = args.next().unwrap_or_else(|| "warm".to_string());
@@ -603,7 +627,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         times_ms,
         result_count,
         arrays,
-        zarrs_crate: "0.23.14",
+        zarrs_crate: zarrs_version()?,
+        threads: spike_threads(),
+        zarrs_codec_concurrent_target: 1,
+        rayon_num_threads_env: std::env::var("RAYON_NUM_THREADS").ok(),
         wide_alid_fallback: wide_count,
     };
     println!("{}", serde_json::to_string(&measurement)?);

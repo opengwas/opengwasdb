@@ -1,40 +1,52 @@
 #!/usr/bin/env python3
-"""Time scattered Dense lookups on the same selection under each #477 candidate.
+"""Time scattered Dense lookups (and the harness's other shapes) under each #477 candidate.
 
-Candidates (each on the harness's two ``random_lookup_*`` shapes, seed-0
-selection taken from the committed selection file):
+Candidate kinds
+---------------
+``python-fused``          the Python reader as shipped: fused pipeline, one worker, Blosc threads on
+                          (``store_reader/arrays.py``).
+``python-zarrs``          the same reader under ``zarrs.ZarrsCodecPipeline`` (zarrs-python).
+``python-zarr-pool16``    the fused pipeline with zarr's own pool at 16 workers, Blosc threads on.
+``python-threadpool16``   the reader's ``grid.read`` called per chunk group (the groups ``main.rs`` reads)
+                          on a 16-thread ``ThreadPoolExecutor``, numcodecs' Blosc threads off.
+``rust:N``                ``benchmarks/rust_spike`` (the ``zarrs`` crate) with the chunk groups on N threads;
+                          zarrs' own codec concurrency is capped at 1 and ``RAYON_NUM_THREADS`` set to N.
 
-* ``python-fused``  the Python reader as it is (fused codec pipeline, ``store/arrays.py``);
-* ``python-zarrs``  the same reader with zarrs-python's codec pipeline;
-* ``rust[:N]``      ``benchmarks/rust_spike`` (the ``zarrs`` crate), a minimal Dense lookup, chunk groups on N threads (default 16);
-* any of the three on a re-chunked copy of the lookup arrays (smaller inner chunk).
+What runs is asserted, not assumed.  A child sets its zarr/numcodecs configuration *after* importing
+the Store Reader (whose array seam sets the configuration at import), reads the effective pipeline
+class, ``max_workers`` and Blosc thread setting back from zarr and numcodecs, and aborts if they are
+not the ones the kind names.
 
-Each (candidate, store, shape, stage) is one fresh process: its first call is
-the *cold* call (a fresh interpreter, arrays opened, nothing decoded; the OS
-page cache cannot be dropped without root and stays warm), then ``--reps``
-warm calls.  Stages separate the ALID-to-row step from the decode:
+Measurement
+-----------
+Every measurement is a fresh process: its first call is the *cold* call (interpreter new, arrays
+just opened, nothing decoded yet; the OS page cache stays warm and cannot be dropped without root, so
+"cold" is not a first-touch disk read), followed by ``--warm`` warm calls.  Rounds are interleaved:
+for each (shape, stage), round r runs every candidate once before round r+1 starts, so a change in
+host load lands on all candidates alike.  Stages separate the ALID-to-row step
+(``axis_resolution``) from the decode (``decode``: the cell read with rows and columns given) and the
+whole ``lookup`` (``end_to_end``).  The other harness shapes run end to end only.
 
-* ``axis_resolution``  ALIDs and Analysis ids to row and column indices;
-* ``decode``           the orthogonal cell read plus decoding, rows/cols given;
-* ``end_to_end``       ``StoreQuery.lookup`` (resolution + decode + record).
+Agreement: the reference is the first ``python-fused`` run, which must be listed first; every
+other run's first-call digests (and, for Rust, its cold process's too) must equal the reference's
+for the same shape and stage, or the run aborts.
 
-Every candidate's result digests are compared with the first python-fused
-run; a mismatch stops the run before any timing is written.
-
-Usage (parent, dev environment, repository root)::
-
-    pixi run -e dev python benchmarks/rust_spike/run_spike.py \\
-        --selection SELECTION.json --output OUT.json --rust-binary BIN \\
-        --zarrs-python 'PIXI_DIR' --run NAME=KIND@STORE [--run ...]
+Commands
+--------
+See ``docs/benchmark-output/rust_spike_ogs00009.md`` for the exact ``cargo build``, ``rechunk.py`` and
+``--run`` commands.  ``summarise_spike.py`` turns this script's JSON into the tables.  The selection
+file is committed beside the JSON (``docs/benchmark-output/rust_spike_selection.json``).
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -45,116 +57,219 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 STAGES = ("axis_resolution", "decode", "end_to_end")
-KINDS = ("python-fused", "python-fused-threads", "python-zarrs", "rust")
+KINDS = (
+    "python-fused",
+    "python-zarrs",
+    "python-zarr-pool16",
+    "python-threadpool16",
+    "rust",
+)
+POOL = 16
 ZARRS_PIPELINE = "zarrs.ZarrsCodecPipeline"
+FUSED = "zarr.core.codec_pipeline.FusedCodecPipeline"
+# Expected effective configuration per Python kind: (config path, pipeline class name,
+# max_workers, numcodecs Blosc threads).
+EXPECTED: dict[str, tuple[str, str, int | None, bool]] = {
+    "python-fused": (FUSED, "FusedCodecPipeline", 1, True),
+    "python-zarrs": (ZARRS_PIPELINE, "ZarrsCodecPipeline", None, True),
+    "python-zarr-pool16": (FUSED, "FusedCodecPipeline", POOL, True),
+    "python-threadpool16": (FUSED, "FusedCodecPipeline", 1, False),
+}
 
 
-def _shape_name(n_variants: int, n_analyses: int) -> str:
+def shape_name(n_variants: int, n_analyses: int) -> str:
     return f"random_lookup_{n_variants}_variants_{n_analyses}_analyses"
 
 
-def _selection_for(selection: dict[str, Any], shape: dict[str, int]) -> tuple[list[str], list[str]]:
-    """The harness's slicing: variants first n, analyses first m (cf. common_query_patterns)."""
+def selection_for(selection: dict[str, Any], n_variants: int, n_analyses: int) -> tuple[list[str], list[str]]:
+    """The harness's slicing (`common_query_patterns`): first n variants, first m Analyses."""
     return (
-        list(selection["random_alids"][: shape["n_variants"]]),
-        list(selection["random_analyses"][: shape["n_analyses"]]),
+        list(selection["random_alids"][:n_variants]),
+        list(selection["random_analyses"][:n_analyses]),
     )
 
 
-def _summary(times: list[float]) -> dict[str, float]:
-    ordered = sorted(times)
-    return {
-        "median_ms": ordered[len(ordered) // 2],
-        "min_ms": ordered[0],
-        "max_ms": ordered[-1],
-        "p95_ms": ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))],
-    }
+def digest_rows(values: Any) -> str:
+    return hashlib.sha256(np.asarray(values, dtype="int64").tobytes()).hexdigest()
 
 
 # --------------------------------------------------------------------------- child
 
 
+def _threadpool_read(q: Any, rows: np.ndarray, cols: list[int], pool: Any, cells_cls: Any) -> dict[str, Any]:
+    """`grid.read` over up to 16 row partitions on a thread pool, merged into the lookup's order.
+
+    One `grid.read` per (row block, column block) group costs ~28 ms of fixed zarr/event-loop
+    overhead each (390 groups in the 10x100 shape), which would measure that overhead rather than
+    the decode, so each task takes whole row blocks times every requested column.  The chunks decoded
+    are the ones `main.rs` reads.  Results come back Analysis-major per task; the merge sorts them
+    into the whole read's order (columns outer, rows inner), so the arrays are the ones one
+    `grid.read` would return.
+    """
+    array = q._grid._z.array
+    row_chunk = int(array.chunks[0])
+    rows = np.asarray(rows, dtype=np.int64)
+    col_array = np.asarray(cols, dtype=np.int64)
+    # Rows sharing a row block stay together, so the tasks decode exactly the inner chunks
+    # `main.rs` reads (no chunk twice); the blocks are dealt round-robin to POOL buckets.
+    by_block: dict[int, list[int]] = {}
+    for row in rows.tolist():
+        by_block.setdefault(row // row_chunk, []).append(row)
+    buckets: list[list[int]] = [[] for _ in range(min(POOL, len(by_block)))]
+    for i, block_rows in enumerate(by_block.values()):
+        buckets[i % len(buckets)].extend(block_rows)
+    results = list(
+        pool.map(lambda b: q._grid.read(cells_cls.cross(b, cols), observed_only=False), buckets)
+    )
+    row_pos = {int(r): i for i, r in enumerate(rows.tolist())}
+    col_pos = {int(c): i for i, c in enumerate(col_array.tolist())}
+    names = list(results[0].keys()) if results else []
+    merged = {n: np.concatenate([np.asarray(r[n]) for r in results]) for n in names}
+    key = np.array(
+        [col_pos[int(a)] * len(rows) + row_pos[int(v)]
+         for v, a in zip(merged["variant_index"], merged["analysis_index"], strict=True)],
+        dtype=np.int64,
+    )
+    order = np.argsort(key, kind="stable")
+    return {n: v[order] for n, v in merged.items()}
+
+
 def _child(args: argparse.Namespace) -> None:
     """One fresh-process measurement of a Python candidate; prints one JSON line."""
+    # Import everything the Store Reader pulls in FIRST: its array seam sets the zarr
+    # configuration at import, and anything set before that is overwritten.
+    import numcodecs.blosc
     import opengwasdb
+    import opengwasdb.query
+    import opengwasdb.store_reader.arrays
+    import zarr
+    from benchmarks import _query_shapes
+    from benchmarks.benchmark_store_comparison import result_digests
+    from opengwasdb.store_reader.associations.cells import Cells
 
     if not Path(opengwasdb.__file__).resolve().is_relative_to(REPO):
         raise SystemExit(f"opengwasdb imported from {opengwasdb.__file__}, not {REPO}")
-    import zarr
-
-    if args.kind == "python-fused-threads":
-        # zarr's own pool, which the seam pins to 1 because a forked worker hangs on
-        # it (ADR 0056); a lookup in one process never forks.  Measured, not shipped.
-        zarr.config.set({"codec_pipeline.max_workers": 16})
-        zarrs_version = None
-    elif args.kind == "python-zarrs":
+    path, pipeline_class, workers, blosc_threads = EXPECTED[args.kind]
+    zarrs_version = None
+    if args.kind == "python-zarrs":
         import zarrs
 
-        zarr.config.set({"codec_pipeline.path": ZARRS_PIPELINE})
-        zarrs_version = zarrs.__version__ if hasattr(zarrs, "__version__") else "unknown"
-    else:
-        zarrs_version = None
-    from benchmarks.benchmark_store_comparison import result_digests
-    from opengwasdb.store_reader.associations.cells import Cells
-    from opengwasdb.query import query_store
+        zarrs_version = zarrs.__version__
+    zarr.config.set({"codec_pipeline.path": path})
+    if workers is not None:
+        zarr.config.set({"codec_pipeline.max_workers": workers})
+    numcodecs.blosc.use_threads = blosc_threads
 
     selection = json.loads(Path(args.selection).read_text())
-    shape = {"n_variants": args.n_variants, "n_analyses": args.n_analyses}
-    alids, analyses = _selection_for(selection, shape)
+    alids, analyses = selection_for(selection, args.n_variants, args.n_analyses)
     opened = time.perf_counter()
-    q = query_store(args.store)
+    q = opengwasdb.query.query_store(args.store)
     open_ms = (time.perf_counter() - opened) * 1000.0
-    pipeline = type(q._grid._group["z"]._async_array.codec_pipeline).__name__ if hasattr(
-        q._grid, "_group"
-    ) else "unknown"
-    rows = q._variant_axis.indices_by_identifiers(alids)
-    cols = [i for aid in analyses if (i := q._analysis_index(aid)) is not None]
 
-    def axis() -> dict[str, np.ndarray]:
-        r = q._variant_axis.indices_by_identifiers(alids)
-        c = [i for aid in analyses if (i := q._analysis_index(aid)) is not None]
-        return {"rows": np.asarray(r, dtype="int64"), "cols": np.asarray(c, dtype="int64")}
+    pool = None
+    if args.kind == "python-threadpool16":
+        from concurrent.futures import ThreadPoolExecutor
 
-    calls = {
-        "axis_resolution": axis,
-        "decode": lambda: q._grid.read(Cells.cross(rows, cols), observed_only=False),
-        "end_to_end": lambda: q.lookup(alids, analyses),
-    }
-    fn = calls[args.stage]
+        pool = ThreadPoolExecutor(max_workers=POOL)
+
+    def analysis_columns() -> list[int]:
+        cols = []
+        for aid in analyses:
+            index = q._analysis_index(aid)
+            if index is None:
+                raise SystemExit(f"Analysis {aid} is not in {args.store}")
+            cols.append(index)
+        return cols
+
+    if args.shape in {shape_name(10, 100), shape_name(100, 10)}:
+        rows = q._variant_axis.indices_by_identifiers(alids)
+        if len(rows) != len(alids):
+            raise SystemExit("an ALID did not resolve; the selection is for another release")
+        cols = analysis_columns()
+
+        def axis() -> dict[str, np.ndarray]:
+            r = q._variant_axis.indices_by_identifiers(alids)
+            return {"rows": np.asarray(r, dtype="int64"), "cols": np.asarray(analysis_columns(), dtype="int64")}
+
+        if pool is None:
+            decode = lambda: q._grid.read(Cells.cross(rows, cols), observed_only=False)  # noqa: E731
+            end_to_end = lambda: q.lookup(alids, analyses)  # noqa: E731
+        else:
+            decode = lambda: _threadpool_read(q, rows, cols, pool, Cells)  # noqa: E731
+            end_to_end = lambda: _threadpool_read(  # noqa: E731
+                q, q._variant_axis.indices_by_identifiers(alids), analysis_columns(), pool, Cells
+            )
+        fn = {"axis_resolution": axis, "decode": decode, "end_to_end": end_to_end}[args.stage]
+    else:
+        if args.kind != "python-fused" or args.stage != "end_to_end":
+            raise SystemExit("the harness's other shapes are timed end to end with python-fused only")
+        region = selection["region"]
+        patterns = _query_shapes.common_query_patterns(
+            q,
+            exposure=selection["exposure_analysis_id"],
+            phewas_alid=selection["phewas_alid"],
+            region=(region["chrom"], region["start"], region["end"]),
+            random_alids=list(selection["random_alids"]),
+            random_analyses=list(selection["random_analyses"]),
+        )
+        fn = patterns[args.shape]
+
+    effective: dict[str, Any] = {}
     times: list[float] = []
-    first: dict[str, np.ndarray] | None = None
-    for call in range(1 + args.reps):
+    first_digests: dict[str, str] = {}
+    last_digests: dict[str, str] = {}
+    count = 0
+    for call in range(1 + args.warm):
         started = time.perf_counter()
         result = fn()
         times.append((time.perf_counter() - started) * 1000.0)
+        arrays = dict(result.items()) if hasattr(result, "items") else dict(result)
+        digests = (
+            {k: digest_rows(v) for k, v in arrays.items()}
+            if args.stage == "axis_resolution"
+            else result_digests(arrays)
+        )
         if call == 0:
-            first = dict(result.items()) if hasattr(result, "items") else dict(result)
-    assert first is not None
-    digests = (
-        {k: _digest_rows(v) for k, v in first.items()}
-        if args.stage == "axis_resolution"
-        else result_digests(first)
-    )
+            first_digests = digests
+            count = int(len(arrays["z"])) if "z" in arrays else int(len(arrays["rows"]))
+            # Read back what actually ran, after the first call has opened every array.
+            effective = {
+                "config_path": zarr.config.get("codec_pipeline.path"),
+                "config_max_workers": zarr.config.get("codec_pipeline.max_workers"),
+                "array_pipeline_class": type(
+                    q._grid._z.array._async_array.codec_pipeline
+                ).__name__,
+                "blosc_use_threads": bool(numcodecs.blosc.use_threads),
+                "blosc_nthreads_env": os.environ.get("BLOSC_NTHREADS"),
+            }
+        last_digests = digests
+    if (
+        effective["config_path"] != path
+        or effective["array_pipeline_class"] != pipeline_class
+        or (workers is not None and effective["config_max_workers"] != workers)
+        or effective["blosc_use_threads"] != blosc_threads
+    ):
+        raise SystemExit(
+            f"{args.kind}: effective configuration {effective} is not the one the kind names "
+            f"({path}, {pipeline_class}, max_workers={workers}, blosc_threads={blosc_threads})"
+        )
     print(
         json.dumps(
             {
                 "cold_ms": times[0],
                 "warm_ms": times[1:],
                 "open_ms": open_ms,
-                "digests": digests,
-                "result_count": int(len(first["z"])) if "z" in first else int(len(first["rows"])),
-                "codec_pipeline": pipeline,
+                "digests_first": first_digests,
+                "digests_last": last_digests,
+                "result_count": count,
+                "effective_config": effective,
                 "zarr": zarr.__version__,
+                "numcodecs": numcodecs.__version__,
                 "zarrs_python": zarrs_version,
+                "threadpool": POOL if pool else None,
             }
         )
     )
-
-
-def _digest_rows(values: np.ndarray) -> str:
-    import hashlib
-
-    return hashlib.sha256(np.asarray(values, dtype="int64").tobytes()).hexdigest()
 
 
 # -------------------------------------------------------------------------- parent
@@ -162,9 +277,7 @@ def _digest_rows(values: np.ndarray) -> str:
 
 def _run_cmd(cmd: list[str], cwd: str, env: dict[str, str] | None = None) -> tuple[str, float]:
     started = time.perf_counter()
-    done = subprocess.run(
-        cmd, cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True
-    )
+    done = subprocess.run(cmd, cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True)
     wall_ms = (time.perf_counter() - started) * 1000.0
     if done.returncode:
         raise SystemExit(f"{' '.join(cmd[:6])} failed ({done.returncode}):\n{done.stderr[-3000:]}")
@@ -175,12 +288,33 @@ def _rust_arrays_to_result(measurement: dict[str, Any]) -> dict[str, np.ndarray]
     from opengwasdb.store_reader.associations.record import STATUS_LABELS
 
     dtypes = {"int32": "<i4", "float32": "<f4", "int8": "i1"}
-    out: dict[str, np.ndarray] = {}
-    for name, packed in measurement["arrays"].items():
-        out[name] = np.frombuffer(base64.b64decode(packed["base64"]), dtype=dtypes[packed["dtype"]])
+    out = {
+        name: np.frombuffer(base64.b64decode(p["base64"]), dtype=dtypes[p["dtype"]])
+        for name, p in measurement["arrays"].items()
+    }
     status = out.pop("association_status_int8")
     out["association_status"] = STATUS_LABELS[status.astype(np.int64)]
     return out
+
+
+def _zarrs_crate_version(lock: Path) -> str:
+    match = re.search(r'name = "zarrs"\nversion = "([^"]+)"', lock.read_text())
+    if not match:
+        raise SystemExit(f"no zarrs entry in {lock}")
+    return match.group(1)
+
+
+def _array_sizes(store: str) -> dict[str, Any]:
+    """Apparent bytes per top-level array of data.zarr (files only; symlinks followed)."""
+    root = Path(store) / "data.zarr"
+    out: dict[str, int] = {}
+    for entry in sorted(root.iterdir()):
+        if entry.name == "zarr.json":
+            continue
+        target = entry.resolve()
+        total = sum(f.stat().st_size for f in target.rglob("*") if f.is_file()) if target.is_dir() else 0
+        out[entry.name] = total
+    return {"apparent_bytes": out, "total": sum(out.values())}
 
 
 def _hardware(store: str) -> dict[str, Any]:
@@ -193,11 +327,11 @@ def _hardware(store: str) -> dict[str, Any]:
         "filesystem": sh(f"df -T {store}"),
         "mount": sh(f"findmnt -T {store} -o SOURCE,FSTYPE,OPTIONS"),
         "kernel": platform.platform(),
-        "page_cache_note": (
-            "cold = first call of a fresh process; the OS page cache is warm and cannot be "
-            "dropped without root, so cold figures are not first-touch disk numbers"
-        ),
     }
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True).stdout.strip()
 
 
 def _parent(args: argparse.Namespace) -> None:
@@ -206,173 +340,189 @@ def _parent(args: argparse.Namespace) -> None:
     from opengwasdb.query import query_store
 
     selection = json.loads(Path(args.selection).read_text())
-    shapes = selection["random_lookup_shapes"]
-    runs = [r.split("=", 1) for r in args.run]
-    runs = [(name, *spec.split("@", 1)) for name, spec in runs]
-    for _, kind, _ in runs:
-        if kind.split(":")[0] not in KINDS:
-            raise SystemExit(f"unknown candidate kind {kind!r}")
-    base_store = args.base_store
-    manifest = json.loads((Path(base_store) / "manifest.json").read_text())["encoding"]
-    q = query_store(base_store)
+    runs = []
+    for spec in args.run:
+        name, _, rest = spec.partition("=")
+        kind, _, store = rest.partition("@")
+        if not (name and kind and store) or kind.split(":")[0] not in KINDS:
+            raise SystemExit(f"--run wants NAME=KIND@STORE with KIND in {KINDS}, got {spec!r}")
+        runs.append((name, kind, store))
+    if not runs or runs[0][1] != "python-fused":
+        raise SystemExit("the first --run must be python-fused: it is the agreement reference")
+    reference_name = runs[0][0]
+
+    manifest = json.loads((Path(args.base_store) / "manifest.json").read_text())["encoding"]
+    q = query_store(args.base_store)
+    lookup_shapes = [shape_name(s["n_variants"], s["n_analyses"]) for s in selection["random_lookup_shapes"]]
     axis_cache: dict[str, dict[str, Any]] = {}
-    for shape in shapes:
-        name = _shape_name(shape["n_variants"], shape["n_analyses"])
-        alids, analyses = _selection_for(selection, shape)
+    for shape in selection["random_lookup_shapes"]:
+        name = shape_name(shape["n_variants"], shape["n_analyses"])
+        alids, analyses = selection_for(selection, shape["n_variants"], shape["n_analyses"])
         rows = [int(x) for x in q._variant_axis.indices_by_identifiers(alids)]
-        cols = [i for aid in analyses if (i := q._analysis_index(aid)) is not None]
+        cols = []
+        for aid in analyses:
+            index = q._analysis_index(aid)
+            if index is None:
+                raise SystemExit(f"Analysis {aid} is not in {args.base_store}")
+            cols.append(int(index))
         wide = [a for a in alids if len(a.encode()) > 32]
         wide_rows = [int(q._variant_axis.indices_by_identifiers([a])[0]) for a in wide]
         axis_cache[name] = {
-            "alids": alids, "analyses": analyses, "rows": rows, "cols": cols,
-            "wide_rows": wide_rows,
+            "alids": alids, "analyses": analyses, "rows": rows, "cols": cols, "wide_rows": wide_rows,
         }
     q.close()
 
-    zarrs_python = args.zarrs_python
-    reference: dict[tuple[str, str], dict[str, str]] = {}
+    crate = _zarrs_crate_version(REPO / "benchmarks/rust_spike/Cargo.lock")
+    scratch = Path(args.scratch)
     out: dict[str, Any] = {
         "tool": "benchmarks/rust_spike/run_spike.py",
         "ticket": 477,
         "measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "commit": subprocess.run(
-            ["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True, text=True
-        ).stdout.strip(),
-        "base_store": base_store,
-        "selection": str(args.selection),
-        "reps": args.reps,
+        "argv": sys.argv,
+        "commit": _git("rev-parse", "HEAD"),
+        "tree_clean": not _git("status", "--porcelain", "--", "benchmarks/rust_spike"),
+        "base_store": args.base_store,
+        "selection": json.loads(json.dumps(selection)),
+        "rounds": args.rounds,
+        "warm_per_process": args.warm,
         "max_start_load": args.max_start_load,
-        "hardware": _hardware(base_store),
-        "runs": [],
+        "zarrs_crate": crate,
+        "reference_run": reference_name,
+        "hardware": _hardware(args.base_store),
+        "store_sizes": {s: _array_sizes(s) for s in sorted({r[2] for r in runs})},
+        "cold_definition": (
+            "the first call of a fresh process: arrays just opened, nothing decoded; the OS page "
+            "cache is warm and cannot be dropped without root, so this is not a first-touch disk read"
+        ),
+        "columns": [],
     }
-    for label, kind, store in runs:
-        record: dict[str, Any] = {"name": label, "kind": kind, "store": store, "columns": []}
-        for shape in shapes:
-            shape_name = _shape_name(shape["n_variants"], shape["n_analyses"])
-            ax = axis_cache[shape_name]
-            for stage in STAGES:
+    reference: dict[tuple[str, str], dict[str, str]] = {}
+    extra_shapes = list(args.extra_shape)
+
+    plan = [(s, st, args.rounds) for s in lookup_shapes for st in STAGES]
+    plan += [(s, "end_to_end", args.extra_rounds) for s in extra_shapes]
+    for shape, stage, rounds in plan:
+        extra = shape in extra_shapes
+        active = [r for r in runs if (not extra) or r[1] == "python-fused"]
+        columns = {
+            name: {
+                "run": name, "kind": kind, "store": store, "shape": shape, "stage": stage,
+                "rounds": [],
+            }
+            for name, kind, store in active
+        }
+        for rnd in range(rounds):
+            for name, kind, store in active:
                 waited, timed_out = wait_for_quiet(args.max_start_load, timeout_s=1800.0)
-                load = os.getloadavg()
-                column: dict[str, Any] = {
-                    "shape": shape_name,
-                    "stage": stage,
-                    "load_1m_at_start": load[0],
-                    "waited_for_quiet_s": waited,
-                    "quiet_wait_timed_out": timed_out,
+                record: dict[str, Any] = {
+                    "round": rnd, "load_1m_at_start": os.getloadavg()[0],
+                    "waited_for_quiet_s": waited, "quiet_wait_timed_out": timed_out,
                 }
-                if kind.split(":")[0] == "rust":
-                    # "rust:N" decodes chunk groups on N threads; plain "rust" is 16.
+                base = kind.split(":")[0]
+                if base == "rust":
                     threads = kind.partition(":")[2] or "16"
-                    column["rust_threads"] = int(threads)
-                    rust_env = {"SPIKE_THREADS": threads}
+                    ax = axis_cache[shape]
                     request = {
-                        "store_path": store,
-                        "shape": shape_name,
-                        "stage": stage,
-                        "alids": ax["alids"],
-                        "analysis_ids": ax["analyses"],
-                        "rows": ax["rows"],
-                        "cols": ax["cols"],
-                        "wide_rows": ax["wide_rows"],
+                        "store_path": store, "shape": shape, "stage": stage,
+                        "alids": ax["alids"], "analysis_ids": ax["analyses"],
+                        "rows": ax["rows"], "cols": ax["cols"], "wide_rows": ax["wide_rows"],
                         "z_scale": float(manifest["z"]["scale"]),
                         "se_step": float(manifest["se"]["residual_range"]) / 127.0,
                         "eaf_step": float(manifest["eaf"]["residual_range"]) / 127.0,
-                        "reps": args.reps,
+                        "reps": args.warm,
                     }
-                    request_path = Path(args.scratch) / "request.json"
+                    request_path = scratch / "request.json"
                     request_path.write_text(json.dumps(request))
-                    cold, cold_wall = _run_cmd(
-                        [args.rust_binary, str(request_path), "cold"], cwd=args.scratch, env=rust_env
+                    env = {"SPIKE_THREADS": threads, "RAYON_NUM_THREADS": threads}
+                    cold_line, _ = _run_cmd([args.rust_binary, str(request_path), "cold"], str(scratch), env)
+                    warm_line, _ = _run_cmd([args.rust_binary, str(request_path), "warm"], str(scratch), env)
+                    cold, warm = json.loads(cold_line), json.loads(warm_line)
+                    if cold["zarrs_crate"] != crate or warm["zarrs_crate"] != crate:
+                        raise SystemExit("the Rust binary was built against a different zarrs than Cargo.lock names")
+                    record.update(
+                        cold_ms=cold["times_ms"][0], warm_ms=warm["times_ms"],
+                        result_count=warm["result_count"],
+                        effective_config={
+                            "threads": warm["threads"],
+                            "zarrs_codec_concurrent_target": warm["zarrs_codec_concurrent_target"],
+                            "rayon_num_threads_env": warm["rayon_num_threads_env"],
+                            "wide_alid_fallback": warm["wide_alid_fallback"],
+                        },
                     )
-                    warm, warm_wall = _run_cmd(
-                        [args.rust_binary, str(request_path), "warm"], cwd=args.scratch, env=rust_env
-                    )
-                    cold_m, warm_m = json.loads(cold), json.loads(warm)
-                    column["cold_ms"] = cold_m["times_ms"][0]
-                    column["warm_ms"] = warm_m["times_ms"]
-                    column["process_wall_ms"] = {"cold": cold_wall, "warm": warm_wall}
-                    column["result_count"] = warm_m["result_count"]
-                    column["zarrs_crate"] = warm_m["zarrs_crate"]
-                    column["wide_alid_fallback"] = warm_m["wide_alid_fallback"]
-                    column["codec_pipeline"] = "zarrs crate"
-                    if stage == "axis_resolution":
-                        digests: dict[str, str] | None = None
-                    else:
-                        digests = result_digests(_rust_arrays_to_result(warm_m))
-                else:
-                    env = {"PYTHONPATH": str(REPO)}
-                    if kind == "python-zarrs":
-                        cmd = ["pixi", "run", "--manifest-path", f"{zarrs_python}/pixi.toml", "python"]
-                        cwd = args.scratch
-                    else:
-                        cmd = [sys.executable]
-                        cwd = args.scratch
-                    cmd += [
-                        str(Path(__file__).resolve()),
-                        "--child",
-                        "--kind", kind,
-                        "--store", store,
-                        "--selection", str(args.selection),
-                        "--n-variants", str(shape["n_variants"]),
-                        "--n-analyses", str(shape["n_analyses"]),
-                        "--stage", stage,
-                        "--reps", str(args.reps),
-                    ]
-                    line, wall = _run_cmd(cmd, cwd=cwd, env=env)
-                    child = json.loads(line)
-                    column.update(
-                        {
-                            "cold_ms": child["cold_ms"],
-                            "warm_ms": child["warm_ms"],
-                            "open_ms": child["open_ms"],
-                            "process_wall_ms": wall,
-                            "result_count": child["result_count"],
-                            "codec_pipeline": child["codec_pipeline"],
-                            "zarr": child["zarr"],
-                            "zarrs_python": child["zarrs_python"],
+                    if warm["threads"] != int(threads):
+                        raise SystemExit("the Rust binary ran a different thread count than asked")
+                    digests = (
+                        None if stage == "axis_resolution" else {
+                            "first": result_digests(_rust_arrays_to_result(cold)),
+                            "last": result_digests(_rust_arrays_to_result(warm)),
                         }
                     )
-                    digests = child["digests"]
+                else:
+                    cmd = [sys.executable]
+                    if base == "python-zarrs":
+                        cmd = ["pixi", "run", "--manifest-path", f"{args.zarrs_python}/pixi.toml", "python"]
+                    cmd += [
+                        str(Path(__file__).resolve()), "--child", "--kind", base, "--store", store,
+                        "--selection", str(args.selection), "--shape", shape, "--stage", stage,
+                        "--warm", str(args.extra_warm if extra else args.warm),
+                    ]
+                    if not extra:
+                        n_variants, n_analyses = (int(x) for x in re.findall(r"\d+", shape)[:2])
+                        cmd += ["--n-variants", str(n_variants), "--n-analyses", str(n_analyses)]
+                    else:
+                        cmd += ["--n-variants", "100", "--n-analyses", "100"]
+                    line, _ = _run_cmd(cmd, str(scratch), {"PYTHONPATH": str(REPO)})
+                    child = json.loads(line)
+                    record.update(
+                        cold_ms=child["cold_ms"], warm_ms=child["warm_ms"], open_ms=child["open_ms"],
+                        result_count=child["result_count"], effective_config=child["effective_config"],
+                        versions={k: child[k] for k in ("zarr", "numcodecs", "zarrs_python", "threadpool")},
+                    )
+                    digests = {"first": child["digests_first"], "last": child["digests_last"]}
                 if digests is not None:
-                    key = (shape_name, stage)
+                    key = (shape, stage)
+                    if name == reference_name and key not in reference:
+                        reference[key] = digests["first"]
                     if key not in reference:
-                        reference[key] = digests
-                    elif digests != reference[key]:
-                        differing = sorted(
-                            k for k in set(digests) | set(reference[key])
-                            if digests.get(k) != reference[key].get(k)
-                        )
-                        raise SystemExit(
-                            f"{label} disagrees with the first run on {shape_name}/{stage}: "
-                            f"{differing}; refusing to publish timings for a wrong answer"
-                        )
-                    column["digests_equal_reference"] = True
-                    column["digests"] = digests
-                column["cold_summary"] = {"ms": column["cold_ms"]}
-                column["warm_summary"] = _summary(column["warm_ms"])
-                record["columns"].append(column)
-                print(
-                    f"{label:24s} {shape_name:44s} {stage:16s} cold {column['cold_ms']:9.2f} "
-                    f"warm med {column['warm_summary']['median_ms']:9.2f} ms "
-                    f"(load {load[0]:.1f})",
-                    flush=True,
-                )
-        out["runs"].append(record)
-        Path(args.output).write_text(json.dumps(out, indent=2) + "\n")
-    out["agreement"] = "every digested column equal to the first run's (else the run aborts)"
-    Path(args.output).write_text(json.dumps(out, indent=2) + "\n")
+                        raise SystemExit("the reference run must be measured first in every round")
+                    for which, got in digests.items():
+                        if got != reference[key]:
+                            differing = sorted(
+                                k for k in set(got) | set(reference[key]) if got.get(k) != reference[key].get(k)
+                            )
+                            raise SystemExit(
+                                f"{name} ({which} call) disagrees with {reference_name} on "
+                                f"{shape}/{stage}: {differing}; refusing to publish timings for a wrong answer"
+                            )
+                    record["digests"] = digests["first"]
+                    record["digests_equal_reference"] = True
+                columns[name]["rounds"].append(record)
+            print(f"{shape} {stage} round {rnd}: " + ", ".join(
+                f"{n} {columns[n]['rounds'][-1]['warm_ms'][-1]:.1f}" for n in columns), flush=True)
+        out["columns"].extend(columns.values())
+        Path(args.output).write_text(json.dumps(out, indent=1) + "\n")
+    out["agreement"] = (
+        f"every digested process (cold and warm, Rust and Python) equals {reference_name}'s first call "
+        "for the same shape and stage; otherwise the run aborts and writes nothing further"
+    )
+    Path(args.output).write_text(json.dumps(out, indent=1) + "\n")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--child", action="store_true")
     p.add_argument("--kind")
     p.add_argument("--store")
+    p.add_argument("--shape")
     p.add_argument("--n-variants", type=int)
     p.add_argument("--n-analyses", type=int)
     p.add_argument("--stage")
     p.add_argument("--selection", type=Path)
-    p.add_argument("--reps", type=int, default=7)
+    p.add_argument("--warm", type=int, default=3, help="warm calls per fresh process")
+    p.add_argument("--rounds", type=int, default=7)
+    p.add_argument("--extra-rounds", type=int, default=5)
+    p.add_argument("--extra-warm", type=int, default=1, help="warm calls per process for the extra shapes")
+    p.add_argument("--extra-shape", action="append", default=[], help="a harness shape name (python-fused only)")
     p.add_argument("--output", type=Path)
     p.add_argument("--base-store")
     p.add_argument("--run", action="append", default=[], help="NAME=KIND@STORE")
@@ -384,8 +534,8 @@ def main() -> None:
     if args.child:
         _child(args)
     else:
-        if args.reps < 5:
-            raise SystemExit("at least 5 reps")
+        if args.rounds < 5:
+            raise SystemExit("at least 5 rounds (5 cold calls per column)")
         _parent(args)
 
 

@@ -29,15 +29,7 @@ from opengwasdb.store.arrays import (
 
 PLANES = ("z", "se", "eaf", "imputed")
 SIDE_ARRAYS = ("eaf_baseline", "eaf_reference")
-UNCHANGED_ARRAYS = (
-    "eaf_exception_index",
-    "eaf_exception_value",
-    "se_coefficients",
-    "se_exception_index",
-    "se_exception_value",
-    "z_overflow_index",
-    "z_overflow_value",
-)
+PROTECTED_ROOT = Path("/data/opengwasdb/stores")
 
 
 def _link(source: Path, destination: Path) -> None:
@@ -55,6 +47,10 @@ def _copy_chunked_array(
 ) -> dict[str, object]:
     shape = tuple(int(x) for x in source.shape)
     shards = tuple(int(x) for x in source.shards)
+    if shards[0] % variant_chunk:
+        raise ValueError(
+            f"{name}: the variant chunk {variant_chunk} must divide the source shard {shards[0]}"
+        )
     inner = (variant_chunk, *(int(x) for x in source.chunks[1:]))
     started = time.perf_counter()
     destination = create_array(
@@ -112,8 +108,10 @@ def _copy_chunked_array(
 
 
 def rechunk(source_path: Path, destination_path: Path, variant_chunk: int) -> None:
-    if variant_chunk <= 0 or 100_000 % variant_chunk:
-        raise ValueError("the variant chunk must be positive and divide the 100,000-row shard")
+    if destination_path.resolve().is_relative_to(PROTECTED_ROOT):
+        raise ValueError(f"{destination_path} is inside {PROTECTED_ROOT}; releases are read-only")
+    if variant_chunk <= 0:
+        raise ValueError("the variant chunk must be positive")
     if destination_path.exists():
         raise FileExistsError(destination_path)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,9 +129,9 @@ def rechunk(source_path: Path, destination_path: Path, variant_chunk: int) -> No
         shutil.copy2(data_source / "zarr.json", data_destination / "zarr.json")
         copied = {*PLANES, *SIDE_ARRAYS}
         for entry in data_source.iterdir():
+            # Everything the lookup does not read (exception tables, coefficients,
+            # top hits, panels) is linked, not copied.
             if entry.name != "zarr.json" and entry.name not in copied:
-                _link(entry, data_destination / entry.name)
-            elif entry.name in UNCHANGED_ARRAYS:
                 _link(entry, data_destination / entry.name)
         source_group = open_group(data_source, mode="r")
         destination_group = open_group_for_write(data_destination, "a", zarr_format=3)
