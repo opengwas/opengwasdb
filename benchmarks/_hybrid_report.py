@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.special import erfc, log_ndtr
+from scipy.special import erfc
+
+from opengwasdb.store_reader.associations import statistics_of
 
 # A stratum of an MR run is only estimated when it holds at least this many
 # instruments: a two-instrument "estimate" is the ratio of two ratios, and
@@ -110,17 +112,6 @@ def selection_summary(
     return out
 
 
-def neglog10_p(z: float) -> float:
-    """-log10 of the two-sided p for a z, computed in the log domain.
-
-    `1 - ndtr(|z|)` underflows to 0 at around z = 38, where this store's
-    strongest hits live, and loses its significant digits long before that;
-    `log_ndtr` keeps both. Shared so a regional profile and a locus check
-    cannot disagree about what a p-value is.
-    """
-    return float(-(log_ndtr(-abs(z)) + np.log(2.0)) / np.log(10.0))
-
-
 def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dict[str, Any] | None:
     """One locus lookup, oriented to its published risk allele, or None if absent.
 
@@ -133,6 +124,9 @@ def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dic
         return None
     record = q._variant_axis.by_index(int(look["variant_index"][0]))
     z, se, eaf = float(look["z"][0]), float(look["se"][0]), float(look["eaf"][0])
+    # The Store Reader's beta and log10_p (ADR 0104): log10_p stays exact where
+    # this store's strongest hits (|z| near 38) take p below float64.
+    beta, log10_p = float(look["beta"][0]), float(statistics_of(look).log10_p[0])
     sign = 1.0 if record.effect_allele == risk_allele else -1.0
     return {
         "analysis_id": analysis_id,
@@ -142,10 +136,10 @@ def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dic
         "variant_index": int(record.variant_index),
         "z": z,
         "se": se,
-        "beta_risk_allele": sign * z * se,
+        "beta_risk_allele": sign * beta,
         "z_risk_allele": sign * z,
         "risk_allele_frequency": eaf if record.effect_allele == risk_allele else 1.0 - eaf,
-        "neglog10_p": neglog10_p(z),
+        "neglog10_p": -log10_p,
     }
 
 

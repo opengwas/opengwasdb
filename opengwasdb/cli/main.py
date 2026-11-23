@@ -62,6 +62,7 @@ from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.associations import statistics_of
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
@@ -2180,23 +2181,34 @@ def _json_cell(value: float) -> object:
 def _emit_json(result: dict[str, np.ndarray]) -> None:
     """The result as one JSON object per association, keyed by index (spec §19).
 
+    `beta`, `pval` and `log10_p` are the record's own (`statistics_of`, ADR 0104);
+    `log10_p` rides beside `pval` because `pval` is 0.0 where p is below
+    float64's range, and `log10_p` is still exact there.
+
     `allow_nan=False`: a value `_json_cell` did not turn into `null` or a string
     stops the command instead of printing a token no JSON parser reads.
     """
+    derived = statistics_of(result)
     rows: list[dict[str, object]] = [
         {
             "variant_index": int(vi),
             "analysis_index": int(ai),
             "z": _json_cell(z),
             "se": _json_cell(se),
+            "beta": _json_cell(beta),
+            "pval": _json_cell(pval),
+            "log10_p": _json_cell(log10_p),
             "eaf": _json_cell(eaf),
             "association_status": str(status),
         }
-        for vi, ai, z, se, eaf, status in zip(
+        for vi, ai, z, se, beta, pval, log10_p, eaf, status in zip(
             result["variant_index"],
             result["analysis_index"],
             result["z"],
             result["se"],
+            derived.beta,
+            derived.pval,
+            derived.log10_p,
             result["eaf"],
             result["association_status"],
             strict=True,
@@ -2220,6 +2232,7 @@ _TSV_COLUMNS = (
     "other_allele",
     "z",
     "se",
+    "beta",
     "p",
     "eaf",
     "association_status",
@@ -2233,16 +2246,17 @@ _TSV_COLUMNS_WITH_VARIANT_INFO = (
 )
 
 
-def _format_p(log10_p: float) -> str:
-    """Two-sided p as a compact display string. Past the point float64 can no
-    longer represent the value (|z| >~ 39; the FADS1/FADS2 window reaches
-    |z| = 47.8) an explicit ``<1e-300`` is printed instead of a silent 0
-    (issue #104)."""
-    if math.isnan(log10_p):
+def _format_p(pval: float, log10_p: float) -> str:
+    """The Store Reader's two-sided p as a compact display string (ADR 0104).
+
+    Read from `log10_p` below 1e-300: `pval` is subnormal from |z| = 37.5 and 0.0
+    from |z| = 38.5 (the FADS1/FADS2 window reaches |z| = 47.8), so an explicit
+    ``<1e-300`` is printed there instead of a silent 0 (issue #104)."""
+    if math.isnan(pval) or math.isnan(log10_p):
         return "NA"
     if log10_p < -300:
         return "<1e-300"
-    return f"{10.0 ** log10_p:.3g}"
+    return f"{pval:.3g}"
 
 
 def _format_eaf(eaf: object) -> str:
@@ -2292,7 +2306,8 @@ def _emit_tsv(
             row["other_allele"],
             f"{row['z']:.6g}",
             f"{row['se']:.6g}",
-            _format_p(cast(float, row["log10_p"])),
+            f"{row['beta']:.6g}",
+            _format_p(cast(float, row["pval"]), cast(float, row["log10_p"])),
         ]
         if include_variant_info:
             fields.insert(2, row["rsid"])

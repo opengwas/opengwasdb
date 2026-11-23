@@ -72,6 +72,19 @@ def dense_fixture_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return shared_releases.dense_fixture_store(tmp_path_factory.mktemp("dense-fixture"))
 
 
+@pytest.fixture(scope="session")
+def rsid_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """The six `store_reader_digests` fixture releases, built once per session, each row
+    naming an rsID (`rsid_releases.with_rsids`). Never written to: copy one to change it."""
+    from rsid_releases import with_rsids
+    from store_reader_digests import build_releases
+
+    built = build_releases(tmp_path_factory.mktemp("rsid-releases"))
+    for path in built.values():
+        with_rsids(path)
+    return built
+
+
 @pytest.fixture
 def dense_store_path(tmp_path: Path, dense_fixture_store: Path) -> Path:
     """A private copy of the shared fixture Store, which is never written to."""

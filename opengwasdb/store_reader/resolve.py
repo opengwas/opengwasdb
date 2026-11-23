@@ -35,7 +35,7 @@ from collections.abc import Iterator, Mapping
 import numpy as np
 
 from opengwasdb.store_reader.analyses import AnalysesIndex
-from opengwasdb.store_reader.stats import log10_p_two_sided
+from opengwasdb.store_reader.associations.record import statistics_of
 from opengwasdb.store_reader.variant_axis import VariantAxis, VariantRecord
 
 
@@ -52,7 +52,10 @@ def resolve_rows(
     (chromosome/position/alid/alleles, plus rsid when
     `include_variant_info=True` -- "." when the store has none for that
     association, matching the Store Variant Table's own missing marker), eaf,
-    z, se, log10_p, and association_status. `rsid` is omitted from the row
+    z, se, beta, pval, log10_p, and association_status. beta, pval and log10_p
+    are the query record's own (`statistics_of`, ADR 0104): NaN for a missing
+    association or an infinite SE, and `pval` 0.0 where p is below float64's
+    range while `log10_p` stays exact. `rsid` is omitted from the row
     entirely when `include_variant_info=False` (the default) rather than
     filled with a placeholder: resolving it is the expensive part of this
     join at scale. `eaf` is always present -- it is already in `result`, so
@@ -60,7 +63,7 @@ def resolve_rows(
     """
     analysis_rows = analyses.all()
     variant_index = result["variant_index"]
-    log10_p = log10_p_two_sided(result["z"])
+    derived = statistics_of(result)
 
     identity = variant_axis.identity_by_indices(variant_index)
     variant_rows = (
@@ -78,7 +81,9 @@ def resolve_rows(
             **_variant_identity(identity, variant_rows, i, vi),
             "z": float(result["z"][i]),
             "se": float(result["se"][i]),
-            "log10_p": float(log10_p[i]),
+            "beta": float(derived.beta[i]),
+            "pval": float(derived.pval[i]),
+            "log10_p": float(derived.log10_p[i]),
             "eaf": _eaf_or_missing(result, i),
             "association_status": str(result["association_status"][i]),
         }

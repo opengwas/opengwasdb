@@ -2251,10 +2251,31 @@ Top-hit results from Reference-Completed releases include imputed associations b
 
 A query returns an association record (`opengwasdb.store_reader.associations.Associations`):
 parallel arrays read as a mapping, keyed `variant_index`, `analysis_index`, `z`,
-`se`, `eaf`, `n` (below) and `association_status` (ADR 0020, ADR 0070). A
-Dense grid stores no association at a missing cell, so a Dense result omits
-them; a Ragged sequence stores a row for every attempted pair, so a Ragged or
-Ragged Overflow result returns such a row as `missing` (§15).
+`se`, `beta`, `pval`, `eaf`, `n` (below) and `association_status` (ADR 0020,
+ADR 0070, ADR 0104). A Dense grid stores no association at a missing cell, so a
+Dense result omits them; a Ragged sequence stores a row for every attempted
+pair, so a Ragged or Ragged Overflow result returns such a row as `missing` (§15).
+
+`beta` and `pval` are derived, never stored, by one function of the record's
+`z` and `se` (`opengwasdb.store_reader.stats.association_statistics`, ADR 0104),
+on every layout and every query method alike:
+
+| Value | Derivation | dtype |
+|---|---|---|
+| `beta` | `z * se`, on the Stored Effect Scale | `float64` |
+| `pval` | two-sided, `erfc(\|z\| / sqrt(2))` | `float64` |
+| `log10_p` | log10 of `pval`, computed in the log domain | `float64` |
+
+- Where z or SE is NaN -- a missing association -- all three are NaN.
+- Where SE is infinite (a release before format 0.2.3 may hold one; ADR 0068),
+  all three are NaN, never infinite: such an SE is an error, so neither `z * se`
+  nor the p of z alone is a value.
+- `pval` is subnormal from |z| = 37.5 and 0.0 from |z| = 38.5, where p is
+  below float64's range. `log10_p` stays finite and exact there (at |z| = 47.8
+  it is -497.92), so rank and display by `log10_p`.
+
+`log10_p` is not a key of the record. Resolved rows (`resolve_rows`) carry
+`beta`, `pval` and `log10_p`, all three from the same function.
 
 Query results SHOULD expose:
 
@@ -2264,8 +2285,8 @@ Query results SHOULD expose:
 | analysis identity | always |
 | z | always when available |
 | se | always when available |
-| beta | when requested, derived as `z * se` |
-| p-value | when requested, derived from Z |
+| beta | always, derived as `z * se` (above) |
+| p-value | always, as `pval` derived from Z, with `log10_p` on resolved rows (above) |
 | stored_effect_scale | always or through Analysis metadata |
 | association_status | Reference-Completed releases |
 | query_component | multi-component releases |
@@ -2281,8 +2302,11 @@ output prints an `n` column immediately before `association_status` (`.` where
 missing) only for such a release (ADR 0067).
 
 `query --format json` prints that record, one JSON object per association, as
-an array: `variant_index`, `analysis_index`, `z`, `se`, `eaf`,
-`association_status`, and `n` when the release carries it in its integer form.
+an array: `variant_index`, `analysis_index`, `z`, `se`, `beta`, `pval`,
+`log10_p`, `eaf`, `association_status`, and `n` when the release carries it in
+its integer form. `log10_p` rides beside `pval` because `pval` is 0.0 where p
+underflows. The resolved TSV prints `beta` after `se`, and its `p` column is
+`pval` to three significant figures, or `<1e-300` where `log10_p` is below -300.
 The output is RFC 8259 JSON, so it never holds `NaN` or `Infinity` as a bare
 token. A cell that is not there is `null`, and ±inf is the string `"Infinity"`
 or `"-Infinity"`, because an infinite value is a value (§15) and a `null`
@@ -2310,8 +2334,8 @@ Validators MUST check at least:
 - `se >= 0` for all finite SE values, and, in a release before `format_version` 0.2.3, a
   **warning** — not a failure — when it holds an infinite `se`, naming the cell count and up to
   five Analyses holding one: such a release stored an SE above a `float16` plane's range as
-  `+inf` beside a finite Z, so `beta = z × se` reads as infinity although the source value was
-  finite (issue #337). From 0.2.3 a release holding any SE above 65,504 — `+inf` or an exact
+  `+inf` beside a finite Z, so `z × se` is infinite although the source's beta was finite
+  (issue #337); a query reads `beta` and `pval` there as NaN (§19, ADR 0104). From 0.2.3 a release holding any SE above 65,504 — `+inf` or an exact
   exception — **fails**: it stores no such association (§15, issue #338);
 - from `format_version` 0.2.3, `analyses.tsv` (a Hybrid root's included) records
   `n_missing_se_out_of_range` as a non-negative integer on every row; below it the column may

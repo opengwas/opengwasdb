@@ -14,13 +14,12 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import zarr
 
@@ -48,6 +47,9 @@ from opengwasdb.store_reader.release import (
     release_paths,
 )
 from opengwasdb.variants.legacy_table import open_legacy_variant_table
+
+if TYPE_CHECKING:
+    import sqlite3
 
 #: The first `format_version` whose `analyses.tsv` must record
 #: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the
@@ -155,6 +157,16 @@ def check_writable_zarr_layout(version: str, *, source: str = "release") -> int:
 
 
 log = logging.getLogger(__name__)
+
+
+def _connect_index(path: Path) -> sqlite3.Connection:
+    """An `index.sqlite` connection with named columns; `sqlite3` is imported here, on use,
+    so opening a Store Release does not load it (#465)."""
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 class DestinationExistsError(FileExistsError):
@@ -490,9 +502,7 @@ class OpenGWASDBStore(StoreRelease):
 
     def index_connection(self) -> sqlite3.Connection:
         """Open a connection to this release's ``index.sqlite``."""
-        conn = sqlite3.connect(str(self.index_path))
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _connect_index(self.index_path)
 
     # ---- provenance amendment -------------------------------------------
 
@@ -625,9 +635,7 @@ class StagedRelease(ReleasePaths):
         return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.index_path))
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _connect_index(self.index_path)
 
     def write_manifest(self, manifest: StoreManifest) -> None:
         self.manifest_path.write_text(

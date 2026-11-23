@@ -16,6 +16,13 @@ from a `git archive 5d600a1d` of the repository, never by the code it checks:
 
 and `<out>` is the committed file, byte for byte, header included.
 
+When every record gained `beta` and `pval` (ADR 0104), the pins were regenerated
+the same way from `git archive 826b36bb`, the commit that added them, with that
+commit named in the header. Two runs were byte-identical. With `beta` and `pval`
+dropped, every one of the 352 shapes' digests and every resolved digest equalled
+the `5d600a1d` pins. The 10,913 `log10_p` values differed by at most 9.7e-16
+relative. Only the two arrays were added: 704 result digests and 52 resolved ones.
+
 It touches only names that are public on both sides of the move
 (`opengwasdb.query.query_store`, the builders the fixtures already call), so the
 same file runs against either.
