@@ -90,7 +90,9 @@ def _copy_chunked_array(
         raw = np.asarray(source[selection])
         destination[selection] = raw
         observed = np.asarray(destination[selection])
-        if not np.array_equal(observed, raw):
+        if observed.dtype != raw.dtype or observed.shape != raw.shape or not np.array_equal(
+            observed.view(np.uint8), raw.view(np.uint8)
+        ):
             raise RuntimeError(f"{name}: copied codes differ in {selection!r}; refusing publication")
         blocks += 1
         print(

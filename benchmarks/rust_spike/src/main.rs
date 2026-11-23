@@ -298,17 +298,34 @@ impl Reader {
         if rows.is_empty() || cols.is_empty() {
             return Ok(Decoded::default());
         }
+        let profile = std::env::var_os("SPIKE_PROFILE").is_some();
+        let mut mark = Instant::now();
+        let mut lap = |label: &str| {
+            if profile {
+                eprintln!("  {label}: {:.2} ms", mark.elapsed().as_secs_f64() * 1000.0);
+            }
+            mark = Instant::now();
+        };
         let raw_z = self.read_cross::<i16>(&self.z, rows, cols)?;
+        lap("z");
         let raw_eaf = self.read_cross::<i8>(&self.eaf, rows, cols)?;
+        lap("eaf");
         let raw_imputed = self.read_cross::<u8>(&self.imputed, rows, cols)?;
+        lap("imputed");
         let raw_se = self.read_cross::<i8>(&self.se, rows, cols)?;
+        lap("se");
         let baselines = self.read_rows::<f32>(&self.baseline, rows)?;
+        lap("baseline");
         let references = self.read_rows::<f32>(&self.reference, rows)?;
+        lap("reference");
         let coefficients = self.read_all::<f32>(&self.se_coefficients)?;
+        lap("coefficients");
         let z_overflow = self.read_exact(&self.z_overflow_index, &self.z_overflow_value)?;
+        lap("z_overflow");
         let eaf_exceptions = self.read_exact(&self.eaf_exception_index, &self.eaf_exception_value)?;
+        lap("eaf_exceptions");
         let se_exceptions = self.read_exact(&self.se_exception_index, &self.se_exception_value)?;
-
+        lap("se_exceptions");
         let n = rows.len() * cols.len();
         let mut z = vec![0.0f32; n];
         let mut se = vec![0.0f32; n];
@@ -415,7 +432,7 @@ impl Reader {
         Ok(out)
     }
 
-    fn read_cross<T: zarrs::array::ElementOwned + Copy + Default>(
+    fn read_cross<T: zarrs::array::ElementOwned + Copy + Default + Send>(
         &self,
         array: &ZarrArray,
         rows: &[u64],
@@ -437,15 +454,46 @@ impl Reader {
                     .push((i, j));
             }
         }
-        for cells in groups.values() {
-            let r0 = cells.iter().map(|(i, _)| rows[*i]).min().unwrap();
-            let r1 = cells.iter().map(|(i, _)| rows[*i]).max().unwrap();
-            let c0 = cells.iter().map(|(_, j)| cols[*j]).min().unwrap();
-            let c1 = cells.iter().map(|(_, j)| cols[*j]).max().unwrap();
-            let subset = ArraySubset::new_with_ranges(&[r0..r1 + 1, c0..c1 + 1]);
-            let block: ArrayD<T> = array.retrieve_array_subset(&subset)?;
-            for (i, j) in cells {
-                out[*i * cols.len() + *j] = block[[(rows[*i] - r0) as usize, (cols[*j] - c0) as usize]];
+        let groups: Vec<&Vec<(usize, usize)>> = groups.values().collect();
+        let threads = std::env::var("SPIKE_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(16)
+            .max(1);
+        let per = groups.len().div_ceil(threads).max(1);
+        let rows_ref = rows;
+        let cols_ref = cols;
+        let results: Vec<Result<Vec<(usize, T)>, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = groups
+                .chunks(per)
+                .map(|batch| {
+                    scope.spawn(move || -> Result<Vec<(usize, T)>, String> {
+                        let mut found = Vec::new();
+                        for cells in batch {
+                            let r0 = cells.iter().map(|(i, _)| rows_ref[*i]).min().unwrap();
+                            let r1 = cells.iter().map(|(i, _)| rows_ref[*i]).max().unwrap();
+                            let c0 = cells.iter().map(|(_, j)| cols_ref[*j]).min().unwrap();
+                            let c1 = cells.iter().map(|(_, j)| cols_ref[*j]).max().unwrap();
+                            let subset = ArraySubset::new_with_ranges(&[r0..r1 + 1, c0..c1 + 1]);
+                            let block: ArrayD<T> = array
+                                .retrieve_array_subset(&subset)
+                                .map_err(|e| e.to_string())?;
+                            for (i, j) in cells.iter() {
+                                found.push((
+                                    *i * cols_ref.len() + *j,
+                                    block[[(rows_ref[*i] - r0) as usize, (cols_ref[*j] - c0) as usize]],
+                                ));
+                            }
+                        }
+                        Ok(found)
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().expect("reader thread panicked")).collect()
+        });
+        for result in results {
+            for (cell, value) in result? {
+                out[cell] = value;
             }
         }
         Ok(out)

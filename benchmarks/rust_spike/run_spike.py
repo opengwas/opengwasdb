@@ -6,7 +6,7 @@ selection taken from the committed selection file):
 
 * ``python-fused``  the Python reader as it is (fused codec pipeline, ``store/arrays.py``);
 * ``python-zarrs``  the same reader with zarrs-python's codec pipeline;
-* ``rust``          ``benchmarks/rust_spike`` (the ``zarrs`` crate), a minimal Dense lookup;
+* ``rust[:N]``      ``benchmarks/rust_spike`` (the ``zarrs`` crate), a minimal Dense lookup, chunk groups on N threads (default 16);
 * any of the three on a re-chunked copy of the lookup arrays (smaller inner chunk).
 
 Each (candidate, store, shape, stage) is one fresh process: its first call is
@@ -205,7 +205,7 @@ def _parent(args: argparse.Namespace) -> None:
     runs = [r.split("=", 1) for r in args.run]
     runs = [(name, *spec.split("@", 1)) for name, spec in runs]
     for _, kind, _ in runs:
-        if kind not in KINDS:
+        if kind.split(":")[0] not in KINDS:
             raise SystemExit(f"unknown candidate kind {kind!r}")
     base_store = args.base_store
     manifest = json.loads((Path(base_store) / "manifest.json").read_text())["encoding"]
@@ -250,7 +250,11 @@ def _parent(args: argparse.Namespace) -> None:
                     "waited_for_quiet_s": waited,
                     "quiet_wait_timed_out": timed_out,
                 }
-                if kind == "rust":
+                if kind.split(":")[0] == "rust":
+                    # "rust:N" decodes chunk groups on N threads; plain "rust" is 16.
+                    threads = kind.partition(":")[2] or "16"
+                    column["rust_threads"] = int(threads)
+                    rust_env = {"SPIKE_THREADS": threads}
                     request = {
                         "store_path": store,
                         "shape": shape_name,
@@ -267,10 +271,10 @@ def _parent(args: argparse.Namespace) -> None:
                     request_path = Path(args.scratch) / "request.json"
                     request_path.write_text(json.dumps(request))
                     cold, cold_wall = _run_cmd(
-                        [args.rust_binary, str(request_path), "cold"], cwd=args.scratch
+                        [args.rust_binary, str(request_path), "cold"], cwd=args.scratch, env=rust_env
                     )
                     warm, warm_wall = _run_cmd(
-                        [args.rust_binary, str(request_path), "warm"], cwd=args.scratch
+                        [args.rust_binary, str(request_path), "warm"], cwd=args.scratch, env=rust_env
                     )
                     cold_m, warm_m = json.loads(cold), json.loads(warm)
                     column["cold_ms"] = cold_m["times_ms"][0]
