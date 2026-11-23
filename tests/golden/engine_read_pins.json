@@ -1,0 +1,1309 @@
+{
+ "__written_by__": "tests/engine_read_pins.py at 3b1c0c30",
+ "completed": {
+  "dense": {
+   "analyses.tsv": "f626db357233c775a871",
+   "data.zarr/eaf": "5eedcb9165139dec704b",
+   "data.zarr/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/eaf_baseline": "c3249a5b7ba6f9374d65",
+   "data.zarr/eaf_baseline@attrs": "44136fa355b3678a1146",
+   "data.zarr/eaf_exception_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/eaf_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/eaf_exception_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/eaf_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/eaf_reference": "c3249a5b7ba6f9374d65",
+   "data.zarr/eaf_reference@attrs": "44136fa355b3678a1146",
+   "data.zarr/imputed": "f293e8d1599148c03d6e",
+   "data.zarr/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/on_panel": "1bdc496b9a064e15584b",
+   "data.zarr/on_panel@attrs": "44136fa355b3678a1146",
+   "data.zarr/se": "93da331dbdb3d9c14885",
+   "data.zarr/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/se_coefficients": "5f173116892ce0585b86",
+   "data.zarr/se_coefficients@attrs": "44136fa355b3678a1146",
+   "data.zarr/se_exception_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/se_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/se_exception_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/se_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/abs_z": "70d1340d72b5f84e0837",
+   "data.zarr/top_hits/p_5e_04/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/analysis_index": "a99def1e892ea1da5742",
+   "data.zarr/top_hits/p_5e_04/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/analysis_offsets": "46b8417abb59f974a049",
+   "data.zarr/top_hits/p_5e_04/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/eaf": "46cd0b07e392d226715d",
+   "data.zarr/top_hits/p_5e_04/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/imputed": "39227f62dbfbc1e63581",
+   "data.zarr/top_hits/p_5e_04/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/p_value": "a376e7935bb938a3bf05",
+   "data.zarr/top_hits/p_5e_04/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/se": "b13c5dcdbd09c4ec4f8d",
+   "data.zarr/top_hits/p_5e_04/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/variant_index": "f46984331857b8c491ef",
+   "data.zarr/top_hits/p_5e_04/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/z": "70d1340d72b5f84e0837",
+   "data.zarr/top_hits/p_5e_04/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04@attrs": "c9ed51eeb3474550241c",
+   "data.zarr/top_hits/p_5e_06/abs_z": "70d1340d72b5f84e0837",
+   "data.zarr/top_hits/p_5e_06/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/analysis_index": "a99def1e892ea1da5742",
+   "data.zarr/top_hits/p_5e_06/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/analysis_offsets": "46b8417abb59f974a049",
+   "data.zarr/top_hits/p_5e_06/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/eaf": "46cd0b07e392d226715d",
+   "data.zarr/top_hits/p_5e_06/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/imputed": "39227f62dbfbc1e63581",
+   "data.zarr/top_hits/p_5e_06/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/p_value": "a376e7935bb938a3bf05",
+   "data.zarr/top_hits/p_5e_06/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/se": "b13c5dcdbd09c4ec4f8d",
+   "data.zarr/top_hits/p_5e_06/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/variant_index": "f46984331857b8c491ef",
+   "data.zarr/top_hits/p_5e_06/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/z": "70d1340d72b5f84e0837",
+   "data.zarr/top_hits/p_5e_06/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06@attrs": "3e70a30e091f24e8ce8b",
+   "data.zarr/top_hits/p_5e_08/abs_z": "70d1340d72b5f84e0837",
+   "data.zarr/top_hits/p_5e_08/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/analysis_index": "a99def1e892ea1da5742",
+   "data.zarr/top_hits/p_5e_08/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/analysis_offsets": "46b8417abb59f974a049",
+   "data.zarr/top_hits/p_5e_08/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/eaf": "46cd0b07e392d226715d",
+   "data.zarr/top_hits/p_5e_08/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/imputed": "39227f62dbfbc1e63581",
+   "data.zarr/top_hits/p_5e_08/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/p_value": "a376e7935bb938a3bf05",
+   "data.zarr/top_hits/p_5e_08/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/se": "b13c5dcdbd09c4ec4f8d",
+   "data.zarr/top_hits/p_5e_08/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/variant_index": "f46984331857b8c491ef",
+   "data.zarr/top_hits/p_5e_08/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/z": "70d1340d72b5f84e0837",
+   "data.zarr/top_hits/p_5e_08/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08@attrs": "96fc7440cb8729409317",
+   "data.zarr/top_hits@attrs": "a9e5edcd60a5029a282d",
+   "data.zarr/z": "b8a37feb0223c6a9fb66",
+   "data.zarr/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/z_overflow_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/z_overflow_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/z_overflow_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/z_overflow_value@attrs": "44136fa355b3678a1146",
+   "data.zarr@attrs": "b22fbc0286b7cedaa501",
+   "index.sqlite/completion_quality": "07d591054b8154879868",
+   "index.sqlite/metadata": "453bb8b02cb5218953fe",
+   "index.sqlite/variant_aliases": "e3b0c44298fc1c149afb",
+   "variant_alid_bytes.npy": "be4bdd9ca65b19d78bbd",
+   "variant_alid_rows.npy": "9133987667aa92083156",
+   "variant_offsets.npy": "d26ceba93b5ea0e7ff9b",
+   "variant_rsid_bytes.npy": "e35ce4c615102c93df19",
+   "variant_rsid_rows.npy": "06ed7f50a661f8906280",
+   "variants.tsv.gz": "7f51b414d73876b7a767"
+  },
+  "hybrid": {
+   "analyses.tsv": "6378b06160a8d2efb4e2",
+   "data.zarr/ragged/by_variant/analysis_index": "ec7919cc07fe64bdacad",
+   "data.zarr/ragged/by_variant/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/eaf": "83f170d6504b741ace50",
+   "data.zarr/ragged/by_variant/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/offsets": "65971d42860a702d8106",
+   "data.zarr/ragged/by_variant/offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/se": "e442ab705748db37bc24",
+   "data.zarr/ragged/by_variant/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/se_exception_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/by_variant/se_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/se_exception_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/by_variant/se_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/z": "0b7e0f31466ae1e6d3ca",
+   "data.zarr/ragged/by_variant/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/z_overflow_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/by_variant/z_overflow_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/z_overflow_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/by_variant/z_overflow_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/eaf": "83f170d6504b741ace50",
+   "data.zarr/ragged/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/offsets": "fd33950070b03c499466",
+   "data.zarr/ragged/offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se": "e442ab705748db37bc24",
+   "data.zarr/ragged/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se_coefficients": "bce79866b5a55121619c",
+   "data.zarr/ragged/se_coefficients@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se_exception_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/se_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se_exception_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/se_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/variant_index": "b83f20828d90f5d49b39",
+   "data.zarr/ragged/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/z": "0b7e0f31466ae1e6d3ca",
+   "data.zarr/ragged/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/z_overflow_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/z_overflow_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/z_overflow_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/z_overflow_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged@attrs": "fd317525f7305adebe39",
+   "data.zarr/top_hits/p_5e_04/abs_z": "68bccfc3406973323aa0",
+   "data.zarr/top_hits/p_5e_04/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/analysis_index": "ecf6f61d5df939149fb8",
+   "data.zarr/top_hits/p_5e_04/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/analysis_offsets": "1df5da349acb283c09d4",
+   "data.zarr/top_hits/p_5e_04/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/eaf": "098cf91187658c5136fe",
+   "data.zarr/top_hits/p_5e_04/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/p_value": "31df905b74c8bcd58ad1",
+   "data.zarr/top_hits/p_5e_04/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/se": "fbee017aab77c19634bf",
+   "data.zarr/top_hits/p_5e_04/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/variant_index": "116dc3bc6293ffb396ad",
+   "data.zarr/top_hits/p_5e_04/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/z": "b068b3bfdb2a0889cf9f",
+   "data.zarr/top_hits/p_5e_04/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04@attrs": "c9ed51eeb3474550241c",
+   "data.zarr/top_hits/p_5e_06/abs_z": "68bccfc3406973323aa0",
+   "data.zarr/top_hits/p_5e_06/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/analysis_index": "ecf6f61d5df939149fb8",
+   "data.zarr/top_hits/p_5e_06/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/analysis_offsets": "1df5da349acb283c09d4",
+   "data.zarr/top_hits/p_5e_06/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/eaf": "098cf91187658c5136fe",
+   "data.zarr/top_hits/p_5e_06/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/p_value": "31df905b74c8bcd58ad1",
+   "data.zarr/top_hits/p_5e_06/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/se": "fbee017aab77c19634bf",
+   "data.zarr/top_hits/p_5e_06/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/variant_index": "116dc3bc6293ffb396ad",
+   "data.zarr/top_hits/p_5e_06/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/z": "b068b3bfdb2a0889cf9f",
+   "data.zarr/top_hits/p_5e_06/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06@attrs": "3e70a30e091f24e8ce8b",
+   "data.zarr/top_hits/p_5e_08/abs_z": "68bccfc3406973323aa0",
+   "data.zarr/top_hits/p_5e_08/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/analysis_index": "ecf6f61d5df939149fb8",
+   "data.zarr/top_hits/p_5e_08/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/analysis_offsets": "1df5da349acb283c09d4",
+   "data.zarr/top_hits/p_5e_08/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/eaf": "098cf91187658c5136fe",
+   "data.zarr/top_hits/p_5e_08/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/p_value": "31df905b74c8bcd58ad1",
+   "data.zarr/top_hits/p_5e_08/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/se": "fbee017aab77c19634bf",
+   "data.zarr/top_hits/p_5e_08/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/variant_index": "116dc3bc6293ffb396ad",
+   "data.zarr/top_hits/p_5e_08/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/z": "b068b3bfdb2a0889cf9f",
+   "data.zarr/top_hits/p_5e_08/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08@attrs": "96fc7440cb8729409317",
+   "data.zarr/top_hits@attrs": "a9e5edcd60a5029a282d",
+   "data.zarr@attrs": "44136fa355b3678a1146",
+   "dense/analyses.tsv": "dcf90f7697ca0331e23f",
+   "dense/data.zarr/eaf": "136f78d3527028f297cd",
+   "dense/data.zarr/eaf@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/eaf_reference": "f0b79c91095a2f5d0c48",
+   "dense/data.zarr/eaf_reference@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/imputed": "f019bcb7190b32e75d33",
+   "dense/data.zarr/imputed@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/on_panel": "03cb86560f5beae1163e",
+   "dense/data.zarr/on_panel@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/se": "003c5289b826a53dbef6",
+   "dense/data.zarr/se@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/se_coefficients": "bce79866b5a55121619c",
+   "dense/data.zarr/se_coefficients@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/se_exception_index": "3b505d926f7ed9d0ae4f",
+   "dense/data.zarr/se_exception_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/se_exception_value": "ff5083c7fa99ca2b699b",
+   "dense/data.zarr/se_exception_value@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/abs_z": "77a59c1627d79bc4e80e",
+   "dense/data.zarr/top_hits/p_5e_04/abs_z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/analysis_index": "92cc1caa9b54a89cd6bb",
+   "dense/data.zarr/top_hits/p_5e_04/analysis_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/analysis_offsets": "bb653e9288887e7c7a82",
+   "dense/data.zarr/top_hits/p_5e_04/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/eaf": "98198395c21efecd1cdc",
+   "dense/data.zarr/top_hits/p_5e_04/eaf@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/imputed": "072db1219a99b7213907",
+   "dense/data.zarr/top_hits/p_5e_04/imputed@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/p_value": "eeb94ee22f9dd4a0cf57",
+   "dense/data.zarr/top_hits/p_5e_04/p_value@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/se": "aef1fb54e5dc40f1abd8",
+   "dense/data.zarr/top_hits/p_5e_04/se@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/variant_index": "c1434be35a0c1c00eed4",
+   "dense/data.zarr/top_hits/p_5e_04/variant_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04/z": "fdfc329b3ca4bb0c22c6",
+   "dense/data.zarr/top_hits/p_5e_04/z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_04@attrs": "c9ed51eeb3474550241c",
+   "dense/data.zarr/top_hits/p_5e_06/abs_z": "77a59c1627d79bc4e80e",
+   "dense/data.zarr/top_hits/p_5e_06/abs_z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/analysis_index": "92cc1caa9b54a89cd6bb",
+   "dense/data.zarr/top_hits/p_5e_06/analysis_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/analysis_offsets": "bb653e9288887e7c7a82",
+   "dense/data.zarr/top_hits/p_5e_06/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/eaf": "98198395c21efecd1cdc",
+   "dense/data.zarr/top_hits/p_5e_06/eaf@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/imputed": "072db1219a99b7213907",
+   "dense/data.zarr/top_hits/p_5e_06/imputed@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/p_value": "eeb94ee22f9dd4a0cf57",
+   "dense/data.zarr/top_hits/p_5e_06/p_value@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/se": "aef1fb54e5dc40f1abd8",
+   "dense/data.zarr/top_hits/p_5e_06/se@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/variant_index": "c1434be35a0c1c00eed4",
+   "dense/data.zarr/top_hits/p_5e_06/variant_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06/z": "fdfc329b3ca4bb0c22c6",
+   "dense/data.zarr/top_hits/p_5e_06/z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_06@attrs": "3e70a30e091f24e8ce8b",
+   "dense/data.zarr/top_hits/p_5e_08/abs_z": "77a59c1627d79bc4e80e",
+   "dense/data.zarr/top_hits/p_5e_08/abs_z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/analysis_index": "92cc1caa9b54a89cd6bb",
+   "dense/data.zarr/top_hits/p_5e_08/analysis_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/analysis_offsets": "bb653e9288887e7c7a82",
+   "dense/data.zarr/top_hits/p_5e_08/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/eaf": "98198395c21efecd1cdc",
+   "dense/data.zarr/top_hits/p_5e_08/eaf@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/imputed": "072db1219a99b7213907",
+   "dense/data.zarr/top_hits/p_5e_08/imputed@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/p_value": "eeb94ee22f9dd4a0cf57",
+   "dense/data.zarr/top_hits/p_5e_08/p_value@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/se": "aef1fb54e5dc40f1abd8",
+   "dense/data.zarr/top_hits/p_5e_08/se@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/variant_index": "c1434be35a0c1c00eed4",
+   "dense/data.zarr/top_hits/p_5e_08/variant_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08/z": "fdfc329b3ca4bb0c22c6",
+   "dense/data.zarr/top_hits/p_5e_08/z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/top_hits/p_5e_08@attrs": "96fc7440cb8729409317",
+   "dense/data.zarr/top_hits@attrs": "a9e5edcd60a5029a282d",
+   "dense/data.zarr/z": "6d5241813455ab35df80",
+   "dense/data.zarr/z@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/z_overflow_index": "3b505d926f7ed9d0ae4f",
+   "dense/data.zarr/z_overflow_index@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr/z_overflow_value": "ff5083c7fa99ca2b699b",
+   "dense/data.zarr/z_overflow_value@attrs": "44136fa355b3678a1146",
+   "dense/data.zarr@attrs": "9ee51633097d9131f494",
+   "dense/dense_to_shared.npy": "15e822cf2f1443d694a3",
+   "dense/index.sqlite/completion_quality": "a2c1af01249f009c7a11",
+   "dense/index.sqlite/metadata": "746f5442ed5594229d97",
+   "dense/index.sqlite/variant_aliases": "e3b0c44298fc1c149afb",
+   "dense/variant_alid_bytes.npy": "e2e94ac2a7c40a7ce543",
+   "dense/variant_alid_rows.npy": "8122a7679622d785b54a",
+   "dense/variant_offsets.npy": "fc1a20dc7d0de1bd7483",
+   "dense/variant_rsid_bytes.npy": "e35ce4c615102c93df19",
+   "dense/variant_rsid_rows.npy": "06ed7f50a661f8906280",
+   "dense/variants.tsv.gz": "d0c53c47b6fcdee55109",
+   "index.sqlite/metadata": "8f01c5903f2538cb7a49",
+   "index.sqlite/variant_aliases": "e3b0c44298fc1c149afb",
+   "variant_alid_bytes.npy": "3321b55bbcada337474d",
+   "variant_alid_rows.npy": "2651b012f5a049b4b63a",
+   "variant_offsets.npy": "501ee9d4949be611be1f",
+   "variant_rsid_bytes.npy": "e35ce4c615102c93df19",
+   "variant_rsid_rows.npy": "06ed7f50a661f8906280",
+   "variants.tsv.gz": "a4e1a357396526420283"
+  },
+  "ragged": {
+   "analyses.tsv": "db8f8ebcd2c1f98f70b3",
+   "data.zarr/ragged/by_variant/analysis_index": "a2f4e462f25511622cdd",
+   "data.zarr/ragged/by_variant/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/eaf": "613c2f518b17ea35eed1",
+   "data.zarr/ragged/by_variant/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/eaf_exception_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/by_variant/eaf_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/eaf_exception_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/by_variant/eaf_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/imputed": "a3a4307407913d7f33a9",
+   "data.zarr/ragged/by_variant/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/offsets": "92a3e606a41328d843da",
+   "data.zarr/ragged/by_variant/offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/se": "79b1ed4a9e48ef417c46",
+   "data.zarr/ragged/by_variant/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/se_exception_index": "6b4242c24c1427de840b",
+   "data.zarr/ragged/by_variant/se_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/se_exception_value": "0cec4bf41e3f6a14b5b0",
+   "data.zarr/ragged/by_variant/se_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/z": "0f5973eee2fe9e60306b",
+   "data.zarr/ragged/by_variant/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/z_overflow_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/by_variant/z_overflow_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant/z_overflow_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/by_variant/z_overflow_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/by_variant@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/eaf": "7aed8f0beb95bca1248f",
+   "data.zarr/ragged/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/eaf_baseline": "90ca51ea0c461bbb4bae",
+   "data.zarr/ragged/eaf_baseline@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/eaf_exception_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/eaf_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/eaf_exception_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/eaf_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/eaf_reference": "37321d80f216c790de68",
+   "data.zarr/ragged/eaf_reference@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/imputed": "93ff43c57f92e2b84109",
+   "data.zarr/ragged/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/offsets": "6074116a3c1dafeb87d4",
+   "data.zarr/ragged/offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se": "5b3de95c26699e89d9fa",
+   "data.zarr/ragged/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se_coefficients": "c4d4aa1fa61cb54a0c49",
+   "data.zarr/ragged/se_coefficients@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se_exception_index": "5db72072d77d046d3518",
+   "data.zarr/ragged/se_exception_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/se_exception_value": "0cec4bf41e3f6a14b5b0",
+   "data.zarr/ragged/se_exception_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/variant_index": "9a2355ed13e8f95f63cb",
+   "data.zarr/ragged/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/z": "9978a4bda76a0702b63a",
+   "data.zarr/ragged/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/z_overflow_index": "3b505d926f7ed9d0ae4f",
+   "data.zarr/ragged/z_overflow_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged/z_overflow_value": "ff5083c7fa99ca2b699b",
+   "data.zarr/ragged/z_overflow_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/ragged@attrs": "ed8b88178cad1f5c31fd",
+   "data.zarr/top_hits/p_5e_04/abs_z": "e5353f7a2cf045265564",
+   "data.zarr/top_hits/p_5e_04/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/analysis_index": "2bebf35f9a458c7a1192",
+   "data.zarr/top_hits/p_5e_04/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/analysis_offsets": "8dea61ee1eb0d96274b5",
+   "data.zarr/top_hits/p_5e_04/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/eaf": "d2bfcd42efb295e63aad",
+   "data.zarr/top_hits/p_5e_04/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/imputed": "5cd26f228fbb3a4d7454",
+   "data.zarr/top_hits/p_5e_04/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/p_value": "5b420d9e07b1843299ec",
+   "data.zarr/top_hits/p_5e_04/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/se": "bfdd3bcc4012c8c68a01",
+   "data.zarr/top_hits/p_5e_04/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/variant_index": "a3ca2316fe0f80bcb01e",
+   "data.zarr/top_hits/p_5e_04/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04/z": "e5353f7a2cf045265564",
+   "data.zarr/top_hits/p_5e_04/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_04@attrs": "c9ed51eeb3474550241c",
+   "data.zarr/top_hits/p_5e_06/abs_z": "e5353f7a2cf045265564",
+   "data.zarr/top_hits/p_5e_06/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/analysis_index": "2bebf35f9a458c7a1192",
+   "data.zarr/top_hits/p_5e_06/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/analysis_offsets": "8dea61ee1eb0d96274b5",
+   "data.zarr/top_hits/p_5e_06/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/eaf": "d2bfcd42efb295e63aad",
+   "data.zarr/top_hits/p_5e_06/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/imputed": "5cd26f228fbb3a4d7454",
+   "data.zarr/top_hits/p_5e_06/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/p_value": "5b420d9e07b1843299ec",
+   "data.zarr/top_hits/p_5e_06/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/se": "bfdd3bcc4012c8c68a01",
+   "data.zarr/top_hits/p_5e_06/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/variant_index": "a3ca2316fe0f80bcb01e",
+   "data.zarr/top_hits/p_5e_06/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06/z": "e5353f7a2cf045265564",
+   "data.zarr/top_hits/p_5e_06/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_06@attrs": "3e70a30e091f24e8ce8b",
+   "data.zarr/top_hits/p_5e_08/abs_z": "e5353f7a2cf045265564",
+   "data.zarr/top_hits/p_5e_08/abs_z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/analysis_index": "2bebf35f9a458c7a1192",
+   "data.zarr/top_hits/p_5e_08/analysis_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/analysis_offsets": "8dea61ee1eb0d96274b5",
+   "data.zarr/top_hits/p_5e_08/analysis_offsets@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/eaf": "d2bfcd42efb295e63aad",
+   "data.zarr/top_hits/p_5e_08/eaf@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/imputed": "5cd26f228fbb3a4d7454",
+   "data.zarr/top_hits/p_5e_08/imputed@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/p_value": "5b420d9e07b1843299ec",
+   "data.zarr/top_hits/p_5e_08/p_value@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/se": "bfdd3bcc4012c8c68a01",
+   "data.zarr/top_hits/p_5e_08/se@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/variant_index": "a3ca2316fe0f80bcb01e",
+   "data.zarr/top_hits/p_5e_08/variant_index@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08/z": "e5353f7a2cf045265564",
+   "data.zarr/top_hits/p_5e_08/z@attrs": "44136fa355b3678a1146",
+   "data.zarr/top_hits/p_5e_08@attrs": "96fc7440cb8729409317",
+   "data.zarr/top_hits@attrs": "a9e5edcd60a5029a282d",
+   "data.zarr@attrs": "44136fa355b3678a1146",
+   "index.sqlite/completion_quality": "034a028ac8e5e8e878b6",
+   "variant_alid_bytes.npy": "25680f023f8af8b17b7b",
+   "variant_alid_rows.npy": "c61a5a4eab7b4d66145b",
+   "variant_offsets.npy": "790ec5571eae96743618",
+   "variant_rsid_bytes.npy": "e35ce4c615102c93df19",
+   "variant_rsid_rows.npy": "06ed7f50a661f8906280",
+   "variants.tsv.gz": "9b82e867ceec8ea0a4ad"
+  }
+ },
+ "findings": {
+  "dense_completed": [
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "dense_completed/mask_value_two": [
+   {
+    "message": "data.zarr/imputed contains values other than 0 and 1",
+    "rule": "completion.mask_binary",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_08 contains imputed value inconsistent with imputed array",
+    "rule": "top_hits.imputed",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_06 contains imputed value inconsistent with imputed array",
+    "rule": "top_hits.imputed",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_04 contains imputed value inconsistent with imputed array",
+    "rule": "top_hits.imputed",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "completion.mask_binary, top_hits.imputed",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_completed/quality_row_out_of_range": [
+   {
+    "message": "validation failed: completion_quality cannot be counted: completion_quality has 1 row(s) with analysis_index outside analyses.tsv's range [0, 2)",
+    "rule": "completion.quality_counts",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "completion_quality has 1 row(s) with analysis_index outside analyses.tsv's range [0, 2)",
+    "rule": "completion.quality_table",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "completion.quality_counts, completion.quality_table",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_completed/top_hit_offsets_dropped": [
+   {
+    "message": "top-hit index p_5e_04 is missing analysis_offsets",
+    "rule": "top_hits.arrays",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "top_hits.arrays",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_observed": [
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "dense_observed/alias_to_nowhere": [
+   {
+    "message": "alias 'rs999999999' points to missing variant 99999999",
+    "rule": "sqlite.variant_aliases",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "sqlite.variant_aliases",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_observed/stray_analyses_table": [
+   {
+    "message": "index.sqlite still contains an analyses table -- analyses.tsv is the sole source of truth for Analytical Metadata (ADR 0030, issue #22)",
+    "rule": "sqlite.analyses_table",
+    "severity": "error",
+    "target": "."
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "sqlite.analyses_table",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "dense_observed/wrong_recorded_layout": [
+   {
+    "message": "index.sqlite dense metadata (data.zarr/z) records chunk_shape [7, 1], which describes [7, 1] for a (200, 2) plane, but data.zarr/z is chunked [100, 2]; a manifest and arrays that disagree are a silent failure class (issue #245)",
+    "rule": "layout.recorded",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "index.sqlite dense metadata (data.zarr/z) records shard_shape [200, 2], which cannot describe a (200, 2) plane chunked [7, 1]: the Dense variant-axis inner chunk 7 does not tile the decided shard axis 200 (shard (200, 2)); a build writes the format's shard, not one it chose. Allowed variant-axis inner chunks: 1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 200",
+    "rule": "layout.recorded",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "index.sqlite dense metadata (data.zarr/se) records chunk_shape [7, 1], which describes [7, 1] for a (200, 2) plane, but data.zarr/z is chunked [100, 2]; a manifest and arrays that disagree are a silent failure class (issue #245)",
+    "rule": "layout.recorded",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "index.sqlite dense metadata (data.zarr/se) records shard_shape [200, 2], which cannot describe a (200, 2) plane chunked [7, 1]: the Dense variant-axis inner chunk 7 does not tile the decided shard axis 200 (shard (200, 2)); a build writes the format's shard, not one it chose. Allowed variant-axis inner chunks: 1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 200",
+    "rule": "layout.recorded",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "index.sqlite dense metadata (data.zarr/eaf) records chunk_shape [7, 1], which describes [7, 1] for a (200, 2) plane, but data.zarr/z is chunked [100, 2]; a manifest and arrays that disagree are a silent failure class (issue #245)",
+    "rule": "layout.recorded",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "index.sqlite dense metadata (data.zarr/eaf) records shard_shape [200, 2], which cannot describe a (200, 2) plane chunked [7, 1]: the Dense variant-axis inner chunk 7 does not tile the decided shard axis 200 (shard (200, 2)); a build writes the format's shard, not one it chose. Allowed variant-axis inner chunks: 1, 2, 4, 5, 8, 10, 20, 25, 40, 50, 100, 200",
+    "rule": "layout.recorded",
+    "severity": "error",
+    "target": "data.zarr"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: general Dense source supplied no orientation reference",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "layout.recorded",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "data.zarr"
+   }
+  ],
+  "hybrid_completed": [
+   {
+    "message": "analysis 'trait_a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'trait_b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "hybrid_completed/mask_value_two": [
+   {
+    "message": "data.zarr/imputed contains values other than 0 and 1",
+    "rule": "completion.mask_binary",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_08 contains imputed value inconsistent with imputed array",
+    "rule": "top_hits.imputed",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_06 contains imputed value inconsistent with imputed array",
+    "rule": "top_hits.imputed",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_04 contains imputed value inconsistent with imputed array",
+    "rule": "top_hits.imputed",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_08 contains eaf value inconsistent with eaf plane",
+    "rule": "top_hits.eaf",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_06 contains eaf value inconsistent with eaf plane",
+    "rule": "top_hits.eaf",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "top-hit index p_5e_04 contains eaf value inconsistent with eaf plane",
+    "rule": "top_hits.eaf",
+    "severity": "error",
+    "target": "dense/data.zarr"
+   },
+   {
+    "message": "analysis 'trait_a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'trait_b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "completion.mask_binary, top_hits.imputed, top_hits.eaf",
+    "rule": "fidelity.source",
+    "severity": "skip",
+    "target": "dense/data.zarr"
+   }
+  ],
+  "hybrid_observed": [
+   {
+    "message": "analysis 'trait_a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'trait_b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "ragged_completed": [
+   {
+    "message": "index.sqlite has no variant_aliases table",
+    "rule": "sqlite.variant_aliases",
+    "severity": "skip",
+    "target": "."
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "ragged_completed/quality_row_dropped": [
+   {
+    "message": "index.sqlite has no variant_aliases table",
+    "rule": "sqlite.variant_aliases",
+    "severity": "skip",
+    "target": "."
+   },
+   {
+    "message": "completion_quality analysis 0: n_imputed=0 but the imputed plane marks 3 cell(s)",
+    "rule": "completion.quality_counts",
+    "severity": "error",
+    "target": "data.zarr/ragged"
+   },
+   {
+    "message": "completion_quality analysis 0: n_imputed + n_missing=0 but the planes hold 4 imputed or missing panel cell(s)",
+    "rule": "completion.quality_counts",
+    "severity": "error",
+    "target": "data.zarr/ragged"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "ragged_observed": [
+   {
+    "message": "index.sqlite has no variant_aliases table",
+    "rule": "sqlite.variant_aliases",
+    "severity": "skip",
+    "target": "."
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "ragged_observed/top_hit_offsets_dropped": [
+   {
+    "message": "index.sqlite has no variant_aliases table",
+    "rule": "sqlite.variant_aliases",
+    "severity": "skip",
+    "target": "."
+   },
+   {
+    "message": "top-hit index p_5e_04 is missing analysis_offsets",
+    "rule": "top_hits.arrays",
+    "severity": "error",
+    "target": "data.zarr/ragged"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ],
+  "ragged_observed/z_code_flipped": [
+   {
+    "message": "index.sqlite has no variant_aliases table",
+    "rule": "sqlite.variant_aliases",
+    "severity": "skip",
+    "target": "."
+   },
+   {
+    "message": "data.zarr/ragged/by_variant: (variant=0, analysis=0) z code np.int16(8192) != source array(8193, dtype=int16)",
+    "rule": "by_variant.sample",
+    "severity": "error",
+    "target": "data.zarr/ragged"
+   },
+   {
+    "message": "analysis 'a' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   },
+   {
+    "message": "analysis 'b' stores EAF whose orientation is unverified: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+    "rule": "eaf_orientation.unverified",
+    "severity": "warning",
+    "target": "."
+   }
+  ]
+ },
+ "observed_view": {
+  "dense": {
+   "analyses": {
+    "identical": true,
+    "n_child": 2,
+    "n_parent": 2
+   },
+   "axis": {
+    "child_rows_unindexed": 0,
+    "n_child": 200,
+    "n_parent": 200,
+    "order_preserved": true,
+    "parent_rows_unindexed": 0,
+    "parent_rows_unmapped": 0
+   },
+   "bands": [
+    {
+     "band": 0,
+     "parent_rows": [
+      0,
+      100
+     ],
+     "strata": [
+      "chrom_edge",
+      "random"
+     ]
+    },
+    {
+     "band": 1,
+     "parent_rows": [
+      100,
+      200
+     ],
+     "strata": [
+      "chrom_edge",
+      "final_partial",
+      "random"
+     ]
+    }
+   ],
+   "bands_by_stratum": {
+    "chrom_edge": 2,
+    "final_partial": 1,
+    "random": 2,
+    "writer_band_boundary": 0
+   },
+   "bands_checked": 2,
+   "bands_with_mismatch": [],
+   "failures": [],
+   "geometry": {
+    "completion_band_rows": 250000,
+    "n_parent_chunk_rows": 2,
+    "parent_chunk_rows": 100
+   },
+   "max_abs_diff": {
+    "eaf": 0.0,
+    "se": 0.0,
+    "z": 0.0
+   },
+   "n_random": 50,
+   "passed": true,
+   "se_out_of_range": {
+    "every_source_cell_compared": true,
+    "found": {},
+    "miscounted": [],
+    "problems": [],
+    "recorded": true,
+    "source_counts": [
+     0,
+     0
+    ]
+   },
+   "seed": 7,
+   "source": {
+    "path": "<release>",
+    "release_id": "obs",
+    "store_id": "s"
+   },
+   "target": {
+    "path": "<release>",
+    "release_id": "comp",
+    "store_id": "s"
+   },
+   "totals": {
+    "cells_compared": 400,
+    "eaf_mismatch": 0,
+    "imputed_mask_invalid": 0,
+    "infinite_cells": 0,
+    "inserted_observed_cells": 0,
+    "inserted_rows": 0,
+    "missing_became_observed": 0,
+    "missing_now_imputed": 4,
+    "non_canonical_marker": 0,
+    "observed_marked_imputed": 0,
+    "observed_missing_in_child": 0,
+    "parent_observed": 396,
+    "parent_rows_without_finite": 0,
+    "se_mismatch": 0,
+    "se_out_of_range_left_out": 0,
+    "se_out_of_range_miscounted": 0,
+    "se_out_of_range_unaccounted": 0,
+    "z_mismatch": 0,
+    "z_se_missingness_mismatch": 0
+   }
+  },
+  "hybrid": {
+   "analyses": {
+    "identical": true,
+    "n_child": 2,
+    "n_parent": 2
+   },
+   "components": {
+    "dense": {
+     "axis": {
+      "child_rows_unindexed": 0,
+      "n_child": 201,
+      "n_parent": 200,
+      "order_preserved": true,
+      "parent_rows_unindexed": 0,
+      "parent_rows_unmapped": 0
+     },
+     "bands": [
+      {
+       "band": 0,
+       "parent_rows": [
+        0,
+        200
+       ],
+       "strata": [
+        "chrom_edge",
+        "final_partial",
+        "random"
+       ]
+      }
+     ],
+     "bands_by_stratum": {
+      "chrom_edge": 1,
+      "final_partial": 1,
+      "random": 1,
+      "writer_band_boundary": 0
+     },
+     "bands_checked": 1,
+     "bands_with_mismatch": [],
+     "geometry": {
+      "completion_band_rows": 249843,
+      "n_parent_chunk_rows": 1,
+      "parent_chunk_rows": 200
+     },
+     "max_abs_diff": {
+      "eaf": 0.0,
+      "se": 0.0,
+      "z": 0.0
+     },
+     "se_out_of_range": {
+      "every_source_cell_compared": true,
+      "found": {},
+      "miscounted": [],
+      "problems": [],
+      "recorded": true,
+      "source_counts": [
+       0,
+       0
+      ]
+     },
+     "totals": {
+      "cells_compared": 400,
+      "crossover_cells": 1,
+      "eaf_mismatch": 0,
+      "imputed_mask_invalid": 0,
+      "infinite_cells": 0,
+      "inserted_observed_cells": 0,
+      "inserted_rows": 1,
+      "missing_became_observed": 0,
+      "missing_now_imputed": 4,
+      "non_canonical_marker": 0,
+      "observed_marked_imputed": 0,
+      "observed_missing_in_child": 0,
+      "parent_observed": 396,
+      "parent_rows_without_finite": 0,
+      "se_mismatch": 0,
+      "se_out_of_range_left_out": 0,
+      "se_out_of_range_miscounted": 0,
+      "se_out_of_range_unaccounted": 0,
+      "z_mismatch": 0,
+      "z_se_missingness_mismatch": 0
+     }
+    },
+    "overflow": {
+     "all_analyses": {
+      "analyses_count_mismatch": 0,
+      "imputed_cells": 0,
+      "observed_in_both": 0
+     },
+     "analyses": [
+      0,
+      1
+     ],
+     "analyses_checked": 2,
+     "analyses_with_mismatch": [],
+     "axis": {
+      "child_dense_order_preserved": true,
+      "child_dense_rows_unshared": 0,
+      "child_rows_unindexed": 0,
+      "n_child": 400,
+      "n_parent": 400,
+      "order_preserved": true,
+      "parent_rows_unindexed": 0,
+      "parent_rows_unmapped": 0
+     },
+     "max_abs_diff": {
+      "eaf": 0.0,
+      "se": 0.0,
+      "z": 0.0
+     },
+     "n_child_associations": 199,
+     "n_parent_associations": 200,
+     "totals": {
+      "child_associations": 199,
+      "crossovers": 1,
+      "eaf_mismatch": 0,
+      "infinite_cells": 0,
+      "missing_became_observed": 0,
+      "non_canonical_marker": 0,
+      "observed_missing_in_child": 0,
+      "parent_associations": 200,
+      "se_mismatch": 0,
+      "se_out_of_range_left_out": 0,
+      "z_mismatch": 0,
+      "z_se_missingness_mismatch": 0
+     }
+    }
+   },
+   "crossovers": {
+    "max_abs_diff": {
+     "eaf": 0.0,
+     "se": 0.0,
+     "z": 0.0
+    },
+    "n": 1,
+    "reencoding_max_abs_diff": {
+     "eaf": 0.0,
+     "se": 0.0,
+     "z": 0.0
+    },
+    "rows": 1,
+    "totals": {
+     "eaf_mismatch": 0,
+     "infinite_cells": 0,
+     "left_out_but_observed": 0,
+     "non_canonical_marker": 0,
+     "observed_marked_imputed": 0,
+     "observed_missing_in_child": 0,
+     "se_mismatch": 0,
+     "se_out_of_range_left_out": 0,
+     "z_mismatch": 0,
+     "z_se_missingness_mismatch": 0
+    }
+   },
+   "failures": [],
+   "layout": "hybrid",
+   "n_random": 50,
+   "passed": true,
+   "se_out_of_range": {
+    "every_source_cell_compared": true,
+    "found": {},
+    "miscounted": [],
+    "problems": [],
+    "recorded": true,
+    "source_counts": [
+     0,
+     0
+    ],
+    "totals": {
+     "se_out_of_range_miscounted": 0,
+     "se_out_of_range_unaccounted": 0
+    }
+   },
+   "seed": 7,
+   "source": {
+    "path": "<release>",
+    "release_id": "v1",
+    "store_id": "hyb"
+   },
+   "target": {
+    "path": "<release>",
+    "release_id": "v1-completed",
+    "store_id": "hyb"
+   }
+  },
+  "ragged": {
+   "analyses": {
+    "identical": true,
+    "n_child": 2,
+    "n_parent": 2
+   },
+   "axis": {
+    "child_rows_unindexed": 0,
+    "n_child": 604,
+    "n_parent": 600,
+    "order_preserved": true,
+    "parent_rows_unindexed": 0,
+    "parent_rows_unmapped": 0
+   },
+   "failing_counters": [
+    "z_mismatch",
+    "se_mismatch",
+    "eaf_mismatch",
+    "observed_marked_imputed",
+    "observed_missing_in_target",
+    "target_observed_not_in_source",
+    "imputed_outside_retained",
+    "missing_outside_retained",
+    "imputed_in_non_admitted",
+    "imputed_mask_invalid",
+    "z_se_missingness_mismatch",
+    "non_canonical_marker",
+    "target_variants_unordered",
+    "quality_blocks_not_in_regions",
+    "se_out_of_range_miscounted",
+    "se_out_of_range_unaccounted"
+   ],
+   "failures": [],
+   "ld_panel": {
+    "ancestry": "EUR",
+    "cis_window_bp": 1000000,
+    "path": "<release>/built/ragged/ragged_residual_140/ld_panel"
+   },
+   "max_abs_diff": {
+    "eaf": 0.0,
+    "se": 0.0,
+    "z": 0.0
+   },
+   "n_random": 50,
+   "passed": true,
+   "regions": null,
+   "sample": {
+    "analyses": [
+     {
+      "admitted": true,
+      "analysis_id": "a",
+      "analysis_index": 0,
+      "blocks": [
+       "1/residual-block"
+      ],
+      "failing": [],
+      "imputed": 3,
+      "nan_rows": 1,
+      "observed_in_source": 600,
+      "regions": 1,
+      "strata": [
+       "largest",
+       "random"
+      ]
+     },
+     {
+      "admitted": true,
+      "analysis_id": "b",
+      "analysis_index": 1,
+      "blocks": [
+       "1/residual-block"
+      ],
+      "failing": [],
+      "imputed": 7,
+      "nan_rows": 1,
+      "observed_in_source": 596,
+      "regions": 1,
+      "strata": [
+       "largest",
+       "random"
+      ]
+     }
+    ],
+    "analyses_checked": 2,
+    "by_stratum": {
+     "empty": 0,
+     "largest": 2,
+     "non_admitted": 0,
+     "random": 2,
+     "trait_less": 0
+    },
+    "non_admitted": 0
+   },
+   "se_out_of_range": {
+    "every_source_cell_compared": true,
+    "found": {},
+    "miscounted": [],
+    "problems": [],
+    "recorded": true,
+    "source_counts": [
+     0,
+     0
+    ]
+   },
+   "seed": 7,
+   "source": {
+    "path": "<release>",
+    "release_id": "obs",
+    "store_id": "residual-rag"
+   },
+   "target": {
+    "path": "<release>",
+    "release_id": "comp",
+    "store_id": "residual-rag"
+   },
+   "totals": {
+    "eaf_mismatch": 0,
+    "imputed": 10,
+    "imputed_in_non_admitted": 0,
+    "imputed_mask_invalid": 0,
+    "imputed_outside_retained": 0,
+    "infinite_cells": 0,
+    "missing_outside_retained": 0,
+    "nan_rows": 2,
+    "non_canonical_marker": 0,
+    "observed_in_source": 1196,
+    "observed_marked_imputed": 0,
+    "observed_missing_in_target": 0,
+    "quality_blocks_not_in_regions": 0,
+    "regions": 2,
+    "se_mismatch": 0,
+    "se_out_of_range_left_out": 0,
+    "se_out_of_range_miscounted": 0,
+    "se_out_of_range_unaccounted": 0,
+    "target_observed_not_in_source": 0,
+    "target_variants_unordered": 0,
+    "z_mismatch": 0,
+    "z_se_missingness_mismatch": 0
+   }
+  }
+ }
+}
