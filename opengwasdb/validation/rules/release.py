@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
@@ -326,18 +326,17 @@ def _require_layout_coverage(manifest: Any, errors: list[str]) -> None:
 
 def stray_analyses_table(target: Target) -> list[str]:
     errors: list[str] = []
-    with target.store.index_connection() as connection:
-        _reject_stray_analyses_table(connection, errors)
+    with ReleaseIndex(target.store.path) as index:
+        _reject_stray_analyses_table(index, errors)
     return errors
 
 
-def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[str]) -> None:
+def _reject_stray_analyses_table(index: ReleaseIndex, errors: list[str]) -> None:
     """Every layout shares this rule (ADR 0034, issue #72): analyses.tsv is
     the sole source of truth for Analytical Metadata, so a leftover SQL
     ``analyses`` table -- Dense/Hybrid retired theirs in issue #68, Ragged in
     issue #69 -- is a validation failure, not a harmless relic."""
-    tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "analyses" in tables:
+    if "analyses" in index.table_names():
         errors.append(
             "index.sqlite still contains an analyses table -- analyses.tsv is the sole "
             "source of truth for Analytical Metadata (ADR 0030, issue #22)"

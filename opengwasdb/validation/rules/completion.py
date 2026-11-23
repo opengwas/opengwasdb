@@ -12,7 +12,6 @@ and never imputed (`csr.observed_only`), so none of these applies to it.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -20,6 +19,7 @@ import numpy as np
 
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
+from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.store_reader.associations import Tally
@@ -195,20 +195,19 @@ def _quality_totals(target: Target) -> tuple[np.ndarray, np.ndarray]:
     errors: list[str] = []
     totals = np.zeros((2, n), dtype=np.int64)
     row_counts = np.zeros(n, dtype=np.int64)
-    with target.store.index_connection() as connection:
-        _validate_completion_quality_table(connection, n, errors)
+    with ReleaseIndex(target.store.path) as index:
+        _validate_completion_quality_table(index, n, errors)
         if errors:
             raise ValueError("completion_quality cannot be counted: " + "; ".join(errors))
-        for analysis, block_id, imputed, missing in connection.execute(
-            "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
-        ):
-            if not all(isinstance(value, int) and value >= 0 for value in (imputed, missing)):
-                raise ValueError(
-                    f"completion_quality for analysis {analysis}, block {block_id!r} "
-                    "has non-integer or negative n_imputed/n_missing"
-                )
-            totals[:, analysis] += (imputed, missing)
-            row_counts[analysis] += 1
+        rows = index.completion_quality()
+    for analysis, block_id, imputed, missing in rows:
+        if not all(isinstance(value, int) and value >= 0 for value in (imputed, missing)):
+            raise ValueError(
+                f"completion_quality for analysis {analysis}, block {block_id!r} "
+                "has non-integer or negative n_imputed/n_missing"
+            )
+        totals[:, analysis] += (imputed, missing)
+        row_counts[analysis] += 1
     return totals, row_counts
 
 
@@ -307,8 +306,8 @@ def _n_analyses(target: Target) -> int:
 def quality_table(target: Target) -> Iterator[str]:
     """A completed component's `completion_quality` table, against its Analyses."""
     errors: list[str] = []
-    with target.store.index_connection() as connection:
-        _validate_completion_quality_table(connection, _n_analyses(target), errors)
+    with ReleaseIndex(target.store.path) as index:
+        _validate_completion_quality_table(index, _n_analyses(target), errors)
     yield from errors
 
 
@@ -320,7 +319,7 @@ def n_missing_column(target: Target) -> Iterator[str]:
 
 
 def _validate_completion_quality_table(
-    connection: sqlite3.Connection, n_analyses: int, errors: list[str]
+    index: ReleaseIndex, n_analyses: int, errors: list[str]
 ) -> None:
     """Seam: the completion_quality table exists, is complete, and is in range.
 
@@ -330,18 +329,12 @@ def _validate_completion_quality_table(
     constraint, and it is shared by Dense and Ragged Reference-Completed
     stores so a quality row can never describe an Analysis that does not exist.
     """
-    tables = {
-        r[0]
-        for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-    }
-    if "completion_quality" not in tables:
+    if "completion_quality" not in index.table_names():
         errors.append(
             "index.sqlite is missing the completion_quality table for a reference-completed store"
         )
         return
-    cols = {
-        r[1] for r in connection.execute("PRAGMA table_info(completion_quality)").fetchall()
-    }
+    cols = index.completion_quality_columns()
     required = COMPLETION_QUALITY_COLUMNS
     missing_cols = required - cols
     if missing_cols:
@@ -349,11 +342,7 @@ def _validate_completion_quality_table(
             f"completion_quality table is missing columns: {', '.join(sorted(missing_cols))}"
         )
         return
-    out_of_range = connection.execute(
-        "SELECT COUNT(*) FROM completion_quality "
-        "WHERE analysis_index < 0 OR analysis_index >= ?",
-        (n_analyses,),
-    ).fetchone()[0]
+    out_of_range = index.completion_quality_rows_outside(n_analyses)
     if out_of_range:
         errors.append(
             f"completion_quality has {out_of_range} row(s) with analysis_index "

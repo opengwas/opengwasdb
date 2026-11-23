@@ -9,6 +9,7 @@ through `_load_manifest`), and source fidelity, whose read is one function (#56)
 from __future__ import annotations
 
 from collections.abc import Collection, Iterator, Sequence
+from contextlib import closing
 from pathlib import Path
 from typing import NamedTuple
 
@@ -26,7 +27,6 @@ from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import UnsupportedFormatVersion, indels_reference_first
 from opengwasdb.store_reader.hybrid import dense_component_path
 from opengwasdb.store_reader.top_hits import threshold_key
-from opengwasdb.store_reader.variant_axis import variant_table_path
 from opengwasdb.validation.rule import (
     Check,
     Finding,
@@ -56,7 +56,6 @@ from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.run import evaluate, selected
-from opengwasdb.variants.axis import VariantAxis
 
 
 def validate_store(
@@ -447,25 +446,8 @@ def _sample_sources(
 def _resolve_via_origin(store_path: Path, wanted: set[str]) -> dict[str, int] | None:
     """Map wanted source ALIDs → variant_index via the stored source_alid column
     in one streamed pass. Returns None if the store predates that column."""
-    import pysam
-
-    out: dict[str, int] = {}
-    remaining = set(wanted)
-    with pysam.BGZFile(str(variant_table_path(store_path)), "r") as handle:  # type: ignore[call-arg]
-        for raw in handle:
-            line = raw.decode("utf-8")
-            if line.startswith("#"):
-                continue
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 8:
-                return None  # no source_alid column → caller falls back to liftover
-            src = fields[7]
-            if src in remaining:
-                out[src] = int(fields[2])
-                remaining.discard(src)
-                if not remaining:
-                    break
-    return out
+    with closing(open_store(store_path).variant_axis(aliases=False)) as axis:
+        return axis.indices_by_source_alid(wanted)
 
 
 def _draw_fidelity_samples(
@@ -506,7 +488,7 @@ def _lookup_variant_rows(store_path: Path, alid_to_identifier: dict[str, str]) -
     cross-assembly one.
     """
     row_by_alid: dict[str, int] = {}
-    va = VariantAxis(store_path)
+    va = open_store(store_path).variant_axis(aliases=False)
     try:
         for src_alid, identifier in alid_to_identifier.items():
             rec = va.by_identifier(identifier)

@@ -11,11 +11,10 @@ reads from a disagreeing one decodes the wrong blocks (issue #245, #248).
 from __future__ import annotations
 
 import numbers
-import sqlite3
 from collections.abc import Iterator
 from typing import Any
 
-from opengwasdb.index.sqlite import get_metadata
+from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store.arrays import COMPRESSOR_RECORD, SHARDED_COMPRESSOR_RECORD
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.layout import ArrayRole, shard_layout
@@ -28,8 +27,8 @@ def recorded(target: Target) -> Iterator[str]:
     """A grid's three recordings describe its planes."""
     errors: list[str] = []
     store = target.store
-    with store.index_connection() as connection:
-        _validate_recorded_layout(store.manifest, connection, target.group, errors)
+    with ReleaseIndex(store.path) as index:
+        _validate_recorded_layout(store.manifest, index, target.group, errors)
     yield from errors
 
 
@@ -56,14 +55,14 @@ def _recorded_from_block(
 
 
 def _recorded_from_index(
-    connection: sqlite3.Connection,
+    index: ReleaseIndex,
 ) -> tuple[str, Any, Any, Any, Any] | None:
     """The `index.sqlite` `dense` blob as a recording, or `None` when absent.
 
     An absent `dense` blob is not a disagreement -- none of the Dense
     Reference-Completion path writes one -- so only a present blob is judged.
     """
-    blob = get_metadata(connection, "dense", default=None)
+    blob = index.metadata("dense", default=None)
     if isinstance(blob, dict):
         return (
             "index.sqlite dense metadata",
@@ -77,7 +76,7 @@ def _recorded_from_index(
 
 def _recorded_layouts(
     manifest: Any,
-    connection: sqlite3.Connection,
+    index: ReleaseIndex,
     root: Any,
     errors: list[str],
     *,
@@ -109,9 +108,9 @@ def _recorded_layouts(
             "manifest.json provenance.dense: no chunk_shape recorded, so the release "
             "does not describe its Dense planes' layout (spec §10a)"
         )
-    index = _recorded_from_index(connection)
-    if index is not None:
-        recorded.append(index)
+    from_index = _recorded_from_index(index)
+    if from_index is not None:
+        recorded.append(from_index)
     elif require_all:
         errors.append(
             "index.sqlite dense metadata: no dense blob recorded, so the release does "
@@ -160,7 +159,7 @@ def _recorded_layout_mismatches(
 
 
 def _validate_recorded_layout(
-    manifest: Any, connection: sqlite3.Connection, root: Any, errors: list[str]
+    manifest: Any, index: ReleaseIndex, root: Any, errors: list[str]
 ) -> None:
     """Every recorded chunk and shard shape must describe the arrays present.
 
@@ -176,7 +175,7 @@ def _validate_recorded_layout(
         return
     planes = _recorded_dense_planes(root)
     sharded = planes[0][3] is not None
-    recorded = _recorded_layouts(manifest, connection, root, errors, require_all=sharded)
+    recorded = _recorded_layouts(manifest, index, root, errors, require_all=sharded)
     _recorded_layout_mismatches(
         recorded,
         planes,
@@ -441,13 +440,10 @@ def _hybrid_outer_recordings(
         )
     else:
         recorded.append(block)
-    connection = store.index_connection()
-    try:
-        index = _recorded_from_index(connection)
-    finally:
-        connection.close()
-    if index is not None:
-        recorded.append(index)
+    with ReleaseIndex(store.path) as index:
+        from_index = _recorded_from_index(index)
+    if from_index is not None:
+        recorded.append(from_index)
     return recorded
 
 
