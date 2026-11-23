@@ -68,7 +68,7 @@ A **Clumping Configuration** is (LD Store, r², kb). The owner decided that only
 is clumped at build time, in one configuration, and that every other tier or configuration is
 clumped on the fly by the Top-Hit Query (#419). The stored configuration is named `default`,
 and it is the only name the format admits: a second stored configuration is a later decision
-and a format change, not a convention.
+and a change to the spec, not a convention.
 
 ### 2. Each Analysis's Assigned Ancestry chooses its LD Store; the mapping is an input (owner; orchestrator)
 
