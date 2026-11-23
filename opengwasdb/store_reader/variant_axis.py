@@ -445,7 +445,38 @@ class VariantAxis:
         }
 
     def all(self) -> list[VariantRecord]:
-        return [parse_variant_line(line) for line in self._legacy.rows()]
+        return list(self.records())
+
+    def records(self) -> Iterator[VariantRecord]:
+        """Every row, streamed in ``variant_index`` order: what `all` materialises.
+
+        A caller that needs one field per row -- the EAF orientation audit, the
+        rsid-index rule -- would otherwise hold tens of millions of records at
+        once on the stores it most needs to run on (#473).
+        """
+        return (parse_variant_line(line) for line in self._legacy.rows())
+
+    def indices_by_source_alid(self, wanted: Iterable[str]) -> dict[str, int] | None:
+        """The Variant Index of each `wanted` ALID, as the build assembly spelt it.
+
+        Matched against each row's ``source_alid``, in one pass that stops once every
+        wanted ALID is found; one the table does not hold is absent from the result.
+        None when the table predates the ``source_alid`` column, so the caller
+        can lift the ALIDs over itself rather than read no match as no variant (#473).
+        """
+        found: dict[str, int] = {}
+        remaining = set(wanted)
+        for line in self._legacy.rows():
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 8:
+                return None
+            source_alid = fields[7]
+            if source_alid in remaining:
+                found[source_alid] = int(fields[2])
+                remaining.discard(source_alid)
+                if not remaining:
+                    break
+        return found
 
 
 def parse_variant_line(line: str) -> VariantRecord:

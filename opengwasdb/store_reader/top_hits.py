@@ -4,7 +4,7 @@ A Top-Hit Index is a `top_hits/` group of one tier per significance threshold
 (`p_5e_08`, ...). A tier holds the associations whose two-sided p clears that
 threshold, as parallel arrays ordered by ``(analysis_index, variant_index)`` with
 an ``analysis_offsets`` array addressing one Analysis's slice (spec, "Top-Hit
-Index"). Writing, counting and checking a tier are `opengwasdb.top_hits`'s; the
+Index"). Writing and checking a tier are `opengwasdb.top_hits`'s; the
 |z| a threshold cuts at is `opengwasdb.store_reader.stats.z_critical`.
 """
 
@@ -52,6 +52,25 @@ def has_index(root: Any) -> bool:
 def index_group(root: Any) -> Any:
     """The Top-Hit Index group of a Store's data group, one tier per key."""
     return root[TOP_HIT_GROUP]
+
+
+def analysis_hit_counts(root: Any, threshold: float, n_analyses: int) -> list[int]:
+    """How many associations the `threshold` tier holds for each Analysis, in
+    ``analysis_index`` order.
+
+    Read from the tier's ``analysis_offsets``. An index that predates that array
+    (ukb-b, and other stores built before issue #22) is counted from its
+    ``analysis_index`` array instead, over `n_analyses` Analyses. A store with no
+    Top-Hit Index, or no tier for `threshold`, is a KeyError, not a zero count.
+    """
+    group = index_group(root)[threshold_key(threshold)]
+    if "analysis_offsets" in group:
+        offsets = np.asarray(group["analysis_offsets"], dtype=np.int64)
+        counts: list[int] = (offsets[1:] - offsets[:-1]).tolist()
+        return counts
+    analysis_index = np.asarray(group["analysis_index"], dtype=np.int64)
+    counted: list[int] = np.bincount(analysis_index, minlength=n_analyses)[:n_analyses].tolist()
+    return counted
 
 
 class TierRows(NamedTuple):
