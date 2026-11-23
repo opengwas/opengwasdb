@@ -39,7 +39,10 @@ from opengwasdb.query import query_store
 
 def result_digests(result):
     # Not `benchmarks.benchmark_store_comparison`'s: importing that loads pysam.
-    return {k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest() for k, v in sorted(result.items())}
+    return {
+        k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest()
+        for k, v in sorted(result.items())
+    }
 
 path, alid, rsid = sys.argv[1:4]
 loaded = lambda: sorted(n for n in ("pysam", "sqlite3") if n in sys.modules)
@@ -77,7 +80,10 @@ import hashlib, json, sys
 from opengwasdb.query import query_store
 
 def result_digests(result):
-    return {k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest() for k, v in sorted(result.items())}
+    return {
+        k: hashlib.sha256(repr(v.tolist()).encode()).hexdigest()
+        for k, v in sorted(result.items())
+    }
 
 path, chromosome = sys.argv[1:3]
 with query_store(path) as q:

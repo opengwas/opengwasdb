@@ -20,8 +20,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import pysam
     import sqlite3
+
+    import pysam
 
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
