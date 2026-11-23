@@ -285,6 +285,23 @@ Sources, each read on 13 November 2026:
   reads under zarr's defaults, but the engine's on-the-fly top-hit clumps (opengwasdb#419) run
   ogld in an engine process, under `FusedCodecPipeline` with one worker, where every query took
   12–49% longer here. That is the engine's to weigh.
+
+  *Amendment, 23 November 2026 (opengwasdb#460, epic #453).* Since #453 ogld is `opengwasdb.ld`,
+  so every LD Store read in a process that imports `opengwasdb` runs under those settings, not
+  only the engine's top-hit clumps. #460 timed the same reads on a copy of the HGDP+1kGP EUR LD
+  Store (chr22, 4 zarr threads, alternated runs, one process each, answers identical) with the
+  merged code and with ogld `147f54d`. **Proxies** took 17–29% longer cold (4.66 → 5.44 s over
+  six alternated pairs; 4.96 → 6.42 s over three) and about 20% longer from an open reader
+  (2.60 → 3.11 s), in the 10- and 100-variant lists; one variant and warm reads were equal.
+  **Clumping, region matrices and warm reads were not slower** (cold clump 63.5 → 59.6 s, region
+  26.9 → 23.9 s, medians). The profile puts the extra time in the ALID-to-row lookup
+  (`rows_of` → `_fetch_batch`, +37% of samples), waiting on zarr's chunk reads; the Partner Rows
+  reads were equal. Setting only the codec pipeline back to `BatchedCodecPipeline` brought
+  proxies to cold 4.88 s and open 2.57 s, within 5% of ogld, so the cause is the engine's fused
+  pipeline with one worker. The records are in
+  [`docs/benchmarks/ld/results/460/`](../benchmarks/ld/results/460/), rendered by
+  `scripts/ld/bench/report.py`. The decision stays the engine's, as above; nothing here changes
+  zarr's configuration.
 - **The gateway gains a backend.** opengwas-gateway forwards `/{namespace}/{path}` to one backend
   per namespace; ogld-api is a second. Where ieugwasr's `/ld/*` paths go is the epic's question.
 - **Immutable directories, once the path is ruled.** If the owner confirms the proposed
