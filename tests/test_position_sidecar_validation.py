@@ -1,11 +1,13 @@
 """`variant_table.position_sidecar` fails each way a 0.3.0 position sidecar can be wrong (#468).
 
-Each corruption below leaves the three files present and loadable, so only the rule
-can see it: positions out of order, a row moved, a chromosome boundary moved,
-chromosomes out of canonical order or named twice, offsets that do not end at the row
-count or do not match the chromosomes, a position of 0, the wrong dtype, a chromosome
-misnamed, and a sidecar a row short. Each is asserted by identity: the whole validator
-runs, and this rule alone fails. A clean release passes it and a 0.2 release is not
+Each corruption below leaves the three files present: positions out of order, a row
+moved, a chromosome boundary moved, chromosomes out of canonical order or named twice,
+offsets that do not end at the row count or do not match the chromosomes, a position
+of 0, the wrong dtype, a chromosome misnamed, and a sidecar a row short. The reader
+refuses two of them at open (a chromosome named twice, offsets for another count of
+chromosomes); the Variant Axis opens the sidecar on first use, so that refusal too
+fails this rule and no other. Each is asserted by identity: the whole validator runs,
+and this rule alone fails. A clean release passes it and a 0.2 release is not
 judged; the version, not the files present, decides whether a release carries one.
 """
 
@@ -18,7 +20,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3
-from test_range_phewas_0_3_0 import LAYOUTS
 
 from opengwasdb.query import query_store
 from opengwasdb.store_reader.position_sidecar import (
@@ -35,10 +36,10 @@ from opengwasdb.validation import validate_store
 RULE = "variant_table.position_sidecar"
 
 
-@pytest.fixture(scope="module")
-def built(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+@pytest.fixture
+def built(range_releases: dict[str, Path]) -> dict[str, Path]:
     """Each layout's 0.3.0 release over three chromosomes. Never written to."""
-    return {name: build(tmp_path_factory.mktemp(name)) for name, build in LAYOUTS.items()}
+    return range_releases
 
 
 @pytest.fixture
@@ -119,7 +120,7 @@ CORRUPTIONS: dict[str, tuple[Callable[[Path], None], str]] = {
     "a_row_moved": (a_row_moved, "row 0: the sidecar places it at 1:999"),
     "a_boundary_moved": (a_boundary_moved, "row 5 is at position 300, before row 4"),
     "chromosomes_out_of_order": (chromosomes_out_of_order, "out of the canonical"),
-    "a_chromosome_named_twice": (a_chromosome_named_twice, "resumes at row 5"),
+    "a_chromosome_named_twice": (a_chromosome_named_twice, "names chromosome '1' twice"),
     "a_chromosome_misnamed": (a_chromosome_misnamed, "row 5: the sidecar places it at 3:300"),
     "offsets_short_of_the_rows": (offsets_short_of_the_rows, "runs from 0 to 7, not from 0"),
     "offsets_for_another_count_of_chromosomes": (

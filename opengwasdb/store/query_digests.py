@@ -249,13 +249,29 @@ def probed_alids(variants: dict[int, dict[str, Any]]) -> list[str]:
     return chosen
 
 
+#: Every range question `range_questions` can pose, in the order it names them.
+RANGE_QUESTIONS: tuple[str, ...] = (
+    "first",
+    "to_first",
+    "last",
+    "from_last",
+    "boundary/before",
+    "boundary/after",
+    "empty/between",
+    "empty/chromosome",
+    "shared",
+    "shared/from_before",
+    "shared/to_after",
+)
+
+
 def range_questions(variants: dict[int, dict[str, Any]]) -> dict[str, tuple[str, int, int]]:
     """The ranges the range probes ask, by name, as ``(chromosome, start, end)``.
 
     Chosen from the rows of `variants` (`variants_table()`), in row order, which is
     genomic order. A case the release cannot pose -- one chromosome, so no boundary;
-    no shared position; no gap; every listed chromosome held -- is left out, and a
-    test asks of its fixtures that none is.
+    no shared position; no gap; every listed chromosome held -- is left out, and named
+    by `unposed_range_questions`, which the rewrite logs and records in its provenance.
     """
     rows = [
         (str(variants[k]["chromosome"]), int(variants[k]["position"])) for k in sorted(variants)
@@ -273,6 +289,11 @@ def range_questions(variants: dict[int, dict[str, Any]]) -> dict[str, tuple[str,
     asked.update(_empty_questions(rows))
     asked.update(_shared_questions(rows))
     return asked
+
+
+def unposed_range_questions(asked: Mapping[str, Any]) -> list[str]:
+    """The names in `RANGE_QUESTIONS` that `asked` (`range_questions`) leaves out, in order."""
+    return [name for name in RANGE_QUESTIONS if name not in asked]
 
 
 def _boundary_questions(rows: list[tuple[str, int]]) -> dict[str, tuple[str, int, int]]:
@@ -327,10 +348,12 @@ def _neighbouring_positions(rows: list[tuple[str, int]], at: int) -> tuple[int, 
     return max(lower, default=1), min(higher, default=CHROMOSOME_END)
 
 
-def _range_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
+def _range_digests(
+    q: Any, asked: dict[str, tuple[str, int, int]]
+) -> dict[str, dict[str, str]]:
     """Each range probe's `range_phewas`, Observed-Only and not, digested."""
     out = {}
-    for name, (chrom, start, end) in range_questions(variants).items():
+    for name, (chrom, start, end) in asked.items():
         for observed_only, flag in ((False, "all"), (True, "observed_only")):
             result = q.range_phewas(chrom, start, end, observed_only=observed_only)
             out[f"range_phewas/{name}/{flag}"] = result_digests(dict(result))
@@ -368,7 +391,9 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
         out["alid_probes"] = _probe_digests(q, variants)
-        out["range_probes"] = _range_digests(q, variants)
+        asked = range_questions(variants)
+        out["range_probes"] = _range_digests(q, asked)
+        out["unposed_range_questions"] = unposed_range_questions(asked)
     return out
 
 
@@ -417,6 +442,7 @@ def _differing(reference: Mapping[str, str], candidate: Mapping[str, str]) -> li
 
 __all__ = [
     "IncompleteResultError",
+    "RANGE_QUESTIONS",
     "RESULT_ARRAY_NAMES",
     "differences",
     "digest_array",
@@ -424,4 +450,5 @@ __all__ = [
     "range_questions",
     "release_digests",
     "result_digests",
+    "unposed_range_questions",
 ]

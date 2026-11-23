@@ -202,28 +202,24 @@ def _position_sidecar(target: Target) -> PositionSidecar:
 
 
 def _position_rows(target: Target, block: TableBlock) -> _PositionRows:
-    """Each row's chromosome and position in the sidecar against the table's; a row past
-    the sidecar's end is counted by its row count (`_judge_position_sidecar`)."""
+    """Each row's chromosome and position in the sidecar against the table's
+    (`PositionSidecar.misplaced`); a row past the sidecar's end is counted by its row
+    count (`_judge_position_sidecar`)."""
     sidecar = _position_sidecar(target)
-    n_rows = len(block.records)
-    held = max(min(block.start + n_rows, sidecar.n_rows) - block.start, 0)
-    positions = np.asarray(sidecar.positions[block.start : block.start + held]).tolist()
-    chromosomes = sidecar.chromosomes_of(np.arange(block.start, block.start + held))
-    differing = [
-        k
-        for k in range(held)
-        if (chromosomes[k], positions[k])
-        != (block.records[k].chromosome, block.records[k].position)
-    ]
+    records = block.records
+    misplaced = sidecar.misplaced(
+        block.start, [r.chromosome for r in records], [r.position for r in records]
+    )
     first = ""
-    if differing:
-        k = differing[0]
-        record = block.records[k]
+    if misplaced:
+        row = misplaced[0]
+        record = records[row - block.start]
+        [(chromosome, position)] = sidecar.placements([row])
         first = (
-            f"row {block.start + k}: the sidecar places it at {chromosomes[k]}:{positions[k]}, "
+            f"row {row}: the sidecar places it at {chromosome}:{position}, "
             f"variants.tsv.gz at {record.chromosome}:{record.position}"
         )
-    return _PositionRows(n_rows, len(differing), first)
+    return _PositionRows(len(records), len(misplaced), first)
 
 
 def _judge_position_sidecar(target: Target, total: _PositionRows) -> Iterator[str]:

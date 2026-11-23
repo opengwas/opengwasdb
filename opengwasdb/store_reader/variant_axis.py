@@ -169,9 +169,12 @@ class VariantAxis:
         # (`open_alid_index`): format 0.3.0's sidecar or the 0.2 series' fixed-width pair.
         # A release missing it is refused here, never read by scanning the table.
         self._alid_index = open_alid_index(self.store_path, format_version)
-        # Format 0.3.0's position sidecar, which answers a range (ADR 0105 §6); None on
-        # the 0.2 series, whose ranges are a tabix fetch through `legacy`.
-        self._position_sidecar = open_position_sidecar(self.store_path, format_version)
+        # Whether ranges are answered by format 0.3.0's position sidecar (ADR 0105 §6)
+        # or, on the 0.2 series, by a tabix fetch through `legacy`. A 0.3.0 release
+        # missing the sidecar's files is refused here; the sidecar is read on first use
+        # (`position_sidecar`), so a malformed one fails only what reads it.
+        self._ranges_by_sidecar = carries_position_sidecar_files(self.store_path, format_version)
+        self._position_sidecar: PositionSidecar | None = None
         # mmap'd rsid search index — present on stores built after issue #109.
         # Absent on older stores, where rsid lookups find nothing (as they did
         # before that index existed).
@@ -195,7 +198,13 @@ class VariantAxis:
 
     @property
     def position_sidecar(self) -> PositionSidecar | None:
-        """The release's position sidecar (format 0.3.0); None on the 0.2 series."""
+        """The release's position sidecar (format 0.3.0), opened on first use; None on
+        the 0.2 series. One whose chromosomes cannot slice its rows is refused
+        (`position_sidecar.MalformedPositionSidecar`)."""
+        if self._ranges_by_sidecar and self._position_sidecar is None:
+            self._position_sidecar = PositionSidecar.open(self.store_path)
+            if self._position_sidecar is None:  # removed since this axis was opened
+                raise MissingPositionSidecar(f"{self.store_path}: the position sidecar is gone")
         return self._position_sidecar
 
     def close(self) -> None:
@@ -333,7 +342,7 @@ class VariantAxis:
         On 0.3.0 the position sidecar finds the rows and `by_indices` reads them; on
         the 0.2 series they are a tabix fetch (`tabix_range`).
         """
-        if self._position_sidecar is None:
+        if not self._ranges_by_sidecar:
             return self.tabix_range(chromosome, start, end)
         rows = self.range_indices(chromosome, start, end)
         records = self.by_indices(rows.tolist())
@@ -360,8 +369,9 @@ class VariantAxis:
         of both with no rows).
         """
         chrom = normalise_chromosome(chromosome)
-        if self._position_sidecar is not None:
-            return self._position_sidecar.rows_in(chrom, start, end).astype("int32")
+        sidecar = self.position_sidecar
+        if sidecar is not None:
+            return sidecar.rows_in(chrom, start, end).astype("int32")
         lines = self._legacy.fetch(chrom, max(0, int(start) - 1), int(end))
         indices = []
         for line in lines:
@@ -470,20 +480,20 @@ class VariantAxis:
         return found
 
 
-def open_position_sidecar(store_path: str | Path, format_version: str) -> PositionSidecar | None:
-    """The position sidecar a release of `format_version` carries, or None for one that
-    carries none (the 0.2 series). A 0.3.0 release missing it is refused, never read by
-    tabix: the version, not the files present, says how a range is answered."""
+def carries_position_sidecar_files(store_path: str | Path, format_version: str) -> bool:
+    """Whether a release of `format_version` answers ranges from its position sidecar:
+    True from 0.3.0, False on the 0.2 series. A 0.3.0 release missing the sidecar's
+    files is refused, never read by tabix: the version, not the files present, says how
+    a range is answered."""
     if not carries_position_sidecar(format_version):
-        return None
-    opened = PositionSidecar.open(store_path)
-    if opened is None:
+        return False
+    if not PositionSidecar.held_in(store_path):
         raise MissingPositionSidecar(
             f"{store_path}: format_version {format_version} carries a position sidecar in "
             f"{', '.join(PositionSidecar.FILENAMES)}, which is missing; the release is "
             "incomplete. Rebuild it, or rewrite it from an intact source (spec §1, §4)"
         )
-    return opened
+    return True
 
 
 #: A Store Variant Table row's fields before the trailing ``source_alid`` column,

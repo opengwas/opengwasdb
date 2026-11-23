@@ -184,21 +184,14 @@ def _write_position_sidecar(context: RewriteContext) -> None:
 def _require_every_row_placed(
     directory: Path, chromosomes: list[str], positions: list[int]
 ) -> None:
-    """Refuse a position sidecar that places some row elsewhere than the table does."""
-    import numpy as np
-
+    """Refuse a position sidecar that places some row elsewhere than the table does
+    (`PositionSidecar.misplaced`, the comparison `variant_table.position_sidecar` makes)."""
     sidecar = PositionSidecar.open(directory)
     if sidecar is None:
         raise RewriteError(f"{directory}: the position sidecar was not written")
-    placed = sidecar.chromosomes_of(np.arange(len(chromosomes)))
-    stored = np.asarray(sidecar.positions).tolist()
-    wrong = [
-        row
-        for row in range(len(chromosomes))
-        if row >= len(stored) or (placed[row], stored[row]) != (chromosomes[row], positions[row])
-    ]
+    wrong = sidecar.misplaced(0, chromosomes, positions)
     if wrong or sidecar.n_rows != len(chromosomes):
-        first = wrong[0] if wrong else len(chromosomes)
+        first = wrong[0] if wrong else min(sidecar.n_rows, len(chromosomes))
         raise RewriteError(
             f"{directory}: the written position sidecar holds {sidecar.n_rows} rows and places "
             f"{len(wrong)} of the table's {len(chromosomes)} elsewhere; first, row {first}"
@@ -264,7 +257,8 @@ def rewrite_release(
     _log_phase(
         f"asked the source {len(reference['shapes'])} questions, "
         f"{len(reference['alid_probes'])} ALID probes and "
-        f"{len(reference['range_probes'])} range probes",
+        f"{len(reference['range_probes'])} range probes; "
+        + _unposed_said(reference["unposed_range_questions"]),
         started,
     )
     with OpenGWASDBStore.staging(destination) as staged:
@@ -276,7 +270,13 @@ def rewrite_release(
             started = time.perf_counter()
             step.run(context)
             _log_phase(f"step {step.name}: {step.summary}", started)
-        _stamp(context, steps, release_id=str(uuid.uuid4()), now=datetime.now(UTC).isoformat())
+        _stamp(
+            context,
+            steps,
+            release_id=str(uuid.uuid4()),
+            now=datetime.now(UTC).isoformat(),
+            unposed=reference["unposed_range_questions"],
+        )
         _refresh_overviews(context)
         started = time.perf_counter()
         _require_same_answers(reference, release_digests(staged.path), destination)
@@ -336,13 +336,27 @@ def _copy_release(source: Path, staged: Path) -> None:
         copy_path(entry, staged / entry.name)
 
 
+def _unposed_said(unposed: list[str]) -> str:
+    """The log's account of the range questions the release cannot pose."""
+    if not unposed:
+        return "it poses every range question"
+    return f"it cannot pose {', '.join(unposed)}: its rows hold no such case"
+
+
 def _stamp(
-    context: RewriteContext, steps: tuple[RewriteStep, ...], *, release_id: str, now: str
+    context: RewriteContext,
+    steps: tuple[RewriteStep, ...],
+    *,
+    release_id: str,
+    now: str,
+    unposed: list[str],
 ) -> None:
     """Stamp every manifest as one new 0.3.0 release, recording what the rewrite did.
 
     Every manifest gets the same fresh `release_id`, so a Hybrid's nested Dense
     Component still names the release that nests it, as the 0.2.0 converter does.
+    `unposed` names the range questions the proof could not ask of the release's rows
+    (`query_digests.unposed_range_questions`): there the proof is weaker, and says so.
     """
     commit = installed_commit()
     for path in manifest_paths(context.staged):
@@ -360,6 +374,7 @@ def _stamp(
                 "from_format_version": SOURCE_FORMAT_VERSION,
                 "to_format_version": data["format_version"],
                 "steps": [step.name for step in steps],
+                "range_questions_not_posed": list(unposed),
                 "tool": "ogdb rewrite-release",
                 "at": now,
                 "opengwasdb_git_hash": commit,

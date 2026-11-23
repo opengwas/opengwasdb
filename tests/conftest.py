@@ -83,6 +83,16 @@ def digest_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]
 
 
 @pytest.fixture(scope="session")
+def range_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """`one_source_releases.LAYOUTS` -- Dense, Ragged and Hybrid 0.3.0 releases over
+    three chromosomes, posing every range question -- built once per session. Never
+    written to: copy one to change it."""
+    from one_source_releases import LAYOUTS
+
+    return {name: build(tmp_path_factory.mktemp(name)) for name, build in LAYOUTS.items()}
+
+
+@pytest.fixture(scope="session")
 def rsid_releases(
     digest_releases: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
 ) -> dict[str, Path]:

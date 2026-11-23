@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components
+from one_source_releases import QUESTIONS
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -97,10 +98,20 @@ NAMES = [
     for state in ("observed", "completed")
 ]
 
+#: The range questions each digest release cannot pose: one chromosome, so no boundary,
+#: and no position two variants share; `dense_observed` also has no free position
+#: between two variants. `test_the_proof_asks_every_range_question_of_each_layout`
+#: asks these through the rewrite.
+UNPOSED = ["boundary/before", "boundary/after", "shared", "shared/from_before",
+           "shared/to_after"]
+NOT_POSED = {name: UNPOSED for name in NAMES} | {
+    "dense_observed": [*UNPOSED[:2], "empty/between", *UNPOSED[2:]]
+}
+
 
 @pytest.mark.parametrize("name", NAMES)
 def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
-    sources: dict[str, Path], tmp_path: Path, name: str
+    sources: dict[str, Path], tmp_path: Path, name: str, capsys: pytest.CaptureFixture[str]
 ):
     source = sources[name]
     before = _files(source)
@@ -111,6 +122,8 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
 
     destination = rewrite_release(source, tmp_path / "rewritten")
 
+    said = capsys.readouterr().out
+    assert f"it cannot pose {', '.join(NOT_POSED[name])}:" in said, said
     assert _files(source) == before, "the rewrite wrote its source"
     assert differences(reference, release_digests(destination)) == []
     release_ids = set()
@@ -124,10 +137,40 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
         assert record["source_release_id"] != manifest["release_id"]
         assert (record["from_format_version"], record["to_format_version"]) == ("0.2.3", "0.3.0")
         assert record["steps"] == ["alid_sidecar", "position_sidecar"]
+        assert record["range_questions_not_posed"] == NOT_POSED[name]
         release_ids.add(manifest["release_id"])
     assert len(release_ids) == 1, "a Hybrid's two manifests name one release"
     result = validate_store(destination)
     assert result.ok, result.errors
+
+
+@pytest.mark.parametrize("layout", ["dense", "ragged", "hybrid"])
+def test_the_proof_asks_every_range_question_of_each_layout(
+    range_releases: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+):
+    """Three chromosomes, a shared position and a gap: the rewrite asks all eleven range
+    questions of source and staged release alike, and they answer the same."""
+    source = as_0_2_3(Path(shutil.copytree(range_releases[layout], tmp_path / "source")))
+    asked: list[dict] = []
+
+    def recording(path):
+        digests = release_digests(path)
+        asked.append(digests)
+        return digests
+
+    monkeypatch.setattr(rewrite, "release_digests", recording)
+    destination = rewrite_release(source, tmp_path / "rewritten")
+
+    assert len(asked) == 2, "the source and the staged release"
+    for digests in asked:
+        names = {key.split("/", 1)[1].rsplit("/", 1)[0] for key in digests["range_probes"]}
+        assert names == QUESTIONS
+        assert len(digests["range_probes"]) == 2 * len(QUESTIONS), "Observed-Only and not"
+        assert digests["unposed_range_questions"] == []
+    assert differences(asked[0], asked[1]) == []
+    for directory in components(destination):
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["provenance"]["format_rewrite"]["range_questions_not_posed"] == []
 
 
 def test_the_rewritten_sidecars_are_what_a_build_writes(built, sources, tmp_path):

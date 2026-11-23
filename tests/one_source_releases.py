@@ -8,7 +8,7 @@ Dense Component panel is `panel`; the rest of its rows are Ragged Overflow.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import test_indel_pairs as pair
@@ -48,3 +48,35 @@ def hybrid_release(root: Path, rows: Rows, panel: Sequence[str]) -> Path:
         store_id="s", release_id="r",
     )
     return store
+
+
+#: ``(chrom, pos, ref, alt, beta, se, af_alt)`` over three chromosomes, with a position
+#: three variants share and a chromosome-2 variant at a position below chromosome 1's
+#: last, so a range that leaks over a boundary shows. Every z is 6 or more, so a
+#: signals-only Ragged build keeps every row.
+ROWS = [
+    ("1", "1000", "A", "G", "0.06", "0.01", "0.2"),
+    ("1", "5000", "C", "A", "0.07", "0.01", "0.3"),
+    ("1", "5000", "C", "G", "-0.08", "0.01", "0.25"),
+    ("1", "5000", "C", "T", "0.09", "0.01", "0.35"),
+    ("1", "9000", "G", "A", "-0.06", "0.01", "0.4"),
+    ("2", "300", "T", "C", "0.07", "0.01", "0.2"),
+    ("2", "7000", "A", "C", "-0.07", "0.01", "0.3"),
+    ("X", "2500", "G", "T", "0.08", "0.01", "0.45"),
+]
+#: The Hybrid's Dense Component panel: the rest are Ragged Overflow.
+PANEL = ["1:1000:A:G", "1:5000:C:A", "1:5000:C:T", "2:300:T:C"]
+
+#: Every range question the rewrite's proof can pose (`query_digests.range_questions`);
+#: a release of `ROWS` poses them all.
+QUESTIONS = {
+    "first", "to_first", "last", "from_last", "boundary/before", "boundary/after",
+    "empty/between", "empty/chromosome", "shared", "shared/from_before", "shared/to_after",
+}
+
+#: Each layout's 0.3.0 release of `ROWS`, built under a root directory.
+LAYOUTS: dict[str, Callable[[Path], Path]] = {
+    "dense": lambda root: dense_release(root, ROWS),
+    "ragged": lambda root: ragged_release(root, ROWS),
+    "hybrid": lambda root: hybrid_release(root, ROWS, PANEL),
+}

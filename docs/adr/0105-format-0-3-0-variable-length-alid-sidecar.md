@@ -105,7 +105,8 @@ a 0.3.0 Staged Release from a 0.2.3 one:
    or disagree with `variant_offsets.npy`. Then it deletes the pair. #468-#472 each append a step.
 4. It stamps every manifest 0.3.0 with one fresh `release_id` and `created_at`, keeps `store_id`,
    and records a `format_rewrite` provenance block: the source `release_id`, the from and to
-   versions, the steps, the tool, the time and the commit. ADR 0038 §5 settles the identity: a new
+   versions, the steps, the tool, the time and the commit. From #468 it also records the range
+   probes the release could not pose (`range_questions_not_posed`, §6). ADR 0038 §5 settles the identity: a new
    `release_id`, with the source named in provenance. The 0.2.0 converter set the precedent for
    `store_id` and for one `release_id` across both Hybrid manifests.
 5. **The proof.** It asks the source and the staged copy the same deterministic questions
@@ -268,11 +269,30 @@ own rows, so they are deterministic. Each is asked both Observed-Only and with i
 - `shared`, `shared/from_before`, `shared/to_after`: the first position several variants share,
   alone, from the position before it, and to the position after it.
 
-A release that cannot pose one, such as a release with one chromosome, has no boundary, and that
-question is left out. The probes are their own section, `range_probes`, so the golden pins keep
-their shapes. The six `store_reader_digests` fixtures hold one chromosome and no shared position.
-`tests/test_range_phewas_0_3_0.py` builds a release of each layout that poses all eleven
-questions.
+A release that cannot pose one leaves that question out. A release with one chromosome, for
+example, has no boundary. The rewrite does not leave a question out silently. Its log line names
+each question it could not pose, and `provenance.format_rewrite.range_questions_not_posed`
+records them. The probes are their own section, `range_probes`, so the golden pins keep their
+shapes.
+
+The six `store_reader_digests` fixtures that the rewrite tests use leave out five or six questions:
+- All six leave out `boundary/before`, `boundary/after`, `shared`, `shared/from_before` and
+  `shared/to_after`. Each holds one chromosome and no shared position.
+- `dense_observed` also leaves out `empty/between`. No position is free between two of its
+  variants.
+
+`tests/one_source_releases.LAYOUTS` builds a Dense, Ragged and Hybrid release over three
+chromosomes that poses all eleven questions. The `range_releases` session fixture builds them once.
+`test_rewrite_release.test_the_proof_asks_every_range_question_of_each_layout` sends the 0.2.3
+form of each one through `rewrite_release`. It asserts that the source and the staged release are
+both asked all eleven questions and answer them identically. That test covers every question the
+digest fixtures leave out.
+
+**A known cost: the rewrite streams each table twice.** The ALID step and the position step each
+read the Variant Table on their own, and each holds a Python list per row. That doubles the
+rewrite's main cost, which matters at ukb-b's scale. One pass could feed both steps. It is not
+worth the change now: the rewrite is a proof, run on fixtures and small releases, and every hosted
+Store is rebuilt at 0.3.0 instead (the owner's ruling, recorded in §3).
 
 **Validation.** `variant_table.position_sidecar` (spec §20.0) judges a 0.3.0 release from the one
 streamed read of its table. It checks that:
@@ -284,6 +304,13 @@ streamed read of its table. It checks that:
 
 `envelope.required` names each missing file. `variant_table.representatives` still checks the tabix
 index on 0.3.0.
+
+The reader refuses some sidecars at open (`MalformedPositionSidecar`): offsets that do not number
+the chromosomes plus one, a chromosome named twice, and a label that is not UTF-8. Read as they
+stand, these would answer one chromosome's ranges from another's rows, or from none. The check
+reads only the chromosomes, a few dozen. The Variant Axis opens the sidecar on first use, so in the
+validator such a sidecar fails `variant_table.position_sidecar` alone. The comparison of each row
+against the table is `PositionSidecar.misplaced`, shared by the rule and the rewrite's read-back.
 
 **Alternatives considered.**
 - *A fixed chromosome list, offsets only.* It needs no label file, but it cannot hold a contig, and
