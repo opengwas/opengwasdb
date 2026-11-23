@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Callable
 from typing import NamedTuple
 
 import numpy as np
@@ -95,11 +96,18 @@ def log10_p_two_sided(z: np.ndarray) -> np.ndarray:
     against 0.17 s). A result of millions of distinct unquantised z, which no
     Store holds, takes about four times scipy's.
     """
+    return _each_distinct_magnitude(z, lambda y: _log_erfc(y * _SQRT_HALF) / _LN10)
+
+
+def _each_distinct_magnitude(z: np.ndarray, rule: Callable[[float], float]) -> np.ndarray:
+    """``rule(|z|)`` for every element of `z`, as float64, evaluated once per
+    distinct |z| (see `log10_p_two_sided` for why that is fast on a stored z)."""
     magnitude = np.abs(np.asarray(z))
     distinct, where = np.unique(magnitude.ravel(), return_inverse=True)
-    scaled = (distinct.astype("float64") * _SQRT_HALF).tolist()
-    logs = np.fromiter(map(_log_erfc, scaled), dtype="float64", count=len(scaled))
-    result: np.ndarray = (logs / _LN10)[where].reshape(magnitude.shape)
+    values = np.fromiter(
+        map(rule, distinct.astype("float64").tolist()), dtype="float64", count=len(distinct)
+    )
+    result: np.ndarray = values[where].reshape(magnitude.shape)
     return result
 
 
@@ -125,24 +133,18 @@ def association_statistics(z: np.ndarray, se: np.ndarray) -> AssociationStatisti
     a value. An infinite z with a finite SE keeps its infinities: beta ±inf, p
     0.0, log10_p -inf.
 
-    Each distinct |z| is evaluated once, as in `log10_p_two_sided`.
+    `log10_p` is `log10_p_two_sided`'s, and `pval` is `p_value_from_z`'s, bit for
+    bit; each is evaluated once per distinct |z|.
     """
     z64 = np.asarray(z, dtype="float64")
     se64 = np.asarray(se, dtype="float64")
     if z64.shape != se64.shape:
         raise ValueError(f"z and se differ in shape: {z64.shape} and {se64.shape}")
+    with np.errstate(invalid="ignore"):  # 0 * inf; set to NaN below with the rest
+        beta = z64 * se64
+    pval = _each_distinct_magnitude(z64, p_value_from_z)
+    log10_p = log10_p_two_sided(z64)
     unusable = ~np.isfinite(se64)
-    beta = z64 * se64
-    magnitude = np.abs(z64)
-    distinct, where = np.unique(magnitude.ravel(), return_inverse=True)
-    scaled = (distinct * _SQRT_HALF).tolist()
-    count = len(scaled)
-    # `p_value_from_z`'s form, bit for bit; `scaled` differs from it by an ulp.
-    halved = (distinct / math.sqrt(2.0)).tolist()
-    pval = np.fromiter(map(math.erfc, halved), dtype="float64", count=count)[where]
-    logs = np.fromiter(map(_log_erfc, scaled), dtype="float64", count=count)
-    log10_p = (logs / _LN10)[where]
-    pval, log10_p = pval.reshape(z64.shape), log10_p.reshape(z64.shape)
     for values in (beta, pval, log10_p):
         values[unusable] = np.nan
     return AssociationStatistics(beta, pval, log10_p)

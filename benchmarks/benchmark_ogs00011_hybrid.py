@@ -59,6 +59,7 @@ from benchmarks._rss import run_probe
 from benchmarks.benchmark_finngen_dense import CLUMP_KB
 from benchmarks.benchmark_ukbb_dense import _clump, _dir_bytes
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.associations import statistics_of
 
 # Type 2 diabetes (Xue 2018) and TCF7L2, the FinnGen benchmark's exposure and
 # region, so the shared shapes ask the same biological question of both stores.
@@ -347,8 +348,9 @@ def mr_instruments(
     clumped = _clump(raw, CLUMP_KB)
     look = q.lookup([c["alid"] for c in clumped], [exposure, outcome])
     per: dict[int, dict[str, Any]] = {}
-    for vi, ai, z, se, status in zip(
-        look["variant_index"], look["analysis_index"], look["z"], look["se"],
+    # beta is the Store Reader's (ADR 0104), not z * se again here.
+    for vi, ai, z, se, beta, status in zip(
+        look["variant_index"], look["analysis_index"], look["z"], look["se"], look["beta"],
         look["association_status"], strict=True,
     ):
         cell = per.setdefault(int(vi), {})
@@ -356,6 +358,7 @@ def mr_instruments(
         cell[f"z_{side}"], cell[f"se_{side}"], cell[f"status_{side}"] = (
             float(z), float(se), str(status)
         )
+        cell[f"beta_{side}"] = float(beta)
     instruments = []
     for vi, cell in per.items():
         if {"z_exp", "z_out"} <= cell.keys():
@@ -363,8 +366,8 @@ def mr_instruments(
             instruments.append({
                 "alid": record.alid, "chrom": record.chromosome,
                 "pos": int(record.position),
-                "beta_exp": cell["z_exp"] * cell["se_exp"], "se_exp": cell["se_exp"],
-                "beta_out": cell["z_out"] * cell["se_out"], "se_out": cell["se_out"],
+                "beta_exp": cell["beta_exp"], "se_exp": cell["se_exp"],
+                "beta_out": cell["beta_out"], "se_out": cell["se_out"],
                 "status_exp": cell["status_exp"], "status_out": cell["status_out"],
             })
     return instruments, len(raw)
@@ -439,9 +442,10 @@ def regional_windows(q: Any) -> list[dict[str, Any]]:
         result = q.lookup(alids, [locus["analysis_id"]])
         rows = []
         n_observed = n_imputed = 0
-        for vi, z, se, status in zip(
-            result["variant_index"], result["z"], result["se"], result["association_status"],
-            strict=True,
+        # The Store Reader's log10_p (ADR 0104), derived once for the whole window.
+        log10_p = statistics_of(result).log10_p
+        for vi, lp, status in zip(
+            result["variant_index"], log10_p, result["association_status"], strict=True
         ):
             record = q._variant_axis.by_index(int(vi))
             status = str(status)
@@ -449,7 +453,7 @@ def regional_windows(q: Any) -> list[dict[str, Any]]:
             n_imputed += int(status == "imputed")
             rows.append([
                 int(record.position),
-                round(_report.neglog10_p(float(z), float(se)), 3),
+                round(-float(lp), 3),
                 status,
                 _component_of(q, int(vi)),
             ])

@@ -62,11 +62,11 @@ from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.associations import statistics_of
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.store_reader.indexed import IndexedSubsetError
-from opengwasdb.store_reader.stats import association_statistics
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -2181,14 +2181,14 @@ def _json_cell(value: float) -> object:
 def _emit_json(result: dict[str, np.ndarray]) -> None:
     """The result as one JSON object per association, keyed by index (spec §19).
 
-    `beta`, `pval` and `log10_p` are the Store Reader's (`association_statistics`,
-    ADR 0104); `log10_p` rides beside `pval` because `pval` is 0.0 where p is
-    below float64's range, and `log10_p` is still exact there.
+    `beta`, `pval` and `log10_p` are the record's own (`statistics_of`, ADR 0104);
+    `log10_p` rides beside `pval` because `pval` is 0.0 where p is below
+    float64's range, and `log10_p` is still exact there.
 
     `allow_nan=False`: a value `_json_cell` did not turn into `null` or a string
     stops the command instead of printing a token no JSON parser reads.
     """
-    derived = association_statistics(result["z"], result["se"])
+    derived = statistics_of(result)
     rows: list[dict[str, object]] = [
         {
             "variant_index": int(vi),

@@ -3,16 +3,13 @@
 `association_statistics` is the one place the Store Reader turns a stored z and
 SE into `beta`, `pval` and `log10_p`. Every query method's record and every
 resolved row carry its output (`tests/test_store_reader_digests.py` checks that
-on every layout); this module checks the function itself, value by value, and
-that nothing else in the package derives beta from a stored z and SE.
+on every layout); this module checks the function itself, value by value.
+`tests/test_derivation_guard.py` checks that nothing else derives them.
 """
 
 from __future__ import annotations
 
 import math
-import re
-import tokenize
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -103,6 +100,9 @@ def test_the_record_carries_the_function_s_output():
     z = np.array([2.5, NAN, 47.8, 1.5, -1.0], np.float32)
     se = np.array([0.125, NAN, 0.01, INF, 0.25], np.float32)
     record = Associations.from_decoded(np.arange(5), 0, z, se)
+    # Asking whether the record has the keys derives nothing.
+    assert "beta" in record and "pval" in record and "log10_p" not in record
+    assert "statistics" not in vars(record)
     stats = association_statistics(z, se)
     for key in ("beta", "pval"):
         assert key in record and key in list(record)
@@ -112,52 +112,3 @@ def test_the_record_carries_the_function_s_output():
     assert np.array_equal(taken["pval"], stats.pval[[4, 0]])
     empty = Associations.empty()
     assert empty["beta"].dtype == np.float64 and len(empty["pval"]) == 0
-
-
-#: The source-side derivations: each turns a *source's* columns into a z and SE
-#: before anything is stored, so none reads a stored z and SE.
-_SOURCE_SIDE = {
-    "opengwasdb/readers/effect_source.py",
-    "opengwasdb/readers/tabular.py",
-    "opengwasdb/readers/gwas_vcf.py",
-}
-
-_PRODUCT = re.compile(
-    r"\bz\w*(\[[^]]*\])?\s*\*\s*\w*\bse\w*|\bse\w*(\[[^]]*\])?\s*\*\s*\w*\bz\w*"
-    r"|\bbeta\s*=\s*.*\bz\b"
-)
-_POWER = re.compile(r"10(\.0)?\s*\*\*\s*\w*log10_p")
-
-
-def _code_lines(path: Path) -> list[tuple[int, str]]:
-    """The code of `path`, line by line: comments and string text left out, an
-    f-string's expressions kept (Python 3.12 tokenizes them as code)."""
-    kept = (tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE)
-    lines: dict[int, list[str]] = {}
-    with path.open("rb") as handle:
-        for token in tokenize.tokenize(handle.readline):
-            if token.type not in kept:
-                lines.setdefault(token.start[0], []).append(token.string)
-    return [(number, " ".join(parts)) for number, parts in sorted(lines.items())]
-
-
-def test_nothing_else_in_the_package_derives_beta_or_p_from_a_stored_z_and_se():
-    root = Path(__file__).resolve().parents[1]
-    files = sorted((root / "opengwasdb").rglob("*.py"))
-    assert len(files) > 200
-    found = []
-    seen_source_side = set()
-    for path in files:
-        name = path.relative_to(root).as_posix()
-        for number, line in _code_lines(path):
-            if _PRODUCT.search(line):
-                if name in _SOURCE_SIDE:
-                    seen_source_side.add(name)
-                elif name != "opengwasdb/store_reader/stats.py":
-                    found.append(f"{name}:{number}: {line.strip()}")
-            if _POWER.search(line):
-                found.append(f"{name}:{number}: {line.strip()}")
-    assert found == []
-    # The pattern finds the source-side products it is told to pass, so it
-    # would find one anywhere else.
-    assert seen_source_side == _SOURCE_SIDE

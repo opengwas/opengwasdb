@@ -303,6 +303,17 @@ class InvalidAssociations(ValueError):
 _DERIVED = ("beta", "pval")
 
 
+def statistics_of(result: Mapping[str, np.ndarray]) -> AssociationStatistics:
+    """A query result's `beta`, `pval` and `log10_p` (ADR 0104).
+
+    A record's own, derived once and kept; for a plain mapping of z and SE --
+    a caller's hand-built result -- the same function's, computed here.
+    """
+    if isinstance(result, Associations):
+        return result.statistics
+    return association_statistics(result["z"], result["se"])
+
+
 def _index_column(values: Any, length: int) -> np.ndarray:
     if np.ndim(values) == 0:
         return np.full(length, values, dtype=np.int32)
@@ -432,6 +443,10 @@ class Associations(Mapping[str, np.ndarray]):
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._keys())
+
+    def __contains__(self, key: object) -> bool:
+        # Mapping's default reads the value, which would derive beta and pval.
+        return key in self._keys()
 
     def __len__(self) -> int:
         return len(self._keys())
