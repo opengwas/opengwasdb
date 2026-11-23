@@ -117,6 +117,66 @@ legitimately produces per this section and §10/§11/§16/§17.
 
 Build and query commands operate on an explicit Store Release path. Directory naming, multi-store catalogues, default release selection, and remote API deployment are outside the store-format contract.
 
+### 1.1 What each component is for
+
+Every component a Store Release ships is in one of three classes
+([ADR 0102](../adr/0102-what-a-store-release-ships.md)). A component is a file or directory in
+the envelope, a Zarr array, a SQLite table, or an `index.sqlite` metadata key.
+
+- **read**: the Store Reader reads it to answer a query. An *accelerator* is a read component
+  that can be recomputed from the primary data and exists for speed.
+- **provenance**: the Store Reader does not read it. It records how the release was made, and it
+  cannot be recomputed from the release's other components.
+- **convenience**: the Store Reader does not read it, and it can be recomputed. It is there for a
+  person, or for a tool outside OpenGWASDB, to use directly, and no other component that such a
+  tool can use presents the same facts. A convenience that restates shipped data
+  (`variants.tsv.gz`, `variants.tsv.gz.tbi`) is checked against it by the `variant_table.*` rules
+  (§20.0). A rendered report (`overview.html`) is regenerated, never read by any code, and never
+  validated.
+
+A component in none of the three classes is **dropped**: if it can be recomputed, whatever needs it
+recomputes it. What only the validator reads is never, by that alone, a reason to ship it. ADR 0102
+§2 states the rule as the steps a reviewer applies to a new component.
+
+The table gives each component's class from format **0.3.0**, the version that applies these
+decisions (epic #450). The ticket that moves a component to its class is in the last column. Until
+that ticket lands, the component is as §1 and the column "Read today by" describe it; 0.2.x releases
+keep their envelope.
+
+| Component | Where | Read today by | From 0.3.0 | Ticket |
+|---|---|---|---|---|
+| `manifest.json` | every release | Store Reader | read | — |
+| `analyses.tsv` | every release | Store Reader; validator | read | — |
+| `data.zarr` planes: `z`, `se`, `eaf`, `eaf_baseline`, `se_coefficients`, the exception and overflow tables; group metadata | every release | Store Reader | read | — |
+| `data.zarr` `imputed`, `eaf_reference` | Reference-Completed | Store Reader (the presence mask; reference EAF on imputed cells) | read | — |
+| `data.zarr` `ragged/` cell arrays | Ragged; Hybrid Overflow | Store Reader | read | — |
+| `data.zarr` `ragged/by_variant/` (By-Variant Index) | Ragged; Hybrid Overflow | Store Reader | read (accelerator, ADR 0060) | — |
+| `data.zarr` `top_hits/<tier>/` `variant_index`, `analysis_index`, `analysis_offsets`, `z`, `se`, `eaf`, `imputed` (Top-Hit Index) | every release | Store Reader | read (accelerator) | — |
+| `data.zarr` `indexed_subsets/<name>/` | Dense, optional | Store Reader | read (accelerator, optional; §10b) | — |
+| `data.zarr` `rho/` | Dense, optional; no release carries one | Store Reader | read, optional: ships only once the Store Reader reads it | — |
+| `data.zarr` `on_panel` (Reference Panel Membership) | Dense Reference-Completed | validator only | provenance | — |
+| `data.zarr` `top_hits/<tier>/abs_z`, `p_value` | every release | validator only | dropped: the validator recomputes them from `z` | #471 |
+| `variant_rsid_bytes.npy`, `variant_rsid_rows.npy` | every release | Store Reader | read (and inverted, for the rsID of a row) | #469 |
+| `variant_alid_bytes.npy`, `variant_alid_rows.npy` | every release | Store Reader | dropped: replaced by the variable-length ALID sidecar, which is read | #467 |
+| variable-length ALID sidecar (new) | every release | — | read | #467 |
+| position sidecar, with chromosome offsets (new) | every release | — | read | #468 |
+| `source_alid` sidecar (new) | every release | — | read | #470 |
+| `variants.tsv.gz` | every release | Store Reader (`by_index`, `variants_table()`); validator | convenience: derived from the sidecars, for tabix, bedtools and R | #465, #469 |
+| `variants.tsv.gz.tbi` | every release | Store Reader (`range_phewas`, through tabix) | convenience: rebuilt with `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`, or `Rsamtools::indexTabix()` | #468, #469 |
+| `variant_offsets.npy` | every release | Store Reader (the variant count; `by_index`) | dropped | #469 |
+| `overview.html` | Dense; Hybrid | nothing | convenience: derived from `analyses.tsv` and `manifest.json`, rewritten by `ogdb regenerate-overview` | — |
+| `regions.tsv` | Ragged, optional | completion; validator; `ogdb info` | provenance: the build's region boundaries and leads (§17) | — |
+| `index.sqlite` | every release | Dense and Hybrid query facades | provenance: present only to hold `completion_quality`, so only in a Reference-Completed release; the Store Reader never opens it | #465, #471 |
+| `index.sqlite` table `completion_quality` | Reference-Completed | completion (the `analyses.tsv` roll-up); `check-observed-view` | provenance: Reference Completion Quality (§12), which needs the LD Reference Panel to recompute | — |
+| `index.sqlite` table `metadata`: keys `dense`, `n_variants`, `n_analyses`, `schema_version` | Dense; Hybrid | validator (`dense`); nothing (the other three) | dropped: `manifest.json` and the arrays carry the same facts | #471 |
+| `index.sqlite` table `variant_aliases` | Dense; Hybrid | Store Reader (fallback after an rsID index miss); validator | dropped: empty in every release measured, and the rsID sidecar covers it | #471 |
+| `dense` (the Dense Component), with its `manifest.json` and `data.zarr` | Hybrid | Store Reader | read | — |
+| `dense_to_shared.npy` (in `dense`) | Hybrid | Store Reader; validator | read | — |
+| `dense/variants.tsv.gz` and its `.tbi`, `dense/variant_offsets.npy`, `dense/variant_alid_*.npy`, `dense/variant_rsid_*.npy` | Hybrid | Store Reader (the nested query) | dropped: the shared sidecars through `dense_to_shared.npy` replace them | #472 |
+| `dense/analyses.tsv` | Hybrid | Store Reader (the nested query) | dropped: it repeats the root `analyses.tsv` and undercounts Top-Hit Counts (issue #107) | #472 |
+| `dense/overview.html` | Hybrid | nothing | dropped: the root `overview.html` presents the same Analyses | #472 |
+| `dense/index.sqlite` | Hybrid | the nested query facade | provenance, as `index.sqlite` above (Reference-Completed only) | #471, #472 |
+
 ## 2. Manifest contract
 
 Every Store Release MUST contain `manifest.json`.
