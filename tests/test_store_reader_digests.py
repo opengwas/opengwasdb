@@ -18,9 +18,10 @@ from typing import Any
 
 import numpy as np
 import pytest
-from store_reader_digests import GOLDEN, _shapes, build_releases, release_digests
+from store_reader_digests import GOLDEN, build_releases, release_digests
 
 from opengwasdb.query import query_store
+from opengwasdb.store.query_digests import query_shapes
 from opengwasdb.store_reader.stats import association_statistics
 
 PINS: dict[str, Any] = json.loads(GOLDEN.read_text(encoding="utf-8"))
@@ -94,7 +95,7 @@ def test_every_answer_carries_beta_and_pval_from_the_one_function(
 ):
     counts = {"rows": 0, "missing": 0, "resolved": 0}
     with query_store(releases[name]) as q:
-        for shape, ask in _shapes(q).items():
+        for shape, ask in query_shapes(q).items():
             result = ask()
             derived = association_statistics(result["z"], result["se"])
             for key in DERIVED:
