@@ -27,11 +27,10 @@ from eaf_tables import EXCEPTION_EVERY, SMALL_VARIANTS, rewrite_primary_table
 from pool_budget import pin_fork_floor
 from validation_bands import band_rows
 
-from opengwasdb.encoding.codec import EAF_EXCEPTION, Z_OVERFLOW
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.store import open_store
 from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
-from opengwasdb.store_reader.encoding.plan import Z_MISSING
+from opengwasdb.store_reader.encoding.plan import EAF_EXCEPTION, Z_MISSING, Z_OVERFLOW
 from opengwasdb.validation import run, scans, validate_store
 from opengwasdb.validation.rule import Kind, ValidationOptions
 from opengwasdb.validation.validate import release_targets

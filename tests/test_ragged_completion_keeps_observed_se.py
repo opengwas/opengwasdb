@@ -53,9 +53,10 @@ from opengwasdb.completion.impute import scalar_n_se
 from opengwasdb.encoding.codec import StoreCodec, se_residual_codes
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analysis_records
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store_reader.encoding.codec import se_from_log
 from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION, SE_EXCEPTION_BUDGET, SE_MISSING
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.observed_view import check_observed_view

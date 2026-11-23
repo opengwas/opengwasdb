@@ -51,9 +51,10 @@ from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store

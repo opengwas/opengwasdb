@@ -70,7 +70,7 @@ from opengwasdb.store_reader.encoding.codec import positions_pairs
 from opengwasdb.store_reader.encoding.plan import Z_MISSING
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 ANALYSES = ("trait_a", "trait_b", "trait_c")
 PANEL_POSITIONS = [1000 * (i + 1) for i in range(12)]

@@ -104,7 +104,7 @@ from opengwasdb.model.analyses import (
     read_analysis_records,
     reset_top_hit_counts,
 )
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -123,15 +123,12 @@ from opengwasdb.store_reader.encoding.codec import (
 )
 from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.top_hits import add_hit_counts
-from opengwasdb.variants import (
-    CanonicalVariant,
-    VariantAxis,
-    chromosome_sort_key,
-    write_variant_axis,
-)
+from opengwasdb.variants import CanonicalVariant, chromosome_sort_key, write_variant_axis
+from opengwasdb.variants.axis import VariantAxis
 
 log = logging.getLogger(__name__)
 

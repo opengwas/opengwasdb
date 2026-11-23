@@ -52,7 +52,7 @@ def warm_parent(out: Path) -> None:
     import zarr.core.codec_pipeline as codec_pipeline
 
     from opengwasdb.store import arrays
-    from opengwasdb.store.arrays import ArrayRole
+    from opengwasdb.store_reader.layout import ArrayRole
 
     warm = out / "warm.zarr"
     root = arrays.open_group_for_write(warm, "w")

@@ -31,14 +31,11 @@ from benchmarks.benchmark_store_comparison import assert_identical, result_diges
 from opengwasdb.query import query_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store.arrays import (
-    TOP_HIT_SHARD_CHUNKS,
-    ArrayRole,
     compressor,
     create_array,
     create_group,
     open_group,
     open_group_for_write,
-    shard_layout,
     sharded_compressor,
 )
 from opengwasdb.store.convert import (
@@ -52,6 +49,7 @@ from opengwasdb.store.convert import (
 )
 from opengwasdb.store_reader import format as store_format
 from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.layout import TOP_HIT_SHARD_CHUNKS, ArrayRole, shard_layout
 from opengwasdb.validation import validate_store
 
 #: The fixture's geometry: more than 1,000 variants so the Dense variant-axis

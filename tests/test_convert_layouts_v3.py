@@ -49,17 +49,11 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.query import query_store
-from opengwasdb.store.arrays import (
-    ArrayRole,
-    create_array,
-    create_group,
-    open_group,
-    role_for_array_path,
-    shard_layout,
-)
+from opengwasdb.store.arrays import create_array, create_group, open_group, role_for_array_path
 from opengwasdb.store.convert import ConversionError, convert_release, verify_conversion
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.layout import ArrayRole, shard_layout
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 

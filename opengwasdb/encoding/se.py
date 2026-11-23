@@ -24,12 +24,7 @@ from opengwasdb.encoding.codec import (
 from opengwasdb.encoding.measure import packed_chunk_bytes, solve_log_se
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
-from opengwasdb.store.arrays import (
-    ArrayRole,
-    compressor,
-    create_array,
-    move_in_group,
-)
+from opengwasdb.store.arrays import compressor, create_array, move_in_group
 from opengwasdb.store_reader.encoding.codec import (
     SE_EXCEPTION_INDEX,
     SE_EXCEPTION_VALUE,
@@ -47,6 +42,7 @@ from opengwasdb.store_reader.encoding.plan import (
     StoreEncoding,
 )
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane
+from opengwasdb.store_reader.layout import ArrayRole
 
 log = logging.getLogger(__name__)
 

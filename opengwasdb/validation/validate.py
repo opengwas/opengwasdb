@@ -56,7 +56,7 @@ from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.run import evaluate, selected
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 
 def validate_store(

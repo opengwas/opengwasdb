@@ -73,7 +73,6 @@ from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RA
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -100,7 +99,7 @@ from opengwasdb.store.open import (
 )
 from opengwasdb.store_reader.associations import Associations, Cells, CsrReader
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
-from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, SE_COEFFICIENTS
 from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.variant_axis import VariantRecord

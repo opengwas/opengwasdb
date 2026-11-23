@@ -32,6 +32,7 @@ from opengwasdb.store_reader.alid import (
 
 # Re-exported: opengwasdb-stores imports it from here.
 from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
+from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
     parse_variant_line,
@@ -44,11 +45,7 @@ from opengwasdb.store_reader.variant_axis import (
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path as variant_alid_bytes_path
 from opengwasdb.store_reader.variant_axis import variant_alid_rows_path as variant_alid_rows_path
 from opengwasdb.store_reader.variant_axis import variant_table_path as variant_table_path
-from opengwasdb.variants.normalise import (
-    CanonicalVariant,
-    chromosome_sort_key,
-    normalise_chromosome,
-)
+from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 
 log = logging.getLogger(__name__)
 

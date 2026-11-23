@@ -80,8 +80,7 @@ from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.variant_axis import VariantRecord
-from opengwasdb.variants import VariantAxis
-from opengwasdb.variants.axis import sorted_alids
+from opengwasdb.variants.axis import VariantAxis, sorted_alids
 
 log = logging.getLogger(__name__)
 

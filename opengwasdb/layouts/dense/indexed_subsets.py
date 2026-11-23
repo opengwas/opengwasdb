@@ -81,7 +81,7 @@ from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.codec import write_exact_table
 from opengwasdb.encoding.timing import log_phase, log_progress, progress_every
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import SE_COEFFICIENTS, ArrayRole
+from opengwasdb.store.arrays import SE_COEFFICIENTS
 from opengwasdb.store.open import (
     DestinationExistsError,
     destination_lock,
@@ -157,8 +157,9 @@ from opengwasdb.store_reader.indexed import (
 
 # Re-exported: opengwasdb-stores opens a subset through this module.
 from opengwasdb.store_reader.indexed import open_indexed_subset as open_indexed_subset
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 

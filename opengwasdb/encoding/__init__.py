@@ -48,7 +48,6 @@ if TYPE_CHECKING:
     from opengwasdb.encoding.se import optimise_dense_se as optimise_dense_se
     from opengwasdb.encoding.se import optimise_dense_se_joint as optimise_dense_se_joint
     from opengwasdb.encoding.se import write_dense_se_side_arrays as write_dense_se_side_arrays
-    from opengwasdb.store.arrays import component_chunk_size as component_chunk_size
     from opengwasdb.store.arrays import component_variant_chunk as component_variant_chunk
     from opengwasdb.store.arrays import per_variant_chunk_size as per_variant_chunk_size
     from opengwasdb.store_reader.encoding.codec import EAF_BASELINE as EAF_BASELINE
@@ -100,6 +99,7 @@ if TYPE_CHECKING:
     from opengwasdb.store_reader.encoding.planes import EafRead as EafRead
     from opengwasdb.store_reader.encoding.planes import RaggedEafPlane as RaggedEafPlane
     from opengwasdb.store_reader.encoding.planes import RaggedSePlane as RaggedSePlane
+    from opengwasdb.store_reader.layout import component_chunk_size as component_chunk_size
 
 #: Each re-exported name, by the module it comes from; imported on first use
 #: (`opengwasdb.lazy_exports`, #464).

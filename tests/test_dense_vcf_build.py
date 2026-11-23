@@ -48,7 +48,7 @@ from opengwasdb.store_reader.encoding.planes import DenseSePlane
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
 # hg19 positions used in fixtures and their expected hg38 positions

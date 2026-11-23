@@ -59,7 +59,7 @@ from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 __all__ = [
     "FAILING_COUNTERS",

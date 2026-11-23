@@ -16,8 +16,7 @@ from collections.abc import Iterator
 import pytest
 
 from opengwasdb.store_reader.alid import ALID_WIDTH, is_indexable_alid
-from opengwasdb.variants import VariantAxis
-from opengwasdb.variants.axis import write_variant_axis
+from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
 

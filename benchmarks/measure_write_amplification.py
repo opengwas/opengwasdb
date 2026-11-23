@@ -54,12 +54,12 @@ from benchmarks._artifact import commit
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
-from opengwasdb.store.arrays import (
+from opengwasdb.store.arrays import count_shard_writes
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.layout import (
     ASSOCIATION_SEQUENCE_CHUNK,
     RAGGED_SEQUENCE_SHARD_ELEMENTS,
-    count_shard_writes,
 )
-from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 #: The guard switch, recorded per run so the artifact says which configuration
 #: each number came from (the fixed run is guard-on, the legacy run guard-off).

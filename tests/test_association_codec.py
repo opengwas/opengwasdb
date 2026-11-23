@@ -23,7 +23,7 @@ from opengwasdb.encoding.association_codec import (
 from opengwasdb.encoding.codec import EafExceptionBuilder, SeExceptionBuilder, StoreCodec
 from opengwasdb.encoding.planes import write_dense_cells, write_encoded_planes
 from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.store.arrays import ArrayRole, compressor
+from opengwasdb.store.arrays import compressor
 from opengwasdb.store_reader.encoding.codec import se_from_log
 from opengwasdb.store_reader.encoding.plan import (
     EAF_EXCEPTION,
@@ -34,6 +34,7 @@ from opengwasdb.store_reader.encoding.plan import (
     ZEncoding,
 )
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.layout import ArrayRole
 
 NAN = np.float32(np.nan)
 

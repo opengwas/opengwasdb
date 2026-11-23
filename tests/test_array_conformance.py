@@ -45,16 +45,14 @@ import pytest
 
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.store.arrays import (
-    ArrayRole,
-    chunk_layout,
     component_variant_chunk,
     inner_chunk_hint_for_path,
     open_group,
     role_for_array_path,
-    shard_layout,
     sharded_compressor,
 )
 from opengwasdb.store_reader.encoding.plan import SE_MISSING
+from opengwasdb.store_reader.layout import ArrayRole, chunk_layout, shard_layout
 from opengwasdb.store_reader.manifest import StoreManifest
 
 #: Array names that make up a Zarr group's exact/overflow side tables.

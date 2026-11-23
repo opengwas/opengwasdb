@@ -27,7 +27,6 @@ from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter, ReferenceCompletion
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.encoding.plan import (
     SE_EXCEPTION,
@@ -37,6 +36,7 @@ from opengwasdb.store_reader.encoding.plan import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.store_reader.layout import ArrayRole
 
 PLAN = StoreEncoding(
     z=ZEncoding(kind="int16_fixed", scale=1024),

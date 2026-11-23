@@ -84,7 +84,7 @@ def _release(directory, rows, *, format_version=None, reference_assembly="GRCh38
 
 
 def _alids(store):
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     axis = VariantAxis(store)
     try:

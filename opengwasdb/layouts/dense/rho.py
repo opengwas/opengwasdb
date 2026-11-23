@@ -26,11 +26,11 @@ from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 from opengwasdb.build.ordered_pool import single_threaded_fork_pool
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 RHO_METHOD = "pleiodb-cml"
 RHO_GRID_N = 2000

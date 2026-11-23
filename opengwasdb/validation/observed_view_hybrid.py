@@ -82,7 +82,7 @@ from opengwasdb.validation.observed_view import (
     leaves_out,
     se_out_of_range_accounting,
 )
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 __all__ = ["CROSSOVER_FAILING", "OVERFLOW_FAILING", "check_hybrid"]
 

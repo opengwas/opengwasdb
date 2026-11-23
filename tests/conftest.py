@@ -186,7 +186,7 @@ def completed_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     from residual_stores import dense_completed
     from test_indexed_subsets import _build
 
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     root = tmp_path_factory.mktemp("one-pass")
     store, _observed, _panel = dense_completed(root)

@@ -798,7 +798,7 @@ def test_index_plane_spans_multiple_inner_chunks(tmp_path: Path, big_store: Path
 
     group = _index_group(store, "big")
     assert tuple(group["z"].shape) == (1, BIG_VARIANTS)
-    assert tuple(group["z"].chunks) == (1, store_arrays.INDEXED_SUBSET_CHUNK)
+    assert tuple(group["z"].chunks) == (1, store_layout.INDEXED_SUBSET_CHUNK)
     assert group["z"].shape[1] > group["z"].chunks[1], "the fixture must span >1 chunk"
 
     subset = open_indexed_subset(store, "big")
@@ -813,13 +813,13 @@ def test_index_plane_splits_into_multiple_shards(
 ) -> None:
     # One inner chunk per shard, so the 65,600-variant row needs two shards.
     monkeypatch.setattr(
-        store_layout, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+        store_layout, "INDEXED_SUBSET_SHARD", store_layout.INDEXED_SUBSET_CHUNK
     )
     store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
     _build(store, "big", _big_variant_list(tmp_path))
 
     group = _index_group(store, "big")
-    assert tuple(group["z"].shards) == (1, store_arrays.INDEXED_SUBSET_CHUNK)
+    assert tuple(group["z"].shards) == (1, store_layout.INDEXED_SUBSET_CHUNK)
     assert group["z"].shape[1] > group["z"].shards[1], "the fixture must span >1 shard"
 
     subset = open_indexed_subset(store, "big")
@@ -1087,7 +1087,7 @@ def test_build_sample_refuses_a_chunk_boundary_corruption(
     _build(store, "big", _big_variant_list(tmp_path))
     group = _index_group(store, "big")
     values = np.asarray(group["z"][:])
-    boundary = store_arrays.INDEXED_SUBSET_CHUNK
+    boundary = store_layout.INDEXED_SUBSET_CHUNK
     assert boundary < values.shape[1], "the fixture must have a second output unit"
     values[0, boundary] = values[0, boundary] + 1
     group["z"][:] = values
@@ -1406,7 +1406,7 @@ def test_validation_refuses_corruption_outside_a_small_sample(
     statistic; the exhaustive publication gate must refuse it.
     """
     monkeypatch.setattr(
-        store_layout, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+        store_layout, "INDEXED_SUBSET_SHARD", store_layout.INDEXED_SUBSET_CHUNK
     )
     store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
     _build(store, "big", _big_variant_list(tmp_path))

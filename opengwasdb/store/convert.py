@@ -66,12 +66,7 @@ from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
-    DENSE_CHUNK_SHAPE,
-    DENSE_SHARD_SHAPE,
     SHARDED_COMPRESSOR_RECORD,
-    TOP_HIT_SHARD_CHUNKS,
-    ArrayRole,
-    chunk_layout,
     create_array,
     inner_chunk_hint_for_path,
     is_recorded_group_path,
@@ -79,13 +74,20 @@ from opengwasdb.store.arrays import (
     open_group_for_write,
     require_group,
     role_for_array_path,
-    shard_layout,
     sharded_compressor,
 )
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.codec import SE_EXCEPTION_INDEX, SE_EXCEPTION_VALUE
 from opengwasdb.store_reader.format import WRITTEN_FORMAT_VERSIONS, format_version_for
+from opengwasdb.store_reader.layout import (
+    DENSE_CHUNK_SHAPE,
+    DENSE_SHARD_SHAPE,
+    TOP_HIT_SHARD_CHUNKS,
+    ArrayRole,
+    chunk_layout,
+    shard_layout,
+)
 from opengwasdb.validation import validate_store
 
 #: The layouts the converter understands (#248).  Every other value is refused

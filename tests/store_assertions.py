@@ -12,7 +12,8 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.store.arrays import ArrayRole, create_array
+from opengwasdb.store.arrays import create_array
+from opengwasdb.store_reader.layout import ArrayRole
 
 #: The arrays the Dense Component band write owns. A residual `eaf` build also
 #: carries the baseline and exception tables; a `float32` or `absent` one does

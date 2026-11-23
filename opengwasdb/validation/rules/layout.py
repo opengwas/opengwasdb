@@ -16,13 +16,9 @@ from collections.abc import Iterator
 from typing import Any
 
 from opengwasdb.index.sqlite import get_metadata
-from opengwasdb.store.arrays import (
-    COMPRESSOR_RECORD,
-    SHARDED_COMPRESSOR_RECORD,
-    ArrayRole,
-    shard_layout,
-)
+from opengwasdb.store.arrays import COMPRESSOR_RECORD, SHARDED_COMPRESSOR_RECORD
 from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.layout import ArrayRole, shard_layout
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.hybrid import COMPONENT, component, is_hybrid
 from opengwasdb.validation.rules.release import REQUIRED

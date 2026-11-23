@@ -20,7 +20,7 @@ from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.query import query_store
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store_reader.encoding.codec import SeExceptionTable
 from opengwasdb.store_reader.encoding.plan import (
     SE_EXCEPTION,
@@ -39,6 +39,7 @@ from opengwasdb.store_reader.encoding.planes import (
     DenseZPlane,
     RaggedSePlane,
 )
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store

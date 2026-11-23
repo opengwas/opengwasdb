@@ -72,59 +72,26 @@ from zarr.storage import LocalStore
 from opengwasdb.store_reader import arrays as reader_arrays
 from opengwasdb.store_reader.arrays import array_length as array_length
 from opengwasdb.store_reader.arrays import inner_chunk_of
-from opengwasdb.store_reader.layout import ASSOCIATION_OFFSETS_CHUNK as ASSOCIATION_OFFSETS_CHUNK
 
 # The format's physical layout -- each role's inner chunk and shard -- is the Store
-# Reader's (`opengwasdb.store_reader.layout`, #464), which checks it on open. It is
-# also this seam's API: a caller creates an array by naming its `ArrayRole`, so the
-# role, the layouts and their constants are re-exported here.
-from opengwasdb.store_reader.layout import ASSOCIATION_SEQUENCE_CHUNK as ASSOCIATION_SEQUENCE_CHUNK
-from opengwasdb.store_reader.layout import DENSE_CHUNK_SHAPE as DENSE_CHUNK_SHAPE
-from opengwasdb.store_reader.layout import DENSE_SHARD_SHAPE as DENSE_SHARD_SHAPE
-from opengwasdb.store_reader.layout import EXCEPTION_TABLE_CHUNK as EXCEPTION_TABLE_CHUNK
-from opengwasdb.store_reader.layout import INDEXED_SUBSET_CHUNK as INDEXED_SUBSET_CHUNK
-from opengwasdb.store_reader.layout import INDEXED_SUBSET_SHARD as INDEXED_SUBSET_SHARD
-from opengwasdb.store_reader.layout import PER_VARIANT_CHUNK as PER_VARIANT_CHUNK
+# Reader's (`opengwasdb.store_reader.layout`, #464); arrays are created on it here.
 from opengwasdb.store_reader.layout import (
-    RAGGED_SEQUENCE_SHARD_ELEMENTS as RAGGED_SEQUENCE_SHARD_ELEMENTS,
+    ArrayRole,
+    chunk_layout,
+    component_chunk_size,
+    require_shard_multiple,
+    shard_layout,
 )
-from opengwasdb.store_reader.layout import RAGGED_SIDE_SHARD_ELEMENTS as RAGGED_SIDE_SHARD_ELEMENTS
-from opengwasdb.store_reader.layout import RHO_CHUNK_ROWS as RHO_CHUNK_ROWS
-from opengwasdb.store_reader.layout import SE_COEFFICIENTS_ROWS as SE_COEFFICIENTS_ROWS
-from opengwasdb.store_reader.layout import SHARD_ELEMENT_CAP as SHARD_ELEMENT_CAP
-from opengwasdb.store_reader.layout import TOP_HIT_CHUNK_SIZE as TOP_HIT_CHUNK_SIZE
-from opengwasdb.store_reader.layout import TOP_HIT_SHARD_CHUNKS as TOP_HIT_SHARD_CHUNKS
-from opengwasdb.store_reader.layout import ArrayRole as ArrayRole
-from opengwasdb.store_reader.layout import chunk_layout as chunk_layout
-from opengwasdb.store_reader.layout import component_chunk_size as component_chunk_size
-from opengwasdb.store_reader.layout import require_shard_multiple as require_shard_multiple
-from opengwasdb.store_reader.layout import shard_layout as shard_layout
 
 __all__ = [
-    "ASSOCIATION_OFFSETS_CHUNK",
-    "ASSOCIATION_SEQUENCE_CHUNK",
     "BY_VARIANT_OFFSETS_CHUNK",
     "COMPRESSOR_RECORD",
-    "DENSE_CHUNK_SHAPE",
-    "DENSE_SHARD_SHAPE",
-    "EXCEPTION_TABLE_CHUNK",
-    "INDEXED_SUBSET_CHUNK",
-    "INDEXED_SUBSET_SHARD",
-    "PER_VARIANT_CHUNK",
-    "RAGGED_SEQUENCE_SHARD_ELEMENTS",
-    "RAGGED_SIDE_SHARD_ELEMENTS",
-    "RHO_CHUNK_ROWS",
     "SE_COEFFICIENTS",
-    "SE_COEFFICIENTS_ROWS",
     "PartialShardWriteError",
     "SHARDED_COMPRESSOR_RECORD",
     "SHARDED_STORE_ZARR_FORMAT",
     "STORE_ZARR_FORMAT",
-    "TOP_HIT_CHUNK_SIZE",
-    "ArrayRole",
     "array_length",
-    "chunk_layout",
-    "component_chunk_size",
     "component_variant_chunk",
     "compressor",
     "compressor_of",
@@ -143,7 +110,6 @@ __all__ = [
     "require_whole_shard_write",
     "require_whole_shard_writes",
     "role_for_array_path",
-    "shard_layout",
     "sharded_compressor",
     "write_shard_cells",
 ]

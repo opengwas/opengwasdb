@@ -34,7 +34,7 @@ from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 PANEL_ALIDS = ["1:100000:A:G", "1:814620:A:G", "1:1064620:A:G", "1:1564620:A:G"]
 OFF_PANEL_ALID = "1:2068561:A:G"

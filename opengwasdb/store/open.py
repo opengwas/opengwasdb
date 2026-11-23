@@ -24,7 +24,7 @@ from typing import Any
 
 import zarr
 
-from opengwasdb.model.manifest import StoreManifest, normalise_coverage
+from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
 
 # The version tables and the read check are the Store Reader's (#464); what a writer
@@ -40,6 +40,7 @@ from opengwasdb.store_reader.format import (
     parse_format_version,
     zarr_format_for_version,
 )
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.release import (
     ReleasePaths,
     StoreRelease,

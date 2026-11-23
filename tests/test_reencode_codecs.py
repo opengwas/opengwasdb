@@ -28,7 +28,8 @@ from zarr.codecs import BloscCodec
 import opengwasdb.reencode as reencode
 from opengwasdb.reencode import plan_se_reencode, reencode_se_codecs
 from opengwasdb.store import open_store, swap
-from opengwasdb.store.arrays import ArrayRole, create_array, open_group, sharded_compressor
+from opengwasdb.store.arrays import create_array, open_group, sharded_compressor
+from opengwasdb.store_reader.layout import ArrayRole
 
 SE_TEMPORARY = ".se.reencoding"
 SE_BACKUP = ".se.old"

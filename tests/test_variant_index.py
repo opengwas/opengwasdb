@@ -44,6 +44,7 @@ from opengwasdb.layouts.ragged.by_variant import add_variant_index
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store import open_store
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader.by_variant import (
     BY_VARIANT_GROUP,
     ByVariantReader,
@@ -120,11 +121,11 @@ def residual(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario
 
 def test_path_mapper_learns_the_index_leaves() -> None:
     assert store_arrays.role_for_array_path("ragged/by_variant/offsets") is (
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT
+        store_layout.ArrayRole.RAGGED_PER_VARIANT
     )
     for leaf in _CORE_LEAVES + ("eaf", "imputed"):
         assert store_arrays.role_for_array_path(f"ragged/by_variant/{leaf}") is (
-            store_arrays.ArrayRole.ASSOCIATION_SEQUENCE
+            store_layout.ArrayRole.ASSOCIATION_SEQUENCE
         )
     for leaf in (
         "z_overflow_index",
@@ -135,7 +136,7 @@ def test_path_mapper_learns_the_index_leaves() -> None:
         "se_exception_value",
     ):
         assert store_arrays.role_for_array_path(f"ragged/by_variant/{leaf}") is (
-            store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE
+            store_layout.ArrayRole.RAGGED_EXCEPTION_TABLE
         )
     assert store_arrays.role_for_array_path("ragged/by_variant/mystery") is None
     assert store_arrays.role_for_array_path("ragged/by_variant/deeper/leaf") is None
@@ -156,11 +157,11 @@ def test_offsets_hint_is_a_path_fact() -> None:
     # The role's default follows the plane (200,000), which is why the path
     # hint is needed: without it a query reading one variant decompresses
     # 200,000 offsets.
-    default = store_arrays.chunk_layout(
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT, (3,), component_chunk=200_000
+    default = store_layout.chunk_layout(
+        store_layout.ArrayRole.RAGGED_PER_VARIANT, (3,), component_chunk=200_000
     )
-    hinted = store_arrays.chunk_layout(
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT,
+    hinted = store_layout.chunk_layout(
+        store_layout.ArrayRole.RAGGED_PER_VARIANT,
         (3,),
         hint=store_arrays.inner_chunk_hint_for_path("ragged/by_variant/offsets"),
     )
@@ -188,11 +189,11 @@ def test_builder_writes_the_decided_layout(observed_ssf: Path) -> None:
     # The decided shards for a full-size array (ADR 0060): 10 M for the offset
     # axis, 50 M for the sequences.  A tiny fixture clips them to its own
     # extent, which is why the roles are checked on a large synthetic shape.
-    assert store_arrays.shard_layout(
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT, (200_000_000,), inner_chunk=(1_000,)
+    assert store_layout.shard_layout(
+        store_layout.ArrayRole.RAGGED_PER_VARIANT, (200_000_000,), inner_chunk=(1_000,)
     ) == (10_000_000,)
-    assert store_arrays.shard_layout(
-        store_arrays.ArrayRole.ASSOCIATION_SEQUENCE,
+    assert store_layout.shard_layout(
+        store_layout.ArrayRole.ASSOCIATION_SEQUENCE,
         (200_000_000,),
         inner_chunk=(200_000,),
     ) == (50_000_000,)
@@ -664,7 +665,7 @@ def test_validation_rejects_a_wrong_index_inner_chunk(tmp_path: Path) -> None:
     store_arrays.create_array(
         index,
         "analysis_index",
-        store_arrays.ArrayRole.ASSOCIATION_SEQUENCE,
+        store_layout.ArrayRole.ASSOCIATION_SEQUENCE,
         data=analysis_index,
         dtype=np.int32,
         compressor=store_arrays.compressor(),
@@ -826,11 +827,11 @@ def _windowed_table(
     directory = tempfile.mkdtemp(prefix="windowed-table-")
     root = store_arrays.open_group_for_write(Path(directory) / "t.zarr", "w")
     store_arrays.create_array(
-        root, "eaf_exception_index", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+        root, "eaf_exception_index", store_layout.ArrayRole.RAGGED_EXCEPTION_TABLE,
         data=index, dtype=np.int64, compressor=None, hint=chunk,
     )
     store_arrays.create_array(
-        root, "eaf_exception_value", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+        root, "eaf_exception_value", store_layout.ArrayRole.RAGGED_EXCEPTION_TABLE,
         data=value, dtype=np.float32, compressor=None, hint=chunk,
     )
     group = _CountedGroup(

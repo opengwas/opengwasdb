@@ -56,7 +56,8 @@ from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.indexed import IndexedSubsetError, open_indexed_subset
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import CanonicalVariant, VariantAxis
+from opengwasdb.variants import CanonicalVariant
+from opengwasdb.variants.axis import VariantAxis
 
 #: The imputation target, left out of a1's source rows and held by the panel.
 IMPUTED = 6

@@ -532,7 +532,7 @@ def _units(
 
 def _variant_rows(path: Path, wanted: np.ndarray) -> dict[int, dict[str, Any]]:
     """The Store Variant Table rows `wanted`, read in one pass over the table."""
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     if not wanted.size:
         return {}

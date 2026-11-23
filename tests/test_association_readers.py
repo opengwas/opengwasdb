@@ -25,7 +25,6 @@ from test_indexed_subsets import _build, alid, build_rich_store
 from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.encoding import StoreCodec
-from opengwasdb.encoding.codec import EAF_ABSENT, Z_MISSING
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -42,10 +41,17 @@ from opengwasdb.store_reader.associations import (
 )
 from opengwasdb.store_reader.by_variant import VariantIndexError
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
-from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.encoding.plan import (
+    EAF_ABSENT,
+    Z_MISSING,
+    EafEncoding,
+    SeEncoding,
+    StoreEncoding,
+    ZEncoding,
+)
 from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 N_VARIANTS = 8
 N_ANALYSES = 3

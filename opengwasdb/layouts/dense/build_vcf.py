@@ -81,7 +81,7 @@ from opengwasdb.model.enums import EafScope, coverage_for_layout
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import SourceSpec, open_source
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.store_reader.encoding.codec import EafExceptionTable, positions_row_band
 from opengwasdb.store_reader.encoding.plan import (
@@ -90,6 +90,7 @@ from opengwasdb.store_reader.encoding.plan import (
     StoreEncoding,
 )
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.stats import z_critical
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 from opengwasdb.top_hits import add_hit_counts

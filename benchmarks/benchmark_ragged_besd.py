@@ -33,7 +33,7 @@ from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.query import query_store
 from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 DEFAULT_BESD = Path("/local-scratch/data/hg38/eqtlgen/cis")
 DEFAULT_STORE = Path("/local-scratch/data/opengwas/opengwasdb/eqtlgen-cis.opengwasdb")

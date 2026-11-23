@@ -43,7 +43,7 @@ import numpy as np
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.store_reader.by_variant import (
     BY_VARIANT_GROUP,
@@ -63,6 +63,7 @@ from opengwasdb.store_reader.encoding.codec import (
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
 )
+from opengwasdb.store_reader.layout import ArrayRole
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ log = logging.getLogger(__name__)
 #: be a read-modify-write of the shard it ends inside (#249).  One shard is the
 #: smallest whole-shard unit, and bounds the working set to about 0.9 GB of
 #: codes at OGS-00011's widest dtype.
-BAND_ROWS = store_arrays.RAGGED_SEQUENCE_SHARD_ELEMENTS
+BAND_ROWS = store_layout.RAGGED_SEQUENCE_SHARD_ELEMENTS
 
 #: The cell-keyed exception tables, by the name a `by_variant/` leaf drops the
 #: component prefix to.  Each is keyed on the flat CSR ordinal, so the index's
@@ -604,7 +605,7 @@ def component_n_axis(store_path: str | Path) -> int:
     a Hybrid Overflow indexes the **shared** axis, not an off-axis rank
     (ADR 0060).
     """
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     axis = VariantAxis(store_path)
     try:

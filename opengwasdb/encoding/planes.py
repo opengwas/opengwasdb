@@ -22,7 +22,6 @@ from opengwasdb.encoding.codec import (
 )
 from opengwasdb.store.arrays import (
     SE_COEFFICIENTS,
-    ArrayRole,
     component_variant_chunk,
     compressor,
     create_array,
@@ -37,6 +36,7 @@ from opengwasdb.store_reader.encoding.codec import (
     positions_pairs,
 )
 from opengwasdb.store_reader.encoding.plan import EafBaselineError, StoreEncoding
+from opengwasdb.store_reader.layout import ArrayRole
 
 if TYPE_CHECKING:
     from opengwasdb.encoding.association_codec import Encoded

@@ -37,7 +37,7 @@ from opengwasdb.model.analyses import read_analysis_records, write_analyses, wri
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
 from opengwasdb.repair import repair_eaf_chunks
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.codec import (
@@ -48,6 +48,7 @@ from opengwasdb.store_reader.encoding.codec import (
 )
 from opengwasdb.store_reader.encoding.plan import EAF_ABSENT, UnsupportedEncoding
 from opengwasdb.store_reader.hybrid import dense_component_path
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf

@@ -38,7 +38,7 @@ from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 #: The SE of the association the injected gate refuses, in fixtures that use it.
 REFUSED_SE = 0.4375

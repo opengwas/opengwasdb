@@ -18,11 +18,7 @@ from typing import Any, ClassVar, TypeVar, cast
 
 import numpy as np
 
-from opengwasdb.store.arrays import (
-    EXCEPTION_TABLE_CHUNK,
-    ArrayRole,
-    create_array,
-)
+from opengwasdb.store.arrays import create_array
 from opengwasdb.store_reader.encoding.codec import (
     EafExceptionTable,
     PositionSource,
@@ -54,6 +50,7 @@ from opengwasdb.store_reader.encoding.plan import (
     EafBaselineError,
     StoreEncoding,
 )
+from opengwasdb.store_reader.layout import EXCEPTION_TABLE_CHUNK, ArrayRole
 
 # Sparse tables can still contain millions of exact values at the accepted
 # 2% ceiling.  Keep their physical chunks bounded so both the writer and the

@@ -30,7 +30,6 @@ from opengwasdb.completion.ld_panel import (
     snp_position,
 )
 from opengwasdb.encoding import StoreCodec
-from opengwasdb.encoding.codec import Z_MISSING
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -38,15 +37,16 @@ from opengwasdb.layouts.dense.complete import (
 )
 from opengwasdb.model.analyses import write_analyses
 from opengwasdb.query import query_store
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.associations import Cells, InvalidAssociations
-from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.plan import Z_MISSING, StoreEncoding
 from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.validation.validate import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 
 def assert_a_resume_refuses_an_older_checkpoint(dst: Path, resume) -> None:

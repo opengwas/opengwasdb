@@ -38,7 +38,6 @@ from opengwasdb.encoding.se import _row_block_of
 from opengwasdb.layouts.dense.build_vcf import _eaf_row_band, _flush_band, _shard_columns
 from opengwasdb.layouts.dense.complete import _completion_band_rows
 from opengwasdb.store.arrays import (
-    ArrayRole,
     PartialShardWriteError,
     _block_selection_to_elements,
     count_shard_writes,
@@ -51,6 +50,7 @@ from opengwasdb.store.arrays import (
     write_shard_cells,
 )
 from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.layout import ArrayRole
 
 #: A plane small enough to build in a test but with **two** shards on the
 #: Analysis axis and two on the variant axis, so an unaligned selection is
@@ -409,7 +409,7 @@ def test_an_inner_chunk_that_does_not_tile_the_dense_shard_is_refused() -> None:
     refused, with the values that do named, instead of writing `[100000, 1000]`.
     A small array still clips.
     """
-    from opengwasdb.store.arrays import chunk_layout, shard_layout
+    from opengwasdb.store_reader.layout import chunk_layout, shard_layout
 
     shape = (200_000, 2_000)
     inner = chunk_layout(ArrayRole.DENSE_STATISTIC_PLANE, shape, hint=(1000, 1000))
@@ -573,14 +573,13 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
     one, because a region-offset bug (reading z from `[0:tail-head]` instead of
     `[head:tail]`) changes values while leaving the write counts alone.
     """
-    import opengwasdb.store.arrays as store_arrays
     from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
     from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 
     monkeypatch.setattr(
         store_layout,
         "RAGGED_SEQUENCE_SHARD_ELEMENTS",
-        4 * store_arrays.ASSOCIATION_SEQUENCE_CHUNK,
+        4 * store_layout.ASSOCIATION_SEQUENCE_CHUNK,
     )
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=3))
     writer = RaggedCSRWriter(50_000)

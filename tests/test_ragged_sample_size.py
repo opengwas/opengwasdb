@@ -339,7 +339,7 @@ def _errors(store: Path) -> list[str]:
 def _rewrite(store: Path, name: str, values: np.ndarray) -> None:
     """Replace one `ragged/` (or `ragged/by_variant/`) array whole, keeping its layout."""
     from opengwasdb.store import arrays as store_arrays
-    from opengwasdb.store.arrays import ArrayRole
+    from opengwasdb.store_reader.layout import ArrayRole
 
     group, _, leaf = f"data.zarr/ragged/{name}".rpartition("/")
     root = store_arrays.open_group_for_write(store / group, "a")

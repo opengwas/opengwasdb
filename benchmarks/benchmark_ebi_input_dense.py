@@ -45,11 +45,11 @@ from opengwasdb.validation import validate_store
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     CanonicalVariant,
-    VariantAxis,
     chromosome_sort_key,
     orient_to_canonical,
     write_variant_axis,
 )
+from opengwasdb.variants.axis import VariantAxis
 
 DEFAULT_SOURCE_DIR = Path("/Users/gh13047/repo/besdq/data/ebi_input")
 DEFAULT_OUTPUT_DIR = Path("/Users/gh13047/repo/opengwasdb/docs/benchmark-output")

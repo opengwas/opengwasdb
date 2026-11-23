@@ -16,9 +16,9 @@ from dense_sources import build_dense_from_records
 
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
-from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import create_array
 from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.variants import CanonicalVariant
 
 #: The subset every one of these releases publishes.
@@ -85,7 +85,7 @@ def rewrite_primary_table(store: Path, positions: np.ndarray, values: np.ndarray
         create_array(
             root,
             name,
-            store_arrays.ArrayRole.EXCEPTION_TABLE,
+            ArrayRole.EXCEPTION_TABLE,
             data=np.asarray(data, dtype=dtype),
             compressor=None,
         )

@@ -43,7 +43,6 @@ from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
 from opengwasdb.store_reader.encoding.codec import (
@@ -63,11 +62,12 @@ from opengwasdb.store_reader.encoding.plan import (
 )
 from opengwasdb.store_reader.encoding.planes import RaggedEafPlane
 from opengwasdb.store_reader.enums import CompletionState
+from opengwasdb.store_reader.layout import ArrayRole
 
 _COMPRESSOR = store_arrays.compressor()
 # Chunk size for the flat association arrays (~400 KB per chunk at float16).
 # Read from the seam so the SE measurement charges the bytes the seam writes.
-_ASSOC_CHUNK = store_arrays.ASSOCIATION_SEQUENCE_CHUNK
+_ASSOC_CHUNK = store_layout.ASSOCIATION_SEQUENCE_CHUNK
 #: Cells one `se_fit_batches` batch aims to carry. The batch holds the variant
 #: indices, the source and round-tripped frequencies, the gathered baseline and
 #: the Analysis indices -- about 30 bytes a cell -- so 2**24 is roughly a
@@ -96,7 +96,7 @@ def sequence_region_step(total: int, region_cells: int) -> int:
     on the same code path; production never calls it with a different one.
     """
     shard = int(
-        store_arrays.shard_layout(
+        store_layout.shard_layout(
             ArrayRole.ASSOCIATION_SEQUENCE,
             (total,),
             inner_chunk=(store_layout.ASSOCIATION_SEQUENCE_CHUNK,),

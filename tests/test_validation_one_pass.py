@@ -32,10 +32,10 @@ from test_indexed_subsets import _index_group, _root
 from validation_bands import band_rows
 
 from opengwasdb.encoding import banding
-from opengwasdb.encoding.codec import Z_OVERFLOW
 from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.encoding.codec import EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE
+from opengwasdb.store_reader.encoding.plan import Z_OVERFLOW
 from opengwasdb.validation import scans, validate_store
 from opengwasdb.validation.rule import Severity
 

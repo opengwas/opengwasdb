@@ -6,7 +6,7 @@ from stored_rows import stored_rows
 
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
-from opengwasdb.store.arrays import ArrayRole, open_group, shard_layout
+from opengwasdb.store.arrays import open_group
 from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.encoding.plan import (
     EafEncoding,
@@ -15,6 +15,7 @@ from opengwasdb.store_reader.encoding.plan import (
     StoreEncoding,
     ZEncoding,
 )
+from opengwasdb.store_reader.layout import ArrayRole, shard_layout
 
 # These tests exercise the CSR arrays directly, in a bare directory with no
 # manifest.json, so they pass the plan explicitly where a real store's reader

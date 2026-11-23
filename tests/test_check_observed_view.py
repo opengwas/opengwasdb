@@ -102,7 +102,7 @@ def _patch(store: Path, cls, rows, cols, values) -> None:
 
 
 def _row_of(store: Path, alid: str) -> int:
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     axis = VariantAxis(store)
     try:

@@ -39,13 +39,12 @@ from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
     SHARDED_COMPRESSOR_RECORD,
-    ArrayRole,
-    chunk_layout,
     component_variant_chunk,
     compressor,
     open_group_for_write,
 )
 from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.layout import ArrayRole, chunk_layout
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "opengwasdb"
 SEAM = PACKAGE_ROOT / "store" / "arrays.py"
@@ -853,7 +852,8 @@ def test_legacy_per_variant_chunk_size_still_accepts_a_group(tmp_path: Path) -> 
     Round 2 changed this signature; pre-existing callers pass a group and must
     keep working.  The explicit-chunk helper has a distinct name.
     """
-    from opengwasdb.encoding import component_chunk_size, per_variant_chunk_size
+    from opengwasdb.encoding import per_variant_chunk_size
+    from opengwasdb.store_reader.layout import component_chunk_size
 
     group = zarr.open_group(str(tmp_path / "group.zarr"), mode="w", zarr_format=2)
     group.create_array("z", shape=(10,), chunks=(7,), dtype="int16")

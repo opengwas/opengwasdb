@@ -33,11 +33,12 @@ from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS, Analysis
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
 
 # Re-exported: the Store Reader owns the cut (#464). It is called through the
 # module, so a test that moves the cut moves every caller with it.
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.stats import z_critical as z_critical
 from opengwasdb.store_reader.top_hits import (
     TOP_HIT_GROUP,
@@ -53,7 +54,7 @@ _special = importlib.import_module("scipy.special")
 
 #: Re-exported from the seam, which owns the role's default layout, so the
 #: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
-TOP_HIT_CHUNK_SIZE = store_arrays.TOP_HIT_CHUNK_SIZE
+TOP_HIT_CHUNK_SIZE = store_layout.TOP_HIT_CHUNK_SIZE
 
 # A dict, not a zip over the caller's own `thresholds`, so `read_top_hit_counts`
 # accepts any subset of TOP_HIT_THRESHOLDS rather than silently requiring three.

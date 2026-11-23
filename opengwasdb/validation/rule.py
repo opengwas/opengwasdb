@@ -28,7 +28,7 @@ from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 #: What one scan yields: a block of the data it reads.
 B = TypeVar("B")

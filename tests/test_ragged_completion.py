@@ -1922,7 +1922,7 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(obs
     from opengwasdb.layouts.ragged.complete import _completed_analysis
     from opengwasdb.store_reader.associations import CsrReader, InvalidAssociations
     from opengwasdb.store_reader.manifest import StoreManifest
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     assert StoreManifest.load(observed_store).encoding.se.kind == "float16"
     ragged = zarr.open_group(observed_store / RAGGED_ZARR_PATH, mode="r+")

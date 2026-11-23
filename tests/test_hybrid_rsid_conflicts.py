@@ -40,7 +40,7 @@ from opengwasdb.layouts.hybrid.checkpoint import (
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 from opengwasdb.variants.reference import read_variant_reference
 
 #: On the reference: the variant the two sources name differently.
