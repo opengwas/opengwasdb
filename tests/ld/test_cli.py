@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.ld import cli, env
+from opengwasdb.variants.normalise import VariantNormalisationError
 
 STORE = store_copies.TEST_STORE
 
@@ -64,6 +65,19 @@ def test_a_refusal_exits_2_and_names_the_command(capsys: pytest.CaptureFixture[s
     ]  # fmt: skip
     assert cli.main(argv) == 2
     assert capsys.readouterr().err.startswith("opengwasdb ld build: ")
+
+
+def test_a_variant_normalisation_refusal_exits_2_naming_the_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #456 moved the identity refusal to the engine's VariantNormalisationError; it is still a
+    # refusal, exit 2, in the `opengwasdb ld <command>: <problem>` form.
+    def refuse(location: str) -> None:
+        raise VariantNormalisationError("unsupported allele 'N'")
+
+    monkeypatch.setattr(cli, "open_store", refuse)
+    assert cli.main(["info", str(STORE)]) == 2
+    assert capsys.readouterr().err == "opengwasdb ld info: unsupported allele 'N'\n"
 
 
 @pytest.mark.parametrize("missing", ["--r-scale", "--t-partner", "--keep", "--panel-id", "--pgen"])

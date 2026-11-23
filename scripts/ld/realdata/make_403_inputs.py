@@ -24,10 +24,10 @@ Sources, all read-only:
   `/data/opengwasdb/stores/` as the sweep's `read_tier` does: `top_hits(threshold=5e-8,
   observed_only=True)` then `resolve`. Imputed rows are not clumped, on either side.
 - **The genotypes.** #5's v2 EUR conversions (`--genotypes`), the pgens the store is built from. A
-  record's ALID is `opengwasdb.ld.identity.orient(chrom, pos, ref, alt).alid`; a record is kept when
-  that
-  ALID is in the store's Variant Set, and where an insertion and a deletion share an ALID, the one
-  whose REF the ALID spells first (the Variant Set's own rule, spec §2). `prepare` writes those
+  record's ALID is `opengwasdb.variants.sorted_spelling.sorted_identity(chrom, pos, ref,
+  alt).alid`, the LD Store's sorted spelling; a record is kept when that ALID is in the store's
+  Variant Set, and where an insertion and a deletion share an ALID, the one whose REF the ALID
+  spells first (the Variant Set's own rule, spec §2). `prepare` writes those
   records to `<out>/EUR-k0.plink2/chr<N>` with `--keep` EUR, the ID renamed to the ALID.
 - **Matching.** A hit whose ALID is not in the store's Variant Set is Absent: neither tool can
   clump it, so it is dropped from `hits.tsv` and counted in `manifest.json` as `unmatched`, per
@@ -251,16 +251,17 @@ def pvar_records(pvar: Path) -> Iterable[tuple[str, int, str, str, str]]:
 
 def records_by_alid(pvar: Path, alids: set[str]) -> tuple[dict[str, list[Record]], int]:
     """The pvar records whose ALID the store holds, by ALID, and how many records have no ALID
-    (an allele ogld refuses, `IdentityError`): the store can hold none of those, so they are
-    counted, and the caller reports the count."""
-    from opengwasdb.ld.identity import IdentityError, orient
+    (an allele the engine refuses, `VariantNormalisationError`): the store can hold none of
+    those, so they are counted, and the caller reports the count."""
+    from opengwasdb.variants.normalise import VariantNormalisationError
+    from opengwasdb.variants.sorted_spelling import sorted_identity
 
     found: dict[str, list[Record]] = {}
     skipped = 0
     for chrom, position, ref, alt, name in pvar_records(pvar):
         try:
-            o = orient(chrom, position, ref, alt)
-        except IdentityError:
+            o = sorted_identity(chrom, position, ref, alt)
+        except VariantNormalisationError:
             skipped += 1
             continue
         if o.alid in alids:
@@ -307,17 +308,17 @@ def pick(
     """The pvar id of the record the Variant Set holds for `alid`.
 
     One record is that one. Of an insertion and a deletion of one site, the rule keeps the record
-    whose REF is A1 (`opengwasdb.ld.identity.resolve_reversed_indels`), unless the builder's filters
-    had
-    dropped it; the store says which it held: the record whose A1 frequency is the store's
-    `a1_frequency` (within the five digits plink2's counts and the store's float32 share). If the
-    rule's record is one, it is taken; if neither is, the store holds neither and this stops.
+    whose REF is A1 (`opengwasdb.variants.sorted_spelling.resolve_sorted_reversed_indels`), unless
+    the builder's filters had dropped it; the store says which it held: the record whose A1
+    frequency is the store's `a1_frequency` (within the five digits plink2's counts and the
+    store's float32 share). If the rule's record is one, it is taken; if neither is, the store
+    holds neither and this stops.
     """
-    from opengwasdb.ld.identity import resolve_reversed_indels
+    from opengwasdb.variants.sorted_spelling import resolve_sorted_reversed_indels
 
     if len(records) == 1:
         return records[0].name
-    kept, _ = resolve_reversed_indels([(r.chrom, r.position, r.ref, r.alt) for r in records])
+    kept, _ = resolve_sorted_reversed_indels([(r.chrom, r.position, r.ref, r.alt) for r in records])
     order = [records[i] for i in kept] + [r for i, r in enumerate(records) if i not in kept]
     for record in order:
         if abs(a1_frequency(record, counts[record.name]) - stored) <= 1e-6:

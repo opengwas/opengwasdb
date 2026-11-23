@@ -33,7 +33,8 @@ from test_build_panel import HGDP_SCALE, eur_keep, inputs, v2_slice
 
 import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
-from opengwasdb.ld.identity import alid_locus, order_key
+from opengwasdb.variants.axis import alid_sort_key
+from opengwasdb.variants.sorted_spelling import sorted_alid_locus
 
 KB = 3000
 #: Fewest Analyses with hits on the slice for the comparison to mean anything.
@@ -76,11 +77,11 @@ def explained(
 ) -> int:
     """The number of pairs that explain the difference, after the rule has accepted them."""
     alid = [a for a, _ in hits]
-    loci = [alid_locus(a) for a in alid]
+    loci = [sorted_alid_locus(a) for a in alid]
     assert all(locus is not None and locus[0] == "22" for locus in loci), "hits are chr22 ALIDs"
     position = np.array([locus[1] for locus in loci if locus is not None], dtype=np.int64)
     # Strongest first, then the engine's order, as `clump` takes them (ogld#14).
-    key = [(-z, *order_key("22", int(position[i]), a)) for i, (a, z) in enumerate(hits)]
+    key = [(-z, *alid_sort_key(a)) for a, z in hits]
     order = sorted(range(len(alid)), key=key.__getitem__)
     got = clump_rule.explain(
         order=order,

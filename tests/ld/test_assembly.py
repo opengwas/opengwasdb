@@ -24,13 +24,14 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import pytest
+import store_copies
 import zarr
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
 from opengwasdb.ld.format.geometry import near_row_lengths
-from opengwasdb.ld.identity import orient
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 N_SAMPLES, K = 771, 10
 #: t_far for the Test Store's n and k, spec §3: q / (n − k − 1) with q = 20.84.
@@ -359,7 +360,7 @@ def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
 def synthetic(rows: int) -> Variants:
     """`rows` variants on chromosome 1, 1 kb apart."""
     position = 1_000 * np.arange(1, rows + 1, dtype=np.int64)
-    oriented = [orient("1", int(p), "A", "C") for p in position]
+    oriented = [sorted_identity("1", int(p), "A", "C") for p in position]
     columns = [np.array([getattr(o, name) for o in oriented]) for name in ("chrom", "alid")]
     a1 = np.array([o.a1 for o in oriented])
     a2 = np.array([o.a2 for o in oriented])
@@ -456,15 +457,7 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
     # variant, so no pair at all. The store writes both and passes every rule.
     position = np.array([1_000_000, 5_000_000, 9_500_000, 2_000_000], dtype=np.int64)
     chrom = ["1", "1", "1", "2"]
-    oriented = [orient(c, int(p), "A", "C") for c, p in zip(chrom, position, strict=True)]
-    table = Variants(
-        np.array(chrom),
-        position,
-        np.array([o.alid for o in oriented]),
-        np.array([o.a1 for o in oriented]),
-        np.array([o.a2 for o in oriented]),
-        np.full(4, 0.3),
-    )
+    table = store_copies.snv_variants(chrom, position)
     writer = create(tmp_path / "s", table)
     r = np.full((3, 3), np.nan)
     r[0, 1], r[0, 2], r[1, 2] = 0.5, -0.3, 0.01

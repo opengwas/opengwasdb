@@ -110,10 +110,16 @@ identifiers, no per-sample values of any kind. A reader ignores any array or gro
   contiguous and cover rows `[0, n_variants)`. A row's **chromosome-local row** is its row minus
   its chromosome's `row_start`; `near/`, `far/` and `partners/` use local rows.
 - `position` is the 1-based position on the Reference Assembly, `int32`.
-- `alid` is the engine's ALID, exactly as the engine's identity function forms it. ogld holds a copy
-  of that function, tested against the engine's own answers (ADR 0003); this format stores what it forms.
-  `a1` and `a2` are the variant's two alleles as the engine's _Variant Identity_ spells them, A1
-  first, in full (opengwas/opengwasdb ADR 0017 keeps the full alleles). All three are Zarr v3
+- `alid` is the variant's ALID in the **sorted spelling**: `chr:pos:A1:A2`, the two alleles
+  upper-cased and sorted, an indel's too. Its owner is `opengwasdb.variants.sorted_spelling`
+  (`sorted_identity`), the engine's own code; this format stores what it forms (ADR 0089; owner,
+  23 November 2026, on #456). It is the engine's ALID for every variant except an indel whose
+  REF is longer and sorts after its ALT, a deletion such as `GGGGCC>G`: the engine spells that
+  reference first (`1:827587:GGGGCC:G`, ADR 0079), this format sorted (`1:827587:G:GGGGCC`, the
+  insertion's spelling too), and r there is signed against the other allele. A reader refuses
+  the reference-first spelling (`ReferenceFirstIndel`). Moving this format to the engine's
+  spelling is #462.
+  `a1` and `a2` are the variant's two alleles in that spelling, A1 first, in full (opengwas/opengwasdb ADR 0017 keeps the full alleles). All three are Zarr v3
   variable-length UTF-8 strings (`string` data type), and none is ever truncated.
 - `a1_frequency` is A1's frequency in the Source Panel's samples, after the variant filters,
   `float32`.

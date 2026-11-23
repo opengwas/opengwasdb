@@ -6,7 +6,7 @@ through
 `StoreWriter`, and `validate` runs the spec's
 named rules. `VariantTable` is the reader's variant half — the Variant Set's rows and the ALID
 lookup — which any reader composes (#94). It imports `opengwasdb.ld.format` and
-`opengwasdb.ld.identity` only.
+`opengwasdb.variants` (variant identity, in the sorted spelling) only.
 """
 
 from opengwasdb.ld.store.assembly import Cut

@@ -2,8 +2,8 @@
 
 A thin shell over the public functions, so a job and a person run exactly what a caller of the
 package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners` (ogld#69).
-Exit status: 0 done, 1 the store breaks a rule, 2 a refusal: a `Refusal`, an `InputError`, an
-`IdentityError` or an environment variable under an old name, printed as
+Exit status: 0 done, 1 the store breaks a rule, 2 a refusal: a `Refusal`, an `InputError`, a
+`VariantNormalisationError` or an environment variable under an old name, printed as
 `opengwasdb ld <command>: <problem>`. A command line the parser refuses also exits 2, but prints
 Click's own `Usage: … Error: …`. Any other exception is a fault inside `opengwasdb.ld` and
 propagates with its traceback.
@@ -28,11 +28,11 @@ from opengwasdb.ld import env
 from opengwasdb.ld.build import BuildInputs, build, build_genotypes
 from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, InputError, Refusal
-from opengwasdb.ld.identity import IdentityError
 from opengwasdb.ld.query import open as open_store
 from opengwasdb.ld.query.validation import validate_at
 from opengwasdb.ld.store import Finding
 from opengwasdb.ld.store.assembly import derive_partners
+from opengwasdb.variants.normalise import VariantNormalisationError
 
 ld_app = typer.Typer(
     name="ld",
@@ -42,7 +42,7 @@ ld_app = typer.Typer(
 )
 
 _THREADS = {"min": 1}
-_REFUSED = (Refusal, InputError, IdentityError, env.LegacyVariable)
+_REFUSED = (Refusal, InputError, VariantNormalisationError, env.LegacyVariable)
 
 
 def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:

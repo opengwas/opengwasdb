@@ -38,7 +38,7 @@ from realdata_inputs import required
 
 import opengwasdb.ld
 from opengwasdb.ld.build.diagnostic import outside_regions
-from opengwasdb.ld.identity import Orientation, orient
+from opengwasdb.variants.sorted_spelling import SortedIdentity, sorted_identity
 
 SCRIPTS = Path(__file__).resolve().parents[3] / "scripts" / "ld"
 PANELS = Path("/data/opengwasdb/reference/hgdp1kgp-hg38")
@@ -152,7 +152,7 @@ class Kept:
     ref_frequency: npt.NDArray[np.float64]
 
 
-def kept_records(slice_: Path, found: list[Orientation], tmp_path: Path) -> Kept:
+def kept_records(slice_: Path, found: list[SortedIdentity], tmp_path: Path) -> Kept:
     plink2("--pfile", slice_, "--freq", "counts", "--out", tmp_path / "freq")
     table = [line.split("\t") for line in (tmp_path / "freq.acount").read_text().splitlines()]
     head = [name.lstrip("#") for name in table[0]]
@@ -177,7 +177,7 @@ def test_the_builder_matches_plink2_on_a_real_chr22_slice(
     store = opengwasdb.ld.open(tmp_path / "store")
 
     rows = pvar_rows(slice_.with_suffix(".pvar"))
-    found = [orient(r[0], int(r[1]), r[3], r[4]) for r in rows]
+    found = [sorted_identity(r[0], int(r[1]), r[3], r[4]) for r in rows]
     kept = kept_records(slice_, found, tmp_path)
     # Every reversed-indel pair whose two records both pass is a choice §6 makes: the store must
     # hold the record whose REF is A1, which its A1 frequency, that record's REF frequency, shows.

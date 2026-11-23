@@ -15,9 +15,9 @@ import numpy as np
 import numpy.typing as npt
 
 from opengwasdb.ld.format import judge_region
-from opengwasdb.ld.identity import normalise_chromosome
 from opengwasdb.ld.query.reader import Reader
 from opengwasdb.ld.query.results import LDMatrix
+from opengwasdb.variants.normalise import normalise_chromosome
 
 
 def matrix(reader: Reader, alids: Sequence[str], *, fill: float | None) -> LDMatrix:
