@@ -38,7 +38,6 @@ from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orienta
 from opengwasdb.build.liftover import (
     LiftedRow,
     lift_hg19_to_hg38,
-    normalise_build,
     require_lifted_alleles_match_reference,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
@@ -80,6 +79,7 @@ from opengwasdb.readers.orientation import a1_frequencies, swap
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,

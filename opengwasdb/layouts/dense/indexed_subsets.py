@@ -78,7 +78,6 @@ import numpy as np
 import zarr
 
 from opengwasdb.associations.record import State, Tally
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.encoding import (
     EAF_BASELINE,
     EAF_EXCEPTION_INDEX,
@@ -114,6 +113,7 @@ from opengwasdb.store.open import (
     staged_named_group,
     zarr_format_for_version,
 )
+from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version

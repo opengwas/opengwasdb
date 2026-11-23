@@ -4,7 +4,6 @@ from pathlib import Path
 
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.admission.rules import AnalysisRules
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.layouts.build_manifest import ManifestRow, manifest_row_to_analysis, read_manifest
 from opengwasdb.layouts.dense import (
     DEFAULT_CHUNK_SHAPE,
@@ -16,6 +15,7 @@ from opengwasdb.model.enums import AssociationCoverage
 from opengwasdb.readers.association_tsv import ASSOCIATION_TSV_CAPABILITY
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
+from opengwasdb.store_reader.assembly import normalise_build
 
 
 def build_dense_observed_from_manifest(

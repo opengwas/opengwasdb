@@ -16,7 +16,6 @@ from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
 from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.build.phenotype_sd_pipeline import (
     AfSource,
@@ -69,6 +68,7 @@ from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store.open import UnsupportedFormatVersion
+from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,

@@ -29,8 +29,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.readers.interface import ReferenceAllele
+from opengwasdb.store_reader.assembly import normalise_build
 
 __all__ = [
     "BUILTIN_COLUMN_MAPS",
