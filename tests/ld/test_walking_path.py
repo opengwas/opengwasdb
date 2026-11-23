@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import build_fixtures as fx
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -96,6 +95,8 @@ def test_a_pair_from_the_pgen_is_answered_by_the_store_it_wrote(tmp_path: Path) 
 def test_the_test_store_script_refuses_a_missing_call_rather_than_average_it(
     tmp_path: Path,
 ) -> None:
+    import build_fixtures as fx
+
     script = load_script("make_test_store")
     rows = np.arange(5, dtype=np.int64)
     calls = fx.hard_calls()[rows].copy()

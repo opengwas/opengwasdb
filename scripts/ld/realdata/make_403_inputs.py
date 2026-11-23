@@ -56,7 +56,6 @@ import argparse
 import hashlib
 import json
 import math
-import shutil
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
@@ -170,6 +169,8 @@ def extract(out: Path) -> None:
 def plink2_exe() -> Path:
     """The one plink2 every step runs: `$OPENGWASDB_LD_PLINK2`, else the one on PATH
     (CONTRIBUTING)."""
+    import shutil
+
     found = env.read("OPENGWASDB_LD_PLINK2", "") or shutil.which("plink2")
     if not found or not Path(found).exists():
         raise SystemExit(

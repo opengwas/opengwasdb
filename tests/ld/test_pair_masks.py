@@ -9,7 +9,6 @@ import build_fixtures
 import numpy as np
 import pytest
 import testdata
-from contract.support import TEST_STORE
 
 import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
@@ -98,6 +97,8 @@ def test_the_emitter_keeps_each_partner_at_its_real_distance(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """The Partner Rows emitter's boundary distances equal the per-pair rule, pair by pair."""
+    from contract.support import TEST_STORE
+
     from opengwasdb.ld.store import StoreReader
 
     _, built = build_fixtures.test_panel_build(10, tmp_path_factory)

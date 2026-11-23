@@ -27,7 +27,6 @@ five.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -117,6 +116,8 @@ def root_provenance(store: Path) -> dict[str, Any]:
 def record_count(store: Path, left_out: int) -> None:
     """Rewrite the store's provenance with `counts.alids_left_out` (spec §7), the one key this
     derivation adds. A new document renamed over the old one, so no reader sees a half one."""
+    import os
+
     meta = store / "zarr.json"
     document = json.loads(meta.read_text())
     document["attributes"]["ld_store"]["counts"]["alids_left_out"] = left_out
