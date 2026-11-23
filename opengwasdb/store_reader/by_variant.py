@@ -28,6 +28,7 @@ from opengwasdb.store_reader.encoding.codec import (
 )
 from opengwasdb.store_reader.encoding.plan import EafBaselineError, StoreEncoding
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.stored import optional_array
 
 #: The index group, under the Ragged component's own group (ADR 0060).
 BY_VARIANT_GROUP = "by_variant"
@@ -42,11 +43,6 @@ def has_variant_index(store_path: str | Path, *, group_name: str = BY_VARIANT_GR
     """Whether the component at `store_path` carries a by-variant index."""
     path = Path(store_path) / RAGGED_ZARR_PATH / group_name
     return (path / "zarr.json").is_file() or (path / ".zgroup").is_file()
-
-
-def _member(group: Any, name: str) -> Any:
-    """An optional array of `group`, or `None` when the group does not carry it."""
-    return group[name] if name in group else None
 
 
 class ByVariantReader:
@@ -85,12 +81,12 @@ class ByVariantReader:
         self._analysis_index = self._index["analysis_index"]
         self._z = self._index["z"]
         self._se = self._index["se"]
-        self._eaf = _member(self._index, "eaf")
-        self._imputed = _member(self._index, "imputed")
-        self._n = _member(self._index, "n")
-        self._baseline = _member(self._ragged, EAF_BASELINE)
-        self._reference = _member(self._ragged, EAF_REFERENCE)
-        self._coefficients = _member(self._ragged, SE_COEFFICIENTS)
+        self._eaf = optional_array(self._index, "eaf")
+        self._imputed = optional_array(self._index, "imputed")
+        self._n = optional_array(self._index, "n")
+        self._baseline = optional_array(self._ragged, EAF_BASELINE)
+        self._reference = optional_array(self._ragged, EAF_REFERENCE)
+        self._coefficients = optional_array(self._ragged, SE_COEFFICIENTS)
         self._codec_cache: StoreDecoder | None = None
 
     def _require_arrays(self) -> None:

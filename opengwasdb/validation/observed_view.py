@@ -59,7 +59,6 @@ from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
-from opengwasdb.variants.axis import VariantAxis
 
 __all__ = [
     "FAILING_COUNTERS",
@@ -383,7 +382,7 @@ _STATE_NAMES = {
 
 def _refuse_if_incoherent(path: Path, planes: _Planes, role: str) -> None:
     """A Store whose planes and variant axis disagree cannot be mapped row for row."""
-    with closing(VariantAxis(path)) as axis:
+    with closing(open_store(path).variant_axis(aliases=False)) as axis:
         n_axis = axis.n_variants
     if n_axis != planes.n_rows:
         raise ObservedViewRefused(
@@ -467,7 +466,7 @@ def _map_axis(source_path: Path, target_path: Path, n_source: int, n_target: int
     chromosome = _source_chromosomes(source_index, n_source)
     source_alids: dict[int, str] = {}
     if source_loose.size:
-        with closing(VariantAxis(source_path)) as axis:
+        with closing(open_store(source_path).variant_axis(aliases=False)) as axis:
             for row, record in axis.by_indices(source_loose.tolist()).items():
                 source_alids[row] = record.alid
                 chromosome[row] = _chromosome_bytes(record.chromosome)
@@ -527,7 +526,7 @@ def _map_residual(
     if not (residual.size and target_loose.size):
         return
     alids = _unmapped_source_alids(mapped, source_index, source_alids)
-    with closing(VariantAxis(target_path)) as axis:
+    with closing(open_store(target_path).variant_axis(aliases=False)) as axis:
         target_row_of = {r.alid: row for row, r in axis.by_indices(target_loose.tolist()).items()}
     for row in residual.tolist():
         if alids[row] in target_row_of:

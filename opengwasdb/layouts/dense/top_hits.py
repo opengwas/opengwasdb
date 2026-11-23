@@ -25,6 +25,7 @@ from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE
 
@@ -248,7 +249,7 @@ class _ScanPlanes(NamedTuple):
 
 
 def _open_scan_planes(store_path: Path, encoding: StoreEncoding) -> _ScanPlanes:
-    root = store_arrays.open_group(store_path / "data.zarr")
+    root = release_arrays(store_path)
     return _ScanPlanes(
         z=DenseZPlane.open(root, encoding),
         se=DenseSePlane.open(root, encoding),
@@ -402,7 +403,7 @@ def _collect_top_hit_eaf(
     n_workers: int = 1,
 ) -> np.ndarray | None:
     """Collect candidate EAF values in row-chunk order for an inline build."""
-    root = store_arrays.open_group(Path(store_path) / "data.zarr")
+    root = release_arrays(store_path)
     plane = DenseEafPlane.open(root, encoding)
     if not plane.can_report_frequencies:
         return None
@@ -417,7 +418,7 @@ def _collect_top_hit_se(
     n_workers: int = 1,
 ) -> np.ndarray:
     """Collect candidate SE values in row-chunk order, decoded as a query sees them."""
-    root = store_arrays.open_group(Path(store_path) / "data.zarr")
+    root = release_arrays(store_path)
     return _gather_in_row_chunks(
         root, rows, cols, DenseSePlane.open(root, encoding).band, n_workers
     )

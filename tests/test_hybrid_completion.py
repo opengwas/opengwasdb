@@ -893,3 +893,28 @@ def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path) -> None:
             src, tmp_path / "dst.opengwasdb", _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9
         )
     assert not (tmp_path / "dst.opengwasdb").exists()
+
+
+def test_a_residual_dense_component_without_se_coefficients_is_refused_by_name(tmp_path):
+    """A residual SE plane's Overflow is coded against the Dense Component's
+    `se_coefficients`; a component holding none is a HybridCompletionError naming it,
+    not a KeyError from inside zarr (#473).
+
+    Mutation that makes this fail: read `se_coefficients` by indexing the group.
+    """
+    from types import SimpleNamespace
+
+    import zarr
+
+    from opengwasdb.layouts.hybrid.complete import HybridCompletionError, _shared_se_coefficients
+
+    dense = tmp_path / "dense"
+    zarr.open_group(str(dense / "data.zarr"), mode="w", zarr_format=3).create_array(
+        "z", shape=(2, 2), dtype="int16"
+    )
+    residual = SimpleNamespace(se=SimpleNamespace(is_residual=True))
+
+    with pytest.raises(HybridCompletionError, match="holds no se_coefficients"):
+        _shared_se_coefficients(dense, residual)
+    plain = SimpleNamespace(se=SimpleNamespace(is_residual=False))
+    assert _shared_se_coefficients(dense, plain) is None

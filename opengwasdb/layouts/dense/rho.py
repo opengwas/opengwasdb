@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from concurrent.futures import as_completed
+from contextlib import closing
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -26,11 +27,10 @@ from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 from opengwasdb.build.ordered_pool import single_threaded_fork_pool
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.store_reader.layout import ArrayRole
-from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants.axis import VariantAxis
 
 RHO_METHOD = "pleiodb-cml"
 RHO_GRID_N = 2000
@@ -335,15 +335,13 @@ def build_dense_rho(
     Dense-only: Ragged stores have no shared variant axis to thin.
     """
     store_path = Path(store_path)
-    encoding = StoreManifest.load(store_path).encoding
-    root = store_arrays.open_group(store_path / "data.zarr")
+    release = open_store(store_path)
+    encoding = release.manifest.encoding
+    root = release.arrays()
     n_analyses = int(root["z"].shape[1])
 
-    variant_axis = VariantAxis(store_path)
-    try:
+    with closing(release.variant_axis(aliases=False)) as variant_axis:
         records = variant_axis.all()
-    finally:
-        variant_axis.close()
     chromosomes = np.array([r.chromosome for r in records])
     positions = np.array([r.position for r in records], dtype=np.int64)
     thinned_rows = select_thinned_variants(chromosomes, positions, window_bp)

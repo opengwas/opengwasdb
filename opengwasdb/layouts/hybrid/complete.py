@@ -65,7 +65,7 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_out_of_range
 from opengwasdb.store import check_format_version_stamp, completed_format_version
-from opengwasdb.store.arrays import open_group, open_group_for_write
+from opengwasdb.store.arrays import open_group_for_write
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -73,14 +73,14 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.store_reader.associations import Cells, CsrReader, DenseGridReader, Status
-from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
-from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
 from opengwasdb.store_reader.variant_axis import VariantRecord
-from opengwasdb.variants.axis import VariantAxis, sorted_alids
+from opengwasdb.variants.axis import sorted_alids
 
 log = logging.getLogger(__name__)
 
@@ -276,7 +276,8 @@ def _complete_dense_component(
         n_workers=n_workers,
         overwrite=True,
     )
-    dense_axis = VariantAxis(dense_dir)
+    dense = open_store(dense_dir)
+    dense_axis = dense.variant_axis(aliases=False)
     try:
         dense_alids = [r.alid for r in dense_axis.all()]
     finally:
@@ -288,7 +289,7 @@ def _complete_dense_component(
         alid_to_row={alid: i for i, alid in enumerate(dense_alids)},
         # The plan `complete_dense_store` just wrote: the source's z/se plus
         # the `eaf_reference` completion added.
-        encoding=open_store(dense_dir).manifest.encoding,
+        encoding=dense.manifest.encoding,
         n_imputed=dense_result.n_imputed,
     )
 
@@ -329,7 +330,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     once: the crossover fold and the overflow rebuild share these arrays."""
     offsets, variant_index, z, se, eaf = _read_overflow_columns(src)
 
-    src_shared_axis = VariantAxis(src)
+    src_shared_axis = open_store(src).variant_axis(aliases=False)
     try:
         vi_to_record = src_shared_axis.by_indices(np.unique(variant_index).tolist())
         shared_all = src_shared_axis.all()
@@ -693,8 +694,12 @@ def _shared_se_coefficients(dense_dir: Path, source_encoding: StoreEncoding) -> 
     """
     if not source_encoding.se.is_residual:
         return None
-    root = open_group(dense_dir / "data.zarr")
-    return np.asarray(root["se_coefficients"][:], dtype=np.float32)
+    coefficients = se_coefficients(release_arrays(dense_dir))
+    if coefficients is None:
+        raise HybridCompletionError(
+            f"{dense_dir}: its se plane is residual but it holds no se_coefficients"
+        )
+    return coefficients
 
 
 # ── Phase 4: manifest + finalization ────────────────────────────────────────
@@ -995,7 +1000,7 @@ def _dense_component_layout(staged_path: Path) -> dict[str, Any]:
     recorded-layout rule (issue #245, #248) rejects that, and a reader sizing
     reads from it would decode the wrong blocks.
     """
-    attrs = dict(open_group(dense_component_path(staged_path) / "data.zarr", "r").attrs)
+    attrs = dict(release_arrays(dense_component_path(staged_path)).attrs)
     return {
         key: attrs[key]
         for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format")
@@ -1014,10 +1019,9 @@ def _remapped_overflow_baseline(
     A variant with no overflow association after the remap keeps a NaN
     baseline: it has no cell to code against one.
     """
-    group = open_group(Path(source_path) / RAGGED_ZARR_PATH)
-    if EAF_BASELINE not in group:
+    src_baseline = eaf_baseline(sequence_arrays(source_path))
+    if src_baseline is None:
         return None
-    src_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
     out = np.full(int(n_shared), np.nan, dtype=np.float32)
     for src_index, record in vi_to_record.items():
         new_index = new_shared_index.get(record.alid)

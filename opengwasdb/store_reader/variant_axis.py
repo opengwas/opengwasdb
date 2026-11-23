@@ -471,14 +471,56 @@ class VariantAxis:
         }
 
     def all(self) -> list[VariantRecord]:
-        return [parse_variant_line(line) for line in self._legacy.rows()]
+        return list(self.records())
+
+    def records(self) -> Iterator[VariantRecord]:
+        """Every row, streamed in ``variant_index`` order: what `all` materialises.
+
+        A caller that needs one field per row -- the EAF orientation audit, the
+        rsid-index rule -- would otherwise hold tens of millions of records at
+        once on the stores it most needs to run on (#473).
+        """
+        return (parse_variant_line(line) for line in self._legacy.rows())
+
+    def indices_by_source_alid(self, wanted: Iterable[str]) -> dict[str, int] | None:
+        """The Variant Index of each `wanted` ALID, as the build assembly spelt it.
+
+        Matched against each row's ``source_alid`` as `parse_variant_line` reads it
+        (a blank, ``.``, is none, and matches nothing), in one pass that stops once
+        every wanted ALID is found; one the table does not hold is absent from the
+        result.
+        None when the table predates the ``source_alid`` column, so the caller
+        can lift the ALIDs over itself rather than read no match as no variant (#473).
+        """
+        found: dict[str, int] = {}
+        remaining = set(wanted)
+        for line in self._legacy.rows():
+            if not carries_source_alid(line):
+                return None
+            record = parse_variant_line(line)
+            if record.source_alid in remaining:
+                found[record.source_alid] = record.variant_index
+                remaining.discard(record.source_alid)
+                if not remaining:
+                    break
+        return found
+
+
+#: A Store Variant Table row's fields before the trailing ``source_alid`` column,
+#: which a table written before that column ends at.
+_FIELDS_BEFORE_SOURCE_ALID = 7
+
+
+def carries_source_alid(line: str) -> bool:
+    """Whether a Store Variant Table row has the ``source_alid`` column."""
+    return line.rstrip("\n").count("\t") + 1 > _FIELDS_BEFORE_SOURCE_ALID
 
 
 def parse_variant_line(line: str) -> VariantRecord:
     """One Store Variant Table row, as the table spells it, as a `VariantRecord`."""
     fields = line.rstrip("\n").split("\t")
     # 7 fields = pre-source_alid stores; 8 = current (trailing source_alid column).
-    if len(fields) == 7:
+    if len(fields) == _FIELDS_BEFORE_SOURCE_ALID:
         chromosome, position, variant_index, effect_allele, other_allele, alid, rsid = fields
         source_alid = "."
     elif len(fields) == 8:

@@ -52,7 +52,7 @@ def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
     """
     group = reader_top_hits.index_group(tier_root(target))[key]
     return target.remember(
-        f"top_hits/{key}", lambda: top_hits.load_tier_arrays(group), until=ASSOCIATIONS.name
+        f"top_hits/{key}", lambda: reader_top_hits.tier_arrays(group), until=ASSOCIATIONS.name
     )
 
 

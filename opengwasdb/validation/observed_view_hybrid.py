@@ -82,7 +82,6 @@ from opengwasdb.validation.observed_view import (
     leaves_out,
     se_out_of_range_accounting,
 )
-from opengwasdb.variants.axis import VariantAxis
 
 __all__ = ["CROSSOVER_FAILING", "OVERFLOW_FAILING", "check_hybrid"]
 
@@ -254,7 +253,7 @@ def _open_overflow(store: OpenGWASDBStore, role: str) -> _Overflow:
         raise ObservedViewRefused(
             f"cannot open the Overflow of {role} store {store.path}: {exc}"
         ) from exc
-    with closing(VariantAxis(store.path)) as axis:
+    with closing(store.variant_axis(aliases=False)) as axis:
         n_shared = axis.n_variants
     offsets = np.asarray(group["offsets"][:], dtype=np.int64)
     imputed = group["imputed"] if "imputed" in group else None

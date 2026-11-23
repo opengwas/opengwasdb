@@ -41,6 +41,17 @@ def release_paths(path: Path) -> dict[str, Path]:
     }
 
 
+def release_arrays(release: str | Path) -> Any:
+    """The `data.zarr` group of the release at `release`, read-only.
+
+    The one read-only open of a release's arrays: `StoreRelease.arrays` is this, for
+    an opened release, and a reader holding only a path -- a staged release not yet
+    published, a Hybrid's Dense Component, a builder adding to a release -- calls it
+    directly (#473).
+    """
+    return open_group(release_paths(Path(release))["data"])
+
+
 class ReleasePaths:
     """Artifact-path properties shared by an opened release and a staged one.
 
@@ -115,8 +126,8 @@ class StoreRelease(ReleasePaths):
             )
 
     def arrays(self) -> Any:
-        """Open this release's ``data.zarr`` group read-only."""
-        return open_group(self.data_path)
+        """Open this release's ``data.zarr`` group read-only (`release_arrays`)."""
+        return release_arrays(self.path)
 
     def variant_axis(self, *, aliases: bool) -> VariantAxis:
         """This release's Variant Axis; `aliases` also consults `variant_aliases`."""
