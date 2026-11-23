@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable, Iterator
 
 import numpy as np
 
-from opengwasdb.store.arrays import array_length
+from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.release import REQUIRED

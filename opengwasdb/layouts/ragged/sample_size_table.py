@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from opengwasdb.encoding import N_MAX
+from opengwasdb.store_reader.encoding.plan import N_MAX
 
 #: The columns a sample-size table must name, in its header.
 SAMPLE_SIZE_TABLE_COLUMNS = ("probe_id", "snp_id", "n")

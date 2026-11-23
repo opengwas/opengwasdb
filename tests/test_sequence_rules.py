@@ -19,9 +19,11 @@ import zarr
 from store_reads import element_reads, times_read
 from test_ragged_residual_completion import RaggedResidualScenario, build_residual_ssf_source
 
-from opengwasdb.encoding import SE_EXCEPTION, Z_MISSING, SeExceptionTable
-from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
+from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION, Z_MISSING
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.scans import analyses_of
 

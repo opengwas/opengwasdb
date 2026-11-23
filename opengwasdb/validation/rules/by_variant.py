@@ -20,16 +20,12 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb import encoding as enc
-from opengwasdb.store.arrays import (
-    array_length,
-    chunk_layout,
-    inner_chunk_hint_for_path,
-    inner_chunk_of,
-    role_for_array_path,
-    shard_layout,
-)
-from opengwasdb.store.open import parse_format_version
+from opengwasdb.store.arrays import inner_chunk_hint_for_path, role_for_array_path
+from opengwasdb.store_reader.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.encoding import codec as enc_codec
+from opengwasdb.store_reader.encoding import plan as enc_plan
+from opengwasdb.store_reader.format import parse_format_version
+from opengwasdb.store_reader.layout import chunk_layout, shard_layout
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS
 from opengwasdb.validation.rules.encoding import PLAN
@@ -339,37 +335,37 @@ def _sample_non_empty_variants(by_offsets: np.ndarray, sample_variants: int) -> 
 def _check_z_overflow(
     root: Any, index: Any, b_z: Any, tag: str, s_idx: int, src_idx: int
 ) -> str | None:
-    if b_z != enc.Z_OVERFLOW:
+    if b_z != enc_plan.Z_OVERFLOW:
         return None
-    idx_v = enc.ZOverflowTable.open(index).lookup(np.array([s_idx]))
-    src_v = enc.ZOverflowTable.open(root).lookup(np.array([src_idx]))
+    idx_v = enc_codec.ZOverflowTable.open(index).lookup(np.array([s_idx]))
+    src_v = enc_codec.ZOverflowTable.open(root).lookup(np.array([src_idx]))
     return f"{tag} z overflow value != Analysis-sorted table" if idx_v != src_v else None
 
 
 def _check_eaf_exception(
     root: Any, index: Any, b_eaf: Any, tag: str, s_idx: int, src_idx: int
 ) -> str | None:
-    if b_eaf != enc.EAF_EXCEPTION:
+    if b_eaf != enc_plan.EAF_EXCEPTION:
         return None
-    idx_v = enc.EafExceptionTable.open(index).lookup(np.array([s_idx]))
-    src_v = enc.EafExceptionTable.open(root).lookup(np.array([src_idx]))
+    idx_v = enc_codec.EafExceptionTable.open(index).lookup(np.array([s_idx]))
+    src_v = enc_codec.EafExceptionTable.open(root).lookup(np.array([src_idx]))
     return f"{tag} eaf exception value != Analysis-sorted table" if idx_v != src_v else None
 
 
 def _check_se_exception(
     root: Any, index: Any, b_se: Any, tag: str, s_idx: int, src_idx: int
 ) -> str | None:
-    if b_se != enc.SE_EXCEPTION:
+    if b_se != enc_plan.SE_EXCEPTION:
         return None
-    idx_v = enc.SeExceptionTable.open(index).lookup(np.array([s_idx]))
-    src_v = enc.SeExceptionTable.open(root).lookup(np.array([src_idx]))
+    idx_v = enc_codec.SeExceptionTable.open(index).lookup(np.array([s_idx]))
+    src_v = enc_codec.SeExceptionTable.open(root).lookup(np.array([src_idx]))
     return f"{tag} se exception value != Analysis-sorted table" if idx_v != src_v else None
 
 
 def _check_cell_exceptions(
     root: Any,
     index: Any,
-    encoding: enc.StoreEncoding,
+    encoding: enc_plan.StoreEncoding,
     b_z: Any,
     b_se: Any,
     b_eaf: Any,
@@ -517,7 +513,7 @@ def _validate_one_cell(
     root: Any,
     gathered: _Gathered,
     index: Any,
-    encoding: enc.StoreEncoding,
+    encoding: enc_plan.StoreEncoding,
     label: str,
     cell: _SampledCell,
     src_pos: int,
@@ -543,7 +539,7 @@ def _validate_variant_index_sample(
     index: Any,
     offsets: np.ndarray,
     by_offsets: np.ndarray,
-    encoding: enc.StoreEncoding,
+    encoding: enc_plan.StoreEncoding,
     n_assoc: int,
     errors: list[str],
     label: str,

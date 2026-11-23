@@ -132,6 +132,10 @@ An association whose Z and SE were inferred during reference completion rather t
 **Association Status**:
 The origin state of an association in a Reference-Completed Store Release: Missing, Observed, or Imputed. Missing means the association was not observed and reference completion did not impute it.
 
+**Store Reader**:
+The read-only path every reader of a Store Release uses: opening the release and checking its Format Version, decoding its Store Encoding, reading its associations under one presence rule, its Variant Axis, Top-Hit Index, Indexed Variant Subsets and `analyses.tsv`, and the query facade and result resolution over them. It is one subpackage, `opengwasdb.store_reader`, that imports nothing from the rest of opengwasdb and no third-party package but numpy, zarr and numcodecs; builders, completion and validation import their reads from it, never the reverse. It becomes the `ogquery` package (epic #450, #464). The 0.2.x Store Variant Table's pysam and SQLite reads stay outside it, behind a seam the Store Reader calls.
+_Avoid_: Reader on its own (a **Source Reader** reads a source, not a Store Release), query engine.
+
 **Observed-Only Query**:
 A query mode that excludes Imputed Associations and returns only source-observed results. Reference-Completed releases include imputed associations by default, but callers may request observed-only results.
 

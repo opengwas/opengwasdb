@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from opengwasdb.model.enums import AssociationCoverage
+from opengwasdb.store_reader.enums import AssociationCoverage
 
 #: Every Ragged builder lifts to hg38, so every Ragged release states it.
 RAGGED_REFERENCE_ASSEMBLY = "GRCh38"

@@ -28,24 +28,26 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.encoding.codec import (
-    EAF_BASELINE,
-    EAF_REFERENCE,
     SE_FLOAT16_MAX,
     EafExceptionBuilder,
-    PositionSource,
     SeExceptionBuilder,
     SideTables,
     StoreCodec,
     ZOverflowBuilder,
-    positions_flat,
-    positions_pairs,
-    positions_row_band,
     require_parallel,
     se_above_bound,
 )
-from opengwasdb.encoding.plan import StoreEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.store.arrays import SE_COEFFICIENTS
+from opengwasdb.store_reader.encoding.codec import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
+    PositionSource,
+    positions_flat,
+    positions_pairs,
+    positions_row_band,
+)
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +212,7 @@ def _refuse_odd_markers(z: np.ndarray, se: np.ndarray, *, where: str) -> None:
     the markers a reader and `validate` refuse.
     """
     from opengwasdb.admission.cells import NotAdmitted
-    from opengwasdb.associations.record import non_canonical
+    from opengwasdb.store_reader.associations.record import non_canonical
 
     odd = non_canonical(z) | non_canonical(se)
     if not odd.any():

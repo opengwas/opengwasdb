@@ -38,7 +38,7 @@ from opengwasdb.readers.interface import (
     StreamTally,
 )
 from opengwasdb.stats import MISSING_STATISTICS, FrequencyTally
-from opengwasdb.variants.normalise import VariantNormalisationError
+from opengwasdb.store_reader.identity import VariantNormalisationError
 
 #: Associations a batch holds once a source is handed to the per-row reader.
 ROW_BATCH = 250_000

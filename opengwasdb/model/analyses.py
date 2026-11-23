@@ -46,6 +46,11 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.info_score_policy import INFO_SCORE_COLUMNS, parse_info_score_policy
 from opengwasdb.model.maf_policy import MAF_COLUMNS, parse_maf_policy
 
+# Reading the table is the Store Reader's (#464). Re-exported: opengwasdb-stores
+# imports both from here.
+from opengwasdb.store_reader.analyses import AnalysesTable as AnalysesTable
+from opengwasdb.store_reader.analyses import read_analyses as read_analyses
+
 ANCESTRY_PROP_PREFIX = "ancestry_prop_"
 
 # Columns interpretation-bearing enough that opengwasdb owns their meaning and
@@ -205,35 +210,6 @@ def classify_column(name: str) -> ColumnClass:
     return ColumnClass.REGISTRY_ONLY
 
 
-@dataclass(frozen=True)
-class AnalysesTable:
-    """A parsed `analyses.tsv`: column order plus raw string rows.
-
-    Rows are kept as raw strings, like `opengwasdb.ancestry.catalogue`'s
-    Catalogue reader -- `analyses.tsv` is inherently a text format, and typed
-    access belongs to callers that know which columns they need, not to this
-    module.
-    """
-
-    fieldnames: tuple[str, ...]
-    rows: tuple[dict[str, str], ...]
-
-
-def read_analyses(path: str | Path) -> AnalysesTable:
-    """Read an `analyses.tsv` file, preserving column order and every field.
-
-    Columns beyond the known contract (registry-only build inputs, or
-    anything else) are read without error and carried through in each row's
-    dict unchanged -- the superset property a manifest and a built store's
-    analyses.tsv are related by.
-    """
-    with open(path, newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        fieldnames = tuple(reader.fieldnames or ())
-        rows = tuple(dict(row) for row in reader)
-    return AnalysesTable(fieldnames=fieldnames, rows=rows)
-
-
 def write_analyses(path: str | Path, table: AnalysesTable) -> Path:
     """Write `table` back to a TSV file, in its own column order."""
     out_path = Path(path)
@@ -243,24 +219,6 @@ def write_analyses(path: str | Path, table: AnalysesTable) -> Path:
         for row in table.rows:
             writer.writerow(row)
     return out_path
-
-
-def analysis_label(row: Mapping[str, str]) -> str:
-    """The best-available human label for one `analyses.tsv` row.
-
-    `analysis_label`, or the `analysis_id` when the release supplies no label --
-    a store built without a label for an Analysis (and every release predating
-    ADR 0034, whose table has no `analysis_label` column at all) still has to be
-    browsable and sortable under something a person can read.
-
-    Deliberately the *only* implementation of that fallback: `overview.html`'s
-    Rho tab and anything else that wants a display label call this rather than
-    spelling the chain out again (issue #57). It is a presentation helper, so it
-    returns a label rather than writing one back into the row: a blank
-    `analysis_label` in a store's `analyses.tsv` is an honest "no label was
-    supplied", and `analyses_table()` hands that column through unchanged.
-    """
-    return row.get("analysis_label") or row.get("analysis_id", "")
 
 
 def validate_analyses(table: AnalysesTable) -> list[str]:

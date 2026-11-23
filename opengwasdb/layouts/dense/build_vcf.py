@@ -38,15 +38,11 @@ from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
 from opengwasdb.encoding import (
     EafExceptionBuilder,
-    EafMeasurements,
-    EncodingMeasurements,
     StoreCodec,
-    StoreEncoding,
     ZOverflowBuilder,
     eaf_baseline_from_grid,
     measure_eaf_sample,
     optimise_dense_se,
-    positions_row_band,
     write_eaf_baseline,
 )
 from opengwasdb.encoding.association_codec import (
@@ -55,11 +51,7 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import (
-    EafExceptionTable,
-    eaf_exception_table,
-    require_parallel,
-)
+from opengwasdb.encoding.codec import eaf_exception_table, require_parallel, write_exact_table
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
@@ -85,18 +77,23 @@ from opengwasdb.layouts.dense.constants import (
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafScope,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafScope, coverage_for_layout
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import SourceSpec, open_source
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
+from opengwasdb.store_reader.encoding.codec import EafExceptionTable, positions_row_band
+from opengwasdb.store_reader.encoding.plan import (
+    EafMeasurements,
+    EncodingMeasurements,
+    StoreEncoding,
+)
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.stats import z_critical
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.routing import (
@@ -1092,7 +1089,7 @@ def _encode_residual_dense_eaf(
         bands = _write_eaf_bands(encoded, baseline, context, pass2_start, n_workers)
         write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
         exceptions = eaf_exception_table(bands)
-        exceptions.write(root)
+        write_exact_table(exceptions, root)
     log.info(
         "eaf: int8 residual at +/-%.1f, %d exception cell(s)",
         codec.encoding.eaf.residual_range,
@@ -1729,7 +1726,7 @@ def _write_dense_z_bands(
                 hit_se_parts.append(loaded.hit_se)
             if flush is not None:
                 _flush_band(z_arr, flush, "Band-write z", n_analyses, pass2_start, band_cols)
-    overflow.table().write(root)
+    write_exact_table(overflow.table(), root)
     return hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts, column_has_eaf
 
 

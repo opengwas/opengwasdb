@@ -36,18 +36,19 @@ from residual_fixtures import (
 )
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
-from opengwasdb.encoding.plan import SE_EXCEPTION, SE_MISSING
-from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.layouts.dense.build_vcf import _spill_column, build_dense_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses, read_analysis_records
+from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION, SE_MISSING
+from opengwasdb.store_reader.encoding.planes import DenseSePlane
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
 # hg19 positions used in fixtures and their expected hg38 positions
@@ -864,7 +865,7 @@ class TestParallel:
 
 
 def _assert_dense_stores_match(serial_path: Path, parallel_path: Path) -> None:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     assert validate_store(parallel_path).ok
     serial_records = {
@@ -941,7 +942,7 @@ class TestPass1Parallel:
         """Parallel Pass 1 produces the same union, ALIDs, rsids, and dense
         arrays as serial Pass 1 -- including a mixed hg19/hg38 manifest so
         the liftover and passthrough groups are both exercised."""
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         vcf_a = _make_vcf(
             tmp_path,
@@ -1079,7 +1080,7 @@ class TestTopHitHarvest:
     def test_harvest_matches_full_scan(self, tmp_path):
         """Top hits harvested during Pass 2 must equal a full-matrix rescan."""
         from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-        from opengwasdb.top_hits import threshold_key
+        from opengwasdb.store_reader.top_hits import threshold_key
 
         # trait z-scores: 4.0 and 5.0 clear the loosest tier; 3.0 does not.
         vcf1 = _make_vcf(
@@ -1123,7 +1124,7 @@ class TestTopHitHarvest:
         exactly -- as decoded through the store's own encoding (ADR 0037) --
         so the index agrees with what a query reads from `z`, and the store
         validates cleanly."""
-        from opengwasdb.top_hits import threshold_key
+        from opengwasdb.store_reader.top_hits import threshold_key
 
         vcf = _make_vcf(
             tmp_path,
@@ -1140,7 +1141,7 @@ class TestTopHitHarvest:
 
         assert validate_store(store).ok
 
-        from opengwasdb.encoding import DenseZPlane
+        from opengwasdb.store_reader.encoding.planes import DenseZPlane
 
         opened = open_store(store)
         root = opened.arrays(mode="r")
@@ -1606,7 +1607,7 @@ def test_axis_source_alids_record_the_prelift_hg19_coordinate(tmp_path):
     row that really moved or the assertion proves nothing -- both ALIDs are
     asserted so the set itself proves the lift happened.
     """
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     vcf = _make_vcf(
         tmp_path,
@@ -1629,7 +1630,7 @@ def test_axis_source_alids_record_the_prelift_hg19_coordinate(tmp_path):
 
 
 def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(tmp_path):
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     """Issue #139/#142: a standalone Dense VCF build can select residual SE.
 
@@ -2059,8 +2060,8 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
     """
     import gzip
 
-    from opengwasdb.top_hits import threshold_key
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.store_reader.top_hits import threshold_key
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     with gzip.open(reference / "variants.tsv.gz", "rt", encoding="utf-8") as a:
         reference_axis = a.read()
@@ -2212,8 +2213,8 @@ class TestVariantReferenceSinglePass:
         )
 
         assert validate_store(store).ok
-        from opengwasdb.encoding import DenseZPlane
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.store_reader.encoding.planes import DenseZPlane
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         records = {r.alid for r in iter_variant_records(store / "variants.tsv.gz")}
         assert records == {"1:100000:A:G", "1:5000000:A:G", "1:9000000:C:T"}
@@ -2265,7 +2266,7 @@ class TestVariantReferenceErrors:
         mismatch is logged so it cannot pass unremarked."""
         import logging
 
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         vcf = _make_vcf(
             tmp_path, "trait_hg19",
@@ -2615,7 +2616,7 @@ def _plain_alid_list(tmp_path: Path, manifest: Path, name: str = "plain.alids") 
 
 
 def _axis_rsids(store: Path) -> dict[str, str]:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     return {r.alid: (r.rsid or "") for r in iter_variant_records(store / "variants.tsv.gz")}
 
@@ -2796,7 +2797,7 @@ class TestPlainAlidReferenceRsids:
         assert validate_store(store).ok
         assert _axis_rsids(store) == {source_alid: "", routed_alid: "rsSOURCE"}
         # And the association really is on the routed row, not the source one.
-        from opengwasdb.encoding import DenseZPlane
+        from opengwasdb.store_reader.encoding.planes import DenseZPlane
 
         opened = open_store(store)
         z = DenseZPlane.open(opened.arrays(mode="r"), opened.manifest.encoding).column(0)

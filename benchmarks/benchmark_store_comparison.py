@@ -70,7 +70,7 @@ from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
-from opengwasdb.associations import Associations
+from opengwasdb.store_reader.associations import Associations
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
 # the statin-use exposure Analysis, the chr19 APOE/APOC region, and the seeded

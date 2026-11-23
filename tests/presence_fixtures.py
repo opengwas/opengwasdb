@@ -17,10 +17,10 @@ from conftest import SOURCE_HEADER, SOURCE_ROWS
 from dense_sources import build_dense_fixture
 from test_query_metadata_reads import _BUILDERS
 
-from opengwasdb.encoding.planes import DenseZPlane
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.manifest import StoreManifest
 
 #: A float16 NaN other than `np.nan`'s 0x7e00: the payload spec §15 forbids.
 PAYLOAD_NAN = np.array([0x7E01], np.uint16).view(np.float16)[0]

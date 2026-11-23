@@ -40,12 +40,8 @@ from opengwasdb.readers.interface import (
 )
 from opengwasdb.readers.rows import ReaderBatch, stream_associations, stream_batches
 from opengwasdb.stats import FrequencyTally
-from opengwasdb.variants.normalise import (
-    IdentityFaults,
-    normalise_allele,
-    normalise_chromosome,
-    orient_or_drop,
-)
+from opengwasdb.store_reader.identity import normalise_allele, normalise_chromosome
+from opengwasdb.variants.normalise import IdentityFaults, orient_or_drop
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
 

@@ -23,10 +23,10 @@ from presence_fixtures import float_plane_z, plant_payload_nan
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
 
 HEADER = tdc.SOURCE_HEADER + "\teaf"
@@ -102,7 +102,7 @@ def _patch(store: Path, cls, rows, cols, values) -> None:
 
 
 def _row_of(store: Path, alid: str) -> int:
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     axis = VariantAxis(store)
     try:
@@ -588,10 +588,10 @@ def _small_chunked_pair(
     from dense_sources import build_dense_fixture
 
     import opengwasdb.layouts.dense.complete as complete_module
-    import opengwasdb.store.arrays as arrays_module
+    import opengwasdb.store_reader.layout as layout_module
 
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
-    monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
+    monkeypatch.setattr(layout_module, "DENSE_SHARD_SHAPE", (4, 2))
+    monkeypatch.setattr(layout_module, "DENSE_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
     rows = [

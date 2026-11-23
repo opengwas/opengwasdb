@@ -14,26 +14,19 @@ from typing import NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Cells, DenseGridReader
-from opengwasdb.associations import present as present_cells
 from opengwasdb.encoding import (
     StoreCodec,
 )
 from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.model.analyses import (
-    read_analyses,
-)
-from opengwasdb.model.enums import (
-    PrimaryStorageLayout,
-)
-from opengwasdb.store.open import (
-    OpenGWASDBStore,
-    UnsupportedFormatVersion,
-    indels_reference_first,
-    open_store,
-)
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import Cells, DenseGridReader
+from opengwasdb.store_reader.associations import present as present_cells
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.format import UnsupportedFormatVersion, indels_reference_first
+from opengwasdb.store_reader.hybrid import dense_component_path
+from opengwasdb.store_reader.top_hits import threshold_key
+from opengwasdb.store_reader.variant_axis import variant_table_path
 from opengwasdb.validation.rule import (
     Check,
     Finding,
@@ -63,10 +56,7 @@ from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.run import evaluate, selected
-from opengwasdb.variants import (
-    VariantAxis,
-    variant_table_path,
-)
+from opengwasdb.variants.axis import VariantAxis
 
 
 def validate_store(

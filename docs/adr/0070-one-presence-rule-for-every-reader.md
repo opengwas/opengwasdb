@@ -5,6 +5,12 @@ Issue [#351](https://github.com/opengwas/opengwasdb/issues/351), part of epic
 its §1 (result type) and §8 (top hits). The read side of the Association
 Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 
+> **Clarification, 23 November 2026 (#464).** The association readers moved into
+> the Store Reader: the "one module" below, `opengwasdb/associations/`, is
+> `opengwasdb/store_reader/associations/`, and the facade that calls it is
+> `opengwasdb/store_reader/facade.py`. The rule, the record and the three adapters
+> are unchanged.
+
 > **Amended by [#393](https://github.com/opengwas/opengwasdb/issues/393)
 > (5 Nov 2026).** The two region reads deferred below exist.
 > `Cells.analyses(first, stop)` names a span of Analyses: a Dense grid reads it

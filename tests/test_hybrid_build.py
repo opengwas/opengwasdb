@@ -46,16 +46,17 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     check_hash,
     encode_key,
 )
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 HG19_POS_1 = 100_000
@@ -735,7 +736,7 @@ def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_pat
     # association behind.
     assert len(rejected["z"]) == 0
 
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     dense_alids = [
         record.alid
@@ -757,7 +758,7 @@ def test_a_single_pass_build_leaves_no_variant_for_a_rejected_row(tmp_path):
     the reference, and a rejected row is not a reason to drop a variant the
     reference names (#255).
     """
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     manifest, panel = _maf_filtered_manifest(tmp_path)
     store_path = tmp_path / "single-pass.opengwasdb"
@@ -925,7 +926,7 @@ def test_two_assemblies_colliding_on_one_hg38_alid_record_no_source_origin(tmp_p
     once, both Analyses' associations route to it, and the two component
     variant tables agree.
     """
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     # trait_vcf (hg19): 1:1000000 lifts onto 1:1064620 (HG38_ALID_2).
     # trait_ssf (hg38): a literal 1:1064620 row, no lift. The raw tuples
@@ -1793,7 +1794,7 @@ class TestVariantReference:
         a new shared variant. Its source coordinate disagrees with the one Pass 1
         recorded, so the variant table must write no source_alid (issue #85)
         rather than misattribute one row's association to the other's variant."""
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         # The reference names ALID_1 and ALID_2 directly as hg38 source keys, so
         # Pass 1 knows ALID_2; the panel keeps only ALID_1, which makes ALID_2 an
@@ -1839,7 +1840,7 @@ class TestVariantReference:
         hg19 key that lifts onto an hg38 coordinate and an hg38 key written
         directly. Both must route to the one stored variant, and their disagreeing
         origins must blank its source_alid rather than record either."""
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True

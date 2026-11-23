@@ -23,17 +23,18 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 from store_digest import store_digest
 
 from benchmarks.compare_top_hits import compare_top_hits
-from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.analyses import read_analyses
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import read_top_hit_counts, threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import InvalidAssociations
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import threshold_key
+from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 PANEL_ALIDS = ["1:100000:A:G", "1:814620:A:G", "1:1064620:A:G", "1:1564620:A:G"]
 OFF_PANEL_ALID = "1:2068561:A:G"
@@ -185,7 +186,7 @@ def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     stamp's other feature, rather than spell the panel's indels beside them."""
     from region_tables import edit_manifest
 
-    from opengwasdb.store.open import UnsupportedFormatVersion
+    from opengwasdb.store_reader.format import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
     assert StoreManifest.load(src).format_version == "0.2.3"
@@ -647,7 +648,7 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     assert z == pytest.approx(-4.0, rel=5e-3)
 
     # The overflow no longer carries this association for any analysis.
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     ragged = RaggedCSRReader(dst)
     overflow_alids_after = {alid_by_index[int(v)] for v in np.unique(ragged._variant_index[:])}
@@ -814,13 +815,10 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     LD blocks), so this exercises `_fold_panel_crossovers`'s count of reclaimed
     imputed cells directly against a synthetic completed-dense zarr array instead of
     routing through a real completion run."""
-    from opengwasdb.encoding import (
-        DenseZPlane,
-        EncodingMeasurements,
-        StoreCodec,
-        StoreEncoding,
-    )
+    from opengwasdb.encoding import StoreCodec
     from opengwasdb.layouts.hybrid.complete import _fold_panel_crossovers
+    from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
+    from opengwasdb.store_reader.encoding.planes import DenseZPlane
 
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
     codec = StoreCodec(encoding)

@@ -1,13 +1,7 @@
 """Dense layout defaults."""
 
-from opengwasdb.store.arrays import (
-    DENSE_CHUNK_SHAPE,
-    SHARDED_COMPRESSOR_RECORD,
-    SHARDED_STORE_ZARR_FORMAT,
-    ArrayRole,
-    chunk_layout,
-    shard_layout,
-)
+from opengwasdb.store.arrays import SHARDED_COMPRESSOR_RECORD, SHARDED_STORE_ZARR_FORMAT
+from opengwasdb.store_reader.layout import DENSE_CHUNK_SHAPE, ArrayRole, chunk_layout, shard_layout
 
 #: The maximum Dense grid chunk hint; the seam's policy clips it to the array
 #: dimensions (ADR 0021).  One definition, imported from the seam so the

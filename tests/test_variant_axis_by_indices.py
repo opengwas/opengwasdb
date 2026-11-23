@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from opengwasdb.variants import VariantAxis
-from opengwasdb.variants.axis import (
+from opengwasdb.store_reader.variant_axis import (
     _BULK_SCAN_FRACTION,
     variant_alid_bytes_path,
     variant_alid_rows_path,
-    write_variant_axis,
 )
+from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
 N_VARIANTS = 1000  # threshold = N_VARIANTS * _BULK_SCAN_FRACTION = 10
@@ -149,9 +148,9 @@ def test_identity_by_indices_with_non_indexable_alids(tmp_path):
     Identity must still resolve every requested row: index rows from the
     mmap'd index, long-allele rows via the table read `by_index` performs.
     """
-    from opengwasdb.variants.axis import _ALID_WIDTH, is_indexable_alid
+    from opengwasdb.store_reader.alid import ALID_WIDTH, is_indexable_alid
 
-    long_allele = "A" * (_ALID_WIDTH + 8)  # alid exceeds the fixed width
+    long_allele = "A" * (ALID_WIDTH + 8)  # alid exceeds the fixed width
     variants = [
         CanonicalVariant(
             chromosome="1",

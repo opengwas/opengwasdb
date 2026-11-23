@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import statistics
 import time
 from pathlib import Path
@@ -26,9 +25,9 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.csr import RaggedCSRReader
 
 
 def _dir_size_mb(path: Path) -> float:

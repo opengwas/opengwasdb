@@ -38,7 +38,6 @@ from opengwasdb.encoding.se import _row_block_of
 from opengwasdb.layouts.dense.build_vcf import _eaf_row_band, _flush_band, _shard_columns
 from opengwasdb.layouts.dense.complete import _completion_band_rows
 from opengwasdb.store.arrays import (
-    ArrayRole,
     PartialShardWriteError,
     _block_selection_to_elements,
     count_shard_writes,
@@ -50,6 +49,8 @@ from opengwasdb.store.arrays import (
     sharded_compressor,
     write_shard_cells,
 )
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.layout import ArrayRole
 
 #: A plane small enough to build in a test but with **two** shards on the
 #: Analysis axis and two on the variant axis, so an unaligned selection is
@@ -205,10 +206,10 @@ def test_a_dense_vcf_build_writes_whole_shards(
     """
     import test_dense_vcf_build as tdv
 
-    import opengwasdb.store.arrays as arrays_module
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (8, 4))
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (8, 4))
+
     entries = []
     for a in range(4):
         rows = [
@@ -250,11 +251,10 @@ def test_a_dense_completion_writes_whole_shards(
     from dense_sources import build_dense_fixture
 
     import opengwasdb.layouts.dense.complete as complete_module
-    import opengwasdb.store.arrays as arrays_module
     from opengwasdb.layouts.dense.complete import complete_dense_store
 
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
-    monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+    monkeypatch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
 
@@ -348,12 +348,11 @@ def test_builder_and_converter_agree_on_a_tail_shard(
     from dense_sources import build_dense_fixture
     from legacy_fixtures import relayout_as_0_1_0
 
-    import opengwasdb.store.arrays as arrays_module
     import opengwasdb.store.convert as convert_module
     from opengwasdb.store.convert import convert_release
 
-    monkeypatch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
-    monkeypatch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
+    monkeypatch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
     monkeypatch.setattr(convert_module, "DENSE_CHUNK_SHAPE", (2, 1))
 
     header = (
@@ -410,7 +409,7 @@ def test_an_inner_chunk_that_does_not_tile_the_dense_shard_is_refused() -> None:
     refused, with the values that do named, instead of writing `[100000, 1000]`.
     A small array still clips.
     """
-    from opengwasdb.store.arrays import chunk_layout, shard_layout
+    from opengwasdb.store_reader.layout import chunk_layout, shard_layout
 
     shape = (200_000, 2_000)
     inner = chunk_layout(ArrayRole.DENSE_STATISTIC_PLANE, shape, hint=(1000, 1000))
@@ -574,14 +573,13 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
     one, because a region-offset bug (reading z from `[0:tail-head]` instead of
     `[head:tail]`) changes values while leaving the write counts alone.
     """
-    import opengwasdb.store.arrays as store_arrays
-    from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
     from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+    from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 
     monkeypatch.setattr(
-        store_arrays,
+        store_layout,
         "RAGGED_SEQUENCE_SHARD_ELEMENTS",
-        4 * store_arrays.ASSOCIATION_SEQUENCE_CHUNK,
+        4 * store_layout.ASSOCIATION_SEQUENCE_CHUNK,
     )
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=3))
     writer = RaggedCSRWriter(50_000)
@@ -624,7 +622,8 @@ def test_the_dense_se_exception_tables_are_written_once(tmp_path: Path) -> None:
     once (#321): three bands, each with an exact exception, make one write per
     table.
     """
-    from opengwasdb.encoding import SeExceptionTable, write_dense_se_side_arrays
+    from opengwasdb.encoding import write_dense_se_side_arrays
+    from opengwasdb.store_reader.encoding.codec import SeExceptionTable
 
     root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
     runs = [
@@ -645,8 +644,13 @@ def test_the_completed_se_plane_is_compressed_for_its_own_dtype(tmp_path: Path) 
     compressor resolved for that dtype: its Blosc `typesize` is the plane's own
     itemsize, not a `float32` scratch plane's (issue #326)."""
     from opengwasdb.encoding import StoreCodec
-    from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
     from opengwasdb.layouts.dense.complete import _create_completed_planes
+    from opengwasdb.store_reader.encoding.plan import (
+        EafEncoding,
+        SeEncoding,
+        StoreEncoding,
+        ZEncoding,
+    )
 
     plan = StoreEncoding(
         z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")

@@ -6,6 +6,14 @@
 > type is an `Associations` record read as this mapping; and `lookup()` is
 > Analysis-major on every adapter. The rest stands.
 
+> **Clarification, 23 November 2026 (#464).** The facade moved with the rest of
+> the read path into the Store Reader: the three adapters, and the module
+> docstring stating the contract's axes, are in `opengwasdb/store_reader/facade.py`.
+> Where the text below says `opengwasdb/query/facade.py`, read that.
+> `opengwasdb.query` keeps `StoreQuery` and `query_store`, which opens a release
+> with opengwasdb's reader of the 0.2.x Store Variant Table and hands it to the
+> Store Reader's `query_release`. Nothing in this decision changes.
+
 Supersedes nothing; amends ADR-0006 the same way ADR-0020 does.
 
 ## Context

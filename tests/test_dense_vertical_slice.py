@@ -3,11 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from opengwasdb.encoding import DenseZPlane
 from opengwasdb.index import connect, get_metadata
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.validation import validate_store
 
 
@@ -194,7 +194,7 @@ def test_query_excludes_missing_dense_cells(dense_store_path):
 
 def test_range_indices_matches_range_variant_index(dense_store_path):
     from opengwasdb.index import connect
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     with connect(dense_store_path / "index.sqlite") as conn:
         va = VariantAxis(dense_store_path, conn)

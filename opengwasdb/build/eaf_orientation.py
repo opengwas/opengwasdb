@@ -67,7 +67,8 @@ import numpy as np
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
-from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
+from opengwasdb.store_reader.identity import VariantNormalisationError
+from opengwasdb.variants.normalise import orient_to_canonical
 
 log = logging.getLogger(__name__)
 

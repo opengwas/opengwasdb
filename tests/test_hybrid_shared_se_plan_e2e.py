@@ -42,14 +42,14 @@ import pytest
 import residual_fixtures as fixtures
 from query_assertions import decoded_se, indexed_se
 
-from opengwasdb.encoding.plan import SE_EXCEPTION, SE_MISSING, SeEncoding
-from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION, SE_MISSING, SeEncoding
+from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 #: Panel variants (Dense Component rows) are 1:1000 .. 1:400000; the Ragged
 #: Overflow starts at 1:500000 so the two position spans can never collide no

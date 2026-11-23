@@ -29,7 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from opengwasdb.store.open import UnsupportedFormatVersion, open_store
+from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.validation import validate_store
 
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "restamp_store_to_0_1_0.py"

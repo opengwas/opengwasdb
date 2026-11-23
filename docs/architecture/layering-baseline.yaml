@@ -47,18 +47,3 @@ allowed:
     name: opengwasdb.readers.interface.ImputationScoreDeclaration
   - file: opengwasdb/model/info_score_policy.py
     name: opengwasdb.readers.interface.ImputationScoreKind
-  # Store contract model (layer 0) -> Store Encoding and Store Release envelope
-  # (layer 1): a manifest records the encoding it was written with, and asks the
-  # store whether a format version can be read.
-  - file: opengwasdb/model/manifest.py
-    name: opengwasdb.encoding.StoreEncoding
-  - file: opengwasdb/model/manifest.py
-    name: opengwasdb.encoding.UnsupportedEncoding
-  - file: opengwasdb/model/manifest.py
-    name: opengwasdb.store.open.check_format_version
-  # Store Release envelope (layer 1) -> Query (layer 4): opening a store hands back
-  # the query facade, so the storage layer knows its caller.
-  - file: opengwasdb/store/open.py
-    name: opengwasdb.query.facade.StoreQuery
-  - file: opengwasdb/store/open.py
-    name: opengwasdb.query.facade.query_store

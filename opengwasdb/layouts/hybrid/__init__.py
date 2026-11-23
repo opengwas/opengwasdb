@@ -15,7 +15,7 @@ The two components partition each Analysis's associations disjointly: a variant 
 on-panel (a Dense Component row) xor off-panel (a Ragged Overflow entry).
 """
 
-from opengwasdb.layouts.hybrid.layout import (
+from opengwasdb.store_reader.hybrid import (
     DENSE_SUBDIR,
     dense_component_path,
     dense_to_shared_path,

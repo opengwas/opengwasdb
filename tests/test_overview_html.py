@@ -21,7 +21,6 @@ from dense_sources import build_dense_fixture
 from opengwasdb import overview as overview_module
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 from opengwasdb.layouts.dense.rho import build_dense_rho, write_rho_group
-from opengwasdb.model.analyses import AnalysesTable, read_analyses
 from opengwasdb.overview import (
     FileGuideEntry,
     RhoHeatmap,
@@ -34,6 +33,7 @@ from opengwasdb.overview import (
     render_overview_html,
     write_overview_html,
 )
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 
 
 def _table() -> AnalysesTable:

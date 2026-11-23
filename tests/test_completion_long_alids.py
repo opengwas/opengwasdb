@@ -17,7 +17,7 @@ import pytest
 import test_indel_pairs as pair
 
 from opengwasdb.query import query_store
-from opengwasdb.variants.axis import iter_variant_records
+from opengwasdb.variants.legacy_table import iter_variant_records
 
 PREFIX_ALLELE = "ACGT" * 15
 #: Two insertions at 1:950000 that share their first 64 bytes, and one alone.

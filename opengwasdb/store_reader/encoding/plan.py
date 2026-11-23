@@ -1,0 +1,617 @@
+"""`StoreEncoding` -- the persisted plan that says how a store's statistic
+planes are encoded (ADR 0037, issue #119).
+
+Four properties, each load-bearing:
+
+1. **Decided in exactly one function.** `decide()` is the tree. Nothing else
+   branches on measured data properties to pick an encoding, so a rule change
+   is a one-line diff with one test file rather than an audit of every writer.
+2. **Persisted in `manifest.json`, never re-derived on read.** If a reader
+   re-ran the tree, changing a threshold would silently change how existing
+   stores decode. `from_manifest` is the only way a reader gets a plan.
+3. **Authoritative over array presence.** Asking `if "z" in root` and
+   inferring from dtype is how a store comes to disagree with itself; the plan
+   says what should be there and validation checks that it is.
+4. **Unknown kinds fail loudly** (`UnsupportedEncoding`, spec §21). A reader
+   meeting an encoding it does not implement rejects the release rather than
+   guessing.
+
+Scope note: `z`, `se`, `eaf` and the optional `n` (ADR 0067). Format 3.0 adds
+#118's residual SE kind; older plans continue to declare the unchanged float16
+representation.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field, replace
+from typing import Any
+
+#: `z` is missing. Decodes to NaN, and the paired `se` must be NaN too
+#: (spec §15). An integer plane cannot hold NaN, which is why the contract is
+#: stated per codec rather than per dtype (ADR 0038 §6).
+Z_MISSING = -32768
+
+#: `z` is outside the representable range. The exact `float32` lives in the
+#: plane's sparse overflow table. Not a clip and not a build failure: the
+#: `ukb-b` survey found 568 genuine associations above |z| = 64 (ADR 0037).
+Z_OVERFLOW = -32767
+
+#: The largest code that carries a value; the two below it are reserved.
+Z_CODE_MAX = 32767
+
+#: Steps per unit for the `int16` fixed-point `z` plane. 1/1024 gives a
+#: representable range of -31.998 .. +31.999 with a worst-case p error of 1.6%
+#: at the edge and 0.24% at z = 5, against `float16`'s 26.4% at z = 30. The
+#: 6,346 `ukb-b` cells outside the range cost a 74 KB side table.
+DEFAULT_Z_SCALE = 1024
+
+#: Version of the plan's own schema, distinct from `format_version`: it
+#: identifies the shape of the `encoding` block, not the store format. It is
+#: not reset alongside the format (issue #143) and does not restart at 1: a
+#: block stamped 1 or 2 was a real shape this project wrote, and giving one of
+#: those numbers to a third shape is the collision the format reset exists to
+#: avoid. Every block this build reads or writes declares 3.
+ENCODING_VERSION = 3
+
+
+class UnsupportedEncoding(Exception):
+    """A store declares a statistic encoding this build does not implement."""
+
+
+@dataclass(frozen=True)
+class ZEncoding:
+    """How the `z` plane's stored bytes relate to z-scores."""
+
+    kind: str
+    scale: int | None = None
+
+    @property
+    def is_fixed_point(self) -> bool:
+        """Whether this plane stores scaled integers, with the reserved codes
+        and the overflow table that go with them."""
+        return self.kind == "int16_fixed"
+
+    @property
+    def dtype(self) -> str:
+        return "int16" if self.is_fixed_point else "float16"
+
+    @property
+    def max_representable(self) -> float:
+        """Largest z the plane itself holds; anything above goes to the table.
+
+        Stated as an exact endpoint rather than "±32": signed fixed point is
+        asymmetric, and reserving `Z_MISSING`/`Z_OVERFLOW` makes it more so.
+        """
+        if not self.is_fixed_point:
+            return float("inf")
+        assert self.scale is not None
+        return Z_CODE_MAX / self.scale
+
+    @property
+    def min_representable(self) -> float:
+        if not self.is_fixed_point:
+            return float("-inf")
+        assert self.scale is not None
+        return (Z_OVERFLOW + 1) / self.scale
+
+    def to_manifest(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"kind": self.kind}
+        if self.scale is not None:
+            payload["scale"] = self.scale
+        return payload
+
+    @classmethod
+    def from_manifest(cls, data: dict[str, Any]) -> ZEncoding:
+        kind = str(data["kind"])
+        if kind == "float16":
+            return cls(kind="float16")
+        if kind == "int16_fixed":
+            scale = int(data["scale"])
+            if scale <= 0:
+                raise UnsupportedEncoding(f"z encoding int16_fixed has invalid scale {scale}")
+            return cls(kind="int16_fixed", scale=scale)
+        raise UnsupportedEncoding(
+            f"z encoding kind {kind!r} is not implemented by this build; "
+            "this release cannot be read (spec §21)"
+        )
+
+
+@dataclass(frozen=True)
+class SeEncoding:
+    """How the `se` plane's stored bytes relate to standard errors.
+
+    `float16` is the universal fallback. `int8_residual` is selected only when
+    the measured MAF-predicted representation satisfies the accuracy,
+    exception-rate, and persisted compressed-size gates (ADR 0037 §3).
+    """
+
+    kind: str = "float16"
+    residual_range: float | None = None
+
+    @property
+    def is_residual(self) -> bool:
+        return self.kind == "int8_residual"
+
+    @property
+    def dtype(self) -> str:
+        return "int8" if self.is_residual else "float16"
+
+    @property
+    def step(self) -> float:
+        if not self.is_residual or self.residual_range is None:
+            raise ValueError("a float16 se plane has no residual step")
+        return self.residual_range / 127.0
+
+    def to_manifest(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"kind": self.kind}
+        if self.residual_range is not None:
+            out["residual_range"] = self.residual_range
+        return out
+
+    @classmethod
+    def from_manifest(cls, data: dict[str, Any]) -> SeEncoding:
+        kind = str(data["kind"])
+        if kind == "float16":
+            return cls(kind=kind)
+        if kind == "int8_residual":
+            residual_range = float(data["residual_range"])
+            if not math.isfinite(residual_range) or residual_range <= 0:
+                raise UnsupportedEncoding(
+                    f"se encoding int8_residual has invalid residual_range {residual_range}"
+                )
+            return cls(kind=kind, residual_range=residual_range)
+        raise UnsupportedEncoding(
+            f"se encoding kind {kind!r} is not implemented by this build; "
+            "this release cannot be read (spec §21)"
+        )
+
+
+#: `eaf` is absent for this cell -- the Analysis reported no frequency at this
+#: variant. Decodes to NaN, and is *not* a residual of zero: a store that
+#: cannot tell "no frequency" from "the same frequency as its neighbours"
+#: reports a made-up number for every EAF-less cohort (ADR 0037 §2).
+EAF_ABSENT = -128
+
+#: `eaf` is not representable as a residual -- the exact `float32` lives in the
+#: plane's exception table. Covers a residual outside the range, a frequency of
+#: exactly 0 or 1 (no logit), and a variant with no usable baseline.
+EAF_EXCEPTION = -127
+
+#: The residual codes, inclusive. 254 levels, not 253: an `int8` has 256 codes
+#: and two are reserved. The accuracy table in ADR 0037 §2 was computed for 254.
+EAF_CODE_MIN = -126
+EAF_CODE_MAX = 127
+
+#: Half of the code span, and the divisor that turns a range into a step. The
+#: span is deliberately asymmetric -- `[-126 * step, +127 * step]` -- for the
+#: same reason `z`'s is: reserving codes off one end of a signed integer makes
+#: it so, and stating exact endpoints is honest where "±range" is not.
+EAF_CODE_HALF = 127
+
+#: The residual ranges `decide()` may choose between, in logit units.
+EAF_RANGE_CANDIDATES = (0.5, 1.0, 2.0)
+
+#: The largest share of EAF-bearing cells `decide()` will send to the exception
+#: table in exchange for a smaller (more accurate) range. An exception costs 12
+#: raw bytes -- an `int64` position and a `float32` value -- against the
+#: plane's 1 byte per cell, so 2% caps the side table at 24% of the plane it
+#: sits beside. Within that budget the smaller range is always preferred: it is
+#: 2-4x more accurate on every cell that is *not* an exception, and an
+#: exception is stored exactly either way.
+EAF_EXCEPTION_BUDGET = 0.02
+
+#: Raw bytes an exception-table entry costs (`int64` index + `float32` value).
+EAF_EXCEPTION_BYTES = 12
+
+SE_RANGE_CANDIDATES = (0.5, 1.0, 2.0)
+SE_EXCEPTION_BUDGET = 0.02
+SE_RELATIVE_ERROR_BUDGET = 0.01
+SE_MISSING = -128
+SE_EXCEPTION = -127
+SE_CODE_MIN = -126
+SE_CODE_MAX = 127
+
+
+#: `n` is missing for this association: the build's sample-size input names no
+#: N for the pair. Decodes to NaN. The top code, not 0, because absence and zero
+#: are different and 0 is an invalid sample size rather than a missing one
+#: (ADR 0067). Every code from 1 to `N_MAX` is that many participants.
+N_MISSING = 2**32 - 1
+N_MAX = N_MISSING - 1
+
+
+@dataclass(frozen=True)
+class NEncoding:
+    """How the optional per-association sample-size plane is stored (ADR 0067).
+
+    One kind, `uint32`, chosen by measurement on eQTLGen's pilot-10: its 86,373
+    published N (99..31,684, 14,936 distinct) cost 1.730 B/cell compressed,
+    against 1.731 for `uint16` -- bitshuffle already discards the zero high
+    bytes -- and 1.889 for `float32` with NaN. A sample size is a count, so an
+    integer plane holds every value exactly, which `float32` does only below
+    2**24. There is no "absent" kind: a release without the plane declares no
+    `n` at all, which keeps such a release's manifest byte-identical to one
+    written before the plane existed.
+    """
+
+    kind: str = "uint32"
+
+    @property
+    def dtype(self) -> str:
+        return "uint32"
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {"kind": self.kind}
+
+    @classmethod
+    def from_manifest(cls, data: dict[str, Any]) -> NEncoding:
+        kind = str(data["kind"])
+        if kind == "uint32":
+            return cls(kind=kind)
+        raise UnsupportedEncoding(
+            f"n encoding kind {kind!r} is not implemented by this build; "
+            "this release cannot be read (spec §21)"
+        )
+
+
+class EafBaselineError(Exception):
+    """A baseline array is missing, or does not describe the cells given."""
+
+
+@dataclass(frozen=True)
+class EafEncoding:
+    """How the `eaf` plane's stored bytes relate to effect allele frequencies.
+
+    Three kinds, and the plan says which:
+
+    - `absent` -- no Analysis in this release reports a frequency, so there is
+      no plane. Distinct from a plane of all-absent cells, and distinct from
+      "the array happens not to be on disk", which is what the code used to
+      ask.
+    - `float32` -- ADR 0036's plane, kept as the escape valve. Exact, and the
+      right answer whenever the residual coding would not actually be smaller
+      (a store with roughly one EAF-bearing cell per variant pays more for the
+      per-variant baseline than the `int8` cell saves).
+    - `int8_residual` -- ADR 0037 §2. A per-variant `float32` baseline plus a
+      per-cell quantised **logit** residual.
+
+    The transform is the logit, `log(f / (1 - f))`, and not the log of the
+    frequency. Both leave residuals of the same width on real data (measured:
+    FinnGen sd 0.0170 against 0.0169), but only the logit's error is bounded
+    on *both* sides of the frequency: a residual error of `d` moves `f` by a
+    relative `(1 - f) * d` and `1 - f` by a relative `f * d`, so neither the
+    effect allele frequency nor the minor allele frequency users filter on can
+    be wrong by more than `d`. `log(f)` is blind to the minor side, which for
+    a frequency near 1 is the only side anyone reads.
+    """
+
+    kind: str
+    residual_range: float | None = None
+
+    #: Whether this component carries a per-variant `eaf_reference` array for
+    #: its imputed cells (ADR 0037 §4). Per component, not per store: a Hybrid
+    #: release's Dense Component has imputed cells where its Ragged Overflow
+    #: does not, and each declares its own plan in its own manifest.
+    reference: bool = False
+
+    @property
+    def is_absent(self) -> bool:
+        return self.kind == "absent"
+
+    @property
+    def is_residual(self) -> bool:
+        return self.kind == "int8_residual"
+
+    @property
+    def dtype(self) -> str:
+        return "int8" if self.is_residual else "float32"
+
+    @property
+    def step(self) -> float:
+        """Logit units per code."""
+        if not self.is_residual:
+            raise EafBaselineError(f"eaf encoding {self.kind!r} has no residual step")
+        assert self.residual_range is not None
+        return self.residual_range / EAF_CODE_HALF
+
+    @property
+    def max_residual(self) -> float:
+        """Largest residual the plane holds; above it a cell is an exception."""
+        return EAF_CODE_MAX * self.step
+
+    @property
+    def min_residual(self) -> float:
+        return EAF_CODE_MIN * self.step
+
+    @property
+    def worst_case_relative_error(self) -> float:
+        """Half a step: the most a decoded EAF -- or its complement -- can be
+        wrong by, relative, on a cell that is not an exception."""
+        return self.step / 2.0
+
+    def to_manifest(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"kind": self.kind}
+        if self.residual_range is not None:
+            payload["residual_range"] = self.residual_range
+        if self.reference:
+            payload["reference"] = True
+        return payload
+
+    @classmethod
+    def from_manifest(cls, data: dict[str, Any]) -> EafEncoding:
+        kind = str(data["kind"])
+        reference = bool(data.get("reference", False))
+        if kind in ("absent", "float32"):
+            return cls(kind=kind, reference=reference)
+        if kind == "int8_residual":
+            residual_range = float(data["residual_range"])
+            if not math.isfinite(residual_range) or residual_range <= 0:
+                raise UnsupportedEncoding(
+                    f"eaf encoding int8_residual has invalid residual_range {residual_range}"
+                )
+            return cls(kind=kind, residual_range=residual_range, reference=reference)
+        raise UnsupportedEncoding(
+            f"eaf encoding kind {kind!r} is not implemented by this build; "
+            "this release cannot be read (spec §21)"
+        )
+
+
+@dataclass(frozen=True)
+class EafMeasurements:
+    """What the tree is allowed to know about a build's frequencies.
+
+    Counted over every component the plan will cover -- a Hybrid release's
+    Dense Component and its Ragged Overflow are summed, because one `decide()`
+    serves both and each writes its own baseline array.
+    """
+
+    #: Cells the plane spans: the Dense grid's area, or the CSR's length.
+    n_cells: int = 0
+    #: Of those, cells carrying a finite frequency.
+    n_eaf_cells: int = 0
+    #: Length of the variant axis (or axes) a baseline array would cover. This,
+    #: not `n_analyses`, is what decides whether the baseline amortises: a
+    #: Ragged store whose variants appear in one Analysis each pays 4 bytes of
+    #: baseline per 1-byte cell, and is better off in `float32`.
+    n_variants: int = 0
+    #: Share of the EAF-bearing cells that would fall outside each candidate
+    #: range, measured on the build's own data. Keys are the candidates.
+    exception_fraction: dict[float, float] = field(default_factory=dict)
+
+    @property
+    def has_eaf(self) -> bool:
+        return self.n_eaf_cells > 0
+
+
+@dataclass(frozen=True)
+class EncodingMeasurements:
+    """The one summary the decision tree is allowed to look at.
+
+    Computed once per build, from the data rather than from the layout.
+    Only the fields the current tree consults are here; #118 adds the
+    per-Analysis `se`~MAF fit when there is a rule that reads it.
+    """
+
+    n_analyses: int
+    eaf: EafMeasurements | None = None
+    se: SeMeasurements | None = None
+    #: Whether the build was given a per-association sample size. An opt-in
+    #: input rather than a measured property, so a build without one writes
+    #: exactly the release it wrote before the plane existed (ADR 0067).
+    n_plane: bool = False
+
+
+@dataclass(frozen=True)
+class SeMeasurements:
+    """Measured residual-SE eligibility and complete compressed byte costs."""
+
+    eligible: bool = False
+    exception_fraction: dict[float, float] = field(default_factory=dict)
+    worst_relative_error: dict[float, float] = field(default_factory=dict)
+    compressed_bytes: dict[float, int] = field(default_factory=dict)
+    float16_compressed_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class StoreEncoding:
+    """The plan: one decision, recorded in `manifest.json`, read everywhere."""
+
+    z: ZEncoding
+    se: SeEncoding
+    eaf: EafEncoding = EafEncoding(kind="absent")
+    version: int = ENCODING_VERSION
+    #: The optional per-association sample-size plane; `None` when the release
+    #: has none, and then omitted from the manifest entirely (ADR 0067).
+    n: NEncoding | None = None
+
+    @classmethod
+    def decide(cls, measurements: EncodingMeasurements) -> StoreEncoding:
+        """The decision tree, and the only site that runs it (ADR 0037).
+
+        R1 -- `z` is `int16` fixed point, unconditionally: it is bounded and
+        needs uniform precision, and the sparse overflow table means no data
+        property can make that choice wrong.
+        R2 -- `se` uses the smallest measured residual range that passes every
+        gate, otherwise the entire plane remains `float16` -- and stays
+        `float16`, unmeasured, beside an `n` plane (`_decide_se`).
+        R3..R5 -- `eaf` is decided by `_decide_eaf` below, from measured
+        residual spread and measured bytes.
+        R6 -- `n` is `uint32` when the build supplies per-association sample
+        sizes and absent otherwise (ADR 0067).
+        """
+        return cls(
+            z=ZEncoding(kind="int16_fixed", scale=DEFAULT_Z_SCALE),
+            se=_decide_se(measurements.se, n_plane=measurements.n_plane),
+            eaf=_decide_eaf(measurements.eaf),
+            n=NEncoding() if measurements.n_plane else None,
+        )
+
+    def with_se(self, se: SeEncoding) -> StoreEncoding:
+        """This plan with `se` replaced, and every other part kept.
+
+        SE is decided after the planes are written, from the plane itself
+        (`opengwasdb.encoding.se`), so it is the one part a build replaces.
+        """
+        return replace(self, se=se)
+
+    def with_eaf_reference(self, present: bool) -> StoreEncoding:
+        """This plan, with the component's `eaf_reference` presence set.
+
+        Reference EAF is the one part of the plan that legitimately differs
+        between a Hybrid release's two components, so it is set per component
+        rather than decided by the tree (ADR 0037 §4).
+
+        It is set independently of the observed plane, `absent` included. A
+        source whose Analyses reported no frequency at all still gains imputed
+        cells when it is completed, and an imputed cell's frequency *is* the
+        panel's -- so such a release carries panel EAF on those cells and NaN
+        on every observed one, which is what issue #113 asked for. Refusing the
+        combination would have made the release with no frequencies of its own
+        the one release that could not hold the panel's.
+        """
+        return StoreEncoding(
+            z=self.z,
+            se=self.se,
+            eaf=EafEncoding(
+                kind=self.eaf.kind,
+                residual_range=self.eaf.residual_range,
+                reference=present,
+            ),
+            version=self.version,
+            n=self.n,
+        )
+
+    def to_manifest(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "version": self.version,
+            "z": self.z.to_manifest(),
+            "se": self.se.to_manifest(),
+            "eaf": self.eaf.to_manifest(),
+        }
+        if self.n is not None:
+            payload["n"] = self.n.to_manifest()
+        return payload
+
+    @classmethod
+    def from_manifest(cls, data: dict[str, Any]) -> StoreEncoding:
+        """Read a declared plan. Never re-derives it, and never falls back."""
+        # A block with no `version` predates the plan's schema carrying one,
+        # which makes it a pre-reset release this build does not read (issue
+        # #143). Inferring a version from its absence is the inference the
+        # persisted plan exists to stop (issue #119), and the earlier reading
+        # of a missing key -- "this is version 1" -- would now hand a `0.1.0`
+        # release the eaf contract of a format that no longer exists.
+        if "version" not in data:
+            raise UnsupportedEncoding(
+                "encoding block declares no version; every block this build reads "
+                f"declares {ENCODING_VERSION} (spec §6a). A block without one was "
+                "written before the format reset and cannot be read -- rebuild the "
+                "release from source (ADR 0041)"
+            )
+        version = int(data["version"])
+        if version != ENCODING_VERSION:
+            raise UnsupportedEncoding(
+                f"encoding block version {version} is not the one this build "
+                f"implements ({ENCODING_VERSION}); this release cannot be read. "
+                "Versions below it are pre-reset block shapes whose readers were "
+                "deleted (ADR 0041); above it is a release from the future"
+            )
+        if "eaf" not in data:
+            raise UnsupportedEncoding(
+                f"encoding block version {version} must declare an eaf plan and does "
+                "not; this release cannot be read without inferring one, which is what "
+                "the declared plan exists to prevent (spec §21)"
+            )
+        plan = cls(
+            z=ZEncoding.from_manifest(data["z"]),
+            se=SeEncoding.from_manifest(data["se"]),
+            eaf=EafEncoding.from_manifest(data["eaf"]),
+            version=version,
+            # Optional, unlike `eaf`: a block without `n` is every release
+            # written before the plane existed, and every release since that
+            # was given no sample-size input (ADR 0067).
+            n=NEncoding.from_manifest(data["n"]) if "n" in data else None,
+        )
+        if plan.n is not None and plan.se.is_residual:
+            # `decide` never writes this pairing; a block that declares it was
+            # written by something else, and decoding it would hand out SEs coded
+            # under a model that assumes one N per Analysis (ADR 0067 §4).
+            raise UnsupportedEncoding(
+                f"encoding block declares an n plane beside se {plan.se.kind}, but an n "
+                "plane requires float16 se (ADR 0067 §4); this release cannot be read"
+            )
+        return plan
+
+
+def _eaf_residual_bytes(measurements: EafMeasurements, residual_range: float) -> int:
+    """Raw bytes the residual coding would occupy at `residual_range`."""
+    fraction = measurements.exception_fraction.get(residual_range, 0.0)
+    exceptions = math.ceil(fraction * measurements.n_eaf_cells)
+    return measurements.n_cells + 4 * measurements.n_variants + EAF_EXCEPTION_BYTES * exceptions
+
+
+def _eaf_float32_bytes(measurements: EafMeasurements) -> int:
+    """Raw bytes ADR 0036's `float32` plane would occupy."""
+    return 4 * measurements.n_cells
+
+
+def _decide_eaf(measurements: EafMeasurements | None) -> EafEncoding:
+    """Pick the `eaf` encoding from measured spread and measured bytes.
+
+    Two questions, in order, and neither is answered from the layout:
+
+    1. **Which range?** The smallest candidate whose measured exception
+       fraction fits `EAF_EXCEPTION_BUDGET`, because a smaller range is more
+       accurate on every cell it holds and an exception is exact either way.
+       If none fits, the widest candidate -- a store whose frequencies really
+       do disagree by more than a factor of `e^2` between Analyses is not made
+       better by a narrower range, only more expensive.
+    2. **Is it worth it?** Raw bytes against ADR 0036's `float32` plane. This
+       is where the baseline's economics are decided rather than assumed: the
+       saving is per *cell* and the cost is per *variant*, so a store with few
+       EAF-bearing cells per variant is left in `float32`. Compressed bytes
+       would be the truer comparison but cannot be measured before the data is
+       written; the raw comparison is conservative in the safe direction,
+       since the `int8` plane compresses substantially better than the
+       `float32` one it would replace (measured: 0.26 against 1.52 B/cell on
+       FinnGen chr1).
+    """
+    if measurements is None or not measurements.has_eaf:
+        return EafEncoding(kind="absent")
+    chosen = next(
+        (
+            candidate
+            for candidate in EAF_RANGE_CANDIDATES
+            if measurements.exception_fraction.get(candidate, 1.0) <= EAF_EXCEPTION_BUDGET
+        ),
+        EAF_RANGE_CANDIDATES[-1],
+    )
+    if _eaf_residual_bytes(measurements, chosen) >= _eaf_float32_bytes(measurements):
+        return EafEncoding(kind="float32")
+    return EafEncoding(kind="int8_residual", residual_range=chosen)
+
+
+def _decide_se(measurements: SeMeasurements | None, *, n_plane: bool = False) -> SeEncoding:
+    """`int8_residual` where it passes every gate, `float16` otherwise.
+
+    Never residual beside a per-association `n` plane (ADR 0067). The residual
+    predicts `log(se)` from `log(2f(1 - f))` with one intercept per Analysis,
+    which assumes one N per Analysis; where N varies by pair the residual
+    absorbs `-1/2 log N`. On eQTLGen, whose N spans 2.5 decades, that forced the
+    widest range and a 0.79% worst-case SE error against `float16`'s 0.049%.
+    The gates would still pass it -- they bound the error at 1% -- so the rule
+    is stated here rather than left to the measurements.
+    """
+    if n_plane or measurements is None or not measurements.eligible:
+        return SeEncoding("float16")
+    for candidate in SE_RANGE_CANDIDATES:
+        if (
+            measurements.exception_fraction.get(candidate, 1.0) <= SE_EXCEPTION_BUDGET
+            and measurements.worst_relative_error.get(candidate, float("inf"))
+            <= SE_RELATIVE_ERROR_BUDGET
+            and measurements.compressed_bytes.get(candidate, math.inf)
+            < measurements.float16_compressed_bytes
+        ):
+            return SeEncoding("int8_residual", candidate)
+    return SeEncoding("float16")

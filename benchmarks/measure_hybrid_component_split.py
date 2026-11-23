@@ -40,7 +40,7 @@ import numpy as np
 import zarr
 
 from benchmarks._artifact import provenance
-from opengwasdb.encoding import Z_MISSING
+from opengwasdb.store_reader.encoding.plan import Z_MISSING
 
 # Row blocks span whole chunks, so no chunk is decompressed by two workers.
 ROWS_PER_TASK_CHUNKS = 10

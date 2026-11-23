@@ -32,9 +32,9 @@ from test_se_measurement_edge_padding import _COMPRESSOR, _real_zarr_bytes
 
 from opengwasdb.encoding import se as se_module
 from opengwasdb.encoding.codec import se_residual_codes
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.encoding.planes import DenseSePlane
 
 
 def _stored_bytes(group: Any, name: str) -> int:

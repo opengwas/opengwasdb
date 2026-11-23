@@ -38,7 +38,8 @@ from benchmarks.benchmark_store_comparison import (
     footprint,
     result_digests,
 )
-from opengwasdb.store.arrays import ArrayRole, create_array, open_group_for_write
+from opengwasdb.store.arrays import create_array, open_group_for_write
+from opengwasdb.store_reader.layout import ArrayRole
 
 
 def _result(

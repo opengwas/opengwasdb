@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 _SCRIPT_PATH = (

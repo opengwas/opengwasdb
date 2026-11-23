@@ -52,7 +52,7 @@ def warm_parent(out: Path) -> None:
     import zarr.core.codec_pipeline as codec_pipeline
 
     from opengwasdb.store import arrays
-    from opengwasdb.store.arrays import ArrayRole
+    from opengwasdb.store_reader.layout import ArrayRole
 
     warm = out / "warm.zarr"
     root = arrays.open_group_for_write(warm, "w")
@@ -125,8 +125,8 @@ def ragged_completion_n2(out: Path) -> None:
 
 def gather_n2(out: Path) -> None:
     import opengwasdb.layouts.dense.top_hits as dense_top_hits
-    from opengwasdb.model.manifest import StoreManifest
     from opengwasdb.store import arrays
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     store = out / "builds" / "hybrid-n2" / "store.opengwasdb" / "dense"
     encoding = StoreManifest.load(store).encoding
@@ -146,7 +146,7 @@ def gather_n2(out: Path) -> None:
 def gather_real_n2(store: Path) -> None:
     """Each worker decodes a full-width row band: three `[1000, 1000]` chunks per plane."""
     import opengwasdb.layouts.dense.top_hits as dense_top_hits
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     encoding = StoreManifest.load(store).encoding
     rng = np.random.default_rng(244)

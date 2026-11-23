@@ -38,7 +38,6 @@ import numpy as np
 
 from opengwasdb.completion.ld_panel import LDBlock, list_all_blocks, list_chromosomes
 from opengwasdb.model.analyses import Analysis
-from opengwasdb.model.enums import AssociationCoverage
 from opengwasdb.model.regions import (
     REGION_KINDS,
     REGIONS_FILE,
@@ -47,7 +46,9 @@ from opengwasdb.model.regions import (
     RegionTableError,
     check_region_table,
 )
-from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
+from opengwasdb.store_reader.enums import AssociationCoverage
+from opengwasdb.store_reader.identity import normalise_chromosome
+from opengwasdb.variants.normalise import chromosome_sort_key
 
 __all__ = [
     "RegionBlocks",

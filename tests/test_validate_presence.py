@@ -16,7 +16,7 @@ import pytest
 import zarr
 from presence_fixtures import CELLS, build_stores, csr_position, plant
 
-from opengwasdb.encoding.codec import Z_MISSING
+from opengwasdb.store_reader.encoding.plan import Z_MISSING
 from opengwasdb.validation.validate import validate_store
 
 CSR_CASES = ["ragged", "hybrid_overflow"]

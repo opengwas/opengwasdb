@@ -41,12 +41,9 @@ import numpy as np
 
 from benchmarks._artifact import provenance, scratch_copy, write_artifact
 from benchmarks.measure_build_cost import parse_time_v
-from opengwasdb.layouts.dense.indexed_subsets import (
-    DEFAULT_BAND_CELLS,
-    open_indexed_subset,
-    remove_indexed_subset,
-)
+from opengwasdb.layouts.dense.indexed_subsets import DEFAULT_BAND_CELLS, remove_indexed_subset
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.indexed import open_indexed_subset
 from opengwasdb.variants.axis import VariantAxis
 
 STORE = Path("/data/opengwasdb/stores/OGS-00009/store.opengwasdb")

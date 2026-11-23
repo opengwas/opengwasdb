@@ -17,10 +17,10 @@ from stored_rows import stored_rows
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH, RaggedCSRReader
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation.validate import validate_store
 
 # ── Synthetic BESD fixture (reused from test_ragged_build_besd.py) ─────────
@@ -217,7 +217,7 @@ class TestTopHitCountsRefreshedByCompletion:
     list a threshold is evaluated against."""
 
     def test_completed_top_hit_counts_match_completed_top_hit_index(self, completed_store):
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.top_hits import read_top_hit_counts
 
         table = read_analyses(completed_store / "analyses.tsv")
@@ -243,7 +243,8 @@ class TestTopHitCountsRefreshedByCompletion:
         top-hit index rather than adding onto whatever the source said, so
         the completed values equal a fresh recomputation for every threshold
         column and the stale marker is neither retained nor double-counted."""
-        from opengwasdb.model.analyses import read_analyses, write_analyses
+        from opengwasdb.model.analyses import write_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.top_hits import read_top_hit_counts
 
         analyses_path = observed_store / "analyses.tsv"
@@ -280,7 +281,7 @@ class TestCompletionRollupColumns:
     def test_rollup_columns_match_completion_quality_table(self, completed_store):
         import sqlite3
 
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         table = read_analyses(completed_store / "analyses.tsv")
         rows = {int(r["analysis_index"]): r for r in table.rows}
@@ -318,7 +319,7 @@ class TestCompletionRollupColumns:
             conn.close()
 
     def test_completed_against_recorded_when_ancestry_matches(self, completed_store):
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         rows = read_analyses(completed_store / "analyses.tsv").rows
         # This fixture's build carries no assigned_ancestry column, so
@@ -616,7 +617,7 @@ class TestPanelAlidCanonicalisation:
         return completed_store
 
     def test_new_panel_variant_in_underscore_form_is_imputed(self, tmp_path):
-        from opengwasdb.variants import parse_canonical_alid
+        from opengwasdb.store_reader.alid import parse_canonical_alid
         from opengwasdb.variants.axis import VariantAxis
 
         # 7 observed positions (alleles already alphabetically A1<A2, so no
@@ -729,8 +730,8 @@ class TestObservedAlidMapsRecord:
     the field assertions cannot pass on a swapped or missing map."""
 
     def test_each_field_is_its_own_statistics_alid_keyed_map(self):
-        from opengwasdb.associations import Associations
         from opengwasdb.layouts.ragged.complete import _observed_alid_maps, _ObservedAlidMaps
+        from opengwasdb.store_reader.associations import Associations
 
         src_alids = ["1:100:A:G", "1:200:C:T", "1:300:A:C"]
         obs = Associations.from_decoded(
@@ -754,8 +755,8 @@ class TestObservedAlidMapsRecord:
         assert maps.eaf_by_alid == {"1:100:A:G": 0.25, "1:200:C:T": 0.5, "1:300:A:C": 0.75}
 
     def test_an_empty_analysis_yields_all_three_maps(self):
-        from opengwasdb.associations import Associations
         from opengwasdb.layouts.ragged.complete import _observed_alid_maps
+        from opengwasdb.store_reader.associations import Associations
 
         obs = Associations.from_decoded(
             variant_index=np.empty(0, dtype=np.int32),
@@ -891,8 +892,8 @@ class TestAncestryMatchedRaggedCompletion:
     def test_only_matching_ancestry_analysis_is_imputed(self, tmp_path):
         import sqlite3
 
-        from opengwasdb.model.analyses import read_analyses
-        from opengwasdb.variants import parse_canonical_alid
+        from opengwasdb.store_reader.alid import parse_canonical_alid
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.variants.axis import VariantAxis
         from tests.ssf_builds import build_ragged_from_ssf
 
@@ -1680,7 +1681,8 @@ class TestGeneTargetLessAnalyses:
         """Blank `trait_chr`/`trait_bp` and nothing else, so the only
         difference from a store that does get completed is the one thing this
         issue is about."""
-        from opengwasdb.model.analyses import read_analyses, write_analyses
+        from opengwasdb.model.analyses import write_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         table = read_analyses(store / "analyses.tsv")
         rows = [{**row, "trait_chr": "", "trait_bp": ""} for row in table.rows]
@@ -1861,7 +1863,7 @@ class TestObservedDuplicates:
 
     @staticmethod
     def _observed():
-        from opengwasdb.associations import Associations
+        from opengwasdb.store_reader.associations import Associations
 
         # Variant 0 twice, agreeing on z and SE but not on EAF; variant 1
         # twice, disagreeing; variant 2 once.
@@ -1917,10 +1919,10 @@ def test_a_half_missing_source_cell_is_refused_even_where_no_block_completes(obs
     An Analysis no completable block touches is carried through as it stands,
     so its half-missing cell is refused rather than written: the Association
     Reader the source is read through refuses it."""
-    from opengwasdb.associations import CsrReader, InvalidAssociations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
-    from opengwasdb.model.manifest import StoreManifest
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.store_reader.associations import CsrReader, InvalidAssociations
+    from opengwasdb.store_reader.manifest import StoreManifest
+    from opengwasdb.variants.axis import VariantAxis
 
     assert StoreManifest.load(observed_store).encoding.se.kind == "float16"
     ragged = zarr.open_group(observed_store / RAGGED_ZARR_PATH, mode="r+")
@@ -2013,8 +2015,8 @@ def _completed_from_fills(alids: list[str], blocks: dict[float, list[tuple[str, 
     block's ``(alid, z, se)`` fills per entry, in block order."""
     from types import SimpleNamespace
 
-    from opengwasdb.associations import Associations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.store_reader.associations import Associations
 
     nothing = Associations.from_decoded(
         variant_index=np.empty(0, dtype=np.int32),
@@ -2054,8 +2056,8 @@ def test_every_observed_row_completion_drops_is_logged(caplog):
     variants that disagree are all named, not a sample of them."""
     from types import SimpleNamespace
 
-    from opengwasdb.associations import Associations
     from opengwasdb.layouts.ragged.complete import _completed_analysis
+    from opengwasdb.store_reader.associations import Associations
 
     observed = Associations.from_decoded(
         variant_index=np.tile(np.arange(6, dtype=np.int32), 2),
@@ -2150,7 +2152,7 @@ def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
 
     from test_ragged_residual_completion import build_residual_ssf_source, write_eaf_carrying_panel
 
-    from opengwasdb.encoding.plan import EAF_ABSENT, SE_MISSING, Z_MISSING
+    from opengwasdb.store_reader.encoding.plan import EAF_ABSENT, SE_MISSING, Z_MISSING
     from opengwasdb.variants.axis import VariantAxis
 
     observed, _ = build_residual_ssf_source(tmp_path / "source")

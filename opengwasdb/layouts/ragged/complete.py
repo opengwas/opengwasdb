@@ -43,7 +43,6 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
@@ -72,19 +71,12 @@ from opengwasdb.completion.regions import analysis_regions, inside, region_block
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    SE_EXCEPTION_BUDGET,
-    StoreEncoding,
-)
 from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
-    RAGGED_ZARR_PATH,
     RaggedCSRWriter,
     ReferenceCompletion,
     SeExceptionCounts,
@@ -96,7 +88,6 @@ from opengwasdb.model.analyses import (
     reset_top_hit_counts,
     write_analysis_records,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.regions import REGIONS_FILE, Region, RegionTable, read_store_regions
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import (
@@ -106,11 +97,13 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
-from opengwasdb.variants.axis import (
-    VariantAxis,
-    VariantRecord,
-    write_variant_axis,
-)
+from opengwasdb.store_reader.associations import Associations, Cells, CsrReader
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, SE_COEFFICIENTS
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.variant_axis import VariantRecord
+from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 

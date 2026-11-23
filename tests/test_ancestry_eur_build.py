@@ -19,7 +19,7 @@ from typer.testing import CliRunner
 import opengwasdb.ancestry.subset as subset_module
 from opengwasdb.ancestry.subset import build_hybrid_from_catalogue, subset_catalogue
 from opengwasdb.cli.main import app
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 

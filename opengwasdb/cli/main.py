@@ -16,7 +16,6 @@ from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
 from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.build.phenotype_sd_pipeline import (
     AfSource,
@@ -36,7 +35,6 @@ from opengwasdb.layouts.dense.complete import (
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
-    IndexedSubsetError,
     OverflowOnlyPolicy,
     build_indexed_subset,
 )
@@ -55,20 +53,19 @@ from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.ld.cli import ld_app
-from opengwasdb.model.analyses import read_analyses, read_analysis_records
-from opengwasdb.model.enums import (
-    COVERAGES_BY_LAYOUT,
-    AssociationCoverage,
-    PrimaryStorageLayout,
-)
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.analyses import read_analysis_records
+from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
-from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
-from opengwasdb.store.open import UnsupportedFormatVersion
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
+from opengwasdb.store_reader.indexed import IndexedSubsetError
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -472,7 +469,7 @@ def _written_association_coverage(store_path: Path) -> str:
     as the release's coverage (#294), so what is printed must be what is on
     disk -- including for a completion, which has no argument to echo.
     """
-    manifest = cast(StoreManifest, open_store(store_path).manifest)
+    manifest = open_store(store_path).manifest
     return manifest.association_coverage.value
 
 
@@ -1848,7 +1845,8 @@ def build_variant_index_command(
     not carry one answers every query through the scan it replaces, so this is
     an acceleration, not a repair: a `0.1.0` release is converted first.
     """
-    from opengwasdb.layouts.ragged.by_variant import VariantIndexError, add_variant_index
+    from opengwasdb.layouts.ragged.by_variant import add_variant_index
+    from opengwasdb.store_reader.by_variant import VariantIndexError
 
     try:
         result = add_variant_index(store_path, force=force, spill_dir=spill_dir)

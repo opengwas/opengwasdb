@@ -38,10 +38,8 @@ from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orienta
 from opengwasdb.build.liftover import (
     LiftedRow,
     lift_hg19_to_hg38,
-    normalise_build,
     require_lifted_alleles_match_reference,
 )
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
@@ -65,13 +63,7 @@ from opengwasdb.layouts.ragged.trait_positions import (
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafScope,
-    PrimaryStorageLayout,
-    SampleSizeScope,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafScope, SampleSizeScope, coverage_for_layout
 from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.readers.besd import BESD_CAPABILITY, BesdSource, load_besd_source
@@ -80,22 +72,23 @@ from opengwasdb.readers.orientation import a1_frequencies, swap
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.identity import (
+    MalformedIdentity,
+    VariantNormalisationError,
+    normalise_chromosome,
+)
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     Orientation,
-    VariantNormalisationError,
     chromosome_sort_key,
-    normalise_chromosome,
     orient_to_canonical,
     write_variant_axis,
 )
-from opengwasdb.variants.normalise import (
-    MalformedIdentity,
-    allele_fault,
-    chromosome_fault,
-    undeclared_reference,
-)
+from opengwasdb.variants.normalise import allele_fault, chromosome_fault, undeclared_reference
 from opengwasdb.variants.routing import collapse_duplicates
 from opengwasdb.variants.routing.lift import split_off_primary
 

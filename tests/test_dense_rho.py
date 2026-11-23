@@ -9,7 +9,6 @@ from dense_sources import build_dense_fixture, build_dense_from_records
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseZPlane
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
@@ -17,9 +16,10 @@ from opengwasdb.layouts.dense.rho import (
     select_thinned_variants,
     write_rho_group,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 

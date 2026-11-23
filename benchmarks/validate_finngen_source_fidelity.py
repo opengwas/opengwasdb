@@ -44,8 +44,8 @@ import pandas as pd
 from scipy.special import log_ndtr
 
 from benchmarks._artifact import provenance, write_artifact
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
 
 PREFIX = "finngen-r13-"
 CHROMOSOMES = {**{str(n): n for n in range(1, 23)}, "X": 23, "Y": 24, "MT": 25, "23": 23}
