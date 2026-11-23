@@ -85,15 +85,40 @@ def main(path: Path) -> None:
                   f"({_range(cold)}) | {warm_med:.1f} ({_range(warm_all)}) | {ratio} | {cratio} |")
         w("")
 
-    w("## Attribution (reference run, end to end)")
+    w("## Attribution (reference run)")
     w("")
-    w("| shape | axis_resolution warm ms | decode warm ms | end_to_end warm ms | decode / end_to_end |")
-    w("|---|---|---|---|---|")
+    w("The ALID-to-row step against the whole lookup, same reference run (warm medians).")
+    w("")
+    w("| shape | axis_resolution warm ms | end_to_end warm ms | ALID-to-row share of end_to_end |")
+    w("|---|---|---|---|")
     for shape in lookup_shapes:
         a = statistics.median(_warm(r) for r in by_key[(shape, "axis_resolution", reference)]["rounds"])
-        d = statistics.median(_warm(r) for r in by_key[(shape, "decode", reference)]["rounds"])
         e = statistics.median(_warm(r) for r in by_key[(shape, "end_to_end", reference)]["rounds"])
-        w(f"| {shape.replace('random_lookup_', '')} | {a:.2f} | {d:.1f} | {e:.1f} | {100 * d / e:.1f} % |")
+        w(f"| {shape.replace('random_lookup_', '')} | {a:.2f} | {e:.1f} | {100 * a / e:.2f} % |")
+    w("")
+
+    w("## Matched comparisons (end to end, warm; ratio per round, median and range)")
+    w("")
+    w("Python candidate / Rust candidate on the same store; above 1 means Rust is faster. "
+      "The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), "
+      "not a bound on what Python can do.")
+    w("")
+    w("| shape | store chunk | threads | Python candidate | Rust candidate | ratio |")
+    w("|---|---|---|---|---|---|")
+    pairs = [
+        ("1000", "1 vs 1", "python-fused-1000", "rust-1thread-1000"),
+        ("1000", "16 vs 16", "python-threadpool16-1000", "rust-16thread-1000"),
+        ("1000", "16 vs 16", "python-zarr-pool16-1000", "rust-16thread-1000"),
+        ("100", "1 vs 1", "python-fused-100", "rust-1thread-100"),
+        ("100", "16 vs 16", "python-threadpool16-100", "rust-16thread-100"),
+    ]
+    for shape in lookup_shapes:
+        for chunk, threads, py, rs in pairs:
+            cp, cr = by_key.get((shape, "end_to_end", py)), by_key.get((shape, "end_to_end", rs))
+            if cp is None or cr is None:
+                continue
+            w(f"| {shape.replace('random_lookup_', '')} | {chunk} | {threads} | {py} | {rs} | "
+              f"{_ratio_text(_ratio(cp, cr, 'warm'))} |")
     w("")
 
     w("## Effective configuration (read back in each child)")
@@ -158,7 +183,9 @@ def main(path: Path) -> None:
     w("## Agreement")
     w("")
     n = sum(1 for c in cols for r in c["rounds"] if r.get("digests_equal_reference"))
-    total = sum(len(c["rounds"]) for c in cols if c["stage"] != "axis_resolution")
+    total = sum(
+        len(c["rounds"]) for c in cols if not (c["kind"].startswith("rust") and c["stage"] == "axis_resolution")
+    )
     w(f"{n} of {total} digested measurements equal the reference's first-call digests "
       f"(Python: first and last call; Rust: cold and warm process). {data.get('agreement', '')}")
     print("\n".join(out))
