@@ -191,14 +191,18 @@ def _child(args: argparse.Namespace) -> None:
             r = q._variant_axis.indices_by_identifiers(alids)
             return {"rows": np.asarray(r, dtype="int64"), "cols": np.asarray(analysis_columns(), dtype="int64")}
 
-        if pool is None:
-            decode = lambda: q._grid.read(Cells.cross(rows, cols), observed_only=False)  # noqa: E731
-            end_to_end = lambda: q.lookup(alids, analyses)  # noqa: E731
-        else:
-            decode = lambda: _threadpool_read(q, rows, cols, pool, Cells)  # noqa: E731
-            end_to_end = lambda: _threadpool_read(  # noqa: E731
+        def decode() -> Any:
+            if pool is None:
+                return q._grid.read(Cells.cross(rows, cols), observed_only=False)
+            return _threadpool_read(q, rows, cols, pool, Cells)
+
+        def end_to_end() -> Any:
+            if pool is None:
+                return q.lookup(alids, analyses)
+            return _threadpool_read(
                 q, q._variant_axis.indices_by_identifiers(alids), analysis_columns(), pool, Cells
             )
+
         fn = {"axis_resolution": axis, "decode": decode, "end_to_end": end_to_end}[args.stage]
     else:
         if args.kind != "python-fused" or args.stage != "end_to_end":
