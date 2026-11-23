@@ -216,7 +216,7 @@ regressions are retained rather than hidden behind aggregate clump wins.
 
 ### Retained evidence
 
-`docs/benchmarks/results/40/round2-*.gz` holds the complete JSONL records, both certification
+`docs/benchmarks/ld/results/40/round2-*.gz` holds the complete JSONL records, both certification
 logs, same-shard microbenchmark, I/O-only diagnostic, phase driver, constrained HTTP driver,
 allocation red run, and exploration logs/scripts. For the final table use local records from
 `round2-initial-reads.gz` / `round2-initial-clump-http.gz`, and HTTP records from

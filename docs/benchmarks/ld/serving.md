@@ -3,7 +3,7 @@
 _Measured 13 November 2026 on the published HGDP+1kGP stores: the clump and read runs at ogld
 `6bae783` (ogld#31's Far Pairs and ogld#32's reader, both merged), the memory and lag runs at
 `1dcd548`, whose `ogld/` is the same. The records are in [`results/9/`](results/9/), and
-[`serving-tables.md`](serving-tables.md) is every one of them rendered by `bench-serving tables`.
+[`serving-tables.md`](serving-tables.md) is every one of them rendered by `ld-bench-serving tables`.
 ogld#8's method, targets and states are in [`latency.md`](latency.md). ADR 0094 uses these
 numbers._
 
@@ -47,20 +47,20 @@ decision turns on were not measured:
 
 ## How
 
-- **Clumps:** `pixi run -e dev bench-latency step1 --target local --case clump --cold-only`,
+- **Clumps:** `pixi run -e dev ld-bench-latency step1 --target local --case clump --cold-only`,
   every Analysis cold: its pages evicted, the store opened inside the timing.
-- **Static Zarr:** `pixi run -e dev bench-latency step1 --target local http10 http50 http100 --case
+- **Static Zarr:** `pixi run -e dev ld-bench-latency step1 --target local http10 http50 http100 --case
   proxies scattered region --seeds 1`. ogld#8's static host and proxy on loopback, with the wait
   added to every request. **This is loopback with injected latency, not a real WAN.** 10, 50 and
   100 ms stand for a client within the UK, across Europe, and across the Atlantic; none was
   measured on a real path.
-- **Memory:** `pixi run -e dev bench-serving memory --out <file>`. One process opens the five
+- **Memory:** `pixi run -e dev ld-bench-serving memory --out <file>`. One process opens the five
   stores with the default 4 GiB cache each (§10), loads every chromosome's positions and its Near
   Band, Proxy Index and Far Pairs `indptr` through the reader's own loaders, then reads 3 Mb
   regions on each store until its cache holds 95% of its budget; a store that ran out of regions
   first would stop the run. `VmRSS` and `VmHWM` are read from `/proc/self/status` after each step,
   beside each store's cache count.
-- **Sharing a process:** `pixi run -e dev bench-serving lag --out <file>`, then the same with
+- **Sharing a process:** `pixi run -e dev ld-bench-serving lag --out <file>`, then the same with
   `--engine-zarr`. The main thread runs an asyncio loop whose task sleeps 5 ms and records how
   late it woke; the query runs on one worker thread (`run_in_executor`), cold: the EUR store's
   pages evicted and the store opened on that thread. The queries are ogld#8's own
@@ -110,8 +110,8 @@ By the number of 5e-8 hits an Analysis has, at r² 0.01:
 
 ## One process holding the five stores
 
-`bench-serving memory`, one process, the default `cache_bytes` (4 GiB a store), one row a
-record, as `bench-serving tables` renders them. The node's load was 54–91.
+`ld-bench-serving memory`, one process, the default `cache_bytes` (4 GiB a store), one row a
+record, as `ld-bench-serving tables` renders them. The node's load was 54–91.
 
 | run | step | store | resident, GiB | peak, GiB | caches counted, GiB | chromosomes or regions | seconds | load |
 |---|---|---|---|---|---|---|---|---|
@@ -146,7 +146,7 @@ record, as `bench-serving tables` renders them. The node's load was 54–91.
 
 ## Sharing a process: the event loop and the engine's zarr settings
 
-`bench-serving lag`, twice with zarr's defaults and twice with `--engine-zarr`, alternating, one
+`ld-bench-serving lag`, twice with zarr's defaults and twice with `--engine-zarr`, alternating, one
 row a record. Each query cold. Lag is how late a 5 ms sleep on the main thread's event loop woke
 while the query ran on a worker thread ("idle": with no query, for 5 s). The node's load was
 55–94, near the highest it reached through any run here.
@@ -241,8 +241,8 @@ Each took `--out <file>.jsonl`; the files are kept gzipped. Every table in
 [`serving-tables.md`](serving-tables.md) was rendered from them by:
 
 ```bash
-pixi run -e dev bench-serving tables docs/benchmarks/results/9/*.jsonl.gz \
-    > docs/benchmarks/serving-tables.md
+pixi run -e dev ld-bench-serving tables docs/benchmarks/ld/results/9/*.jsonl.gz \
+    > docs/benchmarks/ld/serving-tables.md
 ```
 
 The memory and lag tables above are copied from it, one row a record. The clump, read and

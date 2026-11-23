@@ -1,6 +1,6 @@
 # The fast reader's tables (ogld#32)
 
-_Rendered by `scripts/bench/deltas.py` from `results/32/` and ogld#8's step-1 records in
+_Rendered by `scripts/ld/bench/deltas.py` from `results/32/` and ogld#8's step-1 records in
 `results/`; see [`fast-reader.md`](fast-reader.md). Seconds before → after, and how many
 times faster._
 

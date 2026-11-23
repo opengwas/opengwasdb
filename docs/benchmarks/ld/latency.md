@@ -64,7 +64,7 @@ chr22. So step 2 compares layouts on identical data, and its C is step 1's chr22
 ## How
 
 **Targets.** `local` reads the store from `/data` (XFS on a 42 TB non-rotational LVM volume).
-`http<ms>` reads it through `scripts/bench/http_static.py`. That is a static host (aiohttp's
+`http<ms>` reads it through `scripts/ld/bench/http_static.py`. That is a static host (aiohttp's
 `FileResponse`, which honours one byte range, a suffix range included, and sends with
 sendfile) with a proxy in front that waits `<ms>` before forwarding each request and counts the
 requests and body bytes per array. ogld opens the URL as it opens any store, through zarr's
@@ -128,15 +128,15 @@ code ran and whether the checkout could be cited as that code (`code`, from
 `test_panel.checkout.problem`); for these eleven it was added after the runs, from the branch's
 history, and says so. None was clean: `step1-local` ran untracked scripts, and the installed ogld
 named `883eb03` throughout, whose `ogld/` is every later commit's. `results/far_pairs.json` is
-`pixi run -e dev python scripts/bench/far_pairs.py --out …`, run on 13 November, which times
+`pixi run -e dev python scripts/ld/bench/far_pairs.py --out …`, run on 13 November, which times
 nothing. The four Analyses are
 `OGS-00009__ukb-b-4171 OGS-00011__GCST90319613 OGS-00011__GCST90025965 OGS-00011__GCST90029004`.
 The layouts were built, and the tables rendered, by:
 
 ```bash
-pixi run -e dev python scripts/bench/build_layouts.py /data/opengwasdb/work/ogld/scratch/8/layouts
-pixi run -e dev python scripts/bench/report.py docs/benchmarks/results/*.jsonl.gz \
-    --layouts docs/benchmarks/results > docs/benchmarks/latency-tables.md
+pixi run -e dev python scripts/ld/bench/build_layouts.py /data/opengwasdb/work/ogld/scratch/8/layouts
+pixi run -e dev python scripts/ld/bench/report.py docs/benchmarks/ld/results/*.jsonl.gz \
+    --layouts docs/benchmarks/ld/results > docs/benchmarks/ld/latency-tables.md
 ```
 
 `--reader concurrent` and `--cache-mib` measure two reader levers from outside `ogld/` (below).
@@ -349,7 +349,7 @@ per request above. So the merge more than doubles a regional list matrix over a 
 whichever reader reads it.
 
 **chr22 holds few Far Pairs; the saving holds on every chromosome.** chr22 has 0.85 Far Pairs a
-row, where the store averages 15.5 and chr11 162 (`scripts/bench/far_pairs.py`, which counts
+row, where the store averages 15.5 and chr11 162 (`scripts/ld/bench/far_pairs.py`, which counts
 every chromosome's from its Proxy Index; the counts sum to the 132,924,736 the store's
 provenance records). The review of ogld#8 estimated from those averages that a Far Pairs read
 would touch only 3–5× fewer chunks than the index on the dense chromosomes. Counted, it touches
@@ -420,7 +420,7 @@ Analyses again took 38.0 s at r² 0.01 against 79.9 s cold, and 39.7 s against 7
 in its own Zarr call, one after another. Over HTTP each call is two round trips in sequence: the
 shard's index (zarr re-reads it on every call), then the chunks. So with ogld's reader every
 request waits its own round trip: step 2's clumps cost 51.6–53.6 ms a request at 50 ms. Fetching a
-request's runs together (`--reader concurrent`, a prototype in `scripts/bench/latency.py`; same
+request's runs together (`--reader concurrent`, a prototype in `scripts/ld/bench/latency.py`; same
 chunks, same answers, checked on a clump and a matrix) reads 500 chr22 variants 8.8–9× faster
 at 10 and 50 ms (34.2 s → 3.9 s and 126 s → 14.0 s on C). It clumps 1.8–2× faster on C, and
 3.9–4.4× on B, whose leads need more runs. On the published store at 50 ms it clumped the four Analyses in

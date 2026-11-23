@@ -1,9 +1,9 @@
 # The fast reader: ogld#8's reads after ogld#32
 
-_Measured 13 November 2026 with ogld#8's benchmark (`scripts/bench/latency.py`) on the
+_Measured 13 November 2026 with ogld#8's benchmark (`scripts/ld/bench/latency.py`) on the
 published HGDP+1kGP EUR store, at ogld `c5a2eb8`. Every number is rendered from the records in
 [`results/32/`](results/32/), against ogld#8's in [`results/`](results/), by
-`scripts/bench/deltas.py`, and [`fast-reader-tables.md`](fast-reader-tables.md) has all of them._
+`scripts/ld/bench/deltas.py`, and [`fast-reader-tables.md`](fast-reader-tables.md) has all of them._
 
 ## In brief
 
@@ -70,7 +70,7 @@ and both fetched it. They now share one fetch (`_KeptIndexes._shared`), and all 
 
 ## How
 
-ogld#8's method, unchanged: the store's directory served by `scripts/bench/http_static.py`, a
+ogld#8's method, unchanged: the store's directory served by `scripts/ld/bench/http_static.py`, a
 static host on loopback with a proxy that waits the set time before forwarding each request and
 counts the requests and bytes. **This is loopback with injected latency, not a real WAN.** zarr's
 thread pool is 6 threads and BLAS 1. See [`latency.md`](latency.md), "How", for the states
@@ -87,7 +87,7 @@ this store and ran the test suite, were discarded and re-run.
 
 **The runs.** Each file in [`results/32/`](results/32/) is one run, in this order, at
 `c5a2eb8`, whose `code` record says the checkout was clean. Each took
-`pixi run -e dev bench-latency step1` and these arguments:
+`pixi run -e dev ld-bench-latency step1` and these arguments:
 
 | file | started (UTC) | load | arguments |
 |---|---|---|---|
@@ -104,7 +104,7 @@ The four Analyses are `OGS-00009__ukb-b-4171 OGS-00011__GCST90319613 OGS-00011__
 OGS-00011__GCST90029004`. The tables were rendered by:
 
 ```bash
-pixi run -e dev python scripts/bench/deltas.py --before docs/benchmarks/results/step1-*.jsonl.gz \
-    --after docs/benchmarks/results/32/step1-*.jsonl.gz \
-    --levers docs/benchmarks/results/32/lever-*.jsonl.gz > docs/benchmarks/fast-reader-tables.md
+pixi run -e dev python scripts/ld/bench/deltas.py --before docs/benchmarks/ld/results/step1-*.jsonl.gz \
+    --after docs/benchmarks/ld/results/32/step1-*.jsonl.gz \
+    --levers docs/benchmarks/ld/results/32/lever-*.jsonl.gz > docs/benchmarks/ld/fast-reader-tables.md
 ```

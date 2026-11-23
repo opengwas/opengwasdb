@@ -22,7 +22,7 @@ inside the timing; `open` keeps the opened reader and its chromosomes' positions
 but empties its chunk cache and evicts the pages, as a long-lived service meets a new query;
 `warm` repeats the query on the reader as the last run left it.
 
-    pixi run -e dev bench-latency step1 --target local http0 --out results.jsonl
+    pixi run -e dev ld-bench-latency step1 --target local http0 --out results.jsonl
 
 Where things are comes from their owners, never from here: the published EUR store is
 `build_hgdp1kgp.store_path("EUR")` under `$OPENGWASDB_LD_STORES`, #403's Analyses are under
