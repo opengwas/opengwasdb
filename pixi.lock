@@ -4360,7 +4360,6 @@ packages:
   - pyyaml>=6 ; extra == 'dev'
   - ruff>=0.6 ; extra == 'dev'
   - pgenlib>=0.90 ; extra == 'ld-build'
-  - threadpoolctl>=3.1 ; extra == 'ld-build'
   - lz4>=4 ; extra == 'ld-import'
   - pyliftover>=0.4 ; extra == 'ld-import'
   requires_python: '>=3.12'

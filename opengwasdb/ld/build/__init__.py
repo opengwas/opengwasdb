@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import zarr
+from threadpoolctl import threadpool_limits
 
 from opengwasdb.ld.build import diagnostic, passes, pc_check, record
 from opengwasdb.ld.build.variant_set import Chromosome, Pass, Settings, variant_set
@@ -42,14 +43,7 @@ def bounded(threads: int) -> AbstractContextManager[object]:
 
     The caller's zarr setting is restored on exit. zarr makes its pool once, on first use, so
     the cap holds when the build is its process's first zarr work, as `ogld build` is.
-    threadpoolctl comes with the build extra (ADR 0002)."""
-    try:
-        from threadpoolctl import threadpool_limits
-    except ImportError as missing:
-        raise InputError(
-            "a build bounds its threads with threadpoolctl, which ogld installs with the build "
-            "extra: pip install 'opengwasdb[ld-build]'"
-        ) from missing
+    threadpoolctl is a dependency of opengwasdb itself, so a build never lacks it (#455)."""
     stack = ExitStack()
     stack.enter_context(threadpool_limits(limits=1, user_api="blas"))
     stack.enter_context(zarr.config.set({"threading.max_workers": threads}))
@@ -194,7 +188,7 @@ def build(inputs: BuildInputs, out: str | os.PathLike[str], *, threads: int = 1)
 
     `threads` is how many worker threads the build runs, and it bounds it: every parallel part,
     the PC Check's windows, the LD tiles and validation, runs on that many workers; BLAS runs
-    one thread inside the build (threadpoolctl, from the build extra), and zarr's pool at most
+    one thread inside the build (threadpoolctl), and zarr's pool at most
     `threads`, whatever the caller's environment says. Provenance records it as
     `build.threads`.
     """

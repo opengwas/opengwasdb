@@ -165,6 +165,11 @@ The owner decided (7 November 2026; epic #1 comments and the planning pass on #2
    for the build's duration, so the build's own workers are its whole thread count. Only a
    build needs it, so it is an extra, refused by name when missing, as pgenlib is.
 
+   _Amendment, 23 November 2026 (orchestrator's ruling on #455, the move into opengwasdb):_
+   **threadpoolctl leaves the extra.** It is a runtime dependency of opengwasdb itself, so a
+   missing threadpoolctl cannot happen and is no longer a refusal. The extra, now
+   `opengwasdb[ld-build]`, is pgenlib alone. What threadpoolctl does for a build is unchanged.
+
 11. **A Source Panel is its unrelated samples** (owner, 10 November 2026, epic #1, decided at the
    review of #5's whole-panel EUR build). That build's PC diagnostic found 0.0104 of 200,000 seeded
    cross-chromosome pairs at r² ≥ 0.01, against 0.0058 from sampling: the HGDP+1kGP members files

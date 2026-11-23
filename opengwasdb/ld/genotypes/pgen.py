@@ -52,7 +52,7 @@ def import_pgenlib() -> Any:
         import pgenlib
     except ImportError as missing:
         raise InputError(
-            "reading a pgen needs pgenlib, which ogld installs with the build extra: "
+            "reading a pgen needs pgenlib, which the ld-build extra installs: "
             "pip install 'opengwasdb[ld-build]'"
         ) from missing
     return pgenlib

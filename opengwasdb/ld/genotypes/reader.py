@@ -20,6 +20,7 @@ from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
+from threadpoolctl import threadpool_limits
 
 from opengwasdb.ld.format import Codes, InputError, Provenance, REncoding
 from opengwasdb.ld.format.geometry import global_rows, local_rows, position_rows
@@ -39,13 +40,6 @@ _blas_control: AbstractContextManager[object] | None = None
 
 
 def _limit_blas() -> AbstractContextManager[object]:
-    try:
-        from threadpoolctl import threadpool_limits
-    except ImportError as missing:
-        raise InputError(
-            "genotype requests need threadpoolctl, which ogld installs with the build extra: "
-            "pip install 'opengwasdb[ld-build]'"
-        ) from missing
     control: AbstractContextManager[object] = threadpool_limits(limits=1, user_api="blas")
     control.__enter__()
     return control

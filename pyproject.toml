@@ -60,11 +60,10 @@ dependencies = [
 # starts from and the calls a Genotype Store request computes LD from. It is
 # imported inside those paths only, so `import opengwasdb.ld` and every LD Store
 # read work without it; a Genotype Store read refuses and names this extra.
-# threadpoolctl caps BLAS's threads for a build's duration.
-ld-build = [
-  "pgenlib>=0.90",
-  "threadpoolctl>=3.1",
-]
+# ogld's extra also carried threadpoolctl, which caps BLAS's threads for a build;
+# here it is a dependency of the package itself (above), so the extra is
+# pgenlib alone and a build never lacks threadpoolctl.
+ld-build = ["pgenlib>=0.90"]
 # Importing a producer's LD (Pan-UKB's LD matrices, opengwasdb.ld.build.importing).
 ld-import = ["lz4>=4", "pyliftover>=0.4"]
 dev = [
@@ -285,7 +284,6 @@ openssl = ">=3"
 # suite reads the Test Panel's pgen and never skips (#455).
 [tool.pixi.feature.dev.pypi-dependencies]
 pgenlib = ">=0.90"
-threadpoolctl = ">=3.1"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting

@@ -522,24 +522,3 @@ def test_a_psam_missing_one_sample_is_refused(tmp_path: Path) -> None:
         opengwasdb.ld.InputError, match=r"short\.psam lists 770 samples.*short\.pgen.*771"
     ):
         opengwasdb.ld.build(fx.inputs(pgen, keep=keep), tmp_path / "store")
-
-
-def test_a_build_without_threadpoolctl_refuses_naming_the_extra(tmp_path: Path) -> None:
-    import subprocess
-    import sys
-
-    code = (
-        "import sys\n"
-        "sys.modules['threadpoolctl'] = None\n"
-        "sys.path.insert(0, 'tests/ld')\n"
-        "import build_fixtures, testdata, opengwasdb.ld\n"
-        "try:\n"
-        "    opengwasdb.ld.build(build_fixtures.inputs(testdata.panel().pgen), "
-        f"{str(tmp_path / 's')!r})\n"
-        "except opengwasdb.ld.InputError as refusal:\n"
-        "    print(refusal)\n"
-    )
-    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
-    assert done.returncode == 0, done.stderr
-    assert "opengwasdb[ld-build]" in done.stdout
-    assert not (tmp_path / "s").exists()
