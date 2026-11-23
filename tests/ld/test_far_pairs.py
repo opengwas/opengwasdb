@@ -12,8 +12,8 @@ reference r, or is the answer the committed Test Store gives; never the reader's
 
 from __future__ import annotations
 
-import json
 import shutil
+from json import dumps, loads
 from pathlib import Path
 
 import numpy as np
@@ -35,9 +35,7 @@ _Pairs = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int6
 
 
 def provenance(store: Path) -> dict[str, object]:
-    found: dict[str, object] = json.loads((store / "zarr.json").read_text())["attributes"][
-        "ld_store"
-    ]
+    found: dict[str, object] = loads((store / "zarr.json").read_text())["attributes"]["ld_store"]
     return found
 
 
@@ -243,9 +241,9 @@ def test_a_derivation_that_fails_leaves_no_far_pairs_behind(tmp_path: Path) -> N
     # written and counted, so a failure leaves the store as it was, and a run can begin again.
     copy = without_far_pairs(tmp_path / "store")
     meta = copy / "zarr.json"
-    doc = json.loads(meta.read_text())
+    doc = loads(meta.read_text())
     doc["attributes"]["ld_store"]["counts"]["far_pairs"] = 8
-    meta.write_text(json.dumps(doc))
+    meta.write_text(dumps(doc))
     before = files(copy)
     script = load_script("derive_far_pairs")
     with pytest.raises(SystemExit, match="7 Far Pairs, but its provenance counts 8"):
