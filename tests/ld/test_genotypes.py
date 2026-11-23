@@ -31,6 +31,8 @@ def test_codes_equal_the_base_builder_for_every_near_band_pair(k: int, scale: in
     expected = old @ old.T
     block = prepare(calls, covariates(names, values, calls.shape[1]), is_alt)
     actual = r(block, block)
+    both = np.triu(np.ones(actual.shape, dtype=bool), 1)
+    np.testing.assert_allclose(actual[both], expected[both], rtol=0, atol=base.R_TOLERANCE)
     near = (v.chrom[rows, None] == v.chrom[rows][None, :]) & (
         np.abs(v.pos[rows, None] - v.pos[rows][None, :]) <= 3_000_000
     )

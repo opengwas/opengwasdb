@@ -272,6 +272,20 @@ than invoking `pytest` directly: it isolates the Pixi environment from user-site
 limits native numerical thread pools so fork-based integration fixtures do not inherit dozens
 of idle BLAS threads.
 
+### Test tiers
+
+The default run is every test except two opt-in tiers: `realdata` (reads the
+HGDP+1kGP panels, IEU nodes only: `pixi run -e dev ld-test-realdata`) and
+`acceptance` (whole-panel runs: `ld-acceptance-*`). `ld` is an area, applied to
+every test under `tests/ld/`, so `-m ld` and `-m "not ld"` split the suite in
+two. A tier is run only when the `-m` expression *needs* it: `tests/conftest.py`
+evaluates the expression with the tier's mark removed, and if it still selects
+the test, something else selects it and the tier is deselected. So `-m
+realdata` and `-m acceptance` run their tier; `-m ld`, `-m "not ld"`, `-m "ld
+or not acceptance"` and `-m "ld or realdata"` do not (every realdata test is
+also an `ld` test). A tier mark outside the tier's directory is a collection
+error.
+
 ### A test that cannot fail is worse than no test
 
 The most valuable thing a test can do is fail when the bug is present. Verify

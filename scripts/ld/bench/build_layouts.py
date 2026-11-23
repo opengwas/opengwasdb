@@ -4,16 +4,16 @@
 ld-store §6 named three layouts of `near/<c>/r` as (inner chunk, shard) in codes: A (4,096,
 4,194,304), B (32,768, 16,777,216) and C (262,144, 67,108,864). They differ only in that array;
 every other array keeps its one shape. ogld#8 timed the reads on each, and the owner chose C
-(12 November 2026; ADR 0092). So each layout is a real build, by `opengwasdb ld build`, of the
+(12 November 2026; ADR 0006). So each layout is a real build, by `opengwasdb ld build`, of the
 published EUR store's chr22, with `opengwasdb.ld.store.layout.NEAR_R` set for the run, as
-`tests/ld/test_assembly.py`
+`tests/test_assembly.py`
 sets it. The command is the recipe's (`build_hgdp1kgp.build_command`, which owns k, the scale,
 the panel id and the source strings), on its chr22 fileset, keep file and PC File.
 
     pixi run -e dev python scripts/ld/bench/build_layouts.py [OUT] [--layout A B C] [--threads 8]
 
-OUT is `$OGLD_LAYOUTS` unless given (`scripts/ld/test_panel/roots.py`). Each build runs in a child
-process, so its wall time and peak memory are its own, and writes `OUT/chr22-<layout>.store`,
+OUT is `$OPENGWASDB_LD_LAYOUTS` unless given (`scripts/test_panel/roots.py`). Each build runs in a
+child process, so its wall time and peak memory are its own, and writes `OUT/chr22-<layout>.store`,
 its provenance as `.json`, and `.time.json` with the wall time, the peak RSS and the node's load
 before and after. `--check` then holds every array of every layout, the variant columns
 included, equal to the first layout's, so a timing compares layouts, not data.
@@ -22,7 +22,6 @@ included, equal to the first layout's, so a timing compares layouts, not data.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import importlib
 import json
 import os
@@ -55,13 +54,13 @@ def build_command(store: Path, threads: int) -> list[str]:
     """The recipe's `opengwasdb ld build` for the panel's one chromosome, without the program
     name."""
     pgen = Path(f"{recipe.prefix(PANEL, CHROM)}.pgen")
-    pcs = roots.root("OGLD_PCS") / f"{PANEL}.eigenvec"
+    pcs = roots.root("OPENGWASDB_LD_PCS") / f"{PANEL}.eigenvec"
     command: list[str] = recipe.build_command(
         PANEL, [pgen], store, recipe.keep_file(PANEL), pcs, threads
     )
-    if command[:2] != ["ogld", "build"]:
-        raise SystemExit(f"the recipe's build command is not `ogld build`: {command[:2]}")
-    return command[1:]
+    if command[:3] != ["opengwasdb", "ld", "build"]:
+        raise SystemExit(f"the recipe's build command is not `opengwasdb ld build`: {command[:3]}")
+    return command[2:]
 
 
 def load() -> tuple[float, float, float]:
@@ -75,8 +74,10 @@ def store_bytes(path: Path) -> int:
 
 
 def build_one(layout: str, out: Path, threads: int) -> None:
-    """Build chr22 in `layout`, in this process: `NEAR_R` is set before `opengwasdb ld build` runs.
-    The child process exits after, so no other build sees the layout."""
+    """Build chr22 in `layout`, in this process: `NEAR_R` is set before `opengwasdb ld build`
+    runs. The child process exits after, so no other build sees the layout."""
+    import contextlib
+
     from opengwasdb.ld import cli
     from opengwasdb.ld.store import layout as store_layout
 
@@ -88,7 +89,7 @@ def build_one(layout: str, out: Path, threads: int) -> None:
     with provenance.open("w") as written, contextlib.redirect_stdout(written):
         status = cli.main(build_command(store, threads))
     if status:
-        raise SystemExit(f"ogld build of layout {layout} exited {status}")
+        raise SystemExit(f"opengwasdb ld build of layout {layout} exited {status}")
 
 
 def timed_child(layout: str, out: Path, threads: int) -> dict[str, object]:
@@ -160,7 +161,7 @@ def main() -> None:
     parser.add_argument("--one", choices=sorted(LAYOUTS), help=argparse.SUPPRESS)
     parser.add_argument("--check", action="store_true", help="only compare the built layouts")
     args = parser.parse_args()
-    args.out = args.out or roots.root("OGLD_LAYOUTS")
+    args.out = args.out or roots.root("OPENGWASDB_LD_LAYOUTS")
     args.out.mkdir(parents=True, exist_ok=True)
     if args.one:
         build_one(args.one, args.out, args.threads)

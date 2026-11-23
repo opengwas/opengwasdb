@@ -2,8 +2,7 @@
 
 The Test Store is written once per module (about a second) from the Test Panel's `reference_r(10)`;
 every expected value here is the reference r, quantised and signed to A1 by
-`opengwasdb.ld.identity.orient`,
-or a literal from ld-store §6.
+`opengwasdb.variants.sorted_spelling.sorted_identity`, or a literal from spec §6.
 """
 
 from __future__ import annotations
@@ -22,8 +21,8 @@ from ld_script_modules import load_script
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, codes_at
 
 from opengwasdb.ld.format import NEAR_BP, InputError, REncoding
-from opengwasdb.ld.identity import orient
 from opengwasdb.ld.store import StoreReader, StoreWriter, layout
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 K = 10
 #: The Test Store's encoding, which the stores written here share.
@@ -109,7 +108,9 @@ def test_the_variants_read_back_as_the_engine_forms_them(written: Path) -> None:
     reader = StoreReader.open(written)
     v = testdata.variants()
     rows = passing()
-    found = [orient(str(v.chrom[r]), int(v.pos[r]), str(v.ref[r]), str(v.alt[r])) for r in rows]
+    found = [
+        sorted_identity(str(v.chrom[r]), int(v.pos[r]), str(v.ref[r]), str(v.alt[r])) for r in rows
+    ]
     table = reader.variants(np.arange(len(rows)))
     assert list(table.alid) == [f.alid for f in found]
     assert list(table.a1) == [f.a1 for f in found]

@@ -1,9 +1,9 @@
 """Every setting the Test Panel is made with, recorded whole in its manifest.
 
 The genotype source, the PC File and every filter are parameters, so a changed decision is one
-run with a new value (ADR 0088). Paths default to the documented roots of `test_panel.roots`
-(`$OGLD_PHASED_V2`, `$OGLD_PCS`, `$OGLD_REFERENCE`) and tools to `$OGLD_PLINK2`,
-`$OGLD_BCFTOOLS` and `$OGLD_BGZIP`, or `PATH`.
+run with a new value (ADR 0002). Paths default to the documented roots of `test_panel.roots`
+(`$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_PCS`, `$OPENGWASDB_LD_REFERENCE`) and tools to
+`$OPENGWASDB_LD_PLINK2`, `$OPENGWASDB_LD_BCFTOOLS` and `$OPENGWASDB_LD_BGZIP`, or `PATH`.
 """
 
 from __future__ import annotations
@@ -100,17 +100,20 @@ def parse(argv: list[str] | None = None) -> Params:
         required=True,
         help="scratch directory for the converted chromosomes (several GB)",
     )
-    p.add_argument("--plink2", type=Path, help="default: $OGLD_PLINK2, else plink2 on PATH")
-    p.add_argument("--bcftools", type=Path, help="default: $OGLD_BCFTOOLS, else PATH")
-    p.add_argument("--bgzip", type=Path, help="default: $OGLD_BGZIP, else PATH")
+    p.add_argument(
+        "--plink2", type=Path, help="default: $OPENGWASDB_LD_PLINK2, else plink2 on PATH"
+    )
+    p.add_argument("--bcftools", type=Path, help="default: $OPENGWASDB_LD_BCFTOOLS, else PATH")
+    p.add_argument("--bgzip", type=Path, help="default: $OPENGWASDB_LD_BGZIP, else PATH")
     p.add_argument(
         "--source",
-        help=f"per-chromosome BCF or VCF with {{chrom}}; default $OGLD_PHASED_V2/{V2_NAME}",
+        help=f"per-chromosome BCF or VCF with {{chrom}}; "
+        f"default $OPENGWASDB_LD_PHASED_V2/{V2_NAME}",
     )
     p.add_argument(
-        "--keep", type=Path, help="default: $OGLD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep"
+        "--keep", type=Path, help="default: $OPENGWASDB_LD_REFERENCE/hgdp1kgp-hg38/members/EUR.keep"
     )
-    p.add_argument("--pcs", type=Path, help="the PC File; default $OGLD_PCS/EUR.eigenvec")
+    p.add_argument("--pcs", type=Path, help="the PC File; default $OPENGWASDB_LD_PCS/EUR.eigenvec")
     p.add_argument("--pcs-source", default=Params.pcs_source)
     p.add_argument("--mac-min", type=int, default=Params.mac_min)
     p.add_argument("--no-require-pass", action="store_true")
@@ -122,9 +125,9 @@ def parse(argv: list[str] | None = None) -> Params:
         plink2=a.plink2 or tool("plink2"),
         bcftools=a.bcftools or tool("bcftools"),
         bgzip=a.bgzip or tool("bgzip"),
-        source=a.source or str(root("OGLD_PHASED_V2") / V2_NAME),
-        keep=a.keep or root("OGLD_REFERENCE") / "hgdp1kgp-hg38/members/EUR.keep",
-        pcs=a.pcs or root("OGLD_PCS") / "EUR.eigenvec",
+        source=a.source or str(root("OPENGWASDB_LD_PHASED_V2") / V2_NAME),
+        keep=a.keep or root("OPENGWASDB_LD_REFERENCE") / "hgdp1kgp-hg38/members/EUR.keep",
+        pcs=a.pcs or root("OPENGWASDB_LD_PCS") / "EUR.eigenvec",
         pcs_source=a.pcs_source,
         mac_min=a.mac_min,
         require_pass=not a.no_require_pass,

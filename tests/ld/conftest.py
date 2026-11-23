@@ -1,4 +1,10 @@
-"""opengwasdb.ld's suite-wide settings: the Hypothesis profiles, and its timeout and strict xfail.
+"""opengwasdb.ld's suite-wide settings: the `ld` area mark, the Hypothesis profiles, and its
+timeout and strict xfail.
+
+Every test under tests/ld/ carries `ld`, by directory, so `-m ld` and `-m "not ld"` split the
+suite in two. The Hypothesis profile and the `sys.path` appends below act on the whole process:
+that is safe because no test outside tests/ld/ imports hypothesis or a helper by those bare names
+(`test_scope.py` holds both facts, so a change to either fails there, loudly).
 
 `ci` is what CI loads (`HYPOTHESIS_PROFILE=ci`): about 50 examples a property,
 derandomised so a red run reproduces, with a deadline so one slow example fails
@@ -30,7 +36,8 @@ from .tier_markers import refuse_misplaced
 # `from realdata_inputs import …`). tests/ld is a package (tests/ld/__init__.py), so pytest no
 # longer puts these directories on `sys.path`; they go at its end, after tests/, so a name
 # tests/ also has is tests/'s.
-for _directory in (".", "contract", "realdata"):
+SYS_PATH_APPENDS = (".", "contract", "realdata")
+for _directory in SYS_PATH_APPENDS:
     _path = str((Path(__file__).resolve().parent / _directory).resolve())
     if _path not in sys.path:
         sys.path.append(_path)
@@ -99,8 +106,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[Any]) -> No
     sees every collected item, opengwasdb's too, so the timeout and strict xfail go only to the
     items under this directory."""
     here = Path(__file__).resolve().parent
-    refuse_misplaced(items, here)
     ours = [item for item in items if here in Path(item.path).resolve().parents]
+    for item in ours:
+        item.add_marker(pytest.mark.ld)
+    refuse_misplaced(items, here)
     for item in ours:
         if config.getoption("timeout", None) is None and item.get_closest_marker("timeout") is None:
             item.add_marker(pytest.mark.timeout(TIMEOUT_SECONDS))

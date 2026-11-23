@@ -28,11 +28,12 @@ import numpy.typing as npt
 import pytest
 import zarr
 from ld_script_modules import load_script
+from store_copies import DERIVED
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
-from opengwasdb.ld.identity import orient
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, layout
 from opengwasdb.ld.store.validation import validate
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 DATA = Path(__file__).resolve().parent / "data" / "alid_index"
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -128,7 +129,7 @@ def test_the_index_is_the_variant_table_s_longer_entries() -> None:
 
 def table(rows: list[tuple[str, int, str, str]]) -> Variants:
     """A Variant Set from (chromosome, position, ref, alt) records, by the identity function."""
-    oriented = [orient(chrom, position, ref, alt) for chrom, position, ref, alt in rows]
+    oriented = [sorted_identity(chrom, position, ref, alt) for chrom, position, ref, alt in rows]
     columns: dict[str, npt.NDArray[np.generic]] = {
         name: np.array([getattr(o, name) for o in oriented])
         for name in ("chrom", "alid", "a1", "a2")
@@ -146,20 +147,7 @@ SOURCED: dict[str, Any] = {
     for key, value in json.loads((TEST_STORE / "zarr.json").read_text())["attributes"][
         "ld_store"
     ].items()
-    if key
-    not in {
-        "format_version",
-        "encoding",
-        "n_variants",
-        "near_bp",
-        "far_bp",
-        "t_far",
-        "t_far_q",
-        "far_code_floor",
-        "t_partner",
-        "partner_code_floor",
-        "counts",
-    }
+    if key not in DERIVED
 }
 SOURCED["panel"]["n"] = 771
 SOURCED["adjustment"]["k"] = 10
@@ -234,7 +222,7 @@ def test_a_store_writes_its_index_and_counts_what_it_leaves_out(tmp_path: Path) 
     assert alid.dtype == np.dtype("uint8")
     assert alid.shape == ((len(WIDTH_ROWS) - 2) * layout.ALID_INDEX_WIDTH,)
     assert root[f"{layout.ALID_INDEX}/row"].dtype == np.dtype("int32")
-    keys, rows = layout.alid_index([orient(*r).alid for r in WIDTH_ROWS])
+    keys, rows = layout.alid_index([sorted_identity(*r).alid for r in WIDTH_ROWS])
     np.testing.assert_array_equal(np.asarray(alid[:]), keys.ravel())
     np.testing.assert_array_equal(np.asarray(root[f"{layout.ALID_INDEX}/row"][:]), rows)
     provenance = StoreReader.open(store).provenance
@@ -279,6 +267,24 @@ def without_companion(store: Path) -> None:
     if layout.ALID_MMAP_ATTR in root.attrs:
         del root.attrs[layout.ALID_MMAP_ATTR]
     shutil.rmtree(store / layout.ALID_MMAP, ignore_errors=True)
+
+
+def underived_store(tmp_path: Path, left_out: int | None) -> tuple[Any, Path]:
+    """The derive script and a written store with its ALID index removed, its provenance recording
+    `left_out` ALIDs left out, or no such count when it is None."""
+    script = load_script("derive_alid_index")
+    store = written(tmp_path / "store")
+    without_companion(store)
+    shutil.rmtree(store / layout.ALID_INDEX)
+    meta = store / "zarr.json"
+    document = json.loads(meta.read_text())
+    counts = document["attributes"]["ld_store"]["counts"]
+    if left_out is None:
+        del counts["alids_left_out"]
+    else:
+        counts["alids_left_out"] = left_out
+    meta.write_text(json.dumps(document))
+    return script, store
 
 
 def test_a_store_derives_its_index_from_its_own_table(tmp_path: Path) -> None:
@@ -424,14 +430,7 @@ def test_a_recorded_count_that_is_not_the_table_s_refuses_the_derivation(
 ) -> None:
     # A store whose provenance records a count its table does not give is not one to derive over:
     # the record is not this store's, and nothing is written.
-    script = load_script("derive_alid_index")
-    store = written(tmp_path / "store")
-    without_companion(store)
-    shutil.rmtree(store / layout.ALID_INDEX)
-    meta = store / "zarr.json"
-    document = json.loads(meta.read_text())
-    document["attributes"]["ld_store"]["counts"]["alids_left_out"] = 3
-    meta.write_text(json.dumps(document))
+    script, store = underived_store(tmp_path, left_out=3)
     with pytest.raises(SystemExit, match="provenance records"):
         script.derive(store)
     assert not (store / "variants" / "alid_index-partial").exists()
@@ -443,14 +442,7 @@ def test_a_derivation_that_fails_after_its_rename_is_finished_by_another_run(
 ) -> None:
     # The index is in place before the provenance counts it, so a failure in between leaves a
     # store validation refuses and a second run finishes it (ogld#42's fix round 1).
-    script = load_script("derive_alid_index")
-    store = written(tmp_path / "store")
-    without_companion(store)
-    shutil.rmtree(store / layout.ALID_INDEX)
-    meta = store / "zarr.json"
-    document = json.loads(meta.read_text())
-    del document["attributes"]["ld_store"]["counts"]["alids_left_out"]
-    meta.write_text(json.dumps(document))
+    script, store = underived_store(tmp_path, left_out=None)
 
     def fail(*args: object, **kwargs: object) -> None:
         raise OSError("no space left on device")

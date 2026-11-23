@@ -381,10 +381,12 @@ def _scan_chromosome(
 def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("--work", type=Path, required=True, help="scratch, about 25 GB")
-    p.add_argument("--out", type=Path, help="default: $OGLD_PCS")
-    p.add_argument("--bcf-dir", type=Path, help="the v2 BCFs; default: $OGLD_PHASED_V2")
+    p.add_argument("--out", type=Path, help="default: $OPENGWASDB_LD_PCS")
+    p.add_argument("--bcf-dir", type=Path, help="the v2 BCFs; default: $OPENGWASDB_LD_PHASED_V2")
     p.add_argument(
-        "--meta", type=Path, help=f"gnomAD's sample metadata; default: $OGLD_REFERENCE/{META_NAME}"
+        "--meta",
+        type=Path,
+        help=f"gnomAD's sample metadata; default: $OPENGWASDB_LD_REFERENCE/{META_NAME}",
     )
     p.add_argument("--margin-bp", type=int, default=2_000_000)
     p.add_argument(
@@ -394,7 +396,9 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
         metavar="NAME=KEEP",
         help="a panel and its keep file (#IID); repeat for each panel",
     )
-    p.add_argument("--plink2", type=Path, help="default: $OGLD_PLINK2, else plink2 on PATH")
+    p.add_argument(
+        "--plink2", type=Path, help="default: $OPENGWASDB_LD_PLINK2, else plink2 on PATH"
+    )
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--concurrent", type=int, default=2)
     p.add_argument("--memory-mb", type=int, default=32000)
@@ -408,9 +412,9 @@ def _parse(argv: list[str] | None) -> tuple[Settings, dict[str, Path], bool]:
     return (
         Settings(
             a.work,
-            a.out or root("OGLD_PCS"),
-            a.bcf_dir or root("OGLD_PHASED_V2"),
-            a.meta or root("OGLD_REFERENCE") / META_NAME,
+            a.out or root("OPENGWASDB_LD_PCS"),
+            a.bcf_dir or root("OPENGWASDB_LD_PHASED_V2"),
+            a.meta or root("OPENGWASDB_LD_REFERENCE") / META_NAME,
             a.margin_bp,
             a.plink2 or tool("plink2"),
             a.threads,

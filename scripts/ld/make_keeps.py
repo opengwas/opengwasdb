@@ -17,8 +17,8 @@ same inputs write the same bytes. Expected counts: EUR 665, AFR 608, EAS 724, SA
 
     pixi run -e dev python scripts/ld/make_keeps.py [--panel EUR ...]
 
-Writes `<out>/<panel>.keep` (default `$OGLD_KEEP`, `/data/opengwasdb/work/ogld/keep`). The PC
-Files are not changed: they were computed on unrelated samples with the relatives projected.
+Writes `<out>/<panel>.keep` (default `$OPENGWASDB_LD_KEEP`, `/data/opengwasdb/work/ogld/keep`). The
+PC Files are not changed: they were computed on unrelated samples with the relatives projected.
 """
 
 from __future__ import annotations
@@ -47,14 +47,16 @@ def unrelated(pc_file: Path, meta: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--pcs", type=Path, help="the PC Files' directory; default: $OGLD_PCS")
-    parser.add_argument("--meta", type=Path, help=f"default: $OGLD_REFERENCE/{META_NAME}")
-    parser.add_argument("--out", type=Path, help="default: $OGLD_KEEP")
+    parser.add_argument(
+        "--pcs", type=Path, help="the PC Files' directory; default: $OPENGWASDB_LD_PCS"
+    )
+    parser.add_argument("--meta", type=Path, help=f"default: $OPENGWASDB_LD_REFERENCE/{META_NAME}")
+    parser.add_argument("--out", type=Path, help="default: $OPENGWASDB_LD_KEEP")
     parser.add_argument("--panel", action="append", choices=PANELS, help="default: all five")
     args = parser.parse_args(argv)
-    pcs = args.pcs or root("OGLD_PCS")
-    meta = args.meta or root("OGLD_REFERENCE") / META_NAME
-    out = args.out or root("OGLD_KEEP")
+    pcs = args.pcs or root("OPENGWASDB_LD_PCS")
+    meta = args.meta or root("OPENGWASDB_LD_REFERENCE") / META_NAME
+    out = args.out or root("OPENGWASDB_LD_KEEP")
     for panel in args.panel or PANELS:
         kept = unrelated(pcs / f"{panel}.eigenvec", meta)
         out.mkdir(parents=True, exist_ok=True)

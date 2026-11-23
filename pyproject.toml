@@ -153,18 +153,22 @@ local_scheme = "node-and-date"
 [tool.hatch.version.raw-options.scm.git]
 describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--abbrev=40", "--match", "v*"]
 
-# opengwasdb.ld's tiers (#455), carried over from ogld. The default tier is every
-# test with neither mark. `realdata` reads the HGDP+1kGP panels under
+# Test tiers and areas (#455, #459). `ld` is an area: every test under tests/ld/
+# carries it, by directory (tests/ld/conftest.py), so `-m ld` is opengwasdb.ld's
+# suite and `-m "not ld"` is the engine's. The default run is every test with
+# neither opt-in mark: `realdata` reads the HGDP+1kGP panels under
 # /data/opengwasdb/reference/ and runs only on the IEU compute nodes, through
 # `pixi run -e dev ld-test-realdata`; `acceptance` is the whole-panel runs of
-# `ld-acceptance-*`. Both are deselected here, and a command line's `-m`
-# replaces this one. `--strict-markers` makes a misspelt mark an error rather
-# than a test that runs in no tier. ogld's 5 s timeout and `xfail_strict` apply
-# to tests/ld/ only, from tests/ld/conftest.py, not to opengwasdb's tests.
+# `ld-acceptance-*`. The opt-in tiers are deselected in tests/conftest.py, not
+# by an `addopts` `-m`, because a command line's `-m` replaces that one and
+# `-m ld` would bring them back; `-m realdata` still asks for one. `--strict-markers`
+# makes a misspelt mark an error rather than a test that runs in no tier. ogld's
+# 5 s timeout and `xfail_strict` apply to tests/ld/ only, from tests/ld/conftest.py.
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-m", "not realdata and not acceptance", "--strict-markers"]
+addopts = ["--strict-markers"]
 markers = [
+  "ld: an opengwasdb.ld test; added to every test under tests/ld/, so `-m ld` and `-m \"not ld\"` select the area",
   "acceptance: an opengwasdb.ld acceptance run on a whole panel, slower than the realdata tier; run by `pixi run -e dev ld-acceptance-clump`, `ld-acceptance-stores` and `ld-acceptance-genotypes`",
   "realdata: reads the HGDP+1kGP panels under /data/opengwasdb/reference/; IEU nodes only, run by `pixi run -e dev ld-test-realdata`",
 ]

@@ -42,7 +42,7 @@ from store_copies import codes_at as codes_at
 from store_copies import stored_at as stored_at
 
 from opengwasdb.ld.format import t_far
-from opengwasdb.ld.identity import orient
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TESTS = Path(__file__).resolve().parents[1]
 TEST_PANEL = TESTS / "data" / "test-panel"
@@ -96,7 +96,7 @@ def oriented() -> tuple[npt.NDArray[np.str_], npt.NDArray[np.float64]]:
     """
     v = panel_data().variants()
     rows = zip(v.chrom, v.pos, v.ref, v.alt, strict=True)
-    found = [orient(str(c), int(p), str(ref), str(alt)) for c, p, ref, alt in rows]
+    found = [sorted_identity(str(c), int(p), str(ref), str(alt)) for c, p, ref, alt in rows]
     names = np.array([o.alid for o in found])
     return names, np.array([1.0 if o.a1_is_alt else -1.0 for o in found])
 

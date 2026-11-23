@@ -1,8 +1,8 @@
 """The public surface, pinned signature by signature.
 
 What a caller of ogld sees is pinned here: `opengwasdb.ld.open`, the four queries and their results,
-`opengwasdb.ld.build` and its inputs, `opengwasdb.ld.validate`, the identity functions and the CLI's
-entry.
+`opengwasdb.ld.build` and its inputs, `opengwasdb.ld.validate`, the identity functions an LD
+Store's ALIDs are spelt by (`opengwasdb.variants.sorted_spelling`) and the CLI's entry.
 Changing an entry is an API change, made on purpose, with a changelog fragment that says so.
 cleat's public-api gate records only a declaration's first line at column 0, so it cannot see
 a method or a signature that ruff wraps; this test sees both.
@@ -28,7 +28,8 @@ import pytest
 import testdata
 
 import opengwasdb.ld
-from opengwasdb.ld import cli, identity
+from opengwasdb.ld import cli
+from opengwasdb.variants import normalise, sorted_spelling
 
 #: The committed Test Store (tests/ld/contract/support.py), written by the walking skeleton.
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
@@ -110,20 +111,20 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
         opengwasdb.ld.Refusal,
         "(reason: 'RefusalReason', detail: 'str') -> 'None'",
     ),
-    "opengwasdb.ld.identity.orient": (
-        identity.orient,
-        "(chrom: 'str', position: 'int', ref: 'str', alt: 'str') -> 'Orientation'",
+    "opengwasdb.variants.sorted_spelling.sorted_identity": (
+        sorted_spelling.sorted_identity,
+        "(chrom: 'str', position: 'int', ref: 'str', alt: 'str') -> 'SortedIdentity'",
     ),
-    "opengwasdb.ld.identity.normalise_chromosome": (
-        identity.normalise_chromosome,
-        "(label: 'str') -> 'str'",
+    "opengwasdb.variants.normalise.normalise_chromosome": (
+        normalise.normalise_chromosome,
+        "(chromosome: 'str') -> 'str'",
     ),
-    "opengwasdb.ld.identity.alid_locus": (
-        identity.alid_locus,
+    "opengwasdb.variants.sorted_spelling.sorted_alid_locus": (
+        sorted_spelling.sorted_alid_locus,
         "(alid: 'str') -> 'tuple[str, int] | None'",
     ),
-    "opengwasdb.ld.identity.Orientation": (
-        identity.Orientation,
+    "opengwasdb.variants.sorted_spelling.SortedIdentity": (
+        sorted_spelling.SortedIdentity,
         "(chrom: 'str', position: 'int', alid: 'str', a1: 'str', a2: 'str', a1_is_alt: 'bool')"
         " -> None",
     ),

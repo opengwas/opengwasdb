@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gzip
-import hashlib
 import json
 import os
 import subprocess
@@ -130,6 +129,8 @@ def version(binary: Path) -> str:
 
 
 def sha256(path: Path) -> str:
+    import hashlib
+
     h = hashlib.sha256()
     with path.open("rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):

@@ -1,4 +1,7 @@
-"""A fresh process with a two-thread native default, for the public request lifetime test."""
+"""A fresh process with a two-thread native default, for the public request lifetime test.
+
+Every BLAS pool is held at N, not one pool: pip wheels give numpy and scipy an OpenBLAS each.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ def main(path: str) -> None:
     rows = store._reader.rows_in("22", 19000000, 21000000)[:10]
     names = store._reader.alids_of(rows).tolist()
     assert len(names) == 10
-    assert blas_threads() == [2]
+    assert set(blas_threads()) == {2}
     original = reader.r
     fast_entered = threading.Event()
     slow_entered = threading.Event()
@@ -39,7 +42,7 @@ def main(path: str) -> None:
             else:
                 slow_entered.set()
                 assert fast_finished.wait(2)
-                assert blas_threads() == [1]
+                assert set(blas_threads()) == {1}
         return original(rows, span)
 
     def fast():
@@ -55,7 +58,7 @@ def main(path: str) -> None:
             assert fast_entered.wait(2)
             second = pool.submit(store.matrix, names)
             np.testing.assert_array_equal(first.result().r, second.result().r)
-        assert blas_threads() == [2], "restore the caller's default after the last request"
+        assert set(blas_threads()) == {2}, "restore the caller's default after the last request"
     finally:
         reader.r = original
         store._reader.close()

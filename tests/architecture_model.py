@@ -321,6 +321,40 @@ def check_layering(
     ]
 
 
+def independent_pairs(model: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    """The component pairs the model says must not import each other, as `independent` lists them.
+
+    An absent key is no pairs. A pair naming a component the model lacks is an error rather than
+    a rule that quietly matches nothing.
+    """
+    known = {str(component["id"]) for component in model["components"]}
+    pairs = []
+    for entry in model.get("independent", []):
+        if not (isinstance(entry, list) and len(entry) == 2 and entry[0] != entry[1]):
+            raise ModelError(f"`independent` entry {entry!r} must list two different components")
+        for name in entry:
+            if name not in known:
+                raise ModelError(f"`independent` names {name!r}, which is not a component")
+        pairs.append((str(entry[0]), str(entry[1])))
+    return tuple(pairs)
+
+
+def check_independence(model: Mapping[str, Any], graph: Iterable[ImportEdge]) -> list[str]:
+    """Each import between two components `independent` says must not know each other.
+
+    Either direction fails, and there is no baseline: the layers cannot express a rule between
+    siblings, and a pair listed here has no import between them to begin with.
+    """
+    forbidden = {frozenset(pair) for pair in independent_pairs(model)}
+    return [
+        f"{edge.file}: imports {edge.name} from component {edge.source!r} into"
+        f" {edge.destination!r}, but {MODEL_PATH} lists the two as `independent`; move what both"
+        f" need down to a component under them"
+        for edge in graph
+        if frozenset((edge.source, edge.destination)) in forbidden
+    ]
+
+
 class BaselineError(Exception):
     """A baseline file that cannot be read as one. Raised, not returned.
 

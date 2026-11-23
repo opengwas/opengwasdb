@@ -18,6 +18,14 @@ and numcodecs, and the format stores the engine's ALID exactly (`ld-store.md` §
 answers** for awkward inputs, which a default-tier test holds the copy to. ogld does not import
 the engine.
 
+**Amended 23 November 2026 (#456).** The copy is gone. The owner ruled on #456 that
+`opengwasdb.variants` owns both ALID spellings. LD Stores use its sorted spelling
+(`opengwasdb.variants.sorted_spelling`) until #462 moves them to the engine's reference-first
+one (ADR 0079). The sorted spelling is judged by the engine's own `orient_to_canonical`. The
+committed fixtures are frozen, and `tests/ld/test_sorted_spelling_conformance.py` still holds
+the spelling to them. A lookup given a deletion's reference-first ALID refuses
+(`ReferenceFirstIndel`). The reasons below stand as the history of the copy.
+
 ## Why
 
 - The engine's runtime dependencies (pysam, scipy, pandas, scikit-learn, pyliftover, typer) are

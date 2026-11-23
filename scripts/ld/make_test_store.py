@@ -4,7 +4,8 @@
 The Test Store is the LD Store of the Test Panel (`CONTEXT.md`), written from the panel's
 independent `reference_r(10)`, so a reader's tests have real data in the real format before any
 builder exists. Its variants are the rows that pass the build's filters, with the engine's ALID,
-A1 and A2 (`opengwasdb.ld.identity`), reversed indels resolved by the engine's rule; its r is the
+A1 and A2 in the sorted spelling LD Stores keep until #462 (`opengwasdb.variants.sorted_spelling`),
+reversed indels resolved by that spelling's rule; its r is the
 reference r signed to A1. The script supplies that r and what only its source knows, and the
 store makes the rest (`StoreWriter`, ogld#17). That is its codes,
 quantised at × 511, HGDP+1kGP EUR's encoding (ld-store §3; ADR 0090), the Near Band, the Far Pairs
@@ -48,8 +49,13 @@ from opengwasdb.ld.build.pc_check import K_MIN
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
 from opengwasdb.ld.format.geometry import chromosome_ranges, local_rows
 from opengwasdb.ld.genotypes import Genotypes
-from opengwasdb.ld.identity import Orientation, orient, resolve_reversed_indels, variant_order_key
 from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.variants.axis import alid_sort_key
+from opengwasdb.variants.sorted_spelling import (
+    SortedIdentity,
+    resolve_sorted_reversed_indels,
+    sorted_identity,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = ROOT / "tests" / "ld" / "data" / "test-panel" / "store"
@@ -80,9 +86,9 @@ def variant_set() -> VariantSet:
     v = panel_data().variants()
     passing = np.flatnonzero(v.passes_filters)
     records = [(str(v.chrom[r]), int(v.pos[r]), str(v.ref[r]), str(v.alt[r])) for r in passing]
-    kept, dropped = resolve_reversed_indels(records)
-    found = {i: orient(*records[i]) for i in kept}
-    order = sorted(kept, key=lambda i: variant_order_key(found[i]))
+    kept, dropped = resolve_sorted_reversed_indels(records)
+    found = {i: sorted_identity(*records[i]) for i in kept}
+    order = sorted(kept, key=lambda i: alid_sort_key(found[i].alid))
     rows = passing[order].astype(np.int64)
     oriented = [found[i] for i in order]
     is_alt = np.array([o.a1_is_alt for o in oriented])
@@ -115,7 +121,7 @@ def a1_frequency(
     return np.where(is_alt, alt_frequency, 1 - alt_frequency)
 
 
-def variants_table(oriented: list[Orientation], frequency: npt.NDArray[np.float64]) -> Variants:
+def variants_table(oriented: list[SortedIdentity], frequency: npt.NDArray[np.float64]) -> Variants:
     return Variants(
         chrom=np.array([o.chrom for o in oriented], dtype=np.str_),
         position=np.array([o.position for o in oriented], dtype=np.int64),

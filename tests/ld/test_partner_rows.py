@@ -19,49 +19,16 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import zarr
+from partner_oracle import Pairs, chromosomes, decoded_frames, far_pairs, near_pairs, store
 from store_copies import FLOOR, TEST_STORE
 
-from opengwasdb.ld.store import frames
-
-#: The Test Store's distances (ld-store §7).
+#: The Test Store's distances (spec §7).
 NEAR_BP, FAR_BP = 3_000_000, 10_000_000
 #: Its Partner Threshold, and the Partner Floor that is the smallest code c ≥ 0 with
 #: (c / 511)² ≥ 0.01, computed here rather than read from the store (ld-store §3; partner-rows §3).
 T_PARTNER = 0.01
 PARTNER_FLOOR = 52
 CHROMOSOMES = ("21", "22")
-
-Pairs = tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int16]]
-
-
-def store() -> zarr.Group:
-    return zarr.open_group(str(TEST_STORE), mode="r")
-
-
-def chromosomes(group: zarr.Group) -> dict[str, tuple[int, int]]:
-    listed: list[dict[str, Any]] = group["variants"].attrs["chromosomes"]
-    return {entry["name"]: (entry["row_start"], entry["row_stop"]) for entry in listed}
-
-
-def near_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Near Band pair of one chromosome, from ld-store §4's address rule written out here:
-    r(l, m) is at `r[indptr[l] + (m − l − 1)]`, so a code's address gives its pair."""
-    held = group["near"][chrom]
-    indptr = np.asarray(held["indptr"][:], dtype=np.int64)
-    codes = np.asarray(held["r"][:], dtype=np.int16)
-    lengths = np.diff(indptr)
-    row = np.repeat(np.arange(len(lengths), dtype=np.int64), lengths)
-    offset = np.arange(len(codes), dtype=np.int64) - np.repeat(indptr[:-1], lengths)
-    return row, row + 1 + offset, codes
-
-
-def far_pairs(group: zarr.Group, chrom: str) -> Pairs:
-    """Every Far Pair of one chromosome, each in its earlier row: (row, later row, code)."""
-    held = group["far"][chrom]
-    indptr = np.asarray(held["indptr"][:], dtype=np.int64)
-    rows = np.repeat(np.arange(len(indptr) - 1, dtype=np.int64), np.diff(indptr))
-    return rows, np.asarray(held["partner"][:], dtype=np.int64), np.asarray(held["r"][:], np.int16)
-
 
 def kept(group: zarr.Group, chrom: str) -> Pairs:
     """The pairs the Partner Rows must hold of one chromosome, each once and both ways: every
@@ -80,20 +47,8 @@ def kept(group: zarr.Group, chrom: str) -> Pairs:
 
 def decoded(group: zarr.Group, chrom: str) -> Pairs:
     """Every entry a chromosome's Partner Rows hold, frame by frame, as (row, partner, code)."""
-    held = group["partners"][chrom]
-    rows, per_frame = int(held.attrs["rows"]), int(held.attrs["rows_per_frame"])
-    offsets = np.asarray(held["frames_idx"][:], dtype=np.int64)
-    raw = np.asarray(held["frames"][:], dtype=np.uint8).tobytes()
     rows_of, partners, codes = [], [], []
-    for number in range(len(offsets) - 1):
-        first = number * per_frame
-        frame = frames.decode_frame(
-            raw[offsets[number] : offsets[number + 1]],
-            chrom=chrom,
-            number=number,
-            first=first,
-            rows=min(per_frame, rows - first),
-        )
+    for first, frame in decoded_frames(group["partners"][chrom], chrom):
         for row in range(frame.rows):
             held_partners, held_codes = frame.row(first + row)
             rows_of.append(np.full(len(held_partners), first + row, dtype=np.int64))

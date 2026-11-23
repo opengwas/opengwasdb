@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numcodecs
@@ -239,25 +239,37 @@ def test_a_frame_of_more_rows_than_a_frame_holds_is_refused(tmp_path: Path) -> N
 FORTY = frame_rows(40, PAIRS)
 
 
-def test_a_failed_compression_poisons_the_group_and_leaves_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A frame that never compressed is not a frame the chromosome holds: the group is poisoned, so
-    # a second close cannot publish a component short of one, and no file is left behind.
+def encoder_stub(error_for: Callable[[int], Exception | None]) -> Callable[..., bytes]:
+    """A stand-in for `frames.encode_frame`, with its exact signature: the call that is the
+    n-th (from 1) raises `error_for(n)` when that is one, and otherwise encodes for real."""
     real = frames.encode_frame
-    made = {"frames": 0}
+    calls = 0
 
-    def failing(
+    def stub(
         first: int,
         rows: list[tuple[np.ndarray, np.ndarray]],
         *,
         chrom: str,
         number: int,
     ) -> bytes:
-        made["frames"] += 1
-        if made["frames"] == 1:
-            raise RuntimeError("the compressor died")
+        nonlocal calls
+        calls += 1
+        error = error_for(calls)
+        if error is not None:
+            raise error
         return real(first, rows, chrom=chrom, number=number)
+
+    return stub
+
+
+def test_a_failed_compression_poisons_the_group_and_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A frame that never compressed is not a frame the chromosome holds: the group is poisoned, so
+    # a second close cannot publish a component short of one, and no file is left behind.
+    failing = encoder_stub(
+        lambda number: RuntimeError("the compressor died") if number == 1 else None
+    )
 
     monkeypatch.setattr(frames, "encode_frame", failing)
     group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=32, workers=4)
@@ -277,14 +289,7 @@ def test_a_failed_compression_poisons_the_group_and_leaves_nothing(
 def test_a_failed_frame_in_line_poisons_the_group_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing(
-        first: int,
-        rows: list[tuple[np.ndarray, np.ndarray]],
-        *,
-        chrom: str,
-        number: int,
-    ) -> bytes:
-        raise RuntimeError("bad partners")
+    failing = encoder_stub(lambda number: RuntimeError("bad partners"))
 
     monkeypatch.setattr(frames, "encode_frame", failing)
     group = frames.FramesGroup(open_store(tmp_path / "store"), "22", rows=16)

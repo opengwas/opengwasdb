@@ -290,7 +290,7 @@ def test_a_build_with_no_scale_is_refused_naming_what_is_missing(
     with pytest.raises(SystemExit) as refused:
         cli.main(unscaled)
     assert refused.value.code == 2
-    assert "the following arguments are required: --r-scale" in capsys.readouterr().err
+    assert "Missing option '--r-scale'" in capsys.readouterr().err
 
 
 def test_a_build_with_no_partner_threshold_is_refused_naming_what_is_missing(
@@ -311,7 +311,7 @@ def test_a_build_with_no_partner_threshold_is_refused_naming_what_is_missing(
     with pytest.raises(SystemExit) as refused:
         cli.main(unset)
     assert refused.value.code == 2
-    assert "the following arguments are required: --t-partner" in capsys.readouterr().err
+    assert "Missing option '--t-partner'" in capsys.readouterr().err
     with pytest.raises(opengwasdb.ld.InputError, match="t_partner is the r²"):
         opengwasdb.ld.BuildInputs(**{**given, "t_partner": float("nan")})
 

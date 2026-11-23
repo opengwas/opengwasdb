@@ -12,7 +12,6 @@ correlation matrix, so far more pairs reach the floor than in the Test Panel's o
 from __future__ import annotations
 
 import itertools
-import json
 import shutil
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
@@ -24,32 +23,28 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import pytest
+import store_copies
 import zarr
-from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, TEST_STORE, codes_at
+from partner_oracle import decoded_frames
+from store_copies import (
+    DERIVED,
+    FLOOR,
+    PARTNER_FLOOR,
+    R_SCALE,
+    T_PARTNER,
+    TEST_STORE,
+    codes_at,
+    sourced,
+)
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
 from opengwasdb.ld.format.geometry import near_row_lengths
-from opengwasdb.ld.identity import orient
 from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 N_SAMPLES, K = 771, 10
 #: t_far for the Test Store's n and k, ld-store §3: q / (n − k − 1) with q = 20.84.
 T_FAR = 20.84 / (N_SAMPLES - K - 1)
-#: The store-derived keys `finish` adds (ld-store §7; ownership.md, "Provenance and what goes in a
-#: store"), every other key being the producer's.
-DERIVED = {
-    "format_version",
-    "encoding",
-    "n_variants",
-    "near_bp",
-    "far_bp",
-    "t_far",
-    "t_far_q",
-    "far_code_floor",
-    "t_partner",
-    "partner_code_floor",
-    "counts",
-}
 
 
 # ------------------------------------------------------------------ fixtures
@@ -154,15 +149,6 @@ def expected(chrom: str) -> Expected:
     )
 
 
-def sourced(**changes: Any) -> Sourced:
-    """The Test Store's provenance without the keys the store derives, with `changes`."""
-    p: dict[str, Any] = json.loads(json.dumps(StoreReader.open(TEST_STORE).provenance))
-    for key in DERIVED:
-        del p[key]
-    p.update(changes)
-    return cast(Sourced, p)
-
-
 def create(out: Path, table: Variants | None = None, **settings: Any) -> StoreWriter:
     given: dict[str, Any] = {
         "encoding": REncoding(R_SCALE),
@@ -220,17 +206,8 @@ def decoded_partners(
     held_bytes = int(held["frames"].shape[0])
     assert offsets[0] == 0
     assert offsets[-1] == held.attrs["frames_bytes"] == held_bytes
-    raw = np.asarray(held["frames"][:], dtype=np.uint8).tobytes()
     rows_of, partners, codes = [], [], []
-    for number in range(len(offsets) - 1):
-        first = number * per_frame
-        frame = frames.decode_frame(
-            raw[offsets[number] : offsets[number + 1]],
-            chrom=chrom,
-            number=number,
-            first=first,
-            rows=min(per_frame, rows - first),
-        )
+    for _, frame in decoded_frames(held, chrom):
         rows_of.append(np.diff(frame.indptr))
         partners.append(frame.partners.astype(np.int64))
         codes.append(frame.codes)
@@ -240,6 +217,17 @@ def decoded_partners(
         np.concatenate(partners),
         np.concatenate(codes),
     )
+
+
+def assert_far_and_partner_rows(root: zarr.Group, chrom: str, e: Expected) -> None:
+    """The store's Far Pairs and its decoded Partner Rows are the expected ones."""
+    np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
+    np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
+    np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
+    written_indptr, written_partner, written_codes = decoded_partners(root, chrom)
+    np.testing.assert_array_equal(written_indptr, e.partner_rows_indptr)
+    np.testing.assert_array_equal(written_partner, e.partner_rows_partner)
+    np.testing.assert_array_equal(written_codes, e.partner_rows_r)
 
 
 def test_the_fixture_reaches_every_case() -> None:
@@ -286,13 +274,7 @@ def test_a_store_cut_in_blocks_holds_the_arrays_brute_force_gives(
         np.testing.assert_array_equal(root[f"near/{chrom}/indptr"][:], e.near_indptr)
         np.testing.assert_array_equal(root[f"near/{chrom}/r"][:], e.near_r)
         assert f"index/{chrom}" not in root, "a store this code writes holds no Proxy Index"
-        np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
-        np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
-        np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
-        written_indptr, written_partner, written_codes = decoded_partners(root, chrom)
-        np.testing.assert_array_equal(written_indptr, e.partner_rows_indptr)
-        np.testing.assert_array_equal(written_partner, e.partner_rows_partner)
-        np.testing.assert_array_equal(written_codes, e.partner_rows_r)
+        assert_far_and_partner_rows(root, chrom, e)
         if shards is not None:
             assert root[f"near/{chrom}/r"].shards == (shards[0][1],)
             inner, shard = shards[1]
@@ -359,7 +341,7 @@ def test_the_writer_writes_only_whole_shards_but_at_an_array_s_end(
 def synthetic(rows: int) -> Variants:
     """`rows` variants on chromosome 1, 1 kb apart."""
     position = 1_000 * np.arange(1, rows + 1, dtype=np.int64)
-    oriented = [orient("1", int(p), "A", "C") for p in position]
+    oriented = [sorted_identity("1", int(p), "A", "C") for p in position]
     columns = [np.array([getattr(o, name) for o in oriented]) for name in ("chrom", "alid")]
     a1 = np.array([o.a1 for o in oriented])
     a2 = np.array([o.a2 for o in oriented])
@@ -438,13 +420,7 @@ def test_far_pairs_derived_from_an_index_are_the_brute_force_ones(tmp_path: Path
         count = assembly.derive_far_pairs(index, far, here, NEAR_BP, REncoding(R_SCALE))
         e = expected(chrom)
         assert count == e.far_pairs
-        np.testing.assert_array_equal(root[f"far/{chrom}/indptr"][:], e.far_indptr)
-        np.testing.assert_array_equal(root[f"far/{chrom}/partner"][:], e.far_partner)
-        np.testing.assert_array_equal(root[f"far/{chrom}/r"][:], e.far_r)
-        written_indptr, written_partner, written_codes = decoded_partners(root, chrom)
-        np.testing.assert_array_equal(written_indptr, e.partner_rows_indptr)
-        np.testing.assert_array_equal(written_partner, e.partner_rows_partner)
-        np.testing.assert_array_equal(written_codes, e.partner_rows_r)
+        assert_far_and_partner_rows(root, chrom, e)
 
 
 # ------------------------------------------------------------------ empty bands
@@ -456,15 +432,7 @@ def test_a_chromosome_with_an_empty_near_band_holds_only_its_far_pairs(tmp_path:
     # one variant, so no pair at all. The store writes both and passes every rule.
     position = np.array([1_000_000, 5_000_000, 9_500_000, 2_000_000], dtype=np.int64)
     chrom = ["1", "1", "1", "2"]
-    oriented = [orient(c, int(p), "A", "C") for c, p in zip(chrom, position, strict=True)]
-    table = Variants(
-        np.array(chrom),
-        position,
-        np.array([o.alid for o in oriented]),
-        np.array([o.a1 for o in oriented]),
-        np.array([o.a2 for o in oriented]),
-        np.full(4, 0.3),
-    )
+    table = store_copies.snv_variants(chrom, position)
     writer = create(tmp_path / "s", table)
     r = np.full((3, 3), np.nan)
     r[0, 1], r[0, 2], r[1, 2] = 0.5, -0.3, 0.01

@@ -768,19 +768,28 @@ def a_pair_held_with_two_codes(store: Path) -> None:
     edit_partner_row(store, change)
 
 
-def a_missing_within_near_bp_entry(store: Path) -> None:
-    """Drops one direction of a pair within near_bp whose band code reaches the Partner Floor,
-    so the near half is no longer the band's."""
+def drop_first_entry(
+    store: Path, wanted: Callable[[np.ndarray, int, np.ndarray], np.ndarray]
+) -> None:
+    """Drops the first chr22 Partner Rows entry `wanted` picks, from the first row that has one:
+    `wanted(partners, row, distance)` is a mask over the row's partners, `distance` being
+    each one's distance in bp from the row's variant."""
     rows, per_frame = partner_rows(store, "22")
     _, pos = chr22(store)
     for at, (partners, codes) in enumerate(rows):
-        close = np.abs(pos[partners] - pos[at]) <= 3_000_000
-        if not close.any():
+        picked = wanted(partners, at, np.abs(pos[partners] - pos[at]))
+        if not picked.any():
             continue
-        into = int(np.flatnonzero(close)[0])
+        into = int(np.flatnonzero(picked)[0])
         rows[at] = (np.delete(partners, into), np.delete(codes, into))
         break
     write_partner_rows(store, "22", rows, per_frame)
+
+
+def a_missing_within_near_bp_entry(store: Path) -> None:
+    """Drops one direction of a pair within near_bp whose band code reaches the Partner Floor,
+    so the near half is no longer the band's."""
+    drop_first_entry(store, lambda partners, at, distance: distance <= 3_000_000)
 
 
 def a_later_row_code_unlike_the_band(store: Path) -> None:
@@ -803,16 +812,7 @@ def a_later_row_code_unlike_the_band(store: Path) -> None:
 
 def a_missing_far_entry(store: Path) -> None:
     """Drops one direction of a pair beyond near_bp, so the far half is not the Far Pairs'."""
-    rows, per_frame = partner_rows(store, "22")
-    _, pos = chr22(store)
-    for at, (partners, codes) in enumerate(rows):
-        beyond = np.abs(pos[partners] - pos[at]) > 3_000_000
-        if not beyond.any():
-            continue
-        into = int(np.flatnonzero(beyond)[0])
-        rows[at] = (np.delete(partners, into), np.delete(codes, into))
-        break
-    write_partner_rows(store, "22", rows, per_frame)
+    drop_first_entry(store, lambda partners, at, distance: distance > 3_000_000)
 
 
 def flip_a_byte_in_a_frame(store: Path) -> None:
@@ -835,16 +835,9 @@ def a_group_recording_another_row_count(store: Path) -> None:
 def a_later_row_missing_its_entry(store: Path) -> None:
     """Drops the entry a pair's later row holds for its earlier row, keeping the earlier row's
     own: a pair within near_bp whose band code is in one row only (partner-rows §3)."""
-    rows, per_frame = partner_rows(store, "22")
-    _, pos = chr22(store)
-    for at, (partners, codes) in enumerate(rows):
-        close = (partners < at) & (np.abs(pos[partners] - pos[at]) <= 3_000_000)
-        if not close.any():
-            continue
-        into = int(np.flatnonzero(close)[0])
-        rows[at] = (np.delete(partners, into), np.delete(codes, into))
-        break
-    write_partner_rows(store, "22", rows, per_frame)
+    drop_first_entry(
+        store, lambda partners, at, distance: (partners < at) & (distance <= 3_000_000)
+    )
 
 
 def a_temporary_group_a_crash_left(store: Path) -> None:

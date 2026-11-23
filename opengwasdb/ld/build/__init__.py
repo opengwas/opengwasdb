@@ -5,7 +5,7 @@ decision 5). Its inputs are specified in `docs/spec/build-inputs.md` (ADR 0088):
 2 pgen with complete genotypes, a keep file and a PC File. ogld runs no PCA: the PCs are
 computed outside the library by a recipe script, and the builder only chooses which of
 them to adjust for, by the PC Check. It imports `opengwasdb.ld.store`, `opengwasdb.ld.format` and
-`opengwasdb.ld.identity`, never `opengwasdb.ld.query`.
+`opengwasdb.variants` (variant identity, in the sorted spelling), never `opengwasdb.ld.query`.
 
 pgenlib, the pgen reader, is imported inside the build's read path only, never at module
 import: `import opengwasdb.ld` and every reader must work on an install without it

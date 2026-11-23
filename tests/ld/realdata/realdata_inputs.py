@@ -10,15 +10,16 @@ escapes gate counts every `pytest.skip` site in the tree (quality.json, `escapes
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
+from opengwasdb.ld import env
+
 
 def required(name: str, what: str) -> Path:
     """The path `$name` holds; unset or naming nothing, the test stops here, naming both."""
-    value = os.environ.get(name, "")
+    value = env.read(name, "")
     if not value:
         pytest.xfail(f"input missing: ${name} is unset ({what})")
     if not Path(value).exists():

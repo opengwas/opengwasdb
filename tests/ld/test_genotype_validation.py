@@ -1,12 +1,11 @@
 """Build/validate and corruption refusals at the public sidecar boundary (opengwas/ogld#91)."""
 
-import os
-import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 import zarr
+from store_copies import private_sidecar_copy
 
 import opengwasdb.ld
 from opengwasdb.ld.cli import main
@@ -23,17 +22,7 @@ def test_built_sidecar_validates(genotype_store: Path) -> None:
 def test_corrupted_sidecar_fails_validation(
     genotype_store: Path, tmp_path: Path, fault: str
 ) -> None:
-    copy = tmp_path / "sidecar"
-    # Preserve relative input paths when copying the sidecar into a different directory.
-    shutil.copytree(genotype_store, copy)
-    root = zarr.open_group(copy, mode="a")
-    record = dict(root.attrs["genotype_store"])
-    for fileset in record["filesets"]:
-        for name in ("pgen", "psam", "pvar"):
-            pin = fileset[name]
-            pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
-    for pin in record["inputs"]:
-        pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    copy, root, record = private_sidecar_copy(genotype_store, tmp_path)
     if fault == "projection":
         array = np.load(copy / "genotypes/projection.npy", mmap_mode="r+")
         array[0, 0] += 1
@@ -43,8 +32,6 @@ def test_corrupted_sidecar_fails_validation(
     else:
         (copy / "genotypes/norm.npy").unlink()
     root.attrs["genotype_store"] = record
-    # Root pins deliberately changed: the companion must be re-derived on this private copy.
-    del root.attrs["alid_mmap"]
     assert main(["validate", str(copy)]) == 1
     findings = opengwasdb.ld.validate(copy)
     assert findings["genotypes.inputs" if fault == "hash" else "genotypes.arrays"]
@@ -52,19 +39,7 @@ def test_corrupted_sidecar_fails_validation(
 
 def _copy(genotype_store: Path, tmp_path: Path) -> tuple[Path, zarr.Group, dict]:
     """A private copy whose pins point at the original inputs, its companion dropped."""
-    copy = tmp_path / "sidecar"
-    shutil.copytree(genotype_store, copy)
-    root = zarr.open_group(copy, mode="a")
-    record = dict(root.attrs["genotype_store"])
-    for fileset in record["filesets"]:
-        for name in ("pgen", "psam", "pvar"):
-            pin = fileset[name]
-            pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
-    for pin in record["inputs"]:
-        pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
-    if "alid_mmap" in root.attrs:
-        del root.attrs["alid_mmap"]
-    return copy, root, record
+    return private_sidecar_copy(genotype_store, tmp_path)
 
 
 def _rewrite(copy: Path, record: dict, name: str, change) -> None:

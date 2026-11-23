@@ -40,11 +40,11 @@ from opengwasdb.ld.format.geometry import (
     position_rows,
     spans,
 )
-from opengwasdb.ld.identity import alid_locus
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.layout import chromosomes_listed, refused_if_lost
 from opengwasdb.ld.store.location import OpenedStore, elements_of, kept_array, runs_of
 from opengwasdb.ld.store.tables import Variants
+from opengwasdb.variants.sorted_spelling import refuse_reference_first_indel, sorted_alid_locus
 
 #: The variant table's columns (ld-store §2).
 _VARIANT_COLUMNS: Final = ("position", "alid", "a1", "a2", "a1_frequency")
@@ -284,9 +284,21 @@ class VariantTable:
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
         """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (ld-store §2).
 
-        A malformed ALID is Absent too: it names no variant in the store. A long list is searched
-        for in the store's ALID index (ADR 0096), which holds every ALID of the table that fits its
-        32-byte slot, sorted, so one search answers it without reading the variant table at all.
+        A malformed ALID is Absent too: it names no variant in the store. A deletion's ALID
+        spelt reference first, as a GWAS Store of format 0.2.2 spells it (ADR 0079), is refused
+        instead, raising `opengwasdb.variants.sorted_spelling.ReferenceFirstIndel`: the store
+        spells indels sorted (#462), so it would hold that variant under the swapped ALID, and
+        Absent would read as "not in the panel". Only a miss is judged so, so a hit costs
+        nothing.
+
+        The reverse is silent, and no reader can refuse it: an insertion's reference-first ALID
+        is also a sorted ALID, so at a site where the store holds only the deletion of the same
+        two alleles (a tandem repeat, `G>GGGGCC` against `GGGGCC>G`) it finds the deletion's row.
+        The store records no REF to tell them apart. This is recorded on #462.
+
+        A long list is searched for in the store's ALID index (ADR 0010), which holds every ALID of
+        the table that fits its 32-byte slot, sorted, so one search answers it without reading the
+        variant table at all.
         A validated local companion instead answers fitting hits and misses by mmap without
         parsing loci or reading columns (ADR 0098); only wider names take the exact scan.
         Without that companion, every ALID the index does not hold — absent, too wide for the
@@ -295,6 +307,13 @@ class VariantTable:
         can only make this read faster, never change its answer; and a store whose index could
         answer falsely is one validation fails, as it fails a store with any other broken array.
         """
+        found = self._found_rows(alids)
+        for missed in np.flatnonzero(found < 0):
+            refuse_reference_first_indel(alids[int(missed)], f"the Store at {self.location}")
+        return found
+
+    def _found_rows(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
+        """`rows_of` before a miss is judged: −1 for every ALID the store does not hold."""
         found = np.full(len(alids), -1, dtype=np.int64)
         if not len(alids):
             return found
@@ -464,8 +483,8 @@ class VariantTable:
         return self._index_arrays
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
-        """The rows on `chrom` with start ≤ position ≤ stop, ascending (ld-store §2)."""
-        if alid_locus(f"{chrom}:1:A:C") is None:
+        """The rows on `chrom` with start ≤ position ≤ stop, ascending (spec §2)."""
+        if sorted_alid_locus(f"{chrom}:1:A:C") is None:
             raise InputError(
                 f"{chrom!r} is not a canonical chromosome label (1–22, X, Y, MT; no 'chr' prefix)"
             )
@@ -580,7 +599,7 @@ def _loci(
     """Per chromosome of the store, which of `alids` name a locus on it, and its position."""
     by_chrom: dict[str, tuple[list[int], list[int]]] = {}
     for i, alid in enumerate(alids):
-        locus = alid_locus(alid)
+        locus = sorted_alid_locus(alid)
         if locus is not None and locus[0] in ranges:
             which, at = by_chrom.setdefault(locus[0], ([], []))
             which.append(i)

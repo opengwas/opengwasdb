@@ -18,8 +18,10 @@ import numpy.typing as npt
 from opengwasdb.ld.build.importing.matrix import IntArray
 from opengwasdb.ld.build.importing.parts import optional_module
 from opengwasdb.ld.format import NEAR_BP
-from opengwasdb.ld.identity import AUTOSOMES, IdentityError, order_key, orient
 from opengwasdb.ld.store import Variants
+from opengwasdb.variants.axis import alid_sort_key
+from opengwasdb.variants.normalise import AUTOSOMES, VariantNormalisationError
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 # The published Pan-UKB LD band: pairs further apart than this in GRCh37 are not measured.
 SOURCE_BAND_BP: Final = 10_000_000
@@ -177,8 +179,8 @@ def _target(row: SourceVariant, lift: Any, reference: str) -> LiftedVariant | st
         return alleles
     ref, alt = alleles
     try:
-        identity = orient(row.chrom, target + 1, ref, alt)
-    except IdentityError:
+        identity = sorted_identity(row.chrom, target + 1, ref, alt)
+    except VariantNormalisationError:
         return "allele_identity"
     frequency = _a1_frequency(row.af, identity.a1_is_alt)
     if isinstance(frequency, str):
@@ -232,7 +234,7 @@ def lift_variants(
     kept, losses = _targets(rows, lift, reference)
     unique, collisions = _without_collisions(kept)
     losses["liftover_identity_collision"] = collisions
-    unique.sort(key=lambda row: order_key(row.chrom, row.position, row.alid))
+    unique.sort(key=lambda row: alid_sort_key(row.alid))
     return _table(unique), dict(losses)
 
 

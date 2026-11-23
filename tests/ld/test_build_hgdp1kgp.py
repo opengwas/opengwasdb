@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from ld_script_modules import SCRIPTS, load_script
 
+from opengwasdb.ld.cli import ld_app
+
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 recipe = load_script("build_hgdp1kgp")
@@ -56,12 +58,12 @@ def script(path: Path, text: str) -> Path:
 def world(tmp_path, monkeypatch):
     """Roots under tmp_path, a keep file of three samples, a source BCF and the fake plink2."""
     for variable, name in (
-        ("OGLD_PGEN_V2", "pgen"),
-        ("OGLD_PHASED_V2", "bcf"),
-        ("OGLD_KEEP", "keep"),
-        ("OGLD_SCRATCH", "scratch"),
-        ("OGLD_STORES", "stores"),
-        ("OGLD_PCS", "pcs"),
+        ("OPENGWASDB_LD_PGEN_V2", "pgen"),
+        ("OPENGWASDB_LD_PHASED_V2", "bcf"),
+        ("OPENGWASDB_LD_KEEP", "keep"),
+        ("OPENGWASDB_LD_SCRATCH", "scratch"),
+        ("OPENGWASDB_LD_STORES", "stores"),
+        ("OPENGWASDB_LD_PCS", "pcs"),
     ):
         (tmp_path / name).mkdir()
         monkeypatch.setenv(variable, str(tmp_path / name))
@@ -171,25 +173,33 @@ def test_the_keep_file_needs_its_header(tmp_path):
         recipe.keep_iids(keep)
 
 
-def test_the_build_command_is_one_ogld_accepts(tmp_path):
-    from opengwasdb.ld.cli import _parser
+def _parsed(argv):
+    """What the `opengwasdb ld` parser makes of `argv` (a command and its options), without
+    running the command."""
+    import typer.main
 
+    group = typer.main.get_command(ld_app)
+    with group.make_context("ld", list(argv), resilient_parsing=False) as context:
+        name, command, rest = group.resolve_command(context, list(argv))
+        with command.make_context(name, rest, parent=context) as inner:
+            return dict(inner.params)
+
+
+def test_the_build_command_is_one_ogld_accepts(tmp_path):
     pgens = [tmp_path / f"chr{c}.pgen" for c in recipe.CHROMS]
     command = recipe.build_command(
         "AFR", pgens, tmp_path / "s.store", tmp_path / "k", tmp_path / "p", 16
     )
-    args = _parser().parse_args(command[1:])
-    assert args.pgen == pgens
-    assert (args.r_scale, args.k, args.threads) == (recipe.PANEL_SCALE, recipe.K, 16)
-    assert args.t_partner == recipe.PANEL_T_PARTNER
-    assert (args.panel_id, args.ancestry) == (recipe.panel_id("AFR"), "AFR")
+    args = _parsed(command[2:])
+    assert args["pgen"] == tuple(str(p) for p in pgens)
+    assert (args["r_scale"], args["k"], args["threads"]) == (recipe.PANEL_SCALE, recipe.K, 16)
+    assert args["t_partner"] == recipe.PANEL_T_PARTNER
+    assert (args["panel_id"], args["ancestry"]) == (recipe.panel_id("AFR"), "AFR")
 
 
 def test_the_validate_command_is_one_ogld_accepts(tmp_path):
-    from opengwasdb.ld.cli import _parser
-
-    args = _parser().parse_args(recipe.validate_command(tmp_path / "s", 16)[1:])
-    assert (args.location, args.threads) == (str(tmp_path / "s"), 16)
+    args = _parsed(recipe.validate_command(tmp_path / "s", 16)[2:])
+    assert (args["location"], args["threads"]) == (str(tmp_path / "s"), 16)
 
 
 def test_the_arguments_dedupe_panels_and_refuse_an_unknown_one():

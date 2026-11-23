@@ -85,8 +85,8 @@ def test_of_an_insertion_and_a_deletion_the_store_s_a1_frequency_names_the_one_i
 def test_when_both_records_match_the_stores_frequency_the_reversed_indel_rule_decides() -> None:
     # ins (C>CT) has A1 = C = REF: frequency 1 − 300/1330. del (CT>C) has A1 = C = ALT: 1030/1330.
     # The two are the same number, so the store cannot tell them apart, and the rule (REF = A1,
-    # opengwasdb.ld.identity.resolve_reversed_indels) decides: ins, whichever order the records came
-    # in.
+    # opengwasdb.variants.sorted_spelling.resolve_sorted_reversed_indels) decides: ins, whichever
+    # order the records came in.
     counts = {"ins": (300, 1330), "del": (1030, 1330)}
     stored = 1 - 300 / 1330
     assert stored == pytest.approx(1030 / 1330)
@@ -169,6 +169,6 @@ def test_a_plink2_that_will_not_say_its_version_is_refused(
     broken = tmp_path / "plink2"
     broken.write_text("#!/bin/sh\necho 'not a version' >&2\nexit 3\n")
     broken.chmod(0o755)
-    monkeypatch.setenv("OGLD_PLINK2", str(broken))
+    monkeypatch.setenv("OPENGWASDB_LD_PLINK2", str(broken))
     with pytest.raises(SystemExit, match="--version"):
         script.plink2_version()

@@ -23,15 +23,13 @@ ignores a group it does not know (ld-store §1), and `far/` appears whole.
 
 from __future__ import annotations
 
-import argparse
 import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
 import zarr
+from derive_common import derive_each
 
 from opengwasdb.ld.store import StoreReader
 from opengwasdb.ld.store.assembly import derive_far_pairs
@@ -84,23 +82,8 @@ def _write(store: Path, reader: StoreReader) -> int:
     return written
 
 
-def uptime() -> str:
-    return subprocess.run(["uptime"], capture_output=True, text=True, check=True).stdout.strip()
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("stores", nargs="+", type=Path)
-    parser.add_argument("--threads", type=int, default=8, help="zarr's threads (8)")
-    args = parser.parse_args(argv)
-    zarr.config.set({"threading.max_workers": args.threads})
-    for store in args.stores:
-        print(f"{store}: start  {uptime()}", flush=True)
-        started = time.perf_counter()
-        count = derive(store)
-        seconds = time.perf_counter() - started
-        print(f"{store}: {count:,} Far Pairs in {seconds:.1f} s  {uptime()}", flush=True)
-    return 0
+    return derive_each(__doc__.split("\n\n")[0], derive, "Far Pairs", argv)
 
 
 if __name__ == "__main__":

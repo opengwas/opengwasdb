@@ -14,8 +14,8 @@ import numpy as np
 import numpy.typing as npt
 
 from opengwasdb.ld.format import answer_kinds
-from opengwasdb.ld.identity import order_key
 from opengwasdb.ld.store.tables import Variants, check_columns, columns_of
+from opengwasdb.variants.normalise import chromosome_rank
 
 
 @dataclass(frozen=True)
@@ -125,11 +125,13 @@ class Clumps:
     def leads(self) -> npt.NDArray[np.str_]:
         """The lead ALIDs, strongest first, ties by genomic order then ALID (ogld#6): the
         order the greedy pass took them in, by the engine's order of the columns a result
-        holds (`opengwasdb.ld.identity.order_key`), never one re-formed from an ALID's alleles."""
+        holds: chromosome (`opengwasdb.variants.normalise.chromosome_rank`), position, then ALID
+        bytewise, which is `opengwasdb.variants.axis.alid_sort_key`'s order for every ALID a Store
+        holds, never one re-formed from an ALID's alleles."""
 
         def key(i: int) -> tuple[float, int, int, str]:
-            rank = order_key(str(self.chrom[i]), int(self.position[i]), str(self.alid[i]))
-            return (-float(self.score[i]), *rank)
+            rank = chromosome_rank(str(self.chrom[i]))
+            return (-float(self.score[i]), rank, int(self.position[i]), str(self.alid[i]))
 
         order = sorted(np.flatnonzero(self.lead == self.alid).tolist(), key=key)
         return self.alid[np.array(order, dtype=np.int64)]

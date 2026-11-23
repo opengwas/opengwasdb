@@ -492,7 +492,7 @@ class StoreReader(ComponentWorkers):
                 f"{self._provenance['format_version']}, which has no "
                 f"Partner Rows ({layout.PARTNERS}/): clump and proxies read them, so it is refused "
                 "naming the missing component; a store built before 0.2.0 derives them with "
-                "`ogld derive-partners` (ld-store §13; partner-rows §5.1)"
+                "`opengwasdb ld derive-partners` (spec §13; partner-rows §5.1)"
             )
         return float(self._provenance["t_partner"])
 
@@ -797,6 +797,6 @@ def opened_ld(root: zarr.Group, location: str, cache: ChunkCache) -> OpenedStore
     if recorded.get("format_version") not in READABLE_FORMATS:
         raise InputError(
             f"{location} is LD Store format {recorded.get('format_version')!r}; "
-            f"this ogld reads {' and '.join(READABLE_FORMATS)} only (ld-store §13)"
+            f"this opengwasdb.ld reads {' and '.join(READABLE_FORMATS)} only (spec §13)"
         )
     return OpenedStore(root, location, cast(Provenance, recorded), cache)

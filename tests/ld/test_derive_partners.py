@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -198,16 +197,15 @@ raise SystemExit(main())
 """
 
 
-@pytest.fixture(scope="module")
-def killed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, Any]]:
-    """A Test Store copy whose derivation was killed mid-chromosome, and its provenance before."""
-    store = unpartnered(tmp_path_factory.mktemp("killed") / "store")
-    before = provenance(store)
+def run_killed(script: str, store: Path) -> None:
+    """`derive-partners` over `store` in a process that runs `script` first, which kills it."""
+    import subprocess
+
     done = subprocess.run(
         [
             sys.executable,
             "-c",
-            KILLED,
+            script,
             "derive-partners",
             str(store),
             "--t-partner",
@@ -218,6 +216,14 @@ def killed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, An
         check=False,
     )
     assert done.returncode == -9, f"the run was killed, not finished: {done.returncode}"
+
+
+@pytest.fixture(scope="module")
+def killed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, Any]]:
+    """A Test Store copy whose derivation was killed mid-chromosome, and its provenance before."""
+    store = unpartnered(tmp_path_factory.mktemp("killed") / "store")
+    before = provenance(store)
+    run_killed(KILLED, store)
     temporaries = list((store / "partners").glob(".*.tmp-*"))
     assert temporaries, "the killed run left the chromosome's group unpublished, as it must"
     written = list(temporaries[0].glob("frames.bin"))
@@ -352,21 +358,7 @@ def unclaimed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Test Store copy killed between `partners/` becoming a node and the provenance that
     claims it, with the provenance it had before."""
     store = unpartnered(tmp_path_factory.mktemp("unclaimed") / "store")
-    done = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            UNCLAIMED,
-            "derive-partners",
-            str(store),
-            "--t-partner",
-            str(T_PARTNER),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert done.returncode == -9, f"the run was killed, not finished: {done.returncode}"
+    run_killed(UNCLAIMED, store)
     assert (store / "partners" / "zarr.json").exists(), "the node was published before the kill"
     assert "t_partner" not in provenance(store), "and the claim was not written"
     return store
@@ -547,7 +539,8 @@ def test_a_0_1_0_store_that_keeps_the_keys_answers_no_partner_read(tmp_path: Pat
         with pytest.raises(InputError, match=r"format 0\.1\.0.*no Partner Rows") as caught:
             refused()
         assert str(store) in str(caught.value), "the refusal names the store it is about"
-        assert "ogld derive-partners" in str(caught.value), "and the command that settles it"
+        message = str(caught.value)
+        assert "opengwasdb ld derive-partners" in message, "and the command that settles it"
 
 
 # ---- item 3: no link anywhere the derivation writes, and no planted metadata temporary --------

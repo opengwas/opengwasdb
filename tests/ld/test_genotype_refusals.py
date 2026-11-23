@@ -1,16 +1,14 @@
 """Kind dispatch, immutable inputs and query refusals at opengwasdb.ld.open (#91)."""
 
-import os
-import shutil
 import sys
 from pathlib import Path
 
 import build_fixtures
 import numpy as np
 import pytest
-import testdata
 import zarr
 from contract.support import TEST_STORE
+from store_copies import private_sidecar_copy
 
 import opengwasdb.ld
 from opengwasdb.ld.build import build_genotypes
@@ -20,18 +18,8 @@ from opengwasdb.ld.store import StoreReader
 
 @pytest.fixture
 def private_sidecar(genotype_store: Path, tmp_path: Path) -> Path:
-    copy = tmp_path / "sidecar"
-    shutil.copytree(genotype_store, copy)
-    root = zarr.open_group(copy, mode="a")
-    record = root.attrs["genotype_store"]
-    for fileset in record["filesets"]:
-        for name in ("pgen", "psam", "pvar"):
-            pin = fileset[name]
-            pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
-    for pin in record["inputs"]:
-        pin["path"] = os.path.relpath((genotype_store / pin["path"]).resolve(), copy)
+    copy, root, record = private_sidecar_copy(genotype_store, tmp_path)
     root.attrs["genotype_store"] = record
-    del root.attrs["alid_mmap"]
     return copy
 
 
@@ -53,6 +41,8 @@ def test_kind_dispatch_and_explicit_wrong_kind_refusals(genotype_store: Path) ->
 
 
 def test_sidecar_and_inputs_move_together(tmp_path: Path) -> None:
+    import testdata
+
     tree = tmp_path / "tree"
     tree.mkdir()
     pgen = build_fixtures.copy_panel(tree / "panel")
