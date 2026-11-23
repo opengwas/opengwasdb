@@ -31,6 +31,9 @@ _CHROMOSOME_ALIASES = {
 
 
 _PRIMARY_NON_AUTOSOMES = frozenset({"X", "Y", "MT"})
+#: Every canonical chromosome label an ALID carries: the autosomes, `X`, `Y` and `MT`
+#: (`chromosome_rank` ranks exactly these).
+CANONICAL_CHROMOSOMES: Final = frozenset((*AUTOSOMES, *_PRIMARY_NON_AUTOSOMES))
 
 
 class VariantNormalisationError(ValueError):
@@ -514,12 +517,10 @@ def chromosome_rank(chromosome: str) -> int:
     -- a contig such as `HLA-A` -- has no rank and raises `VariantNormalisationError`.
     """
     rank, label = chromosome_sort_key(chromosome)
-    if rank not in _RANKED:
+    if label not in CANONICAL_CHROMOSOMES:
         raise VariantNormalisationError(
             f"chromosome {chromosome!r} ({label!r}) has no place in the variant order: "
             "only 1-22, X, Y and MT are ranked"
         )
     return rank
 
-
-_RANKED: Final = frozenset(range(1, 26))

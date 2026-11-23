@@ -11,9 +11,13 @@ LD Store reader parses it. It forms the ALID with `sorted_alid_alleles` and judg
 Sorted and reference-first spell one ALID for every pair except an indel whose reference allele
 is longer and sorts after its alternate: a deletion, `GGGGCC>G`, is `1:827587:GGGGCC:G`
 reference first and `1:827587:G:GGGGCC` sorted, the spelling of the insertion `G>GGGGCC` too.
-A sorted Store holds at most one of the two (`resolve_sorted_reversed_indels`), so a lookup
-that receives the reference-first spelling must refuse (`ReferenceFirstIndel`), never report it
-Absent.
+A sorted Store holds the deletion under the sorted ALID, unless the insertion is also at that
+site, when it keeps the insertion there (`resolve_sorted_reversed_indels`), and r there is
+signed against the allele the reference-first spelling puts second. So a lookup that receives
+the reference-first spelling refuses (`ReferenceFirstIndel`), naming the sorted ALID, rather than
+report it Absent (owner, on #456). The reverse case cannot be told apart: a reference-first
+insertion ALID is also a sorted ALID, and at a site that holds only the deletion it finds the
+deletion's row (#462).
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from opengwasdb.variants.normalise import (
+    CANONICAL_CHROMOSOMES,
     VALID_BASES,
     VariantNormalisationError,
     normalise_allele,
@@ -30,7 +35,6 @@ from opengwasdb.variants.normalise import (
     sorted_alid_alleles,
 )
 
-_CANONICAL_CHROMOSOMES: Final = frozenset((*(str(n) for n in range(1, 23)), "X", "Y", "MT"))
 #: A position an LD Store's int32 column holds (ld-store spec §2), spelt with at most this many
 #: digits.
 _MAX_POSITION: Final = 2**31 - 1
@@ -47,9 +51,10 @@ class DuplicateRecord(VariantNormalisationError):
 class ReferenceFirstIndel(VariantNormalisationError):
     """An ALID that spells an indel reference first where ALIDs are spelt sorted.
 
-    Its alleles differ in length and its A1 sorts after its A2, so no sorted spelling forms it,
-    and the variant it names is one a sorted Store cannot hold: the Store's ALID of the same two
-    alleles names the reversed indel, if anything (#462).
+    Its alleles differ in length and its A1 sorts after its A2: a deletion whose REF sorts after
+    its ALT, which no sorted spelling forms. A sorted Store would hold that variant as
+    `chr:pos:A2:A1`. That row is this deletion unless the panel also has the insertion at that
+    site, and either way r there is signed against the other allele, A2 here (#462).
     """
 
     reason = "indel_spelt_reference_first"
@@ -96,6 +101,13 @@ def sorted_identity(chrom: str, position: int, ref: str, alt: str) -> SortedIden
 def sorted_alid_locus(alid: str) -> tuple[str, int] | None:
     """The chromosome and position a sorted-spelling ALID names, or None when it is not one.
 
+    The strict parser, for an LD Store's lookup: an ALID either is one exactly as such a Store
+    spells it or names nothing there. `opengwasdb.variants.axis.parse_canonical_alid` is the
+    lenient one, for the engine's GWAS Store and variant-list reads: it normalises a chromosome
+    alias and an allele's case, takes the alleles in either order, and has no int32 or digit
+    limit. Both exist because an LD lookup must find nothing under a spelling its Store never
+    wrote, while the engine resolves an identifier as it is given.
+
     A reader finds an ALID by this locus, then compares whole ALID strings there, so a malformed
     one is Absent rather than an error, and this never raises. Such an ALID is
     `chrom:position:A1:A2`: a chromosome `1`–`22`, `X`, `Y` or `MT`, a position of at most 10
@@ -107,7 +119,7 @@ def sorted_alid_locus(alid: str) -> tuple[str, int] | None:
     if len(parts) != 4:
         return None
     chrom, pos, a1, a2 = parts
-    if not (chrom in _CANONICAL_CHROMOSOMES and _is_canonical_position(pos)):
+    if not (chrom in CANONICAL_CHROMOSOMES and _is_canonical_position(pos)):
         return None
     if not (_is_allele(a1) and _is_allele(a2) and a1 < a2):
         return None
@@ -134,8 +146,9 @@ def refuse_reference_first_indel(alid: str, where: str) -> None:
         chrom, pos, a1, a2 = alid.split(":")
         raise ReferenceFirstIndel(
             f"{alid} spells an indel reference first (ADR 0079), but {where} spells indels "
-            f"sorted, so it holds no ALID for this variant: {chrom}:{pos}:{a2}:{a1} there "
-            "names the reversed indel, if anything (#462)"
+            f"sorted, so it would hold this variant as {chrom}:{pos}:{a2}:{a1}. That row is "
+            "this deletion unless the panel also has the insertion at that site; either way r "
+            f"there is signed against the other allele, {a2}, not {a1} (#462)"
         )
 
 

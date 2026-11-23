@@ -282,11 +282,17 @@ class VariantTable:
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
         """The Variant Set row of each ALID, in order; −1 where the ALID is Absent (spec §2).
 
-        A malformed ALID is Absent too: it names no variant in the store. An ALID that spells an
-        indel reference first, as a GWAS Store of format 0.2.2 does (ADR 0079), is refused
-        instead, raising `opengwasdb.variants.sorted_spelling.ReferenceFirstIndel`: an LD Store
-        spells indels sorted (#462), so it cannot name that variant, and Absent would read as
-        "not in the panel". Only a miss is judged so, so a hit costs nothing.
+        A malformed ALID is Absent too: it names no variant in the store. A deletion's ALID
+        spelt reference first, as a GWAS Store of format 0.2.2 spells it (ADR 0079), is refused
+        instead, raising `opengwasdb.variants.sorted_spelling.ReferenceFirstIndel`: the store
+        spells indels sorted (#462), so it would hold that variant under the swapped ALID, and
+        Absent would read as "not in the panel". Only a miss is judged so, so a hit costs
+        nothing.
+
+        The reverse is silent, and no reader can refuse it: an insertion's reference-first ALID
+        is also a sorted ALID, so at a site where the store holds only the deletion of the same
+        two alleles (a tandem repeat, `G>GGGGCC` against `GGGGCC>G`) it finds the deletion's row.
+        The store records no REF to tell them apart. This is recorded on #462.
 
         A long list is searched for in the store's ALID index (ADR 0010), which holds every ALID of
         the table that fits its 32-byte slot, sorted, so one search answers it without reading the

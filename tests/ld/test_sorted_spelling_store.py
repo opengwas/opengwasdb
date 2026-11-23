@@ -96,6 +96,20 @@ def test_a_reference_first_deletion_is_refused_naming_the_spelling(
         opengwasdb.ld.open(TEST_STORE).matrix([alid])
 
 
+def test_the_refusal_of_a_held_deletion_names_the_row_that_holds_it(reader: StoreReader) -> None:
+    # 21:28100086 AAATTT>A is in the Test Store, spelt sorted, and no insertion shares its site:
+    # the refusal must point at that row, never say the Store lacks the variant (review of #456).
+    held = "21:28100086:A:AAATTT"
+    assert reader.rows_of([held]).tolist() == [51]
+    with pytest.raises(ReferenceFirstIndel) as refused:
+        reader.rows_of(["21:28100086:AAATTT:A"])
+    words = " ".join(str(refused.value).split())
+    assert f"would hold this variant as {held}" in words
+    assert "is this deletion unless the panel also has the insertion at that site" in words
+    assert "r there is signed against the other allele, A, not AAATTT (#462)" in words
+    assert "holds no ALID" not in words and "if anything" not in words
+
+
 def test_every_deletion_of_the_store_is_refused_in_the_engine_s_spelling(
     reader: StoreReader,
 ) -> None:
