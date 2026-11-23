@@ -5,8 +5,10 @@ a Store built before the rsid index names rsids in `index.sqlite`. Opening eithe
 costs a file open and a connection per query, whatever the query asks. Each
 question below is answered from the mmap'd search indexes and the arrays alone, in
 a fresh interpreter, and the test requires that neither `pysam` nor `sqlite3` was
-ever imported. `range_phewas` is the one that needs the table (a position range
-is a tabix fetch); it must still answer as before, with pysam loaded.
+ever imported. `range_phewas` was the one that needed the table (a position range
+was a tabix fetch); on 0.3.0 the position sidecar answers it (#468), so it loads
+neither pysam nor sqlite3. A 0.2 release's range is still a tabix fetch
+(`tests/test_range_phewas_0_3_0.py`).
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ with query_store(path) as q:
         if name.startswith(("phewas_alid_0", "lookup_rsid_0")):
             sizes[name + "_rows"] = len(list(q.resolve(result)))
             seen[name + "_resolved"] = loaded()
-    # The one question that needs the table: a position range is a tabix fetch.
+    # Once the one question that needed the table: on 0.3.0 the position sidecar answers it.
     ranged = q.range_phewas(chromosome, 1, 10**9)
     sizes["range_phewas"] = len(ranged["variant_index"])
     after = loaded()
@@ -116,9 +118,9 @@ def test_questions_a_search_index_answers_never_load_pysam_or_sqlite(
     assert all(n > 0 for key, n in sizes.items() if key.startswith(("phewas", "lookup")))
     assert sizes["phewas_alid_0_rows"] > 0 and sizes["lookup_rsid_0_rows"] > 0
     # `range_phewas` answers (its digests are pinned in tests/golden/store_reader_digests.json,
-    # written by the code before #464) and is the one question that opens the table.
+    # written by the code before #464), and on 0.3.0 without opening the table (#468).
     assert sizes["range_phewas"] > 0
-    assert probe["after_range_phewas"] == ["pysam"]
+    assert probe["after_range_phewas"] == []
 
 
 @pytest.mark.parametrize("name", ["hybrid_completed", "hybrid_observed"])

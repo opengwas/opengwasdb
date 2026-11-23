@@ -17,6 +17,7 @@ import zarr
 
 from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
 from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
+from opengwasdb.store_reader.position_sidecar import write_position_sidecar
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stored import (
     eaf_baseline,
@@ -55,7 +56,14 @@ class _Table:
 
 def _axis(tmp_path: Path, rows: list[str]) -> tuple[VariantAxis, _Table]:
     np.save(tmp_path / "variant_offsets.npy", np.arange(len(rows), dtype=np.int64))
-    write_alid_sidecar(tmp_path, [parse_variant_line(row).alid for row in rows])
+    records = [parse_variant_line(row) for row in rows]
+    write_alid_sidecar(tmp_path, [record.alid for record in records])
+    write_position_sidecar(
+        tmp_path,
+        [record.chromosome for record in records],
+        [record.position for record in records],
+        chromosome_key=None,
+    )
     table = _Table(rows)
     return VariantAxis(tmp_path, table, format_version=CURRENT_FORMAT_VERSION), table
 

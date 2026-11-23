@@ -29,6 +29,7 @@ from opengwasdb.store_reader.alid import (
 from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
 from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
 from opengwasdb.store_reader.identity import normalise_chromosome
+from opengwasdb.store_reader.position_sidecar import write_position_sidecar
 
 # Re-exported: opengwasdb-stores imports these three from here.
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path as variant_alid_bytes_path
@@ -119,10 +120,12 @@ def write_variant_axis(
     source_alids: Sequence[str | None] | None = None,
 ) -> None:
     """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
-    row offsets, the ALID sidecar (`opengwasdb.store_reader.alid_sidecar`) and the rsid
-    index: the axis's one writer, which every build and completion path calls. The ALID
-    sidecar's own one writer is the codec's `write_alid_sidecar`, which this calls and
-    the rewrite to 0.3.0 calls directly.
+    row offsets, the ALID sidecar (`opengwasdb.store_reader.alid_sidecar`), the position
+    sidecar (`opengwasdb.store_reader.position_sidecar`) and the rsid index: the axis's
+    one writer, which every build and completion path calls, a Hybrid's nested Dense
+    Component included. Each sidecar's own one writer is its codec's
+    (`write_alid_sidecar`, `write_position_sidecar`), which this calls and the rewrite
+    to 0.3.0 calls directly.
 
     ``source_alids`` (optional, parallel to ``variants``) records the source-
     assembly canonical ALID that each row was lifted from — provenance back to
@@ -136,6 +139,31 @@ def write_variant_axis(
             f"source_alids has {len(source_alids)} entries but there are {len(variants)} variants"
         )
     store = Path(store_path)
+    _write_table(store, variants, rsid_by_alid, source_alids)
+    # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
+    # however long, by row and by search. The 0.2 series' fixed-width pair
+    # (`variant_alid_bytes.npy`/`variant_alid_rows.npy`) left out each ALID wider than
+    # 32 bytes and is no longer written.
+    write_alid_sidecar(store, [variant.alid for variant in variants])
+    # The position sidecar (format 0.3.0, #468, ADR 0105 §6): every row's position and
+    # each chromosome's rows, which answer a range without tabix. It refuses rows out
+    # of genomic order, as tabix does, and chromosomes out of the canonical order.
+    write_position_sidecar(
+        store,
+        [variant.chromosome for variant in variants],
+        [variant.position for variant in variants],
+        chromosome_key=chromosome_sort_key,
+    )
+    _write_rsid_index(store, variants, rsid_by_alid)
+
+
+def _write_table(
+    store: Path,
+    variants: list[CanonicalVariant],
+    rsid_by_alid: Mapping[str, str],
+    source_alids: Sequence[str | None] | None,
+) -> None:
+    """`variants.tsv.gz`, its row offsets (`variant_offsets.npy`) and its tabix index."""
     table_path = variant_table_path(store)
     offsets: list[int] = []
     with pysam.BGZFile(str(table_path), "w") as handle:  # type: ignore[call-arg]
@@ -160,12 +188,6 @@ def write_variant_axis(
         zerobased=False,
         force=True,
     )
-    # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
-    # however long, by row and by search. The 0.2 series' fixed-width pair
-    # (`variant_alid_bytes.npy`/`variant_alid_rows.npy`) left out each ALID wider than
-    # 32 bytes and is no longer written.
-    write_alid_sidecar(store, [variant.alid for variant in variants])
-    _write_rsid_index(store, variants, rsid_by_alid)
 
 
 def _write_rsid_index(

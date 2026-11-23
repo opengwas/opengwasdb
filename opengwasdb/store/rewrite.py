@@ -47,7 +47,7 @@ from opengwasdb.store.convert import (
     refuse_destination,
     require_valid_staged_release,
 )
-from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store.query_digests import differences, release_digests
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
 from opengwasdb.store_reader.analyses import read_analyses
@@ -59,11 +59,16 @@ from opengwasdb.store_reader.format import (
     check_format_version,
     format_version_for,
 )
+from opengwasdb.store_reader.position_sidecar import PositionSidecar, write_position_sidecar
 from opengwasdb.store_reader.variant_axis import (
+    VariantRecord,
     variant_alid_bytes_path,
     variant_alid_rows_path,
+    variant_offsets_path,
     variant_table_path,
 )
+from opengwasdb.variants.legacy_table import iter_variant_records
+from opengwasdb.variants.normalise import chromosome_sort_key
 
 #: The one `format_version` this rewrite reads: every other is refused (module docstring).
 SOURCE_FORMAT_VERSION = LAST_0_2_FORMAT_VERSION
@@ -129,7 +134,7 @@ def _write_alid_sidecar(context: RewriteContext) -> None:
     and must name its own row: the proof's questions reach only some of them.
     """
     for directory in context.staged_components():
-        alids = list(_alids_in_row_order(directory))
+        alids = [record.alid for record in _records_in_row_order(directory)]
         write_alid_sidecar(directory, alids)
         _require_every_alid_resolves(directory, alids)
         variant_alid_bytes_path(directory).unlink()
@@ -154,21 +159,70 @@ def _require_every_alid_resolves(directory: Path, alids: list[str]) -> None:
         )
 
 
-def _alids_in_row_order(directory: Path) -> Iterator[str]:
-    """Every row's ALID, read through the Store Reader's Variant Axis, in row order."""
-    from contextlib import closing
+def _write_position_sidecar(context: RewriteContext) -> None:
+    """Write each component's position sidecar from its Variant Table (ADR 0105 §6).
+
+    The rows come from the table in row order, refused as for the ALID sidecar when
+    out of order. The writer, the codec's `write_position_sidecar` (which a build
+    reaches through `write_variant_axis`), refuses rows not in genomic order. Before
+    the step ends, the sidecar read back must place every row where the table does:
+    the proof's range questions reach only some of them. The tabix index stays, a
+    convenience no 0.3.0 query reads (spec §1.1).
+    """
+    for directory in context.staged_components():
+        chromosomes: list[str] = []
+        positions: list[int] = []
+        for record in _records_in_row_order(directory):
+            chromosomes.append(record.chromosome)
+            positions.append(record.position)
+        write_position_sidecar(
+            directory, chromosomes, positions, chromosome_key=chromosome_sort_key
+        )
+        _require_every_row_placed(directory, chromosomes, positions)
+
+
+def _require_every_row_placed(
+    directory: Path, chromosomes: list[str], positions: list[int]
+) -> None:
+    """Refuse a position sidecar that places some row elsewhere than the table does."""
+    import numpy as np
+
+    sidecar = PositionSidecar.open(directory)
+    if sidecar is None:
+        raise RewriteError(f"{directory}: the position sidecar was not written")
+    placed = sidecar.chromosomes_of(np.arange(len(chromosomes)))
+    stored = np.asarray(sidecar.positions).tolist()
+    wrong = [
+        row
+        for row in range(len(chromosomes))
+        if row >= len(stored) or (placed[row], stored[row]) != (chromosomes[row], positions[row])
+    ]
+    if wrong or sidecar.n_rows != len(chromosomes):
+        first = wrong[0] if wrong else len(chromosomes)
+        raise RewriteError(
+            f"{directory}: the written position sidecar holds {sidecar.n_rows} rows and places "
+            f"{len(wrong)} of the table's {len(chromosomes)} elsewhere; first, row {first}"
+        )
+
+
+def _records_in_row_order(directory: Path) -> Iterator[VariantRecord]:
+    """Every row of the Variant Table, in row order, read without its search indexes.
+
+    Each step rewrites some of those indexes, so none of them is opened here: the
+    table is streamed, and its rows are checked against `variant_offsets.npy`.
+    """
+    import numpy as np
 
     table = variant_table_path(directory)
-    with closing(open_store(directory).variant_axis(aliases=False)) as axis:
-        n_rows = axis.n_variants
-        row = -1
-        for row, record in enumerate(axis.records()):
-            if record.variant_index != row:
-                raise RewriteError(
-                    f"{table}: row {row} has variant_index {record.variant_index}; a table "
-                    "out of order is not rewritten"
-                )
-            yield record.alid
+    n_rows = len(np.load(variant_offsets_path(directory), mmap_mode="r"))
+    row = -1
+    for row, record in enumerate(iter_variant_records(table)):
+        if record.variant_index != row:
+            raise RewriteError(
+                f"{table}: row {row} has variant_index {record.variant_index}; a table "
+                "out of order is not rewritten"
+            )
+        yield record
     if row + 1 != n_rows:
         raise RewriteError(
             f"{table} has {row + 1} rows but variant_offsets.npy has {n_rows}; a table that "
@@ -183,6 +237,13 @@ STEPS: tuple[RewriteStep, ...] = (
         "write the variable-length ALID sidecar from the Variant Table and drop the "
         "fixed-width variant_alid_bytes.npy/variant_alid_rows.npy (ADR 0105)",
         _write_alid_sidecar,
+    ),
+    RewriteStep(
+        "position_sidecar",
+        "write the position sidecar, each row's position and each chromosome's rows, "
+        "from the Variant Table, so a range is a binary search and not a tabix fetch "
+        "(ADR 0105 §6)",
+        _write_position_sidecar,
     ),
 )
 
@@ -201,8 +262,9 @@ def rewrite_release(
     started = time.perf_counter()
     reference = release_digests(source)
     _log_phase(
-        f"asked the source {len(reference['shapes'])} questions and "
-        f"{len(reference['alid_probes'])} ALID probes",
+        f"asked the source {len(reference['shapes'])} questions, "
+        f"{len(reference['alid_probes'])} ALID probes and "
+        f"{len(reference['range_probes'])} range probes",
         started,
     )
     with OpenGWASDBStore.staging(destination) as staged:

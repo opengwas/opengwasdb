@@ -37,6 +37,11 @@ from opengwasdb.store_reader.alid_sidecar import (
     AlidSidecar,
     write_alid_sidecar,
 )
+from opengwasdb.store_reader.position_sidecar import (
+    POSITION_SIDECAR_FILENAMES,
+    PositionSidecar,
+    write_position_sidecar,
+)
 from opengwasdb.validation import validate_store
 
 FIXED_WIDTH = ("variant_alid_bytes.npy", "variant_alid_rows.npy")
@@ -113,22 +118,23 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["format_version"] == "0.3.0"
         assert all((directory / f).exists() for f in ALID_SIDECAR_FILENAMES), directory
+        assert all((directory / f).exists() for f in POSITION_SIDECAR_FILENAMES), directory
         assert not any((directory / f).exists() for f in FIXED_WIDTH), directory
         record = manifest["provenance"]["format_rewrite"]
         assert record["source_release_id"] != manifest["release_id"]
         assert (record["from_format_version"], record["to_format_version"]) == ("0.2.3", "0.3.0")
-        assert record["steps"] == ["alid_sidecar"]
+        assert record["steps"] == ["alid_sidecar", "position_sidecar"]
         release_ids.add(manifest["release_id"])
     assert len(release_ids) == 1, "a Hybrid's two manifests name one release"
     result = validate_store(destination)
     assert result.ok, result.errors
 
 
-def test_the_rewritten_sidecar_is_what_a_build_writes(built, sources, tmp_path):
-    """Rewritten from the 0.2.3 table, the sidecar is the 0.3.0 build's, byte for byte."""
+def test_the_rewritten_sidecars_are_what_a_build_writes(built, sources, tmp_path):
+    """Rewritten from the 0.2.3 table, each sidecar is the 0.3.0 build's, byte for byte."""
     destination = rewrite_release(sources["hybrid_completed"], tmp_path / "rewritten")
     for directory in ("", "dense"):
-        for name in ALID_SIDECAR_FILENAMES:
+        for name in (*ALID_SIDECAR_FILENAMES, *POSITION_SIDECAR_FILENAMES):
             rewritten = (destination / directory / name).read_bytes()
             assert rewritten == (built["hybrid_completed"] / directory / name).read_bytes(), name
 
@@ -299,7 +305,7 @@ def test_the_step_refuses_a_table_out_of_variant_index_order(sources, tmp_path):
 
     _rewrite_table(source, first_row_names_row_1)
     with pytest.raises(RewriteError, match="row 0 has variant_index 1; a table out of order"):
-        list(rewrite._alids_in_row_order(source))
+        list(rewrite._records_in_row_order(source))
 
 
 def test_the_step_refuses_a_table_that_disagrees_with_its_offsets(sources, tmp_path):
@@ -309,4 +315,53 @@ def test_the_step_refuses_a_table_that_disagrees_with_its_offsets(sources, tmp_p
     offsets = np.load(source / "variant_offsets.npy")
     np.save(source / "variant_offsets.npy", np.append(offsets, offsets[-1]))
     with pytest.raises(RewriteError, match="rows but variant_offsets.npy has"):
-        list(rewrite._alids_in_row_order(source))
+        list(rewrite._records_in_row_order(source))
+
+
+def _move_the_first_row(context: rewrite.RewriteContext) -> None:
+    """Write the root's position sidecar with the first row at a position one past its
+    own: every structure intact, but a range at either position answers otherwise."""
+    from opengwasdb.variants.normalise import chromosome_sort_key
+
+    directory = context.staged
+    sidecar = PositionSidecar.open(directory)
+    assert sidecar is not None
+    chromosomes = sidecar.chromosomes_of(np.arange(sidecar.n_rows))
+    positions = np.asarray(sidecar.positions).tolist()
+    del sidecar
+    following = positions[1] if chromosomes[1] == chromosomes[0] else None
+    assert following is None or following > positions[0] + 1, "fixture: row 0 must stand apart"
+    positions[0] += 1
+    write_position_sidecar(directory, chromosomes, positions, chromosome_key=chromosome_sort_key)
+
+
+def test_the_step_refuses_a_position_sidecar_that_misplaces_a_row(
+    sources, tmp_path, monkeypatch
+):
+    """A writer that places a row elsewhere is caught by the step's read-back."""
+    real = rewrite.write_position_sidecar
+
+    def misplacing(directory, chromosomes, positions, *, chromosome_key):
+        real(directory, chromosomes, [positions[0] + 1, *positions[1:]],
+             chromosome_key=chromosome_key)
+
+    monkeypatch.setattr(rewrite, "write_position_sidecar", misplacing)
+    with pytest.raises(RewriteError, match="places 1 of the table's") as refused:
+        rewrite_release(sources["ragged_observed"], tmp_path / "rewritten")
+    assert type(refused.value) is RewriteError, "the step, not the proof, must catch it"
+    assert not (tmp_path / "rewritten").exists()
+
+
+def test_the_proof_asks_the_first_variants_range_and_refuses_a_moved_row(sources, tmp_path):
+    """With the step's check passed, the proof's range probes still see a moved row."""
+    corrupt = RewriteStep(
+        "move_a_row", "a step that changes a range's answer", _move_the_first_row
+    )
+    with pytest.raises(RewriteVerificationError) as refused:
+        rewrite_release(
+            sources["dense_completed"], tmp_path / "rewritten", steps=(*rewrite.STEPS, corrupt)
+        )
+    probes = [d for d in refused.value.differences if d.startswith("range_probes/")]
+    assert any(d.startswith("range_probes/range_phewas/first/") for d in probes), probes
+    assert not (tmp_path / "rewritten").exists()
+

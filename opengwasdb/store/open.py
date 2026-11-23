@@ -36,6 +36,7 @@ from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
     carries_alid_sidecar,
+    carries_position_sidecar,
     check_format_version,
     format_version_for,
     indels_reference_first,
@@ -44,6 +45,7 @@ from opengwasdb.store_reader.format import (
     zarr_format_for_version,
 )
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
 from opengwasdb.store_reader.release import (
     ReleasePaths,
     StoreRelease,
@@ -271,7 +273,7 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
         "variant_rsid_bytes.npy",
         "variant_rsid_rows.npy",
     }
-) | set(AlidSidecar.FILENAMES)
+) | set(AlidSidecar.FILENAMES) | set(POSITION_SIDECAR_FILENAMES)
 
 #: Dense Observed-Only/Reference-Completed (§10, §16).
 DENSE_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html"}
@@ -295,13 +297,24 @@ HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_sh
 
 def envelope_at(envelope: frozenset[str], format_version: str) -> frozenset[str]:
     """`envelope`, one of the constants above, as a release of `format_version` carries it:
-    with the ALID index that version carries (`alid_index_kind`) and no other.
+    with the ALID index that version carries (`alid_index_kind`) and no other, and the
+    position sidecar only from 0.3.0 (`carries_position_sidecar`).
 
-    The constants are what this build writes (0.3.0, the sidecar). A 0.2 release
-    carries the fixed-width pair instead, and either one carrying the other's files
-    fails its closed envelope (spec §1, §20).
+    The constants are what this build writes (0.3.0, the sidecars). A 0.2 release
+    carries the fixed-width pair instead and no position sidecar, and either one
+    carrying the other's files fails its closed envelope (spec §1, §20).
     """
-    return (envelope - ALID_INDEX_FILENAMES) | set(alid_index_kind(format_version).FILENAMES)
+    return (
+        (envelope - ALID_INDEX_FILENAMES - set(POSITION_SIDECAR_FILENAMES))
+        | set(alid_index_kind(format_version).FILENAMES)
+        | _position_sidecar_at(format_version)
+    )
+
+
+def _position_sidecar_at(format_version: str) -> frozenset[str]:
+    """The position sidecar's files, in a release of `format_version` that carries them."""
+    carried = carries_position_sidecar(format_version)
+    return frozenset(POSITION_SIDECAR_FILENAMES) if carried else frozenset()
 
 
 @contextmanager

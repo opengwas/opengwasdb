@@ -40,6 +40,10 @@ sidecar's four files where it carried `variant_alid_bytes.npy`/`variant_alid_row
 (ADR 0105); the Dense pin's `overview.html` lists them. Re-derived after checking that
 each completed release, turned back into its 0.2.3 form (`format_0_2_3.as_0_2_3`),
 matched the previous pin in every entry but that `overview.html`.
+
+Since #468 every pin also holds the position sidecar's three files (ADR 0105 §6), and
+the Dense pin's `overview.html` lists them. Re-derived after checking that every other
+entry, and every total, equalled the previous pin.
 """
 
 from __future__ import annotations

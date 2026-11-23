@@ -3,11 +3,12 @@
 From #467 every build and completion writes format 0.3.0. The 0.2 series is still
 read, and `ogdb rewrite-release` turns a 0.2.3 release into a 0.3.0 one, so the tests
 need 0.2.3 releases. A 0.3.0 release differs from the 0.2.3 one the same build would
-have written in one thing (ADR 0105): it carries the variable-length ALID sidecar
-where 0.2.3 carried the fixed-width pair. `as_0_2_3` undoes exactly that, in every
-component of a release (a Hybrid's nested Dense Component included):
+have written in two things (ADR 0105): it carries the variable-length ALID sidecar
+where 0.2.3 carried the fixed-width pair (#467), and the position sidecar 0.2.3 did
+not carry (#468). `as_0_2_3` undoes exactly that, in every component of a release (a
+Hybrid's nested Dense Component included):
 
-- the sidecar's four files are deleted;
+- the ALID sidecar's four files and the position sidecar's three are deleted;
 - `variant_alid_bytes.npy`/`variant_alid_rows.npy` are written by
   `write_fixed_width_alid_index`, a copy of what `write_variant_axis` wrote at
   `e93fba8f` -- the only other writer of the pair, and only ever in tests;
@@ -28,6 +29,7 @@ import numpy as np
 from opengwasdb.store_reader.alid import ALID_DTYPE, is_indexable_alid
 from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES, AlidSidecar
 from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_alid_sidecar
+from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
 
 
@@ -48,12 +50,15 @@ def components(release: Path) -> list[Path]:
 
 
 def with_fixed_width_alid_index(directory: Path) -> None:
-    """Replace `directory`'s ALID sidecar by the fixed-width pair a 0.2 release carries."""
+    """Replace `directory`'s sidecars by the fixed-width pair a 0.2 release carries: the
+    ALID sidecar's files give way to the pair, and the position sidecar's are deleted."""
     sidecar = AlidSidecar.open(directory)
     assert sidecar is not None, f"{directory} has no ALID sidecar: not a 0.3.0 build"
     alids = sidecar.alids(np.arange(sidecar.n_rows)).tolist()
     del sidecar
     for name in ALID_SIDECAR_FILENAMES:
+        (directory / name).unlink()
+    for name in POSITION_SIDECAR_FILENAMES:
         (directory / name).unlink()
     write_fixed_width_alid_index(directory, alids)
 
