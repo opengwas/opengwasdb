@@ -1,5 +1,14 @@
 # `overview.html` is one tabbed page; Top-Hit Counts are persisted `analyses.tsv` columns, not rendered on the fly
 
+> **Amended by [ADR 0102](0102-the-5e-8-tier-is-clumped-at-build-time.md)** (issue #417,
+> epic #62; the owner's plan of 23 Nov 2026): `n_hits_*` stay the raw Top-Hit Counts, and
+> two columns are persisted beside them, `n_loci_5e8` (the Clump Leads of the 5e-8 tier,
+> clumped at build time against each Analysis's ancestry's LD Store) and `n_unclumped_5e8`
+> (its observed rows that LD Store could not clump). They are Analytical Metadata for the
+> reason the hit counts are, and are computed once and never at render time; `overview.html`
+> shows them from `analyses.tsv` like any other column. Both are blank, never 0, for an
+> Analysis that was not clumped (spec §7a).
+
 ADR 0030 added `overview.html` as a single searchable/sortable table over
 `analyses.tsv`. Issue #23 asked for that table to actually be designed, and in
 scoping it we widened the ask: an Ancestry Composition view and a file-guide
