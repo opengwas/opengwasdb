@@ -51,7 +51,8 @@ from typing import IO, TypeVar
 
 from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.variant_axis import variant_table_path
-from opengwasdb.variants.axis import alid_sort_key, iter_variant_records
+from opengwasdb.variants.axis import alid_sort_key
+from opengwasdb.variants.legacy_table import iter_variant_records
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.windows import DEFAULT_WINDOW_SIZE_MB, window_key, window_size_bp
 

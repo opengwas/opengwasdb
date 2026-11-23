@@ -442,7 +442,7 @@ def test_hg19_source_build_lifts_variant_coordinates(tmp_path):
     1:100000 → hg38 1:100000 identity; hg19 1:1000000 → hg38 1:1064620), so
     the second ESI row proves a real translation happened — a build that
     silently skipped the lift would store it at 1:1000000 and fail here."""
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     fixture = tmp_path / "fixture_hg19"
     fixture.mkdir()
@@ -881,7 +881,8 @@ def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
     canonical A1 is `C`, so the sign flips.
     """
     from opengwasdb.readers.gwas_vcf import load_liftover, oriented_variant
-    from opengwasdb.variants.axis import VariantAxis, iter_variant_records
+    from opengwasdb.variants.axis import VariantAxis
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
     prefix = _write_strand_fixture(tmp_path)

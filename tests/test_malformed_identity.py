@@ -34,7 +34,7 @@ from opengwasdb.store_reader.identity import (
     normalise_allele,
     normalise_chromosome,
 )
-from opengwasdb.variants.axis import iter_variant_records
+from opengwasdb.variants.legacy_table import iter_variant_records
 from opengwasdb.variants.normalise import (
     IdentityFaults,
     allele_fault,

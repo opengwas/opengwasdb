@@ -26,7 +26,7 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.query import query_store
 from opengwasdb.readers.column_map import load_column_map
-from opengwasdb.variants.axis import iter_variant_records
+from opengwasdb.variants.legacy_table import iter_variant_records
 
 #: Each reader of a format, and the Column Map that reads it as that reader does.
 FINNGEN = [

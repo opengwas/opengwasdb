@@ -1,20 +1,17 @@
-"""Writing the tabix-backed Store Variant Axis, and reading its 0.2.x table through pysam.
+"""Writing the tabix-backed Store Variant Axis.
 
 `VariantAxis` -- every variant question a query asks -- is the Store Reader's
-(`opengwasdb.store_reader.variant_axis`, #464). It reads the BGZF/tabix Variant
-Table and `index.sqlite`'s `variant_aliases` through a `LegacyVariantTable`,
-which needs pysam and SQLite and so lives here, the one module that holds that
-access: `LegacyVariantTable` and its opener `open_legacy_variant_table`, which
-#465 makes lazy and #476 deletes. This module's `VariantAxis` is the reader's,
-opened with this table, for the opengwasdb code (and opengwasdb-stores) that
-constructs an axis from a Store path.
+(`opengwasdb.store_reader.variant_axis`, #464). It reads the 0.2.x BGZF/tabix
+Variant Table through `opengwasdb.variants.legacy_table`. This module's
+`VariantAxis` is that one, opened with the table, for the opengwasdb code (and
+opengwasdb-stores) that constructs an axis from a Store path.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -33,18 +30,17 @@ from opengwasdb.store_reader.alid import (
 # Re-exported: opengwasdb-stores imports it from here.
 from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical_alid
 from opengwasdb.store_reader.identity import normalise_chromosome
-from opengwasdb.store_reader.variant_axis import (
-    VariantRecord,
-    parse_variant_line,
-    variant_offsets_path,
-    variant_rsid_bytes_path,
-    variant_rsid_rows_path,
-)
 
 # Re-exported: opengwasdb-stores imports these three from here.
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path as variant_alid_bytes_path
 from opengwasdb.store_reader.variant_axis import variant_alid_rows_path as variant_alid_rows_path
+from opengwasdb.store_reader.variant_axis import (
+    variant_offsets_path,
+    variant_rsid_bytes_path,
+    variant_rsid_rows_path,
+)
 from opengwasdb.store_reader.variant_axis import variant_table_path as variant_table_path
+from opengwasdb.variants.legacy_table import TabixVariantTable
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 
 log = logging.getLogger(__name__)
@@ -226,103 +222,15 @@ def _write_rsid_index(
     np.save(variant_rsid_rows_path(store), rsid_rows[order])
 
 
-def iter_variant_records(table_path: str | Path) -> Iterator[VariantRecord]:
-    """Stream a Store Variant Table row by row, in `variant_index` order.
-
-    What `VariantAxis.all` materialises. A caller that only needs one field per
-    row -- the EAF orientation audit needs `variant_index` and `alid` -- would
-    otherwise pay tens of millions of `VariantRecord` objects to get at them,
-    on stores where that is gigabytes.
-    """
-    for line in _table_lines(table_path):
-        yield parse_variant_line(line)
-
-
-def _table_lines(table_path: str | Path) -> Iterator[str]:
-    """A Store Variant Table's rows as text, header lines skipped."""
-    with pysam.BGZFile(str(table_path), "r") as handle:  # type: ignore[call-arg]
-        for raw_line in handle:
-            line = raw_line.decode("utf-8")
-            if line.startswith("#"):
-                continue
-            yield line
-
-
-class LegacyVariantTable:
-    """A Store's 0.2.x Variant Table, read through pysam, and its `variant_aliases`.
-
-    The Store Reader's `LegacyVariantTable` seam, implemented: the tabix range
-    fetches, the BGZF seek per row, the whole-table scan and the SQLite rsid
-    fallback the Variant Axis used to make itself (#464). `aliases` is an open
-    `index.sqlite` connection, or None for a Store whose rsids are not looked up
-    there (a Ragged release); a connection this object opened (`owns_aliases`)
-    it closes with the table.
-    """
-
-    def __init__(
-        self,
-        store_path: str | Path,
-        aliases: sqlite3.Connection | None = None,
-        *,
-        owns_aliases: bool = False,
-    ) -> None:
-        self.table_path = variant_table_path(store_path)
-        self._tabix = pysam.TabixFile(str(self.table_path))
-        self._aliases = aliases
-        self._owns_aliases = owns_aliases
-
-    def fetch(self, chromosome: str, start: int, end: int) -> Iterable[str]:
-        try:
-            return list(self._tabix.fetch(chromosome, start, end))
-        except ValueError:
-            return []
-
-    def line_at(self, offset: int) -> str:
-        with pysam.BGZFile(str(self.table_path), "r") as handle:  # type: ignore[call-arg]
-            handle.seek(offset)
-            line: str = handle.readline().decode("utf-8")
-        return line
-
-    def rows(self) -> Iterator[str]:
-        return _table_lines(self.table_path)
-
-    def alias_index(self, alias: str) -> int | None:
-        if self._aliases is None:
-            return None
-        row = self._aliases.execute(
-            """
-            SELECT variant_index
-            FROM variant_aliases
-            WHERE alias = ?
-            ORDER BY variant_index
-            LIMIT 1
-            """,
-            (alias,),
-        ).fetchone()
-        return None if row is None else int(row["variant_index"])
-
-    def close(self) -> None:
-        self._tabix.close()
-        if self._owns_aliases and self._aliases is not None:
-            self._aliases.close()
-
-
-def open_legacy_variant_table(store_path: Path, *, aliases: bool) -> LegacyVariantTable:
-    """The Store Reader's `LegacyTableOpener`: a Store's Variant Table, with its
-    `index.sqlite` opened for `variant_aliases` when `aliases` asks."""
-    connection = None
-    if aliases:
-        connection = sqlite3.connect(str(Path(store_path) / "index.sqlite"))
-        connection.row_factory = sqlite3.Row
-    return LegacyVariantTable(store_path, connection, owns_aliases=True)
-
-
 class VariantAxis(reader_axis.VariantAxis):
-    """A Store's Variant Axis with its 0.2.x Variant Table opened here.
+    """The Store Reader's `VariantAxis`, constructed from a Store path alone.
 
-    `aliases` is an open `index.sqlite` connection the caller keeps, for a Store
-    whose rsids may only be named in `variant_aliases`.
+    What it adds is the construction: it opens the Store's 0.2.x Variant Table
+    (`TabixVariantTable`) itself, so a caller -- a builder, completion,
+    validation, opengwasdb-stores' audit -- writes ``VariantAxis(path)`` as it
+    always has. `aliases` is an open `index.sqlite` connection the caller keeps,
+    for a Store whose rsids may only be named in `variant_aliases`.
     """
 
     def __init__(self, store_path: str | Path, aliases: sqlite3.Connection | None = None):
-        super().__init__(store_path, LegacyVariantTable(store_path, aliases))
+        super().__init__(store_path, TabixVariantTable(store_path, aliases))

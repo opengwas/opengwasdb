@@ -30,7 +30,7 @@ from opengwasdb.store_reader.variant_axis import (
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED, current_builders_wrote, severity_owed
-from opengwasdb.variants import iter_variant_records
+from opengwasdb.variants.legacy_table import iter_variant_records
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.

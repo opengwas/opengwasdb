@@ -1658,7 +1658,7 @@ def test_two_stage_build_matches_the_one_command_two_pass_store(tmp_path):
     _assert_dense_stores_data_identical(two_pass, single_pass)
 
     # The first-named rsid survives the two-stage pipeline into the axis.
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     records = {r.alid: r.rsid for r in iter_variant_records(single_pass / "variants.tsv.gz")}
     assert records[HG38_ALID_1] == "rs1"

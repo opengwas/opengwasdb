@@ -865,7 +865,7 @@ class TestParallel:
 
 
 def _assert_dense_stores_match(serial_path: Path, parallel_path: Path) -> None:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     assert validate_store(parallel_path).ok
     serial_records = {
@@ -942,7 +942,7 @@ class TestPass1Parallel:
         """Parallel Pass 1 produces the same union, ALIDs, rsids, and dense
         arrays as serial Pass 1 -- including a mixed hg19/hg38 manifest so
         the liftover and passthrough groups are both exercised."""
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         vcf_a = _make_vcf(
             tmp_path,
@@ -1607,7 +1607,7 @@ def test_axis_source_alids_record_the_prelift_hg19_coordinate(tmp_path):
     row that really moved or the assertion proves nothing -- both ALIDs are
     asserted so the set itself proves the lift happened.
     """
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     vcf = _make_vcf(
         tmp_path,
@@ -2061,7 +2061,7 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
     import gzip
 
     from opengwasdb.store_reader.top_hits import threshold_key
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     with gzip.open(reference / "variants.tsv.gz", "rt", encoding="utf-8") as a:
         reference_axis = a.read()
@@ -2214,7 +2214,7 @@ class TestVariantReferenceSinglePass:
 
         assert validate_store(store).ok
         from opengwasdb.store_reader.encoding.planes import DenseZPlane
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         records = {r.alid for r in iter_variant_records(store / "variants.tsv.gz")}
         assert records == {"1:100000:A:G", "1:5000000:A:G", "1:9000000:C:T"}
@@ -2266,7 +2266,7 @@ class TestVariantReferenceErrors:
         mismatch is logged so it cannot pass unremarked."""
         import logging
 
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         vcf = _make_vcf(
             tmp_path, "trait_hg19",
@@ -2616,7 +2616,7 @@ def _plain_alid_list(tmp_path: Path, manifest: Path, name: str = "plain.alids") 
 
 
 def _axis_rsids(store: Path) -> dict[str, str]:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     return {r.alid: (r.rsid or "") for r in iter_variant_records(store / "variants.tsv.gz")}
 

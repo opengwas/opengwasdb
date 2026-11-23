@@ -47,7 +47,7 @@ from opengwasdb.store_reader.release import (
     open_release,
     release_paths,
 )
-from opengwasdb.variants.axis import open_legacy_variant_table
+from opengwasdb.variants.legacy_table import open_legacy_variant_table
 
 #: The first `format_version` whose `analyses.tsv` must record
 #: `n_missing_se_out_of_range` on every row (ADR 0068, issue #338). Below it the

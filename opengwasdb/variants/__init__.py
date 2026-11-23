@@ -48,8 +48,8 @@ if TYPE_CHECKING:
     from opengwasdb.store_reader.variant_axis import variant_table_path as variant_table_path
     from opengwasdb.variants.axis import VARIANT_AXIS_FORMAT as VARIANT_AXIS_FORMAT
     from opengwasdb.variants.axis import VariantAxis as VariantAxis
-    from opengwasdb.variants.axis import iter_variant_records as iter_variant_records
     from opengwasdb.variants.axis import write_variant_axis as write_variant_axis
+    from opengwasdb.variants.legacy_table import iter_variant_records as iter_variant_records
     from opengwasdb.variants.normalise import CanonicalVariant as CanonicalVariant
     from opengwasdb.variants.normalise import Orientation as Orientation
     from opengwasdb.variants.normalise import chromosome_sort_key as chromosome_sort_key
@@ -75,8 +75,10 @@ _EXPORTS = {
     "opengwasdb.variants.axis": (
         "VARIANT_AXIS_FORMAT",
         "VariantAxis",
-        "iter_variant_records",
         "write_variant_axis",
+    ),
+    "opengwasdb.variants.legacy_table": (
+        "iter_variant_records",
     ),
     "opengwasdb.store_reader.variant_axis": (
         "VARIANT_OFFSETS_FILENAME",

@@ -41,7 +41,7 @@ from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.variant_axis import variant_table_path
-from opengwasdb.variants import iter_variant_records
+from opengwasdb.variants.legacy_table import iter_variant_records
 
 log = logging.getLogger(__name__)
 
