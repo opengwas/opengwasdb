@@ -185,6 +185,17 @@ resolved row's rsID. A 0.3.0 release written on the integration branch before #4
 carries the offsets and fails `envelope.closed`: rebuild it, or delete the file. A 0.2
 release is read as before.
 
+**#471 drops from 0.3.0 what nothing read, or only the validator read and recomputes
+(ADR 0102).** `index.sqlite` holds only `completion_quality`, so an Observed-Only 0.3.0
+release, and a Hybrid's outer release, carries none; its `metadata` table and
+`variant_aliases` are gone, and the Top-Hit tiers store `z` but not `abs_z` or `p_value`.
+This package's Store Reader never opens a 0.3.0 release's `index.sqlite`, and an rsID its
+rsID index lacks is a miss. A 0.2 release keeps all of them and is read as before, its
+`variant_aliases` fallback included; rebuilding its Top-Hit Index keeps its tiers' `abs_z`
+and `p_value`. `ogdb rewrite-release` drops them from a 0.2.3 source. A 0.3.0 release
+written on the integration branch before #471 still carries them and fails `validate`
+(`envelope.closed`, `top_hits.arrays`): rebuild it.
+
 ## Keeping this page true
 
 A pull request that moves `format_version`, or changes which formats the

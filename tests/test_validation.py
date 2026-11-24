@@ -166,8 +166,12 @@ def test_validator_rejects_inconsistent_top_hit_index(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert result.failed() == {"top_hits.z"}
-    assert result.errors == ["top-hit index p_5e_08 contains z value inconsistent with z array"]
+    # A tier z of 0 disagrees with the plane, and clears no threshold (#471).
+    assert result.failed() == {"top_hits.z", "top_hits.threshold"}
+    assert sorted(result.errors) == [
+        "top-hit index p_5e_08 contains z value inconsistent with z array",
+        "top-hit index p_5e_08 holds 1 row(s) whose z does not clear its threshold",
+    ]
 
 
 def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_store_path):
@@ -184,7 +188,13 @@ def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_sto
 
     result = validate_store(dense_store_path)
 
-    assert result.failed() == {"variant_table.representatives", "top_hits.z"}
+    # The 0.2.3 form stores the tier's abs_z and p_value (#471), which no longer match z.
+    assert result.failed() == {
+        "variant_table.representatives",
+        "top_hits.z",
+        "top_hits.threshold",
+        "top_hits.abs_z",
+    }
 
 
 def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
@@ -296,7 +306,9 @@ def test_validator_rejects_leftover_sqlite_analyses_table(dense_store_path):
     # ADR 0030/issue #22: analyses.tsv is the sole source of truth for
     # Analytical Metadata; a store carrying a leftover SQLite `analyses`
     # table (store-format spec §20) is invalid even though nothing else
-    # about it is malformed.
+    # about it is malformed. A 0.2.3 release: an Observed-Only 0.3.0 one has
+    # no index.sqlite to carry it (#471).
+    as_0_2_3(dense_store_path)
     connection = open_store(dense_store_path).index_connection()
     try:
         connection.execute("CREATE TABLE analyses (analysis_index INTEGER PRIMARY KEY)")
@@ -318,7 +330,8 @@ def test_validator_accepts_store_without_sqlite_analyses_table(dense_store_path)
 def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_path):
     # Issue #69/#72: Ragged retired its SQLite `analyses` table onto
     # analyses.tsv too -- the same rule Dense already enforces must catch a
-    # Ragged release that still carries one.
+    # Ragged release that still carries one (a 0.2.3 one, as above).
+    as_0_2_3(ragged_store_path)
     connection = open_store(ragged_store_path).index_connection()
     try:
         connection.execute("CREATE TABLE analyses (analysis_index INTEGER PRIMARY KEY)")
@@ -348,6 +361,10 @@ def test_a_ragged_release_has_its_variant_table_checked(ragged_store_path):
 
 
 def test_a_ragged_release_has_no_alias_table_and_is_not_said_to_pass_it(ragged_store_path):
+    # A 0.3.0 release carries no alias table and is not judged on one (#471); a 0.2.3
+    # Ragged release's index.sqlite is empty, and the rule says it judged nothing.
+    assert "sqlite.variant_aliases" not in validate_store(ragged_store_path).skipped
+    as_0_2_3(ragged_store_path)
     result = validate_store(ragged_store_path)
 
     assert result.ok, result.errors
@@ -643,6 +660,7 @@ def test_validator_accepts_migrated_hybrid_store(hybrid_store_path):
 def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_path):
     from opengwasdb.store_reader.hybrid import dense_component_path
 
+    as_0_2_3(hybrid_store_path)  # an Observed-Only 0.3.0 Dense Component has no index (#471)
     connection = open_store(dense_component_path(hybrid_store_path)).index_connection()
     try:
         connection.execute("CREATE TABLE analyses (analysis_index INTEGER PRIMARY KEY)")

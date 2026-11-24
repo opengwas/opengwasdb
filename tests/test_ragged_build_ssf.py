@@ -240,7 +240,7 @@ def test_build_creates_store_files(tmp_path):
     assert (out / "manifest.json").exists()
     assert (out / "variants.tsv.gz").exists()
     assert (out / "analyses.tsv").exists()
-    assert (out / "index.sqlite").exists()
+    assert not (out / "index.sqlite").exists()  # 0.3.0 Observed-Only (ADR 0102, #471)
     assert (out / "data.zarr" / "ragged").exists()
 
     assert result.n_variants == 3  # 1:100000, 1:200000, 2:500000

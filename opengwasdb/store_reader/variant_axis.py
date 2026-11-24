@@ -13,7 +13,9 @@ answers every variant question a query asks from them.
 names; its rsID is the rsID index's, inverted; the variant count is the ALID sidecar's.
 `variants_table()`, `identity_by_indices` and `rsids_by_indices` answer from those, and
 `variant_offsets.npy` is not written. The table and its `.tbi` still ship, a convenience
-for tabix, bedtools and R that the validator checks against the sidecars (spec §1.1).
+for tabix, bedtools and R that the validator checks against the sidecars (spec §1.1). A
+0.3.0 release has no `variant_aliases` either (ADR 0102, #471): an rsID its rsID index
+lacks is a miss there.
 
 In format 0.2.x the table itself is read: a BGZF file whose rows `variant_offsets.npy`
 locates and whose tabix index answers a 0.2 release's ranges. A Store built before the
@@ -39,7 +41,11 @@ import numpy as np
 from opengwasdb.store_reader.alid import ParsedAlid, parse_canonical_alid
 from opengwasdb.store_reader.alid_index import ABSENT, UNINDEXED, AlidIndex, open_alid_index
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar
-from opengwasdb.store_reader.format import carries_position_sidecar, carries_variant_offsets
+from opengwasdb.store_reader.format import (
+    carries_position_sidecar,
+    carries_variant_aliases,
+    carries_variant_offsets,
+)
 from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.store_reader.position_sidecar import MissingPositionSidecar, PositionSidecar
 from opengwasdb.store_reader.rsid_index import (
@@ -187,6 +193,9 @@ class VariantAxis:
         self._n_variants = (
             len(self._offsets) if self._offsets is not None else _sidecar_rows(self._alid_index)
         )
+        # A 0.2 release may name an rsID only in `index.sqlite`'s `variant_aliases`; a
+        # 0.3.0 release carries no such table, and its rsID index is the whole answer.
+        self._format_version = format_version
         # Whether ranges are answered by format 0.3.0's position sidecar (ADR 0105 §6)
         # or, on the 0.2 series, by a tabix fetch through `legacy`. A 0.3.0 release
         # missing the sidecar's files is refused here; the sidecar is read on first use
@@ -291,8 +300,8 @@ class VariantAxis:
 
         Canonical ALIDs are resolved with a single vectorised `searchsorted`
         over the mmap'd ALID index; rsids through the equivalent rsid index
-        (issue #109), falling back to the `variant_aliases` SQLite table for
-        stores built before it. Unlike `by_identifier`, an rsid contributes
+        (issue #109), falling back, on a 0.2 release, to the `variant_aliases`
+        SQLite table for stores built before it. Unlike `by_identifier`, an rsid contributes
         *every* row it names, not only the lowest-indexed one. Identifiers that
         don't resolve are dropped, matching `by_identifier()`'s None-on-miss
         semantics.
@@ -331,15 +340,18 @@ class VariantAxis:
         """Every row each rsid names, not just the first: a phewas over rs123 at
         a multi-allelic site wants both stored rows.
 
-        That holds for an rsid the sidecar rsid index holds. On a release without
-        that index (built before issue #109) the `variant_aliases` fallback
-        answers, and it is `LIMIT 1`: one row, the lowest.
+        That holds for an rsid the sidecar rsid index holds. On a 0.2 release
+        without that index (built before issue #109) the `variant_aliases` fallback
+        answers, and it is `LIMIT 1`: one row, the lowest. A 0.3.0 release has no
+        fallback: an rsID its index lacks names no row (ADR 0102).
         """
         indices: list[int] = []
         for identifier in aliases:
             matched = self.indices_by_alias(identifier)
             if len(matched):
                 indices.extend(int(index) for index in matched)
+                continue
+            if not carries_variant_aliases(self._format_version):
                 continue
             index = self._legacy.alias_index(identifier)
             if index is not None:

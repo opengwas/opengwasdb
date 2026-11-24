@@ -21,6 +21,9 @@ What this ADR changes in other documents:
   rsID and the variant count are read without the Variant Table, and give the `.tbi` rebuild
   command; §20.0 adds `variant_table.rsid_rows` and restates `rows` and `representatives`;
   §21.3 and §21.4 add the change to 0.3.0 and to the rewrite.
+- From #471 (the dated section below): spec §1, §1.1, §10a, §18, §20 and §20.0 for what
+  0.3.0 drops, and banners on [ADR 0001](0001-hybrid-sqlite-zarr-store-envelope.md) and
+  [ADR 0057](0057-store-format-0-2-0-zarr-v3-with-sharding.md) §5.
 - [ADR 0038](0038-store-format-versioning-and-migration-policy.md) and
   [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md) stand: this applies them.
 
@@ -367,8 +370,8 @@ and drops the offsets.
   it would name no row's rsID. A 0.2 release built before #109 still opens without one.
 - **`variant_offsets.npy` is not written from 0.3.0.** A 0.3.0 release carrying it fails its
   closed envelope; a 0.2 Dense release missing it fails `envelope.required`, as before. The Dense
-  builder's `provenance.dense.variant_axis.row_offsets` and its `index.sqlite` `dense` blob no
-  longer name it.
+  builder's `provenance.dense.variant_axis.row_offsets` no longer names it, and the `index.sqlite`
+  `dense` blob that also named it is gone from 0.3.0 (#471, the section below).
 - **The record methods still read the table.** `by_index`, `by_indices`, `all`, `records` and
   `range` return every column, `source_alid` included, and only the table holds `source_alid` until
   #470. The builders, completion and the validator call them; no query does. On 0.3.0 `by_index`
@@ -386,10 +389,12 @@ and drops the offsets.
   identically. So does `Rsamtools::indexTabix("variants.tsv.gz", seq = 1, start = 2, end = 2,
   comment = "#")` (Rsamtools 2.28.0), which spec §4 gives too.
 
-**The rewrite step**, `variant_offsets`, runs last. It refuses unless the ALID and position
-sidecars each count the rows `variant_offsets.npy` does. Then it deletes the file and the Dense
-provenance's `row_offsets`. The `index.sqlite` `dense` blob keeps its `row_offsets` key: #471 drops
-that blob. The proof already asked `variants_table()` and the resolved rows of the lookup, the range
+**The rewrite step**, `variant_offsets`, fits #471's step frame (the section below). It leaves the
+file out of the copy (`leaves_out`), so the steps that stream the staged Variant Table check its rows
+against the source's offsets. Its `run` comes last: it refuses unless the staged ALID and position
+sidecars each count the rows the source's `variant_offsets.npy` does, and drops the Dense
+provenance's `row_offsets`. The `index.sqlite` `dense` blob, which named the file too, is dropped
+with the rest of `metadata` by #471's `provenance_index` step. The proof already asked `variants_table()` and the resolved rows of the lookup, the range
 and the widest top hits, with variant info, so it needs no new question.
 
 **Evidence.** `tests/test_variant_table_off_read_path.py` gives every fixture rsIDs that plant a row
@@ -456,6 +461,77 @@ Variant Table through the axis's private attributes. Its owner moves its pin (#4
 - **Tests build 0.2.3 releases** by turning a 0.3.0 build back (`tests/format_0_2_3.py`). The nine
   completion pins, turned back so, match their previous pins in every entry but the Dense
   `overview.html`, which lists the files.
+
+## 23 Nov 2026 (#471): what else 0.3.0 drops
+
+[ADR 0102](0102-what-a-store-release-ships.md) classifies every component a release ships.
+Issue [#471](https://github.com/opengwas/opengwasdb/issues/471) carries its drops into 0.3.0,
+the same format version as the sidecar, so there is still one backfill. From 0.3.0:
+
+- **`index.sqlite` holds only `completion_quality`**, and ships only where that table does: in
+  a Reference-Completed release, a Hybrid's in its Dense Component. The envelope is therefore
+  a function of layout, version and completion state (`envelope_at`, `ships_index`). An
+  Observed-Only release, and a Hybrid's outer release, carrying one fails `envelope.closed`.
+  An `index.sqlite` holding anything else fails `sqlite.provenance_only`.
+- **The `metadata` table is gone**: its `dense` layout blob and the unread `schema_version`,
+  `n_variants` and `n_analyses`. `manifest.json` is the one copy of the layout the blob held,
+  and `layout.recorded` and `hybrid.recordings` read the manifest and the root attributes.
+- **`variant_aliases` is gone.** On 0.3.0 the Store Reader never opens `index.sqlite`: an
+  rsID the rsID index lacks is a miss, and SQLite is not loaded. On 0.2 the fallback stays
+  until #476 retires it.
+- **The Top-Hit tiers' `abs_z` and `p_value` are gone.** The validator recomputes both from
+  `z` through `opengwasdb.store_reader.stats`. `top_hits.threshold` fails a tier row whose
+  recomputed |z| does not clear its threshold, on every format. `top_hits.abs_z` holds a 0.2
+  tier's stored pair to the recomputed one: `abs_z` within the 1e-3 it always used, and
+  `p_value` within 1e-3 relative.
+
+`completion_quality` and `on_panel` stay, as provenance.
+
+Builds and completion write 0.3.0's tiers. Rebuilding the index of an existing 0.2 release
+(`ogdb build-dense-top-hits`, `build-ragged-top-hits`) keeps that release's format, as #313
+requires: its tiers get `abs_z` and `p_value` back, recomputed from `z`
+(`top_hits.write_stored_p`).
+
+**The rewrite** drops all four in two steps after `alid_sidecar` and `position_sidecar`.
+`provenance_index` writes a Reference-Completed component a new `index.sqlite` holding only
+`completion_quality`, copied with its schema. `tier_stored_p` drops each tier's pair, and has
+no `run`: neither copies what it drops. A step names the paths it drops
+(`RewriteStep.leaves_out`), and the copy leaves them out, so a later step that needed one
+would read it from the source. Each step's `refuse` hook runs before anything is staged,
+and refuses a source whose drop would change an answer or lose evidence:
+- a `variant_aliases` rsID the rsID index lacks;
+- a `dense` blob that disagrees with the manifest;
+- a Reference-Completed component with no `completion_quality`;
+- an `index.sqlite` table it does not know;
+- a tier storing one of `abs_z` and `p_value` without the other;
+- a tier whose stored pair is not what its `z` implies;
+- a consolidated-metadata record over a tier.
+
+The rewrite finds a Hybrid and its Dense Component from the root manifest's layout
+(`Component`), not from directory names. #470 and #472 add their steps to this frame.
+
+The proof also asks about rsIDs no release names, by PheWAS and inside a lookup (its
+`misses` section). On 0.2 those reach `variant_aliases`; on 0.3.0 they are misses.
+
+Two real releases were rewritten, each with the version refusal bypassed as for #467:
+
+- **OGS-00007** (Ragged Observed-Only, 0.2.1) took 21.6 s, before #468's step. All 146
+  questions, 9 ALID probes and 3 misses matched. It left out 71,412 B: `abs_z` 24,224 B and
+  `p_value` 47,188 B over three tiers, and an empty `index.sqlite`.
+- **OGS-00006** (Ragged Reference-Completed, 0.2.1) took 2,183 s, of which 1,976 s were the two
+  sides of the proof. All 146 questions, 9 ALID probes, 22 range probes and 3 misses matched.
+  It left out 19,012,514 B: `abs_z` 3,452,953 B, `p_value` 14,969,737 B, and the source's
+  589,824 B `index.sqlite`. The new one holds the same 7,509 `completion_quality` rows.
+
+On its first run the rewrite refused OGS-00006. In each tier, 226 rows (|z| 37.7 to 40)
+stored `p_value` 0.0. Here `store_reader.stats` recomputes a subnormal, 4.1e-311 at |z| 37.7:
+the build's scipy `erfc` flushed it to zero, and `math.erfc` does not. Both say p
+underflows, so `stored_p_agrees` allows an absolute difference up to float64's smallest
+normal number, and no more. Under that rule all 54 tiers agree, over the 18 hosted 0.2
+components whose tiers total under 1.2 GB (|z| up to 200.8).
+
+ADR 0102's Consequences gives the same drops on the large releases: 575 MB of tier arrays
+on OGS-00009, and 2.09 GB on OGS-00011's Dense Component.
 
 ## Alternatives considered
 

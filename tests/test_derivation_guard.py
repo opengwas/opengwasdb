@@ -40,8 +40,9 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("opengwasdb/build/phenotype_sd_pipeline.py", "_gather_evidence"): (
         "a source reader's associations, judged to set the SD before the build stores them"
     ),
-    ("opengwasdb/top_hits.py", "_write_tier"): (
-        "the build-time harvest writing the Top-Hit Index's stored p_value"
+    ("opengwasdb/top_hits.py", "recomputed_abs_z_and_p"): (
+        "what a 0.2 tier stored beside z, recomputed to check it (validator, rewrite) or "
+        "to write it back on a 0.2 rebuild: the p of the stored z, not a second derivation"
     ),
     ("opengwasdb/build/effect_consistency.py", "log10_two_sided_p"): (
         "a build's check of the values it is writing, before any query"
@@ -58,7 +59,7 @@ ALLOWED: dict[tuple[str, str], str] = {
 
 _Z = re.compile(r"^(z|abs_z|zs|z\d+|z_\w+|\w+_z)$", re.IGNORECASE)
 _SE = re.compile(r"^(se|ses|se\d+|se_\w+|\w+_se|sebeta)$", re.IGNORECASE)
-_P_CALLS = {"erfc", "p_value_from_z", "logsf", "log_ndtr"}
+_P_CALLS = {"erfc", "p_value_from_z", "p_values_from_z", "logsf", "log_ndtr"}
 
 
 def _operand_name(node: ast.expr) -> str:
@@ -163,6 +164,9 @@ def signed(sign, d):
 def p_of(z, math):
     return math.erfc(abs(z) / 2 ** 0.5), p_value_from_z(z), norm.sf(z), norm.logsf(z)
 
+def p_over_an_array(stats, z):
+    return stats.p_values_from_z(z)
+
 def p_back(row):
     return 10.0 ** row["log10_p"], np.power(10, log10_p)
 
@@ -182,6 +186,7 @@ def test_the_guard_sees_each_form_it_claims_to():
         ("p_of", "p_value_from_z"),
         ("p_of", "norm.sf"),
         ("p_of", "logsf"),
+        ("p_over_an_array", "p_values_from_z"),
         ("p_back", "10 ** log10_p"),
         ("p_back", "np.power(10, log10_p)"),
     }
@@ -214,3 +219,16 @@ def test_the_exempt_module_is_where_the_derivation_lives(function):
     source = (ROOT / EXEMPT).read_text(encoding="utf-8")
     kinds = {kind for _, where, kind in derivations(source) if where == function}
     assert kinds, function
+
+
+def test_a_caller_of_p_values_from_z_outside_the_allow_list_is_caught():
+    """`p_values_from_z` is the derivation over an array (#471): its one caller outside
+    `stats.py` is listed, and any other is reported, as this one would be unlisted."""
+    module = "opengwasdb/top_hits.py"
+    found = derivations((ROOT / module).read_text(encoding="utf-8"))
+    calls = {(function, kind) for _, function, kind in found if kind == "p_values_from_z"}
+    assert calls == {("recomputed_abs_z_and_p", "p_values_from_z")}
+    unlisted = {(module, function) for function, _ in calls} - set(ALLOWED)
+    assert unlisted == set()
+    planted = "def elsewhere(stats, z):\n    return stats.p_values_from_z(z)\n"
+    assert [(f, k) for _, f, k in derivations(planted)] == [("elsewhere", "p_values_from_z")]

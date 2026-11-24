@@ -44,6 +44,15 @@ matched the previous pin in every entry but that `overview.html`.
 Since #468 every pin also holds the position sidecar's three files (ADR 0105 §6), and
 the Dense pin's `overview.html` lists them. Re-derived after checking that every other
 entry, and every total, equalled the previous pin.
+
+Since #471 no pin holds a tier's `abs_z` or `p_value`, and the Dense pin's
+`index.sqlite` holds `completion_quality` alone, without the `metadata` table or
+`variant_aliases` (ADR 0102); its `overview.html` words `index.sqlite`'s entry anew.
+Re-derived after checking that every other entry matched the previous pin, that the
+Dense `index.sqlite`, with the metadata the code before #471 wrote added back, hashed
+to the previous pin, and that its `overview.html`, re-rendered with the previous
+wording, did too. The Dense `overview.html` was re-derived once more at #471's review,
+which re-worded `index.sqlite`'s entry; with the earlier wording it hashes to that pin.
 """
 
 from __future__ import annotations

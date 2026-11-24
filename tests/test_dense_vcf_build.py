@@ -154,7 +154,7 @@ def two_trait_store(tmp_path):
 
 def test_build_creates_standard_store_envelope(two_trait_store):
     assert (two_trait_store / "manifest.json").exists()
-    assert (two_trait_store / "index.sqlite").exists()
+    assert not (two_trait_store / "index.sqlite").exists()  # 0.3.0 Observed-Only (ADR 0102)
     assert (two_trait_store / "data.zarr").exists()
     assert (two_trait_store / "variants.tsv.gz").exists()
     assert (two_trait_store / "variant_alid_offsets.npy").exists()

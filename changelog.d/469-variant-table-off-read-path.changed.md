@@ -12,8 +12,8 @@
   it inverts, once, and keeps it. 0.2.x is unchanged.
 - **`variant_offsets.npy` is not written from 0.3.0.** A 0.3.0 release carrying it fails
   `envelope.closed`. The Dense builder's `provenance.dense.variant_axis.row_offsets` no
-  longer names it. A rewritten Dense release's `index.sqlite` `dense` blob still does;
-  #471 drops that blob. `variants.tsv.gz` and its `.tbi` still ship, written with htslib,
+  longer names it, and #471 has dropped the `index.sqlite` `dense` blob that also named it,
+  from builds and rewrites alike. `variants.tsv.gz` and its `.tbi` still ship, written with htslib,
   as a convenience for tabix, bedtools and R. Spec §4 gives the command that rebuilds a lost
   `.tbi`: `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`.
 - **A 0.3.0 release without its rsID index is refused** (`MissingRsidIndex`), rather than read
@@ -25,8 +25,9 @@
   over 24 bytes). The rebuild reads sources, though, and a GWAS-VCF `ID` cell is kept
   whole: one naming several rsIDs past 24 bytes (three of nine digits already are) is
   refused at build.
-- **`ogdb rewrite-release` gains a `variant_offsets` step**, which drops the file once the
-  ALID and position sidecars count the rows it does.
+- **`ogdb rewrite-release` gains a `variant_offsets` step**, in #471's step frame: the copy
+  leaves the file out, and the step refuses unless the ALID and position sidecars count the
+  rows the source's offsets did.
 - **New validation rule `variant_table.rsid_rows`** (0.3.0). It checks that the inverted rsID
   index names every row by the table's rsID. On 0.3.0, `variant_table.rows` counts against
   the ALID sidecar, and `variant_table.representatives` checks the tabix index only.

@@ -86,6 +86,7 @@ from opengwasdb.store_reader.associations import (
 )
 from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.format import carries_variant_aliases
 from opengwasdb.store_reader.hybrid import dense_to_shared_path
 from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
@@ -258,9 +259,12 @@ class StoreQuery(_StoreQueryBase):
         self.store = store
         self._analyses = AnalysesIndex(store.path)
         self._root = store.arrays()
-        # The Store Variant Table, with `index.sqlite`'s `variant_aliases` for an
-        # rsid the rsid index does not hold; both closed with the axis.
-        self._variant_axis = store.variant_axis(aliases=True)
+        # The Store Variant Table, with a 0.2 release's `index.sqlite`
+        # `variant_aliases` for an rsid the rsid index does not hold; both closed
+        # with the axis. A 0.3.0 release has neither the table nor the fallback.
+        self._variant_axis = store.variant_axis(
+            aliases=carries_variant_aliases(store.manifest.format_version)
+        )
         # Every association read goes through the grid reader: the store's
         # declared encoding (ADR 0037) and the presence rule (ADR 0070) are
         # applied there, once, rather than at each result site.
@@ -733,7 +737,10 @@ class HybridStoreQuery(_StoreQueryBase):
         )
         self._csr = self._overflow.structure
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
-        self._variant_axis = store.variant_axis(aliases=True)  # shared union table
+        # The shared union table; `variant_aliases` as for a Dense release.
+        self._variant_axis = store.variant_axis(
+            aliases=carries_variant_aliases(store.manifest.format_version)
+        )
         self._overflow.open_variant_index(self._variant_axis.n_variants)
         self._top_hits = TopHitTiers(store.arrays())  # overflow's own tiers
 
@@ -887,7 +894,7 @@ class HybridStoreQuery(_StoreQueryBase):
     ) -> Associations:
         # Resolved once, against the shared Variant Axis: an identifier its index
         # holds never reaches a Dense Component whose own index lacks it (an
-        # off-panel variant), which would consult `variant_aliases`.
+        # off-panel variant), which on a 0.2 release would consult `variant_aliases`.
         shared = np.unique(self._variant_axis.indices_by_identifiers(identifiers)).astype(np.int64)
         on_panel, rows = self._panel_split(shared)
         panel_rows = rows[on_panel]

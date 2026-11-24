@@ -54,13 +54,15 @@ from opengwasdb.query import query_store
 from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
+from opengwasdb.store.arrays import open_group_for_write
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.associations import statistics_of
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
-from opengwasdb.store_reader.format import UnsupportedFormatVersion
+from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_stored_p
 from opengwasdb.store_reader.indexed import IndexedSubsetError
+from opengwasdb.top_hits import write_stored_p
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
     EmptyReferenceError,
@@ -1876,10 +1878,21 @@ def build_variant_index_command(
     )
 
 
+def _keep_stored_p(store_path: Path) -> None:
+    """Give a rebuilt index the `abs_z` and `p_value` its release's format stores.
+
+    The builders write format 0.3.0's tiers, which store neither (ADR 0102, #471). A
+    0.2 release stays indexable (#313), so its rebuilt tiers get both back.
+    """
+    if carries_stored_p(open_store(store_path).manifest.format_version):
+        write_stored_p(open_group_for_write(store_path / "data.zarr", "a"))
+
+
 @app.command("build-ragged-top-hits")
 def build_ragged_top_hits_command(store_path: Path) -> None:
     """Build (or rebuild) the top-hit index for a Ragged store."""
     build_ragged_top_hit_indexes(store_path)
+    _keep_stored_p(store_path)
     typer.echo("done")
 
 
@@ -1888,6 +1901,9 @@ def build_dense_top_hits_command(
     store_path: Path, n_workers: int = _N_WORKERS_OPTION
 ) -> None:
     """Build (or rebuild) the top-hit index for a Dense store.
+
+    A 0.2 release's rebuilt tiers keep the `abs_z` and `p_value` its format stores, and
+    a 0.3.0 release's store neither (ADR 0102, #471).
 
     A release stored as Zarr v2 -- every `format_version` 0.1.0 release -- is
     refused before anything is written: the index is Zarr v3 arrays written into
@@ -1900,6 +1916,7 @@ def build_dense_top_hits_command(
     """
     try:
         build_top_hit_indexes(store_path, n_workers=n_workers)
+        _keep_stored_p(store_path)
     except UnsupportedFormatVersion as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

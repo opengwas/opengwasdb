@@ -3,11 +3,14 @@
 Format 0.2.x keeps a few facts in `index.sqlite`: the `metadata` table (the
 `dense` layout recording among them), Reference Completion's
 `completion_quality` rows, and, for a Store built before the rsid index, the
-`variant_aliases` table. The Store Reader may not import sqlite3 (#464), so,
-like the 0.2.x Store Variant Table (`opengwasdb.variants.legacy_table`), these
-reads live beside it as its SQLite implementation, and count as the Store
-Reader (#473 ruling 1): the validator and the observed-view check ask for them
-here, by what they return, and no other read module opens `index.sqlite`.
+`variant_aliases` table. From 0.3.0 only `completion_quality` is left, and only a
+Reference-Completed release carries the file (ADR 0102, #471): `metadata` and
+`variant_aliases` are read here for a 0.2 release alone. The Store Reader may not
+import sqlite3 (#464), so, like the 0.2.x Store Variant Table
+(`opengwasdb.variants.legacy_table`), these reads live beside it as its SQLite
+implementation, and count as the Store Reader (#473 ruling 1): the validator and the
+observed-view check ask for them here, by what they return, and no other read module
+opens `index.sqlite`.
 Writing it -- the schema, metadata and quality rows a build or a completion
 writes -- is `opengwasdb.index.sqlite`'s and the writers'. #476 removes SQLite
 from every read path.
@@ -105,6 +108,22 @@ class ReleaseIndex:
             raise ValueError(f"completion_quality reads {QUALITY_COUNTS} or {QUALITY_BLOCKS}")
         query = f"SELECT {', '.join(columns)} FROM completion_quality"
         return [tuple(row) for row in self._connection.execute(query)]
+
+    def completion_quality_copy(self) -> tuple[list[str], list[tuple[Any, ...]]]:
+        """`completion_quality` as a copy of it needs it: the statements that create the
+        table and its indexes, table first, and every row, as stored. Empty when there is
+        no such table. What `ogdb rewrite-release` keeps of a 0.2 index (#471)."""
+        statements = [
+            str(row[0])
+            for row in self._connection.execute(
+                "SELECT sql FROM sqlite_master WHERE tbl_name='completion_quality' "
+                "AND sql IS NOT NULL ORDER BY type='index', name"
+            )
+        ]
+        if not statements:
+            return [], []
+        rows = [tuple(row) for row in self._connection.execute("SELECT * FROM completion_quality")]
+        return statements, rows
 
     def variant_aliases(self) -> list[tuple[Any, Any]]:
         """Every `variant_aliases` row as ``(alias, variant_index)``, the values as

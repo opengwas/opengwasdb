@@ -19,20 +19,18 @@ from typing import Any
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.store.open import (
-    DENSE_ENVELOPE,
-    HYBRID_DENSE_COMPONENT_ENVELOPE,
-    HYBRID_ENVELOPE,
-    RAGGED_ENVELOPE,
     check_format_version_stamp,
     envelope_at,
     newer_than_written,
     newer_than_written_text,
+    ships_index,
 )
 from opengwasdb.store_reader.alid_index import alid_index_kind
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
+    carries_index_metadata,
     carries_position_sidecar,
     carries_variant_offsets,
     indels_reference_first,
@@ -217,6 +215,26 @@ def _alid_index_entries(target: Target, *, rebuild: bool = False) -> list[tuple[
     ]
 
 
+def _index_entry(target: Target) -> list[tuple[str, Path]]:
+    """`index.sqlite`, where a release of its layout, version and completion state
+    carries one (`ships_index`): every 0.2 release; from 0.3.0 only one that holds its
+    own `completion_quality` (ADR 0102)."""
+    if not target_ships_index(target):
+        return []
+    return [("missing index.sqlite", target.store.index_path)]
+
+
+def target_ships_index(target: Target) -> bool:
+    """Whether the release carries an `index.sqlite` (`ships_index`)."""
+    manifest = target.store.manifest
+    return ships_index(
+        target.layout,
+        manifest.format_version,
+        manifest.completion_state,
+        dense_component=_is_dense_component(target),
+    )
+
+
 def _position_sidecar_entries(target: Target) -> list[tuple[str, Path]]:
     """The position sidecar's files, from 0.3.0 (ADR 0105 §6): a 0.3.0 release answers
     every range from them, and one without them is refused, never read by tabix."""
@@ -241,7 +259,7 @@ def _dense_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
     return [
-        ("missing index.sqlite", store.index_path),
+        *_index_entry(target),
         ("missing data.zarr", store.data_path),
         ("missing analyses.tsv", store.analyses_path),
         ("missing variants.tsv.gz", variant_table_path(path)),
@@ -256,7 +274,7 @@ def _ragged_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
     return [
-        ("missing index.sqlite", store.index_path),
+        *_index_entry(target),
         ("missing data.zarr", store.data_path),
         ("missing data.zarr/ragged", store.data_path / "ragged"),
         ("missing variants.tsv.gz", variant_table_path(path)),
@@ -274,7 +292,7 @@ def _hybrid_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing dense/ (Dense Component)", dense_dir),
         ("missing dense/manifest.json", dense_dir / "manifest.json"),
         ("missing dense/dense_to_shared.npy", dense_to_shared_path(path)),
-        ("missing index.sqlite", path / "index.sqlite"),
+        *_index_entry(target),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
         *_alid_index_entries(target),
@@ -301,18 +319,20 @@ def required_entries(target: Target) -> Iterator[str]:
             yield message
 
 
+def _is_dense_component(target: Target) -> bool:
+    """Whether the release is a Hybrid's nested Dense Component, which additionally
+    carries dense_to_shared.npy, as a standalone Dense release never does."""
+    return target.parent is not None
+
+
 def _envelope(target: Target) -> frozenset[str]:
-    if target.parent is not None:
-        # A Hybrid release's Dense Component additionally carries dense_to_shared.npy,
-        # which a standalone Dense release never does.
-        envelope = HYBRID_DENSE_COMPONENT_ENVELOPE
-    else:
-        envelope = {
-            PrimaryStorageLayout.DENSE: DENSE_ENVELOPE,
-            PrimaryStorageLayout.RAGGED: RAGGED_ENVELOPE,
-            PrimaryStorageLayout.HYBRID: HYBRID_ENVELOPE,
-        }[target.layout]
-    return envelope_at(envelope, target.store.manifest.format_version)
+    manifest = target.store.manifest
+    return envelope_at(
+        target.layout,
+        manifest.format_version,
+        manifest.completion_state,
+        dense_component=_is_dense_component(target),
+    )
 
 
 def closed_envelope(target: Target) -> list[str]:
@@ -373,11 +393,46 @@ def _reject_stray_analyses_table(index: ReleaseIndex, errors: list[str]) -> None
     the sole source of truth for Analytical Metadata, so a leftover SQL
     ``analyses`` table -- Dense/Hybrid retired theirs in issue #68, Ragged in
     issue #69 -- is a validation failure, not a harmless relic."""
-    if "analyses" in index.names(tables_only=True):
+    if _ANALYSES_TABLE in index.names(tables_only=True):
         errors.append(
             "index.sqlite still contains an analyses table -- analyses.tsv is the sole "
             "source of truth for Analytical Metadata (ADR 0030, issue #22)"
         )
+
+
+#: The one table a 0.3.0 `index.sqlite` holds (ADR 0102).
+_PROVENANCE_TABLES = frozenset({"completion_quality"})
+
+#: A table `sqlite.analyses_table` reports, on every format, so not reported again.
+_ANALYSES_TABLE = "analyses"
+
+
+def provenance_only_index(target: Target) -> list[str]:
+    """A 0.3.0 `index.sqlite` holds `completion_quality` and nothing else (ADR 0102).
+
+    The `metadata` table and `variant_aliases` a 0.2 release carried are dropped from
+    0.3.0 (#471); one still present is a writer that did not move with the format.
+    """
+    with ReleaseIndex(target.store.path) as index:
+        tables = index.names(tables_only=True)
+    stray = sorted(
+        name
+        for name in tables - _PROVENANCE_TABLES - {_ANALYSES_TABLE}
+        if not name.startswith("sqlite_")
+    )
+    if not stray:
+        return []
+    return [
+        f"index.sqlite holds {', '.join(stray)}, which format "
+        f"{target.store.manifest.format_version} does not carry: from 0.3.0 it holds only "
+        "completion_quality (ADR 0102)"
+    ]
+
+
+def _provenance_only(target: Target) -> bool:
+    """A release whose `index.sqlite` ships and holds provenance alone: 0.3.0 on."""
+    version = target.store.manifest.format_version
+    return target_ships_index(target) and not carries_index_metadata(version)
 
 
 def format_stamp(target: Target) -> list[str]:
@@ -437,7 +492,15 @@ RULES: tuple[Rule, ...] = (
     Check(
         name="sqlite.analyses_table",
         kinds=Kind.RELEASE,
+        when=target_ships_index,
         after=(REQUIRED,),
         run=stray_analyses_table,
+    ),
+    Check(
+        name="sqlite.provenance_only",
+        kinds=Kind.RELEASE,
+        when=_provenance_only,
+        after=(REQUIRED,),
+        run=provenance_only_index,
     ),
 )

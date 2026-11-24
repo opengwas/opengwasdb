@@ -87,7 +87,7 @@ def _answers(release: Path) -> dict[str, Any]:
         results = {f"analysis/{a}": q.analysis(a) for a in ids}
         results["lookup"] = q.lookup(alids, ids)
         # A tier every layout indexes: a Dense or Hybrid release answers a threshold no
-        # tier holds with no rows (#469's report), which would compare nothing.
+        # tier holds with no rows (opengwas/opengwasdb#483), which would compare nothing.
         results["top_hits"] = q.top_hits(threshold=5e-4)
         resolved = {
             name: _reprs(q.resolve(result, include_variant_info=True))
@@ -237,7 +237,7 @@ def test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam(
         "query-range-phewas": [first["chromosome"], "1", "500000000"],
         "query-analysis": [analysis_id],
         "query-lookup": [f"{first['alid']},rs77,{last['alid']}", analysis_id],
-        "query-top-hits": ["--threshold", "5e-4"],
+        "query-top-hits": ["--threshold", "5e-4"],  # an indexed tier: #483
     }
     argvs = [[command, str(release), *args, "--variant-info"] for command, args in asked.items()]
     out = _run_unreadable(release, ["-c", CLI, json.dumps(argvs)])

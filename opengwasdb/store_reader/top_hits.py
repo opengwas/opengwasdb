@@ -81,7 +81,9 @@ def tier_arrays(group: Any) -> dict[str, Any]:
     the coercion that lets the validation logic diagnose malformed contents.
     Keeping the uint32 coordinates compact is material: OGS-00010's nominal
     tier alone has 45.7 million hits (issue #254). The tier must not be missing
-    any of `opengwasdb.top_hits.TOP_HIT_TIER_ARRAYS` (see its `missing_arrays`).
+    any of the arrays its format carries (`opengwasdb.top_hits.missing_arrays`).
+    `abs_z` is None on a tier that does not store it: one of format 0.3.0, which
+    drops it (ADR 0102, #471).
 
     What the validator's Top-Hit rules read: they check the tier's structure and
     cross-check its values against the planes, so they want every array as stored,
@@ -92,7 +94,7 @@ def tier_arrays(group: Any) -> dict[str, Any]:
         "cols": np.asarray(group["analysis_index"][:], dtype=np.uint32),
         "z_values": np.asarray(group["z"][:], dtype=np.float32),
         "se_values": np.asarray(group["se"][:], dtype=np.float32),
-        "abs_z": np.asarray(group["abs_z"][:], dtype=np.float32),
+        "abs_z": np.asarray(group["abs_z"][:], dtype=np.float32) if "abs_z" in group else None,
         "offsets": np.asarray(group["analysis_offsets"][:], dtype=np.uint64),
         "imputed_values": (
             np.asarray(group["imputed"][:], dtype=np.uint8) if "imputed" in group else None

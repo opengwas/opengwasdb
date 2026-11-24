@@ -308,7 +308,8 @@ def test_a_component_defect_does_not_hide_an_overflow_defect(
     result = validate_store(store)
 
     assert {f.target for f in result.of("top_hits.z")} == {"dense/data.zarr", "data.zarr/ragged"}
-    assert result.failed() == {"top_hits.z", "top_hits.abs_z"}, result.errors
+    # 0.3.0 tiers store no abs_z (#471); a z of 0 clears no threshold.
+    assert result.failed() == {"top_hits.z", "top_hits.threshold"}, result.errors
 
 
 def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(fresh_ragged: Path) -> None:
