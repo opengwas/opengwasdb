@@ -58,6 +58,11 @@ Since #449 each Ragged pin's `variants.tsv.gz` and its `.tbi` are re-derived: a 
 build now writes each row's `source_alid` (the ALID itself for an unlifted source), and
 completion keeps it, where both wrote `.`. Re-derived after checking that every other
 entry of every pin, and every Dense entry, was unchanged.
+
+Since epic #450's final review the Dense pin's `overview.html` is re-derived once more:
+its file guide describes `variants.tsv.gz` as a file no 0.3.0 query reads, and names
+the position, `source_alid` and rsID sidecars. Fresh pins of every fixture differed from
+the previous ones in that entry alone, and the previous one held at the integration tip.
 """
 
 from __future__ import annotations
