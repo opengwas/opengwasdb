@@ -717,14 +717,17 @@ def _fidelity(release: Path, source: Path, chain: Path, monkeypatch: pytest.Monk
 def test_a_release_naming_no_source_alid_and_recording_no_lift_lifts_its_samples(
     lifted_without_sources, monkeypatch: pytest.MonkeyPatch
 ):
-    """The join says it cannot answer (None), so `validate --source` lifts the samples
-    itself and every one matches its stored cell (#473, ADR 0105 §8)."""
+    """The join says it cannot answer (None), so `validate --source` takes the samples'
+    rows from its own lift and every one matches its stored cell (#473, ADR 0105 §8).
+    The lift count does not tell the two answers apart -- a cross-assembly check lifts
+    once either way, to orient its samples (#486) -- the outcome does: answering {}
+    instead matches no sample."""
     release, source, chain = lifted_without_sources
     _forget_the_lift(release)
 
     result, lifts = _fidelity(release, source, chain, monkeypatch)
 
-    assert lifts == 1, "the validator lifted the samples itself"
+    assert lifts == 1, "lifted once: for the rows and the orientation alike"
     assert result.failed() == frozenset(), result.errors
     assert "fidelity.source" not in result.skipped, "fidelity was judged"
     # Were the join to answer {} (no row found) instead, no sample would match.
