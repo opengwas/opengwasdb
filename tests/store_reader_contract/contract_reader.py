@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from opengwasdb.store.query_digests import (
-    CROSS_MACHINE_PVAL_RTOL,
+    CROSS_MACHINE_RTOL,
     VALUES,
     differences,
     readable_differences,
@@ -74,11 +74,9 @@ def mismatches(path: Path, want: dict[str, Any]) -> list[str]:
 
 def disagreements(found: dict[str, Any], want: dict[str, Any]) -> list[str]:
     """Every place `found` (`answers`) differs from `want`. `want` was written on another
-    machine, so `pval` is compared to a few ulps (`CROSS_MACHINE_PVAL_RTOL`); every other
-    value exactly."""
-    out = differences(want["digests"], found["digests"], pval_rtol=CROSS_MACHINE_PVAL_RTOL)
+    machine, so `pval` and `log10_p` are compared to a few ulps (`CROSS_MACHINE_RTOL`);
+    every other value exactly."""
+    out = differences(want["digests"], found["digests"], rtol=CROSS_MACHINE_RTOL)
     if found["digests"]["unposed_range_questions"] != want["digests"]["unposed_range_questions"]:
         out.append("unposed_range_questions")
-    return out + readable_differences(
-        want["readable"], found["readable"], pval_rtol=CROSS_MACHINE_PVAL_RTOL
-    )
+    return out + readable_differences(want["readable"], found["readable"], rtol=CROSS_MACHINE_RTOL)
