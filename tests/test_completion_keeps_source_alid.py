@@ -43,7 +43,8 @@ def _records(store: Path) -> list[VariantRecord]:
 
 def _spelt_on_source(record: VariantRecord) -> str:
     """A plausible pre-liftover ALID for a row: another position, never the row's own ALID."""
-    return f"{record.chromosome}:{record.position - 1000}:{record.effect_allele}:{record.other_allele}"
+    alleles = f"{record.effect_allele}:{record.other_allele}"
+    return f"{record.chromosome}:{record.position - 1000}:{alleles}"
 
 
 def plant_source_alids(store: Path, *, blank: int = 1) -> dict[str, str]:
@@ -216,6 +217,7 @@ def test_the_rule_passes_a_completed_lifted_release_that_kept_them(
 )
 def test_a_hybrid_build_keeps_a_folded_rows_source_alid(tmp_path: Path) -> None:
     import test_hybrid_build as thb
+
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
     early = thb._make_vcf(
