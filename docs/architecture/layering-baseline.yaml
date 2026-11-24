@@ -39,11 +39,3 @@ allowed:
     name: opengwasdb.completion.checkpoint.checkpoint_dir_for
   - file: opengwasdb/layouts/hybrid/checkpoint.py
     name: opengwasdb.completion.checkpoint.require_fresh_destination
-  # Store contract model (layer 0) -> Source Readers (layer 1): the INFO score
-  # policy names the declaration kinds the readers parse.
-  - file: opengwasdb/model/info_score_policy.py
-    name: opengwasdb.readers.gwas_ssf.GWAS_SSF_CAPABILITY
-  - file: opengwasdb/model/info_score_policy.py
-    name: opengwasdb.readers.interface.ImputationScoreDeclaration
-  - file: opengwasdb/model/info_score_policy.py
-    name: opengwasdb.readers.interface.ImputationScoreKind
