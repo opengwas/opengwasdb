@@ -10,10 +10,13 @@ answers every variant question a query asks from them.
 
 **From format 0.3.0 the Store Reader never reads the Variant Table** (#469, ADR 0105
 §7). A row's chromosome, position and alleles are its ALID's, which the ALID sidecar
-names; its rsID is the rsID index's, inverted; the variant count is the ALID sidecar's.
-`variants_table()`, `identity_by_indices` and `rsids_by_indices` answer from those, and
+names; its rsID is the rsID index's, inverted; its `source_alid` is the `source_alid`
+sidecar's (`opengwasdb.store_reader.source_alid_sidecar`, #470); the variant count is
+the ALID sidecar's. `variants_table()`, the record methods and `identity_by_indices`,
+`rsids_by_indices` and `source_alids_by_indices` answer from those, and
 `variant_offsets.npy` is not written. The table and its `.tbi` still ship, a convenience
-for tabix, bedtools and R that the validator checks against the sidecars (spec §1.1). A
+for tabix, bedtools and R that the validator checks against the sidecars (spec §1.1),
+and `table_records` and `tabix_range`, which the validator alone asks, read it. A
 0.3.0 release has no `variant_aliases` either (ADR 0102, #471): an rsID its rsID index
 lacks is a miss there.
 
@@ -23,10 +26,9 @@ rsID index resolves rsIDs through `index.sqlite`'s `variant_aliases` table. Neit
 belongs in the Store Reader, which may import neither pysam nor sqlite3 (#464): the
 axis asks a `LegacyVariantTable` for those reads, and opengwasdb supplies one
 (`opengwasdb.variants.legacy_table.TabixVariantTable`). It opens its files on first use
-(#465). The record-returning methods (`by_index`, `by_indices`, `all`, `records`,
-`range`, `by_identifier`) read the table on every version, because only the table
-holds a row's `source_alid`: the builders, completion and the validator ask them, and
-no query does. #476 deletes the legacy seam.
+(#465). On the 0.2 series the record-returning methods (`by_index`, `by_indices`,
+`all`, `records`, `range`, `by_identifier`) read the table, which alone holds a row's
+`source_alid` there. #476 deletes the legacy seam.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from opengwasdb.store_reader.alid_index import ABSENT, UNINDEXED, AlidIndex, ope
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.format import (
     carries_position_sidecar,
+    carries_source_alid_sidecar,
     carries_variant_aliases,
     carries_variant_offsets,
 )
@@ -53,6 +56,10 @@ from opengwasdb.store_reader.rsid_index import (
     VARIANT_RSID_ROWS_FILENAME,
     MissingRsidIndex,
     RsidIndex,
+)
+from opengwasdb.store_reader.source_alid_sidecar import (
+    MissingSourceAlidSidecar,
+    SourceAlidSidecar,
 )
 
 VARIANT_TABLE_FILENAME = "variants.tsv.gz"
@@ -100,6 +107,22 @@ class LegacyTableOpener(Protocol):
 # resolution -- see that method's docstring for the measured costs behind it.
 _BULK_SCAN_FRACTION = 0.01
 
+#: Rows `records` names from a 0.3.0 release's sidecars at a time.
+_RECORD_WINDOW = 65_536
+
+#: A `VariantRecord`'s fields, in order.
+RECORD_FIELDS = (
+    "variant_index",
+    "alid",
+    "chromosome",
+    "position",
+    "effect_allele",
+    "other_allele",
+    "rsid",
+    "source_alid",
+)
+
+
 @dataclass(frozen=True)
 class VariantRecord(Mapping[str, Any]):
     """One Store Variant Table row."""
@@ -115,29 +138,20 @@ class VariantRecord(Mapping[str, Any]):
     rsid: str | None
     # Canonical ALID of the source association on the *build* (pre-liftover)
     # assembly that occupies this row — the store's provenance link back to the
-    # original dataset. None for same-assembly builds (no liftover) and for rows
-    # where several source variants collided onto one lifted ALID (ambiguous).
+    # original dataset. A build writes an unlifted row's as its own ALID. None where
+    # several source variants collided onto one lifted ALID (ambiguous), for a row
+    # Reference Completion added from the panel, and on a table that predates it.
+    # From 0.3.0 the `source_alid` sidecar names it (#470).
     source_alid: str | None = None
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(
-            (
-                "variant_index",
-                "alid",
-                "chromosome",
-                "position",
-                "effect_allele",
-                "other_allele",
-                "rsid",
-                "source_alid",
-            )
-        )
+        return iter(RECORD_FIELDS)
 
     def __len__(self) -> int:
-        return 8
+        return len(RECORD_FIELDS)
 
 
 def variant_table_path(store_path: str | Path) -> Path:
@@ -214,6 +228,14 @@ class VariantAxis:
                 "are missing; "
                 "the release is incomplete. Rebuild it (spec §1, §4)"
             )
+        # Whether each row's `source_alid` is the `source_alid` sidecar's (0.3.0, #470) or
+        # the table's eighth column (the 0.2 series). A 0.3.0 release missing the sidecar
+        # is refused here, never read as naming none; it is read on first use
+        # (`source_alid_sidecar`), so a malformed one fails only what reads it.
+        self._sources_by_sidecar = carries_source_alid_sidecar_files(
+            self.store_path, format_version
+        )
+        self._source_alid_sidecar: SourceAlidSidecar | None = None
 
     @property
     def n_variants(self) -> int:
@@ -247,6 +269,19 @@ class VariantAxis:
             if self._position_sidecar is None:  # removed since this axis was opened
                 raise MissingPositionSidecar(f"{self.store_path}: the position sidecar is gone")
         return self._position_sidecar
+
+    @property
+    def source_alid_sidecar(self) -> SourceAlidSidecar | None:
+        """The release's `source_alid` sidecar (format 0.3.0), opened on first use; None
+        on the 0.2 series. One whose offsets cannot slice its bytes is refused
+        (`source_alid_sidecar.MalformedSourceAlidSidecar`)."""
+        if self._sources_by_sidecar and self._source_alid_sidecar is None:
+            self._source_alid_sidecar = SourceAlidSidecar.open(self.store_path)
+            if self._source_alid_sidecar is None:  # removed since this axis was opened
+                raise MissingSourceAlidSidecar(
+                    f"{self.store_path}: the source_alid sidecar is gone"
+                )
+        return self._source_alid_sidecar
 
     def close(self) -> None:
         self._legacy.close()
@@ -378,10 +413,9 @@ class VariantAxis:
         """The rows at a position in ``[start, end]`` on `chromosome`, in row order, every
         column of each.
 
-        Reads the Variant Table on every version, so no query calls it: a query asks
-        `range_indices`. On 0.3.0 the position sidecar finds the rows and `by_indices`
-        reads them, one tabix fetch a row; on the 0.2 series they are one tabix fetch
-        (`tabix_range`).
+        On 0.3.0 the position sidecar finds the rows and the sidecars name them
+        (`by_indices`); on the 0.2 series they are one tabix fetch of the Variant Table
+        (`tabix_range`). A query asks `range_indices`, which names no row.
         """
         if not self._ranges_by_sidecar:
             return self.tabix_range(chromosome, start, end)
@@ -422,16 +456,16 @@ class VariantAxis:
         return np.array(indices, dtype="int32")
 
     def by_index(self, variant_index: int) -> VariantRecord | None:
-        """The table's row `variant_index`, every column of it; None outside the axis.
+        """Row `variant_index`, every column of it; None outside the axis.
 
-        Read from the table on every version, because only the table holds `source_alid`;
-        no query asks it. The 0.2 series seeks the row's BGZF offset. A 0.3.0 release has
-        no offsets: the position sidecar places the row, and the tabix index fetches it.
+        On 0.3.0 from the sidecars (`sidecar_records`), the table unread. The 0.2 series
+        seeks the row's BGZF offset in the table.
         """
         if variant_index < 0 or variant_index >= self.n_variants:
             return None
         if self._offsets is None:  # `not self.reads_table`, spelt so mypy narrows `_offsets`
-            return self._fetched_record(int(variant_index))
+            [record] = self.sidecar_records(np.array([int(variant_index)], dtype=np.int64))
+            return record
         line = self._legacy.line_at(int(self._offsets[int(variant_index)]))
         record = parse_variant_line(line)
         if record.variant_index != variant_index:
@@ -440,24 +474,28 @@ class VariantAxis:
             )
         return record
 
-    def _fetched_record(self, variant_index: int) -> VariantRecord:
-        """Row `variant_index` of a 0.3.0 table, fetched by tabix where the sidecar places it."""
-        sidecar = self.position_sidecar
-        assert sidecar is not None, "a release without offsets carries the position sidecar"
-        [(chromosome, position)] = sidecar.placements([variant_index])
-        if chromosome is None or position is None:
-            raise ValueError(
-                f"the position sidecar holds {sidecar.n_rows} rows and places no row "
-                f"{variant_index}, of the {self.n_variants} the ALID sidecar names"
+    def sidecar_records(self, rows: np.ndarray) -> list[VariantRecord]:
+        """The 0.3.0 rows `rows`, every column, named by the sidecars alone, in `rows`'
+        order: identity from the ALID sidecar, rsID from the rsID index, `source_alid`
+        from the `source_alid` sidecar. Every row must be in the axis."""
+        rows = np.asarray(rows, dtype=np.int64).reshape(-1)
+        identity = self.identity_by_indices(rows)
+        rsids = self.rsids_by_indices(rows)
+        sources = self.source_alids_by_indices(rows)
+        positions = identity["position"].tolist()
+        return [
+            VariantRecord(
+                variant_index=row,
+                alid=identity["alid"][k],
+                chromosome=identity["chromosome"][k],
+                position=positions[k],
+                effect_allele=identity["effect_allele"][k],
+                other_allele=identity["other_allele"][k],
+                rsid=rsids[k],
+                source_alid=sources[k],
             )
-        for line in self._legacy.fetch(chromosome, position - 1, position):
-            record = parse_variant_line(line)
-            if record.variant_index == variant_index:
-                return record
-        raise ValueError(
-            f"the position sidecar places row {variant_index} at {chromosome}:{position}, "
-            "where the tabix index of variants.tsv.gz finds no such row"
-        )
+            for k, row in enumerate(rows.tolist())
+        ]
 
     def rsids_by_indices(self, variant_index: np.ndarray) -> np.ndarray:
         """Each row's rsID, as an object array in `variant_index`'s order; None for a row
@@ -470,38 +508,70 @@ class VariantAxis:
         if not self.reads_table:
             assert self._rsid_index is not None, "a 0.3.0 axis is refused without one"
             return self._rsid_index.rsids(vi, self.n_variants)
+        return self._table_column(vi, "rsid")
+
+    def source_alids_by_indices(self, variant_index: np.ndarray) -> np.ndarray:
+        """Each row's `source_alid`, as an object array in `variant_index`'s order; None
+        for a row that has none (the table's blank, ``.``) or that the axis lacks.
+
+        On 0.3.0 the `source_alid` sidecar's (#470), which refuses a row outside it: the
+        table is not read. On the 0.2 series the table's rows (`by_indices`).
+        """
+        vi = np.asarray(variant_index, dtype=np.int64).reshape(-1)
+        sidecar = self.source_alid_sidecar
+        if sidecar is None:
+            return self._table_column(vi, "source_alid")
+        held = (vi >= 0) & (vi < self.n_variants)
+        out = np.full(vi.size, None, dtype=object)
+        out[held] = sidecar.values(vi[held])
+        return out
+
+    def _table_column(self, vi: np.ndarray, column: str) -> np.ndarray:
+        """One column of the 0.2 table's rows `vi`, None for a row the axis lacks."""
         records = self.by_indices(vi.tolist())
         out = np.full(vi.size, None, dtype=object)
         for slot, row in enumerate(vi.tolist()):
             record = records.get(int(row))
-            out[slot] = None if record is None else record.rsid
+            out[slot] = None if record is None else record[column]
         return out
 
     def variants_table(self) -> dict[int, dict[str, Any]]:
-        """Every variant keyed by `variant_index`: its ALID, chromosome, position, alleles
-        and rsID (None where it names none).
+        """Every variant keyed by `variant_index`: its ALID, chromosome, position, alleles,
+        rsID and `source_alid` (each None where it names none).
 
         On 0.3.0 from the sidecars: the ALID sidecar names each row, its ALID spells the
-        chromosome, position and alleles (`identity_by_indices`), and the rsID index names
-        its rsID. On the 0.2 series from the table's rows. The two agree column by column
-        (`tests/test_variant_table_off_read_path.py`).
+        chromosome, position and alleles (`identity_by_indices`), the rsID index names
+        its rsID, and the `source_alid` sidecar its `source_alid`. On the 0.2 series from
+        the table's rows. The two agree column by column
+        (`tests/test_variant_table_off_read_path.py`, `tests/test_source_alid_sidecar.py`).
         """
         if self.reads_table:
             return {r.variant_index: _table_row(r) for r in self.all()}
         rows = np.arange(self.n_variants, dtype=np.int64)
         columns = {name: values.tolist() for name, values in self.identity_by_indices(rows).items()}
         columns["rsid"] = self.rsids_by_indices(rows).tolist()
+        columns["source_alid"] = self.source_alids_by_indices(rows).tolist()
         return {
             row: {name: columns[name][row] for name in VARIANTS_TABLE_COLUMNS}
             for row in rows.tolist()
         }
 
     def by_indices(self, indices: Iterable[int]) -> dict[int, VariantRecord]:
-        """Resolve many Store-local Variant Indices to `VariantRecord`s, every column.
+        """Resolve many Store-local Variant Indices to `VariantRecord`s, every column; a row
+        outside the axis is left out.
 
-        Reads the Variant Table on every version, so no query calls it: a query names a
-        row by `identity_by_indices` and `rsids_by_indices`, which on 0.3.0 read the
-        sidecars. On 0.3.0 a seek is one tabix fetch a row (`by_index`).
+        On 0.3.0 from the sidecars (`sidecar_records`), the table unread. On the 0.2
+        series from the table (`_table_records_by_indices`).
+        """
+        wanted = sorted(set(int(item) for item in indices))
+        if not self.reads_table:
+            held = np.asarray(wanted, dtype=np.int64)
+            held = held[(held >= 0) & (held < self.n_variants)]
+            return {record.variant_index: record for record in self.sidecar_records(held)}
+        return self._table_records_by_indices(wanted)
+
+    def _table_records_by_indices(self, wanted: list[int]) -> dict[int, VariantRecord]:
+        """The 0.2 table's rows `wanted` (ascending, distinct), by one of two strategies.
 
         Adaptively picks between two strategies (issue #104 follow-up,
         measured on the UKB pilot store's ~9.85M-row Store Variant Table):
@@ -515,7 +585,6 @@ class VariantAxis:
         sub-second dense "query-analysis" resolution and one that never
         finishes in practice.
         """
-        wanted = sorted(set(int(item) for item in indices))
         if not wanted:
             return {}
         if len(wanted) > self.n_variants * _BULK_SCAN_FRACTION:
@@ -554,35 +623,52 @@ class VariantAxis:
         return _identity_of(alids)
 
     def all(self) -> list[VariantRecord]:
-        """Every row of the Variant Table, every column, in ``variant_index`` order.
-
-        Reads the whole table on every version, so no query calls it: `variants_table()`
-        reads the sidecars on 0.3.0. The builders, completion and the validator ask it,
-        for `source_alid` (`records`, which streams the same rows).
-        """
+        """Every row, every column, in ``variant_index`` order (`records`, materialised)."""
         return list(self.records())
 
     def records(self) -> Iterator[VariantRecord]:
         """Every row, streamed in ``variant_index`` order: what `all` materialises.
 
-        Reads the whole table on every version, so no query calls it (`all`).
+        On 0.3.0 named by the sidecars, a window of rows at a time (`sidecar_records`);
+        on the 0.2 series the Variant Table's rows (`table_records`).
 
         A caller that needs one field per row -- the EAF orientation audit, the
         rsid-index rule -- would otherwise hold tens of millions of records at
         once on the stores it most needs to run on (#473).
+        """
+        if self.reads_table:
+            return self.table_records()
+        return self._windowed_sidecar_records()
+
+    def _windowed_sidecar_records(self) -> Iterator[VariantRecord]:
+        for start in range(0, self.n_variants, _RECORD_WINDOW):
+            stop = min(start + _RECORD_WINDOW, self.n_variants)
+            yield from self.sidecar_records(np.arange(start, stop, dtype=np.int64))
+
+    def table_records(self) -> Iterator[VariantRecord]:
+        """Every row of the Variant Table as it is written, streamed in row order, on
+        every version.
+
+        The validator's one read of the table, which it checks the sidecars against
+        (ADR 0074): no query asks it, and on 0.3.0 nothing else does.
         """
         return (parse_variant_line(line) for line in self._legacy.rows())
 
     def indices_by_source_alid(self, wanted: Iterable[str]) -> dict[str, int] | None:
         """The Variant Index of each `wanted` ALID, as the build assembly spelt it.
 
-        Matched against each row's ``source_alid`` as `parse_variant_line` reads it
-        (a blank, ``.``, is none, and matches nothing), in one pass that stops once
-        every wanted ALID is found; one the table does not hold is absent from the
-        result.
-        None when the table predates the ``source_alid`` column, so the caller
+        Matched against each row's ``source_alid`` (a blank is none, and matches
+        nothing), in one pass that stops once every wanted ALID is found; one the
+        release does not hold is absent from the result. Where several rows hold it,
+        the first. On 0.3.0 the `source_alid` sidecar is scanned
+        (`SourceAlidSidecar.rows_of`); on the 0.2 series the table's rows, as
+        `parse_variant_line` reads them.
+        None when a 0.2 table predates the ``source_alid`` column, so the caller
         can lift the ALIDs over itself rather than read no match as no variant (#473).
         """
+        sidecar = self.source_alid_sidecar
+        if sidecar is not None:
+            return sidecar.rows_of(wanted)
         found: dict[str, int] = {}
         remaining = set(wanted)
         for line in self._legacy.rows():
@@ -608,9 +694,8 @@ def _sidecar_rows(index: AlidIndex) -> int:
     return index.n_rows
 
 
-#: A `variants_table()` row's columns, in order: a table record's but `variant_index`
-#: and `source_alid`.
-VARIANTS_TABLE_COLUMNS = ("alid", "chromosome", "position", "effect_allele", "other_allele", "rsid")
+#: A `variants_table()` row's columns, in order: a record's but `variant_index`.
+VARIANTS_TABLE_COLUMNS = RECORD_FIELDS[1:]
 
 
 def _table_row(record: VariantRecord) -> dict[str, Any]:
@@ -629,6 +714,21 @@ def carries_position_sidecar_files(store_path: str | Path, format_version: str) 
         raise MissingPositionSidecar(
             f"{store_path}: format_version {format_version} carries a position sidecar in "
             f"{', '.join(PositionSidecar.FILENAMES)}, which is missing; the release is "
+            "incomplete. Rebuild it, or rewrite it from an intact source (spec §1, §4)"
+        )
+    return True
+
+
+def carries_source_alid_sidecar_files(store_path: str | Path, format_version: str) -> bool:
+    """Whether a release of `format_version` names each row's `source_alid` from its
+    sidecar: True from 0.3.0, False on the 0.2 series. A 0.3.0 release missing the
+    sidecar's files is refused, never read as naming none or from its table (#470)."""
+    if not carries_source_alid_sidecar(format_version):
+        return False
+    if not SourceAlidSidecar.held_in(store_path):
+        raise MissingSourceAlidSidecar(
+            f"{store_path}: format_version {format_version} carries a source_alid sidecar "
+            f"in {', '.join(SourceAlidSidecar.FILENAMES)}, which is missing; the release is "
             "incomplete. Rebuild it, or rewrite it from an intact source (spec §1, §4)"
         )
     return True

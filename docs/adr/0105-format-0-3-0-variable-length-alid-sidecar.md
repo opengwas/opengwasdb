@@ -21,6 +21,9 @@ What this ADR changes in other documents:
   rsID and the variant count are read without the Variant Table, and give the `.tbi` rebuild
   command; §20.0 adds `variant_table.rsid_rows` and restates `rows` and `representatives`;
   §21.3 and §21.4 add the change to 0.3.0 and to the rewrite.
+- From #470 (§8): spec §1, §1.1 and §4 name the `source_alid` sidecar's two files and say
+  what a row's `source_alid` is; §20.0 adds `variant_table.source_alid_sidecar` and restates
+  `variant_table.source_alid`; §21.3 and §21.4 add it to 0.3.0 and to the rewrite.
 - From #471 (the dated section below): spec §1, §1.1, §10a, §18, §20 and §20.0 for what
   0.3.0 drops, and banners on [ADR 0001](0001-hybrid-sqlite-zarr-store-envelope.md) and
   [ADR 0057](0057-store-format-0-2-0-zarr-v3-with-sharding.md) §5.
@@ -372,7 +375,8 @@ and drops the offsets.
   closed envelope; a 0.2 Dense release missing it fails `envelope.required`, as before. The Dense
   builder's `provenance.dense.variant_axis.row_offsets` no longer names it, and the `index.sqlite`
   `dense` blob that also named it is gone from 0.3.0 (#471, the section below).
-- **The record methods still read the table.** `by_index`, `by_indices`, `all`, `records` and
+- **The record methods still read the table** (superseded by §8, #470, which moves them to
+  the sidecars). `by_index`, `by_indices`, `all`, `records` and
   `range` return every column, `source_alid` included, and only the table holds `source_alid` until
   #470. The builders, completion and the validator call them; no query does. On 0.3.0 `by_index`
   fetches the row by tabix where the position sidecar places it, one fetch a row, so `by_indices`
@@ -433,6 +437,82 @@ Variant Table through the axis's private attributes. Its owner moves its pin (#4
   second copy of every name. The inversion's one-off second does not justify it.
 - *Write `.` to the table for an over-wide rsID.* The table and the index would then agree, but
   the answer would differ from what 0.2.x gave. Refusing the build loses nothing silently.
+
+### 8. The `source_alid` sidecar (#470, 24 Nov 2026)
+
+**Context.** A row's `source_alid` is the ALID its source spelt it by: for a lifted row the
+pre-liftover ALID, the one link from a GRCh38 row back to the dataset it came from. Every
+build writes an unlifted row's as its own ALID. A collision (#85) leaves a row none, and so
+does a row Reference Completion added from the panel. After §7 only the Variant Table held
+it, in its eighth column, so a 0.3.0 query could not return it, and completion of a 0.3.0
+source, the record methods and the source-fidelity join still read the table for it (#449
+made completion keep it).
+
+**Decision.**
+
+- **Two plain `.npy` files** beside the Variant Table
+  (`opengwasdb.store_reader.source_alid_sidecar`, numpy and the standard library only):
+
+  | file | dtype | length | holds |
+  |---|---|---|---|
+  | `variant_source_alid_utf8.npy` | `uint8` | total bytes | every row's `source_alid`, UTF-8, in row order |
+  | `variant_source_alid_offsets.npy` | `<u8` | rows + 1 | row `i`'s is `utf8[offsets[i]:offsets[i+1]]`; an empty slice is none |
+
+  It is the ALID sidecar's row-to-text half, without keys: nothing looks a row up by its
+  `source_alid` except `validate --source`'s join, which scans it, a window of rows at a
+  time, by length (`SourceAlidSidecar.rows_of`). A value is stored whole, however long.
+- **One writer.** `write_source_alid_sidecar` is it. `write_variant_axis` calls it, before
+  it writes the table, so every build and completion writes the sidecar and completion
+  keeps each observed row's value through #449's `carried_source_alids`. The rewrite calls
+  it directly, as its own step. It refuses a value the table could not hold as the sidecar
+  does: `.`, the table's blank, which the table reads as none, and one holding a tab, a
+  newline or NUL (`UnencodableSourceAlidError`).
+- **The reads.** On 0.3.0 the `source_alid` of `variants_table()`, of a resolved row with
+  variant info (`source_alids_by_indices`) and of every record comes from the sidecar.
+  `by_index`, `by_indices`, `all`, `records` and `range` name their rows from the sidecars
+  alone (`sidecar_records`), which retires §7's last exception: no 0.3.0 read of a row,
+  query or not, opens `variants.tsv.gz`. The validator reads the table through
+  `table_records`, which it checks the sidecars against, and through `tabix_range`.
+  `indices_by_source_alid` scans the sidecar.
+- **The column is new on every format.** `variants_table()` and resolved rows with variant
+  info gain `source_alid`, as they name rsIDs: `None` in `variants_table()` and `.` in a
+  resolved row where a row has none. A 0.2 release reads it from its table, so the
+  rewrite's proof compares it, and a table written before the column gives none. The
+  `opengwasdb query-* --variant-info` TSV names its columns and is unchanged.
+- **The version chooses**, as for the other sidecars (`carries_source_alid_sidecar`): a
+  0.3.0 release missing the files fails `envelope.required` and is refused at open
+  (`MissingSourceAlidSidecar`), never read as naming none; a 0.2 release carrying them fails
+  `envelope.closed`. A sidecar whose offsets do not start at 0 and end at the byte array's
+  length, or whose arrays are not of their dtypes, is refused at open
+  (`MalformedSourceAlidSidecar`); the sidecar opens on first use, so in the validator it
+  fails `variant_table.source_alid_sidecar` alone.
+- **A Hybrid.** On the integration tip the Dense Component still writes its own axis through
+  `write_variant_axis`, so it carries its own copy, from its own table. #472 removes the
+  Dense Component's copies of the shared sidecars, this one with them, and its rows answer
+  `source_alid` through the shared axis (opengwasdb-stores#499: the shared table, not the
+  Dense copy, holds it after completion).
+
+**The rewrite step**, `source_alid_sidecar`, runs after `position_sidecar`. It streams each
+component's table in row order, checked against the source's `variant_offsets.npy`, writes
+the sidecar from its `source_alid` column (empty on every row of a seven-column table), and
+reads it back: it refuses unless every row's value is the table's. That makes the rewrite
+stream each table three times; §6's note on the cost stands. The proof needs no new question:
+`variants_table()` compares every row's `source_alid`, and the resolved rows of the lookup,
+the range and the widest top hits compare the rows those answers reach.
+
+**Validation.** `variant_table.source_alid_sidecar` (spec §20.0) folds over the one streamed
+read of the table: each row's value in the sidecar against the table's (`differing`, shared
+with the rewrite's read-back), the dtypes, offsets that never fall, and one row per row.
+`variant_table.source_alid` (#449) counts sourced rows from the sidecar on 0.3.0.
+
+**Alternatives considered.**
+- *Reuse the ALID sidecar's codec with keys.* A search nothing asks for, at 28 bytes a row.
+- *A fixed-width `|S<n>` array.* An indel's `source_alid` runs past 100 bytes; a width that
+  held it would cost it on every row, and a narrower one would truncate.
+- *One row index into the ALID sidecar instead of the text.* Most rows of a lifted release
+  name an ALID the release does not hold (the GRCh37 spelling), so the text is needed.
+- *Keep `source_alid` in the table only.* Completion and the source-fidelity join would keep
+  pysam, and a 0.3.0 query could not trace a row to its source.
 
 ## Consequences
 

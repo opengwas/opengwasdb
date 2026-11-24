@@ -16,6 +16,7 @@ from opengwasdb.admission.rules import LOGGED, Reason
 from opengwasdb.readers.tabular import NO_REFERENCE
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
 from opengwasdb.store_reader.identity import MalformedIdentity, VariantNormalisationError
+from opengwasdb.store_reader.source_alid_sidecar import write_source_alid_sidecar
 from opengwasdb.variants.legacy_table import iter_variant_records
 from opengwasdb.variants.normalise import (
     IdentityFaults,
@@ -513,8 +514,11 @@ def _rewrite_table(store, edit) -> None:
         force=True,
     )
     if AlidSidecar.open(store) is not None:
-        # A 0.3.0 release written so: its ALID sidecar names the rows the table does.
-        write_alid_sidecar(store, [r.alid for r in iter_variant_records(path)])
+        # A 0.3.0 release written so: its ALID and `source_alid` sidecars name the rows
+        # the table does (#467, #470).
+        records = list(iter_variant_records(path))
+        write_alid_sidecar(store, [r.alid for r in records])
+        write_source_alid_sidecar(store, [r.source_alid for r in records])
 
 
 def _set_format_version(store, version: str) -> None:

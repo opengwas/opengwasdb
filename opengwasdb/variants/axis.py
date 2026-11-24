@@ -29,6 +29,7 @@ from opengwasdb.store_reader.alid import parse_canonical_alid as parse_canonical
 from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
 from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.store_reader.position_sidecar import write_position_sidecar
+from opengwasdb.store_reader.source_alid_sidecar import write_source_alid_sidecar
 
 # Re-exported: opengwasdb-stores imports these three from here.
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path as variant_alid_bytes_path
@@ -119,17 +120,18 @@ def write_variant_axis(
 ) -> None:
     """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
     ALID sidecar (`opengwasdb.store_reader.alid_sidecar`), the position sidecar
-    (`opengwasdb.store_reader.position_sidecar`) and the rsid index: the axis's one
+    (`opengwasdb.store_reader.position_sidecar`), the `source_alid` sidecar
+    (`opengwasdb.store_reader.source_alid_sidecar`) and the rsid index: the axis's one
     writer, which every build and completion path calls, a Hybrid's nested Dense
     Component included. Each sidecar's own one writer is its codec's
-    (`write_alid_sidecar`, `write_position_sidecar`), which this calls and the rewrite
-    to 0.3.0 calls directly.
+    (`write_alid_sidecar`, `write_position_sidecar`, `write_source_alid_sidecar`),
+    which this calls and the rewrite to 0.3.0 calls directly.
 
     ``source_alids`` (optional, parallel to ``variants``) records the source-
     assembly canonical ALID that each row was lifted from — provenance back to
     the original dataset. Pass ``None`` (or per-row ``None``/``""``) for
-    same-assembly builds or ambiguous (collided) rows; the column is written as
-    ``"."`` there.
+    ambiguous (collided) rows and rows no source observed; the table's column is
+    written as ``"."`` there, and the sidecar's value is empty.
     """
 
     if source_alids is not None and len(source_alids) != len(variants):
@@ -141,6 +143,12 @@ def write_variant_axis(
     # index alone (#469), so an rsID the index cannot hold would be lost from every
     # answer while the table still showed it.
     _refuse_unindexable_rsids(variants, rsid_by_alid)
+    # The `source_alid` sidecar (format 0.3.0, #470, ADR 0105 §8): each row's pre-liftover
+    # ALID, which the Store Reader returns without reading the table. Written first: it
+    # refuses a value the table's column could not hold as the sidecar does.
+    write_source_alid_sidecar(
+        store, list(source_alids) if source_alids is not None else [None] * len(variants)
+    )
     _write_table(store, variants, rsid_by_alid, source_alids)
     # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
     # however long, by row and by search. The 0.2 series' fixed-width pair

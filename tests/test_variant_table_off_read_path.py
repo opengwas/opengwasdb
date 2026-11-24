@@ -143,14 +143,20 @@ path = sys.argv[1]
 digests = release_digests(path)
 with query_store(path) as q:
     ids = [row["analysis_id"] for _, row in sorted(q.analyses_table().items())]
-    resolved = [
-        row["rsid"]
+    rows = [
+        row
         for a in ids
         for row in q.resolve(q.analysis(a), include_variant_info=True)
     ]
+    table = q.variants_table()
+    axis = q._variant_axis
+    records = [axis.by_index(0), *axis.by_indices([0, len(table) - 1]).values(), *axis.records()]
 print(json.dumps({
     "questions": len(digests["shapes"]) + len(digests["range_probes"]),
-    "resolved": sorted(set(resolved)),
+    "resolved": sorted({row["rsid"] for row in rows}),
+    "source_alids": sorted({row["source_alid"] for row in rows}),
+    "table_source_alids": sorted({str(row["source_alid"]) for row in table.values()}),
+    "records": len(records),
     "pysam": "pysam" in sys.modules,
 }))
 """
@@ -198,6 +204,15 @@ def test_every_query_shape_on_0_3_0_reads_no_variant_table_and_no_pysam(
     found = json.loads(out.stdout)
     assert found["questions"] > 50, "a probe that asked little would prove little"
     assert {".", "rs77", "rs11;rs12"} <= set(found["resolved"])
+    # Each row's `source_alid`, and every record method, answer from the sidecars (#470),
+    # as the 0.2.3 form answers from its table.
+    with query_store(planted[name][1]) as q:
+        table = q.variants_table()
+        ids = [row["analysis_id"] for _, row in sorted(q.analyses_table().items())]
+        rows = [r for a in ids for r in q.resolve(q.analysis(a), include_variant_info=True)]
+    assert found["source_alids"] == sorted({row["source_alid"] for row in rows})
+    assert found["table_source_alids"] == sorted({str(r["source_alid"]) for r in table.values()})
+    assert found["records"] == len(table) + 3
     assert found["pysam"] is False, "a 0.3.0 query loaded pysam"
 
 

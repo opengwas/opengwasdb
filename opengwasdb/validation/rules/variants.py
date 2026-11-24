@@ -4,7 +4,7 @@
 about it folds over that one read (issue #254: the table is never
 materialised). The checks it feeds: the row count against the offset sidecar,
 the row sequence and duplicate canonical variants, the ALID and rsid search
-indexes, the position sidecar (format 0.3.0), and the offset and tabix spot
+indexes, the position and `source_alid` sidecars (format 0.3.0), and the offset and tabix spot
 checks at a bounded set of representative rows -- which used to stream the table
 a second time to reach its last row. The alias rule reads a 0.2 release's
 `index.sqlite` beside it; a 0.3.0 release carries no `variant_aliases` (ADR 0102,
@@ -26,11 +26,13 @@ from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     carries_alid_sidecar,
     carries_position_sidecar,
+    carries_source_alid_sidecar,
     carries_variant_aliases,
     carries_variant_offsets,
 )
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.position_sidecar import PositionSidecar
+from opengwasdb.store_reader.source_alid_sidecar import SourceAlidSidecar
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
 )
@@ -84,13 +86,17 @@ def _n_blocks(target: Target) -> int:
 
 
 def _blocks(target: Target) -> Iterator[TableBlock]:
-    """Consecutive rows of the table, `_block_limits` at a time, until the stream ends."""
+    """Consecutive rows of the table, `_block_limits` at a time, until the stream ends.
+
+    The table as it is written (`VariantAxis.table_records`), on every version: on 0.3.0
+    the axis names rows from the sidecars, which these rows are checked against.
+    """
     limits = _block_limits(None)
     limit = next(limits)
     previous: VariantRecord | None = None
     start = 0
     records: list[VariantRecord] = []
-    for record in target.variant_axis.records():
+    for record in target.variant_axis.table_records():
         records.append(record)
         if start + len(records) >= limit[1]:
             yield TableBlock(start, records, previous)
@@ -251,6 +257,64 @@ def _judge_position_sidecar(target: Target, total: _PositionRows) -> Iterator[st
 
 def _carries_position_sidecar(target: Target) -> bool:
     return carries_position_sidecar(target.store.manifest.format_version)
+
+
+@dataclass(frozen=True)
+class _SourceAlidSidecarRows:
+    """How many table rows a block held, and the first whose `source_alid` the sidecar
+    names otherwise."""
+
+    rows: int = 0
+    differing: int = 0
+    first: str = ""
+
+    def __add__(self, other: _SourceAlidSidecarRows) -> _SourceAlidSidecarRows:
+        return _SourceAlidSidecarRows(
+            self.rows + other.rows, self.differing + other.differing, self.first or other.first
+        )
+
+
+def _source_alid_sidecar(target: Target) -> SourceAlidSidecar:
+    sidecar = target.variant_axis.source_alid_sidecar
+    if sidecar is None:
+        raise ValueError("a 0.3.0 Variant Axis opened without its source_alid sidecar")
+    return sidecar
+
+
+def _source_alid_sidecar_rows(target: Target, block: TableBlock) -> _SourceAlidSidecarRows:
+    """Each row's `source_alid` in the sidecar against the table's
+    (`SourceAlidSidecar.differing`); a row past the sidecar's end is counted by its row
+    count (`_judge_source_alid_sidecar`)."""
+    sidecar = _source_alid_sidecar(target)
+    records = block.records
+    differing = sidecar.differing(block.start, [r.source_alid for r in records])
+    first = ""
+    if differing:
+        row = differing[0]
+        [named] = sidecar.values([row])
+        first = (
+            f"row {row}: the sidecar names {named!r}, "
+            f"variants.tsv.gz {records[row - block.start].source_alid!r}"
+        )
+    return _SourceAlidSidecarRows(len(records), len(differing), first)
+
+
+def _judge_source_alid_sidecar(target: Target, total: _SourceAlidSidecarRows) -> Iterator[str]:
+    """The `source_alid` sidecar names every row's `source_alid` as the table does
+    (format 0.3.0, #470): a 0.3.0 Store Reader names it from the sidecar alone."""
+    sidecar = _source_alid_sidecar(target)
+    problems = list(sidecar.problems(total.rows))
+    yield from problems
+    if not problems and total.differing:
+        yield (
+            f"the source_alid sidecar names {total.differing} row(s) otherwise than "
+            f"variants.tsv.gz does, so variants_table() and resolved rows would give "
+            f"another source_alid; first, {total.first}"
+        )
+
+
+def _carries_source_alid_sidecar(target: Target) -> bool:
+    return carries_source_alid_sidecar(target.store.manifest.format_version)
 
 
 def _named_rsids(_target: Target, block: TableBlock) -> int:
@@ -609,7 +673,14 @@ def _unreadable_lift(target: Target) -> str | None:
     return None
 
 
-def _source_alid_rows(_target: Target, block: TableBlock) -> _SourceAlidRows:
+def _source_alid_rows(target: Target, block: TableBlock) -> _SourceAlidRows:
+    """How many of the block's rows carry a ``source_alid``: the sidecar's count on
+    0.3.0, where the Store Reader names it from the sidecar (#470), the table's on the
+    0.2 series. `variant_table.source_alid_sidecar` holds the two to one another."""
+    sidecar = target.variant_axis.source_alid_sidecar
+    if sidecar is not None:
+        start, stop = block.start, block.start + len(block.records)
+        return _SourceAlidRows(len(block.records), sidecar.sourced(start, stop))
     sourced = sum(1 for record in block.records if record.source_alid)
     return _SourceAlidRows(len(block.records), sourced)
 
@@ -689,6 +760,16 @@ RULES: tuple[Rule, ...] = (
         zero=_PositionRows(),
         measure=_position_rows,
         judge=_judge_position_sidecar,
+    ),
+    Fold(
+        name="variant_table.source_alid_sidecar",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_carries_source_alid_sidecar,
+        scan=VARIANT_TABLE,
+        zero=_SourceAlidSidecarRows(),
+        measure=_source_alid_sidecar_rows,
+        judge=_judge_source_alid_sidecar,
     ),
     Fold(
         name="variant_table.rsid_index",

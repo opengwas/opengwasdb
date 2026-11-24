@@ -11,9 +11,11 @@ chromosome/position/effect_allele/other_allele/alid come from
 it from the store's already-loaded mmap'd ALID search index with zero
 `variants.tsv.gz` I/O. rsid is the one identity field that index can't
 produce (it isn't part of the alid), so it's resolved via
-`variant_axis.rsids_by_indices()`, and only when `include_variant_info=True`.
-On 0.3.0 that inverts the rsID index, sized to the rows asked, and reads no
-table (#469). On the 0.2 series it reads the table's rows (`by_indices`, which
+`variant_axis.rsids_by_indices()`, and only when `include_variant_info=True`;
+so is `source_alid`, the row's pre-liftover ALID (`source_alids_by_indices`, #470).
+On 0.3.0 those invert the rsID index, sized to the rows asked, and slice the
+`source_alid` sidecar, and read no table (#469, #470). On the 0.2 series they read
+the table's rows (`by_indices`, which
 adaptively picks a bounded random-access resolution or one sequential scan),
 the one part of this join that can cost anywhere from milliseconds to tens of
 seconds on a large dense query. `eaf` always rides the row: it is already
@@ -49,7 +51,7 @@ def resolve_rows(
     """Yield one human-readable row per association in `result`.
 
     Each row carries analysis_id/analysis_label, variant identity
-    (chromosome/position/alid/alleles, plus rsid when
+    (chromosome/position/alid/alleles, plus rsid and source_alid when
     `include_variant_info=True` -- "." when the store has none for that
     association, matching the Store Variant Table's own missing marker), eaf,
     z, se, beta, pval, log10_p, and association_status. beta, pval and log10_p
@@ -66,7 +68,7 @@ def resolve_rows(
     derived = statistics_of(result)
 
     identity = variant_axis.identity_by_indices(variant_index)
-    rsids = variant_axis.rsids_by_indices(variant_index) if include_variant_info else None
+    info = _variant_info(variant_axis, variant_index) if include_variant_info else {}
 
     for i in range(len(variant_index)):
         analysis = analysis_rows[int(result["analysis_index"][i])]
@@ -84,9 +86,17 @@ def resolve_rows(
         }
         if "n" in result:
             row["n"] = _n_or_missing(result["n"], i)
-        if rsids is not None:
-            row["rsid"] = rsids[i] or "."
+        row.update({name: values[i] or "." for name, values in info.items()})
         yield row
+
+
+def _variant_info(variant_axis: VariantAxis, variant_index: np.ndarray) -> dict[str, np.ndarray]:
+    """The variant info a row resolved with it carries: each row's rsID and `source_alid`,
+    None where it has none, which the row spells ``.``."""
+    return {
+        "rsid": variant_axis.rsids_by_indices(variant_index),
+        "source_alid": variant_axis.source_alids_by_indices(variant_index),
+    }
 
 
 def _variant_identity(identity: dict[str, np.ndarray], i: int) -> dict[str, object]:
