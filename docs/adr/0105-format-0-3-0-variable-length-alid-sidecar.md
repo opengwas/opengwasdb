@@ -385,8 +385,18 @@ naming none, two rows naming one, and a cell naming several. These fixtures are 
 releases and the three one-source layouts. Each 0.3.0 release answers `variants_table()` and the
 resolved rows of every Analysis, a lookup and the top hits exactly as its 0.2.3 form, scanned and
 inverted. In a fresh interpreter, with each table and `.tbi` made unreadable, every question of the
-proof is answered without importing pysam. On OGS-00007 the rewrite passes its proof; the
-timings are in #469's report.
+proof is answered without importing pysam.
+
+On OGS-00007 (Ragged, 171,006 variants, 0.2.1, read only, its version refusal bypassed as
+for #467), the rewrite runs every step and its proof passes in 18.8 s. The proof asks 146
+questions, 9 ALID probes and 22 range probes. The published copy carries no
+`variant_offsets.npy`, and `variant_table.rsid_rows` passes on it. Each read below ran in a
+fresh process, twice, with the same answer digest on both formats:
+
+| read | 0.2.1 (table) | 0.3.0 (sidecars) | pysam loaded on 0.3.0 |
+|---|---:|---:|---|
+| `variants_table()`, 171,006 rows | 0.93 s | 0.54 s | no |
+| `resolve(analysis, include_variant_info=True)`, 14,894 rows | 0.89 s | 0.12 s | no |
 
 **ogdb-api breaks on a 0.3.0 release.** It reads `variant_offsets.npy` and seeks into the
 Variant Table through the axis's private attributes. Its owner moves its pin (#450, 23 Nov).
