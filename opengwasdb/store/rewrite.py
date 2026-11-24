@@ -12,7 +12,7 @@ was. The rewrite:
    no space where the filesystem can share it), leaving out every path a step drops
    (`RewriteStep.leaves_out`): what 0.3.0 no longer carries is never copied;
 3. runs its **steps** on the staged copy, in order. Each is one named change the
-   format makes; #468-#472 each add theirs to `STEPS` (`RewriteStep` says how). A
+   format makes, in `STEPS` (#467-#472; `RewriteStep` says how to add one). A
    step that reads a component another drops reads it from the source;
 4. stamps every manifest 0.3.0 with a fresh `release_id` and `created_at`, keeps
    `store_id`, and records a `format_rewrite` provenance block naming the source
@@ -197,7 +197,7 @@ class RewriteStep:
     3. `run(context)`, on the staged copy, after every earlier step's `run`: what the
        step writes. A step that only drops has none.
 
-    **Adding a step** (#470, #472): write its parts, append it to `STEPS`, and give the
+    **Adding a step**: write its parts, append it to `STEPS`, and give the
     proof (`opengwasdb.store.query_digests`) any question only the change could answer
     differently. The step's name is recorded in each manifest's `format_rewrite`.
     """
