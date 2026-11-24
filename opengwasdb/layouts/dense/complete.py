@@ -127,6 +127,7 @@ from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.variant_axis import VariantAxis, VariantRecord
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, chromosome_sort_key, write_variant_axis
+from opengwasdb.variants.axis import carried_source_alids
 
 log = logging.getLogger(__name__)
 
@@ -556,16 +557,6 @@ def _union_variant_table(
     return merged_variants, new_canonical, new_alid_to_idx
 
 
-def _carried_source_alids(
-    source_variants: list[VariantRecord], merged_variants: list[CanonicalVariant]
-) -> list[str | None]:
-    """Each merged row's `source_alid`: an observed row keeps the ALID its build lifted it
-    from, a row added from the panel (which no source observed) and a row the build left
-    blank stay `None`, written as `.` (#449)."""
-    by_alid = {v.alid: v.source_alid for v in source_variants if v.source_alid}
-    return [by_alid.get(v.alid) for v in merged_variants]
-
-
 def _write_union_axis_tables(
     staged: StagedRelease,
     *,
@@ -592,7 +583,7 @@ def _write_union_axis_tables(
         staged.path,
         merged_variants,
         rsid_by_alid,
-        _carried_source_alids(source_variants, merged_variants),
+        carried_source_alids(source_variants, merged_variants),
     )
 
     out_to_src = np.full(n_variants, -1, dtype=np.int64)

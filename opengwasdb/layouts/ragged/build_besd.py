@@ -830,7 +830,8 @@ def _source_alids(
 
     A collision group is dropped whole, so a survivor has one entry and one origin; no
     ambiguity can remain, and none is guessed (the routing's rule, #85). An unlifted
-    build's origin is the variant itself."""
+    build's origin is the variant itself. A survivor whose own coordinate cannot be spelt
+    is refused, never written blank."""
     by_row = {snp.row_idx: snp for snp in snps}
     origin: dict[str, str | None] = {}
     for _key, row, variant, _flipped, _rsid in survivors:
@@ -838,15 +839,20 @@ def _source_alids(
             origin[variant.alid] = variant.alid
             continue
         snp = by_row[row]
-        if snp.a1 is None or snp.a2 is None:  # a survivor has both; the type says so
-            origin[variant.alid] = None
-            continue
+        if snp.a1 is None or snp.a2 is None:
+            raise ValueError(
+                f"ESI row {row} reached the axis as {variant.alid} with no alleles of its own; "
+                "its source_alid cannot be spelt, and a blank would hide that"
+            )
         try:
             origin[variant.alid] = orient_to_canonical(
                 snp.chromosome, snp.bp, snp.a1, snp.a2, other_is_reference=False
             ).variant.alid
-        except VariantNormalisationError:
-            origin[variant.alid] = None
+        except VariantNormalisationError as exc:
+            raise ValueError(
+                f"ESI row {row} lifted to {variant.alid} but its own coordinate has no ALID "
+                f"({exc}); its source_alid cannot be spelt, and a blank would hide that"
+            ) from exc
     return origin
 
 

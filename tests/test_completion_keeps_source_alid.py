@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 import test_dense_completion as tdc
+import test_extract_variant_reference as tev
 import test_hybrid_completion as thc
-import test_ragged_completion as trc
 from dense_sources import build_dense_fixture
 from region_tables import edit_manifest
 
@@ -25,6 +25,7 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
@@ -78,7 +79,98 @@ def assert_source_alids_survive(
     assert blanked and all(after[a] is None for a in blanked), "a blank source row was filled"
 
 
-def test_dense_completion_keeps_the_observed_rows_source_alid(tmp_path: Path) -> None:
+def _strand_source_alids() -> dict[str, str]:
+    """The hg38 ALID of each `STRAND_ROWS` variant, and the hg19 ALID its source spelt."""
+    from liftover_fixtures import STRAND_ROWS
+
+    from opengwasdb.variants.normalise import canonical_alid
+
+    return {row[5]: canonical_alid(row[1], row[2], row[3], row[4]) for row in STRAND_ROWS}
+
+
+def _strand_panel(root: Path) -> Path:
+    """Panel blocks over the three lifted variants and one new variant on each of chr2, chr3."""
+    from ld_blocks import write_ld_block
+
+    write_ld_block(
+        root / "EUR" / "2", "990000-1000000",
+        [("2:995000:A:G", 0.3, 995_000), ("2:998001:A:T", 0.3, 998_001),
+         ("2:999001:C:T", 0.3, 999_001)],
+        seed=2,
+    )
+    write_ld_block(
+        root / "EUR" / "3", "1-5000",
+        [("3:1000:A:G", 0.3, 1_000), ("3:2000:A:G", 0.3, 2_000)], seed=3,
+    )
+    return root
+
+
+def assert_lifted_provenance_kept(source: Path, completed: Path, alids: dict[str, str]) -> None:
+    """Every observed row holds its pre-lift ALID, which is not its own ALID for a row the
+    chain moved; every row completion added from the panel is `.`."""
+    assert any(a != s for a, s in alids.items()), "nothing moved: the fixture proves nothing"
+    observed = {r.alid for r in _records(source)}
+    after = {r.alid: r.source_alid for r in _records(completed)}
+    assert {a: after[a] for a in observed} == {a: alids[a] for a in observed}
+    assert set(alids) <= observed
+    added = set(after) - observed
+    assert added, "completion added no panel row: the fixture does not reach the path"
+    assert all(after[a] is None for a in added), "a panel row was given a source_alid"
+
+
+def test_a_lifted_dense_source_keeps_its_source_alid_through_completion(tmp_path: Path) -> None:
+    from liftover_fixtures import strand_vcf_rows, write_two_strand_chain
+
+    from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    vcf = tev._make_vcf(tmp_path, "strand_rows", strand_vcf_rows())
+    manifest = tev._make_manifest(tmp_path, [("strand", vcf, "", "hg19")])
+    observed = tmp_path / "obs.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest, observed, store_id="s", release_id="r", chain_file=chain,
+        liftover_failure_threshold=0.5,
+    )
+    completed = tmp_path / "comp.opengwasdb"
+    complete_dense_store(
+        observed, completed, _strand_panel(tmp_path / "panel"),
+        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+    )
+    assert_lifted_provenance_kept(observed, completed, _strand_source_alids())
+    assert validate_store(completed).failed() == frozenset()
+
+
+def test_a_lifted_ragged_source_keeps_its_source_alid_through_completion(tmp_path: Path) -> None:
+    import test_ragged_build_besd as tb
+    from liftover_fixtures import write_two_strand_chain
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    observed = tmp_path / "obs.opengwasdb"
+    build_ragged_from_besd(
+        tb._write_strand_fixture(tmp_path), observed, store_id="test", release_id="v1",
+        source_build="hg19", chain_file=chain, association_coverage="cis",
+    )
+    completed = tmp_path / "comp.opengwasdb"
+    complete_ragged_store(
+        observed, completed, _strand_panel(tmp_path / "panel"),
+        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+    )
+    from opengwasdb.variants.normalise import orient_to_canonical
+
+    alids = {
+        alid: orient_to_canonical(
+            snp["chr"], snp["bp"], snp["a1"], snp["a2"], other_is_reference=False
+        ).variant.alid
+        for alid, snp in (
+            (tb._REVERSE_SNP_HG38_ALID, tb._REVERSE_SNP),
+            (tb._FORWARD_SNP_HG38_ALID, tb._FORWARD_SNP),
+        )
+    }
+    assert_lifted_provenance_kept(observed, completed, alids)
+
+
+def test_dense_completion_leaves_a_blank_source_row_blank(tmp_path: Path) -> None:
+    """A row the build left blank (a collision) is never filled, whatever its neighbours hold."""
     source_tsv = tmp_path / "associations.tsv"
     source_tsv.write_text(
         tdc.SOURCE_HEADER + "\n" + "\n".join(tdc.SOURCE_ROWS) + "\n", encoding="utf-8"
@@ -92,21 +184,6 @@ def test_dense_completion_keeps_the_observed_rows_source_alid(tmp_path: Path) ->
     complete_dense_store(
         observed, completed, tdc._make_ld_panel(tmp_path),
         ancestry="EUR", min_cor=0.0, release_id="comp-v1",
-    )
-    assert_source_alids_survive(observed, completed, planted)
-
-
-def test_ragged_completion_keeps_the_observed_rows_source_alid(tmp_path: Path) -> None:
-    observed = tmp_path / "obs.opengwasdb"
-    build_ragged_from_besd(
-        trc._make_besd_fixture(tmp_path), observed, store_id="test", release_id="obs-v1",
-        tissue="Blood", association_coverage="cis",
-    )
-    planted = plant_source_alids(observed)
-    completed = tmp_path / "comp.opengwasdb"
-    complete_ragged_store(
-        observed, completed, trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
     )
     assert_source_alids_survive(observed, completed, planted)
 
@@ -126,87 +203,6 @@ def test_hybrid_completion_keeps_the_shared_tables_source_alid(tmp_path: Path) -
     added = set(after) - set(before)
     # The shared table gains a row only where completion folds one in from the panel.
     assert all(after[a] is None for a in added)
-
-
-# ── the rule ────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def observed_dense(tmp_path: Path) -> Path:
-    source_tsv = tmp_path / "associations.tsv"
-    source_tsv.write_text(
-        tdc.SOURCE_HEADER + "\n" + "\n".join(tdc.SOURCE_ROWS) + "\n", encoding="utf-8"
-    )
-    out = tmp_path / "obs.opengwasdb"
-    build_dense_fixture(
-        [source_tsv], out, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
-    )
-    return out
-
-
-def record_liftover(store: Path) -> None:
-    edit_manifest(
-        store,
-        lambda m: {
-            **m,
-            "provenance": {**m["provenance"], "chain_file": "pyliftover_builtin_hg19_hg38"},
-        },
-    )
-
-
-def source_alid_findings(store: Path) -> list[str]:
-    return validate_store(store, rules={RULE}).errors
-
-
-def test_the_rule_fails_a_lifted_release_whose_rows_all_lack_a_source_alid(
-    observed_dense: Path,
-) -> None:
-    assert all(r.source_alid is None for r in _records(observed_dense))  # meaningful fixture
-    record_liftover(observed_dense)
-    (error,) = source_alid_findings(observed_dense)
-    assert "records a liftover" in error and "source_alid" in error
-
-
-def test_the_rule_passes_when_one_row_carries_a_source_alid(observed_dense: Path) -> None:
-    record_liftover(observed_dense)
-    plant_source_alids(observed_dense, blank=len(_records(observed_dense)) - 1)
-    assert sum(1 for r in _records(observed_dense) if r.source_alid) == 1
-    assert source_alid_findings(observed_dense) == []
-
-
-def test_the_rule_passes_a_release_that_records_no_liftover(observed_dense: Path) -> None:
-    assert all(r.source_alid is None for r in _records(observed_dense))
-    assert source_alid_findings(observed_dense) == []
-
-
-def test_the_rule_passes_a_chain_recorded_where_nothing_was_lifted(observed_dense: Path) -> None:
-    """OGS-00011's shape (opengwasdb-stores#499): a build records `provenance.chain_file`
-    as a default label even when no variant was lifted, and its `source_alid` is the ALID."""
-    record_liftover(observed_dense)
-    records = _records(observed_dense)
-    write_variant_axis(
-        observed_dense,
-        [
-            CanonicalVariant(r.chromosome, r.position, r.effect_allele, r.other_allele)
-            for r in records
-        ],
-        {r.alid: r.rsid for r in records if r.rsid},
-        [r.alid for r in records],
-    )
-    assert source_alid_findings(observed_dense) == []
-
-
-def test_the_rule_passes_a_completed_lifted_release_that_kept_them(
-    observed_dense: Path, tmp_path: Path
-) -> None:
-    plant_source_alids(observed_dense)
-    record_liftover(observed_dense)
-    completed = tmp_path / "comp.opengwasdb"
-    complete_dense_store(
-        observed_dense, completed, tdc._make_ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
-    )
-    assert source_alid_findings(completed) == []
 
 
 def test_a_hybrid_variant_seen_from_two_assemblies_has_no_source_alid(tmp_path: Path) -> None:
@@ -232,10 +228,161 @@ def test_a_hybrid_variant_seen_from_two_assemblies_has_no_source_alid(tmp_path: 
         manifest, store, reference_panel=panel, store_id="s", release_id="r"
     )
     # By design (#85): the routing blanks an ALID whose sites name different origins
-    # (`routing/route.py`, `source_alids`), never guessing one. Here the hg19 row lifts onto
-    # the variant the hg38 row names, so its two origins differ.
+    # (`routing/keys.note_origin`), never guessing one. Here the hg19 row lifts onto the
+    # variant the hg38 row names, so its two origins differ.
     by_alid = {r.alid: r.source_alid for r in _records(store)}
     assert by_alid["1:1064620:C:T"] is None
+
+
+# ── the rule ────────────────────────────────────────────────────────────────
+
+
+def _blank_source_alids(store: Path) -> None:
+    """Rewrite a release's table with no `source_alid` on any row."""
+    records = _records(store)
+    write_variant_axis(
+        store,
+        [
+            CanonicalVariant(r.chromosome, r.position, r.effect_allele, r.other_allele)
+            for r in records
+        ],
+        {r.alid: r.rsid for r in records if r.rsid},
+    )
+
+
+def _edit_provenance(store: Path, **entries: object) -> None:
+    edit_manifest(store, lambda m: {**m, "provenance": {**m["provenance"], **entries}})
+
+
+@pytest.fixture
+def observed_dense(tmp_path: Path) -> Path:
+    source_tsv = tmp_path / "associations.tsv"
+    source_tsv.write_text(
+        tdc.SOURCE_HEADER + "\n" + "\n".join(tdc.SOURCE_ROWS) + "\n", encoding="utf-8"
+    )
+    out = tmp_path / "obs.opengwasdb"
+    build_dense_fixture(
+        [source_tsv], out, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
+    )
+    return out
+
+
+def record_liftover(store: Path) -> None:
+    _edit_provenance(store, chain_file="pyliftover_builtin_hg19_hg38")
+
+
+def test_the_rule_fails_a_lifted_release_whose_rows_all_lack_a_source_alid(
+    observed_dense: Path,
+) -> None:
+    assert validate_store(observed_dense).failed() == frozenset()  # a valid release to begin with
+    assert all(r.source_alid is None for r in _records(observed_dense))  # meaningful fixture
+    record_liftover(observed_dense)
+    result = validate_store(observed_dense)
+    assert result.failed() == {RULE}
+    assert "records a liftover" in result.of(RULE)[0].message
+
+
+def test_the_rule_passes_when_one_row_carries_a_source_alid(observed_dense: Path) -> None:
+    record_liftover(observed_dense)
+    plant_source_alids(observed_dense, blank=len(_records(observed_dense)) - 1)
+    assert sum(1 for r in _records(observed_dense) if r.source_alid) == 1
+    assert validate_store(observed_dense).failed() == frozenset()
+
+
+def test_the_rule_passes_a_release_that_records_no_liftover(observed_dense: Path) -> None:
+    assert all(r.source_alid is None for r in _records(observed_dense))
+    assert validate_store(observed_dense).failed() == frozenset()
+
+
+def test_the_rule_passes_a_chain_recorded_where_nothing_was_lifted(observed_dense: Path) -> None:
+    """OGS-00011's shape (opengwasdb-stores#499): a build records `provenance.chain_file`
+    as a default label even when no variant was lifted, and its `source_alid` is the ALID."""
+    record_liftover(observed_dense)
+    records = _records(observed_dense)
+    write_variant_axis(
+        observed_dense,
+        [
+            CanonicalVariant(r.chromosome, r.position, r.effect_allele, r.other_allele)
+            for r in records
+        ],
+        {r.alid: r.rsid for r in records if r.rsid},
+        [r.alid for r in records],
+    )
+    assert validate_store(observed_dense).failed() == frozenset()
+
+
+def test_the_rule_passes_a_completed_lifted_release_that_kept_them(
+    observed_dense: Path, tmp_path: Path
+) -> None:
+    plant_source_alids(observed_dense)
+    record_liftover(observed_dense)
+    completed = tmp_path / "comp.opengwasdb"
+    complete_dense_store(
+        observed_dense, completed, tdc._make_ld_panel(tmp_path),
+        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+    )
+    assert validate_store(completed).failed() == frozenset()
+
+
+@pytest.fixture
+def lifted_ragged(tmp_path: Path) -> Path:
+    import test_ragged_build_besd as tb
+    from liftover_fixtures import write_two_strand_chain
+
+    out = tmp_path / "ragged.opengwasdb"
+    build_ragged_from_besd(
+        tb._write_strand_fixture(tmp_path), out, store_id="test", release_id="v1",
+        source_build="hg19", chain_file=write_two_strand_chain(tmp_path / "x.chain"),
+        association_coverage="cis_and_signals",
+    )
+    return out
+
+
+def test_the_rule_fails_a_ragged_release_that_lifted_and_holds_no_source_alid(
+    lifted_ragged: Path,
+) -> None:
+    import json
+
+    lift = json.loads((lifted_ragged / "manifest.json").read_text())["provenance"]["lift"]
+    assert lift["n_lifted"] > 0  # meaningful fixture
+    assert validate_store(lifted_ragged).failed() == frozenset()
+    _blank_source_alids(lifted_ragged)
+    assert validate_store(lifted_ragged).failed() == {RULE}
+
+
+def test_the_rule_does_not_judge_a_ragged_release_that_lifted_nothing(lifted_ragged: Path) -> None:
+    import json
+
+    lift = json.loads((lifted_ragged / "manifest.json").read_text())["provenance"]["lift"]
+    _edit_provenance(lifted_ragged, lift={**lift, "n_lifted": 0})
+    _blank_source_alids(lifted_ragged)
+    result = validate_store(lifted_ragged)
+    assert result.failed() == frozenset()
+    assert not [f for f in result.of(RULE) if f.severity.name == "ERROR"]
+
+
+def test_the_rule_refuses_a_lift_block_that_does_not_say_how_many_it_lifted(
+    lifted_ragged: Path,
+) -> None:
+    import json
+
+    lift = json.loads((lifted_ragged / "manifest.json").read_text())["provenance"]["lift"]
+    _edit_provenance(lifted_ragged, lift={k: v for k, v in lift.items() if k != "n_lifted"})
+    result = validate_store(lifted_ragged)
+    assert result.failed() == {RULE}
+    assert "n_lifted" in result.of(RULE)[0].message
+
+
+def test_a_hybrid_is_judged_on_its_shared_table_alone(tmp_path: Path) -> None:
+    """The Dense Component's copy of the table is gone at 0.3.0 (#472), so a blank copy is
+    no finding, and a blank shared table is."""
+    source = thc._build_source(tmp_path)
+    assert StoreManifest.load(source).provenance.get("chain_file"), "the fixture records a liftover"
+    assert validate_store(source).failed() == frozenset()
+    _blank_source_alids(source / "dense")
+    assert validate_store(source).failed() == frozenset()
+    _blank_source_alids(source)
+    assert validate_store(source).failed() == {RULE}
 
 
 # ── the Ragged builders record `source_alid` (#449) ─────────────────────────

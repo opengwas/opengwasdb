@@ -87,6 +87,7 @@ from opengwasdb.variants.normalise import (
     chromosome_sort_key,
 )
 from opengwasdb.variants.routing import SourceKey, collapse_duplicates, union_names
+from opengwasdb.variants.routing.keys import note_origin
 from opengwasdb.variants.rsid import RsidConflictPolicy
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
@@ -743,13 +744,6 @@ class _Harvest:
     #: guess (the routing's rule, #85).
     origin: dict[str, str | None] = field(default_factory=dict)
 
-    def _note_origin(self, target: str, source: str) -> None:
-        origin = self.origin
-        if target not in origin:
-            origin[target] = source
-        elif origin[target] != source:
-            origin[target] = None
-
     def add_lifted(self, batch: ReaderBatch, source_alid: np.ndarray) -> None:
         """`add` for a lifted source's rows.
 
@@ -763,7 +757,7 @@ class _Harvest:
             source_alid.tolist(), batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(),
             batch.rsid.tolist(), strict=True,
         ):
-            self._note_origin(target, source)
+            note_origin(self.origin, target, source)
             if target not in alid_variant:
                 chromosome, position, a1, a2 = target.split(":")
                 alid_variant[target] = CanonicalVariant(chromosome, int(position), a1, a2)
@@ -787,7 +781,7 @@ class _Harvest:
             batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(), batch.rsid.tolist(),
             strict=True,
         ):
-            self._note_origin(alid, alid)
+            note_origin(self.origin, alid, alid)
             site = f"{alid}\t{ref}\t{alt}"
             if site in named:
                 continue

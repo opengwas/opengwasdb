@@ -44,6 +44,18 @@ def source_alid(site: SourceKey) -> str:
     return canonical_alid(chrom, pos, ref, alt)
 
 
+def note_origin(origin: dict[str, str | None], alid: str, source: str) -> None:
+    """Fold one site's source ALID into ``origin``, a routed ALID's provenance.
+
+    The first site names it; another that names a different source makes it ambiguous,
+    ``None``, never a guess (issue #85). The one owner of that rule: the routing's
+    `source_alids` and the Ragged SSF harvest both call it."""
+    if alid not in origin:
+        origin[alid] = source
+    elif origin[alid] != source:
+        origin[alid] = None
+
+
 def encode_routing_keys(
     chroms: list[str], poss: list[int], refs: list[str], alts: list[str]
 ) -> np.ndarray:
