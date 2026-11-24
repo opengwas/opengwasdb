@@ -205,6 +205,16 @@ class _BesdBuildRequest:
             )
 
 
+def _write_axis(store_path: Path, axis: _EsiAxis) -> None:
+    """The Store Variant Table, each row's `source_alid` with it (#449)."""
+    write_variant_axis(
+        store_path,
+        axis.variants,
+        axis.rsid_by_alid,
+        [axis.source_alid_by_alid.get(v.alid) for v in axis.variants],
+    )
+
+
 def _build_besd_release(
     staged: StagedRelease, prefix: Path, request: _BesdBuildRequest
 ) -> tuple[_EsiAxis, RaggedCSRWriter]:
@@ -223,12 +233,7 @@ def _build_besd_release(
     # Checked before anything is written: a build that is going to fail on a
     # flipped `.esi` fails before it spends the ingest (issue #115).
     eaf_report = _verify_eaf(axis, request)
-    write_variant_axis(
-        staged.path,
-        axis.variants,
-        axis.rsid_by_alid,
-        [axis.source_alid_by_alid.get(v.alid) for v in axis.variants],
-    )
+    _write_axis(staged.path, axis)
     # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
     positions, trait_lift = _trait_positions(axis, request)
     analyses, se_divisors = _analysis_records(
@@ -833,6 +838,9 @@ def _source_alids(
             origin[variant.alid] = variant.alid
             continue
         snp = by_row[row]
+        if snp.a1 is None or snp.a2 is None:  # a survivor has both; the type says so
+            origin[variant.alid] = None
+            continue
         try:
             origin[variant.alid] = orient_to_canonical(
                 snp.chromosome, snp.bp, snp.a1, snp.a2, other_is_reference=False
