@@ -17,3 +17,9 @@
   scipy form did. The 0.2.x Store Variant Table's pysam and SQLite reads move to
   `opengwasdb.variants.legacy_table`, behind the Store Reader's
   `LegacyVariantTable` seam.
+- **Three module paths are removed, with no shim (issue #464).** Import from the Store
+  Reader instead: `opengwasdb.associations` (and its `cells`, `csr`, `dense`, `record`
+  and `subset` modules, `Associations` among them) is `opengwasdb.store_reader.associations`;
+  `opengwasdb.query.facade` is `opengwasdb.store_reader.facade`; and
+  `opengwasdb.query.resolve` is `opengwasdb.store_reader.resolve`. `opengwasdb.query`
+  itself keeps `query_store`, `StoreQuery`, `resolve_rows` and `log10_p_two_sided`.

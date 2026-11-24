@@ -16,8 +16,7 @@
   any other raw read of a release, naming each exempt writer and its reason.
   Every validation finding, observed-view verdict, EAF audit and completed
   array on the fixture releases was what it had been, checked against pins the
-  code before the change wrote (a migration check retired at #467, once format
-  0.3.0 changed what a completed release holds).
+  code before the change wrote.
   Hybrid Reference Completion now refuses a residual-SE Dense Component that
   holds no `se_coefficients` with a `HybridCompletionError` naming it, where it
   raised a bare `KeyError`.

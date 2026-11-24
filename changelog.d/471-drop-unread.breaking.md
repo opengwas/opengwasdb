@@ -1,6 +1,5 @@
 - **A format 0.3.0 release no longer carries what nothing read, or what only the
-  validator read and can recompute (issue #471, ADR 0102).** Not released until #468–#472
-  land on epic #450's branch. From 0.3.0:
+  validator read and can recompute (issue #471, ADR 0102).** From 0.3.0:
   - `index.sqlite` holds only `completion_quality`, so it ships only in a
     Reference-Completed release (a Hybrid's in its Dense Component). An Observed-Only
     release, and a Hybrid's outer release, has none, and the closed envelope fails one
