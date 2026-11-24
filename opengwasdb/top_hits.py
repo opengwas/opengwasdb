@@ -306,15 +306,23 @@ def stored_p_agrees(abs_z: np.ndarray, p_value: np.ndarray, z: np.ndarray) -> bo
     """Whether a 0.2 tier's stored `abs_z` and `p_value` are what its `z` implies.
 
     `abs_z` within the tolerance its validator rule has always used (1e-3, relative and
-    absolute); `p_value` within 1e-3 relative, with no absolute floor, which a p of
-    5e-8 would sit under. The validator's `top_hits.abs_z` and the rewrite to 0.3.0,
-    which drops both arrays, ask this one question (ADR 0102, #471).
+    absolute); `p_value` within 1e-3 relative, and absolutely only within float64's
+    smallest normal number. A floor any wider would wave through a wrong p of 5e-8; one
+    narrower would fail every p below it, where the build's scipy `erfc` flushed to 0.0
+    what `store_reader.stats` keeps as a subnormal: both say p underflows, |z| from
+    37.5 (226 rows a tier on OGS-00006). The validator's `top_hits.abs_z` and the
+    rewrite to 0.3.0, which drops both arrays, ask this one question (ADR 0102, #471).
     """
     abs_z_now, p_now = recomputed_abs_z_and_p(z)
+    stored_p = np.asarray(p_value, dtype=np.float64)
     return bool(
         np.allclose(np.asarray(abs_z), abs_z_now, rtol=1e-3, atol=1e-3)
-        and np.allclose(np.asarray(p_value, dtype=np.float64), p_now, rtol=1e-3, atol=0.0)
+        and np.allclose(stored_p, p_now, rtol=1e-3, atol=_SMALLEST_NORMAL_P)
     )
+
+
+#: Below this a float64 p is subnormal, or 0.0 where an `erfc` flushes it (`stored_p_agrees`).
+_SMALLEST_NORMAL_P = float(np.finfo(np.float64).tiny)
 
 
 def _offsets_ok(offsets: np.ndarray, n_rows: int, n_analyses: int) -> bool:

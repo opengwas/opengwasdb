@@ -187,3 +187,20 @@ def test_a_rebuilt_index_keeps_its_release_s_format(
         for key in tiers:
             assert top_hits.STORED_P_ARRAYS & set(root["top_hits"][key].keys()) == stored
         assert validate_store(release).ok, (release, validate_store(release).errors)
+
+
+def test_a_stored_p_flushed_to_zero_below_float64_s_normal_range_agrees():
+    """`_write_tier` stored scipy's erfc, which flushes a p below float64's smallest
+    normal (|z| from 37.5) to 0.0; `store_reader.stats` keeps the subnormal. Both say p
+    underflows, so the stored pair agrees: OGS-00006 holds 226 such rows a tier (#471)."""
+    z = np.array([37.705013, -38.07005, 40.0, 5.5], dtype=np.float32)
+    abs_z = np.abs(z)
+    stored = erfc(abs_z.astype("float64") / math.sqrt(2.0))
+    assert stored[0] == 0.0 and stored[1] == 0.0, "scipy flushes these to zero"
+    assert top_hits.stored_p_agrees(abs_z, stored, z)
+    wrong = stored.copy()
+    wrong[0] = 1e-300  # a normal p where z implies one that underflows
+    assert not top_hits.stored_p_agrees(abs_z, wrong, z)
+    wrong = stored.copy()
+    wrong[3] *= 1.01
+    assert not top_hits.stored_p_agrees(abs_z, wrong, z)
