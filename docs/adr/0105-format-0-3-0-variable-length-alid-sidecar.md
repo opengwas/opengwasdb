@@ -502,8 +502,11 @@ made completion keep it).
   predates the column: a 0.3.0 release rewritten from such a table holds nothing to join
   on, and `validate --source` then lifts its samples itself (#473) rather than count them
   unmatched.
-- **The column is new on every format.** `variants_table()` and resolved rows with variant
-  info gain `source_alid`, as they name rsIDs: `None` in `variants_table()` and `.` in a
+- **The column is new on every format.** `variants_table()`, the variant-only reads #484
+  added (`variants()`, `variants_in_range()`) and resolved rows with variant info gain
+  `source_alid`, as they name rsIDs. The three reads share one projection of a row, the
+  axis's `rows_by_indices` (`variants_table()` is it over every row), on `VariantAxis`
+  and `PanelVariantAxis` alike: `None` in `variants_table()` and `.` in a
   resolved row where a row has none. A 0.2 release reads it from its table, so the
   rewrite's proof compares it, and a table written before the column gives none. The
   `opengwasdb query-* --variant-info` TSV names its columns and is unchanged.

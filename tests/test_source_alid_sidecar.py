@@ -298,6 +298,22 @@ def test_0_3_0_returns_each_rows_source_alid_through_the_table_and_resolved_rows
     assert answers(current) == answers(legacy), "0.3.0 answers as its 0.2.3 form does"
 
 
+@pytest.mark.parametrize("name", RELEASE_NAMES)
+def test_the_variant_only_reads_carry_source_alid_as_variants_table_does(planted, name: str):
+    """`variants()` and `variants_in_range()` (#484) give the rows `variants_table()` gives,
+    `source_alid` included: all three are the axis's `rows_by_indices`."""
+    current, legacy, _ = planted[name]
+    for release in (current, legacy):
+        with query_store(release) as q:
+            table = q.variants_table()
+            assert all("source_alid" in row for row in table.values())
+            alids = [table[key]["alid"] for key in sorted(table)]
+            assert q.variants(alids) == table
+            chromosome = table[0]["chromosome"]
+            on_chromosome = {k: r for k, r in table.items() if r["chromosome"] == chromosome}
+            assert q.variants_in_range(chromosome, 1, 500_000_000) == on_chromosome
+
+
 def _resolved_rows(release: Path) -> list[dict[str, Any]]:
     """The resolved rows, with variant info, of a lookup of every variant."""
     with query_store(release) as q:

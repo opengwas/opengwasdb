@@ -12,7 +12,9 @@
   release carrying them fails `envelope.closed`. The writer refuses a `source_alid` the
   table could not hold as the sidecar does: `.`, or one holding a tab, newline or NUL
   (`UnencodableSourceAlidError`).
-- **`variants_table()` and resolved rows with variant info gain a `source_alid` column**,
+- **`variants_table()`, `variants()`, `variants_in_range()` and resolved rows with
+  variant info gain a `source_alid` column** (the three reads are one projection, the
+  axis's `rows_by_indices`),
   on every format: `None` in `variants_table()` and `.` in a resolved row where a row has
   none. A 0.3.0 release reads it from the sidecar, a 0.2 release from its table. The
   `opengwasdb query-* --variant-info` TSV output is unchanged.

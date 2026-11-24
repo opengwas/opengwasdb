@@ -37,7 +37,6 @@ from opengwasdb.store_reader.alid import ParsedAlid
 from opengwasdb.store_reader.alid_index import ABSENT, AlidIndex
 from opengwasdb.store_reader.hybrid import DenseComponentSharesAxis, panel_rows
 from opengwasdb.store_reader.variant_axis import (
-    VARIANTS_TABLE_COLUMNS,
     VariantAxis,
     VariantRecord,
 )
@@ -214,17 +213,21 @@ class PanelVariantAxis:
         return out
 
     def variants_table(self) -> dict[int, dict[str, Any]]:
-        rows = np.arange(self.n_variants, dtype=np.int64)
-        shared = self._dense_to_shared.astype(np.int64)
-        columns = {
-            name: values.tolist()
-            for name, values in self._shared.identity_by_indices(shared).items()
-        }
-        columns["rsid"] = self._shared.rsids_by_indices(shared).tolist()
-        columns["source_alid"] = self._shared.source_alids_by_indices(shared).tolist()
+        """Every panel row's `variants_table()` row: `rows_by_indices` of every row."""
+        return self.rows_by_indices(np.arange(self.n_variants, dtype=np.int64))
+
+    def rows_by_indices(self, rows: np.ndarray) -> dict[int, dict[str, Any]]:
+        """The `variants_table()` rows of panel rows `rows`, keyed by panel row, ascending:
+        each its shared row's (`VariantAxis.rows_by_indices`), `source_alid` included. A
+        row outside the panel is refused."""
+        panel = np.unique(np.asarray(rows, dtype=np.int64))
+        shared = self._to_shared(panel)
+        if (shared < 0).any():
+            raise ValueError(f"no variant row at index {int(panel[shared < 0][0])}")
+        found = self._shared.rows_by_indices(shared)
         return {
-            row: {name: columns[name][row] for name in VARIANTS_TABLE_COLUMNS}
-            for row in rows.tolist()
+            int(row): found[int(shared_row)]
+            for row, shared_row in zip(panel.tolist(), shared.tolist(), strict=True)
         }
 
     # ── the record reads: the shared axis's rows, its `source_alid` included (#470) ──

@@ -16,8 +16,8 @@ for (#483); the digest of that answer is of the refusal's type and message
 (`refusal_digest`), so the proof compares the refusal where it cannot compare rows.
 Every array each answer holds is digested (`result_digests`), with
 the `variants_table()` and `analyses_table()` column by column, and the lookup, range
-and widest top-hit answers resolved to rows, with variant info. Both name each row's
-rsID and `source_alid`, so every row's `source_alid` is compared through
+and widest top-hit answers resolved to rows, with variant info. Both, and the variant-only
+reads, name each row's rsID and `source_alid`, so every row's `source_alid` is compared through
 `variants_table()`, and the rows an answer reaches through its resolved rows: a 0.2
 release reads them from its Variant Table, a 0.3.0 one from its sidecars (#469, #470).
 A resolved row's `log10_p` is kept as a

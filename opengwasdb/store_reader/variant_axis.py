@@ -550,17 +550,38 @@ class VariantAxis:
         its rsID, and the `source_alid` sidecar its `source_alid`. On the 0.2 series from
         the table's rows. The two agree column by column
         (`tests/test_variant_table_off_read_path.py`, `tests/test_source_alid_sidecar.py`).
+        It is `rows_by_indices` of every row.
         """
+        return self.rows_by_indices(np.arange(self.n_variants, dtype=np.int64))
+
+    def rows_by_indices(self, rows: np.ndarray) -> dict[int, dict[str, Any]]:
+        """The `variants_table()` rows of `rows` alone, keyed by `variant_index`, ascending:
+        the one projection of a row every variant read answers with (`VARIANTS_TABLE_COLUMNS`).
+
+        On 0.3.0 from the sidecars; on the 0.2 series from the table's records
+        (`by_indices`, which reads the whole table once for many rows). A row outside the
+        axis is refused, never left out.
+        """
+        unique = np.unique(np.asarray(rows, dtype=np.int64))
+        if not unique.size:
+            return {}
         if self.reads_table:
-            return {r.variant_index: _table_row(r) for r in self.all()}
-        rows = np.arange(self.n_variants, dtype=np.int64)
-        columns = {name: values.tolist() for name, values in self.identity_by_indices(rows).items()}
-        columns["rsid"] = self.rsids_by_indices(rows).tolist()
-        columns["source_alid"] = self.source_alids_by_indices(rows).tolist()
+            return self._table_rows(unique)
+        columns = {name: v.tolist() for name, v in self.identity_by_indices(unique).items()}
+        columns["rsid"] = self.rsids_by_indices(unique).tolist()
+        columns["source_alid"] = self.source_alids_by_indices(unique).tolist()
         return {
-            row: {name: columns[name][row] for name in VARIANTS_TABLE_COLUMNS}
-            for row in rows.tolist()
+            row: {name: columns[name][slot] for name in VARIANTS_TABLE_COLUMNS}
+            for slot, row in enumerate(unique.tolist())
         }
+
+    def _table_rows(self, unique: np.ndarray) -> dict[int, dict[str, Any]]:
+        """`rows_by_indices` on the 0.2 series: the table's records, projected."""
+        records = self.by_indices(unique.tolist())
+        missing = [row for row in unique.tolist() if row not in records]
+        if missing:
+            raise ValueError(f"no variant row at index {missing[0]}")
+        return {row: _table_row(records[row]) for row in unique.tolist()}
 
     def by_indices(self, indices: Iterable[int]) -> dict[int, VariantRecord]:
         """Resolve many Store-local Variant Indices to `VariantRecord`s, every column; a row
