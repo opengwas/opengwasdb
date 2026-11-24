@@ -16,8 +16,10 @@ them from here, so none reads a second copy.
 Writing to a release -- staging, publishing, amending its provenance, opening
 its arrays for writing or its `index.sqlite` -- is `opengwasdb.store.open`'s,
 whose `OpenGWASDBStore` is this class with those added (#464). So is the Store
-Variant Table's 0.2.x access (`opengwasdb.variants.legacy_table`): a release
-opened with no `legacy` opener has no Variant Axis, and `variant_axis` says so.
+Variant Table's 0.2.x access (`opengwasdb.variants.legacy_table`): a 0.2 release
+opened with no `legacy` opener has no Variant Axis, and `variant_axis` says so. A 0.3.0
+release needs none: its axis reads the sidecars, and its table refuses every read
+(`NoVariantTable`, #474).
 """
 
 from __future__ import annotations
@@ -30,11 +32,16 @@ import numpy as np
 
 from opengwasdb.store_reader.arrays import open_group
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.format import check_format_version
+from opengwasdb.store_reader.format import carries_variant_offsets, check_format_version
 from opengwasdb.store_reader.hybrid import DENSE_TO_SHARED_FILENAME, shared_axis_root
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.panel_axis import AnyVariantAxis, PanelVariantAxis
-from opengwasdb.store_reader.variant_axis import LegacyTableOpener, VariantAxis
+from opengwasdb.store_reader.variant_axis import (
+    LegacyTableOpener,
+    LegacyVariantTable,
+    NoVariantTable,
+    VariantAxis,
+)
 
 if TYPE_CHECKING:
     from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
@@ -168,17 +175,18 @@ class StoreRelease(ReleasePaths):
     def own_variant_axis(self, *, aliases: bool) -> VariantAxis:
         """The Variant Axis this release's own files hold: every release's but a 0.3.0
         Dense Component's, which holds none and is refused (`DenseComponentSharesAxis`)."""
-        if self.legacy is None:
+        if self.legacy is not None:
+            table: LegacyVariantTable = self.legacy(self.path, aliases=aliases)
+        elif carries_variant_offsets(self.manifest.format_version):
             raise ValueError(
                 f"{self.path} was opened without a reader for its Store Variant Table "
                 "(a 0.2.x BGZF/tabix file); open it with opengwasdb.store.open.open_store, "
                 "or pass open_release(..., legacy=...)"
             )
-        return VariantAxis(
-            self.path,
-            self.legacy(self.path, aliases=aliases),
-            format_version=self.manifest.format_version,
-        )
+        else:
+            # 0.3.0 reads its sidecars, never the table (ADR 0105 §7, §8, #474).
+            table = NoVariantTable(self.path)
+        return VariantAxis(self.path, table, format_version=self.manifest.format_version)
 
     def query(self) -> StoreQuery | RaggedStoreQuery | HybridStoreQuery:
         """The query facade over this release, by its layout (ADR 0033)."""
