@@ -953,8 +953,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "cf7d893723942af178680f4fb9bf7414827e853e344f0fac202413fd14624987",
    "variant_rsid_rows.npy": "b2af8d0eead6cc6f8b2a4dee207b4bdd4a467be8ebb32349de1b80da5ae3b889",
-   "variants.tsv.gz": "ba81b2edeac4b6f8c359836d784758b6acd5d412b06200e768998011f3041a6d",
-   "variants.tsv.gz.tbi": "790c1eb190acaf8379af714a067ee37ecc917e60cabf35fcf8c77143c5c3e985",
+   "variants.tsv.gz": "4fcccd5d8d901f8b95f1648e3302eeb2fd177aae6a45b6b368728d272aff926c",
+   "variants.tsv.gz.tbi": "819ed615166ab4d56d245e90891ece9434d285ac27092750d42a8a68f305f2f5",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -1950,8 +1950,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
-   "variants.tsv.gz": "ee47a5b1d8768a980e5f4ef49b3151dcc8090d612a63f372d122e06e88c71350",
-   "variants.tsv.gz.tbi": "eb1120a6379884187451b5eb40a47ff787471c3f1c17724eed8f6bb7db81bfe8",
+   "variants.tsv.gz": "10c8c2fe86d54a3ecdb1b81fae86e01f223ac412abcaec0746e38bc09369e612",
+   "variants.tsv.gz.tbi": "5a78b7b3d65fc7091abcce3a051f7b1e7bf9095ef9136ece69daa282fb562630",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -3198,8 +3198,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
-   "variants.tsv.gz": "9b82e867ceec8ea0a4adc6dd15b7aea557d5d74361c27481b02826a4d0455ff1",
-   "variants.tsv.gz.tbi": "cd5a0dd65b796de9da9e97bfde712865bafdbe92c8d397756b93856c7c26b414",
+   "variants.tsv.gz": "a496ae9844f2c93010fd4ba042ac9b479e3e29c7d535bb1fb5f3411742928296",
+   "variants.tsv.gz.tbi": "15a8fedb8fbf6749e7442386d3aa26fd3358f71372257b4768b4dc09dd5c2fd2",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -4448,8 +4448,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
-   "variants.tsv.gz": "6513f7c74cbab3465cf75375d08da1e8ec6dfa340a076708f19c053d1966815d",
-   "variants.tsv.gz.tbi": "326793e061f50a3b11bbb76fce911b862f30622af979610da509ab956f036d74",
+   "variants.tsv.gz": "47f9b8502175d828a2b11abf7993be8064eb1a3ddb94f5d0cd1659fb18c767c1",
+   "variants.tsv.gz.tbi": "5bec8c105f51585ed30f8daab48a318927cd168ff67beff26ad077a4699a89e9",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -5647,8 +5647,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "1092a994cc94be12846c9fc2ba069e7a255bc0c61fd38146ff3b23e8d84d2c04",
    "variant_rsid_rows.npy": "6f46a8554f1d546045c0553af6c3700e84d324d90b5e012a20b77f0fea0011b2",
-   "variants.tsv.gz": "f3da8f24fc0cd9a8a2bba185e5585df0d5030b158af18e85f7cb37c838eb6b00",
-   "variants.tsv.gz.tbi": "0d56525a3461f3ee89a8fdcebf76b2e117ed35d9ea4f5b2bd4807b4293d777ed",
+   "variants.tsv.gz": "ea8a51a5c84f419e7d81466e5df5ccd1210dc02b9450e5883f945cce9b664e18",
+   "variants.tsv.gz.tbi": "eb070f1e64ce87465665c8274ba7d9a39a5dda13a6c00c50fe80dbb20835d63b",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -6646,8 +6646,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
-   "variants.tsv.gz": "149b23fa09ac027a5edb8900c04d1d5fc352f84c97e09d7db34da456eba661a9",
-   "variants.tsv.gz.tbi": "4b158b61dcb9efc6110a8de3e8fbb13c06df4dc0cca702f2ed87754c05246186",
+   "variants.tsv.gz": "ee7bbee5c5dd89a04ed3cad6130598a7f8a742c12e099b3075f2a189510f805b",
+   "variants.tsv.gz.tbi": "94d219a2033b43f306601a6ccbbfe4854128500f33c2fa4141cc69de67c51981",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -7637,8 +7637,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "99520bd88eae6e6ca8525cd24eb63cb0072b049fe4f54c8d549c3df225b2845e",
    "variant_rsid_rows.npy": "040ce28f7590a34af85fbdb8115c90c9a0529a73b047533889c859c2f2c6e627",
-   "variants.tsv.gz": "9b82e867ceec8ea0a4adc6dd15b7aea557d5d74361c27481b02826a4d0455ff1",
-   "variants.tsv.gz.tbi": "cd5a0dd65b796de9da9e97bfde712865bafdbe92c8d397756b93856c7c26b414",
+   "variants.tsv.gz": "a496ae9844f2c93010fd4ba042ac9b479e3e29c7d535bb1fb5f3411742928296",
+   "variants.tsv.gz.tbi": "15a8fedb8fbf6749e7442386d3aa26fd3358f71372257b4768b4dc09dd5c2fd2",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {
@@ -8836,8 +8836,8 @@
    "variant_position_chromosomes.npy": "af4b77c687f3951fc8ec4a701ea9bd6fe3c8c0a08c980fd000d70f8ff79221dc",
    "variant_rsid_bytes.npy": "1092a994cc94be12846c9fc2ba069e7a255bc0c61fd38146ff3b23e8d84d2c04",
    "variant_rsid_rows.npy": "b5e35b87da9b43654a9807e6e945d10290c1b3093a59d4935729f730a661665c",
-   "variants.tsv.gz": "0329bfe6148aadd57534226b71816ee5eec3ff5ce1f81e5419fd271a11834fb9",
-   "variants.tsv.gz.tbi": "d05c3261dd4fcb348b7e4afdc9dad3336aa35b7895633a581a6c75a0122fd648",
+   "variants.tsv.gz": "1f43ff8a8d324e062154d55d8c0f4ba8695a87bedb255fb85576ecb2ff49f179",
+   "variants.tsv.gz.tbi": "f9457761bc43651da0bbaace59f411745aac4df5609aeb5efefaf6a8c97fedb1",
    "zarr": {
     "data.zarr/ragged/by_variant/analysis_index": {
      "compressor": {

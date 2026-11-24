@@ -53,6 +53,11 @@ Dense `index.sqlite`, with the metadata the code before #471 wrote added back, h
 to the previous pin, and that its `overview.html`, re-rendered with the previous
 wording, did too. The Dense `overview.html` was re-derived once more at #471's review,
 which re-worded `index.sqlite`'s entry; with the earlier wording it hashes to that pin.
+
+Since #449 each Ragged pin's `variants.tsv.gz` and its `.tbi` are re-derived: a Ragged
+build now writes each row's `source_alid` (the ALID itself for an unlifted source), and
+completion keeps it, where both wrote `.`. Re-derived after checking that every other
+entry of every pin, and every Dense entry, was unchanged.
 """
 
 from __future__ import annotations
