@@ -41,6 +41,10 @@ sidecar's four files where it carried `variant_alid_bytes.npy`/`variant_alid_row
 each completed release, turned back into its 0.2.3 form (`format_0_2_3.as_0_2_3`),
 matched the previous pin in every entry but that `overview.html`.
 
+Since #468 every pin also holds the position sidecar's three files (ADR 0105 §6), and
+the Dense pin's `overview.html` lists them. Re-derived after checking that every other
+entry, and every total, equalled the previous pin.
+
 Since #471 no pin holds a tier's `abs_z` or `p_value`, and the Dense pin's
 `index.sqlite` holds `completion_quality` alone, without the `metadata` table or
 `variant_aliases` (ADR 0102); its `overview.html` words `index.sqlite`'s entry anew.

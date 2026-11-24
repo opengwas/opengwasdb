@@ -8,8 +8,9 @@ Reference-Completed release carries the file (ADR 0102, #471): `metadata` and
 `variant_aliases` are read here for a 0.2 release alone. The Store Reader may not
 import sqlite3 (#464), so, like the 0.2.x Store Variant Table
 (`opengwasdb.variants.legacy_table`), these reads live beside it as its SQLite
-implementation, and count as the Store Reader (#473 ruling 1): the validator and the observed-view check ask for them
-here, by what they return, and no other read module opens `index.sqlite`.
+implementation, and count as the Store Reader (#473 ruling 1): the validator and the
+observed-view check ask for them here, by what they return, and no other read module
+opens `index.sqlite`.
 Writing it -- the schema, metadata and quality rows a build or a completion
 writes -- is `opengwasdb.index.sqlite`'s and the writers'. #476 removes SQLite
 from every read path.

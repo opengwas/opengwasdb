@@ -119,6 +119,10 @@ WRITER_FUNCTIONS = {
     ("opengwasdb/variants/reference.py", "require_written_rsids_match"): (
         "reads back the Variant Table it just wrote, before the release exists"
     ),
+    ("opengwasdb/store/rewrite.py", "_records_in_row_order"): (
+        "streams the staged copy's Variant Table, before it is a release: its steps are "
+        "replacing the search indexes a Variant Axis would open (#468)"
+    ),
 }
 
 #: Every read-mode `StoreRelease.arrays()` call outside the Store Reader and the

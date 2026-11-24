@@ -4,10 +4,11 @@
 about it folds over that one read (issue #254: the table is never
 materialised). The checks it feeds: the row count against the offset sidecar,
 the row sequence and duplicate canonical variants, the ALID and rsid search
-indexes, and the offset and tabix spot checks at a bounded set of
-representative rows -- which used to stream the table a second time to reach
-its last row. The alias rule reads a 0.2 release's `index.sqlite` beside it; a 0.3.0
-release carries no `variant_aliases` (ADR 0102, #471).
+indexes, the position sidecar (format 0.3.0), and the offset and tabix spot
+checks at a bounded set of representative rows -- which used to stream the table
+a second time to reach its last row. The alias rule reads a 0.2 release's
+`index.sqlite` beside it; a 0.3.0 release carries no `variant_aliases` (ADR 0102,
+#471).
 """
 
 from __future__ import annotations
@@ -22,14 +23,20 @@ import numpy as np
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.format import carries_alid_sidecar, index_holds_provenance_only
+from opengwasdb.store_reader.format import (
+    carries_alid_sidecar,
+    carries_position_sidecar,
+    index_holds_provenance_only,
+)
 from opengwasdb.store_reader.identity import is_primary_contig
+from opengwasdb.store_reader.position_sidecar import PositionSidecar
 from opengwasdb.store_reader.variant_axis import (
     VariantRecord,
 )
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED, current_builders_wrote, severity_owed
+from opengwasdb.variants.normalise import chromosome_sort_key
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.
@@ -183,6 +190,66 @@ def _carries_variant_aliases(target: Target) -> bool:
     return not index_holds_provenance_only(target.store.manifest.format_version)
 
 
+@dataclass(frozen=True)
+class _PositionRows:
+    """How many table rows a block held, and the first whose sidecar chromosome or
+    position differs from the table's."""
+
+    rows: int = 0
+    differing: int = 0
+    first: str = ""
+
+    def __add__(self, other: _PositionRows) -> _PositionRows:
+        return _PositionRows(
+            self.rows + other.rows, self.differing + other.differing, self.first or other.first
+        )
+
+
+def _position_sidecar(target: Target) -> PositionSidecar:
+    sidecar = target.variant_axis.position_sidecar
+    if sidecar is None:
+        raise ValueError("a 0.3.0 Variant Axis opened without its position sidecar")
+    return sidecar
+
+
+def _position_rows(target: Target, block: TableBlock) -> _PositionRows:
+    """Each row's chromosome and position in the sidecar against the table's
+    (`PositionSidecar.misplaced`); a row past the sidecar's end is counted by its row
+    count (`_judge_position_sidecar`)."""
+    sidecar = _position_sidecar(target)
+    records = block.records
+    misplaced = sidecar.misplaced(
+        block.start, [r.chromosome for r in records], [r.position for r in records]
+    )
+    first = ""
+    if misplaced:
+        row = misplaced[0]
+        record = records[row - block.start]
+        [(chromosome, position)] = sidecar.placements([row])
+        first = (
+            f"row {row}: the sidecar places it at {chromosome}:{position}, "
+            f"variants.tsv.gz at {record.chromosome}:{record.position}"
+        )
+    return _PositionRows(len(records), len(misplaced), first)
+
+
+def _judge_position_sidecar(target: Target, total: _PositionRows) -> Iterator[str]:
+    """The position sidecar places every row where the table does, in genomic order
+    (format 0.3.0, ADR 0105 §6): a range is two binary searches in it."""
+    sidecar = _position_sidecar(target)
+    problems = list(sidecar.problems(total.rows, chromosome_key=chromosome_sort_key))
+    yield from problems
+    if not problems and total.differing:
+        yield (
+            f"the position sidecar places {total.differing} row(s) elsewhere than "
+            f"variants.tsv.gz does; first, {total.first}"
+        )
+
+
+def _carries_position_sidecar(target: Target) -> bool:
+    return carries_position_sidecar(target.store.manifest.format_version)
+
+
 def _named_rsids(_target: Target, block: TableBlock) -> int:
     return sum(1 for record in block.records if is_indexable_rsid(record.rsid))
 
@@ -285,6 +352,8 @@ def _pick(target: Target, block: TableBlock) -> _Picked:
 def _judge_representatives(target: Target, picked: _Picked) -> Iterator[str]:
     """The offset sidecar and the tabix index each find the row the table holds.
 
+    On 0.3.0 no query reads the tabix index (a range is the position sidecar's), but it
+    still ships as a convenience restating the table (spec §1.1), so it is checked here.
     The rows are chosen from the offsets, so the check means something only when
     the table holds the same number of rows. It runs after `variant_table.rows`,
     which judged that from the same read, so a mismatch skips it behind that rule.
@@ -300,7 +369,7 @@ def _judge_representatives(target: Target, picked: _Picked) -> Iterator[str]:
         if offset_record != record:
             yield f"variant offset for row {index} points to a different row"
             return
-        if record not in axis.range(record.chromosome, record.position, record.position):
+        if record not in axis.tabix_range(record.chromosome, record.position, record.position):
             yield f"tabix index cannot fetch variant {record.alid}"
             return
 
@@ -480,6 +549,16 @@ RULES: tuple[Rule, ...] = (
         zero=_SidecarRows(),
         measure=_sidecar_rows,
         judge=_judge_alid_sidecar,
+    ),
+    Fold(
+        name="variant_table.position_sidecar",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_carries_position_sidecar,
+        scan=VARIANT_TABLE,
+        zero=_PositionRows(),
+        measure=_position_rows,
+        judge=_judge_position_sidecar,
     ),
     Fold(
         name="variant_table.rsid_index",

@@ -31,12 +31,14 @@ from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
+    carries_position_sidecar,
     indels_reference_first,
     index_holds_provenance_only,
     split_format_version,
     zarr_format_for_version,
 )
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import (
     variant_offsets_path,
     variant_tabix_path,
@@ -230,6 +232,18 @@ def target_ships_index(target: Target) -> bool:
     )
 
 
+def _position_sidecar_entries(target: Target) -> list[tuple[str, Path]]:
+    """The position sidecar's files, from 0.3.0 (ADR 0105 §6): a 0.3.0 release answers
+    every range from them, and one without them is refused, never read by tabix."""
+    if not carries_position_sidecar(target.store.manifest.format_version):
+        return []
+    path = target.store.path
+    return [
+        (f"missing {name} — rebuild the store to generate the position sidecar", path / name)
+        for name in POSITION_SIDECAR_FILENAMES
+    ]
+
+
 def _dense_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
@@ -241,6 +255,7 @@ def _dense_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
         ("missing variant_offsets.npy", variant_offsets_path(path)),
         *_alid_index_entries(target, rebuild=True),
+        *_position_sidecar_entries(target),
     ]
 
 
@@ -254,6 +269,7 @@ def _ragged_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
         *_alid_index_entries(target),
+        *_position_sidecar_entries(target),
         ("missing analyses.tsv", store.analyses_path),
     ]
 
@@ -269,6 +285,7 @@ def _hybrid_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
         *_alid_index_entries(target),
+        *_position_sidecar_entries(target),
         ("missing data.zarr/ragged (Ragged Overflow)", path / "data.zarr" / "ragged"),
     ]
 

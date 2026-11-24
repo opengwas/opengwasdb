@@ -13,6 +13,9 @@ What this ADR changes in other documents:
 - Spec [§1](../spec/store-format.md#1-store-release-envelope), §1.1, §4: the envelope names the
   sidecar's four files from 0.3.0 and the fixed-width pair before it; §4 states the layout.
 - Spec §20.0: a new rule, `variant_table.alid_sidecar`.
+- From #468 (§6): spec §1, §1.1 and §4 name the position sidecar's three files and how a range is
+  answered; §20.0 adds `variant_table.position_sidecar`; §21.3 and §21.4 add it to 0.3.0 and to
+  the rewrite.
 - Spec §21.1-§21.4: 0.3.0 in each table, and `ogdb rewrite-release` among the migrations.
 - From #471 (the dated section below): spec §1, §1.1, §10a, §18, §20 and §20.0 for what
   0.3.0 drops, and banners on [ADR 0001](0001-hybrid-sqlite-zarr-store-envelope.md) and
@@ -105,7 +108,8 @@ a 0.3.0 Staged Release from a 0.2.3 one:
    or disagree with `variant_offsets.npy`. Then it deletes the pair. #468-#472 each append a step.
 4. It stamps every manifest 0.3.0 with one fresh `release_id` and `created_at`, keeps `store_id`,
    and records a `format_rewrite` provenance block: the source `release_id`, the from and to
-   versions, the steps, the tool, the time and the commit. ADR 0038 §5 settles the identity: a new
+   versions, the steps, the tool, the time and the commit. From #468 it also records the range
+   probes the release could not pose (`range_questions_not_posed`, §6). ADR 0038 §5 settles the identity: a new
    `release_id`, with the source named in provenance. The 0.2.0 converter set the precedent for
    `store_id` and for one `release_id` across both Hybrid manifests.
 5. **The proof.** It asks the source and the staged copy the same deterministic questions
@@ -204,8 +208,127 @@ change that.
 - the `variant_table.alid_index` rule and its `when=`, which then leave `variant_table.alid_sidecar`
   without a `when=`.
 
+### 6. The position sidecar (#468, 23 Nov 2026)
+
+**Context.** A 0.2 release answers `range_phewas` by a tabix fetch of its BGZF Variant Table. That
+loads pysam, which the Store Reader is to stop importing (#464, #476), and it is the last query
+shape that reads the table to find its rows (#465). Rows are already in genomic order: a Variant
+Index is sorted by `alid_sort_key`, and tabix refuses a table out of order. So a sorted array of
+positions answers a range by binary search.
+
+**Decision.** Three plain `.npy` files beside the Variant Table
+(`opengwasdb.store_reader.position_sidecar`, numpy and the standard library only):
+
+| file | dtype | length | holds |
+|---|---|---|---|
+| `variant_position.npy` | `<u4` | rows | each row's position, in row order |
+| `variant_position_chromosomes.npy` | `\|S<n>` | chromosomes | each chromosome once, as the table spells it, in row order |
+| `variant_position_chromosome_offsets.npy` | `<u8` | chromosomes + 1 | chromosome `k`'s rows are `offsets[k]:offsets[k+1]` |
+
+- **A range is two `searchsorted` calls** in its chromosome's slice: the first position at or after
+  `start`, and the first after `end`. The rows between are the answer, ascending. The chromosome
+  is normalised first, by the existing owner (`normalise_chromosome`, which the Variant Axis
+  already applied before a tabix fetch).
+- **The dtypes.** A position fits `uint32`: the longest human chromosome is 248,956,422 bases,
+  and `<u4` holds 4,294,967,295. That is 4 bytes a row, against the 8 of `<i8`. The row offsets
+  are `<u8`, as the ALID sidecar's are; there are a few dozen of them. The labels are stored, not
+  implied by a fixed list, because a release may hold a contig outside `1`-`22`, `X`, `Y` and `MT`,
+  which `chromosome_sort_key` sorts after them by its text.
+- **The order is the canonical chromosome order**, the order the rows are in. The writer takes the
+  order as an argument (`chromosome_key`), so the codec does not restate it, and refuses rows not
+  in it: a chromosome whose rows are not contiguous, a position that falls within a chromosome, a
+  position outside `1..2**32-1`, an empty label, or chromosomes out of `chromosome_sort_key`'s
+  order.
+- **One writer.** `write_position_sidecar` is it. `write_variant_axis` calls it, so every build and
+  completion writes the sidecar, the Hybrid's nested Dense Component included; #472 removes that
+  copy. The rewrite calls it directly, as its own step.
+- **0.2.x is unchanged.** A 0.2 release answers a range by tabix, through the legacy seam, as it
+  did. Like the ALID index, the version chooses (`carries_position_sidecar`): a 0.3.0 release
+  missing the sidecar is refused (`MissingPositionSidecar`), not read by tabix. A stray sidecar
+  beside a 0.2 release is not read, and `envelope.closed` reports it.
+- **Edge cases match tabix.** `TabixVariantTable.fetch` returns no rows when tabix refuses, so a
+  0.2 release answers an `end` before `start`, and a chromosome it lacks, with no rows. The
+  sidecar answers both the same way. A `start` of 0 or less starts at the first position, as
+  tabix's `max(0, start - 1)` does.
+- **`VariantAxis.range`**, which returns records rather than rows, finds its rows in the sidecar and
+  reads them with `by_indices`. `VariantAxis.tabix_range` keeps the tabix read, and the validator
+  uses it, because the `.tbi` still ships as a convenience (spec §1.1).
+
+**The rewrite step**, `position_sidecar`, writes each component's sidecar from its Variant Table,
+streamed in row order and checked against `variant_offsets.npy`. It does not open the release's
+search indexes, because an earlier step rewrites them. Before it ends, it reads the sidecar back
+and refuses unless every row is at the table's chromosome and position.
+
+**The proof's range probes.** `query_digests.range_questions` picks the ranges from the release's
+own rows, so they are deterministic. Each is asked both Observed-Only and with imputed cells:
+- `first`, `to_first`: the first variant's position, and from 1 to it;
+- `last`, `from_last`: the last variant's position, and from it to 500,000,000. That bound is past
+  every human position and inside the 2^29 a tabix index addresses;
+- `boundary/before`, `boundary/after`: from the last variant before the first chromosome boundary
+  to that chromosome's end, and from the next chromosome's start to its first variant;
+- `empty/between`: between the first two variants of one chromosome with a position free between
+  them;
+- `empty/chromosome`: the first of `1`-`22`, `X`, `Y`, `MT` the release lacks;
+- `shared`, `shared/from_before`, `shared/to_after`: the first position several variants share,
+  alone, from the position before it, and to the position after it.
+
+A release that cannot pose one leaves that question out. A release with one chromosome, for
+example, has no boundary. The rewrite does not leave a question out silently. Its log line names
+each question it could not pose, and `provenance.format_rewrite.range_questions_not_posed`
+records them. The probes are their own section, `range_probes`, so the golden pins keep their
+shapes.
+
+The six `store_reader_digests` fixtures that the rewrite tests use leave out five or six questions:
+- All six leave out `boundary/before`, `boundary/after`, `shared`, `shared/from_before` and
+  `shared/to_after`. Each holds one chromosome and no shared position.
+- `dense_observed` also leaves out `empty/between`. No position is free between two of its
+  variants.
+
+`tests/one_source_releases.LAYOUTS` builds a Dense, Ragged and Hybrid release over three
+chromosomes that poses all eleven questions. The `range_releases` session fixture builds them once.
+`test_rewrite_release.test_the_proof_asks_every_range_question_of_each_layout` sends the 0.2.3
+form of each one through `rewrite_release`. It asserts that the source and the staged release are
+both asked all eleven questions and answer them identically. That test covers every question the
+digest fixtures leave out.
+
+**A known cost: the rewrite streams each table twice.** The ALID step and the position step each
+read the Variant Table on their own, and each holds a Python list per row. That doubles the
+rewrite's main cost, which matters at ukb-b's scale. One pass could feed both steps. It is not
+worth the change now: the rewrite is a proof, run on fixtures and small releases, and every hosted
+Store is rebuilt at 0.3.0 instead (the owner's ruling, recorded in §3).
+
+**Validation.** `variant_table.position_sidecar` (spec §20.0) judges a 0.3.0 release from the one
+streamed read of its table. It checks that:
+- each row's chromosome and position are the table's;
+- each array has its dtype;
+- the offsets start at 0, rise with every chromosome and end at the row count;
+- each chromosome is named once, in the canonical order;
+- no position is 0, and none falls within a chromosome.
+
+`envelope.required` names each missing file. `variant_table.representatives` still checks the tabix
+index on 0.3.0.
+
+The reader refuses some sidecars at open (`MalformedPositionSidecar`): offsets that do not number
+the chromosomes plus one, a chromosome named twice, and a label that is not UTF-8. Read as they
+stand, these would answer one chromosome's ranges from another's rows, or from none. The check
+reads only the chromosomes, a few dozen. The Variant Axis opens the sidecar on first use, so in the
+validator such a sidecar fails `variant_table.position_sidecar` alone. The comparison of each row
+against the table is `PositionSidecar.misplaced`, shared by the rule and the rewrite's read-back.
+
+**Alternatives considered.**
+- *A fixed chromosome list, offsets only.* It needs no label file, but it cannot hold a contig, and
+  the canonical order would then be stated in the format as well as in `chromosome_sort_key`.
+- *One `(chromosome rank, position)` key per row*, searched once. It costs 4 bytes more a row,
+  and needs the rank in the codec.
+- *`int64` positions.* 8 bytes a row for nothing: no position needs more than 32 bits.
+- *Keep tabix on 0.3.0.* pysam would stay on the query path, and #476 could not remove it.
+
 ## Consequences
 
+- **A range on 0.3.0 reads neither the Variant Table nor its tabix index** (#468):
+  `range_phewas` answers in every layout without importing pysam, and exactly as the 0.2.3 form of
+  the release does by tabix (`tests/test_range_phewas_0_3_0.py`). The position sidecar costs 4
+  bytes a row, and a few bytes a chromosome.
 - **The Store Reader resolves every ALID on 0.3.0 without the Variant Table.** `lookup` and `phewas`
   by an ALID over 32 bytes return its row in every layout without importing pysam
   (`tests/test_long_alid_0_3_0.py`). On 0.2.3 the same questions return the same rows by the scan.
@@ -258,9 +381,9 @@ Builds and completion write 0.3.0's tiers. Rebuilding the index of an existing 0
 requires: its tiers get `abs_z` and `p_value` back, recomputed from `z`
 (`top_hits.write_stored_p`).
 
-**The rewrite** drops all four in two steps after `alid_sidecar`. `provenance_index` writes a
-Reference-Completed component a new `index.sqlite` holding only `completion_quality`, copied
-with its schema. `tier_stored_p` drops each tier's pair. Neither copies what it drops. A step
+**The rewrite** drops all four in two steps after `alid_sidecar` and `position_sidecar`.
+`provenance_index` writes a Reference-Completed component a new `index.sqlite` holding only
+`completion_quality`, copied with its schema. `tier_stored_p` drops each tier's pair. Neither copies what it drops. A step
 names the paths it drops (`RewriteStep.leaves_out`), and the copy leaves them out, so a later
 step that needed one would read it from the source. Each refuses a source whose drop would
 change an answer or lose evidence:

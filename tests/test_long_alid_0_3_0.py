@@ -19,12 +19,8 @@ import sys
 from pathlib import Path
 
 import pytest
-import test_indel_pairs as pair
-from admission_helpers import ragged_ssf_store
 from format_0_2_3 import as_0_2_3
-
-from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from one_source_releases import dense_release, hybrid_release, ragged_release
 
 LONG_ALT = "G" + "GGGGCC" * 6
 #: ``(chrom, pos, ref, alt, beta, se, af_alt)``, effect for `alt`, as test_indel_pairs.
@@ -61,33 +57,17 @@ print(json.dumps(out))
 
 
 def _dense(root: Path) -> Path:
-    store = root / "dense.opengwasdb"
-    source = pair._finngen(root / "bmi_irn.tsv", ROWS)
-    build_dense_from_vcf_manifest(
-        pair._manifest(root, source, "opengwasdb.finngen-r13"), store,
-        store_id="s", release_id="r",
-    )
-    return store
+    return dense_release(root, ROWS)
 
 
 def _ragged(root: Path) -> Path:
-    store, _ = ragged_ssf_store(root, pair._ssf_rows(ROWS, "11"))
-    return store
+    return ragged_release(root, ROWS)
 
 
 def _hybrid(root: Path, *, on_panel: bool) -> Path:
-    source = pair._gwas_vcf(root / "bmi_irn.vcf", ROWS)
-    panel = root / "panel.txt"
-    alids = [*LONG_ALIDS, "1:900000:A:G"] if on_panel else ["1:900000:A:G"]
-    panel.write_text(
-        "#opengwasdb-variant-reference\t1\n" + "".join(f"{a}\n" for a in alids), encoding="utf-8"
+    return hybrid_release(
+        root, ROWS, [*LONG_ALIDS, "1:900000:A:G"] if on_panel else ["1:900000:A:G"]
     )
-    store = root / "hybrid.opengwasdb"
-    build_hybrid_from_vcf_manifest(
-        pair._manifest(root, source, "opengwasdb.gwas-vcf"), store, reference_panel=panel,
-        store_id="s", release_id="r",
-    )
-    return store
 
 
 LAYOUTS = {

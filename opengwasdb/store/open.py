@@ -37,6 +37,7 @@ from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
     carries_alid_sidecar,
+    carries_position_sidecar,
     check_format_version,
     format_version_for,
     indels_reference_first,
@@ -46,6 +47,7 @@ from opengwasdb.store_reader.format import (
     zarr_format_for_version,
 )
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
 from opengwasdb.store_reader.release import (
     ReleasePaths,
     StoreRelease,
@@ -272,7 +274,7 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
         "variant_rsid_bytes.npy",
         "variant_rsid_rows.npy",
     }
-) | set(AlidSidecar.FILENAMES)
+) | set(AlidSidecar.FILENAMES) | set(POSITION_SIDECAR_FILENAMES)
 
 #: A release's `index.sqlite`: in every 0.2 release; from 0.3.0 only where it holds
 #: `completion_quality` (`ships_index`).
@@ -305,6 +307,7 @@ _HOLDS_COMPLETION_QUALITY: frozenset[frozenset[str]] = frozenset(
 )
 
 
+
 def layout_envelope(layout: PrimaryStorageLayout, *, dense_component: bool) -> frozenset[str]:
     """The envelope constant of a release of `layout`, before its version and state:
     `dense_component` names a Hybrid's nested Dense Component (spec §16)."""
@@ -322,18 +325,27 @@ def envelope_at(
 ) -> frozenset[str]:
     """`envelope`, one of the constants above, as a release of `format_version` and
     `completion_state` carries it: with the ALID index that version carries
-    (`alid_index_kind`) and no other, and with `index.sqlite` where it ships
-    (`ships_index`).
+    (`alid_index_kind`) and no other, the position sidecar only from 0.3.0
+    (`carries_position_sidecar`), and `index.sqlite` where it ships (`ships_index`).
 
-    The constants are what this build writes (0.3.0, the sidecar, no `index.sqlite`). A
-    0.2 release carries the fixed-width pair instead, and either one carrying the other's
-    files fails its closed envelope (spec §1, §20); so does a 0.3.0 Observed-Only release
-    carrying an `index.sqlite`.
+    The constants are what this build writes (0.3.0, the sidecars, no `index.sqlite`).
+    A 0.2 release carries the fixed-width pair instead and no position sidecar, and
+    either one carrying the other's files fails its closed envelope (spec §1, §20); so
+    does a 0.3.0 Observed-Only release carrying an `index.sqlite`.
     """
     index = {INDEX_FILENAME} if ships_index(envelope, format_version, completion_state) else set()
     return (
-        (envelope - ALID_INDEX_FILENAMES) | set(alid_index_kind(format_version).FILENAMES) | index
+        (envelope - ALID_INDEX_FILENAMES - set(POSITION_SIDECAR_FILENAMES))
+        | set(alid_index_kind(format_version).FILENAMES)
+        | _position_sidecar_at(format_version)
+        | index
     )
+
+
+def _position_sidecar_at(format_version: str) -> frozenset[str]:
+    """The position sidecar's files, in a release of `format_version` that carries them."""
+    carried = carries_position_sidecar(format_version)
+    return frozenset(POSITION_SIDECAR_FILENAMES) if carried else frozenset()
 
 
 def ships_index(

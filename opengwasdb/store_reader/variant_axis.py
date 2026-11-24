@@ -4,15 +4,16 @@ A Store's variants are its Store Variant Table, one row per Store-local Variant
 Index, and the mmap'd search indexes beside it: `variant_offsets.npy` (each row's
 place in the table, which also fixes how many variants the Store holds), the
 ALID index (`opengwasdb.store_reader.alid_index`: format 0.3.0's sidecar or the 0.2
-series' fixed-width pair) and the sorted rsid index (#109, #127). `VariantAxis` answers
-every variant question a query asks from them.
+series' fixed-width pair), the sorted rsid index (#109, #127) and, from format 0.3.0,
+the position sidecar (`opengwasdb.store_reader.position_sidecar`), which answers a
+range. `VariantAxis` answers every variant question a query asks from them.
 
 In format 0.2.x the table itself is a BGZF file with a tabix index, which only
-pysam reads, and a Store built before the rsid index resolves rsids through
-`index.sqlite`'s `variant_aliases` table. A 0.3.0 release has no `variant_aliases`
-(ADR 0102, #471): an rsID its rsID index lacks is a miss there, and the axis never
-asks for the table. Neither belongs in the Store Reader,
-which may import neither pysam nor sqlite3 (#464): the axis asks a
+pysam reads and which answers a 0.2 release's ranges, and a Store built before the
+rsid index resolves rsids through `index.sqlite`'s `variant_aliases` table. A 0.3.0
+release has no `variant_aliases` (ADR 0102, #471): an rsID its rsID index lacks is a
+miss there, and the axis never asks for the table. Neither belongs in the Store
+Reader, which may import neither pysam nor sqlite3 (#464): the axis asks a
 `LegacyVariantTable` for those reads, and opengwasdb supplies one
 (`opengwasdb.variants.legacy_table.TabixVariantTable`). It opens its files on
 first use (#465): an identifier a search index holds resolves, and every result
@@ -35,8 +36,9 @@ from opengwasdb.store_reader.alid import (
     parse_canonical_alid,
 )
 from opengwasdb.store_reader.alid_index import ABSENT, UNINDEXED, AlidIndex, open_alid_index
-from opengwasdb.store_reader.format import index_holds_provenance_only
+from opengwasdb.store_reader.format import carries_position_sidecar, index_holds_provenance_only
 from opengwasdb.store_reader.identity import normalise_chromosome
+from opengwasdb.store_reader.position_sidecar import MissingPositionSidecar, PositionSidecar
 
 VARIANT_TABLE_FILENAME = "variants.tsv.gz"
 VARIANT_TABIX_FILENAME = "variants.tsv.gz.tbi"
@@ -172,6 +174,12 @@ class VariantAxis:
         # A 0.2 release may name an rsID only in `index.sqlite`'s `variant_aliases`; a
         # 0.3.0 release carries no such table, and its rsID index is the whole answer.
         self._consults_variant_aliases = not index_holds_provenance_only(format_version)
+        # Whether ranges are answered by format 0.3.0's position sidecar (ADR 0105 §6)
+        # or, on the 0.2 series, by a tabix fetch through `legacy`. A 0.3.0 release
+        # missing the sidecar's files is refused here; the sidecar is read on first use
+        # (`position_sidecar`), so a malformed one fails only what reads it.
+        self._ranges_by_sidecar = carries_position_sidecar_files(self.store_path, format_version)
+        self._position_sidecar: PositionSidecar | None = None
         # mmap'd rsid search index — present on stores built after issue #109.
         # Absent on older stores, where rsid lookups find nothing (as they did
         # before that index existed).
@@ -192,6 +200,17 @@ class VariantAxis:
     def alid_index(self) -> AlidIndex:
         """The release's ALID index (`opengwasdb.store_reader.alid_index`)."""
         return self._alid_index
+
+    @property
+    def position_sidecar(self) -> PositionSidecar | None:
+        """The release's position sidecar (format 0.3.0), opened on first use; None on
+        the 0.2 series. One whose chromosomes cannot slice its rows is refused
+        (`position_sidecar.MalformedPositionSidecar`)."""
+        if self._ranges_by_sidecar and self._position_sidecar is None:
+            self._position_sidecar = PositionSidecar.open(self.store_path)
+            if self._position_sidecar is None:  # removed since this axis was opened
+                raise MissingPositionSidecar(f"{self.store_path}: the position sidecar is gone")
+        return self._position_sidecar
 
     def close(self) -> None:
         self._legacy.close()
@@ -326,13 +345,41 @@ class VariantAxis:
         return None
 
     def range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:
+        """The rows at a position in ``[start, end]`` on `chromosome`, in row order.
+
+        On 0.3.0 the position sidecar finds the rows and `by_indices` reads them; on
+        the 0.2 series they are a tabix fetch (`tabix_range`).
+        """
+        if not self._ranges_by_sidecar:
+            return self.tabix_range(chromosome, start, end)
+        rows = self.range_indices(chromosome, start, end)
+        records = self.by_indices(rows.tolist())
+        return [records[int(row)] for row in rows]
+
+    def tabix_range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:
+        """`range`, read through the Variant Table's tabix index on any format.
+
+        A 0.2 release's ranges are this. The validator asks it of a 0.3.0 release
+        too, whose `variants.tsv.gz.tbi` is a convenience it still checks (spec §1.1).
+        """
         chrom = normalise_chromosome(chromosome)
         lines = self._legacy.fetch(chrom, max(0, int(start) - 1), int(end))
         return [parse_variant_line(line) for line in lines]
 
     def range_indices(self, chromosome: str, start: int, end: int) -> np.ndarray:
-        """Return variant indices for a genomic range as int32 array, without object allocation."""
+        """The Variant Indices at a position in ``[start, end]`` on `chromosome`, ascending,
+        as int32, without reading a row.
+
+        On 0.3.0, two binary searches in the chromosome's slice of the position sidecar;
+        on the 0.2 series, a tabix fetch. The chromosome is normalised either way, and
+        either answers nothing for a range whose end is before its start, or for a
+        chromosome the release lacks (`TabixVariantTable.fetch` answers tabix's refusal
+        of both with no rows).
+        """
         chrom = normalise_chromosome(chromosome)
+        sidecar = self.position_sidecar
+        if sidecar is not None:
+            return sidecar.rows_in(chrom, start, end).astype("int32")
         lines = self._legacy.fetch(chrom, max(0, int(start) - 1), int(end))
         indices = []
         for line in lines:
@@ -439,6 +486,22 @@ class VariantAxis:
                 if not remaining:
                     break
         return found
+
+
+def carries_position_sidecar_files(store_path: str | Path, format_version: str) -> bool:
+    """Whether a release of `format_version` answers ranges from its position sidecar:
+    True from 0.3.0, False on the 0.2 series. A 0.3.0 release missing the sidecar's
+    files is refused, never read by tabix: the version, not the files present, says how
+    a range is answered."""
+    if not carries_position_sidecar(format_version):
+        return False
+    if not PositionSidecar.held_in(store_path):
+        raise MissingPositionSidecar(
+            f"{store_path}: format_version {format_version} carries a position sidecar in "
+            f"{', '.join(PositionSidecar.FILENAMES)}, which is missing; the release is "
+            "incomplete. Rebuild it, or rewrite it from an intact source (spec §1, §4)"
+        )
+    return True
 
 
 #: A Store Variant Table row's fields before the trailing ``source_alid`` column,
