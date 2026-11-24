@@ -37,10 +37,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from opengwasdb.layouts.dense.indexed_subsets import (
-    indexed_subset_namespace_path,
-    list_indexed_subsets,
-)
 from opengwasdb.store.arrays import open_group
 from opengwasdb.store_reader.encoding.plan import StoreEncoding, UnsupportedEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
@@ -48,6 +44,8 @@ from opengwasdb.store_reader.indexed import (
     ATTR_ENCODING,
     ATTR_SCHEMA,
     INDEXED_SUBSET_SCHEMA_VERSION,
+    indexed_subset_namespace_path,
+    list_indexed_subsets,
     open_indexed_subset,
 )
 from opengwasdb.store_reader.manifest import StoreManifest

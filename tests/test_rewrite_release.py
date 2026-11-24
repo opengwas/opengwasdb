@@ -636,11 +636,9 @@ def test_a_completed_source_without_completion_quality_is_refused(sources, tmp_p
 def _with_subset(source: Path, tmp_path: Path) -> Path:
     """Build the subset `hm3` on the 0.2.3 `source`, over three of its Dense rows, and
     return the subset group; the source must validate with it."""
-    from opengwasdb.layouts.dense.indexed_subsets import (
-        build_indexed_subset,
-        indexed_subset_namespace_path,
-    )
+    from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
     from opengwasdb.store.open import open_store
+    from opengwasdb.store_reader.indexed import indexed_subset_namespace_path
 
     holder = source / "dense" if (source / "dense" / "manifest.json").exists() else source
     axis = open_store(holder).variant_axis(aliases=False)

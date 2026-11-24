@@ -46,7 +46,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     _physical_write_unit,
     _validation_sample,
     build_indexed_subset,
-    list_indexed_subsets,
     read_variant_list,
     remove_indexed_subset,
     resolve_variant_list,
@@ -64,6 +63,7 @@ from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
     IndexedSubsetNameError,
     IndexedSubsetStaleError,
+    list_indexed_subsets,
     open_indexed_subset,
     parse_indexed_subset_name,
 )

@@ -31,10 +31,13 @@ from test_query_metadata_reads import _hybrid
 from test_ragged_build_ssf import _make_fixture
 
 from benchmarks import _hm3, _query_shapes
-from opengwasdb.layouts.dense.indexed_subsets import list_indexed_subsets
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.query import query_store
-from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP, IndexedSubsetError
+from opengwasdb.store_reader.indexed import (
+    INDEXED_SUBSETS_GROUP,
+    IndexedSubsetError,
+    list_indexed_subsets,
+)
 from tests.ssf_builds import build_ragged_from_ssf
 
 #: The Hybrid fixture's on-panel ALIDs (its Dense Component's reference axis).
