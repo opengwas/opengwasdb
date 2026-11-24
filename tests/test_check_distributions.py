@@ -215,3 +215,16 @@ def test_the_smoke_test_refuses_a_package_imported_from_a_checkout() -> None:
 def test_the_smoke_test_refuses_a_version_other_than_the_built_one() -> None:
     with pytest.raises(smoke.SmokeTestFailure, match="the wheel was built as 0.0.1"):
         smoke.check_version("0.0.1")
+
+
+def test_the_smoke_test_expects_what_the_checkout_returns_and_documents(tmp_path: Path) -> None:
+    # CI runs the smoke test only on a built wheel, and not on a required
+    # check, so a change to the query output once left it expecting rows the
+    # package no longer returned (#466's `beta`), and publishing would have
+    # failed. Run its tiny-Store check here against this checkout's command,
+    # and hold getting-started.md to the same rows.
+    rows = smoke.EXPECTED_PHEWAS.splitlines()
+    assert rows[0].startswith("analysis_id\t") and len(rows) == 3
+    documented = (REPO / "docs" / "getting-started.md").read_text()
+    assert smoke.EXPECTED_PHEWAS in documented
+    smoke.check_tiny_store(smoke.installed_command(), REPO / "docs" / "examples" / "tiny", tmp_path)

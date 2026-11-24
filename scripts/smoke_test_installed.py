@@ -39,11 +39,11 @@ from pathlib import Path
 # on the tiny example. A change here is a change to that page.
 EXPECTED_PHEWAS = (
     "analysis_id\tanalysis_label\trsid\tchromosome\tposition\talid\teffect_allele"
-    "\tother_allele\tz\tse\tp\teaf\tassociation_status\n"
+    "\tother_allele\tz\tse\tbeta\tp\teaf\tassociation_status\n"
     "height_eur\tHeight EUR pilot\trs111\t1\t100\t1:100:A:G\tA\tG\t2\t0.0999756"
-    "\t0.0455\t.\tobserved\n"
+    "\t0.199951\t0.0455\t.\tobserved\n"
     "ldl_eur\tLDL EUR pilot\trs111\t1\t100\t1:100:A:G\tA\tG\t-6\t0.199951"
-    "\t1.97e-09\t.\tobserved\n"
+    "\t-1.19971\t1.97e-09\t.\tobserved\n"
 )
 # Where the tiny manifest's `source_file` paths expect the fixture, relative to
 # the directory the build runs in.

@@ -75,7 +75,7 @@ Inspect the release envelope and declared encodings:
 pixi run -e dev opengwasdb info /tmp/opengwasdb-tiny.opengwasdb
 ```
 
-You should see `format_version: 0.1.0`, `primary_layout: dense`, and `completion_state: observed_only`.
+You should see `format_version: 0.3.0`, `primary_layout: dense`, and `completion_state: observed_only`.
 
 ## Query by variant
 
@@ -91,9 +91,9 @@ pixi run -e dev opengwasdb query-phewas \
 Expected rows:
 
 ```text
-analysis_id	analysis_label	rsid	chromosome	position	alid	effect_allele	other_allele	z	se	p	eaf	association_status
-height_eur	Height EUR pilot	rs111	1	100	1:100:A:G	A	G	2	0.0999756	0.0455	.	observed
-ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	1.97e-09	.	observed
+analysis_id	analysis_label	rsid	chromosome	position	alid	effect_allele	other_allele	z	se	beta	p	eaf	association_status
+height_eur	Height EUR pilot	rs111	1	100	1:100:A:G	A	G	2	0.0999756	0.199951	0.0455	.	observed
+ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	-1.19971	1.97e-09	.	observed
 ```
 
 The `.` in `eaf` is intentional for this fixture: it carries no Effect Allele Frequency plane, so the query returns absence rather than fabricating a default.
@@ -113,8 +113,8 @@ pixi run -e dev opengwasdb query-lookup \
 Expected row:
 
 ```text
-analysis_id	analysis_label	rsid	chromosome	position	alid	effect_allele	other_allele	z	se	p	eaf	association_status
-height_eur	Height EUR pilot	rs222	1	200	1:200:C:T	C	T	-6	0.119995	1.97e-09	.	observed
+analysis_id	analysis_label	rsid	chromosome	position	alid	effect_allele	other_allele	z	se	beta	p	eaf	association_status
+height_eur	Height EUR pilot	rs222	1	200	1:200:C:T	C	T	-6	0.119995	-0.719971	1.97e-09	.	observed
 ```
 
 ## Query top hits
@@ -131,9 +131,9 @@ pixi run -e dev opengwasdb query-top-hits \
 Expected rows:
 
 ```text
-analysis_id	analysis_label	rsid	chromosome	position	alid	effect_allele	other_allele	z	se	p	eaf	association_status
-height_eur	Height EUR pilot	rs222	1	200	1:200:C:T	C	T	-6	0.119995	1.97e-09	.	observed
-ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	1.97e-09	.	observed
+analysis_id	analysis_label	rsid	chromosome	position	alid	effect_allele	other_allele	z	se	beta	p	eaf	association_status
+height_eur	Height EUR pilot	rs222	1	200	1:200:C:T	C	T	-6	0.119995	-0.719971	1.97e-09	.	observed
+ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	-1.19971	1.97e-09	.	observed
 ```
 
 ## Indexed Variant Subsets (fast repeated extraction)
