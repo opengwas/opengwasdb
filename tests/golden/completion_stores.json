@@ -164,7 +164,7 @@
     "release_id": "comp-signal-v1",
     "store_id": "test"
    },
-   "overview.html": "2834eac038afd5c6cfd5e3813ca9c8419861ea606ccaa1e8fb240932ba45b988",
+   "overview.html": "6ada2720883859807f17dda30427945af695c28609d19993e73d5b6860d35fb0",
    "variant_alid_keys.npy": "2d89f7184c60c52d454caf2640c95cdf4a421047c8c19702c094204da9317552",
    "variant_alid_offsets.npy": "4e6c1683c05267e12bef5a0eb051c0f70747aac3cf15844d0c91d45e965ebf7d",
    "variant_alid_order.npy": "9ccf3e85bb79bd039402a5a311525246f94bfe8b513da8488538b7f6653b7f62",
@@ -808,7 +808,7 @@
    "n_missing_off_panel": 0,
    "n_variants": 12
   },
-  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
+  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin); overview.html re-worded for index.sqlite at #471 review round 1 (re-rendered with the previous wording, it hashes to the previous pin)"
  },
  "ragged_besd": {
   "store": {

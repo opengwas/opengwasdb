@@ -51,7 +51,8 @@ Since #471 no pin holds a tier's `abs_z` or `p_value`, and the Dense pin's
 Re-derived after checking that every other entry matched the previous pin, that the
 Dense `index.sqlite`, with the metadata the code before #471 wrote added back, hashed
 to the previous pin, and that its `overview.html`, re-rendered with the previous
-wording, did too.
+wording, did too. The Dense `overview.html` was re-derived once more at #471's review,
+which re-worded `index.sqlite`'s entry; with the earlier wording it hashes to that pin.
 """
 
 from __future__ import annotations
