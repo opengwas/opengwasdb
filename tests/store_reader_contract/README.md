@@ -91,7 +91,9 @@ hold the same answers, in sections:
 - `variant_reads`: `variant_count`, `variants` and `variants_in_range`;
 - `refusals`: the questions above whose answer is an error;
 - and, beside them, `variants_table` and `analyses_table`, and in `digests` the resolved
-  rows of the lookup, the range and the widest top hits (`resolved`) with their `log10_p`.
+  rows of the lookup, the range and the widest top hits (`resolved`) with their `log10_p`,
+  and every answer's `pval` as numbers, by `<section>/<question>` (`pval`; a resolved row's
+  under `resolved/`).
 
 **What a port compares: `readable`.** For each answer, `rows` is its row count, `head` its
 first two rows, and `by_status` the first row of each `association_status` it holds
@@ -102,9 +104,13 @@ values it names: `analysis_id` for `UnknownAnalysisError`, `chromosome` for
 `UnstoredThresholdError`. A port must raise an error of that kind carrying those values;
 `message` is informative, not contract. JSON holds no NaN or infinity, so a float that is
 one is spelt `"NaN"`, `"Infinity"` or `"-Infinity"`; every other float is the exact value
-read, which JSON round-trips. A port's `pval` and `log10_p` come from its own libm `erfc`
-and `log`, which may differ from Linux glibc's in the last unit; compare those two with a
-relative tolerance of about 1e-15.
+read, which JSON round-trips. **libm.** `pval` is the libm's `erfc`, which differs in the
+last ulp between C libraries -- between this bundle's generating host and GitHub's runner,
+both glibc -- so every reader, the Python ones included, compares `pval` to within four
+float64 ulps: relative `4 * 2**-52`, about 8.9e-16, NaN equal to NaN
+(`query_digests.CROSS_MACHINE_PVAL_RTOL`); a relative change of 1e-9 is a difference. Every
+other value is compared exactly. A port's `log10_p` comes from its own `log` too, and may
+need the same tolerance; the Python readers have matched it exactly so far.
 
 **`digests` are opengwasdb's and ogquery's, not a port's.** A digest is a sha256 over a
 numpy array's dtype string, its shape and its bytes in native order, and over Python's
@@ -112,7 +118,10 @@ numpy array's dtype string, its shape and its bytes in native order, and over Py
 outside Python means reproducing numpy's dtype names and Python's `repr` of floats, None
 and strings, which is a second implementation of both rather than of the Store Reader. So
 the Python readers compare every digest, and a port compares `readable`, which reaches every
-answer, every row count and every status, with fewer rows.
+answer, every row count and every status, with fewer rows. `pval` is no digest's: it is
+kept as numbers beside them, since a digest cannot be compared to a few ulps (above).
+Between two releases read by one build -- the rewrite's proof -- `query_digests.differences`
+compares it exactly, its default.
 
 ## Running the contract
 

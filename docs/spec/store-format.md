@@ -2581,7 +2581,11 @@ chromosome no ALID can spell (`UnsupportedChromosome`) and, on Dense and Hybrid,
 `top_hits` at a threshold with no stored tier (`UnstoredThresholdError`, §18). A refusal is
 its type and the values it names (`fields`: the `analysis_id`; the `chromosome`; the
 `threshold` and the `stored` thresholds); its message is informative. A reader in another
-language compares the readable rows; the digests are the Python readers'. Its `VERSION`
+language compares the readable rows; the digests are the Python readers'. Every value is
+compared exactly but `pval`, which is the reader's libm `erfc` and differs between C
+libraries in the last ulp: it is kept as numbers beside the digests, and compared, there and
+in the readable rows, to within four float64 ulps (relative `4 * 2**-52`), NaN equal to NaN.
+The rewrite's proof, whose two sides one build reads, compares it exactly. Its `VERSION`
 names the bundle's version and the `format_version` its releases are; its README names what
 each release exercises. Two of its states are ones the validator refuses at 0.3.0 and a
 reader still meets, an infinite SE (above) and a tier without `analysis_offsets` (§18).
