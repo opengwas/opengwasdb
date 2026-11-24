@@ -396,11 +396,25 @@ change an answer or lose evidence:
 The proof also asks about rsIDs no release names, by PheWAS and inside a lookup (its
 `misses` section). On 0.2 those reach `variant_aliases`; on 0.3.0 they are misses.
 
-On OGS-00007 (Ragged Observed-Only, 0.2.1, rewritten with the version refusal bypassed, as for
-#467), the rewrite took 21.6 s. All 146 questions, 9 ALID probes and 3 misses matched. It left
-out 71,412 B: `abs_z` 24,224 B and `p_value` 47,188 B over three tiers, and an empty
-`index.sqlite`. ADR 0102's Consequences gives the same drops on the large releases: 575 MB of
-tier arrays on OGS-00009, and 2.09 GB on OGS-00011's Dense Component.
+Two real releases were rewritten, each with the version refusal bypassed as for #467:
+
+- **OGS-00007** (Ragged Observed-Only, 0.2.1) took 21.6 s, before #468's step. All 146
+  questions, 9 ALID probes and 3 misses matched. It left out 71,412 B: `abs_z` 24,224 B and
+  `p_value` 47,188 B over three tiers, and an empty `index.sqlite`.
+- **OGS-00006** (Ragged Reference-Completed, 0.2.1) took 2,183 s, of which 1,976 s were the two
+  sides of the proof. All 146 questions, 9 ALID probes, 22 range probes and 3 misses matched.
+  It left out 19,012,514 B: `abs_z` 3,452,953 B, `p_value` 14,969,737 B, and the source's
+  589,824 B `index.sqlite`. The new one holds the same 7,509 `completion_quality` rows.
+
+On its first run the rewrite refused OGS-00006. In each tier, 226 rows (|z| 37.7 to 40)
+stored `p_value` 0.0. Here `store_reader.stats` recomputes a subnormal, 4.1e-311 at |z| 37.7:
+the build's scipy `erfc` flushed it to zero, and `math.erfc` does not. Both say p
+underflows, so `stored_p_agrees` allows an absolute difference up to float64's smallest
+normal number, and no more. Under that rule all 54 tiers agree, over the 18 hosted 0.2
+components whose tiers total under 1.2 GB (|z| up to 200.8).
+
+ADR 0102's Consequences gives the same drops on the large releases: 575 MB of tier arrays
+on OGS-00009, and 2.09 GB on OGS-00011's Dense Component.
 
 ## Alternatives considered
 
