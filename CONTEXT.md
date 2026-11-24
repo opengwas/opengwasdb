@@ -140,10 +140,10 @@ _Avoid_: Reader on its own (a **Source Reader** reads a source, not a Store Rele
 A query mode that excludes Imputed Associations and returns only source-observed results. Reference-Completed releases include imputed associations by default, but callers may request observed-only results.
 
 **Top-Hit Query**:
-A query that returns associations ranked by statistical significance. Dense and Ragged, observed and imputed results have equal priority; ranking is determined by significance, not by storage component or association status.
+A query that returns the associations whose p clears a threshold, in genomic order (`analysis_index`, then `variant_index`), not ranked by significance. Dense and Ragged, observed and imputed results have equal priority: the answer does not depend on storage component or association status.
 
 **Top-Hit Index**:
-A layout-specific acceleration structure that supports Top-Hit Queries using the Store's shared significance thresholds and result contract. Dense and Ragged components may encode the index differently but expose the same query semantics.
+A layout-specific acceleration structure that supports Top-Hit Queries using the Store's shared significance thresholds and result contract. Dense and Ragged components may encode the index differently but expose the same query semantics. A Dense or Hybrid release answers only at a threshold it stores a tier for and refuses any other, where a Ragged release scans (#483).
 
 **Indexed Variant Subset**:
 An optional, named, rebuildable Dense-store query index containing every Analysis's full available association statistics over a declared subset of Store variants, chunked for rapid single-Analysis extraction. It is derived from and validated against the primary statistic planes, and adding or removing it does not change the Store Release's authoritative association data.

@@ -408,293 +408,149 @@
     8.0
    ]
   },
-  "0.0005|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "0.001|None|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|b|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|b|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|b|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|b|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|b|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|b|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|b|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|b|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "5e-06|None|1|False": {
    "analysis_index": [
@@ -1104,38 +960,6 @@
     8.0
    ]
   },
-  "5e-06|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "5e-08|None|1|False": {
    "analysis_index": [
     0
@@ -1543,38 +1367,6 @@
     8.0,
     8.0
    ]
-  },
-  "5e-08|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   }
  },
  "dense": {
@@ -1794,293 +1586,149 @@
     6.0
    ]
   },
-  "0.0005|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "0.001|None|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a1|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a1|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a1|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a1|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a2|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a2|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a2|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|a2|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a1|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a1|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a1|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a1|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a2|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a2|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a2|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|a2|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "5e-06|None|1|False": {
    "analysis_index": [
@@ -2298,38 +1946,6 @@
     6.0
    ]
   },
-  "5e-06|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "5e-08|None|1|False": {
    "analysis_index": [
     1
@@ -2545,38 +2161,6 @@
     6.0,
     6.0
    ]
-  },
-  "5e-08|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   }
  },
  "hybrid": {
@@ -2695,38 +2279,6 @@
     -12.0,
     4.0
    ]
-  },
-  "0.0005|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   },
   "0.0005|trait_a|1|False": {
    "analysis_index": [
@@ -2913,260 +2465,148 @@
    ]
   },
   "0.001|None|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|None|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_a|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_a|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_a|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_a|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_b|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_b|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_b|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "0.001|trait_b|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 0.001 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|None|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_a|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_a|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_a|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_a|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_b|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_b|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_b|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "1e-09|trait_b|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
+   "raises": [
+    "UnstoredThresholdError",
+    "threshold 1e-09 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   ]
   },
   "5e-06|None|1|False": {
    "analysis_index": [
@@ -3259,38 +2699,6 @@
     -5.0,
     -12.0
    ]
-  },
-  "5e-06|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   },
   "5e-06|trait_a|1|False": {
    "analysis_index": [
@@ -3531,38 +2939,6 @@
    "z": [
     -12.0
    ]
-  },
-  "5e-08|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   },
   "5e-08|trait_a|1|False": {
    "analysis_index": [],
@@ -3990,38 +3366,6 @@
     -6.0
    ]
   },
-  "0.0005|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.0005|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "0.001|ENSG00000000001|1|False": {
    "analysis_index": [
     0
@@ -4334,38 +3678,6 @@
     -6.0
    ]
   },
-  "0.001|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "0.001|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "1e-09|ENSG00000000001|1|False": {
    "analysis_index": [
     0
@@ -4629,38 +3941,6 @@
     10.0,
     7.5
    ]
-  },
-  "1e-09|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "1e-09|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   },
   "5e-06|ENSG00000000001|1|False": {
    "analysis_index": [
@@ -4974,38 +4254,6 @@
     -6.0
    ]
   },
-  "5e-06|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-06|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
   "5e-08|ENSG00000000001|1|False": {
    "analysis_index": [
     0
@@ -5293,38 +4541,6 @@
     7.5,
     -6.0
    ]
-  },
-  "5e-08|no-such-analysis|1|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|1|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|False": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
-  },
-  "5e-08|no-such-analysis|None|True": {
-   "analysis_index": [],
-   "association_status": [],
-   "eaf": [],
-   "se": [],
-   "variant_index": [],
-   "z": []
   }
  }
 }

@@ -17,6 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+class UnknownAnalysisError(ValueError):
+    """A query named an `analysis_id` the Store Release does not hold.
+
+    An empty answer would read as "no association"; a name nothing holds is a
+    mistake the caller must see (#483).
+    """
+
+
 @dataclass(frozen=True)
 class AnalysesTable:
     """A parsed `analyses.tsv`: column order plus raw string rows.
@@ -83,6 +91,15 @@ class AnalysesIndex:
 
     def by_id(self, analysis_id: str) -> dict[str, str] | None:
         return self._by_id.get(analysis_id)
+
+    def require_index(self, analysis_id: str) -> int:
+        """The Store-local Analysis index of `analysis_id`; raises `UnknownAnalysisError`."""
+        row = self._by_id.get(analysis_id)
+        if row is None:
+            raise UnknownAnalysisError(
+                f"unknown analysis_id {analysis_id!r}: not in this Store Release"
+            )
+        return int(row["analysis_index"])
 
     def all(self) -> dict[int, dict[str, str]]:
         return dict(self._by_index)

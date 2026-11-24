@@ -21,6 +21,7 @@ from stored_rows import stored_rows
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import UnknownAnalysisError
 from opengwasdb.store_reader.associations import Cells, CsrReader
 from opengwasdb.store_reader.csr import RaggedCSRReader
 
@@ -274,7 +275,9 @@ def test_top_hits_query_selects_one_analysis_from_index(tmp_path):
 
     assert selected["analysis_index"].tolist() == [0]
     assert selected["variant_index"].tolist() == global_result["variant_index"][:1].tolist()
-    assert q.top_hits(analysis_id="unknown", threshold=5e-4)["z"].size == 0
+    # an Analysis the release does not hold is refused, not answered with nothing (#483)
+    with pytest.raises(UnknownAnalysisError, match="GCST-no-such"):
+        q.top_hits(analysis_id="GCST-no-such", threshold=5e-4)
 
 
 def test_validation_rejects_ragged_top_hit_offsets(tmp_path):
