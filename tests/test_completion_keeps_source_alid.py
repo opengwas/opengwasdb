@@ -206,3 +206,34 @@ def test_the_rule_passes_a_completed_lifted_release_that_kept_them(
         ancestry="EUR", min_cor=0.0, release_id="comp-v1",
     )
     assert source_alid_findings(completed) == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#449 report: this mixed hg19+hg38 Hybrid writes every shared-table source_alid blank, "
+    "the lifted row's included, where an hg19 and an hg38 row reach one ALID; whether that "
+    "blank is the collision rule or a drop is for #472, which owns layouts/hybrid",
+)
+def test_a_hybrid_build_keeps_a_folded_rows_source_alid(tmp_path: Path) -> None:
+    import test_hybrid_build as thb
+    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+
+    early = thb._make_vcf(
+        tmp_path, "early_hg19",
+        ["1\t1000000\trsEARLY\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    late = thb._make_vcf(
+        tmp_path, "late_hg38",
+        ["1\t1064620\trsLATE\tC\tT\t.\tPASS\t.\tES:SE\t1.2:0.3\n"],
+    )
+    manifest = thb._manifest_with_source_assembly(
+        tmp_path, [("early", early, "Early", "hg19"), ("late", late, "Late", "hg38")]
+    )
+    panel = tmp_path / "panel.txt"
+    panel.write_text("1:1064619:A:G\n", encoding="utf-8")
+    store = tmp_path / "h.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store, reference_panel=panel, store_id="s", release_id="r"
+    )
+    by_alid = {r.alid: r.source_alid for r in _records(store)}
+    assert by_alid["1:1064620:C:T"] == "1:1000000:C:T"

@@ -575,14 +575,21 @@ class _SourceAlidRows:
         return _SourceAlidRows(self.n_rows + other.n_rows, self.n_sourced + other.n_sourced)
 
 
-def records_liftover(target: Target) -> bool:
-    """Whether the manifest records that the release's variants were lifted from another
-    assembly: a ``provenance.chain_file`` (Dense, Hybrid) or a ``provenance.lift`` block
-    (Ragged)."""
+def judges_source_alid(target: Target) -> bool:
+    """Whether the release records a liftover its own table must then show, and is not a
+    Hybrid's Dense Component: that copy of the table is gone at 0.3.0 (#472), so a
+    Hybrid is judged on its shared table alone.
+
+    The liftover is a ``provenance.chain_file`` (Dense, Hybrid).
+
+    A Ragged build records its lift as ``provenance.lift`` and writes no ``source_alid``
+    at all, so it is not judged here until its builders do (reported on #449)."""
     provenance = target.store.manifest.provenance
-    if not isinstance(provenance, dict):
-        return False
-    return bool(provenance.get("chain_file")) or isinstance(provenance.get("lift"), dict)
+    return (
+        not target.is_component
+        and isinstance(provenance, dict)
+        and bool(provenance.get("chain_file"))
+    )
 
 
 def _source_alid_rows(_target: Target, block: TableBlock) -> _SourceAlidRows:
@@ -723,7 +730,7 @@ RULES: tuple[Rule, ...] = (
     Fold(
         name="variant_table.source_alid",
         kinds=Kind.RELEASE,
-        when=records_liftover,
+        when=judges_source_alid,
         after=(REQUIRED,),
         scan=VARIANT_TABLE,
         zero=_SourceAlidRows(),

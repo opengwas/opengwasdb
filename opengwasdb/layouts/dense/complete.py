@@ -556,6 +556,16 @@ def _union_variant_table(
     return merged_variants, new_canonical, new_alid_to_idx
 
 
+def _carried_source_alids(
+    source_variants: list[VariantRecord], merged_variants: list[CanonicalVariant]
+) -> list[str | None]:
+    """Each merged row's `source_alid`: an observed row keeps the ALID its build lifted it
+    from, a row added from the panel (which no source observed) and a row the build left
+    blank stay `None`, written as `.` (#449)."""
+    by_alid = {v.alid: v.source_alid for v in source_variants if v.source_alid}
+    return [by_alid.get(v.alid) for v in merged_variants]
+
+
 def _write_union_axis_tables(
     staged: StagedRelease,
     *,
@@ -578,14 +588,11 @@ def _write_union_axis_tables(
 
     rsid_by_alid = {v.alid: v.rsid for v in source_variants if v.rsid}
     print("Writing variants.tsv.gz...")
-    # Observed rows keep the ALID the build lifted them from; rows added from the panel
-    # no source observed stay "." (#449). A blank source row stays blank.
-    source_alid_by_alid = {v.alid: v.source_alid for v in source_variants if v.source_alid}
     write_variant_axis(
         staged.path,
         merged_variants,
         rsid_by_alid,
-        [source_alid_by_alid.get(v.alid) for v in merged_variants],
+        _carried_source_alids(source_variants, merged_variants),
     )
 
     out_to_src = np.full(n_variants, -1, dtype=np.int64)
