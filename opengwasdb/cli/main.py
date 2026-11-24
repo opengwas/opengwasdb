@@ -1488,9 +1488,7 @@ def calibrate_ancestry_command(
     from opengwasdb.ancestry.mixture import Gates
 
     with open(catalogue_path, newline="", encoding="utf-8") as fh:
-        import csv as _csv
-
-        reader = _csv.DictReader(fh, delimiter="\t")
+        reader = csv.DictReader(fh, delimiter="\t")
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
 
@@ -1674,9 +1672,8 @@ def build_ragged_ssf_command(
     stored_effect_scale, original_sd_method (with original_sd for a rescaling
     method) and source_genome_build (or source_assembly). A row labelled
     ``sd`` must name a rescaling method or ``declared_standardised`` (#366).
-    Every row must declare
-    source_genome_build. The Store is GRCh38: a GRCh37 (hg19) row is lifted to
-    it by --chain-file, which it requires. The build fails when more than
+    Every row must declare source_genome_build. The Store is GRCh38: a GRCh37
+    (hg19) row is lifted to it by --chain-file, which it requires. The build fails when more than
     --liftover-failure-threshold of the lifted sites have no place on the
     chain; the Admission record counts them (`lift_unmapped`, `lift_ambiguous`).
     A build with any such row holds every Analysis's admitted rows in memory
