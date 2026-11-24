@@ -6,7 +6,8 @@ A Store Release stores z and SE; its beta is ``z * se`` and its two-sided p is
 - `association_statistics`, the one derivation of `beta`, `pval` and `log10_p`
   from a result's z and SE arrays (ADR 0104). Every query record and every
   resolved row carries its output; nothing else in the package derives them;
-- `p_value_from_z`, the scalar p;
+- `p_value_from_z`, the scalar p, and `p_values_from_z`, it over an array: the
+  validator's recomputation of a 0.2 Top-Hit tier's stored `p_value` (#471);
 - `log10_p_two_sided`, its log10 over an array, which result resolution reports
   as `log10_p`. It stays finite and exact where p itself is lost in float64 --
   subnormal from |z| = 37.5, 0.0 from |z| = 38.5 -- as at the FADS1/FADS2
@@ -55,6 +56,15 @@ def p_value_from_z(z: float) -> float:
     """Return the two-sided normal p-value implied by a Z score."""
 
     return math.erfc(abs(z) / math.sqrt(2.0))
+
+
+def p_values_from_z(z: np.ndarray) -> np.ndarray:
+    """`p_value_from_z` of every element of `z`, as float64, once per distinct |z|.
+
+    No SE is asked: unlike `association_statistics`' `pval`, an infinite SE does not
+    blank it. What a 0.2 Top-Hit tier stored as `p_value` (ADR 0102, #471).
+    """
+    return _each_distinct_magnitude(z, p_value_from_z)
 
 
 def _log_erfc_tail(y: float) -> float:
@@ -142,7 +152,7 @@ def association_statistics(z: np.ndarray, se: np.ndarray) -> AssociationStatisti
         raise ValueError(f"z and se differ in shape: {z64.shape} and {se64.shape}")
     with np.errstate(invalid="ignore"):  # 0 * inf; set to NaN below with the rest
         beta = z64 * se64
-    pval = _each_distinct_magnitude(z64, p_value_from_z)
+    pval = p_values_from_z(z64)
     log10_p = log10_p_two_sided(z64)
     unusable = ~np.isfinite(se64)
     for values in (beta, pval, log10_p):

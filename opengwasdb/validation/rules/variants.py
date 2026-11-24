@@ -6,7 +6,9 @@ materialised). The checks it feeds: the row count against the offset sidecar,
 the row sequence and duplicate canonical variants, the ALID and rsid search
 indexes, the position sidecar (format 0.3.0), and the offset and tabix spot
 checks at a bounded set of representative rows -- which used to stream the table
-a second time to reach its last row. The alias rule reads `index.sqlite` beside it.
+a second time to reach its last row. The alias rule reads a 0.2 release's
+`index.sqlite` beside it; a 0.3.0 release carries no `variant_aliases` (ADR 0102,
+#471).
 """
 
 from __future__ import annotations
@@ -21,7 +23,11 @@ import numpy as np
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.format import carries_alid_sidecar, carries_position_sidecar
+from opengwasdb.store_reader.format import (
+    carries_alid_sidecar,
+    carries_position_sidecar,
+    carries_variant_aliases,
+)
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.position_sidecar import PositionSidecar
 from opengwasdb.store_reader.variant_axis import (
@@ -177,6 +183,10 @@ def _carries_alid_sidecar(target: Target) -> bool:
 
 def _carries_fixed_width_alid_index(target: Target) -> bool:
     return not _carries_alid_sidecar(target)
+
+
+def _carries_variant_aliases(target: Target) -> bool:
+    return carries_variant_aliases(target.store.manifest.format_version)
 
 
 @dataclass(frozen=True)
@@ -599,6 +609,7 @@ RULES: tuple[Rule, ...] = (
     Check(
         name="sqlite.variant_aliases",
         kinds=Kind.RELEASE,
+        when=_carries_variant_aliases,
         after=(ROWS,),
         run=variant_aliases,
     ),

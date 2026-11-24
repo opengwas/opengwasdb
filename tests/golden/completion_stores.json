@@ -61,7 +61,7 @@
     "variants.tsv.gz",
     "variants.tsv.gz.tbi"
    ],
-   "index.sqlite": "fc16f67a019cb59c07afee2120ed4cad0638a62d3f3ff77c2c9ad8e1071bff9a",
+   "index.sqlite": "b21d233b2bbea6f2446fd3dfae5254d225ff61ca7bc24fcfb0e3e6a0b74a97b9",
    "manifest.json": {
     "association_coverage": "gwas",
     "completion_state": "reference_completed",
@@ -164,7 +164,7 @@
     "release_id": "comp-signal-v1",
     "store_id": "test"
    },
-   "overview.html": "718634e434432322c3a3ce8583a5256006fa54637ee4109c60208467a1eeed34",
+   "overview.html": "6ada2720883859807f17dda30427945af695c28609d19993e73d5b6860d35fb0",
    "variant_alid_keys.npy": "2d89f7184c60c52d454caf2640c95cdf4a421047c8c19702c094204da9317552",
    "variant_alid_offsets.npy": "4e6c1683c05267e12bef5a0eb051c0f70747aac3cf15844d0c91d45e965ebf7d",
    "variant_alid_order.npy": "9ccf3e85bb79bd039402a5a311525246f94bfe8b513da8488538b7f6653b7f62",
@@ -272,28 +272,6 @@
      "values": "cd18bb568ab97dc3972f663199634858f50aa60579fa0ca8e66b42059e33a50a",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      7
-     ],
-     "shape": [
-      7
-     ],
-     "shard": [
-      7
-     ],
-     "values": "23eff859b9957dd93f377c515f2204409037ec476dc1737d442752fc09f775c9",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -382,28 +360,6 @@
      "values": "989a3b81f32a10a894875458073b7cc37fa249561b81434978854054133bb7b6",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      7
-     ],
-     "shape": [
-      7
-     ],
-     "shard": [
-      7
-     ],
-     "values": "5d092df4af1446e2f41e8c9cca97eae9f31b50a4ca9b3b0a13f5a9c4b8563150",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -468,28 +424,6 @@
       7
      ],
      "values": "23eff859b9957dd93f377c515f2204409037ec476dc1737d442752fc09f775c9",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      5
-     ],
-     "shape": [
-      5
-     ],
-     "shard": [
-      5
-     ],
-     "values": "821bd34722727896944ff2a8aef5468d008156c40d9a250f7d5808d6116d18e1",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/analysis_index": {
@@ -580,28 +514,6 @@
      "values": "00d4713429e4fd21597e02355b1eb30bdae1225a163eb7e655328c75a877bc64",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      5
-     ],
-     "shape": [
-      5
-     ],
-     "shard": [
-      5
-     ],
-     "values": "67cde9b2d71a31e55fcdca1e78bdc0253725dfdd521b83fa872e6fea03638535",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -666,28 +578,6 @@
       5
      ],
      "values": "821bd34722727896944ff2a8aef5468d008156c40d9a250f7d5808d6116d18e1",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_08/analysis_index": {
@@ -766,28 +656,6 @@
       "typesize": 1
      },
      "dtype": "uint8",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
      "inner_chunk": [
       1
      ],
@@ -940,7 +808,7 @@
    "n_missing_off_panel": 0,
    "n_variants": 12
   },
-  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin); overview.html re-worded for index.sqlite at #471 review round 1 (re-rendered with the previous wording, it hashes to the previous pin)"
  },
  "ragged_besd": {
   "store": {
@@ -1415,28 +1283,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      4
-     ],
-     "shape": [
-      4
-     ],
-     "shard": [
-      4
-     ],
-     "values": "2bd62102af4f3992a50b4897c7b6c6105457389c5d2563e5f7cc326a1e68ccba",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -1525,28 +1371,6 @@
      "values": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      4
-     ],
-     "shape": [
-      4
-     ],
-     "shard": [
-      4
-     ],
-     "values": "670f56cd5520fa1dbb69c113ed7966cca6dea852fc7f9a64aa5dd407e7d2c6b5",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -1611,28 +1435,6 @@
       4
      ],
      "values": "948201cf87dc8d76085f02decd952fb193062d8f4915df379c5154a164088f23",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      4
-     ],
-     "shape": [
-      4
-     ],
-     "shard": [
-      4
-     ],
-     "values": "2bd62102af4f3992a50b4897c7b6c6105457389c5d2563e5f7cc326a1e68ccba",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/analysis_index": {
@@ -1723,28 +1525,6 @@
      "values": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      4
-     ],
-     "shape": [
-      4
-     ],
-     "shard": [
-      4
-     ],
-     "values": "670f56cd5520fa1dbb69c113ed7966cca6dea852fc7f9a64aa5dd407e7d2c6b5",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -1809,28 +1589,6 @@
       4
      ],
      "values": "948201cf87dc8d76085f02decd952fb193062d8f4915df379c5154a164088f23",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      3
-     ],
-     "shape": [
-      3
-     ],
-     "shard": [
-      3
-     ],
-     "values": "9b9c5dbc09ac493643f170695e062c3ddd91bf78602e352982925d3d7fd909fe",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_08/analysis_index": {
@@ -1921,28 +1679,6 @@
      "values": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      3
-     ],
-     "shape": [
-      3
-     ],
-     "shard": [
-      3
-     ],
-     "values": "be05219d70a94a66b27993dbaae76ecba7a708b784e7688d77b08bb511afd5bf",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -2018,7 +1754,7 @@
    "n_missing": 3,
    "n_variants": 4
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_nothing_imputed": {
   "store": {
@@ -2801,28 +2537,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -2911,28 +2625,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -2978,28 +2670,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -3109,28 +2779,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -3176,28 +2824,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -3307,28 +2933,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -3400,7 +3004,7 @@
   "totals": {
    "n_imputed": 0
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_off_grid": {
   "store": {
@@ -4183,28 +3787,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -4293,28 +3875,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -4360,28 +3920,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -4491,28 +4029,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -4558,28 +4074,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -4689,28 +4183,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -4782,7 +4254,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_out_of_range": {
   "store": {
@@ -5567,28 +5039,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -5677,28 +5127,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -5744,28 +5172,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -5875,28 +5281,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -5942,28 +5326,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -6073,28 +5435,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -6166,7 +5506,7 @@
   "totals": {
    "n_imputed": 16
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_overlap": {
   "store": {
@@ -6645,28 +5985,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "52b3930d183af1e061652e96f53664c4ca2b2c2e8c9e83215001875b49ade8d2",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -6755,28 +6073,6 @@
      "values": "10487d86ce3584e156874ed9b2650e8d772a8d1fdbb1c9111bf7e2fbcab18ccb",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "c20b1fd36789d197a70a82d58f0086c3dae655a27955d0fa024366cf11b5877a",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -6822,28 +6118,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "52b3930d183af1e061652e96f53664c4ca2b2c2e8c9e83215001875b49ade8d2",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -6953,28 +6227,6 @@
      "values": "10487d86ce3584e156874ed9b2650e8d772a8d1fdbb1c9111bf7e2fbcab18ccb",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "c20b1fd36789d197a70a82d58f0086c3dae655a27955d0fa024366cf11b5877a",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -7039,28 +6291,6 @@
       6
      ],
      "values": "52b3930d183af1e061652e96f53664c4ca2b2c2e8c9e83215001875b49ade8d2",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      5
-     ],
-     "shape": [
-      5
-     ],
-     "shard": [
-      5
-     ],
-     "values": "eba2ba65d6020daafa9a396b1c3dde95d2eacf9e16c50bef5f20012c1a49f5ee",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_08/analysis_index": {
@@ -7151,28 +6381,6 @@
      "values": "00d4713429e4fd21597e02355b1eb30bdae1225a163eb7e655328c75a877bc64",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      5
-     ],
-     "shape": [
-      5
-     ],
-     "shard": [
-      5
-     ],
-     "values": "429a29f971bc729ac5b7a07b9c1bd9ba0f42c0052e67bbea53c6fd859eb9e1db",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -7248,7 +6456,7 @@
    "n_missing": 1,
    "n_variants": 7
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); re-derived at ea81c4a from the panel writer that names each row's A1 its EA; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_panel_only_eaf": {
   "store": {
@@ -7778,28 +6986,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -7888,28 +7074,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -7955,28 +7119,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -8086,28 +7228,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -8153,28 +7273,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -8284,28 +7382,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      1
-     ],
-     "shape": [
-      0
-     ],
-     "shard": [
-      1
-     ],
-     "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -8375,7 +7451,7 @@
    }
   },
   "totals": {},
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_residual": {
   "store": {
@@ -9158,28 +8234,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -9268,28 +8322,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -9335,28 +8367,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -9466,28 +8476,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -9533,28 +8521,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_06/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "8741e7284fdc09f39373c7f750d5be1044f2ecf9579b284c8bdf324798b16911",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -9664,28 +8630,6 @@
      "values": "6edd9f6f9cc92cded36e6c4a580933f9c9f1b90562b46903b806f21902a1a54f",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      120
-     ],
-     "shape": [
-      120
-     ],
-     "shard": [
-      120
-     ],
-     "values": "c38ef837993391b58d6f67ff7e897efad2f1c6ea2c7ce2de111a0195f1e2d0bb",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -9757,7 +8701,7 @@
   "totals": {
    "n_imputed": 10
   },
-  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: its source is a cis Store, so the manifest's association_coverage reads cis; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  },
  "ragged_trait_less": {
   "store": {
@@ -10236,28 +9180,6 @@
      "values": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "9ac49de5f197f18df78d89f1e61a8c6fadf5fa71f571527936a15f30631527af",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/analysis_index": {
      "compressor": {
       "blocksize": 0,
@@ -10346,28 +9268,6 @@
      "values": "10487d86ce3584e156874ed9b2650e8d772a8d1fdbb1c9111bf7e2fbcab18ccb",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_04/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "e611b4ad9042bd0d97d0999be3e27b807cc757eb08c9b9374073f3d834198a0e",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_04/se": {
      "compressor": {
       "blocksize": 0,
@@ -10413,28 +9313,6 @@
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_04/z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "9ac49de5f197f18df78d89f1e61a8c6fadf5fa71f571527936a15f30631527af",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_06/abs_z": {
      "compressor": {
       "blocksize": 0,
       "clevel": 3,
@@ -10544,28 +9422,6 @@
      "values": "10487d86ce3584e156874ed9b2650e8d772a8d1fdbb1c9111bf7e2fbcab18ccb",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_06/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      6
-     ],
-     "shape": [
-      6
-     ],
-     "shard": [
-      6
-     ],
-     "values": "e611b4ad9042bd0d97d0999be3e27b807cc757eb08c9b9374073f3d834198a0e",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_06/se": {
      "compressor": {
       "blocksize": 0,
@@ -10630,28 +9486,6 @@
       6
      ],
      "values": "9ac49de5f197f18df78d89f1e61a8c6fadf5fa71f571527936a15f30631527af",
-     "zarr_format": 3
-    },
-    "data.zarr/top_hits/p_5e_08/abs_z": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 4
-     },
-     "dtype": "float32",
-     "inner_chunk": [
-      5
-     ],
-     "shape": [
-      5
-     ],
-     "shard": [
-      5
-     ],
-     "values": "b3f2f0d691c61320186683cae9c2d8174afca900bc7bbdd85e662005fb71c085",
      "zarr_format": 3
     },
     "data.zarr/top_hits/p_5e_08/analysis_index": {
@@ -10742,28 +9576,6 @@
      "values": "00d4713429e4fd21597e02355b1eb30bdae1225a163eb7e655328c75a877bc64",
      "zarr_format": 3
     },
-    "data.zarr/top_hits/p_5e_08/p_value": {
-     "compressor": {
-      "blocksize": 0,
-      "clevel": 3,
-      "cname": "zstd",
-      "sharding": "sharding_indexed",
-      "shuffle": "bitshuffle",
-      "typesize": 8
-     },
-     "dtype": "float64",
-     "inner_chunk": [
-      5
-     ],
-     "shape": [
-      5
-     ],
-     "shard": [
-      5
-     ],
-     "values": "0646abc31c13040c9ead74a23e3966a757c3c67763989f92155b87787cb00313",
-     "zarr_format": 3
-    },
     "data.zarr/top_hits/p_5e_08/se": {
      "compressor": {
       "blocksize": 0,
@@ -10839,6 +9651,6 @@
    "n_missing": 0,
    "n_variants": 6
   },
-  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09, re-derived at #430: it carries its source's regions.tsv; its manifest declares that regions.tsv (path and sha256); and carrying it, it is stamped format_version 0.2.1 (spec \u00a721.3); format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin)"
  }
 }

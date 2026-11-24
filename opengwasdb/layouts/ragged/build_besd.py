@@ -229,7 +229,6 @@ def _build_besd_release(
     analyses, se_divisors = _analysis_records(
         axis.probes, request.tissue, request.analyses_path, positions
     )
-    staged.index_connection().close()
     # Phase 4 — CSR ingestion and the encoding plan it decides.
     sample_sizes = None if request.sample_size_table is None else SampleSizeTable(
         Path(request.sample_size_table), [p.probe_id for p in axis.probes]

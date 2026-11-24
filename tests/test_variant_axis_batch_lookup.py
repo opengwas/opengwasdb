@@ -16,7 +16,7 @@ from format_0_2_3 import with_fixed_width_alid_index
 
 from opengwasdb.index.sqlite import connect, initialise_schema
 from opengwasdb.store_reader.alid_index import MissingAlidIndex
-from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION, LAST_0_2_FORMAT_VERSION
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
@@ -66,12 +66,27 @@ def test_drops_missing_alids(tmp_path):
         connection.close()
 
 
-def test_resolves_rsid_aliases_alongside_canonical_alids(tmp_path):
+def test_resolves_rsid_aliases_alongside_canonical_alids_on_0_2(tmp_path):
+    connection = _build_axis(tmp_path, aliases=[("rs1", 0), ("rs3", 2)])
+    with_fixed_width_alid_index(tmp_path)  # the 0.2 series' ALID index
+    axis = VariantAxis(tmp_path, connection, format_version=LAST_0_2_FORMAT_VERSION)
+    try:
+        indices = axis.indices_by_identifiers(["rs1", "1:2000:C:T", "rs3", "unknown_rsid"])
+        assert sorted(indices.tolist()) == [0, 1, 2]
+    finally:
+        axis.close()
+        connection.close()
+
+
+def test_an_rsid_only_variant_aliases_names_is_a_miss_on_0_3_0(tmp_path):
+    """0.3.0 carries no `variant_aliases` (ADR 0102, #471): the rsID index is the answer,
+    and the table is not asked even when a caller hands the axis one."""
     connection = _build_axis(tmp_path, aliases=[("rs1", 0), ("rs3", 2)])
     axis = VariantAxis(tmp_path, connection, format_version=CURRENT_FORMAT_VERSION)
     try:
         indices = axis.indices_by_identifiers(["rs1", "1:2000:C:T", "rs3", "unknown_rsid"])
-        assert sorted(indices.tolist()) == [0, 1, 2]
+        assert indices.tolist() == [1]
+        assert axis.by_identifier("rs1") is None
     finally:
         axis.close()
         connection.close()

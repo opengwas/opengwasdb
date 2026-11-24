@@ -19,9 +19,7 @@ changes it.
 
 from __future__ import annotations
 
-import importlib
 import logging
-import math
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -40,6 +38,7 @@ from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.format import carries_stored_p
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stats import z_critical as z_critical
@@ -56,10 +55,6 @@ log = logging.getLogger(__name__)
 #: under the name this module gave it.
 load_tier_arrays = reader_top_hits.tier_arrays
 
-# scipy ships no type stubs; importing by name keeps the build's one scipy use
-# (the stored `p_value`'s erfc) from needing a per-site `type: ignore`.
-_special = importlib.import_module("scipy.special")
-
 #: Re-exported from the seam, which owns the role's default layout, so the
 #: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
 TOP_HIT_CHUNK_SIZE = store_layout.TOP_HIT_CHUNK_SIZE
@@ -70,19 +65,21 @@ _THRESHOLD_COLUMNS = dict(zip(TOP_HIT_THRESHOLDS, TOP_HIT_COUNT_COLUMNS, strict=
 
 #: Every tier carries these, whatever layout wrote it. `imputed` and `eaf` are
 #: optional: an index that predates them, or a Store that has no such plane.
-TOP_HIT_TIER_ARRAYS = frozenset(
-    {"analysis_offsets", "variant_index", "analysis_index", "abs_z", "z", "se", "p_value"}
-)
+TOP_HIT_TIER_ARRAYS = frozenset({"analysis_offsets", "variant_index", "analysis_index", "z", "se"})
+
+#: What a tier before format 0.3.0 also stores: `abs_z`, its z's magnitude, and
+#: `p_value`, the two-sided p that z implies. Nothing but the validator read them, and
+#: it recomputes both from `z` (`opengwasdb.store_reader.stats`), so 0.3.0 drops them
+#: (ADR 0102, #471). This build writes neither.
+STORED_P_ARRAYS = frozenset({"abs_z", "p_value"})
 
 # The dtype each tier array is written as. One table, so an optional array cannot
 # acquire a different dtype from the required ones by being written elsewhere.
 _TIER_DTYPES = {
     "variant_index": "uint32",
     "analysis_index": "uint32",
-    "abs_z": "float32",
     "z": "float32",
     "se": "float32",
-    "p_value": "float64",
     "imputed": "uint8",
     "eaf": "float32",
 }
@@ -142,10 +139,9 @@ def _write_tier(
 ) -> int:
     group = store_arrays.create_group(top, threshold_key(threshold))
 
+    # The cut is on |z|; neither it nor the p it implies is stored (ADR 0102, #471).
     keep = abs_z >= reader_stats.z_critical(threshold)
     kept = {name: values[keep] for name, values in columns.items()}
-    kept["abs_z"] = abs_z[keep]
-    kept["p_value"] = _special.erfc(kept["abs_z"].astype("float64") / math.sqrt(2.0))
 
     order = np.lexsort((kept["variant_index"], kept["analysis_index"]))
     kept = {name: values[order] for name, values in kept.items()}
@@ -178,6 +174,33 @@ def _write_tier(
     group.attrs["threshold"] = threshold
     group.attrs["order"] = "analysis_index,variant_index"
     return int(len(kept["variant_index"]))
+
+
+def write_stored_p(root: zarr.Group, compressor: Blosc | None = None) -> None:
+    """Give every tier of `root`'s Top-Hit Index the `abs_z` and `p_value` a release
+    before format 0.3.0 stores (`STORED_P_ARRAYS`), recomputed from its `z`.
+
+    `write_index` writes 0.3.0's tiers, which store neither (ADR 0102, #471). A
+    rebuild of a 0.2 release's index (`ogdb build-dense-top-hits`,
+    `build-ragged-top-hits`) adds them after, so the release keeps its own format
+    (#313). The values are `recomputed_abs_z_and_p`'s, the validator's.
+    """
+    comp = compressor if compressor is not None else store_arrays.compressor()
+    index = root[TOP_HIT_GROUP]
+    for key in list(index):
+        tier = index[key]
+        abs_z, p_value = recomputed_abs_z_and_p(tier["z"][:])
+        for name, values, dtype in (("abs_z", abs_z, "float32"), ("p_value", p_value, "float64")):
+            store_arrays.create_array(
+                tier,
+                name,
+                ArrayRole.TOP_HIT_INDEX,
+                data=values,
+                dtype=dtype,
+                compressor=comp,
+                hint=TOP_HIT_CHUNK_SIZE,
+                overwrite=True,
+            )
 
 
 # ── read ──────────────────────────────────────────────────────────────────────
@@ -238,22 +261,68 @@ def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Ana
 # layout and stay with the validator; these do not, and used to be written twice.
 
 
-def missing_arrays(group: Any) -> list[str]:
-    """The required arrays a tier lacks, sorted."""
-    return sorted(TOP_HIT_TIER_ARRAYS.difference(group.keys()))
+def tier_array_names(format_version: str) -> frozenset[str]:
+    """The arrays a tier of a release of `format_version` must carry: `STORED_P_ARRAYS`
+    as well before 0.3.0 (`carries_stored_p`)."""
+    if carries_stored_p(format_version):
+        return TOP_HIT_TIER_ARRAYS | STORED_P_ARRAYS
+    return TOP_HIT_TIER_ARRAYS
+
+
+def missing_arrays(group: Any, format_version: str) -> list[str]:
+    """The required arrays a tier of a release of `format_version` lacks, sorted."""
+    return sorted(tier_array_names(format_version).difference(group.keys()))
+
+
+def dropped_arrays(group: Any, format_version: str) -> list[str]:
+    """The arrays a tier carries that its release's `format_version` dropped, sorted:
+    `STORED_P_ARRAYS` from 0.3.0, which no writer of that format stores."""
+    if carries_stored_p(format_version):
+        return []
+    return sorted(STORED_P_ARRAYS.intersection(group.keys()))
 
 
 def _lengths_ok(a: dict[str, Any], group: Any) -> bool:
     """Whether every parallel array in the tier is the same length."""
     n = len(a["rows"])
-    optional = [x for x in (a["imputed_values"], a["eaf_values"]) if x is not None]
+    optional = [x for x in (a["imputed_values"], a["eaf_values"], a["abs_z"]) if x is not None]
     # `a`'s entries are numpy arrays, `group["se"]`/`group["p_value"]` are Zarr
     # arrays; zarr 3 removed ``len(Array)``, so every length is the leading
     # axis (which is what ``len`` meant for the numpy ones too).
+    stored_p = [group["p_value"]] if "p_value" in group else []
     return all(
-        int(x.shape[0]) == n
-        for x in [a["cols"], a["z_values"], a["abs_z"], group["se"], group["p_value"], *optional]
+        int(x.shape[0]) == n for x in [a["cols"], a["z_values"], group["se"], *stored_p, *optional]
     )
+
+
+def recomputed_abs_z_and_p(z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """What a 0.2 tier stored beside `z`: its magnitude, as `float32`, and the two-sided
+    p it implies, through `opengwasdb.store_reader.stats` (the one derivation)."""
+    abs_z = np.abs(np.asarray(z, dtype=np.float32))
+    return abs_z, reader_stats.p_values_from_z(abs_z)
+
+
+def stored_p_agrees(abs_z: np.ndarray, p_value: np.ndarray, z: np.ndarray) -> bool:
+    """Whether a 0.2 tier's stored `abs_z` and `p_value` are what its `z` implies.
+
+    `abs_z` within the tolerance its validator rule has always used (1e-3, relative and
+    absolute); `p_value` within 1e-3 relative, and absolutely only within float64's
+    smallest normal number. A floor any wider would wave through a wrong p of 5e-8; one
+    narrower would fail every p below it, where the build's scipy `erfc` flushed to 0.0
+    what `store_reader.stats` keeps as a subnormal: both say p underflows, |z| from
+    37.5 (226 rows a tier on OGS-00006). The validator's `top_hits.abs_z` and the
+    rewrite to 0.3.0, which drops both arrays, ask this one question (ADR 0102, #471).
+    """
+    abs_z_now, p_now = recomputed_abs_z_and_p(z)
+    stored_p = np.asarray(p_value, dtype=np.float64)
+    return bool(
+        np.allclose(np.asarray(abs_z), abs_z_now, rtol=1e-3, atol=1e-3)
+        and np.allclose(stored_p, p_now, rtol=1e-3, atol=_SMALLEST_NORMAL_P)
+    )
+
+
+#: Below this a float64 p is subnormal, or 0.0 where an `erfc` flushes it (`stored_p_agrees`).
+_SMALLEST_NORMAL_P = float(np.finfo(np.float64).tiny)
 
 
 def _offsets_ok(offsets: np.ndarray, n_rows: int, n_analyses: int) -> bool:

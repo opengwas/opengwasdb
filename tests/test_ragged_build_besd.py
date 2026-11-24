@@ -77,7 +77,7 @@ def test_build_creates_store_files(tmp_path):
     # position lives in analyses.tsv's own trait_chr/trait_bp columns now,
     # not a second, independently-shaped tabix-indexed position file.
     assert not (out / "traits.tsv.gz").exists()
-    assert (out / "index.sqlite").exists()
+    assert not (out / "index.sqlite").exists()  # 0.3.0 Observed-Only (ADR 0102, #471)
     assert (out / "data.zarr" / "ragged").exists()
 
     assert result.n_variants == 5
@@ -217,10 +217,12 @@ def test_top_hit_index_schema(tmp_path):
     root = open_store(out).arrays(mode="r")
     for key in root["top_hits"]:
         group = root["top_hits"][key]
-        for name in ("variant_index", "analysis_index", "abs_z", "z", "se", "p_value"):
+        for name in ("variant_index", "analysis_index", "z", "se"):
             assert name in group, f"missing {name} in {key}"
+        for name in ("abs_z", "p_value"):  # dropped from 0.3.0 (ADR 0102, #471)
+            assert name not in group, f"{name} in {key}"
         n = group["variant_index"].shape[0]
-        for name in ("analysis_index", "abs_z", "z", "se", "p_value"):
+        for name in ("analysis_index", "z", "se"):
             assert group[name].shape[0] == n
         assert "threshold" in group.attrs
 
@@ -312,8 +314,6 @@ def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
     Metadata; the store's index.sqlite carries no `analyses` table, and the
     molecular/context columns the BESD path already collects (gene, tissue,
     genomic position) are carried into the shared schema."""
-    import sqlite3
-
     from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
@@ -323,10 +323,8 @@ def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
         association_coverage="cis_and_signals",
     )
 
-    conn = sqlite3.connect(str(out / "index.sqlite"))
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    conn.close()
-    assert "analyses" not in tables
+    # No index.sqlite at all, from 0.3.0 (ADR 0102, #471), so no table in one.
+    assert not (out / "index.sqlite").exists()
 
     table = read_analyses(out / "analyses.tsv")
     rows = {r["analysis_id"]: r for r in table.rows}

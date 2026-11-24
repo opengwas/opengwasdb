@@ -90,7 +90,6 @@ from opengwasdb.encoding.memory import (
     pool_workers,
 )
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
-from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -565,7 +564,6 @@ def _write_union_axis_tables(
     new_alid_to_idx: dict[str, int],
     panel_alids: set[str],
     n_variants: int,
-    n_analyses: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Persist the union axis: ``variants.tsv.gz`` with the source's rsids
     carried across (issue #109), the ``on_panel`` mask, the inverse
@@ -587,12 +585,9 @@ def _write_union_axis_tables(
         out_to_src[new_alid_to_idx[v.alid]] = v.variant_index
 
     print("Writing index.sqlite...")
+    # From 0.3.0 `index.sqlite` holds `completion_quality` and nothing else (ADR 0102).
     with staged.index_connection() as dst_db:
-        initialise_schema(dst_db)
         create_completion_quality_table(dst_db)
-        set_metadata(dst_db, "schema_version", 2)
-        set_metadata(dst_db, "n_variants", n_variants)
-        set_metadata(dst_db, "n_analyses", n_analyses)
         dst_db.commit()
         # analyses.tsv is written after the band write, once
         # n_missing_off_panel is known (issue 044; issue #22).
@@ -622,7 +617,6 @@ def _build_union_axis(
         new_alid_to_idx=new_alid_to_idx,
         panel_alids=panel_alids,
         n_variants=len(merged_variants),
-        n_analyses=source_axis.n_analyses,
     )
     return _UnionAxis(
         merged_variants=merged_variants,
@@ -925,15 +919,12 @@ def _record_effective_dense_chunk_shape(
         return manifest
     # Record the whole layout, not only the inner chunk: a completed release
     # that inherited the source's `shard_shape` or compressor but wrote arrays
-    # with another is the same silent-failure class (issue #245, #247).  The
-    # `index.sqlite` `dense` blob is the third recording 0.2.0 requires (#248),
-    # and completion is the writer that produces it for a completed release.
+    # with another is the same silent-failure class (issue #245, #247). From
+    # 0.3.0 the manifest and the root attrs are the two recordings: the
+    # `index.sqlite` `dense` blob 0.2 carried as a third is dropped (ADR 0102).
     for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format"):
         if key in attrs:
             dense[key] = attrs[key]
-    with staged.index_connection() as connection:
-        set_metadata(connection, "dense", dict(dense))
-        connection.commit()
     return replace(manifest, provenance={**manifest.provenance, "dense": dense})
 
 

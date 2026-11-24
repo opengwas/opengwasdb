@@ -32,7 +32,7 @@ from opengwasdb.encoding import banding, memory
 from opengwasdb.encoding.banding import BYTES_PER_CELL
 from opengwasdb.layouts.dense import top_hits as dense_top_hits
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.top_hits import TOP_HIT_TIER_ARRAYS
+from opengwasdb.top_hits import STORED_P_ARRAYS, TOP_HIT_TIER_ARRAYS
 
 _N_ANALYSES = 2
 _N_VARIANTS = 200
@@ -237,7 +237,8 @@ def test_the_index_is_identical_at_one_and_three_workers(
     assert set(serial_arrays) == {
         f"{tier}/{name}"
         for tier in ("p_5e_08", "p_5e_06", "p_5e_04")
-        for name in TOP_HIT_TIER_ARRAYS | {"eaf"}
+        # The fixture is a 0.2.0 release, whose rebuilt tiers keep the stored p (#471).
+        for name in TOP_HIT_TIER_ARRAYS | STORED_P_ARRAYS | {"eaf"}
     }
     assert set(parallel_arrays) == set(serial_arrays)
     for name, values in serial_arrays.items():

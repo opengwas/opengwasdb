@@ -2,7 +2,9 @@
 
 Format 0.2.x keeps the Store Variant Table as a BGZF file with a tabix index,
 which only pysam reads, and a Store built before the rsid index names rsids in
-`index.sqlite`'s `variant_aliases` table. The Store Reader may import neither
+`index.sqlite`'s `variant_aliases` table. A 0.3.0 release has no such table (ADR
+0102, #471): its Variant Axis never asks `alias_index`, and its facade never names
+the index to open. The Store Reader may import neither
 pysam nor sqlite3 (#464): its Variant Axis asks a `LegacyVariantTable` (a
 Protocol in `opengwasdb.store_reader.variant_axis`) for these reads, and this
 module is the one implementation, and the only place opengwasdb reads that

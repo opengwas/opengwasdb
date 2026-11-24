@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from format_0_2_3 import as_0_2_3
 from validation_bands import band_rows
 
 from opengwasdb.layouts.dense import indexed_subsets
@@ -201,6 +202,7 @@ def test_a_rule_whose_body_skips_gets_one_line_and_no_row(ragged_store_path, log
     `sqlite.variant_aliases` reads a table a Ragged release built before the rename does
     not have, and raises `Skip` from its own body: it must leave the report untouched.
     """
+    as_0_2_3(ragged_store_path)  # a 0.3.0 release is not judged on an alias table (#471)
     result = validate_store(ragged_store_path)
     assert "sqlite.variant_aliases" in result.skipped, "fixture must reach the rule"
 

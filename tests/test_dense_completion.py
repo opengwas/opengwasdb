@@ -1717,21 +1717,16 @@ class TestUnionAxisPhase:
             assert len(axis.tsv_paths) == 2  # one chr1 block + one chr2 block
 
             # The phase has already persisted the axis: variants.tsv.gz and an
-            # index.sqlite seeded with the completion-quality table.
+            # index.sqlite holding the completion-quality table and, from 0.3.0,
+            # nothing else (ADR 0102, #471).
             assert (staged.path / "variants.tsv.gz").exists()
             conn = sqlite3.connect(str(staged.path / "index.sqlite"))
             tables = {
                 r[0]
                 for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
-            metadata = {
-                row[0]: row[1]
-                for row in conn.execute("SELECT key, value FROM metadata")
-            }
             conn.close()
-            assert "completion_quality" in tables
-            assert metadata["n_variants"] == "8"
-            assert metadata["n_analyses"] == "2"
+            assert tables == {"completion_quality"}
 
 
 class TestReaderSeam:

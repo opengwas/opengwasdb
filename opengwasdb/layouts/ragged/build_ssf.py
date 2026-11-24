@@ -891,9 +891,9 @@ def _build_variant_axis(
     """Sort the unique canonical variants into the axis and index the store.
 
     No `analyses` table (ADR 0034, issue #69): analyses.tsv is the sole
-    source of truth for Analytical Metadata. The empty index file is still
-    created here, so Reference Completion has somewhere to add
-    completion_quality, and its connection is closed before the CSR phase.
+    source of truth for Analytical Metadata. No `index.sqlite` either: from
+    0.3.0 only a Reference-Completed release carries one, which completion
+    creates to hold `completion_quality` (ADR 0102, #471).
     """
     variants = sorted(
         alid_variant.values(),
@@ -902,7 +902,6 @@ def _build_variant_axis(
     alid_to_idx = {v.alid: i for i, v in enumerate(variants)}
     print(f"Canonical variants: {len(variants):,}")
     write_variant_axis(staged.path, variants, rsid_by_alid)
-    staged.index_connection().close()
     return variants, alid_to_idx
 
 

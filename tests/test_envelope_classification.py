@@ -19,6 +19,7 @@ from opengwasdb.store.open import (
     DENSE_ENVELOPE,
     HYBRID_DENSE_COMPONENT_ENVELOPE,
     HYBRID_ENVELOPE,
+    INDEX_FILENAME,
     RAGGED_ENVELOPE,
 )
 
@@ -65,7 +66,8 @@ def test_a_malformed_table_line_fails_rather_than_vanishing() -> None:
 def test_every_envelope_entry_has_a_classification_row() -> None:
     named = set().union(*(names for names, _ in _rows()))
     envelope = DENSE_ENVELOPE | RAGGED_ENVELOPE | HYBRID_ENVELOPE | HYBRID_DENSE_COMPONENT_ENVELOPE
-    assert sorted(envelope - named) == []
+    # `index.sqlite` is added by completion state (`envelope_at`, #471), not a constant's.
+    assert sorted((envelope | {INDEX_FILENAME}) - named) == []
 
 
 def test_every_row_names_one_class() -> None:
