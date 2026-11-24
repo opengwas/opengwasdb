@@ -416,6 +416,20 @@ def _miss_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict
     return out
 
 
+def _variant_read_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """The facade's variant-only reads (#484), digested: the count, the rows of the spread
+    identifiers and the absent ones, and the rows of every range probe."""
+    records = [variants[key] for key in sorted(variants)]
+    identifiers = [*_identifiers(_spread(records, N_VARIANTS_ASKED)), *ABSENT_IDENTIFIERS]
+    out = {
+        "variant_count": {"count": digest_array(np.asarray([q.variant_count()], dtype="int64"))},
+        "variants": _table_digests(q.variants(identifiers)),
+    }
+    for name, (chrom, start, end) in range_questions(variants).items():
+        out[f"variants_in_range/{name}"] = _table_digests(q.variants_in_range(chrom, start, end))
+    return out
+
+
 def _subset_digests(q: Any, path: str | Path) -> dict[str, dict[str, str]]:
     """Each Indexed Variant Subset's answer for the spread Analyses, Observed-Only and
     not (ADR 0061): a subset records its parent release, so a derived release that
@@ -463,6 +477,7 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
         out["alid_probes"] = _probe_digests(q, variants)
+        out["variant_reads"] = _variant_read_digests(q, variants)
         out["indexed_subsets"] = _subset_digests(q, path)
         out["misses"] = _miss_digests(q, variants)
         asked = range_questions(variants)
@@ -484,6 +499,11 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
     for section in ("shapes", "resolved", "alid_probes", "range_probes", "misses"):
         found += _shape_differences(section, reference[section], candidate[section])
+    found += _shape_differences(
+        "variant_reads",
+        reference.get("variant_reads", {}),
+        candidate.get("variant_reads", {}),
+    )
     found += _shape_differences(
         "indexed_subsets",
         reference.get("indexed_subsets", {}),

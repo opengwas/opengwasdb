@@ -412,3 +412,122 @@ def test_the_writer_refuses_an_rsid_the_index_cannot_hold(tmp_path: Path):
     with pytest.raises(UnindexableRsidError, match=r"1 variant\(s\) .* first, 1:200:C:T"):
         write_variant_axis(tmp_path, variants, {variants[0].alid: "rs1", variants[1].alid: wide})
     assert list(tmp_path.iterdir()) == [], "nothing is written"
+
+
+# ── variant-only reads (#484): `variant_count()`, `variants()`, `variants_in_range()` ──
+# Each is `variants_table()` filtered by brute force, at 0.3.0 and 0.2.3, and on 0.3.0 loads
+# neither pysam nor sqlite3 with every Variant Table unreadable.
+
+
+def _names(row: dict[str, Any]) -> set[str]:
+    """Every identifier a row answers to: its ALID and its rsID cell, whole -- the axis
+    indexes a cell as one name, as `lookup` has always read it, on both versions."""
+    return {row["alid"], *([row["rsid"]] if row["rsid"] else [])}
+
+
+def _asked(table: dict[int, dict[str, Any]]) -> list[str]:
+    """ALIDs and rsIDs spread over the table, the planted multi-allelic ones, and misses."""
+    keys = sorted(table)
+    spread = [table[k] for k in keys[:: max(1, len(keys) // 7)]]
+    return [
+        *(r["alid"] for r in spread),
+        *(r["rsid"] for r in spread if r["rsid"]),
+        "rs77",  # two rows
+        "rs11;rs12",  # a cell naming two rsIDs
+        "rs0",
+        "1:1:A:C",
+    ]
+
+
+@pytest.mark.parametrize("form", [0, 1], ids=["0.3.0", "0.2.3"])
+@pytest.mark.parametrize("name", FIXTURES)
+def test_each_read_is_the_variants_table_filtered_by_brute_force(planted, name: str, form: int):
+    with query_store(planted[name][form]) as q:
+        table = q.variants_table()
+        assert q.variant_count() == len(table) >= len(PLANTED)
+
+        asked = _asked(table)
+        got = q.variants(asked)
+        want = {k: row for k, row in table.items() if _names(row) & set(asked)}
+        assert got == want
+        assert len([r for r in got.values() if r["rsid"] == "rs77"]) == 2, (
+            "a multi-allelic rsID gives every row"
+        )
+        assert any(r["rsid"] == "rs11;rs12" for r in got.values()), "an rsID of a several-rsID cell"
+        assert q.variants(["rs0", "1:1:A:C"]) == {}, "unknown identifiers are absent"
+        assert q.variants([]) == {}
+        assert list(got) == sorted(got)
+
+        chromosomes = sorted({r["chromosome"] for r in table.values()})
+        absent = next(c for c in ("Y", "MT", "X") if c not in chromosomes)
+        first, last = table[0], table[len(table) - 1]
+        ranges = [
+            (first["chromosome"], first["position"], first["position"]),  # one position
+            (last["chromosome"], last["position"], 10**9),  # to the chromosome's edge
+            (first["chromosome"], 1, 10**9),  # a whole chromosome
+            (chromosomes[-1], 1, 1),  # nothing there
+            (absent, 1, 10**9),  # a chromosome the release lacks
+            (first["chromosome"], 10, 5),  # end before start
+        ]
+        for chromosome, start, end in ranges:
+            got = q.variants_in_range(chromosome, start, end)
+            want = {
+                k: row
+                for k, row in table.items()
+                if row["chromosome"] == chromosome and start <= row["position"] <= end
+            }
+            assert got == want, (chromosome, start, end)
+            assert list(got) == sorted(got)
+        assert q.variants_in_range(first["chromosome"], first["position"], first["position"])
+        assert q.variants_in_range(absent, 1, 10**9) == {}
+
+
+@pytest.mark.parametrize("name", FIXTURES)
+def test_a_range_is_the_rows_range_phewas_reads(planted, name: str):
+    """`variants_in_range` names the variant indices `range_phewas` returns associations for."""
+    with query_store(planted[name][0]) as q:
+        table = q.variants_table()
+        first, last = table[0], table[len(table) - 1]
+        rows = q.variants_in_range(first["chromosome"], 1, 10**9)
+        result = q.range_phewas(first["chromosome"], 1, 10**9)
+        assert len(result["variant_index"]) > 0
+        assert set(result["variant_index"].tolist()) <= set(rows)
+        edge = q.variants_in_range(last["chromosome"], last["position"], last["position"])
+        assert 0 in q.variants_in_range(first["chromosome"], first["position"], first["position"])
+        assert len(table) - 1 in edge
+
+
+VARIANT_READS_PROBE = r"""
+import json, sys
+from opengwasdb.query import query_store
+
+path, alid = sys.argv[1], sys.argv[2]
+with query_store(path) as q:
+    count = q.variant_count()
+    by_identifier = q.variants([alid, "rs77", "rs0"])
+    in_range = q.variants_in_range(by_identifier[min(by_identifier)]["chromosome"], 1, 10**9)
+print(json.dumps({
+    "count": count,
+    "by_identifier": len(by_identifier),
+    "in_range": len(in_range),
+    "pysam": "pysam" in sys.modules,
+    "sqlite3": "sqlite3" in sys.modules,
+}))
+"""
+
+
+@pytest.mark.parametrize("name", PROBED)
+def test_the_reads_on_0_3_0_load_no_variant_table_no_pysam_and_no_sqlite3(
+    planted, tmp_path: Path, name: str
+):
+    release = Path(shutil.copytree(planted[name][0], tmp_path / name))
+    with query_store(release) as q:
+        table = q.variants_table()
+    last = table[len(table) - 1]["alid"]
+    out = _run_unreadable(release, ["-c", VARIANT_READS_PROBE, str(release), last])
+    assert out.returncode == 0, out.stderr[-3000:]
+    found = json.loads(out.stdout)
+    assert found["count"] == len(table)
+    assert found["by_identifier"] >= 3 and found["in_range"] >= 1, "a read that found nothing"
+    assert found["pysam"] is False, "a 0.3.0 variant read loaded pysam"
+    assert found["sqlite3"] is False, "a 0.3.0 variant read loaded sqlite3"
