@@ -500,8 +500,12 @@ made completion keep it).
   a state-1 row through the ALID index and scans the lifted text for the rest. When no row
   has a `source_alid`, every state 0, it returns None, as it does for a 0.2 table that
   predates the column: a 0.3.0 release rewritten from such a table holds nothing to join
-  on, and `validate --source` then lifts its samples itself (#473) rather than count them
-  unmatched.
+  on. On a release whose manifest records no lift, `validate --source` then lifts its
+  samples itself (#473) rather than count them unmatched. On one that records a lift
+  (every Dense VCF build records `provenance.chain_file`) `variant_table.source_alid`
+  (#449) fails first and `fidelity.source`, which runs behind it, is skipped: such a
+  release is rebuilt, and the fallback is never reached. Both are tested end to end on
+  a lifted Dense build whose states are all 0 (`tests/test_source_alid_sidecar.py`).
 - **The column is new on every format.** `variants_table()`, the variant-only reads #484
   added (`variants()`, `variants_in_range()`) and resolved rows with variant info gain
   `source_alid`, as they name rsIDs. The three reads share one projection of a row, the

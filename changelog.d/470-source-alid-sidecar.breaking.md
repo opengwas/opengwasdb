@@ -22,8 +22,10 @@
   `by_indices`, `all`, `records`, `range` and `by_identifier` name each row from the
   sidecars, so neither completion of a 0.3.0 source nor `validate --source`'s join
   (`indices_by_source_alid`) reads `variants.tsv.gz`. The join returns None, as for a
-  table that predates the column, when no row has a `source_alid`, so `validate
-  --source` lifts its samples itself. The validator reads the table through the new
+  table that predates the column, when no row has a `source_alid`. On a release whose
+  manifest records no lift, `validate --source` then lifts its samples itself; on one
+  that records a lift, `variant_table.source_alid` (#449) fails first and the
+  source-fidelity check is skipped. The validator reads the table through the new
   `VariantAxis.written_table_records`. A 0.2 release is read as before.
 - **`ogdb build-dense` writes each row's own ALID as its `source_alid`.** It lifts
   nothing, and wrote none before, so its releases now say each row's source named it

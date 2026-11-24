@@ -567,13 +567,7 @@ class VariantAxis:
             return {}
         if self.reads_table:
             return self._table_rows(unique)
-        columns = {name: v.tolist() for name, v in self.identity_by_indices(unique).items()}
-        columns["rsid"] = self.rsids_by_indices(unique).tolist()
-        columns["source_alid"] = self.source_alids_by_indices(unique).tolist()
-        return {
-            row: {name: columns[name][slot] for name in VARIANTS_TABLE_COLUMNS}
-            for slot, row in enumerate(unique.tolist())
-        }
+        return {record.variant_index: _table_row(record) for record in self.sidecar_records(unique)}
 
     def _table_rows(self, unique: np.ndarray) -> dict[int, dict[str, Any]]:
         """`rows_by_indices` on the 0.2 series: the table's records, projected."""
@@ -694,8 +688,10 @@ class VariantAxis:
 
         None when the release records no row's ``source_alid``: a 0.2 table that predates
         the column, or a 0.3.0 sidecar whose every state is none, which is what a rewrite
-        of such a table writes. The caller then lifts the ALIDs over itself rather than
-        read no match as no variant (#473, ADR 0105 §8).
+        of such a table writes. The caller can then lift the ALIDs over itself rather
+        than read no match as no variant (#473, ADR 0105 §8). `validate --source` does so
+        only for a release whose manifest records no lift: on one that records a lift,
+        `variant_table.source_alid` (#449) fails first and the fidelity check is skipped.
         """
         if not self.reads_table:
             sidecar = self._sources()
@@ -732,7 +728,8 @@ VARIANTS_TABLE_COLUMNS = RECORD_FIELDS[1:]
 
 
 def _table_row(record: VariantRecord) -> dict[str, Any]:
-    """One `variants_table()` row from a table record (`VARIANTS_TABLE_COLUMNS`)."""
+    """One `variants_table()` row from a record, read from the table or named by the
+    sidecars (`VARIANTS_TABLE_COLUMNS`)."""
     return {name: record[name] for name in VARIANTS_TABLE_COLUMNS}
 
 

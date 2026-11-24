@@ -805,7 +805,9 @@ value, which the table would read otherwise than the sidecar. Nothing searches t
 text, so it has no sort keys; the source-fidelity join (`validate --source`) finds a
 state-1 row through the ALID index and scans the text for the rest; a release whose
 every state is 0 holds nothing to join on, and the join says so, as for a table without
-the column, so `validate --source` lifts the samples itself. Each row's state
+the column. On a release whose manifest records no lift, `validate --source` then lifts
+the samples itself; on one that records a lift, `variant_table.source_alid` (§20.0)
+fails first and the source-fidelity check is not run. Each row's state
 and text equal the table's `source_alid` column row for row, a blank (`.`) there
 being state 0, which `variant_table.source_alid_sidecar` (§20.0) holds a release
 to. `variants_table()` gives it as `source_alid` (`None` where empty), and a resolved

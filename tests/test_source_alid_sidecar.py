@@ -633,3 +633,118 @@ def test_a_seven_column_table_rewrites_to_a_sidecar_naming_none(planted, tmp_pat
     assert sidecar.sourced(0, sidecar.n_rows) == 0
     assert len(sidecar.utf8) == 0
     assert _source_alid_join(destination, lifted) is None
+
+
+# ── the source-fidelity fallback, end to end ────────────────────────────────
+
+
+def _forward_moving_chain(path: Path) -> Path:
+    """A chain that moves hg19 chr3 1,000 bases up on hg38, forward: a lift no strand
+    flip complicates (opengwas/opengwasdb#486)."""
+    size = 1_000_000
+    path.write_text(
+        f"chain 1000 chr3 {size} + 0 500000 chr3 {size} + 1000 501000 1\n500000\n\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture
+def lifted_without_sources(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A Dense release lifted from hg19 whose rows name no `source_alid` (every state 0),
+    its source manifest and chain: ``(release, source, chain)``."""
+    import test_extract_variant_reference as tev
+
+    from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+
+    chain = _forward_moving_chain(tmp_path / "hg19ToHg38.chain")
+    rows = [
+        f"3\t{pos}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t{es}:0.1:0.2\n"
+        for pos, es in ((1_000, 0.2), (2_000, -0.3), (3_000, 0.5))
+    ]
+    source = tev._make_manifest(tmp_path, [("t", tev._make_vcf(tmp_path, "t", rows), "", "hg19")])
+    release = tmp_path / "obs.opengwasdb"
+    build_dense_from_vcf_manifest(
+        source, release, store_id="s", release_id="r", chain_file=chain,
+        liftover_failure_threshold=0.5,
+    )
+    axis = VariantAxis(release)
+    try:
+        records = axis.all()
+    finally:
+        axis.close()
+    assert all(r.source_alid and r.source_alid != r.alid for r in records), "every row lifted"
+    write_variant_axis(
+        release,
+        [
+            CanonicalVariant(r.chromosome, r.position, r.effect_allele, r.other_allele)
+            for r in records
+        ],
+        {r.alid: r.rsid for r in records if r.rsid},
+        [None] * len(records),
+    )
+    assert set(np.load(release / codec.SOURCE_ALID_STATE_FILENAME).tolist()) == {codec.NONE}
+    return release, source, chain
+
+
+def _forget_the_lift(release: Path) -> None:
+    import json
+
+    manifest = json.loads((release / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["provenance"].pop("chain_file", None), "a Dense VCF build records its chain"
+    (release / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _fidelity(release: Path, source: Path, chain: Path, monkeypatch: pytest.MonkeyPatch):
+    """`validate --source` of `release`, and how many times it lifted the samples."""
+    import opengwasdb.build.liftover as liftover
+
+    lifts: list[int] = []
+    lift = liftover.build_liftover_lookup
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        lifts.append(1)
+        return lift(*args, **kwargs)
+
+    monkeypatch.setattr(liftover, "build_liftover_lookup", counted)
+    result = validate_store(release, source=source, source_assembly="hg19", chain_file=chain)
+    return result, len(lifts)
+
+
+def test_a_release_naming_no_source_alid_and_recording_no_lift_lifts_its_samples(
+    lifted_without_sources, monkeypatch: pytest.MonkeyPatch
+):
+    """The join says it cannot answer (None), so `validate --source` lifts the samples
+    itself and every one matches its stored cell (#473, ADR 0105 §8)."""
+    release, source, chain = lifted_without_sources
+    _forget_the_lift(release)
+
+    result, lifts = _fidelity(release, source, chain, monkeypatch)
+
+    assert lifts == 1, "the validator lifted the samples itself"
+    assert result.failed() == frozenset(), result.errors
+    assert "fidelity.source" not in result.skipped, "fidelity was judged"
+    # Were the join to answer {} (no row found) instead, no sample would match.
+    from opengwasdb.store_reader import variant_axis
+
+    monkeypatch.setattr(variant_axis.VariantAxis, "indices_by_source_alid", lambda self, w: {})
+    result, lifts = _fidelity(release, source, chain, monkeypatch)
+    assert lifts == 0
+    assert "fidelity.source" in result.failed()
+    assert any("none of 3 sampled source associations" in e for e in result.errors)
+
+
+def test_a_release_that_records_a_lift_and_names_no_source_alid_fails_before_fidelity(
+    lifted_without_sources, monkeypatch: pytest.MonkeyPatch
+):
+    """Where the manifest records a lift, `variant_table.source_alid` (#449) fails first and
+    `fidelity.source`, which runs after it, is not reached: the samples are not lifted."""
+    release, source, chain = lifted_without_sources
+
+    result, lifts = _fidelity(release, source, chain, monkeypatch)
+
+    assert "variant_table.source_alid" in result.failed(), result.errors
+    assert "fidelity.source" in result.skipped, "fidelity runs behind the #449 rule"
+    assert "fidelity.source" not in result.failed()
+    assert lifts == 0
+

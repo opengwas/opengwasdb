@@ -212,7 +212,7 @@ class SourceAlidSidecar:
         from the state; refused unless the offsets number them plus one, or if a state
         is outside 0-2."""
         if not self._checked:
-            fault = _state_fault(self.state) or _count_fault(self.state, self.offsets)
+            fault = _state_fault(self.state) or _count_fault(self._other_rows(), self.offsets)
             if fault:
                 raise MalformedSourceAlidSidecar(f"the {_WHAT} cannot be read: {fault}")
             self._checked = True
@@ -342,7 +342,7 @@ class SourceAlidSidecar:
         """
         fault = (
             _state_fault(self.state)
-            or _count_fault(self.state, self.offsets)
+            or _count_fault(self._other_rows(), self.offsets)
             or offsets_fault(
                 self.offsets,
                 len(self.utf8),
@@ -411,9 +411,9 @@ def _state_fault(state: np.ndarray) -> str:
     return ""
 
 
-def _count_fault(state: np.ndarray, offsets: np.ndarray) -> str:
-    """Why the offsets do not number the `OTHER` rows plus one, or ``""``."""
-    n_other = int(np.count_nonzero(np.asarray(state) == OTHER))
+def _count_fault(others: np.ndarray, offsets: np.ndarray) -> str:
+    """Why the offsets do not number the `OTHER` rows, `others`, plus one, or ``""``."""
+    n_other = len(others)
     if len(offsets) != n_other + 1:
         return (
             f"{SOURCE_ALID_OFFSETS_FILENAME} has {len(offsets)} offsets for {n_other} lifted "
