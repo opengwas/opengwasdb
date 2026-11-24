@@ -38,7 +38,7 @@ from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader import top_hits as reader_top_hits
-from opengwasdb.store_reader.format import tiers_store_p_value
+from opengwasdb.store_reader.format import carries_stored_p
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stats import z_critical as z_critical
@@ -263,8 +263,8 @@ def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Ana
 
 def tier_array_names(format_version: str) -> frozenset[str]:
     """The arrays a tier of a release of `format_version` must carry: `STORED_P_ARRAYS`
-    as well before 0.3.0 (`tiers_store_p_value`)."""
-    if tiers_store_p_value(format_version):
+    as well before 0.3.0 (`carries_stored_p`)."""
+    if carries_stored_p(format_version):
         return TOP_HIT_TIER_ARRAYS | STORED_P_ARRAYS
     return TOP_HIT_TIER_ARRAYS
 
@@ -277,7 +277,7 @@ def missing_arrays(group: Any, format_version: str) -> list[str]:
 def dropped_arrays(group: Any, format_version: str) -> list[str]:
     """The arrays a tier carries that its release's `format_version` dropped, sorted:
     `STORED_P_ARRAYS` from 0.3.0, which no writer of that format stores."""
-    if tiers_store_p_value(format_version):
+    if carries_stored_p(format_version):
         return []
     return sorted(STORED_P_ARRAYS.intersection(group.keys()))
 

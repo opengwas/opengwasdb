@@ -36,7 +36,7 @@ from opengwasdb.store_reader.alid import (
     parse_canonical_alid,
 )
 from opengwasdb.store_reader.alid_index import ABSENT, UNINDEXED, AlidIndex, open_alid_index
-from opengwasdb.store_reader.format import carries_position_sidecar, index_holds_provenance_only
+from opengwasdb.store_reader.format import carries_position_sidecar, carries_variant_aliases
 from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.store_reader.position_sidecar import MissingPositionSidecar, PositionSidecar
 
@@ -173,7 +173,7 @@ class VariantAxis:
         self._alid_index = open_alid_index(self.store_path, format_version)
         # A 0.2 release may name an rsID only in `index.sqlite`'s `variant_aliases`; a
         # 0.3.0 release carries no such table, and its rsID index is the whole answer.
-        self._consults_variant_aliases = not index_holds_provenance_only(format_version)
+        self._format_version = format_version
         # Whether ranges are answered by format 0.3.0's position sidecar (ADR 0105 §6)
         # or, on the 0.2 series, by a tabix fetch through `legacy`. A 0.3.0 release
         # missing the sidecar's files is refused here; the sidecar is read on first use
@@ -321,7 +321,7 @@ class VariantAxis:
             if len(matched):
                 indices.extend(int(index) for index in matched)
                 continue
-            if not self._consults_variant_aliases:
+            if not carries_variant_aliases(self._format_version):
                 continue
             index = self._legacy.alias_index(identifier)
             if index is not None:

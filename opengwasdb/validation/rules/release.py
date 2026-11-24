@@ -21,7 +21,6 @@ from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.store.open import (
     check_format_version_stamp,
     envelope_at,
-    layout_envelope,
     newer_than_written,
     newer_than_written_text,
     ships_index,
@@ -31,9 +30,9 @@ from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
+    carries_index_metadata,
     carries_position_sidecar,
     indels_reference_first,
-    index_holds_provenance_only,
     split_format_version,
     zarr_format_for_version,
 )
@@ -216,7 +215,7 @@ def _alid_index_entries(target: Target, *, rebuild: bool = False) -> list[tuple[
 
 
 def _index_entry(target: Target) -> list[tuple[str, Path]]:
-    """`index.sqlite`, where a release of its envelope, version and completion state
+    """`index.sqlite`, where a release of its layout, version and completion state
     carries one (`ships_index`): every 0.2 release; from 0.3.0 only one that holds its
     own `completion_quality` (ADR 0102)."""
     if not target_ships_index(target):
@@ -228,7 +227,10 @@ def target_ships_index(target: Target) -> bool:
     """Whether the release carries an `index.sqlite` (`ships_index`)."""
     manifest = target.store.manifest
     return ships_index(
-        _layout_envelope(target), manifest.format_version, manifest.completion_state
+        target.layout,
+        manifest.format_version,
+        manifest.completion_state,
+        dense_component=_is_dense_component(target),
     )
 
 
@@ -308,19 +310,19 @@ def required_entries(target: Target) -> Iterator[str]:
             yield message
 
 
-def _layout_envelope(target: Target) -> frozenset[str]:
-    """The envelope constant of the release's layout, before its version and state.
-
-    A Hybrid release's Dense Component additionally carries dense_to_shared.npy, which
-    a standalone Dense release never does.
-    """
-    return layout_envelope(target.layout, dense_component=target.parent is not None)
+def _is_dense_component(target: Target) -> bool:
+    """Whether the release is a Hybrid's nested Dense Component, which additionally
+    carries dense_to_shared.npy, as a standalone Dense release never does."""
+    return target.parent is not None
 
 
 def _envelope(target: Target) -> frozenset[str]:
     manifest = target.store.manifest
     return envelope_at(
-        _layout_envelope(target), manifest.format_version, manifest.completion_state
+        target.layout,
+        manifest.format_version,
+        manifest.completion_state,
+        dense_component=_is_dense_component(target),
     )
 
 
@@ -382,16 +384,18 @@ def _reject_stray_analyses_table(index: ReleaseIndex, errors: list[str]) -> None
     the sole source of truth for Analytical Metadata, so a leftover SQL
     ``analyses`` table -- Dense/Hybrid retired theirs in issue #68, Ragged in
     issue #69 -- is a validation failure, not a harmless relic."""
-    if "analyses" in index.names(tables_only=True):
+    if _ANALYSES_TABLE in index.names(tables_only=True):
         errors.append(
             "index.sqlite still contains an analyses table -- analyses.tsv is the sole "
             "source of truth for Analytical Metadata (ADR 0030, issue #22)"
         )
 
 
-#: What a 0.3.0 `index.sqlite` may hold: `completion_quality` and SQLite's own tables.
-#: A stray `analyses` table is `sqlite.analyses_table`'s to report.
-_PROVENANCE_TABLES = frozenset({"completion_quality", "analyses"})
+#: The one table a 0.3.0 `index.sqlite` holds (ADR 0102).
+_PROVENANCE_TABLES = frozenset({"completion_quality"})
+
+#: A table `sqlite.analyses_table` reports, on every format, so not reported again.
+_ANALYSES_TABLE = "analyses"
 
 
 def provenance_only_index(target: Target) -> list[str]:
@@ -403,7 +407,9 @@ def provenance_only_index(target: Target) -> list[str]:
     with ReleaseIndex(target.store.path) as index:
         tables = index.names(tables_only=True)
     stray = sorted(
-        name for name in tables - _PROVENANCE_TABLES if not name.startswith("sqlite_")
+        name
+        for name in tables - _PROVENANCE_TABLES - {_ANALYSES_TABLE}
+        if not name.startswith("sqlite_")
     )
     if not stray:
         return []
@@ -417,7 +423,7 @@ def provenance_only_index(target: Target) -> list[str]:
 def _provenance_only(target: Target) -> bool:
     """A release whose `index.sqlite` ships and holds provenance alone: 0.3.0 on."""
     version = target.store.manifest.format_version
-    return target_ships_index(target) and index_holds_provenance_only(version)
+    return target_ships_index(target) and not carries_index_metadata(version)
 
 
 def format_stamp(target: Target) -> list[str]:

@@ -18,13 +18,12 @@ from format_0_2_3 import as_0_2_3
 
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
-    HYBRID_DENSE_COMPONENT_ENVELOPE,
     HYBRID_ENVELOPE,
     RAGGED_ENVELOPE,
     envelope_at,
     ships_index,
 )
-from opengwasdb.store_reader.enums import CompletionState
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.validation import validate_store
 
 NAMES = [
@@ -41,18 +40,28 @@ def _tables(index: Path) -> set[str]:
         return {row[0] for row in listed}
 
 
+#: Every release kind: each layout's own release, and a Hybrid's nested Dense Component.
+KINDS = [
+    (PrimaryStorageLayout.DENSE, False),
+    (PrimaryStorageLayout.RAGGED, False),
+    (PrimaryStorageLayout.HYBRID, False),
+    (PrimaryStorageLayout.HYBRID, True),
+]
+
+
 def test_index_sqlite_ships_by_version_layout_and_completion_state():
-    every = (DENSE_ENVELOPE, RAGGED_ENVELOPE, HYBRID_ENVELOPE, HYBRID_DENSE_COMPONENT_ENVELOPE)
-    for envelope in every:
-        assert "index.sqlite" not in envelope
+    for envelope in (DENSE_ENVELOPE, RAGGED_ENVELOPE, HYBRID_ENVELOPE):
+        assert "index.sqlite" not in envelope  # added by `envelope_at`, not a constant
+    for layout, nested in KINDS:
         for state in (OO, RC):
-            assert "index.sqlite" in envelope_at(envelope, "0.2.3", state)
-            assert ships_index(envelope, "0.2.3", state)
-        assert "index.sqlite" not in envelope_at(envelope, "0.3.0", OO)
-    for envelope in (DENSE_ENVELOPE, RAGGED_ENVELOPE, HYBRID_DENSE_COMPONENT_ENVELOPE):
-        assert "index.sqlite" in envelope_at(envelope, "0.3.0", RC)
-    # A Hybrid's outer release holds no completion_quality: its Dense Component does.
-    assert "index.sqlite" not in envelope_at(HYBRID_ENVELOPE, "0.3.0", RC)
+            assert "index.sqlite" in envelope_at(layout, "0.2.3", state, dense_component=nested)
+            assert ships_index(layout, "0.2.3", state, dense_component=nested)
+        assert "index.sqlite" not in envelope_at(layout, "0.3.0", OO, dense_component=nested)
+        # A Hybrid's outer release holds no completion_quality: its Dense Component does.
+        holds_its_own = nested or layout is not PrimaryStorageLayout.HYBRID
+        assert ("index.sqlite" in envelope_at(layout, "0.3.0", RC, dense_component=nested)) is (
+            holds_its_own
+        )
 
 
 @pytest.mark.parametrize("name", NAMES)

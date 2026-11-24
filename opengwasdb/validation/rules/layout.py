@@ -20,7 +20,7 @@ from typing import Any
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store.arrays import COMPRESSOR_RECORD, SHARDED_COMPRESSOR_RECORD
 from opengwasdb.store_reader.arrays import inner_chunk_of
-from opengwasdb.store_reader.format import index_holds_provenance_only
+from opengwasdb.store_reader.format import carries_index_metadata
 from opengwasdb.store_reader.layout import ArrayRole, shard_layout
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.hybrid import COMPONENT, component, is_hybrid
@@ -30,19 +30,8 @@ from opengwasdb.validation.rules.release import REQUIRED
 def recorded(target: Target) -> Iterator[str]:
     """A grid's three recordings describe its planes."""
     errors: list[str] = []
-    store = target.store
-    blob = _index_blob(store)
-    _validate_recorded_layout(store.manifest, blob, target.group, errors)
+    _validate_recorded_layout(target.store, target.group, errors)
     yield from errors
-
-
-def _index_blob(store: Any) -> tuple[Any] | None:
-    """The release's `index.sqlite` `dense` blob, as a one-tuple (None inside when it
-    records none); None where the format carries no blob to read (0.3.0, ADR 0102)."""
-    if index_holds_provenance_only(store.manifest.format_version):
-        return None
-    with ReleaseIndex(store.path) as index:
-        return (index.metadata("dense", default=None),)
 
 
 def outer_recordings(target: Target) -> Iterator[str]:
@@ -85,13 +74,15 @@ def _recorded_from_index(blob: Any) -> tuple[str, Any, Any, Any, Any] | None:
 
 
 def _index_recording(
-    blob: tuple[Any] | None, errors: list[str], *, require_all: bool
+    store: Any, errors: list[str], *, require_all: bool
 ) -> list[tuple[str, Any, Any, Any, Any]]:
-    """The `index.sqlite` `dense` blob as a recording: none on a 0.3.0 release, which
-    carries no blob (`blob` None), and an error where `require_all` and it is absent."""
-    if blob is None:
+    """The `index.sqlite` `dense` blob as a recording, where the release's format carries
+    one (`carries_index_metadata`: the 0.2 series); none on 0.3.0, whose manifest is the
+    one copy (ADR 0102). An absent blob is an error where `require_all`."""
+    if not carries_index_metadata(store.manifest.format_version):
         return []
-    from_index = _recorded_from_index(blob[0])
+    with ReleaseIndex(store.path) as index:
+        from_index = _recorded_from_index(index.metadata("dense", default=None))
     if from_index is not None:
         return [from_index]
     if require_all:
@@ -103,8 +94,7 @@ def _index_recording(
 
 
 def _recorded_layouts(
-    manifest: Any,
-    blob: tuple[Any] | None,
+    store: Any,
     root: Any,
     errors: list[str],
     *,
@@ -122,10 +112,11 @@ def _recorded_layouts(
     an absent `provenance.dense` or `dense` blob is then an error, not a skipped
     comparison (issue #248 review round 3).  A 0.1.0 release is only judged on
     the recordings it carries -- the completion path writes no `dense` blob.
-    `blob` is None for a 0.3.0 release, which carries none (ADR 0102): its
-    manifest and root attrs are the recordings, and neither is optional.
+    A 0.3.0 release carries no blob (ADR 0102): its manifest and root attrs are
+    the recordings.
     """
     recorded: list[tuple[str, Any, Any, Any, Any]] = []
+    manifest = store.manifest
     provenance = manifest.provenance if isinstance(manifest.provenance, dict) else {}
     block = None
     for key in ("dense", "hybrid"):
@@ -138,7 +129,7 @@ def _recorded_layouts(
             "manifest.json provenance.dense: no chunk_shape recorded, so the release "
             "does not describe its Dense planes' layout (spec §10a)"
         )
-    recorded += _index_recording(blob, errors, require_all=require_all)
+    recorded += _index_recording(store, errors, require_all=require_all)
     attrs = dict(root.attrs)
     recorded.append(
         (
@@ -181,9 +172,7 @@ def _recorded_layout_mismatches(
     errors.extend(_recorded_zarr_format_errors(recorded, planes[0][3]))
 
 
-def _validate_recorded_layout(
-    manifest: Any, blob: tuple[Any] | None, root: Any, errors: list[str]
-) -> None:
+def _validate_recorded_layout(store: Any, root: Any, errors: list[str]) -> None:
     """Every recorded chunk and shard shape must describe the arrays present.
 
     A manifest that describes one shape over arrays of another is a silent
@@ -198,7 +187,7 @@ def _validate_recorded_layout(
         return
     planes = _recorded_dense_planes(root)
     sharded = planes[0][3] is not None
-    recorded = _recorded_layouts(manifest, blob, root, errors, require_all=sharded)
+    recorded = _recorded_layouts(store, root, errors, require_all=sharded)
     _recorded_layout_mismatches(
         recorded,
         planes,
@@ -463,11 +452,7 @@ def _hybrid_outer_recordings(
         )
     else:
         recorded.append(block)
-    blob = _index_blob(store)
-    from_index = None if blob is None else _recorded_from_index(blob[0])
-    if from_index is not None:
-        recorded.append(from_index)
-    return recorded
+    return recorded + _index_recording(store, errors, require_all=False)
 
 
 #: A grid's recordings, and a Hybrid's outer ones for its Dense Component.

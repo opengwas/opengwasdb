@@ -383,15 +383,21 @@ requires: its tiers get `abs_z` and `p_value` back, recomputed from `z`
 
 **The rewrite** drops all four in two steps after `alid_sidecar` and `position_sidecar`.
 `provenance_index` writes a Reference-Completed component a new `index.sqlite` holding only
-`completion_quality`, copied with its schema. `tier_stored_p` drops each tier's pair. Neither copies what it drops. A step
-names the paths it drops (`RewriteStep.leaves_out`), and the copy leaves them out, so a later
-step that needed one would read it from the source. Each refuses a source whose drop would
-change an answer or lose evidence:
+`completion_quality`, copied with its schema. `tier_stored_p` drops each tier's pair, and has
+no `run`: neither copies what it drops. A step names the paths it drops
+(`RewriteStep.leaves_out`), and the copy leaves them out, so a later step that needed one
+would read it from the source. Each step's `refuse` hook runs before anything is staged,
+and refuses a source whose drop would change an answer or lose evidence:
 - a `variant_aliases` rsID the rsID index lacks;
 - a `dense` blob that disagrees with the manifest;
+- a Reference-Completed component with no `completion_quality`;
+- an `index.sqlite` table it does not know;
+- a tier storing one of `abs_z` and `p_value` without the other;
 - a tier whose stored pair is not what its `z` implies;
-- a table it does not know;
 - a consolidated-metadata record over a tier.
+
+The rewrite finds a Hybrid and its Dense Component from the root manifest's layout
+(`Component`), not from directory names. #470 and #472 add their steps to this frame.
 
 The proof also asks about rsIDs no release names, by PheWAS and inside a lookup (its
 `misses` section). On 0.2 those reach `variant_aliases`; on 0.3.0 they are misses.

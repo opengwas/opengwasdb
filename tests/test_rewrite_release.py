@@ -536,3 +536,35 @@ def test_a_stored_p_value_that_disagrees_with_z_is_refused(sources, tmp_path):
     tier["p_value"][:] = p_value
     with pytest.raises(RewriteError, match="p_5e_04: its stored abs_z and p_value are not"):
         rewrite_release(source, tmp_path / "rewritten")
+
+
+def test_a_tier_storing_abs_z_without_p_value_is_refused(sources, tmp_path):
+    from opengwasdb.store import arrays as store_arrays
+
+    source = _source_copy(sources, tmp_path, "ragged_observed")
+    tiers = store_arrays.open_group_for_write(source / "data.zarr", "a")["top_hits"]
+    assert "p_value" in tiers["p_5e_06"], "the 0.2.3 fixture tier stores p_value"
+    del tiers["p_5e_06"]["p_value"]
+    with pytest.raises(RewriteError, match="p_5e_06: stores abs_z without p_value"):
+        rewrite_release(source, tmp_path / "rewritten")
+    assert not (tmp_path / "rewritten").exists()
+
+
+def test_a_tier_under_consolidated_metadata_is_refused(sources, tmp_path):
+    """A consolidated record would go on naming the dropped arrays: zarr 3 reads it in
+    place of the live metadata."""
+    import zarr
+
+    source = _source_copy(sources, tmp_path, "dense_observed")
+    zarr.consolidate_metadata(str(source / "data.zarr" / "top_hits"), zarr_format=3)
+    with pytest.raises(RewriteError, match="consolidated metadata"):
+        rewrite_release(source, tmp_path / "rewritten")
+
+
+def test_a_completed_source_without_completion_quality_is_refused(sources, tmp_path):
+    source = _source_copy(sources, tmp_path, "dense_completed")
+    assert "completion_quality" in _tables(source / "index.sqlite")
+    _execute(source / "index.sqlite", "DROP TABLE completion_quality")
+    with pytest.raises(RewriteError, match="has no completion_quality table"):
+        rewrite_release(source, tmp_path / "rewritten")
+    assert not (tmp_path / "rewritten").exists()

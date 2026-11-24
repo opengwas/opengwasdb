@@ -26,7 +26,7 @@ from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     carries_alid_sidecar,
     carries_position_sidecar,
-    index_holds_provenance_only,
+    carries_variant_aliases,
 )
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.position_sidecar import PositionSidecar
@@ -186,8 +186,7 @@ def _carries_fixed_width_alid_index(target: Target) -> bool:
 
 
 def _carries_variant_aliases(target: Target) -> bool:
-    """A release of a format whose `index.sqlite` may hold `variant_aliases`: 0.2."""
-    return not index_holds_provenance_only(target.store.manifest.format_version)
+    return carries_variant_aliases(target.store.manifest.format_version)
 
 
 @dataclass(frozen=True)

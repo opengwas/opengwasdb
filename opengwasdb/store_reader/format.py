@@ -146,31 +146,42 @@ def carries_alid_sidecar(version: str) -> bool:
     return parse_format_version(version) >= ALID_SIDECAR_SINCE
 
 
-#: The first `format_version` that ships nothing only the validator read and could
-#: recompute, and nothing nobody read (ADR 0102, #471): 0.3.0, with the sidecar.
-DERIVED_COMPONENTS_DROPPED_SINCE = ALID_SIDECAR_SINCE
+#: The first `format_version` whose `index.sqlite` has no `metadata` table -- the
+#: `dense` layout blob, `schema_version`, `n_variants`, `n_analyses` -- (ADR 0102,
+#: #471): `manifest.json` is the one copy of the layout. 0.3.0 is one format version,
+#: so it is the ALID sidecar's.
+INDEX_METADATA_DROPPED_SINCE = ALID_SIDECAR_SINCE
 
 
-def index_holds_provenance_only(version: str) -> bool:
-    """Whether a Store of ``version`` keeps `index.sqlite` for `completion_quality` alone.
+def carries_index_metadata(version: str) -> bool:
+    """Whether a Store of ``version`` carries `index.sqlite`'s `metadata` table.
 
-    From 0.3.0 (ADR 0102, #471) the `metadata` table and `variant_aliases` are gone:
-    `index.sqlite` ships only in a Reference-Completed release, a Hybrid's in its Dense
-    Component, and holds only that provenance. The Store Reader never opens it, and an
-    rsID the rsID index lacks is a miss. Before 0.3.0 every release carries one, and a
-    Dense or Hybrid query consults its `variant_aliases` for such an rsID (#476 retires
-    that).
+    Every release of such a version carries `index.sqlite` (a Ragged one's may be
+    empty). From 0.3.0 it holds only `completion_quality`, so only a release that holds
+    its own carries one (`opengwasdb.store.open.ships_index`).
     """
-    return parse_format_version(version) >= DERIVED_COMPONENTS_DROPPED_SINCE
+    return parse_format_version(version) < INDEX_METADATA_DROPPED_SINCE
 
 
-def tiers_store_p_value(version: str) -> bool:
-    """Whether a Store of ``version``'s Top-Hit tiers store `abs_z` and `p_value`.
+#: The first `format_version` with no `variant_aliases` (ADR 0102, #471): an rsID the
+#: rsID index lacks is a miss, and the Store Reader never opens `index.sqlite`.
+VARIANT_ALIASES_DROPPED_SINCE = ALID_SIDECAR_SINCE
 
-    Before 0.3.0 they do; from 0.3.0 they store `z`, from which the validator
-    recomputes both through `opengwasdb.store_reader.stats` (ADR 0102, #471).
-    """
-    return parse_format_version(version) < DERIVED_COMPONENTS_DROPPED_SINCE
+
+def carries_variant_aliases(version: str) -> bool:
+    """Whether a Store of ``version`` may name an rsID in `index.sqlite`'s
+    `variant_aliases`, which a Dense or Hybrid query falls back to (#476 retires it)."""
+    return parse_format_version(version) < VARIANT_ALIASES_DROPPED_SINCE
+
+
+#: The first `format_version` whose Top-Hit tiers store `z` but neither `abs_z` nor
+#: `p_value`, which the validator recomputes from `z` (ADR 0102, #471).
+STORED_P_DROPPED_SINCE = ALID_SIDECAR_SINCE
+
+
+def carries_stored_p(version: str) -> bool:
+    """Whether a Store of ``version``'s Top-Hit tiers store `abs_z` and `p_value`."""
+    return parse_format_version(version) < STORED_P_DROPPED_SINCE
 
 
 #: The first `format_version` that answers a range from the position sidecar

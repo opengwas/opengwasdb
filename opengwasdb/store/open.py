@@ -37,11 +37,11 @@ from opengwasdb.store_reader.format import (
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
     carries_alid_sidecar,
+    carries_index_metadata,
     carries_position_sidecar,
     check_format_version,
     format_version_for,
     indels_reference_first,
-    index_holds_provenance_only,
     parse_format_version,
     split_format_version,
     zarr_format_for_version,
@@ -299,14 +299,6 @@ HYBRID_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html", "dense"}
 #: carries.
 HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_shared.npy"}
 
-#: The envelopes of the releases that hold their own `completion_quality` when
-#: Reference-Completed: every one but a Hybrid's outer release, whose Dense Component
-#: holds it (spec §16).
-_HOLDS_COMPLETION_QUALITY: frozenset[frozenset[str]] = frozenset(
-    {DENSE_ENVELOPE, RAGGED_ENVELOPE, HYBRID_DENSE_COMPONENT_ENVELOPE}
-)
-
-
 
 def layout_envelope(layout: PrimaryStorageLayout, *, dense_component: bool) -> frozenset[str]:
     """The envelope constant of a release of `layout`, before its version and state:
@@ -321,10 +313,15 @@ def layout_envelope(layout: PrimaryStorageLayout, *, dense_component: bool) -> f
 
 
 def envelope_at(
-    envelope: frozenset[str], format_version: str, completion_state: CompletionState
+    layout: PrimaryStorageLayout,
+    format_version: str,
+    completion_state: CompletionState,
+    *,
+    dense_component: bool,
 ) -> frozenset[str]:
-    """`envelope`, one of the constants above, as a release of `format_version` and
-    `completion_state` carries it: with the ALID index that version carries
+    """The closed envelope of a release of `layout` (a Hybrid's nested Dense Component
+    when `dense_component`), `format_version` and `completion_state`: its layout's
+    constant (`layout_envelope`) with the ALID index that version carries
     (`alid_index_kind`) and no other, the position sidecar only from 0.3.0
     (`carries_position_sidecar`), and `index.sqlite` where it ships (`ships_index`).
 
@@ -333,12 +330,13 @@ def envelope_at(
     either one carrying the other's files fails its closed envelope (spec §1, §20); so
     does a 0.3.0 Observed-Only release carrying an `index.sqlite`.
     """
-    index = {INDEX_FILENAME} if ships_index(envelope, format_version, completion_state) else set()
+    envelope = layout_envelope(layout, dense_component=dense_component)
+    ships = ships_index(layout, format_version, completion_state, dense_component=dense_component)
     return (
         (envelope - ALID_INDEX_FILENAMES - set(POSITION_SIDECAR_FILENAMES))
         | set(alid_index_kind(format_version).FILENAMES)
         | _position_sidecar_at(format_version)
-        | index
+        | ({INDEX_FILENAME} if ships else set())
     )
 
 
@@ -349,21 +347,25 @@ def _position_sidecar_at(format_version: str) -> frozenset[str]:
 
 
 def ships_index(
-    envelope: frozenset[str], format_version: str, completion_state: CompletionState
+    layout: PrimaryStorageLayout,
+    format_version: str,
+    completion_state: CompletionState,
+    *,
+    dense_component: bool,
 ) -> bool:
-    """Whether a release of `envelope` (one of the constants above), `format_version` and
-    `completion_state` carries `index.sqlite`.
+    """Whether a release of `layout` (a Hybrid's nested Dense Component when
+    `dense_component`), `format_version` and `completion_state` carries `index.sqlite`.
 
-    Every 0.2 release does. From 0.3.0 it holds only `completion_quality`
-    (`index_holds_provenance_only`, ADR 0102), so only a Reference-Completed release
-    that holds its own -- not a Hybrid's outer release -- carries one.
+    Every release of a version that carries the `metadata` table does
+    (`carries_index_metadata`: the 0.2 series). From 0.3.0 the file holds only
+    `completion_quality` (ADR 0102), so only a Reference-Completed release that holds
+    its own carries one: every release but a Hybrid's outer one, whose Dense Component
+    holds it (spec §16).
     """
-    if not index_holds_provenance_only(format_version):
+    if carries_index_metadata(format_version):
         return True
-    return (
-        completion_state is CompletionState.REFERENCE_COMPLETED
-        and envelope in _HOLDS_COMPLETION_QUALITY
-    )
+    holds_its_own = dense_component or layout is not PrimaryStorageLayout.HYBRID
+    return completion_state is CompletionState.REFERENCE_COMPLETED and holds_its_own
 
 
 @contextmanager

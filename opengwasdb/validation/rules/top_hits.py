@@ -29,7 +29,7 @@ import numpy as np
 
 from opengwasdb import top_hits
 from opengwasdb.store_reader import top_hits as reader_top_hits
-from opengwasdb.store_reader.format import tiers_store_p_value
+from opengwasdb.store_reader.format import carries_stored_p
 from opengwasdb.store_reader.stats import z_critical
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import VALUES_AFTER, frequencies
@@ -53,7 +53,7 @@ def has_index(target: Target) -> bool:
 
 def _has_stored_p(target: Target) -> bool:
     """A Top-Hit Index whose tiers store `abs_z` and `p_value`: a 0.2 release's."""
-    return stores_p(target) and has_index(target)
+    return _carries_stored_p(target) and has_index(target)
 
 
 def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
@@ -83,9 +83,8 @@ def _version(target: Target) -> str:
     return target.store.manifest.format_version
 
 
-def stores_p(target: Target) -> bool:
-    """Whether the component's tiers store `abs_z` and `p_value`: before 0.3.0."""
-    return tiers_store_p_value(_version(target))
+def _carries_stored_p(target: Target) -> bool:
+    return carries_stored_p(_version(target))
 
 
 def _stored_p_agrees(target: Target, key: str) -> bool:
@@ -267,7 +266,7 @@ def _built(target: Target, key: str, group: Any) -> Tier | None:
     unsound = _problem(target, key) is not None
     if not unsound:
         _below_threshold(target, key)
-        if stores_p(target):
+        if _carries_stored_p(target):
             _stored_p_agrees(target, key)
     loaded = target.forget(f"top_hits/{key}")
     if unsound:
@@ -459,7 +458,7 @@ def abs_z(target: Target) -> Iterator[str]:
     """A 0.2 tier's stored `abs_z` and `p_value` are what its `z` implies, recomputed."""
     for key in _sound_keys(target):
         if not _stored_p_agrees(target, key):
-            yield f"top-hit index {key} abs_z inconsistent with z"
+            yield f"top-hit index {key} abs_z or p_value inconsistent with z"
 
 
 def threshold(target: Target) -> Iterator[str]:

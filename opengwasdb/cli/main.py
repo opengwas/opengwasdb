@@ -66,7 +66,7 @@ from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.associations import statistics_of
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
-from opengwasdb.store_reader.format import UnsupportedFormatVersion, tiers_store_p_value
+from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_stored_p
 from opengwasdb.store_reader.indexed import IndexedSubsetError
 from opengwasdb.top_hits import write_stored_p
 from opengwasdb.validation import validate_store
@@ -1874,7 +1874,7 @@ def _keep_stored_p(store_path: Path) -> None:
     The builders write format 0.3.0's tiers, which store neither (ADR 0102, #471). A
     0.2 release stays indexable (#313), so its rebuilt tiers get both back.
     """
-    if tiers_store_p_value(open_store(store_path).manifest.format_version):
+    if carries_stored_p(open_store(store_path).manifest.format_version):
         write_stored_p(open_group_for_write(store_path / "data.zarr", "a"))
 
 
