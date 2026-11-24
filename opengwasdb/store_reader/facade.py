@@ -201,22 +201,13 @@ def _rho_pairs(reader: DenseRhoReader, resolved: list[tuple[str, int]]) -> dict[
 
 
 def _variants_table(variant_axis: VariantAxis) -> dict[int, dict]:
-    """Return all variants keyed by variant_index.
+    """Return all variants keyed by variant_index (`VariantAxis.variants_table`).
 
     The Store Variant Table's shape is layout-independent, so all three
-    adapters share this projection rather than each repeating it.
+    adapters share this projection rather than each repeating it. On 0.3.0 it
+    is answered from the sidecars, without reading `variants.tsv.gz` (#469).
     """
-    return {
-        r.variant_index: {
-            "alid": r.alid,
-            "chromosome": r.chromosome,
-            "position": r.position,
-            "effect_allele": r.effect_allele,
-            "other_allele": r.other_allele,
-            "rsid": r.rsid,
-        }
-        for r in variant_axis.all()
-    }
+    return variant_axis.variants_table()
 
 
 def _is_completed(store: StoreRelease) -> bool:

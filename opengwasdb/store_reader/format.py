@@ -158,6 +158,19 @@ def carries_position_sidecar(version: str) -> bool:
     return parse_format_version(version) >= POSITION_SIDECAR_SINCE
 
 
+#: The first `format_version` whose Store Reader never reads `variants.tsv.gz` (#469,
+#: ADR 0105 §7): a row's identity and rsID come from the sidecars, the variant count
+#: from the ALID sidecar, and `variant_offsets.npy` is not written. 0.3.0 is one format
+#: version, so this is the ALID sidecar's version too.
+VARIANT_TABLE_OFF_READ_PATH_SINCE = ALID_SIDECAR_SINCE
+
+
+def carries_variant_offsets(version: str) -> bool:
+    """Whether a Store of ``version`` carries `variant_offsets.npy`, each row's BGZF
+    offset in its Variant Table, and is read through that table: the 0.2 and 0.1 series."""
+    return parse_format_version(version) < VARIANT_TABLE_OFF_READ_PATH_SINCE
+
+
 def zarr_format_for_version(version: str, *, source: str = "release") -> int:
     """The Zarr on-disk format a readable ``format_version`` is stored in.
 

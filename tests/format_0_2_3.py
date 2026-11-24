@@ -27,7 +27,11 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.store_reader.alid import ALID_DTYPE, is_indexable_alid
-from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES, AlidSidecar
+from opengwasdb.store_reader.alid_sidecar import (
+    ALID_SIDECAR_FILENAMES,
+    AlidSidecar,
+    write_alid_sidecar,
+)
 from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_alid_sidecar
 from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
@@ -82,6 +86,27 @@ def _sidecar_version(version: str) -> bool:
         return carries_alid_sidecar(version)
     except UnsupportedFormatVersion:
         return False
+
+
+def count_one_row_fewer(directory: Path) -> int:
+    """Make what counts `directory`'s variants claim one row fewer than its table holds,
+    and return the count it now claims: `variant_offsets.npy` on a 0.2 release, the ALID
+    sidecar on 0.3.0, which counts them there (#469)."""
+    offsets_path = directory / "variant_offsets.npy"
+    version = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))[
+        "format_version"
+    ]
+    if not _sidecar_version(version):
+        offsets = np.load(offsets_path)
+        assert len(offsets) >= 2, "the release must have a row to drop"
+        np.save(offsets_path, offsets[:-1])
+        return len(offsets) - 1
+    sidecar = AlidSidecar.open(directory)
+    assert sidecar is not None and sidecar.n_rows >= 2, "the release must have a row to drop"
+    alids = sidecar.alids(np.arange(sidecar.n_rows - 1)).tolist()
+    del sidecar
+    write_alid_sidecar(directory, alids)
+    return len(alids)
 
 
 def as_0_2_3(release: Path) -> Path:

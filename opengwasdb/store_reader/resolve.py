@@ -10,12 +10,12 @@ chromosome/position/effect_allele/other_allele/alid come from
 `chromosome:position:effect_allele:other_allele`, and that method recovers
 it from the store's already-loaded mmap'd ALID search index with zero
 `variants.tsv.gz` I/O. rsid is the one identity field that index can't
-produce today (it isn't part of the alid), so it's resolved via
-`variant_axis.by_indices()` -- which itself adaptively picks a bounded
-random-access resolution or, once the request touches a large-enough share
-of the Store Variant Table, one sequential scan instead (see that method's
-docstring) -- and only when `include_variant_info=True`, since that's the
-one part of this join that can cost anywhere from milliseconds to tens of
+produce (it isn't part of the alid), so it's resolved via
+`variant_axis.rsids_by_indices()`, and only when `include_variant_info=True`.
+On 0.3.0 that inverts the rsID index, sized to the rows asked, and reads no
+table (#469). On the 0.2 series it reads the table's rows (`by_indices`, which
+adaptively picks a bounded random-access resolution or one sequential scan),
+the one part of this join that can cost anywhere from milliseconds to tens of
 seconds on a large dense query. `eaf` always rides the row: it is already
 materialised in the query result the facade returned, so resolving it costs
 no extra I/O and hiding it saved nothing (issue #136). It rides `result`
@@ -36,7 +36,7 @@ import numpy as np
 
 from opengwasdb.store_reader.analyses import AnalysesIndex
 from opengwasdb.store_reader.associations.record import statistics_of
-from opengwasdb.store_reader.variant_axis import VariantAxis, VariantRecord
+from opengwasdb.store_reader.variant_axis import VariantAxis
 
 
 def resolve_rows(
@@ -66,19 +66,14 @@ def resolve_rows(
     derived = statistics_of(result)
 
     identity = variant_axis.identity_by_indices(variant_index)
-    variant_rows = (
-        variant_axis.by_indices(variant_index)
-        if include_variant_info or identity is None
-        else None
-    )
+    rsids = variant_axis.rsids_by_indices(variant_index) if include_variant_info else None
 
     for i in range(len(variant_index)):
-        vi = int(variant_index[i])
         analysis = analysis_rows[int(result["analysis_index"][i])]
         row: dict[str, object] = {
             "analysis_id": analysis["analysis_id"],
             "analysis_label": analysis.get("analysis_label", ""),
-            **_variant_identity(identity, variant_rows, i, vi),
+            **_variant_identity(identity, i),
             "z": float(result["z"][i]),
             "se": float(result["se"][i]),
             "beta": float(derived.beta[i]),
@@ -89,40 +84,20 @@ def resolve_rows(
         }
         if "n" in result:
             row["n"] = _n_or_missing(result["n"], i)
-        if include_variant_info:
-            assert variant_rows is not None
-            rsid_record = variant_rows.get(vi)
-            row["rsid"] = (rsid_record.rsid or ".") if rsid_record is not None else "."
+        if rsids is not None:
+            row["rsid"] = rsids[i] or "."
         yield row
 
 
-def _variant_identity(
-    identity: dict[str, np.ndarray] | None,
-    variant_rows: dict[int, VariantRecord] | None,
-    i: int,
-    vi: int,
-) -> dict[str, object]:
-    """One row's chromosome, position, ALID and alleles, in the row's column order.
-
-    From the ALID search index when it could answer (`identity`), otherwise from
-    the Store Variant Table rows `resolve_rows` already fetched.
-    """
-    if identity is not None:
-        return {
-            "chromosome": identity["chromosome"][i],
-            "position": int(identity["position"][i]),
-            "alid": identity["alid"][i],
-            "effect_allele": identity["effect_allele"][i],
-            "other_allele": identity["other_allele"][i],
-        }
-    assert variant_rows is not None
-    variant = variant_rows[vi]
+def _variant_identity(identity: dict[str, np.ndarray], i: int) -> dict[str, object]:
+    """One row's chromosome, position, ALID and alleles, in the row's column order,
+    from the ALID index (`VariantAxis.identity_by_indices`)."""
     return {
-        "chromosome": variant.chromosome,
-        "position": variant.position,
-        "alid": variant.alid,
-        "effect_allele": variant.effect_allele,
-        "other_allele": variant.other_allele,
+        "chromosome": identity["chromosome"][i],
+        "position": int(identity["position"][i]),
+        "alid": identity["alid"][i],
+        "effect_allele": identity["effect_allele"][i],
+        "other_allele": identity["other_allele"][i],
     }
 
 

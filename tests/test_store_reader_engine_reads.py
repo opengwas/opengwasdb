@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import zarr
 
+from opengwasdb.store_reader.alid import RSID_DTYPE
 from opengwasdb.store_reader.alid_sidecar import write_alid_sidecar
 from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
 from opengwasdb.store_reader.position_sidecar import write_position_sidecar
@@ -55,7 +56,7 @@ class _Table:
 
 
 def _axis(tmp_path: Path, rows: list[str]) -> tuple[VariantAxis, _Table]:
-    np.save(tmp_path / "variant_offsets.npy", np.arange(len(rows), dtype=np.int64))
+    """A 0.3.0 axis over `rows`: its sidecars, and an rsID index naming none (`_row`)."""
     records = [parse_variant_line(row) for row in rows]
     write_alid_sidecar(tmp_path, [record.alid for record in records])
     write_position_sidecar(
@@ -64,6 +65,8 @@ def _axis(tmp_path: Path, rows: list[str]) -> tuple[VariantAxis, _Table]:
         [record.position for record in records],
         chromosome_key=None,
     )
+    np.save(tmp_path / "variant_rsid_bytes.npy", np.empty(0, dtype=RSID_DTYPE))
+    np.save(tmp_path / "variant_rsid_rows.npy", np.empty(0, dtype="int32"))
     table = _Table(rows)
     return VariantAxis(tmp_path, table, format_version=CURRENT_FORMAT_VERSION), table
 

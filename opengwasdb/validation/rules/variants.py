@@ -19,9 +19,13 @@ from functools import lru_cache
 import numpy as np
 
 from opengwasdb.index.release_index import ReleaseIndex
-from opengwasdb.store_reader.alid import is_indexable_alid, is_indexable_rsid
+from opengwasdb.store_reader.alid import RSID_WIDTH, is_indexable_alid, is_indexable_rsid
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.format import carries_alid_sidecar, carries_position_sidecar
+from opengwasdb.store_reader.format import (
+    carries_alid_sidecar,
+    carries_position_sidecar,
+    carries_variant_offsets,
+)
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.store_reader.position_sidecar import PositionSidecar
 from opengwasdb.store_reader.variant_axis import (
@@ -107,9 +111,12 @@ def _rows(_target: Target, block: TableBlock) -> int:
 
 
 def _judge_rows(target: Target, n_rows: int) -> Iterator[str]:
-    n_offsets = target.variant_axis.n_variants
-    if n_offsets != n_rows:
-        yield f"variant_offsets.npy has {n_offsets} rows but variants.tsv.gz has {n_rows} rows"
+    """The table holds one row per variant the axis counts: `variant_offsets.npy`'s
+    entries on the 0.2 series, the ALID sidecar's rows on 0.3.0 (#469)."""
+    axis = target.variant_axis
+    counted_by = "variant_offsets.npy" if axis.reads_table else "the ALID sidecar"
+    if axis.n_variants != n_rows:
+        yield f"{counted_by} has {axis.n_variants} rows but variants.tsv.gz has {n_rows} rows"
 
 
 def _indexable(_target: Target, block: TableBlock) -> Counter[str]:
@@ -256,7 +263,8 @@ def _judge_rsid_index(target: Target, named_rsids: int) -> Iterator[str]:
     written by, so a correctly built store cannot fail over a deliberately
     omitted identifier.
     """
-    indexed = target.variant_axis._rsid_bytes
+    rsid_index = target.variant_axis.rsid_index
+    indexed = None if rsid_index is None else rsid_index.names
     if indexed is None:
         if named_rsids:
             yield (
@@ -270,6 +278,60 @@ def _judge_rsid_index(target: Target, named_rsids: int) -> Iterator[str]:
             f"variant_rsid_bytes.npy has {len(indexed)} entries but variants.tsv.gz "
             f"names {named_rsids} rsid(s)"
         )
+
+
+@dataclass(frozen=True)
+class _RsidRows:
+    """How many table rows a block held, and the first whose rsID the rsID index names
+    otherwise than the table does."""
+
+    rows: int = 0
+    differing: int = 0
+    first: str = ""
+
+    def __add__(self, other: _RsidRows) -> _RsidRows:
+        return _RsidRows(
+            self.rows + other.rows, self.differing + other.differing, self.first or other.first
+        )
+
+
+def _rsid_rows(target: Target, block: TableBlock) -> _RsidRows:
+    """Each row's rsID as the inverted rsID index names it against the table's cell.
+
+    A row past the axis's end is not compared: `variant_table.rows` reports it.
+    """
+    axis = target.variant_axis
+    held = max(min(len(block.records), axis.n_variants - block.start), 0)
+    rows = np.arange(block.start, block.start + held, dtype=np.int64)
+    named = axis.rsids_by_indices(rows)
+    differing = [k for k in range(held) if named[k] != block.records[k].rsid]
+    first = ""
+    if differing:
+        k = differing[0]
+        cell = block.records[k].rsid
+        why = "" if cell is None or is_indexable_rsid(cell) else (
+            f", an rsID wider than {RSID_WIDTH} bytes, which the index cannot hold"
+        )
+        first = (
+            f"row {block.start + k}: the index names {named[k]!r}, "
+            f"variants.tsv.gz {cell!r}{why}"
+        )
+    return _RsidRows(len(block.records), len(differing), first)
+
+
+def _judge_rsid_rows(_target: Target, total: _RsidRows) -> Iterator[str]:
+    """The rsID index names every row's rsID as the table does (format 0.3.0, #469): a
+    0.3.0 Store Reader names a row's rsID from the index alone, never the table."""
+    if total.differing:
+        yield (
+            f"the rsID index names {total.differing} row(s) otherwise than variants.tsv.gz "
+            f"does, so variants_table() and resolved rows would give another rsID; first, "
+            f"{total.first}"
+        )
+
+
+def _reads_rsids_from_index(target: Target) -> bool:
+    return not carries_variant_offsets(target.store.manifest.format_version)
 
 
 @dataclass(frozen=True)
@@ -339,25 +401,29 @@ def _pick(target: Target, block: TableBlock) -> _Picked:
 
 
 def _judge_representatives(target: Target, picked: _Picked) -> Iterator[str]:
-    """The offset sidecar and the tabix index each find the row the table holds.
+    """The tabix index finds the row the table holds, and on the 0.2 series so does the
+    row's offset in `variant_offsets.npy`.
 
-    On 0.3.0 no query reads the tabix index (a range is the position sidecar's), but it
-    still ships as a convenience restating the table (spec §1.1), so it is checked here.
-    The rows are chosen from the offsets, so the check means something only when
+    No 0.3.0 query reads the table or its tabix index, but both still ship as
+    conveniences restating the sidecars (spec §1.1), so the tabix index is checked here.
+    A 0.3.0 release has no offsets (#469): its rows are placed by the position sidecar,
+    which `variant_table.position_sidecar` judges row by row.
+    The rows are chosen from the axis's count, so the check means something only when
     the table holds the same number of rows. It runs after `variant_table.rows`,
     which judged that from the same read, so a mismatch skips it behind that rule.
     """
     axis = target.variant_axis
     for index in representative_variant_indices(axis.n_variants):
         record = picked.records[index]
-        try:
-            offset_record = axis.by_index(index)
-        except ValueError as exc:
-            yield str(exc)
-            return
-        if offset_record != record:
-            yield f"variant offset for row {index} points to a different row"
-            return
+        if axis.reads_table:
+            try:
+                offset_record = axis.by_index(index)
+            except ValueError as exc:
+                yield str(exc)
+                return
+            if offset_record != record:
+                yield f"variant offset for row {index} points to a different row"
+                return
         if record not in axis.tabix_range(record.chromosome, record.position, record.position):
             yield f"tabix index cannot fetch variant {record.alid}"
             return
@@ -557,6 +623,16 @@ RULES: tuple[Rule, ...] = (
         zero=0,
         measure=_named_rsids,
         judge=_judge_rsid_index,
+    ),
+    Fold(
+        name="variant_table.rsid_rows",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_reads_rsids_from_index,
+        scan=VARIANT_TABLE,
+        zero=_RsidRows(),
+        measure=_rsid_rows,
+        judge=_judge_rsid_rows,
     ),
     Fold(
         name="variant_table.sequence",

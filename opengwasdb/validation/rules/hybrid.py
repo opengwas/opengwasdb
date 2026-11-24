@@ -18,6 +18,7 @@ import numpy as np
 
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import dense_to_shared_path
+from opengwasdb.store_reader.variant_axis import VariantAxis
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.rules.variants import representative_variant_indices
@@ -92,17 +93,26 @@ def plan(target: Target) -> Iterator[str]:
 def coverage(target: Target) -> Iterator[str]:
     """The shared row each Dense Component row maps to holds that row's variant."""
     rows = dense_to_shared(target)
-    dense_axis = component(target).variant_axis
-    shared_axis = target.variant_axis
-    for r in representative_variant_indices(len(rows)):
-        dense_rec = dense_axis.by_index(r)
-        shared_rec = shared_axis.by_index(int(rows[r]))
-        if dense_rec is None or shared_rec is None or dense_rec.alid != shared_rec.alid:
+    picked = list(representative_variant_indices(len(rows)))
+    dense = _alids(component(target).variant_axis, picked)
+    shared = _alids(target.variant_axis, [int(rows[r]) for r in picked])
+    for r, dense_alid, shared_alid in zip(picked, dense, shared, strict=True):
+        if dense_alid is None or shared_alid is None or dense_alid != shared_alid:
             yield (
                 "dense_to_shared coverage violated: Dense Component row "
                 f"{r} does not match its shared variant table row"
             )
             return
+
+
+def _alids(axis: VariantAxis, rows: list[int]) -> list[str | None]:
+    """Each row's ALID, None for a row the axis lacks: from the table's rows on the 0.2
+    series, from the ALID sidecar on 0.3.0, whose Store Reader reads no table (#469)."""
+    if axis.reads_table:
+        records = [axis.by_index(row) for row in rows]
+        return [None if record is None else record.alid for record in records]
+    alids: list[str | None] = axis.alid_index.alids(np.asarray(rows, dtype=np.int64)).tolist()
+    return alids
 
 
 #: The rules about the Dense Component, once it has opened as one.

@@ -2299,7 +2299,8 @@ def _emit_tsv(
     # rather than building a Python list/string of the whole formatted table
     # up front. rsid is the one identity field not derivable from the alid
     # (VariantAxis.identity_by_indices()), so it's the only part of this
-    # join that still needs a variants.tsv.gz lookup -- resolve() only pays
+    # join with a cost of its own -- the rsID index inverted on 0.3.0, a
+    # variants.tsv.gz lookup on 0.2.x (#469) -- and resolve() only pays
     # for it when include_variant_info is set (issue #104 follow-up). eaf,
     # by contrast, came back in the query result itself, so it is always a
     # column now (issue #136) and never costs a new read.
