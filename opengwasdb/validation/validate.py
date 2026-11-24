@@ -275,7 +275,8 @@ _FIDELITY_RTOL = 1e-2
 _FIDELITY_ATOL = 1e-2
 # One source association in canonical form as the build readers yield it:
 # (analysis_id, chrom, pos, a1, a2, z, se) -- and one sampled-and-matched store
-# cell carrying its source z/se plus the source ALID for diagnostics.
+# cell carrying its source z (signed on the Store's A1) and se, plus the source ALID
+# for diagnostics.
 _FidelitySample = tuple[str, str, int, str, str, float, float]
 _FidelityCell = tuple[int, int, float, float, str]
 
@@ -499,57 +500,102 @@ def _lookup_variant_rows(store_path: Path, alid_to_identifier: dict[str, str]) -
     return row_by_alid
 
 
-def _resolve_fidelity_rows(
-    store_path: Path,
-    samples: list[_FidelitySample],
+class _ResolvedRows(NamedTuple):
+    """Each sampled source ALID's store row, and the sampled ALIDs a reverse-strand
+    lift re-oriented: the Store holds their source z negated (#284, #486)."""
+
+    row_by_alid: dict[str, int]
+    reoriented: frozenset[str]
+
+
+def _lift_samples(
+    tuples: set[tuple[str, int, str, str]],
     *,
     src_asm: str,
     store_asm: str,
     chain_file: str | Path | None,
-) -> dict[str, int]:
+) -> dict[str, tuple[str, bool]]:
+    """Each lifted sample's source ALID -> (its lifted ALID, whether the lift
+    re-oriented it), by the build's own lift and rule (`lifted_rows`,
+    `statistics_swap`), so the validator holds no strand rule of its own.
+
+    A sample is keyed by its A1 first, and its z is signed on A1, so
+    `statistics_swap` answers exactly whether that z is the Store's negated: the
+    build asks the same of the source's own allele order, about the same A1.
+    A sample the chain places nowhere is absent.
+    """
+    from opengwasdb.build.liftover import lifted_rows, statistics_swap
+
+    lifted, _attempts, _failures = lifted_rows(
+        tuples, from_build=src_asm, to_build=store_asm, chain_file=chain_file
+    )
+    return {
+        f"{c}:{p}:{a1}:{a2}": (row.alid, statistics_swap((c, p, a1, a2), row))
+        for (c, p, a1, a2), row in lifted.items()
+    }
+
+
+def _resolve_fidelity_rows(
+    store_path: Path,
+    samples: list[_FidelitySample],
+    errors: list[str],
+    *,
+    src_asm: str,
+    store_asm: str,
+    chain_file: str | Path | None,
+) -> _ResolvedRows:
     """Row-resolution phase: map each sampled source variant to a store row.
 
-    Assembly-dependent: same-assembly samples join through the canonical ALID;
-    cross-assembly samples first use the stored source-ALID provenance column,
-    and fall back to liftover only when the store predates that column.
+    Assembly-dependent: same-assembly samples join through the canonical ALID.
+    Cross-assembly samples are lifted, always, because only the chain says which
+    of them a reverse-strand block re-oriented -- a palindromic pair's ALID reads
+    the same on either strand (#486). Their rows come from the stored
+    `source_alid` column, or from the lifted ALID where the store predates it.
+    A sample the Store holds by `source_alid` where the chain does not place it
+    cannot be oriented, so it is reported, not compared under a guessed strand.
     """
     src_alids = {f"{c}:{p}:{a1}:{a2}" for (_a, c, p, a1, a2, _z, _s) in samples}
     if src_asm == store_asm:
-        return _lookup_variant_rows(store_path, {a: a for a in src_alids})
-    origin_map = _resolve_via_origin(store_path, src_alids)
-    if origin_map is not None:
-        return origin_map  # store carries provenance → no liftover needed
-    from opengwasdb.build.liftover import build_liftover_lookup
-
-    tuples = {(c, p, a1, a2) for (_a, c, p, a1, a2, _z, _s) in samples}
-    lut = build_liftover_lookup(
-        tuples,
-        from_build=src_asm,
-        to_build=store_asm,
-        failure_threshold=1.0,
+        same = _lookup_variant_rows(store_path, {a: a for a in src_alids})
+        return _ResolvedRows(same, frozenset())
+    lifted = _lift_samples(
+        {(c, p, a1, a2) for (_a, c, p, a1, a2, _z, _s) in samples},
+        src_asm=src_asm,
+        store_asm=store_asm,
         chain_file=chain_file,
     )
-    wanted = {
-        f"{c}:{p}:{a1}:{a2}": hg38
-        for c, p, a1, a2 in tuples
-        if (hg38 := lut.get((c, p, a1, a2))) is not None
-    }
-    return _lookup_variant_rows(store_path, wanted)
+    reoriented = frozenset(alid for alid, (_hg38, swapped) in lifted.items() if swapped)
+    by_lift = _lookup_variant_rows(store_path, {a: hg38 for a, (hg38, _s) in lifted.items()})
+    origin_map = _resolve_via_origin(store_path, src_alids)
+    if origin_map is None:
+        return _ResolvedRows(by_lift, reoriented)  # the store predates source_alid
+    unplaced = sorted(a for a, row in origin_map.items() if by_lift.get(a) != row)
+    if unplaced:
+        errors.append(
+            f"source-fidelity: the chain does not place {len(unplaced)} sampled source "
+            f"association(s) on the row the Store holds by source_alid (e.g. {unplaced[0]}), "
+            f"so their strand is unknown -- give the chain the build lifted with"
+        )
+    held = {a: row for a, row in origin_map.items() if a not in set(unplaced)}
+    return _ResolvedRows(held, reoriented)
 
 
 def _match_fidelity_pairs(
     store_path: Path,
     samples: list[_FidelitySample],
-    row_by_alid: dict[str, int],
+    resolved: _ResolvedRows,
     errors: list[str],
 ) -> list[_FidelityCell] | None:
-    """Analysis-matching phase: join each sample onto a (row, column) cell.
+    """Analysis-matching phase: join each sample onto a (row, column) cell, its
+    z signed as the Store signs it (`swap_one`, on a row a lift re-oriented).
 
     A sample whose Analysis the store does not hold, or whose variant row it
     does not carry, is counted rather than silently dropped; when nothing
     matches, one diagnostic names both counts so a wrong source and a wrong
     assembly stay distinguishable. Returns None after recording that error.
     """
+    from opengwasdb.readers.orientation import swap_one
+
     col_by_aid = {
         row["analysis_id"]: int(row["analysis_index"])
         for row in read_analyses(store_path / "analyses.tsv").rows
@@ -562,11 +608,13 @@ def _match_fidelity_pairs(
         if col is None:
             n_unmatched_analysis += 1
             continue
-        row = row_by_alid.get(f"{c}:{p}:{a1}:{a2}")
+        alid = f"{c}:{p}:{a1}:{a2}"
+        row = resolved.row_by_alid.get(alid)
         if row is None:
             n_unmatched_variant += 1
             continue
-        pairs.append((row, col, z, se, f"{c}:{p}:{a1}:{a2}"))
+        stored_z, _eaf = swap_one(alid in resolved.reoriented, z, None)
+        pairs.append((row, col, stored_z, se, alid))
     if not pairs:
         errors.append(
             f"source-fidelity: none of {len(samples)} sampled source associations could be "
@@ -635,7 +683,8 @@ def _compare_fidelity_cells(
         ):
             if len(mismatches) < 5:
                 mismatches.append(
-                    f"{alid}: store z={sz:.4f} se={sse:.4f} vs source z={z_src:.4f} se={se_src:.4f}"
+                    f"{alid}: store z={sz:.4f} se={sse:.4f} vs source "
+                    f"z={z_src:.4f} (on the stored A1) se={se_src:.4f}"
                 )
     return n_compared, mismatches
 
@@ -687,10 +736,10 @@ def _validate_source_fidelity(
         return
     store_asm = _normalise_assembly(store.manifest.reference_assembly)
     src_asm = _normalise_assembly(source_assembly) if source_assembly else store_asm
-    row_by_alid = _resolve_fidelity_rows(
-        store.path, samples, src_asm=src_asm, store_asm=store_asm, chain_file=chain_file
+    resolved = _resolve_fidelity_rows(
+        store.path, samples, errors, src_asm=src_asm, store_asm=store_asm, chain_file=chain_file
     )
-    pairs = _match_fidelity_pairs(store.path, samples, row_by_alid, errors)
+    pairs = _match_fidelity_pairs(store.path, samples, resolved, errors)
     if pairs is None:
         return
     n_compared, mismatches = _compare_fidelity_cells(store, pairs)
