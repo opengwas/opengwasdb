@@ -17,6 +17,7 @@ question of the rewrite's proof is answered on 0.3.0 without importing pysam.
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import subprocess
@@ -32,6 +33,7 @@ from rsid_releases import RELEASE_NAMES, rsid_names, with_rsids
 
 from opengwasdb.query import query_store
 from opengwasdb.store_reader import rsid_index
+from opengwasdb.store_reader.identity import VariantNormalisationError
 from opengwasdb.store_reader.rsid_index import MalformedRsidIndex, MissingRsidIndex, RsidIndex
 from opengwasdb.validation import validate_store
 
@@ -151,7 +153,9 @@ with query_store(path) as q:
 print(json.dumps({
     "questions": len(digests["shapes"]) + len(digests["range_probes"]),
     "resolved": sorted(set(resolved)),
+    "variant_reads": len(digests["variant_reads"]),
     "pysam": "pysam" in sys.modules,
+    "sqlite3": "sqlite3" in sys.modules,
 }))
 """
 
@@ -202,7 +206,9 @@ def test_every_query_shape_on_0_3_0_reads_no_variant_table_and_no_pysam(
     found = json.loads(out.stdout)
     assert found["questions"] > 50, "a probe that asked little would prove little"
     assert {".", "rs77", "rs11;rs12"} <= set(found["resolved"])
+    assert found["variant_reads"] > 5, "the variant-only reads (#484) were not asked"
     assert found["pysam"] is False, "a 0.3.0 query loaded pysam"
+    assert found["sqlite3"] is False, "a 0.3.0 query loaded sqlite3"
 
 
 CLI = r"""
@@ -412,3 +418,108 @@ def test_the_writer_refuses_an_rsid_the_index_cannot_hold(tmp_path: Path):
     with pytest.raises(UnindexableRsidError, match=r"1 variant\(s\) .* first, 1:200:C:T"):
         write_variant_axis(tmp_path, variants, {variants[0].alid: "rs1", variants[1].alid: wide})
     assert list(tmp_path.iterdir()) == [], "nothing is written"
+
+
+# ── variant-only reads (#484): `variant_count()`, `variants()`, `variants_in_range()` ──
+# Each is `variants_table()` filtered by brute force, at 0.3.0 and 0.2.3, and on 0.3.0 loads
+# neither pysam nor sqlite3 with every Variant Table unreadable.
+
+
+def _names(row: dict[str, Any]) -> set[str]:
+    """Every identifier a row answers to: its ALID and its rsID cell, whole -- the axis
+    indexes a cell as one name, as `lookup` has always read it, on both versions."""
+    return {row["alid"], *([row["rsid"]] if row["rsid"] else [])}
+
+
+def _asked(table: dict[int, dict[str, Any]]) -> list[str]:
+    """ALIDs and rsIDs spread over the table, the planted multi-allelic ones, and misses."""
+    keys = sorted(table)
+    spread = [table[k] for k in keys[:: max(1, len(keys) // 7)]]
+    return [
+        *(r["alid"] for r in spread),
+        *(r["rsid"] for r in spread if r["rsid"]),
+        "rs77",  # two rows
+        "rs11;rs12",  # a cell naming two rsIDs
+        "rs0",
+        "1:1:A:C",
+    ]
+
+
+@pytest.mark.parametrize("form", [0, 1], ids=["0.3.0", "0.2.3"])
+@pytest.mark.parametrize("name", FIXTURES)
+def test_each_read_is_the_variants_table_filtered_by_brute_force(planted, name: str, form: int):
+    with query_store(planted[name][form]) as q:
+        table = q.variants_table()
+        assert q.variant_count() == len(table) >= len(PLANTED)
+
+        asked = _asked(table)
+        got = q.variants(asked)
+        want = {k: row for k, row in table.items() if _names(row) & set(asked)}
+        assert got == want
+        assert len([r for r in got.values() if r["rsid"] == "rs77"]) == 2, (
+            "a multi-allelic rsID gives every row"
+        )
+        assert any(r["rsid"] == "rs11;rs12" for r in got.values()), "an rsID of a several-rsID cell"
+        assert q.variants(["rs0", "1:1:A:C"]) == {}, "unknown identifiers are absent"
+        assert q.variants([]) == {}
+        assert list(got) == sorted(got)
+
+        chromosomes = sorted({r["chromosome"] for r in table.values()})
+        absent = next(c for c in ("Y", "MT", "X") if c not in chromosomes)
+        first, last = table[0], table[len(table) - 1]
+        ranges = [
+            (first["chromosome"], first["position"], first["position"]),  # one position
+            (last["chromosome"], last["position"], 10**9),  # to the chromosome's edge
+            (first["chromosome"], 1, 10**9),  # a whole chromosome
+            (chromosomes[-1], 1, 1),  # nothing there
+            (absent, 1, 10**9),  # a chromosome the release lacks
+            (first["chromosome"], 10, 5),  # end before start
+        ]
+        for chromosome, start, end in ranges:
+            got = q.variants_in_range(chromosome, start, end)
+            want = {
+                k: row
+                for k, row in table.items()
+                if row["chromosome"] == chromosome and start <= row["position"] <= end
+            }
+            assert got == want, (chromosome, start, end)
+            assert list(got) == sorted(got)
+        assert q.variants_in_range(first["chromosome"], first["position"], first["position"])
+        assert q.variants_in_range(absent, 1, 10**9) == {}
+
+
+@pytest.mark.parametrize("name", FIXTURES)
+def test_a_range_is_the_rows_range_phewas_reads(planted, name: str):
+    """`variants_in_range` names exactly the variant indices `range_phewas` reads."""
+    with query_store(planted[name][0]) as q:
+        table = q.variants_table()
+        first = table[0]
+        rows = q.variants_in_range(first["chromosome"], 1, 10**9)
+        result = q.range_phewas(first["chromosome"], 1, 10**9)
+        assert len(result["variant_index"]) > 0
+        assert set(result["variant_index"].tolist()) == set(rows)
+
+
+def test_a_chromosome_the_release_cannot_spell_is_refused(planted):
+    with query_store(planted["dense_observed"][0]) as q:
+        with pytest.raises(VariantNormalisationError):
+            q.variants_in_range("99", 1, 10**9)
+
+
+def test_the_proof_reports_a_difference_in_the_variant_reads(planted):
+    """`differences` compares `variant_reads`: a dropped row, a changed count."""
+    from opengwasdb.store.query_digests import differences, release_digests
+
+    reference = release_digests(planted["dense_observed"][0])
+    reads = reference["variant_reads"]
+    assert reads["variant_count"] and reads["variants"] and len(reads) > 3
+    assert differences(reference, reference) == []
+    changed = copy.deepcopy(reference)
+    changed["variant_reads"]["variant_count"]["count"] = "0" * 8
+    assert differences(reference, changed) == ["variant_reads/variant_count/count"]
+    dropped = copy.deepcopy(reference)
+    name = next(n for n in dropped["variant_reads"] if n.startswith("variants_in_range/"))
+    dropped["variant_reads"][name]["alid"] = "0" * 8
+    assert differences(reference, dropped) == [f"variant_reads/{name}/alid"]
+    del dropped["variant_reads"]["variants"]
+    assert any(d.startswith("variant_reads/variants/") for d in differences(reference, dropped))

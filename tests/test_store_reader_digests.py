@@ -54,6 +54,17 @@ def test_the_pins_cover_every_layout_and_completion_state():
         assert sum(len(values) for values in PINS[name]["log10_p"].values()) > 500, name
 
 
+def test_the_variant_reads_are_the_one_section_the_pins_gained_with_484():
+    """The pins hold the sections of the code before the move, and `variant_reads` (#484)
+    from the facade's variant-only reads; nothing else was added to them."""
+    for name in RELEASES:
+        assert set(PINS[name]) == {
+            "adapter", "variants_table", "analyses_table", "shapes", "resolved", "log10_p",
+            "variant_reads",
+        }, name
+        assert len(PINS[name]["variant_reads"]) > 5, name
+
+
 @pytest.mark.parametrize("name", RELEASES)
 def test_every_answer_matches_the_code_before_the_move(releases: dict[str, Path], name: str):
     found = release_digests(releases[name])
@@ -73,6 +84,7 @@ def test_every_answer_matches_the_code_before_the_move(releases: dict[str, Path]
     }
     assert differing == {}
     assert found["resolved"] == pinned["resolved"]
+    assert found["variant_reads"] == pinned["variant_reads"]  # #484
     for shape, values in pinned["log10_p"].items():
         assert len(found["log10_p"][shape]) == len(values), shape
         for got, want in zip(found["log10_p"][shape], values, strict=True):

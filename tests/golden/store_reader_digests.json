@@ -1,7 +1,7 @@
 {
  "__written_by__": {
   "commit": "4b012873",
-  "how": "tests/store_reader_digests.py from a git archive of 4b012873, with the answers #483 changed (top_hits at an unstored threshold on a Dense or Hybrid release, now a refusal) taken from the #483 commit that carries this file; see its docstring"
+  "how": "tests/store_reader_digests.py from a git archive of 4b012873, with the answers #483 changed (top_hits at an unstored threshold on a Dense or Hybrid release, now a refusal) taken from the #483 commit that carries this file; see its docstring; the `variant_reads` section (#484) added from this package's own run, every other pinned section unchanged (checked equal)"
  },
  "dense_completed": {
   "adapter": "StoreQuery",
@@ -1427,6 +1427,62 @@
    },
    "top_hits/limit/observed_only": {
     "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   }
+  },
+  "variant_reads": {
+   "variant_count": {
+    "count": "3cdc180df86af780f91d8a654a92db4647ba6d71ffe12e2b0e3aa9013667bb82"
+   },
+   "variants": {
+    "__keys__": "ecca3ae7d83d90f1074c26665210a1706fce508d1d56488baf8447656fcdc527",
+    "alid": "0829135c3612ed1468e2afb5aa57935d5f8c9f584e5c466317770566a4b97944",
+    "chromosome": "dbd274442b3d1c0d2e8b0f4d6250efdcc9db813171a80b8799ef7d64864a05e9",
+    "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
+    "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
+    "position": "5fd7bf3171bd40626386246cede059e3b177074c587cfa59cc9bb2a5e2df59fc",
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "f33e351e7952828a42774495ae156091d2925fc6708e6bd9a84389f8628600b1",
+    "alid": "24f4ad392f83b03c6aa3dd7773b36071446ddb6fd40c749d698a18af8af30e72",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "aa351486b5f6963d9421dcb2db50042f57c7bf74246df1e9723a30b879dc8c77",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/last": {
+    "__keys__": "f33e351e7952828a42774495ae156091d2925fc6708e6bd9a84389f8628600b1",
+    "alid": "24f4ad392f83b03c6aa3dd7773b36071446ddb6fd40c749d698a18af8af30e72",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "aa351486b5f6963d9421dcb2db50042f57c7bf74246df1e9723a30b879dc8c77",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
    }
   },
   "variants_table": {
@@ -4468,6 +4524,59 @@
     "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
    }
   },
+  "variant_reads": {
+   "variant_count": {
+    "count": "9b16b1a6d3ede159b9bcce043ceeccd9e085f0bc988f6da3933b8a41d927501a"
+   },
+   "variants": {
+    "__keys__": "62ce3b9edd43a957ac7a24c72835c6a4b4e71ab9067af1011d5cd11eeea0ba74",
+    "alid": "0fc489817e6049c2aacdc5bbb8b9daa603599fc2ebc3af69f96b73c2dfb18d68",
+    "chromosome": "dbd274442b3d1c0d2e8b0f4d6250efdcc9db813171a80b8799ef7d64864a05e9",
+    "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
+    "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
+    "position": "dfbee70e0fe155e818762128dd44c9de8d82b1002e3355bdc835b8cdb56c9fce",
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "7ba50c82c49787462d579679ef7ef99745ac3b72f37be64a9497398adf53b299",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "921cf5d0320fdbc6bf1b079bd5f61fa0afaf785886101bebade282dc9202eb2a",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
+    "alid": "2ec22f422db0485c241bbacc16b7992cade6d421e6cc21324e1423ec64ea455a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "aa65bd643b9ce7e0e3106089c4d355de7a498aeef699b1504e11bde3ea6233f3",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/last": {
+    "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
+    "alid": "2ec22f422db0485c241bbacc16b7992cade6d421e6cc21324e1423ec64ea455a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "aa65bd643b9ce7e0e3106089c4d355de7a498aeef699b1504e11bde3ea6233f3",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "7ba50c82c49787462d579679ef7ef99745ac3b72f37be64a9497398adf53b299",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "921cf5d0320fdbc6bf1b079bd5f61fa0afaf785886101bebade282dc9202eb2a",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   }
+  },
   "variants_table": {
    "__keys__": "7c9ae5159d8b3443479c4877b0e3ad831286168a5ddc67164f3772aa6d47eed2",
    "alid": "e2bd3bbf153a7dd47e3d2ff5e94d209dab7142be2ad2fc60861223506072a14e",
@@ -6297,6 +6406,62 @@
     "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
    }
   },
+  "variant_reads": {
+   "variant_count": {
+    "count": "c5263ae6255083898c8ebba19ec45450275fd9ea7ddb232bff1fd52307f28e7d"
+   },
+   "variants": {
+    "__keys__": "7c82a1209da8a1931bdbe94077e7bac6844a93e0190ad076e69e4de3df163c08",
+    "alid": "8db7d9c26909a696c55066514116895102d07f3ad53dca1f3e10eac520677f74",
+    "chromosome": "dbd274442b3d1c0d2e8b0f4d6250efdcc9db813171a80b8799ef7d64864a05e9",
+    "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
+    "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
+    "position": "a0b916e5a482c51a16be3f6069ee9b7eca5d11edd007821459854466b40a52f5",
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
+    "alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/last": {
+    "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
+    "alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   }
+  },
   "variants_table": {
    "__keys__": "7a9cb27455ead59a1f16376d64ed723c7be7bdd04a7e52b4338bb168983283d2",
    "alid": "a566f9cb6b4f8190c7a4cc92b0af91c1f5af4a950176d559358e903c76635bc4",
@@ -8120,6 +8285,62 @@
    },
    "top_hits/limit/observed_only": {
     "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   }
+  },
+  "variant_reads": {
+   "variant_count": {
+    "count": "c5263ae6255083898c8ebba19ec45450275fd9ea7ddb232bff1fd52307f28e7d"
+   },
+   "variants": {
+    "__keys__": "7c82a1209da8a1931bdbe94077e7bac6844a93e0190ad076e69e4de3df163c08",
+    "alid": "8db7d9c26909a696c55066514116895102d07f3ad53dca1f3e10eac520677f74",
+    "chromosome": "dbd274442b3d1c0d2e8b0f4d6250efdcc9db813171a80b8799ef7d64864a05e9",
+    "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
+    "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
+    "position": "a0b916e5a482c51a16be3f6069ee9b7eca5d11edd007821459854466b40a52f5",
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
+    "alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/last": {
+    "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
+    "alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
    }
   },
   "variants_table": {
@@ -11497,6 +11718,62 @@
     "z": "f3d82f34928bf217528a0468b8ac18a7f96bad1319565136f98321bdc6ea1216"
    }
   },
+  "variant_reads": {
+   "variant_count": {
+    "count": "ebb64124ebdbe1554cb24fec17d0df38c226826a28c7fa299c2a1eff618e262c"
+   },
+   "variants": {
+    "__keys__": "69140c51347236f21d64bf698a441be5e05e5b6e3372afdb650d150c9823bf12",
+    "alid": "3e00849a236faf352e41195cdc7615c4e4bb2a20c30ab7b17a029c7015743c7c",
+    "chromosome": "dbd274442b3d1c0d2e8b0f4d6250efdcc9db813171a80b8799ef7d64864a05e9",
+    "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
+    "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
+    "position": "2030f9fd5cb3de6c783764d567db9daa53a71867fb173f0cd00f707ad8968755",
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "e959a7c14d3c8b83b473f2d4962cd3dfc9e573edd01e41c5126dd7f510871403",
+    "alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/last": {
+    "__keys__": "e959a7c14d3c8b83b473f2d4962cd3dfc9e573edd01e41c5126dd7f510871403",
+    "alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   }
+  },
   "variants_table": {
    "__keys__": "3422b81850632e306f038fc6acc10eedc4b49cf511dfede97c2d8cae46b6adae",
    "alid": "4263e16e0540decb5b351236831fe1f07b4c0295cacc22132708befeaa1efabc",
@@ -14854,6 +15131,62 @@
     "se": "4f7375986e2d64d073b87178940c3d0a789931da75aaa2cb46b7217b8590978a",
     "variant_index": "f6f55a52421aa7d0a933fec066e7891435f43548afebeef3eddb2a88789e8c52",
     "z": "f3d82f34928bf217528a0468b8ac18a7f96bad1319565136f98321bdc6ea1216"
+   }
+  },
+  "variant_reads": {
+   "variant_count": {
+    "count": "9b16b1a6d3ede159b9bcce043ceeccd9e085f0bc988f6da3933b8a41d927501a"
+   },
+   "variants": {
+    "__keys__": "62ce3b9edd43a957ac7a24c72835c6a4b4e71ab9067af1011d5cd11eeea0ba74",
+    "alid": "fdb473bd3ec2a6e5edcd98615fd0904073e29fe8785e33d86cdfa66b4f9fdc14",
+    "chromosome": "dbd274442b3d1c0d2e8b0f4d6250efdcc9db813171a80b8799ef7d64864a05e9",
+    "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
+    "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
+    "position": "383776ca3578c6f2b834e8752c47df88702006ac0ddd46aa102d97ba1c25c7b8",
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
+    "alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/last": {
+    "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
+    "alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
    }
   },
   "variants_table": {
