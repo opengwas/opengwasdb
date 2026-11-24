@@ -46,6 +46,7 @@ import numpy as np
 from opengwasdb.store_reader.npy_sidecar import (
     OFFSET_DTYPE,
     WINDOW_ROWS,
+    dtype_fault,
     encode_utf8_offsets,
     holds_sidecar,
     offsets_fault,
@@ -390,15 +391,13 @@ def _slicing_fault(state: np.ndarray, utf8: np.ndarray, offsets: np.ndarray) -> 
 
 def _dtype_fault(state: np.ndarray, utf8: np.ndarray, offsets: np.ndarray) -> str:
     """The first array not 1-d of the dtype the layout gives it, or ``""``."""
-    expected = (
-        (SOURCE_ALID_STATE_FILENAME, state, STATE_DTYPE),
-        (SOURCE_ALID_UTF8_FILENAME, utf8, UTF8_DTYPE),
-        (SOURCE_ALID_OFFSETS_FILENAME, offsets, OFFSET_DTYPE),
+    return dtype_fault(
+        (
+            (SOURCE_ALID_STATE_FILENAME, state, STATE_DTYPE),
+            (SOURCE_ALID_UTF8_FILENAME, utf8, UTF8_DTYPE),
+            (SOURCE_ALID_OFFSETS_FILENAME, offsets, OFFSET_DTYPE),
+        )
     )
-    for name, array, dtype in expected:
-        if array.dtype != dtype or array.ndim != 1:
-            return f"{name} is {array.dtype} of {array.ndim} dimension(s), not 1-d {dtype}"
-    return ""
 
 
 def _state_fault(state: np.ndarray) -> str:

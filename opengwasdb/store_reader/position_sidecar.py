@@ -32,7 +32,12 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from opengwasdb.store_reader.npy_sidecar import holds_sidecar, open_sidecar_arrays
+from opengwasdb.store_reader.npy_sidecar import (
+    dtype_fault,
+    holds_sidecar,
+    offsets_fault,
+    open_sidecar_arrays,
+)
 
 POSITION_FILENAME = "variant_position.npy"
 CHROMOSOMES_FILENAME = "variant_position_chromosomes.npy"
@@ -340,20 +345,16 @@ def sidecar_problems(
 
 
 def _offset_problem(sidecar: PositionSidecar) -> str:
-    """Why the chromosome offsets do not slice the rows into the chromosomes, or ``""``.
-
-    That they number the chromosomes plus one is checked at open (`_slicing_fault`).
-    """
-    offsets = np.asarray(sidecar.offsets, dtype=np.int64)
-    if int(offsets[0]) != 0 or int(offsets[-1]) != sidecar.n_rows:
-        return (
-            f"{CHROMOSOME_OFFSETS_FILENAME} runs from {int(offsets[0])} to {int(offsets[-1])}, "
-            f"not from 0 to the {sidecar.n_rows} rows of {POSITION_FILENAME}"
-        )
-    if np.any(offsets[1:] <= offsets[:-1]):
-        at = int(np.flatnonzero(offsets[1:] <= offsets[:-1])[0])
-        return f"{CHROMOSOME_OFFSETS_FILENAME} does not rise at chromosome {at}: each holds a row"
-    return ""
+    """Why the chromosome offsets do not slice the rows into the chromosomes, or ``""``:
+    `offsets_fault`, over rows. That they number the chromosomes plus one is checked at
+    open (`_slicing_fault`)."""
+    return offsets_fault(
+        sidecar.offsets,
+        sidecar.n_rows,
+        names=(CHROMOSOME_OFFSETS_FILENAME, POSITION_FILENAME),
+        rising=("chromosome", "each holds a row"),
+        unit="rows",
+    )
 
 
 _WHAT = "position sidecar"
@@ -392,13 +393,14 @@ def _slicing_fault(labels: list[str], n_offsets: int) -> str:
 
 def _dtype_problem(sidecar: PositionSidecar) -> str:
     """The first array not of the dtype the layout gives it, or ``""``."""
-    expected = (
-        (POSITION_FILENAME, sidecar.positions, POSITION_DTYPE),
-        (CHROMOSOME_OFFSETS_FILENAME, sidecar.offsets, ROW_OFFSET_DTYPE),
+    fault = dtype_fault(
+        (
+            (POSITION_FILENAME, sidecar.positions, POSITION_DTYPE),
+            (CHROMOSOME_OFFSETS_FILENAME, sidecar.offsets, ROW_OFFSET_DTYPE),
+        )
     )
-    for name, array, dtype in expected:
-        if array.dtype != dtype or array.ndim != 1:
-            return f"{name} is {array.dtype} of {array.ndim} dimension(s), not 1-d {dtype}"
+    if fault:
+        return fault
     if sidecar.chromosomes.dtype.kind != "S" or sidecar.chromosomes.ndim != 1:
         return f"{CHROMOSOMES_FILENAME} is {sidecar.chromosomes.dtype}, not 1-d bytes"
     return ""

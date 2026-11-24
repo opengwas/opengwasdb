@@ -94,8 +94,8 @@ def a_chromosome_misnamed(store: Path) -> None:
     _edit(store, CHROMOSOMES_FILENAME, _set(1, b"3"))
 
 
-def offsets_short_of_the_rows(store: Path) -> None:
-    _edit(store, CHROMOSOME_OFFSETS_FILENAME, lambda a: np.append(a[:-1], a[-1] - 1))
+def offsets_past_the_rows(store: Path) -> None:
+    _edit(store, CHROMOSOME_OFFSETS_FILENAME, lambda a: np.append(a[:-1], a[-1] + 1))
 
 
 def offsets_for_another_count_of_chromosomes(store: Path) -> None:
@@ -122,7 +122,10 @@ CORRUPTIONS: dict[str, tuple[Callable[[Path], None], str]] = {
     "chromosomes_out_of_order": (chromosomes_out_of_order, "out of the canonical"),
     "a_chromosome_named_twice": (a_chromosome_named_twice, "names chromosome '1' twice"),
     "a_chromosome_misnamed": (a_chromosome_misnamed, "row 5: the sidecar places it at 3:300"),
-    "offsets_short_of_the_rows": (offsets_short_of_the_rows, "runs from 0 to 7, not from 0"),
+    "offsets_past_the_rows": (
+        offsets_past_the_rows,
+        "ends at 9 but variant_position.npy holds 8 rows",
+    ),
     "offsets_for_another_count_of_chromosomes": (
         offsets_for_another_count_of_chromosomes,
         "has 5 offsets for 3 chromosome(s)",
