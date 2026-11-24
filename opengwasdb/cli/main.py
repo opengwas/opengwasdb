@@ -7,51 +7,30 @@ import math
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import numpy as np
 import typer
 
-from opengwasdb.ancestry.mixture import Gates
-from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
-from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
-from opengwasdb.build.observed import build_dense_observed_from_manifest
-from opengwasdb.build.phenotype_sd_pipeline import (
-    AfSource,
-    estimate_manifest_phenotype_sd,
-    load_af_reference,
-    read_sd_manifest,
-    write_sd_estimates,
+from opengwasdb.build.phenotype_sd import DEFAULT_EVIDENCE_SAMPLE, AfSource
+from opengwasdb.layouts.dense.constants import (
+    DEFAULT_CHUNK_SHAPE,
+    DEFAULT_RHO_MIN_NULLS,
+    DEFAULT_RHO_WINDOW_BP,
+    DEFAULT_RHO_Z_THRESH,
 )
-from opengwasdb.build.resolve import DEFAULT_EVIDENCE_SAMPLE
-from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
-from opengwasdb.layouts.build_manifest import read_manifest
-from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
     OverflowOnlyPolicy,
     build_indexed_subset,
 )
-from opengwasdb.layouts.dense.rho import (
-    DEFAULT_RHO_MIN_NULLS,
-    DEFAULT_RHO_WINDOW_BP,
-    DEFAULT_RHO_Z_THRESH,
-    build_dense_rho,
-)
-from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged import RaggedBuildResult
-from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.ld.cli import ld_app
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
-from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
-from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store.arrays import open_group_for_write
@@ -64,13 +43,6 @@ from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_sto
 from opengwasdb.store_reader.indexed import IndexedSubsetError
 from opengwasdb.store_reader.top_hits import UnstoredThresholdError
 from opengwasdb.top_hits import write_stored_p
-from opengwasdb.validation import validate_store
-from opengwasdb.variants.routing import (
-    EmptyReferenceError,
-    UnionOptions,
-    VariantReferenceExtraction,
-    extract_variant_reference,
-)
 from opengwasdb.variants.rsid import RsidConflictPolicy
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
@@ -79,6 +51,10 @@ from opengwasdb.variants.windows import (
 )
 from opengwasdb.version import __version__
 
+if TYPE_CHECKING:
+    from opengwasdb.layouts.hybrid.build import HybridBuildResult
+    from opengwasdb.variants.routing import UnionOptions, VariantReferenceExtraction
+
 #: The one logging layout a step's stderr is written in. A benchmark that parses
 #: those lines imports these rather than spelling the layout again.
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -86,9 +62,13 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 
-# Reference Completion's modules load pysam (its LD panel reader), so each `complete-*`
-# command imports its own on use: a `query-*` command on a 0.3.0 release loads no pysam
-# (#469). `test_cli_query_loads_no_pysam` holds every module imported here to that.
+# A command imports what only it needs on use. Reference Completion's modules load
+# pysam (its LD panel reader), and the builders, the resolvers, ancestry, validation
+# and `overview.html` load sqlite3, pandas or scipy, so a `query-*` command on a 0.3.0
+# release loads none of them (#469, #450). Only what an option's declaration names is
+# imported here, from modules that load none of them.
+# `test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam` holds every
+# module imported here to that.
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(ld_app, name="ld")
@@ -196,6 +176,7 @@ _COLUMN_MAP_OPTION = Annotated[
 
 
 def _validate_source_reader_capability(value: str | None) -> str | None:
+    from opengwasdb.readers import known_capabilities
     if value is None:
         return None
     if value not in known_capabilities():
@@ -575,6 +556,7 @@ def validate_command(
 ) -> None:
     """Validate a local Store Release."""
 
+    from opengwasdb.validation import validate_store
     result = validate_store(store_path, n_workers=n_workers)
     if output_format is ReportFormat.json:
         # `findings` names the rule behind each record, and the skips beside the
@@ -780,6 +762,7 @@ def build_dense_command(
     --admission-record names where Association Admission's record goes (#357).
     """
 
+    from opengwasdb.build.observed import build_dense_observed_from_manifest
     result = build_dense_observed_from_manifest(
         manifest,
         output_path,
@@ -811,8 +794,8 @@ def _extract_manifest_reference(
     chain_file: Path | None,
     failure_threshold: float,
     n_workers: int,
-    union: UnionOptions,
-) -> VariantReferenceExtraction:
+    union: "UnionOptions",
+) -> "VariantReferenceExtraction":
     """Extract the Variant Reference of a manifest's sources, naming the manifest
     when there is none.
 
@@ -820,6 +803,8 @@ def _extract_manifest_reference(
     manifest's rows default to. Routing reads sources, not manifests, so the
     manifest's path is put back into its refusal here, where it is known.
     """
+    from opengwasdb.layouts.build_manifest import read_manifest
+    from opengwasdb.variants.routing import EmptyReferenceError, extract_variant_reference
     capability, assembly, column_map = defaults
     rows = read_manifest(
         manifest_path, default_source_reader_capability=capability,
@@ -881,6 +866,7 @@ def extract_variant_reference_command(
     genomic tree-reduce (issue #188) and never change the artifact.
     --map-spill-records bounds a worker's peak memory (issue #194).
     """
+    from opengwasdb.variants.routing import UnionOptions
     result = _extract_manifest_reference(
         manifest_path, output_path,
         defaults=(source_reader_capability, source_assembly, column_map),
@@ -940,6 +926,7 @@ def build_dense_vcf_command(
     carry only `gwas`, its default (issue #298). --admission-record names where
     Association Admission's record goes (#357).
     """
+    from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
         association_coverage=association_coverage,
@@ -999,6 +986,7 @@ def build_hybrid_command(
     carry only `gwas`, its default (issue #298). --admission-record names where
     Association Admission's record goes (#357).
     """
+    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
         variant_reference=variant_reference, association_coverage=association_coverage,
@@ -1012,7 +1000,7 @@ def build_hybrid_command(
     _echo_hybrid_result(res)
 
 
-def _echo_hybrid_result(res: HybridBuildResult) -> None:
+def _echo_hybrid_result(res: "HybridBuildResult") -> None:
     """Echo one Hybrid build's summary as the CLI's JSON contract."""
     _echo_summary(
         dict(
@@ -1173,6 +1161,9 @@ def _run_assign_ancestry(
     n_min: int, residual_max: float, orientation_flip_r: float, n_workers: int,
     catalogue_version: str, reference_version: str,
 ) -> None:
+    from opengwasdb.ancestry.mixture import Gates
+    from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
+    from opengwasdb.ancestry.reference import load_reference
     reference = load_reference(ancestry_reference, ancestry_groups, maf_floor=maf_floor)
     gates = Gates(tau, delta, n_min, residual_max, orientation_flip_r=orientation_flip_r)
     source_rows = read_source_manifest(
@@ -1221,6 +1212,12 @@ def estimate_phenotype_sd_command(
     number; the tier, the tolerance, and whether a disagreement blocks a
     release stay registry decisions (ADR 0029).
     """
+    from opengwasdb.build.phenotype_sd_pipeline import (
+        estimate_manifest_phenotype_sd,
+        load_af_reference,
+        read_sd_manifest,
+        write_sd_estimates,
+    )
     if af_source is AfSource.reference and af_reference is None:
         raise typer.BadParameter("--af-source reference requires --af-reference")
     reference = (
@@ -1396,6 +1393,7 @@ def resolve_analyses_command(
     parent and fork-shared across workers. Source/parser/statistical errors are
     isolated to the affected Analysis; setup errors fail the command.
     """
+    from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
     try:
         summary = resolve_analyses_manifest(
             manifest_path=manifest_path,
@@ -1487,6 +1485,7 @@ def calibrate_ancestry_command(
     Catalogue. Reported Population calibrates/audits only — it never routes.
     """
     from opengwasdb.ancestry import calibrate
+    from opengwasdb.ancestry.mixture import Gates
 
     with open(catalogue_path, newline="", encoding="utf-8") as fh:
         import csv as _csv
@@ -1626,6 +1625,7 @@ def build_ragged_besd_command(
     against --eaf-reference (ADR 0067). --admission-record names where
     Association Admission's record goes (#357).
     """
+    from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
     result = build_ragged_from_besd(
         besd_prefix,
         output_path,
@@ -1692,6 +1692,7 @@ def build_ragged_ssf_command(
     --admission-record names where Association Admission's record goes (#357).
     --regions is the bundle's region table, written as regions.tsv (#430).
     """
+    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
     result = build_ragged_from_ssf(
         manifest_path,
         filtered_dir,
@@ -1915,6 +1916,7 @@ def build_dense_top_hits_command(
     References with the v1 reference-first marker; conversion cannot establish
     allele orientation.
     """
+    from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
     try:
         build_top_hit_indexes(store_path, n_workers=n_workers)
         _keep_stored_p(store_path)
@@ -1939,6 +1941,7 @@ def build_dense_rho_command(
     n_workers: int = typer.Option(1, help="Process pool size for the per-pair MLE"),
 ) -> None:
     """Build (or rebuild) the pairwise Rho Matrix for a Dense store."""
+    from opengwasdb.layouts.dense.rho import build_dense_rho
     build_dense_rho(
         store_path,
         window_bp=window_bp,
@@ -2053,6 +2056,7 @@ def regenerate_overview_command(store_path: Path) -> None:
     """Rewrite overview.html from a store's already-persisted data --
     analyses.tsv, manifest.json, and a directory scan (issue #23 AC3, ADR
     0032). No other store artifact is rebuilt or touched."""
+    from opengwasdb.overview import write_overview_html
     table = read_analyses(store_path / "analyses.tsv")
     out_path = write_overview_html(store_path, table)
     typer.echo(f"wrote {out_path}")

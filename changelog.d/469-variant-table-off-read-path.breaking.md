@@ -4,7 +4,9 @@
   names each row, its ALID gives the chromosome, position and alleles, and the rsID index,
   inverted, gives the rsID. The variant count is the ALID sidecar's. No query loads pysam,
   through the Python API or `opengwasdb query-*`: the CLI imports Reference Completion,
-  which does, only inside the `complete-*` commands.
+  which does, only inside the `complete-*` commands. Nor does `opengwasdb query-*` load
+  sqlite3, pandas or scipy: each build, resolve, ancestry, validation and overview command
+  imports its modules on use.
   The answers equal 0.2.x's column by column: a row with no rsID is `None` in
   `variants_table()` and `.` in a resolved row, and a cell naming several (`rs1;rs2`) is
   that cell whole. Naming a few rows scans the rsID index (0.04 s for one row on

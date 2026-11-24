@@ -26,6 +26,11 @@ from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 
 from opengwasdb.build.ordered_pool import single_threaded_fork_pool
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.layouts.dense.constants import (
+    DEFAULT_RHO_MIN_NULLS,
+    DEFAULT_RHO_WINDOW_BP,
+    DEFAULT_RHO_Z_THRESH,
+)
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
@@ -34,9 +39,6 @@ from opengwasdb.store_reader.layout import ArrayRole
 
 RHO_METHOD = "pleiodb-cml"
 RHO_GRID_N = 2000
-DEFAULT_RHO_WINDOW_BP = 15_000
-DEFAULT_RHO_Z_THRESH = 1.0
-DEFAULT_RHO_MIN_NULLS = 500
 _RHO_BOUNDS = (-1.0 + 1e-6, 1.0 - 1e-6)
 
 

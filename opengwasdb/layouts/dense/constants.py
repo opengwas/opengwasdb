@@ -15,6 +15,13 @@ DEFAULT_CHUNK_SHAPE = DENSE_CHUNK_SHAPE
 #: the `sharding_indexed` codec, and the published record must name that codec.
 DEFAULT_COMPRESSOR = SHARDED_COMPRESSOR_RECORD
 DEFAULT_DTYPE = "float16"
+#: `build-dense-rho`'s defaults (the ADR 0025 Rho estimator, `layouts.dense.rho`): the
+#: distance-thinning window, the |z| below which a variant counts as null, and the
+#: shared null variants below which Rho is NaN. Here rather than in `rho`, which loads
+#: scipy, so the CLI names them without loading it.
+DEFAULT_RHO_WINDOW_BP = 15_000
+DEFAULT_RHO_Z_THRESH = 1.0
+DEFAULT_RHO_MIN_NULLS = 500
 
 
 def dense_layout_records(
