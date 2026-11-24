@@ -505,6 +505,38 @@ read of the table: each row's value in the sidecar against the table's (`differi
 with the rewrite's read-back), the dtypes, offsets that never fall, and one row per row.
 `variant_table.source_alid` (#449) counts sourced rows from the sidecar on 0.3.0.
 
+**Evidence.** `tests/test_source_alid_sidecar.py` plants, in each of the six digest
+releases (every layout, both completion states), a collision row, an unlifted row, a lifted
+one, and lifted values of 24, 32, 33 and 130 bytes. Each 0.3.0 release returns them through
+`variants_table()` and resolved rows, exactly as its 0.2.3 form does from its table. A lifted
+Dense and a lifted Hybrid completion keep every observed row's value and give a panel row none.
+The validator fails a sidecar one row different from the table, or one row short. #469's
+fresh-interpreter probe now also asks each row's `source_alid` and every record method, with
+the table unreadable, and loads no pysam.
+
+Two real releases were rewritten, read only, with the version refusal bypassed as for #467:
+- **OGS-00007** (Ragged, 0.2.1, 171,006 rows) in 22.8 s. All 146 questions, 9 ALID probes,
+  22 range probes and 3 misses matched, `source_alid` among them in `variants_table()` and the
+  5 resolved shapes. Its table holds no `source_alid`, so the sidecar is its offsets alone:
+  1,368,312 B, against 2,492,367 B of `variants.tsv.gz`. With the table unreadable the
+  rewritten release answered `variants_table()`, the resolved rows of an Analysis, `records`
+  and the source-fidelity join in 1.6 s, without pysam.
+- **OGS-00001** (Ragged BESD, 0.2.0, which records a lift of 86,376 variants) in 14.5 s. All
+  146 questions, 4 ALID probes, 16 range probes and 3 misses matched. It was built before
+  #449, so its table holds no `source_alid` either (691,272 B against 1,231,739 B), and
+  `variant_table.source_alid` fails it, as it fails the source.
+
+None of the eight hosted releases checked holds a lifted `source_alid`: OGS-00001, -00002,
+-00003 and -00007 were read whole, and OGS-00004, -00009, -00015 and -00027 over their first
+299,999 rows. Each row is blank or names its own ALID.
+
+**Size.** A release built on its own assembly gives every row its own ALID, so the sidecar
+repeats the ALID sidecar's text. On OGS-00003 (Dense, 21,327,043 rows, each its own ALID) it would
+be 489,484,138 B: the ALID sidecar's 318,867,530 B of text, byte for byte, and 170,616,352 B
+of offsets. That is 23.0 B a row, and 1.34 times the 366,598,962 B `variants.tsv.gz`.
+At that rate OGS-00011's 47,920,778 shared rows would cost about 1.1 GB. The sidecar is
+not compacted here.
+
 **Alternatives considered.**
 - *Reuse the ALID sidecar's codec with keys.* A search nothing asks for, at 28 bytes a row.
 - *A fixed-width `|S<n>` array.* An indel's `source_alid` runs past 100 bytes; a width that
