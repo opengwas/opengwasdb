@@ -564,6 +564,74 @@ class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
             )
 
 
+@dataclass(frozen=True)
+class _SourceAlidRows:
+    """How many table rows there are, and how many of them carry a ``source_alid``."""
+
+    n_rows: int = 0
+    n_sourced: int = 0
+
+    def __add__(self, other: _SourceAlidRows) -> _SourceAlidRows:
+        return _SourceAlidRows(self.n_rows + other.n_rows, self.n_sourced + other.n_sourced)
+
+
+def _judges_source_alid(target: Target) -> bool:
+    """Whether the release records a lift its own table must then show, and is not a
+    Hybrid's Dense Component: that copy of the table is gone at 0.3.0 (#472), so a
+    Hybrid is judged on its shared table alone.
+
+    A lift is recorded as a ``provenance.lift`` block that lifted a variant (Ragged), or a
+    ``provenance.chain_file`` (Dense, Hybrid). The second is a weak signal: a build writes
+    a default chain label whether or not it lifted anything, and no Dense or Hybrid
+    manifest records its Analyses' source assemblies. It cannot wrongly fail a release,
+    though: every build now writes an unlifted row's ``source_alid`` as its ALID, so a
+    release that lifted nothing still holds sourced rows. A ``lift`` block that does not
+    say how many it lifted is judged, and refused by `_judge_source_alid_rows`.
+    """
+    provenance = target.store.manifest.provenance
+    if target.is_component or not isinstance(provenance, dict):
+        return False
+    lift = provenance.get("lift")
+    if isinstance(lift, dict):
+        n_lifted = lift.get("n_lifted")
+        return not isinstance(n_lifted, int) or n_lifted > 0
+    return bool(provenance.get("chain_file"))
+
+
+def _unreadable_lift(target: Target) -> str | None:
+    """Why a ``provenance.lift`` block cannot say whether it lifted, or ``None``."""
+    lift = target.store.manifest.provenance.get("lift")
+    if isinstance(lift, dict) and not isinstance(lift.get("n_lifted"), int):
+        return (
+            f"manifest.json provenance.lift records n_lifted={lift.get('n_lifted')!r}, not a "
+            "count: the release cannot say whether it lifted, so source_alid cannot be judged"
+        )
+    return None
+
+
+def _source_alid_rows(_target: Target, block: TableBlock) -> _SourceAlidRows:
+    sourced = sum(1 for record in block.records if record.source_alid)
+    return _SourceAlidRows(len(block.records), sourced)
+
+
+def _judge_source_alid_rows(target: Target, found: _SourceAlidRows) -> Iterator[str]:
+    """A lifted release has an observed row with a ``source_alid``, or none was kept.
+
+    Rows Reference Completion adds from the panel are blank by design and a collision
+    blanks its row, so one blank row is no fault. A table with *no* ``source_alid`` at
+    all holds none on any observed row: the provenance was dropped (#449).
+    """
+    unreadable = _unreadable_lift(target)
+    if unreadable:
+        yield unreadable
+    elif found.n_rows and not found.n_sourced:
+        yield (
+            f"manifest.json records a liftover but none of the {found.n_rows} rows of "
+            "variants.tsv.gz carries a source_alid: a build or Reference Completion dropped "
+            "the lift's provenance (#449) -- rebuild the release from source"
+        )
+
+
 def variant_aliases(target: Target) -> Iterator[str]:
     """Every alias names a variant the table holds.
 
@@ -678,6 +746,16 @@ RULES: tuple[Rule, ...] = (
         zero=_LiftedOffPrimary(),
         measure=_lifted_off_primary,
         judge=_judge_lifted_off_primary,
+    ),
+    Fold(
+        name="variant_table.source_alid",
+        kinds=Kind.RELEASE,
+        when=_judges_source_alid,
+        after=(REQUIRED,),
+        scan=VARIANT_TABLE,
+        zero=_SourceAlidRows(),
+        measure=_source_alid_rows,
+        judge=_judge_source_alid_rows,
     ),
     Check(
         name="sqlite.variant_aliases",

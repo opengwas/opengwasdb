@@ -159,6 +159,20 @@ def write_variant_axis(
     _write_rsid_index(store, variants, rsid_by_alid)
 
 
+def carried_source_alids(
+    source_variants: Iterable[reader_axis.VariantRecord], variants: Sequence[CanonicalVariant]
+) -> list[str | None]:
+    """Each of ``variants``' `source_alid`, carried from the source release's rows.
+
+    The one owner of how Reference Completion keeps provenance (#449): an observed row
+    keeps the ALID its build recorded, and a row added from the panel (which no source
+    observed) or one the build left blank stays ``None``, written as ``.``. Hybrid
+    completion builds the same list inline and could call this.
+    """
+    by_alid = {row.alid: row.source_alid for row in source_variants if row.source_alid}
+    return [by_alid.get(variant.alid) for variant in variants]
+
+
 def _write_table(
     store: Path,
     variants: list[CanonicalVariant],

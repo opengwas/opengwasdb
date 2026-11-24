@@ -101,7 +101,7 @@ from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEnco
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
 from opengwasdb.store_reader.variant_axis import VariantRecord
-from opengwasdb.variants.axis import write_variant_axis
+from opengwasdb.variants.axis import carried_source_alids, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
@@ -907,7 +907,14 @@ def _write_variant_axis(store_path: Path, state: _SourceState, axis: _MergedAxis
     # no rsid -- they are positions the reference panel supplies, which the
     # source never named.
     rsid_by_alid = {v.alid: v.rsid for v in state.src_variants if v.rsid}
-    write_variant_axis(store_path, axis.variants, rsid_by_alid)
+    # Observed rows keep the ALID the build lifted them from; panel-added rows stay "."
+    # and a blank source row stays blank (#449).
+    write_variant_axis(
+        store_path,
+        axis.variants,
+        rsid_by_alid,
+        carried_source_alids(state.src_variants, axis.variants),
+    )
 
 
 def _run_pending_blocks(
