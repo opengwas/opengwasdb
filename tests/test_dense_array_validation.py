@@ -24,7 +24,6 @@ import pytest
 import zarr
 from store_reads import element_reads, times_read
 
-from opengwasdb import top_hits
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits
 from opengwasdb.store import open_store
 from opengwasdb.store_reader import top_hits as reader_top_hits

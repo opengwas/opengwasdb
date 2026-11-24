@@ -37,7 +37,6 @@ from opengwasdb.store import arrays as store_arrays
 # module, so a test that moves the cut moves every caller with it.
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
-from opengwasdb.store_reader import top_hits as reader_top_hits
 from opengwasdb.store_reader.format import carries_stored_p
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import release_arrays
