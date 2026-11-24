@@ -10,22 +10,43 @@
   OGS-00004 (Hybrid Observed-Only, 13,718,605 panel rows) the 0.2 copies come to
   1,098,940,214 B, and on OGS-00011 as completed (14,267,257 panel rows) to
   1,175,803,588 B; a 0.3.0 component that kept its copy would carry 1,265,761,783 B and
-  1,347,866,437 B. Both rewrote with no answer changed.
-  The closed envelope fails a 0.3.0 Dense Component carrying any of them.
+  1,347,866,437 B. Both were rewritten read only with the version refusal bypassed
+  (neither is 0.2.3). OGS-00004's proof matched on every question; its copy then failed
+  `subsets.indexed` on its `hm3` subset, which the rewrite now carries over (below).
+  OGS-00011's comparison left out the one broad `range_phewas`, too large for it, and
+  changed no answer on the rest. The closed envelope fails a 0.3.0 Dense Component
+  carrying any of the dropped files.
 - **The Dense Component's variants are the shared axis's, through `dense_to_shared`.**
   Opened as a release, its `variant_axis()` is the shared axis in its panel rows
   (`opengwasdb.store_reader.panel_axis.PanelVariantAxis`), and its `analyses_path` is
   the Hybrid's. `VariantAxis(<hybrid>/dense)` on a 0.3.0 release raises
-  `DenseComponentSharesAxis` instead of opening files that are not there. A Hybrid
-  query resolves an identifier and a range once, against the shared sidecars.
-- **The Dense Component's own `n_missing_se_out_of_range` is no longer recorded.** The
-  Hybrid's `analyses.tsv` counts both components, as it did. A completion of a 0.3.0
+  `DenseComponentSharesAxis` instead of opening files that are not there, and a
+  `dense/` under a parent `manifest.json` that cannot be read raises
+  `UnreadableHybridManifest`. A Hybrid query resolves an identifier and a range once,
+  against the shared sidecars.
+- **0.2 Hybrids are read through the shared axis too.** On every format, a Hybrid query's
+  Dense Component is now read through the shared Variant Axis and the shared Analyses,
+  never its own copy, because a completed 0.2 Hybrid's copy lost rsIDs and every
+  `source_alid` the shared table keeps (#481). `range_phewas` was the last query still
+  reading the copy, by position, which the copy had kept; `phewas` and `lookup` had read
+  the shared axis since #465. No answer changed on OGS-00004 or OGS-00011.
+- **The Dense Component's own `n_missing_se_out_of_range` is gone with
+  `dense/analyses.tsv`.** The Hybrid's `analyses.tsv` counts both components, as it did;
+  the Dense Component's own count is no longer recorded anywhere. What its completion left
+  out is still recorded in its manifest (`provenance.completion.se_out_of_range`), and
+  `check-observed-view` accounts that against what it finds
+  (`observed_view._component_accounting`). A completion of a 0.3.0
   Hybrid counts what a completion of its 0.2.3 form counts; the
   `analyses.se_out_of_range_partition` rule has nothing to compare on 0.3.0.
 - **`ogdb rewrite-release` drops the copies** in a new step, `dense_shared_axis`, and
   refuses, before anything is written, a source whose `dense_to_shared.npy` does not
   name, for each Dense row, the shared row holding that row's ALID, in range and
   strictly ascending. It does not compare the copies' rsID or `source_alid`.
+- **`ogdb rewrite-release` carries an Indexed Variant Subset to the new release.** A new
+  step, `indexed_subsets`, records the new `release_id` and `format_version` in each
+  subset, which holds the same cells of the new release (ADR 0061); before, every
+  rewritten release with a subset failed `subsets.indexed`. It refuses a source whose
+  subset already names another release. The proof asks each subset the spread Analyses.
 - **Validation.** `hybrid.dense_to_shared` reports a row out of range, a row named
   twice and a descending pair each by itself; `hybrid.coverage` fails a map that does
   not name one shared row for each row of a 0.3.0 Dense Component's grid. The

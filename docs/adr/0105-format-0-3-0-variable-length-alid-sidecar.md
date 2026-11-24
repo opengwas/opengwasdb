@@ -546,21 +546,30 @@ format version, so there is still one backfill.
 **What the Dense Component carries from 0.3.0.** `manifest.json`, `data.zarr/`,
 `dense_to_shared.npy` and, when Reference-Completed, `index.sqlite` with its
 `completion_quality` (`SHARED_AXIS_DENSE_COMPONENT_ENVELOPE`, `envelope_at`). No Variant
-Table, `.tbi`, ALID, position or rsID sidecar, `analyses.tsv` or `overview.html`
-(`DENSE_COMPONENT_COPIES`). Each would have been one more file per sidecar for #467, #468
+Table, `.tbi`, ALID, position or rsID sidecar, `analyses.tsv` or `overview.html`. What is
+dropped is derived from the envelopes, never listed again: `DENSE_COMPONENT_COPIES` is the
+0.2.3 component's envelope less the 0.3.0 one's (what the rewrite leaves out), and
+`COMPLETED_DENSE_COMPONENT_COPIES` a standalone 0.3.0 Dense release's less it (what
+completion drops). Each would have been one more file per sidecar for #467, #468
 and #470 to write twice, and on a completed Hybrid the copy is already wrong (#481).
 
-**How it is read.** The version chooses, as everywhere in 0.3.0
-(`dense_component_shares_axis`); the component's place says it is one (`hybrid_root_of`: the
-`dense/` directory of a release whose manifest says `hybrid`).
+**How it is read.** One function decides that a release is a Dense Component that shares
+the axis, `shared_axis_root`: the version chooses, as everywhere in 0.3.0
+(`dense_component_shares_axis`), and the component's place says it is one (`hybrid_root_of`:
+the `dense/` directory of a release whose manifest says `hybrid`; a parent manifest that
+exists but cannot be read is refused, `UnreadableHybridManifest`). `StoreRelease`, the
+Variant Axis's guard, the rewrite and the validator ask it. It reads the filesystem, so it
+changes when a staged root's manifest lands; completion writes that manifest before it
+drops the copies, and nothing opens the component in between.
 
 - `StoreRelease.variant_axis()` of such a component is `PanelVariantAxis`
   (`opengwasdb.store_reader.panel_axis`): the shared axis seen through the map. A panel row's
   variant is the shared row the map names; a shared row's panel row is a binary search of the
   map, `hybrid.panel_rows`, the one search of it, which the query facade asks too. It answers
-  every `VariantAxis` method in panel rows, and refuses by name (`NoComponentIndex`) the ones
-  that would hand out an index the component does not carry. Its `analyses_path` is the
-  root's. So completion, the validator and the Indexed Variant Subset builder, which open the
+  what a `VariantAxis` answers, in panel rows, without inheriting from it; readers are typed
+  `AnyVariantAxis`, so each is checked against both. It refuses
+  (`DenseComponentSharesAxis`) to hand out an index the component does not carry. Its
+  `analyses_path` is the root's. So completion, the validator and the Indexed Variant Subset builder, which open the
   component as a release, read the shared copies without knowing it.
 - `HybridStoreQuery` resolves an identifier and a range once, against the shared sidecars,
   and reaches Dense rows through the map. `phewas` and `lookup` already did (#465);
@@ -586,7 +595,10 @@ they still do.
 
 **Builds** write the map and no copy. The build's #255 read-back of the Dense Component's
 table against its names becomes a read-back of the map against the shared ALID sidecar
-just written (`require_panel_mapped`). The single-pass build's rewrite of the Dense table
+just written (`require_panel_mapped`). The map's invariants are stated once,
+`check_dense_to_shared` (in range, strictly ascending, one entry per Dense row), and the
+comparison of each Dense row's ALID with its mapped shared row's once, `misnamed_panel_rows`:
+the build's read-back, the rewrite's refusal and the validator ask both. The single-pass build's rewrite of the Dense table
 when the global rsID rekey moved a panel name is gone with the table.
 
 **Completion** runs the unchanged Dense completion on the component, as before. It writes
@@ -594,7 +606,9 @@ the completed component as a standalone Dense release, own Variant Table include
 Hybrid completion reads the completed panel from it. Once the shared table and the map are
 written, the map is read back against the shared ALID sidecar, and the copies are dropped
 (`_drop_dense_copies`). Writing them to drop them costs one Variant Table write of the
-panel. Not writing them would mean a second Dense completion path, which the module's
+panel: 9.5 ms of a 3.0 s fixture completion, and on OGS-00011's 14,267,257-row panel 94 s
+to write 1,371,261,555 B and 0.08 s to drop them, against that release's 73,388 s
+completion (`scratch/472/copy_cost.py`). Not writing them would mean a second Dense completion path, which the module's
 design (one Dense completion, reused unchanged) is there to avoid.
 
 **The rewrite step**, `dense_shared_axis`, runs before `variant_offsets`, which stays last
@@ -639,8 +653,9 @@ a map one row short fails `hybrid.coverage`. A Hybrid completed from its 0.3.0 f
 its 0.2.3 form, and rewritten from the 0.2.3 form of that completion, answer every
 question of the proof identically. The rewrite drops the copies, refuses three maps that
 misname a Dense row, and publishes a source whose Dense copy has lost every rsID, naming
-each row by the shared table's. 21 of these 22 tests fail on the code before this change;
-the 22nd, a 0.2 map naming another variant, holds behaviour that was already there.
+each row by the shared table's. After fix round 1 the module holds 26 tests; on the code
+before #472, 22 fail and the 3 sharing one rewrite fixture error in it. The one that passes,
+a 0.2 map naming another variant, holds behaviour that was already there.
 `test_rewrite_release` proves both Hybrid digest releases through the rewrite, as before.
 
 **OGS-00004** (Hybrid Observed-Only, 0.2.2, 23,726,262 shared rows, 13,718,605 panel
@@ -650,7 +665,8 @@ range probes and 3 rsID misses, and every answer matched; it took 715 s on the s
 487 s on the copy, and 1,662 s in all, at 20 GB peak RSS. The copy's
 `hybrid.dense_to_shared`, `hybrid.coverage` and closed envelope pass; it fails only what
 the bypass brings (a 0.2.2 `analyses.tsv` has no `n_missing_se_out_of_range`) and its
-`hm3` Indexed Variant Subset, which names the source's `release_id`. The Dense Component's
+`hm3` Indexed Variant Subset, which named the source's `release_id` and version; the
+`indexed_subsets` step now carries it over (above). The Dense Component's
 0.2 copies came to 1,098,940,214 B, the figure ADR 0102 §4 gives. A 0.3.0 component that
 kept its copy would carry 1,265,761,783 B: its table, `.tbi`, rsID index, `analyses.tsv`
 and `overview.html` as the source holds them, and the ALID and position sidecars sized
