@@ -67,9 +67,11 @@ class PanelAlidIndex:
     def alids(self, rows: np.ndarray) -> np.ndarray:
         rows = np.asarray(rows, dtype=np.int64).reshape(-1)
         inside = (rows >= 0) & (rows < self._dense_to_shared.size)
-        shared = np.full(rows.shape, -1, dtype=np.int64)
-        shared[inside] = self._dense_to_shared[rows[inside]]
-        return self._shared.alids(shared)
+        out = np.full(rows.shape, None, dtype=object)
+        if inside.any():
+            shared = self._dense_to_shared[rows[inside]].astype(np.int64)
+            out[inside] = self._shared.alids(shared)
+        return out
 
     def unindexed_rows(self, n_rows: int) -> np.ndarray:
         shared = self._shared.unindexed_rows(self._n_shared)
