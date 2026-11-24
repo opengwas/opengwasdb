@@ -28,13 +28,12 @@ from typing import Any
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components
-from rsid_releases import RELEASE_NAMES, with_rsids
+from rsid_releases import RELEASE_NAMES, rsid_names, with_rsids
 
 from opengwasdb.query import query_store
 from opengwasdb.store_reader import rsid_index
 from opengwasdb.store_reader.rsid_index import MalformedRsidIndex, MissingRsidIndex, RsidIndex
 from opengwasdb.validation import validate_store
-from opengwasdb.variants.axis import VariantAxis
 
 #: The rsID cell planted at each of a release's first four rows; every later row `i`
 #: names ``rs{1000 + i}``. Row 0 names none (``None``, the table's ``.``).
@@ -43,20 +42,22 @@ PLANTED = (None, "rs77", "rs77", "rs11;rs12")
 FIXTURES = [*RELEASE_NAMES, "one_source_dense", "one_source_ragged", "one_source_hybrid"]
 
 
-def _plant(release: Path) -> None:
-    axis = VariantAxis(release)
-    try:
-        alids = [record.alid for record in axis.records()]
-    finally:
-        axis.close()
-    assert len(alids) >= len(PLANTED), f"{release} has too few rows to plant every case"
-    names = {alid: f"rs{1000 + i}" for i, alid in enumerate(alids)}
-    for alid, name in zip(alids, PLANTED, strict=False):
-        if name is None:
-            del names[alid]
-        else:
-            names[alid] = name
-    with_rsids(release, names)
+class _Planted:
+    """Each fixture, planted (`PLANTED`), as ``(0.3.0, its 0.2.3 form)``, made on first
+    ask and kept: an xdist worker plants only the fixtures its tests name."""
+
+    def __init__(self, sources: dict[str, Path], root: Path) -> None:
+        self._sources = sources
+        self._root = root
+        self._made: dict[str, tuple[Path, Path]] = {}
+
+    def __getitem__(self, name: str) -> tuple[Path, Path]:
+        if name not in self._made:
+            current = Path(shutil.copytree(self._sources[name], self._root / name / "0.3.0"))
+            with_rsids(current, planted=PLANTED)
+            legacy = as_0_2_3(Path(shutil.copytree(current, self._root / name / "0.2.3")))
+            self._made[name] = (current, legacy)
+        return self._made[name]
 
 
 @pytest.fixture(scope="module")
@@ -64,17 +65,10 @@ def planted(
     digest_releases: dict[str, Path],
     range_releases: dict[str, Path],
     tmp_path_factory: pytest.TempPathFactory,
-) -> dict[str, tuple[Path, Path]]:
-    """Each fixture, planted (`PLANTED`), as ``(0.3.0, its 0.2.3 form)``. Never written to."""
-    root = tmp_path_factory.mktemp("planted")
+) -> _Planted:
+    """The planted fixtures, by name (`_Planted`). Never written to."""
     sources = {**digest_releases, **{f"one_source_{k}": v for k, v in range_releases.items()}}
-    out = {}
-    for name in FIXTURES:
-        current = Path(shutil.copytree(sources[name], root / name / "0.3.0"))
-        _plant(current)
-        legacy = as_0_2_3(Path(shutil.copytree(current, root / name / "0.2.3")))
-        out[name] = (current, legacy)
-    return out
+    return _Planted(sources, tmp_path_factory.mktemp("planted"))
 
 
 def _reprs(rows: Iterator[dict[str, Any]] | list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -85,14 +79,16 @@ def _reprs(rows: Iterator[dict[str, Any]] | list[dict[str, Any]]) -> list[dict[s
 
 def _answers(release: Path) -> dict[str, Any]:
     """`variants_table()`, and the resolved rows of every Analysis, a lookup of every
-    variant, and the widest top hits, with variant info."""
+    variant, and the widest indexed top hits, with variant info."""
     with query_store(release) as q:
         table = q.variants_table()
         ids = [row["analysis_id"] for _, row in sorted(q.analyses_table().items())]
         alids = [table[key]["alid"] for key in sorted(table)]
         results = {f"analysis/{a}": q.analysis(a) for a in ids}
         results["lookup"] = q.lookup(alids, ids)
-        results["top_hits"] = q.top_hits(threshold=0.2)
+        # A tier every layout indexes: a Dense or Hybrid release answers a threshold no
+        # tier holds with no rows (#469's report), which would compare nothing.
+        results["top_hits"] = q.top_hits(threshold=5e-4)
         resolved = {
             name: _reprs(q.resolve(result, include_variant_info=True))
             for name, result in results.items()
@@ -100,25 +96,27 @@ def _answers(release: Path) -> dict[str, Any]:
     return {"variants_table": {k: _reprs([row])[0] for k, row in table.items()}, **resolved}
 
 
-def test_every_fixture_plants_each_case_a_row_can_be_in(planted):
+@pytest.mark.parametrize("name", FIXTURES)
+def test_every_fixture_plants_each_case_a_row_can_be_in(planted, name: str):
     """A row naming no rsID, two naming one, one naming several: in the 0.2.3 table,
     and in rows the resolved answers reach."""
-    for name, (_, legacy) in planted.items():
-        with query_store(legacy) as q:
-            table = q.variants_table()
-        rsids = [table[key]["rsid"] for key in sorted(table)]
-        assert rsids[: len(PLANTED)] == list(PLANTED), name
-        assert rsids[len(PLANTED) :] == [
-            f"rs{1000 + i}" for i in range(len(PLANTED), len(rsids))
-        ], name
-        resolved = _answers(legacy)
-        reached = {
-            row["rsid"]
-            for shape, rows in resolved.items()
-            if shape != "variants_table"
-            for row in rows
-        }
-        assert {"'.'", "'rs77'", "'rs11;rs12'"} <= reached, (name, reached)
+    _, legacy = planted[name]
+    with query_store(legacy) as q:
+        table = q.variants_table()
+    alids = [table[key]["alid"] for key in sorted(table)]
+    rsids = [table[key]["rsid"] for key in sorted(table)]
+    assert rsids[: len(PLANTED)] == list(PLANTED)
+    expected = rsid_names(alids, PLANTED)
+    assert rsids == [expected.get(alid) for alid in alids]
+    resolved = _answers(legacy)
+    assert resolved["top_hits"] and resolved["lookup"], "an empty answer would compare nothing"
+    reached = {
+        row["rsid"]
+        for shape, rows in resolved.items()
+        if shape != "variants_table"
+        for row in rows
+    }
+    assert {"'.'", "'rs77'", "'rs11;rs12'"} <= reached, reached
 
 
 @pytest.mark.parametrize("inverted", [False, True], ids=["scanned", "inverted"])
@@ -170,26 +168,82 @@ def _unreadable_tables(release: Path) -> list[Path]:
     return locked
 
 
-@pytest.mark.parametrize("name", ["one_source_dense", "one_source_ragged", "one_source_hybrid"])
+def _run_unreadable(release: Path, argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run `argv` in a fresh interpreter with every Variant Table of `release` unreadable."""
+    locked = _unreadable_tables(release)
+    with pytest.raises(PermissionError):
+        locked[0].open("rb")  # the subprocess cannot read the table either
+    try:
+        return subprocess.run([sys.executable, *argv], capture_output=True, text=True)
+    finally:
+        for path in locked:
+            path.chmod(0o644)
+
+
+#: The probed releases: each layout over three chromosomes, and each layout
+#: Reference-Completed, whose queries also read the presence mask.
+PROBED = [
+    "one_source_dense", "one_source_ragged", "one_source_hybrid",
+    "dense_completed", "ragged_completed", "hybrid_completed",
+]
+
+
+@pytest.mark.parametrize("name", PROBED)
 def test_every_query_shape_on_0_3_0_reads_no_variant_table_and_no_pysam(
     planted, tmp_path: Path, name: str
 ):
     release = Path(shutil.copytree(planted[name][0], tmp_path / name))
-    locked = _unreadable_tables(release)
-    with pytest.raises(PermissionError):
-        locked[0].open("rb")  # the probe below cannot read the table either
-    try:
-        out = subprocess.run(
-            [sys.executable, "-c", PROBE, str(release)], capture_output=True, text=True
-        )
-    finally:
-        for path in locked:
-            path.chmod(0o644)
+    out = _run_unreadable(release, ["-c", PROBE, str(release)])
     assert out.returncode == 0, out.stderr[-3000:]
     found = json.loads(out.stdout)
     assert found["questions"] > 50, "a probe that asked little would prove little"
     assert {".", "rs77", "rs11;rs12"} <= set(found["resolved"])
     assert found["pysam"] is False, "a 0.3.0 query loaded pysam"
+
+
+CLI = r"""
+import sys
+from opengwasdb.cli.main import app
+
+try:
+    app(sys.argv[1:], prog_name="opengwasdb")
+except SystemExit as exit:
+    code = exit.code or 0
+else:
+    code = 0
+print(f"\nPYSAM={'pysam' in sys.modules}", file=sys.stderr)
+sys.exit(code)
+"""
+
+
+@pytest.mark.parametrize("name", ["one_source_hybrid", "ragged_completed"])
+def test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam(
+    planted, tmp_path: Path, name: str
+):
+    """`opengwasdb query-*` loads no pysam on 0.3.0: Reference Completion's modules, which
+    do, are imported by the `complete-*` commands alone."""
+    release = Path(shutil.copytree(planted[name][0], tmp_path / name))
+    with query_store(release) as q:
+        table = q.variants_table()
+        analysis_id = q.analyses_table()[0]["analysis_id"]
+    first, last = table[0], table[len(table) - 1]
+    asked = {
+        "query-phewas": [first["alid"]],
+        "query-range-phewas": [first["chromosome"], "1", "500000000"],
+        "query-analysis": [analysis_id],
+        "query-lookup": [f"{first['alid']},rs77,{last['alid']}", analysis_id],
+        "query-top-hits": ["--threshold", "5e-4"],
+    }
+    answered = {}
+    for command, args in asked.items():
+        out = _run_unreadable(
+            release, ["-c", CLI, command, str(release), *args, "--variant-info"]
+        )
+        assert out.returncode == 0, (command, out.stderr[-3000:])
+        assert out.stdout.count("\n") > 1, (command, "a query that answered nothing")
+        assert out.stderr.rstrip().endswith("PYSAM=False"), (command, out.stderr[-500:])
+        answered[command] = out.stdout
+    assert "\trs77\t" in answered["query-lookup"], "the lookup resolved the planted rsID"
 
 
 def test_a_0_3_0_release_without_its_rsid_index_is_refused(planted, tmp_path: Path):
@@ -217,8 +271,24 @@ def test_scanned_and_inverted_rows_name_the_same_rsids(asked: list[int]):
     assert _index(names).rsids(np.array(asked), 200).tolist() == expected
     inverted = _index(names)
     inverted.rsids(np.arange(200), 200)  # past `_SCANNED_ROWS`: inverts, and keeps it
-    assert inverted._slot_of_row is not None
+    assert inverted.inverted
     assert inverted.rsids(np.array(asked), 200).tolist() == expected
+
+
+def test_the_index_inverts_once_its_scans_would_cost_more_than_one_inversion():
+    """Asked 32 rows a call, the index scans while the scans so far cost less than one
+    inversion (`_scan_cost`), then inverts, once, and gathers from then on."""
+    names = [f"rs{i}" for i in range(400)]
+    index = _index(names)
+    per_call = rsid_index._scan_cost(32)
+    scans = int(1.0 // per_call)
+    assert 1 < scans < 10, "the measured costs make a few scans cheaper than inverting"
+    for call in range(scans):
+        asked = np.arange(32) + 32 * call
+        assert index.rsids(asked, 400).tolist() == [names[i] for i in asked.tolist()]
+        assert not index.inverted, f"inverted after {call + 1} scan(s) of {scans}"
+    index.rsids(np.arange(32), 400)
+    assert index.inverted, "the next scan would have cost more than an inversion"
 
 
 @pytest.mark.parametrize("width", [3, 200], ids=["scanned", "inverted"])
@@ -226,6 +296,16 @@ def test_an_index_naming_a_row_twice_is_refused(width: int):
     index = RsidIndex(np.array([b"rs1", b"rs2"], dtype="|S24"), np.array([4, 4], dtype="int32"))
     with pytest.raises(MalformedRsidIndex, match="row 4 twice"):
         index.rsids((np.arange(width) + 4) % 200, 200)
+
+
+@pytest.mark.parametrize("asked", [[0], list(range(100))], ids=["scanned", "inverted"])
+def test_an_index_naming_a_row_outside_the_axis_is_refused_on_either_path(asked: list[int]):
+    """One malformed index, the same refusal however many rows are asked."""
+    index = RsidIndex(
+        np.array([b"rs1", b"rs2"], dtype="|S24"), np.array([0, 100], dtype="int32")
+    )
+    with pytest.raises(MalformedRsidIndex, match=r"rows 0\.\.100, outside the axis of 100"):
+        index.rsids(np.array(asked), 100)
 
 
 def test_a_row_outside_the_axis_is_refused():
