@@ -3270,7 +3270,13 @@ the manifest's rows in order.
   association with the Store after that standardisation, reads a source as the
   build does (a row the build dropped as malformed is not a failure), and
   reports `fidelity.source` for a bare association TSV, which names no Analysis,
-  or a manifest with no rows.
+  or a manifest with no rows. A source on another assembly has its samples
+  lifted through the build's own lift, whatever the join finds, because only
+  the chain says which of them a reverse-strand block re-oriented: such a
+  sample's z is compared negated, as the build stored it (§4, #284, #486). A
+  sample the release holds by `source_alid` where the given chain does not
+  place it fails the check, naming the chain, so the check needs the chain the
+  build lifted with.
 
 ## 21. Compatibility
 

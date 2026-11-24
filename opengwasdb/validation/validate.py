@@ -74,8 +74,10 @@ def validate_store(
     Internal (structural) validation is always run.  When ``source`` is given —
     the original dataset the store was built from — a **source-fidelity** check
     is also run for dense stores: a random sample of source associations is
-    compared against the store, orienting through the stored source-ALID
-    provenance (or, for lifted stores, via liftover).
+    compared against the store, joined through the stored source-ALID
+    provenance (or, where the store has none, via liftover). A sample from
+    another assembly is always lifted, through the build's own lift, to sign
+    its z as a reverse-strand block made the build store it (#486).
 
     ``rules`` runs only the named rules and the rules they run after; a name no
     rule has is refused before anything is read.
