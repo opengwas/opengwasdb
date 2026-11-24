@@ -1,7 +1,7 @@
 {
  "__written_by__": {
-  "commit": "4b012873",
-  "how": "tests/store_reader_digests.py from a git archive of 4b012873, with the answers #483 changed (top_hits at an unstored threshold on a Dense or Hybrid release, now a refusal) taken from the #483 commit that carries this file; see its docstring; the `variant_reads` section (#484) added from this package's own run, every other pinned section unchanged (checked equal)"
+  "commit": "1ca2d349",
+  "how": "tests/store_reader_digests.py run from a git archive of 1ca2d349, keeping the sections the pins hold (variant_reads since #484); see its docstring"
  },
  "dense_completed": {
   "adapter": "StoreQuery",
@@ -894,6 +894,7 @@
     "pval": "dfa532dfe5e9ea6f839f182ea203661e85d161c8059ee2a2f313b6a06dbc8764",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "b97334997c4e66a2776265d1c789b37fc9100b3027b133eb56b6107b03c2968c",
+    "source_alid": "61806bccf15142cec6323b7504900839805b5ea2aae7c06f0ceb2083f036f3a9",
     "z": "a7c2394bf8b41541831e9427d81c68cd8e56a494de0132bfccbe21914e07e820"
    },
    "lookup/observed_only": {
@@ -910,6 +911,7 @@
     "pval": "0f625caa55721e15cb0a1509c60ba3f5a8f285238c42b406607f235967fb1eac",
     "rsid": "f1089e480111a992e19e43a75357ee56eba4b02a34e42cc4ee300991f71a825d",
     "se": "28abb52650235abf892ec41fd80863ac91a821a3d7b9326c2bb58ef5ef0081b1",
+    "source_alid": "ea2aba68853e50cd632e4992160be55988829586df27e2b5d5a6fa5a029233eb",
     "z": "fb85b9d94482b8dbaa129bebfbcb6da01eaf07aee30939c248edd2103176ba22"
    },
    "range_phewas/all": {
@@ -926,6 +928,7 @@
     "pval": "6aa8b4ae2c96953f93616f57d64c0532ef7eb159f02a75e36e6c0f2600bf9f83",
     "rsid": "18c65732c5cae76967b444927a1e475223eb29efdd0ed80b0ca89be1e24c199c",
     "se": "9b05ae7c85401ecc3a06130f6317456fdf772e519c0a42d00aac00d32b7a1ae9",
+    "source_alid": "1cdbb52fd3387e8214dff17577da5e3ba9ffabf55bc285e24c2a31ff6965d7a5",
     "z": "94a512c31430c3b1dc00d76041312f562a95026987c364c94933c9be82c69fb8"
    },
    "range_phewas/observed_only": {
@@ -942,6 +945,7 @@
     "pval": "0fad3774504bd98dbcc940c2f530b620b8716edd18db258df8f7790258a46a92",
     "rsid": "e369fcfb627e34283a7dacf1b2d658822fd778e611b2285eca332d6343451775",
     "se": "7af10972b69c77b0169ac2c8d8caf35aeccf66e9c0e5472cb9c158c1afd6cee9",
+    "source_alid": "4d0bbd74f619285f1be9f1ea9b746673291f29586991de19f5acb323e96b7df9",
     "z": "13e5b8934313128b582361cc3b75a98ef1f7c87adb86a0cfc0de2aed0367ffb1"
    }
   },
@@ -1440,7 +1444,8 @@
     "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
     "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
     "position": "5fd7bf3171bd40626386246cede059e3b177074c587cfa59cc9bb2a5e2df59fc",
-    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5",
+    "source_alid": "0829135c3612ed1468e2afb5aa57935d5f8c9f584e5c466317770566a4b97944"
    },
    "variants_in_range/empty/between": {
     "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
@@ -1455,7 +1460,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
    },
    "variants_in_range/from_last": {
     "__keys__": "f33e351e7952828a42774495ae156091d2925fc6708e6bd9a84389f8628600b1",
@@ -1464,7 +1470,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "aa351486b5f6963d9421dcb2db50042f57c7bf74246df1e9723a30b879dc8c77",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "24f4ad392f83b03c6aa3dd7773b36071446ddb6fd40c749d698a18af8af30e72"
    },
    "variants_in_range/last": {
     "__keys__": "f33e351e7952828a42774495ae156091d2925fc6708e6bd9a84389f8628600b1",
@@ -1473,7 +1480,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "aa351486b5f6963d9421dcb2db50042f57c7bf74246df1e9723a30b879dc8c77",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "24f4ad392f83b03c6aa3dd7773b36071446ddb6fd40c749d698a18af8af30e72"
    },
    "variants_in_range/to_first": {
     "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
@@ -1482,7 +1490,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
    }
   },
   "variants_table": {
@@ -1492,7 +1501,8 @@
    "effect_allele": "0bc8e5f4ec7687887a82b136c14382fb79a5904f2ec73603bfa8094ac4bc04c7",
    "other_allele": "b01e6bdc7ec9f3bc767f6a7a59a20bc2ac8dac4e538bec6aac73aa856db8fad9",
    "position": "c66179f99fd01f894379caa0a7ac2a53a0cc45b2114957b21d74cdc2af5b6a70",
-   "rsid": "d197965d6f9dbae5efb315bab6761c331af400954d8796911bf6206431fb1b32"
+   "rsid": "d197965d6f9dbae5efb315bab6761c331af400954d8796911bf6206431fb1b32",
+   "source_alid": "64b5debff91f345d7047df39071664e8490556056d2739f6e547e6f6ff2f6e5b"
   }
  },
  "dense_observed": {
@@ -3989,6 +3999,7 @@
     "pval": "06a48ae555b012ed489779aa073b8dd390026f88f3f7ee43e44f77d0db624955",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "b228a77b502650c65123beb80026a4340aea5518028aadd29ed7523eff157add",
+    "source_alid": "9b8faf8a25a0fbf40c8c06ba4f7cb8f6229b0ce7b2639c00137e5ff1083c2779",
     "z": "02f3a653652c48eff7aa03f74f07c50ac3e744284d4ef051a8e1438232be5f9c"
    },
    "lookup/observed_only": {
@@ -4005,6 +4016,7 @@
     "pval": "06a48ae555b012ed489779aa073b8dd390026f88f3f7ee43e44f77d0db624955",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "b228a77b502650c65123beb80026a4340aea5518028aadd29ed7523eff157add",
+    "source_alid": "9b8faf8a25a0fbf40c8c06ba4f7cb8f6229b0ce7b2639c00137e5ff1083c2779",
     "z": "02f3a653652c48eff7aa03f74f07c50ac3e744284d4ef051a8e1438232be5f9c"
    },
    "range_phewas/all": {
@@ -4021,6 +4033,7 @@
     "pval": "fc875f4593c0d3829e085d3a9533c8b3d76389c908e08c000c7aaa2efba5cf36",
     "rsid": "cd7664d386b078eb3a1f98c4fdd1bd27db9bb1f9b716725a3bdf216730741abe",
     "se": "1509d1a5b3635bdfe55d6c0f5e010899ea7166a80c74dd068ff208e5f78cae9c",
+    "source_alid": "2cfa72fe8c5cf8300e69e90f4f042965124ff1ef90ad5ee7f369b8b4f57374b0",
     "z": "05ce9d4e991f12a565bec5ab2f2c9819ce6fad9459febc7e5bb3454ecea5934c"
    },
    "range_phewas/observed_only": {
@@ -4037,6 +4050,7 @@
     "pval": "fc875f4593c0d3829e085d3a9533c8b3d76389c908e08c000c7aaa2efba5cf36",
     "rsid": "cd7664d386b078eb3a1f98c4fdd1bd27db9bb1f9b716725a3bdf216730741abe",
     "se": "1509d1a5b3635bdfe55d6c0f5e010899ea7166a80c74dd068ff208e5f78cae9c",
+    "source_alid": "2cfa72fe8c5cf8300e69e90f4f042965124ff1ef90ad5ee7f369b8b4f57374b0",
     "z": "05ce9d4e991f12a565bec5ab2f2c9819ce6fad9459febc7e5bb3454ecea5934c"
    }
   },
@@ -4535,7 +4549,8 @@
     "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
     "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
     "position": "dfbee70e0fe155e818762128dd44c9de8d82b1002e3355bdc835b8cdb56c9fce",
-    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5",
+    "source_alid": "0fc489817e6049c2aacdc5bbb8b9daa603599fc2ebc3af69f96b73c2dfb18d68"
    },
    "variants_in_range/empty/chromosome": {
     "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
@@ -4547,7 +4562,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "921cf5d0320fdbc6bf1b079bd5f61fa0afaf785886101bebade282dc9202eb2a",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "7ba50c82c49787462d579679ef7ef99745ac3b72f37be64a9497398adf53b299"
    },
    "variants_in_range/from_last": {
     "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
@@ -4556,7 +4572,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "aa65bd643b9ce7e0e3106089c4d355de7a498aeef699b1504e11bde3ea6233f3",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "2ec22f422db0485c241bbacc16b7992cade6d421e6cc21324e1423ec64ea455a"
    },
    "variants_in_range/last": {
     "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
@@ -4565,7 +4582,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "aa65bd643b9ce7e0e3106089c4d355de7a498aeef699b1504e11bde3ea6233f3",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "2ec22f422db0485c241bbacc16b7992cade6d421e6cc21324e1423ec64ea455a"
    },
    "variants_in_range/to_first": {
     "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
@@ -4574,7 +4592,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "921cf5d0320fdbc6bf1b079bd5f61fa0afaf785886101bebade282dc9202eb2a",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "7ba50c82c49787462d579679ef7ef99745ac3b72f37be64a9497398adf53b299"
    }
   },
   "variants_table": {
@@ -4584,7 +4603,8 @@
    "effect_allele": "c37e81ddfd77a1de1bf218ee7019c9fbd917ddcc68611ced29da6b88af77b083",
    "other_allele": "19526042e595faf5e498fbcdc236337032bdde8d530df48616f3daf380de5acf",
    "position": "d2dc608b059040117cd0267a02efbb8de815f0903ec454c80446dd882d7cf112",
-   "rsid": "21283c73a183f2411b254f52f600d39b7d80420928b37cfc67fdfc677821fd1d"
+   "rsid": "21283c73a183f2411b254f52f600d39b7d80420928b37cfc67fdfc677821fd1d",
+   "source_alid": "e2bd3bbf153a7dd47e3d2ff5e94d209dab7142be2ad2fc60861223506072a14e"
   }
  },
  "hybrid_completed": {
@@ -5871,6 +5891,7 @@
     "pval": "51fdcb9d5ac4b7b38d6b1cdeac29c35069cf54ad4e656c7be43f999f055ec692",
     "rsid": "549eda0c5e7748fcbf144013a65bbc26e41a1cdf23431699965139a1503dc05d",
     "se": "63eba13e6b33972972e68300b685859432a7b5de7f65f5d7c21d65c84f173902",
+    "source_alid": "e05052c4592e75a1421ca14f5f65dbddce657f959a675963093f6dc13729da22",
     "z": "d5a1e25367ddeb2130d7e9e7c1d8ede6aea8f997f37345a361fe598b86fa2af2"
    },
    "lookup/observed_only": {
@@ -5887,6 +5908,7 @@
     "pval": "51fdcb9d5ac4b7b38d6b1cdeac29c35069cf54ad4e656c7be43f999f055ec692",
     "rsid": "549eda0c5e7748fcbf144013a65bbc26e41a1cdf23431699965139a1503dc05d",
     "se": "63eba13e6b33972972e68300b685859432a7b5de7f65f5d7c21d65c84f173902",
+    "source_alid": "e05052c4592e75a1421ca14f5f65dbddce657f959a675963093f6dc13729da22",
     "z": "d5a1e25367ddeb2130d7e9e7c1d8ede6aea8f997f37345a361fe598b86fa2af2"
    },
    "range_phewas/all": {
@@ -5903,6 +5925,7 @@
     "pval": "4eacebff011d85ff55a88bd7bcf28bf3b75e4faf06e0945fac53982d9046dceb",
     "rsid": "7b363b9946b718fe73d78f345c706255bd6764307a5ed87496b124a8a6e0ca76",
     "se": "8a280a6d81d11adb893780103ef0b597560fb4f623b279b620f3970d4b9e529a",
+    "source_alid": "ab3099fab067f23b0b9ecf957489850c0ed2eab3032ac7d60091a674b4d7617b",
     "z": "749089b682525afbee249d9579ab70ff9c689505d0cb979fc9288bfeb8597919"
    },
    "range_phewas/observed_only": {
@@ -5919,6 +5942,7 @@
     "pval": "811b36bc83effb1eec8b61107a5f68b1c4e72d1200491a7a9e3b35faaca55436",
     "rsid": "18d2663bb71838d6a5d0717be394b07672ccec757c8d0b80a969d49f607be660",
     "se": "807b156f1630667f02eac036571fb75a04b250d0fab74178f140d621be9a9c2c",
+    "source_alid": "d043b592af84e3cf634bf80440b15b42398fef07ab86f1292eca2fc5feec86cf",
     "z": "350af5aec300733b86d790bfaa419bf799b29efccef5c0d8f7d4a2946ce400bd"
    }
   },
@@ -6417,7 +6441,8 @@
     "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
     "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
     "position": "a0b916e5a482c51a16be3f6069ee9b7eca5d11edd007821459854466b40a52f5",
-    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5",
+    "source_alid": "8db7d9c26909a696c55066514116895102d07f3ad53dca1f3e10eac520677f74"
    },
    "variants_in_range/empty/between": {
     "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
@@ -6432,7 +6457,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
    },
    "variants_in_range/from_last": {
     "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
@@ -6441,7 +6467,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9"
    },
    "variants_in_range/last": {
     "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
@@ -6450,7 +6477,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9"
    },
    "variants_in_range/to_first": {
     "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
@@ -6459,7 +6487,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
    }
   },
   "variants_table": {
@@ -6469,7 +6498,8 @@
    "effect_allele": "d0736765e8d2a5e226dd21e33090f5c11e2ae9b7c2a9a7fe5633714251922bc1",
    "other_allele": "3745cb128a1c89995c141242042eea303685964a4172f182f2b8a5de159b3da7",
    "position": "d041738856e5055ac381e4dece30ea7ab406d222b248c124a6f71a1b27a9b335",
-   "rsid": "8e3ee15502bab985a360d7dccb2310ecc22ba18d9eba3e9416fd1cffd87376b1"
+   "rsid": "8e3ee15502bab985a360d7dccb2310ecc22ba18d9eba3e9416fd1cffd87376b1",
+   "source_alid": "a566f9cb6b4f8190c7a4cc92b0af91c1f5af4a950176d559358e903c76635bc4"
   }
  },
  "hybrid_observed": {
@@ -7752,6 +7782,7 @@
     "pval": "51fdcb9d5ac4b7b38d6b1cdeac29c35069cf54ad4e656c7be43f999f055ec692",
     "rsid": "549eda0c5e7748fcbf144013a65bbc26e41a1cdf23431699965139a1503dc05d",
     "se": "63eba13e6b33972972e68300b685859432a7b5de7f65f5d7c21d65c84f173902",
+    "source_alid": "e05052c4592e75a1421ca14f5f65dbddce657f959a675963093f6dc13729da22",
     "z": "d5a1e25367ddeb2130d7e9e7c1d8ede6aea8f997f37345a361fe598b86fa2af2"
    },
    "lookup/observed_only": {
@@ -7768,6 +7799,7 @@
     "pval": "51fdcb9d5ac4b7b38d6b1cdeac29c35069cf54ad4e656c7be43f999f055ec692",
     "rsid": "549eda0c5e7748fcbf144013a65bbc26e41a1cdf23431699965139a1503dc05d",
     "se": "63eba13e6b33972972e68300b685859432a7b5de7f65f5d7c21d65c84f173902",
+    "source_alid": "e05052c4592e75a1421ca14f5f65dbddce657f959a675963093f6dc13729da22",
     "z": "d5a1e25367ddeb2130d7e9e7c1d8ede6aea8f997f37345a361fe598b86fa2af2"
    },
    "range_phewas/all": {
@@ -7784,6 +7816,7 @@
     "pval": "e4481e683cce60aaab868e099fe7f62351cc8af13779eace147aee80cbd7e0c3",
     "rsid": "18d2663bb71838d6a5d0717be394b07672ccec757c8d0b80a969d49f607be660",
     "se": "3a771d7679b6b7069c73d6d0cc39a870b9dfeaccaea904b8de295d41fdc500cf",
+    "source_alid": "fb1a74104b15aef886643f572bd0a42f038764967977bc2325a0f000caf516a9",
     "z": "918401bd55eefe2ec9a34a24e65f459eb46c03bb952378245c5592132c86587a"
    },
    "range_phewas/observed_only": {
@@ -7800,6 +7833,7 @@
     "pval": "e4481e683cce60aaab868e099fe7f62351cc8af13779eace147aee80cbd7e0c3",
     "rsid": "18d2663bb71838d6a5d0717be394b07672ccec757c8d0b80a969d49f607be660",
     "se": "3a771d7679b6b7069c73d6d0cc39a870b9dfeaccaea904b8de295d41fdc500cf",
+    "source_alid": "fb1a74104b15aef886643f572bd0a42f038764967977bc2325a0f000caf516a9",
     "z": "918401bd55eefe2ec9a34a24e65f459eb46c03bb952378245c5592132c86587a"
    }
   },
@@ -8298,7 +8332,8 @@
     "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
     "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
     "position": "a0b916e5a482c51a16be3f6069ee9b7eca5d11edd007821459854466b40a52f5",
-    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5",
+    "source_alid": "8db7d9c26909a696c55066514116895102d07f3ad53dca1f3e10eac520677f74"
    },
    "variants_in_range/empty/between": {
     "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
@@ -8313,7 +8348,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
    },
    "variants_in_range/from_last": {
     "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
@@ -8322,7 +8358,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9"
    },
    "variants_in_range/last": {
     "__keys__": "70b2f82ac8eb56b954532fa7ec7b1cf28611eefd73f73a8010031d8d27ca861a",
@@ -8331,7 +8368,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "c8faf6f6dac661509683312926aaf0f8c4fef90e1d6e11d3099b2cacc260e8fb",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "1eb112621b86fb2231a80ef1ad00c5032d2a9eca050ea24f1b2daae1302717c9"
    },
    "variants_in_range/to_first": {
     "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
@@ -8340,7 +8378,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
    }
   },
   "variants_table": {
@@ -8350,7 +8389,8 @@
    "effect_allele": "d0736765e8d2a5e226dd21e33090f5c11e2ae9b7c2a9a7fe5633714251922bc1",
    "other_allele": "3745cb128a1c89995c141242042eea303685964a4172f182f2b8a5de159b3da7",
    "position": "d041738856e5055ac381e4dece30ea7ab406d222b248c124a6f71a1b27a9b335",
-   "rsid": "8e3ee15502bab985a360d7dccb2310ecc22ba18d9eba3e9416fd1cffd87376b1"
+   "rsid": "8e3ee15502bab985a360d7dccb2310ecc22ba18d9eba3e9416fd1cffd87376b1",
+   "source_alid": "a566f9cb6b4f8190c7a4cc92b0af91c1f5af4a950176d559358e903c76635bc4"
   }
  },
  "ragged_completed": {
@@ -11049,6 +11089,7 @@
     "pval": "7882c58ae79827e266d714fa090b0f9b7fba9cf7be2943ec5563f0dafa8c19b3",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "4963f7b529c5652954c70648d7ff2ed482b0d76be7d37c06e3d6da6c1b0797dc",
+    "source_alid": "2ddce8d751a89247d5e2e0ea859f8fb767d9d08bbc13f89b49b8245fe1d3c133",
     "z": "3e51fbf1799abe1526224e7114a2f770f539c5482b65f6189f486db98a25fb23"
    },
    "lookup/observed_only": {
@@ -11065,6 +11106,7 @@
     "pval": "7882c58ae79827e266d714fa090b0f9b7fba9cf7be2943ec5563f0dafa8c19b3",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "4963f7b529c5652954c70648d7ff2ed482b0d76be7d37c06e3d6da6c1b0797dc",
+    "source_alid": "2ddce8d751a89247d5e2e0ea859f8fb767d9d08bbc13f89b49b8245fe1d3c133",
     "z": "3e51fbf1799abe1526224e7114a2f770f539c5482b65f6189f486db98a25fb23"
    },
    "range_phewas/all": {
@@ -11081,6 +11123,7 @@
     "pval": "322c5b7c13daa9cd46641c05b3539939e4593f80b14e4c5f43ad3a6bec95f516",
     "rsid": "451632e2ec19011de376057a4df643d3ce9e0c56307202789a9d762362726778",
     "se": "8ef7f72f8478d68258f8f3a7f0f4577555cf7fc36a9105216922e592964bbf1e",
+    "source_alid": "717743a576bb20e5a8931c187aa16bcda2a9df6b36cfecedd7e9bad1b4e9504f",
     "z": "002eeb8e836a03b52e8ce4c15988c84f7d8a7bd6ce688b5b391bffd33eb4182f"
    },
    "range_phewas/observed_only": {
@@ -11097,6 +11140,7 @@
     "pval": "65a7b4461ea17cfb54887e8232df6e5eeb23967e1e01c3bc107deac4c1759816",
     "rsid": "59ceff3961ac9557271b904cffcf4205d9c88d86251d1c12d697da354b79dacd",
     "se": "a068fd1c32e5676d750d086e85a5b5d0d510a41f89ceee3baef67195a0683dcb",
+    "source_alid": "dd4e1da29d9eeb428cb0a050214392593ab3729f7b7d0121a556b95f4fbc7917",
     "z": "3979586a653c31e47d4b1adb126fd4139e84781607bd585d431facc1484a6cff"
    },
    "top_hits/0.2/all": {
@@ -11113,6 +11157,7 @@
     "pval": "1c5f5960fca97449d48b395e78b75f2ae111d05de4716f7b7cc5b5b5b8eaabbb",
     "rsid": "6f4f6e90f307aaa8a9b52a094cda9fd9a514fdd8813a48a47942c31495b8c953",
     "se": "8192de0eefba8709ff9ff18692e10fe879230ad8bc35e34245a74becc4826f2a",
+    "source_alid": "2066593e7ac1bca03b2b224fdbd896a24248ca9b2b6e05d0a55876df2333c59f",
     "z": "4253443f2a72c8203817b134e6efef64bd2d737d870be00d7311c3f8fdbef608"
    }
   },
@@ -11729,7 +11774,8 @@
     "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
     "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
     "position": "2030f9fd5cb3de6c783764d567db9daa53a71867fb173f0cd00f707ad8968755",
-    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5",
+    "source_alid": "3e00849a236faf352e41195cdc7615c4e4bb2a20c30ab7b17a029c7015743c7c"
    },
    "variants_in_range/empty/between": {
     "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
@@ -11744,7 +11790,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229"
    },
    "variants_in_range/from_last": {
     "__keys__": "e959a7c14d3c8b83b473f2d4962cd3dfc9e573edd01e41c5126dd7f510871403",
@@ -11753,7 +11800,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca"
    },
    "variants_in_range/last": {
     "__keys__": "e959a7c14d3c8b83b473f2d4962cd3dfc9e573edd01e41c5126dd7f510871403",
@@ -11762,7 +11810,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca"
    },
    "variants_in_range/to_first": {
     "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
@@ -11771,7 +11820,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229"
    }
   },
   "variants_table": {
@@ -11781,7 +11831,8 @@
    "effect_allele": "88a2ec6cf72f31474f34b827af27bd8d902e818050c24571eef8087e2944f405",
    "other_allele": "f5a5d36a2a9339ed4916b43c9569ed86d2fb4d2162b4aa6f09e458f193818522",
    "position": "ab1a49a743247418f42ca2858b73cf109f707ff0eda7c80c627cfd5705f3b639",
-   "rsid": "bfcd52d0351d00a34fcafad3743a8723658474c927b7c883ae4425f3f7350c8e"
+   "rsid": "bfcd52d0351d00a34fcafad3743a8723658474c927b7c883ae4425f3f7350c8e",
+   "source_alid": "9b6238fed72a6856e510934731108e29362d6f6fbcd17051855ea97c2490f18b"
   }
  },
  "ragged_observed": {
@@ -14464,6 +14515,7 @@
     "pval": "06a48ae555b012ed489779aa073b8dd390026f88f3f7ee43e44f77d0db624955",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "ba158f76c0ae94cfe73ce47134be7326308123d0e650adf1958547bfadce20ec",
+    "source_alid": "491c32040cda5db5d8fd902df3803ead9043e87d034eae25e2d9f512cd1adce2",
     "z": "02f3a653652c48eff7aa03f74f07c50ac3e744284d4ef051a8e1438232be5f9c"
    },
    "lookup/observed_only": {
@@ -14480,6 +14532,7 @@
     "pval": "06a48ae555b012ed489779aa073b8dd390026f88f3f7ee43e44f77d0db624955",
     "rsid": "b2254539ebd1e72d7e0cc2b6017816bc9d976d0b34f6a56bfadd0faddbc3eb1b",
     "se": "ba158f76c0ae94cfe73ce47134be7326308123d0e650adf1958547bfadce20ec",
+    "source_alid": "491c32040cda5db5d8fd902df3803ead9043e87d034eae25e2d9f512cd1adce2",
     "z": "02f3a653652c48eff7aa03f74f07c50ac3e744284d4ef051a8e1438232be5f9c"
    },
    "range_phewas/all": {
@@ -14496,6 +14549,7 @@
     "pval": "60619ef5f6d2c9545e7d6ab05fd1a99937d1d76fc6be7d6873b49abc93eddc92",
     "rsid": "04fae47106d5a345167f929f0caadb83702e320319833d81e28927f1b8b30423",
     "se": "4ced496180b4edc95288c0631e85611a102888e1c3e3557e0b9202e868d1a535",
+    "source_alid": "cd39f8aac162ba6362cb52772a6fc74b6c0caeff701e2dd2673009f7f40e2690",
     "z": "92bda3038c543b6a467a9047bef98c3a2f6436c57cbbed50149d2b05506777cd"
    },
    "range_phewas/observed_only": {
@@ -14512,6 +14566,7 @@
     "pval": "60619ef5f6d2c9545e7d6ab05fd1a99937d1d76fc6be7d6873b49abc93eddc92",
     "rsid": "04fae47106d5a345167f929f0caadb83702e320319833d81e28927f1b8b30423",
     "se": "4ced496180b4edc95288c0631e85611a102888e1c3e3557e0b9202e868d1a535",
+    "source_alid": "cd39f8aac162ba6362cb52772a6fc74b6c0caeff701e2dd2673009f7f40e2690",
     "z": "92bda3038c543b6a467a9047bef98c3a2f6436c57cbbed50149d2b05506777cd"
    },
    "top_hits/0.2/all": {
@@ -14528,6 +14583,7 @@
     "pval": "553b3b040c9a91e1010d6bb0d4de5a381ab0aa331885b51ca0e83d178e691bd9",
     "rsid": "6d7d6a845342ceeb5eddc77596f616c72520213fda372bd13aad52fe96571c1e",
     "se": "34f01b69d03ac9197fdecfefd3bccf042daf1920b6a80828c1b4ea0f05d6775f",
+    "source_alid": "913c452b02d0631fcd099e7d7ef8b1ee3167a80fea03cd4fecd2cbdbba14ce47",
     "z": "3128aca5a03d9293ec6bcb67e531cf20018445b32a5876d7c679b0ad3b6697b6"
    }
   },
@@ -15144,7 +15200,8 @@
     "effect_allele": "c07c726416dc898f0ed028bd108fbe99fe8bf68bcc6bd04d6857f889c8a81976",
     "other_allele": "e75e957f21e86db67913109405aa558deac7520ced86e9404b89bd6895151979",
     "position": "383776ca3578c6f2b834e8752c47df88702006ac0ddd46aa102d97ba1c25c7b8",
-    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5"
+    "rsid": "79b846f7736ad0af2c97e482b0f4fff30a4ea1b4ebc10fe89dff57815e3a78b5",
+    "source_alid": "fdb473bd3ec2a6e5edcd98615fd0904073e29fe8785e33d86cdfa66b4f9fdc14"
    },
    "variants_in_range/empty/between": {
     "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
@@ -15159,7 +15216,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229"
    },
    "variants_in_range/from_last": {
     "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
@@ -15168,7 +15226,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca"
    },
    "variants_in_range/last": {
     "__keys__": "149caaf999be206a82829e26f600a0bef6ea0df45a03fe788888bdc4c3526435",
@@ -15177,7 +15236,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "2b84b5c97c144a78d6915b5d334241a7fa7f4fe3dcd865ccf918d5c87cc59cd2",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "38b8e93cfb9e303634bb4cf71014d1d333b9a4ff3130f2b0a5514653454eddca"
    },
    "variants_in_range/to_first": {
     "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
@@ -15186,7 +15246,8 @@
     "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
     "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
     "position": "30f28e701b55b6032fd023b2794abab67f0d0518eb06ec58a6e88fe2179dd4e3",
-    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330"
+    "rsid": "be67be035f3f34e6371d57b657e752e0a3b266745c13e0af6e926a8a26bc2330",
+    "source_alid": "018d6c73ae6e6bc9f18167e3d8ba72338f412ba9c8313231e3ddd47fee74c229"
    }
   },
   "variants_table": {
@@ -15196,7 +15257,8 @@
    "effect_allele": "c37e81ddfd77a1de1bf218ee7019c9fbd917ddcc68611ced29da6b88af77b083",
    "other_allele": "19526042e595faf5e498fbcdc236337032bdde8d530df48616f3daf380de5acf",
    "position": "6c3dd581dad0b2b761efce323acf66c7d7bbb1db61ca2989f616de832820a8db",
-   "rsid": "21283c73a183f2411b254f52f600d39b7d80420928b37cfc67fdfc677821fd1d"
+   "rsid": "21283c73a183f2411b254f52f600d39b7d80420928b37cfc67fdfc677821fd1d",
+   "source_alid": "29f0da21f536998439096cc8b3eafbb379212d228a6cf103f61928ea8137d3b2"
   }
  }
 }

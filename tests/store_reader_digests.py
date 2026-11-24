@@ -26,6 +26,19 @@ dropped, every one of the 352 shapes' digests and every resolved digest equalled
 the `5d600a1d` pins. The 10,913 `log10_p` values differed by at most 9.7e-16
 relative. Only the two arrays were added: 704 result digests and 52 resolved ones.
 
+When `variants_table()`, resolved rows with variant info and the variant reads gained
+`source_alid`, and `build-dense` came to write each row's own (#470), the pins were
+regenerated from `git archive 1ca2d349` the same way, keeping the sections they hold;
+with `source_alid` dropped, every pinned digest and `log10_p` equalled #484's pins
+(`scratch/470/compare_digest_pins_fix2.py`). Earlier, when `variants_table()` and
+resolved rows with variant info first gained `source_alid`
+(#470), the pins were regenerated the same way from `git archive 30cb20cc`, #470's
+merge of #483, whose pins it replaces. Two runs were byte-identical. With
+`source_alid` dropped, the `variants_table()` of each of the 6 releases, every one of
+the 352 shapes' digests, the `analyses_table()` and all 26 resolved shapes equalled
+#483's pins, and the 10,913 `log10_p` values were equal exactly. Only the column was
+added: to 6 variants tables and to the 26 resolved shapes.
+
 It touches only names that are public on both sides of the move
 (`opengwasdb.query.query_store`, the builders the fixtures already call), so the
 same file runs against either.

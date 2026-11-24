@@ -4,9 +4,10 @@ From #467 every build and completion writes format 0.3.0. The 0.2 series is stil
 read, and `ogdb rewrite-release` turns a 0.2.3 release into a 0.3.0 one, so the tests
 need 0.2.3 releases. A 0.3.0 release differs from the 0.2.3 one the same build would
 have written in five things: it carries the variable-length ALID sidecar where 0.2.3
-carried the fixed-width pair (#467, ADR 0105), the position sidecar 0.2.3 did not carry
-(#468), no `variant_offsets.npy`, which 0.2.3 carried (#469), it drops what nothing
-but the validator read (#471, ADR 0102), and a Hybrid's Dense Component carries no copy
+carried the fixed-width pair (#467, ADR 0105), the position and `source_alid`
+sidecars 0.2.3 did not carry (#468, #470), no `variant_offsets.npy`, which 0.2.3
+carried (#469), it drops what nothing but the validator read (#471, ADR 0102), and a
+Hybrid's Dense Component carries no copy
 of the shared variants or Analyses (#472). `as_0_2_3` undoes exactly that, in every
 component of a release (a Hybrid's nested Dense Component included):
 
@@ -18,8 +19,8 @@ component of a release (a Hybrid's nested Dense Component included):
   Counts. Its `n_missing_se_out_of_range` cannot be recovered from 0.3.0, which keeps
   only the root's count of both components, so it is restored only where the root
   counts none and is refused otherwise;
-
-- the ALID sidecar's four files and the position sidecar's three are deleted;
+- the ALID sidecar's four files, the position sidecar's three and the `source_alid`
+  sidecar's three are deleted;
 - `variant_alid_bytes.npy`/`variant_alid_rows.npy` are written by
   `write_fixed_width_alid_index`, a copy of what `write_variant_axis` wrote at
   `e93fba8f` -- the only other writer of the pair, and only ever in tests;
@@ -60,6 +61,7 @@ from opengwasdb.store_reader.alid_sidecar import (
 )
 from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_alid_sidecar
 from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
+from opengwasdb.store_reader.source_alid_sidecar import SOURCE_ALID_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
 
 
@@ -170,7 +172,7 @@ def with_fixed_width_alid_index(directory: Path) -> None:
     del sidecar
     for name in ALID_SIDECAR_FILENAMES:
         (directory / name).unlink()
-    for name in POSITION_SIDECAR_FILENAMES:
+    for name in (*POSITION_SIDECAR_FILENAMES, *SOURCE_ALID_SIDECAR_FILENAMES):
         (directory / name).unlink()
     write_fixed_width_alid_index(directory, alids)
     write_variant_offsets(directory)

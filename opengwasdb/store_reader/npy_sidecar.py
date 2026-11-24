@@ -10,6 +10,11 @@ pair, open more leniently (`open_pair_or_none`): a release built before one exis
 has neither file. Both pairs map a key to a row, and both are inverted, to map a row
 to its key, the same way (`invert_rows`).
 
+Two sidecars hold text the same way, as UTF-8 bytes and `<u8` offsets: the ALID
+sidecar (every row's ALID) and the `source_alid` sidecar (each lifted row's). Both
+encode (`encode_utf8_offsets`), slice (`slice_texts`) and check (`offsets_fault`)
+through this module.
+
 This module imports numpy and the standard library only, as every codec does.
 """
 
@@ -19,6 +24,60 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
+
+#: The dtype of a text sidecar's offsets: entry `k` is where text `k` starts.
+OFFSET_DTYPE = np.dtype("<u8")
+
+#: Rows a reader names, or a scan reads, at a time, where one pass over a whole sidecar
+#: would hold an object or an index array the size of the axis.
+WINDOW_ROWS = 65_536
+
+
+def encode_utf8_offsets(encoded: Sequence[bytes]) -> tuple[np.ndarray, np.ndarray]:
+    """`encoded`'s texts as one ``uint8`` array and `OFFSET_DTYPE` offsets, one more than
+    the texts: text ``k`` is ``utf8[offsets[k]:offsets[k + 1]]``."""
+    lengths = np.fromiter((len(item) for item in encoded), dtype=OFFSET_DTYPE, count=len(encoded))
+    offsets = np.zeros(len(encoded) + 1, dtype=OFFSET_DTYPE)
+    np.cumsum(lengths, out=offsets[1:])
+    utf8 = np.frombuffer(b"".join(encoded), dtype=np.uint8)
+    return utf8, offsets
+
+
+def slice_texts(text: memoryview, offsets: np.ndarray, at: np.ndarray) -> list[str]:
+    """The texts at positions `at` (each in ``0..len(offsets) - 2``), decoded strictly:
+    a text that is not UTF-8 raises, never reads as another."""
+    at = np.asarray(at, dtype=np.int64)
+    starts = np.asarray(offsets[at], dtype=np.int64).tolist()
+    stops = np.asarray(offsets[at + 1], dtype=np.int64).tolist()
+    return [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
+
+
+def offsets_fault(
+    offsets: np.ndarray,
+    n_bytes: int,
+    *,
+    names: tuple[str, str],
+    rising: tuple[str, str] | None,
+) -> str:
+    """Why `offsets` cannot slice `n_bytes` of text into non-empty texts, or ``""``.
+
+    They start at 0 and end at `n_bytes`. With `rising`, ``(what a text is, why it is
+    never empty)``, each also lies above the one before: the check reads every offset,
+    so a reader that opens a sidecar leaves it out and the validator makes it. `names`
+    is ``(offsets file, text file)``.
+    """
+    offsets_name, utf8_name = names
+    if not len(offsets) or int(offsets[0]) != 0:
+        return f"{offsets_name} does not start at 0"
+    if rising is not None:
+        values = np.asarray(offsets, dtype=np.uint64)
+        flat = np.flatnonzero(values[1:] <= values[:-1])
+        if flat.size:
+            what, why = rising
+            return f"{offsets_name} does not rise at {what} {int(flat[0])}: {why}"
+    if int(offsets[-1]) != n_bytes:
+        return f"{offsets_name} ends at {int(offsets[-1])} but {utf8_name} holds {n_bytes} bytes"
+    return ""
 
 
 def holds_sidecar(store_path: str | Path, filenames: Sequence[str], what: str) -> bool:

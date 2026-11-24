@@ -33,7 +33,12 @@ from typing import ClassVar
 
 import numpy as np
 
-from opengwasdb.store_reader.npy_sidecar import open_sidecar_arrays
+from opengwasdb.store_reader.npy_sidecar import (
+    encode_utf8_offsets,
+    offsets_fault,
+    open_sidecar_arrays,
+    slice_texts,
+)
 
 ALID_UTF8_FILENAME = "variant_alid_utf8.npy"
 ALID_OFFSETS_FILENAME = "variant_alid_offsets.npy"
@@ -54,7 +59,6 @@ ALID_SIDECAR_FILENAMES: tuple[str, ...] = (
 #: so nearly every key is its whole ALID and nearly every search ends at the key.
 KEY_WIDTH = 24
 KEY_DTYPE = np.dtype(f"S{KEY_WIDTH}")
-OFFSET_DTYPE = np.dtype("<u8")
 ORDER_DTYPE = np.dtype("<i4")
 
 #: Rows a structural check reads at a time. `_keys_of` builds two `int64` arrays of
@@ -85,12 +89,10 @@ def encode_alids(alids: Sequence[str]) -> EncodedAlids:
     n_rows = len(encoded)
     if n_rows > np.iinfo(ORDER_DTYPE).max:
         raise ValueError(f"{n_rows} rows do not fit the sidecar's {ORDER_DTYPE} row order")
-    lengths = np.fromiter((len(item) for item in encoded), dtype=OFFSET_DTYPE, count=n_rows)
+    utf8, offsets = encode_utf8_offsets(encoded)
+    lengths = np.diff(offsets)
     if n_rows and int(lengths.min()) == 0:
         raise ValueError(f"row {int(np.argmin(lengths))} has an empty ALID")
-    offsets = np.zeros(n_rows + 1, dtype=OFFSET_DTYPE)
-    np.cumsum(lengths, out=offsets[1:])
-    utf8 = np.frombuffer(b"".join(encoded), dtype=np.uint8)
     # The cast truncates each ALID to its key, which is what a key is; the full bytes
     # settle every tie (`_sorted_keys`) and every search (`AlidSidecar.rows_of`).
     keys, order = _sorted_keys(encoded)
@@ -196,10 +198,7 @@ class AlidSidecar:
         rows = np.asarray(rows, dtype=np.int64)
         out = np.full(rows.size, None, dtype=object)
         held = np.flatnonzero((rows >= 0) & (rows < self.n_rows))
-        starts = np.asarray(self.offsets[rows[held]], dtype=np.int64).tolist()
-        stops = np.asarray(self.offsets[rows[held] + 1], dtype=np.int64).tolist()
-        text = self._text
-        out[held] = [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
+        out[held] = slice_texts(self._text, self.offsets, rows[held])
         return out
 
     def search(self, alids: Sequence[str]) -> np.ndarray:
@@ -267,20 +266,15 @@ def sidecar_problems(sidecar: AlidSidecar) -> Iterator[str]:
     bytes, strictly, so no ALID names two rows. Whether each row's ALID is the one the
     Variant Table gives it is the validator's comparison (`variant_table.alid_sidecar`).
     """
-    offsets = np.asarray(sidecar.offsets, dtype=np.uint64)
     n_rows = sidecar.n_rows
-    if n_rows < 0 or int(offsets[0]) != 0:
-        yield "variant_alid_offsets.npy does not start at 0"
-        return
-    if np.any(offsets[1:] <= offsets[:-1]):
-        at = int(np.flatnonzero(offsets[1:] <= offsets[:-1])[0])
-        yield f"variant_alid_offsets.npy does not rise at row {at}: every row has an ALID"
-        return
-    if int(offsets[-1]) != len(sidecar.utf8):
-        yield (
-            f"variant_alid_offsets.npy ends at {int(offsets[-1])} but variant_alid_utf8.npy "
-            f"holds {len(sidecar.utf8)} bytes"
-        )
+    fault = offsets_fault(
+        sidecar.offsets,
+        len(sidecar.utf8),
+        names=(ALID_OFFSETS_FILENAME, ALID_UTF8_FILENAME),
+        rising=("row", "every row has an ALID"),
+    )
+    if fault:
+        yield fault
         return
     if len(sidecar.keys) != n_rows or len(sidecar.order) != n_rows:
         yield (
