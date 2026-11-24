@@ -202,17 +202,21 @@ def test_every_query_shape_on_0_3_0_reads_no_variant_table_and_no_pysam(
 
 
 CLI = r"""
-import sys
+import contextlib, io, json, sys
 from opengwasdb.cli.main import app
 
-try:
-    app(sys.argv[1:], prog_name="opengwasdb")
-except SystemExit as exit:
-    code = exit.code or 0
-else:
-    code = 0
-print(f"\nPYSAM={'pysam' in sys.modules}", file=sys.stderr)
-sys.exit(code)
+out = {}
+for argv in json.loads(sys.argv[1]):
+    written = io.StringIO()
+    with contextlib.redirect_stdout(written):
+        try:
+            app(argv, prog_name="opengwasdb")
+        except SystemExit as exit:
+            code = exit.code or 0
+        else:
+            code = 0
+    out[argv[0]] = {"code": code, "stdout": written.getvalue()}
+print(json.dumps({"answers": out, "pysam": "pysam" in sys.modules}))
 """
 
 
@@ -221,7 +225,8 @@ def test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam(
     planted, tmp_path: Path, name: str
 ):
     """`opengwasdb query-*` loads no pysam on 0.3.0: Reference Completion's modules, which
-    do, are imported by the `complete-*` commands alone."""
+    do, are imported by the `complete-*` commands alone. The five commands run in one
+    fresh interpreter, which loads nothing a command could have loaded for another."""
     release = Path(shutil.copytree(planted[name][0], tmp_path / name))
     with query_store(release) as q:
         table = q.variants_table()
@@ -234,16 +239,16 @@ def test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam(
         "query-lookup": [f"{first['alid']},rs77,{last['alid']}", analysis_id],
         "query-top-hits": ["--threshold", "5e-4"],
     }
-    answered = {}
-    for command, args in asked.items():
-        out = _run_unreadable(
-            release, ["-c", CLI, command, str(release), *args, "--variant-info"]
-        )
-        assert out.returncode == 0, (command, out.stderr[-3000:])
-        assert out.stdout.count("\n") > 1, (command, "a query that answered nothing")
-        assert out.stderr.rstrip().endswith("PYSAM=False"), (command, out.stderr[-500:])
-        answered[command] = out.stdout
-    assert "\trs77\t" in answered["query-lookup"], "the lookup resolved the planted rsID"
+    argvs = [[command, str(release), *args, "--variant-info"] for command, args in asked.items()]
+    out = _run_unreadable(release, ["-c", CLI, json.dumps(argvs)])
+    assert out.returncode == 0, out.stderr[-3000:]
+    found = json.loads(out.stdout)
+    assert found["answers"].keys() == asked.keys()
+    for command, answer in found["answers"].items():
+        assert answer["code"] == 0, (command, out.stderr[-3000:])
+        assert answer["stdout"].count("\n") > 1, (command, "a query that answered nothing")
+    assert "\trs77\t" in found["answers"]["query-lookup"]["stdout"], "the planted rsID"
+    assert found["pysam"] is False, "a 0.3.0 CLI query loaded pysam"
 
 
 def test_a_0_3_0_release_without_its_rsid_index_is_refused(planted, tmp_path: Path):
