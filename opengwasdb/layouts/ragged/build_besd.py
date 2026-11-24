@@ -223,7 +223,12 @@ def _build_besd_release(
     # Checked before anything is written: a build that is going to fail on a
     # flipped `.esi` fails before it spends the ingest (issue #115).
     eaf_report = _verify_eaf(axis, request)
-    write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
+    write_variant_axis(
+        staged.path,
+        axis.variants,
+        axis.rsid_by_alid,
+        [axis.source_alid_by_alid.get(v.alid) for v in axis.variants],
+    )
     # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
     positions, trait_lift = _trait_positions(axis, request)
     analyses, se_divisors = _analysis_records(
@@ -342,6 +347,7 @@ class _CanonicalAxis:
     rsid_by_alid: dict[str, str]
     esi_to_variant: dict[int, tuple[int, bool]]
     collisions: _VariantCollisions
+    source_alid_by_alid: dict[str, str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -370,6 +376,7 @@ class _EsiAxis:
     esi_to_variant: dict[int, tuple[int, bool]]
     collisions: _VariantCollisions
     lift: dict[str, object] | None
+    source_alid_by_alid: dict[str, str | None] = field(default_factory=dict)
     variant_by_esi: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=np.int64))
     flipped_by_esi: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
     eaf_by_esi: np.ndarray | None = None
@@ -422,6 +429,7 @@ def _esi_axis(
         canonical.esi_to_variant,
         canonical.collisions,
         lift_provenance,
+        canonical.source_alid_by_alid,
         variant_by_esi=variant_by_esi,
         flipped_by_esi=flipped_by_esi,
         eaf_by_esi=None if frequencies is None else _axis_frequencies(
@@ -806,7 +814,32 @@ def _canonical_variants(
         rsid_by_alid={entry[2].alid: entry[4] for entry in survivors if entry[4]},
         esi_to_variant={entry[1]: (idx, entry[3]) for idx, entry in enumerate(survivors)},
         collisions=collisions,
+        source_alid_by_alid=_source_alids(snps, survivors, lifted is not None),
     )
+
+
+def _source_alids(
+    snps: list[SnpRecord], survivors: list[_Candidate], lifted: bool
+) -> dict[str, str | None]:
+    """Each surviving variant's `source_alid`: its ESI row's own coordinate, as an ALID.
+
+    A collision group is dropped whole, so a survivor has one entry and one origin; no
+    ambiguity can remain, and none is guessed (the routing's rule, #85). An unlifted
+    build's origin is the variant itself."""
+    by_row = {snp.row_idx: snp for snp in snps}
+    origin: dict[str, str | None] = {}
+    for _key, row, variant, _flipped, _rsid in survivors:
+        if not lifted:
+            origin[variant.alid] = variant.alid
+            continue
+        snp = by_row[row]
+        try:
+            origin[variant.alid] = orient_to_canonical(
+                snp.chromosome, snp.bp, snp.a1, snp.a2, other_is_reference=False
+            ).variant.alid
+        except VariantNormalisationError:
+            origin[variant.alid] = None
+    return origin
 
 
 def _opt(value: str | None) -> str | None:

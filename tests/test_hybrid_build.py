@@ -2403,9 +2403,10 @@ class TestVariantReferenceRsids:
 
         assert _hybrid_axis_rsids(two_pass)["1:1064620:C:T"] == "rsEARLY"
         assert _hybrid_axis_rsids(single_pass)["1:1064620:C:T"] == "rsEARLY"
-        # Apart from `variant_table.source_alid`: the shared table's `source_alid` is blank
-        # for every row here, a Hybrid defect (#449 report; xfail in
-        # test_completion_keeps_source_alid.py) that the rule found.
+        # Apart from `variant_table.source_alid`: every variant here is seen from both
+        # assemblies, so the routing blanks each one's `source_alid` by design (#85,
+        # `routing/route.py` `source_alids`), and the rule fails a table with none. A real
+        # mixed release always has rows that only one assembly saw.
         assert not _errors_but_source_alid(two_pass)
         assert not _errors_but_source_alid(single_pass)
 

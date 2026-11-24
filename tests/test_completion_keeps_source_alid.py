@@ -209,13 +209,7 @@ def test_the_rule_passes_a_completed_lifted_release_that_kept_them(
     assert source_alid_findings(completed) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#449 report: this mixed hg19+hg38 Hybrid writes every shared-table source_alid blank, "
-    "the lifted row's included, where an hg19 and an hg38 row reach one ALID; whether that "
-    "blank is the collision rule or a drop is for #472, which owns layouts/hybrid",
-)
-def test_a_hybrid_build_keeps_a_folded_rows_source_alid(tmp_path: Path) -> None:
+def test_a_hybrid_variant_seen_from_two_assemblies_has_no_source_alid(tmp_path: Path) -> None:
     import test_hybrid_build as thb
 
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -237,5 +231,102 @@ def test_a_hybrid_build_keeps_a_folded_rows_source_alid(tmp_path: Path) -> None:
     build_hybrid_from_vcf_manifest(
         manifest, store, reference_panel=panel, store_id="s", release_id="r"
     )
+    # By design (#85): the routing blanks an ALID whose sites name different origins
+    # (`routing/route.py`, `source_alids`), never guessing one. Here the hg19 row lifts onto
+    # the variant the hg38 row names, so its two origins differ.
     by_alid = {r.alid: r.source_alid for r in _records(store)}
-    assert by_alid["1:1064620:C:T"] == "1:1000000:C:T"
+    assert by_alid["1:1064620:C:T"] is None
+
+
+# ── the Ragged builders record `source_alid` (#449) ─────────────────────────
+
+
+def _hg19_alids_of_strand_rows() -> dict[str, str]:
+    """The hg38 ALID of each `STRAND_ROWS` variant, and the hg19 ALID its source spelt."""
+    from liftover_fixtures import STRAND_ROWS
+
+    from opengwasdb.variants.normalise import canonical_alid
+
+    return {row[5]: canonical_alid(row[1], row[2], row[3], row[4]) for row in STRAND_ROWS}
+
+
+def test_a_lifted_ssf_build_records_each_rows_pre_lift_alid(tmp_path: Path) -> None:
+    import test_ragged_build_ssf_lift as tl
+    from liftover_fixtures import write_two_strand_chain
+
+    chain = write_two_strand_chain(tmp_path / "two-strand.chain")
+    store = tl._build(tmp_path, [("a", "GRCh37", tl._GRCH37_ROWS)], "lifted", chain_file=chain)
+    expected = _hg19_alids_of_strand_rows()
+    got = {r.alid: r.source_alid for r in _records(store)}
+    assert got == expected
+    assert any(a != s for a, s in expected.items()), "nothing moved: the fixture proves nothing"
+
+
+def test_an_ssf_build_with_no_lift_records_the_alid_as_its_source(tmp_path: Path) -> None:
+    import test_ragged_build_ssf_lift as tl
+
+    store = tl._build(tmp_path, [("a", "GRCh38", tl._GRCH38_ROWS)])
+    got = {r.alid: r.source_alid for r in _records(store)}
+    assert got and all(source == alid for alid, source in got.items())
+
+
+def test_an_ssf_variant_two_sources_reach_from_different_origins_is_blank(tmp_path: Path) -> None:
+    """#85's rule: the hg19 and the hg38 Analysis name a chr2 variant from different
+    coordinates, so its origin is `.`. (A chr3 variant, the chain's identity, is declared
+    under both builds, which the lift drops from both.)"""
+    import test_ragged_build_ssf_lift as tl
+    from liftover_fixtures import write_two_strand_chain
+
+    chain = write_two_strand_chain(tmp_path / "two-strand.chain")
+    store = tl._build(
+        tmp_path,
+        [("a", "GRCh37", tl._GRCH37_ROWS), ("b", "GRCh38", tl._GRCH38_ROWS)],
+        "mixed",
+        chain_file=chain,
+    )
+    got = {r.alid: r.source_alid for r in _records(store)}
+    chr2 = {a: s for a, s in _hg19_alids_of_strand_rows().items() if a.startswith("2:")}
+    assert chr2 and all(a != s for a, s in chr2.items()) and set(got) == set(chr2)
+    assert all(source is None for source in got.values())
+
+
+def test_a_lifted_besd_build_records_each_rows_pre_lift_alid(tmp_path: Path) -> None:
+    import test_ragged_build_besd as tb
+    from liftover_fixtures import write_two_strand_chain
+
+    from opengwasdb.variants.normalise import orient_to_canonical
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    prefix = tb._write_strand_fixture(tmp_path)
+    reference = tb._write_reference_alleles(
+        tmp_path, [tb._REVERSE_SNP_HG38_ALID, tb._FORWARD_SNP_HG38_ALID]
+    )
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", source_build="hg19", chain_file=chain,
+        variant_reference=reference, association_coverage="cis_and_signals",
+    )
+    got = {r.alid: r.source_alid for r in _records(out)}
+    expected = {
+        alid: orient_to_canonical(
+            snp["chr"], snp["bp"], snp["a1"], snp["a2"], other_is_reference=False
+        ).variant.alid
+        for alid, snp in (
+            (tb._REVERSE_SNP_HG38_ALID, tb._REVERSE_SNP),
+            (tb._FORWARD_SNP_HG38_ALID, tb._FORWARD_SNP),
+        )
+    }
+    assert got == expected
+    assert any(a != s for a, s in expected.items()), "nothing moved: the fixture proves nothing"
+
+
+def test_a_besd_build_with_no_lift_records_the_alid_as_its_source(tmp_path: Path) -> None:
+    import test_ragged_build_besd as tb
+
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_besd(
+        tb._write_strand_fixture(tmp_path), out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    got = {r.alid: r.source_alid for r in _records(out)}
+    assert got and all(source == alid for alid, source in got.items())

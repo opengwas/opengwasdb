@@ -576,20 +576,24 @@ class _SourceAlidRows:
 
 
 def judges_source_alid(target: Target) -> bool:
-    """Whether the release records a liftover its own table must then show, and is not a
+    """Whether the release records a lift its own table must then show, and is not a
     Hybrid's Dense Component: that copy of the table is gone at 0.3.0 (#472), so a
     Hybrid is judged on its shared table alone.
 
-    The liftover is a ``provenance.chain_file`` (Dense, Hybrid).
-
-    A Ragged build records its lift as ``provenance.lift`` and writes no ``source_alid``
-    at all, so it is not judged here until its builders do (reported on #449)."""
+    A lift is recorded as a ``provenance.lift`` block that lifted a variant (Ragged), or a
+    ``provenance.chain_file`` (Dense, Hybrid). The second is a weak signal: a build writes
+    a default chain label whether or not it lifted anything, and no Dense or Hybrid
+    manifest records its Analyses' source assemblies. It cannot wrongly fail a release,
+    though: every build now writes an unlifted row's ``source_alid`` as its ALID, so a
+    release that lifted nothing still holds sourced rows.
+    """
     provenance = target.store.manifest.provenance
-    return (
-        not target.is_component
-        and isinstance(provenance, dict)
-        and bool(provenance.get("chain_file"))
-    )
+    if target.is_component or not isinstance(provenance, dict):
+        return False
+    lift = provenance.get("lift")
+    if isinstance(lift, dict):
+        return bool(lift.get("n_lifted"))
+    return bool(provenance.get("chain_file"))
 
 
 def _source_alid_rows(_target: Target, block: TableBlock) -> _SourceAlidRows:
