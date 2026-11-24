@@ -385,8 +385,8 @@ def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str
     """Every `top_hits/…` value a target is asked to hold that is more than a fact.
 
     The structure rules' small facts (a tier's problem, how many of its rows miss its
-    threshold, whether a 0.2 tier's `abs_z` agrees) are kept for the run; what the association scan reads to check the planes
-    against, the tiers' arrays, is not.
+    threshold, whether a 0.2 tier's `abs_z` agrees) are kept for the run; what the
+    association scan reads to check the planes against, the tiers' arrays, is not.
     """
     held: list[tuple[Target, str]] = []
     remember = Target.remember
