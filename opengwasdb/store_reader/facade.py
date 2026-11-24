@@ -819,10 +819,6 @@ class HybridStoreQuery(_StoreQueryBase):
         search of the panel map, which the Dense Component's axis asks too)."""
         return panel_rows(self._dense_to_shared, shared_indices)
 
-    def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
-        """Which shared variant indices are rows of the Dense Component's panel."""
-        return self._panel_split(shared_indices)[0]
-
     def _overflow_read(self, cells: Cells, *, observed_only: bool) -> Associations:
         """The Overflow's rows for a region, without the `n` a Hybrid never reports."""
         return self._overflow.read(cells, observed_only=observed_only)

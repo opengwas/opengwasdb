@@ -27,9 +27,9 @@ DEFAULT_RHO_MIN_NULLS = 500
 def dense_layout_records(
     shape: tuple[int, int], *, hint: tuple[int, int] = DEFAULT_CHUNK_SHAPE
 ) -> dict[str, object]:
-    """The layout a Dense plane of `shape` is written with, as the three
-    recordings publish it (manifest `provenance.dense`, the `index.sqlite`
-    `dense` blob, the `data.zarr` root attrs).
+    """The layout a Dense plane of `shape` is written with, as the two
+    recordings publish it (manifest `provenance.dense`, the `data.zarr` root
+    attrs; a 0.2 release's `index.sqlite` `dense` blob was a third, #471).
 
     The **inner chunk** comes from the seam's role policy (the builder's
     `chunk_shape` hint, clipped to the plane), and the **shard** from the shard
@@ -45,22 +45,6 @@ def dense_layout_records(
         "compressor": DEFAULT_COMPRESSOR,
         "zarr_format": SHARDED_STORE_ZARR_FORMAT,
     }
-
-
-def dense_index_metadata(
-    shape: tuple[int, int], *, hint: tuple[int, int] = DEFAULT_CHUNK_SHAPE, **extra: object
-) -> dict[str, object]:
-    """The `dense` blob every Dense-shaped builder writes into `index.sqlite`.
-
-    Deliberately carries no `se_dtype`. Two of the three builders write this
-    before the SE encoding has been measured, and `manifest.json`'s `encoding`
-    block is the authoritative declaration in any case (spec §6a) — a duplicate
-    that cannot be right is worse than no duplicate (issue #118).
-
-    The chunk, shard and compressor come from `dense_layout_records`, so the
-    blob cannot describe a layout the arrays do not have (issue #245, #247).
-    """
-    return {**dense_layout_records(shape, hint=hint), **extra}
 
 
 def dense_provenance_block(

@@ -83,7 +83,7 @@ def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
     for name, values in arrays.items():
         group.create_array(name, data=values)
 
-    loaded = top_hits.load_tier_arrays(group)
+    loaded = reader_top_hits.tier_arrays(group)
 
     assert loaded["rows"].dtype == np.uint32
     assert loaded["cols"].dtype == np.uint32

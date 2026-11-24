@@ -220,11 +220,6 @@ class AlidSidecar:
                 f"{table_rows}"
             )
 
-    def row_of(self, alid: str) -> int | None:
-        """The row `alid` names, None when the release holds no such ALID."""
-        row = int(self.rows_of([alid])[0])
-        return None if row < 0 else row
-
     def rows_of(self, alids: Sequence[str]) -> np.ndarray:
         """Each ALID's row, ``-1`` where the release holds none, in `alids`' order."""
         found = np.full(len(alids), ABSENT, dtype=np.int64)

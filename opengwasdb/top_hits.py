@@ -51,10 +51,6 @@ from opengwasdb.store_reader.top_hits import (
 
 log = logging.getLogger(__name__)
 
-#: A tier's arrays, as the validator reads them: the Store Reader's read (#473),
-#: under the name this module gave it.
-load_tier_arrays = reader_top_hits.tier_arrays
-
 #: Re-exported from the seam, which owns the role's default layout, so the
 #: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
 TOP_HIT_CHUNK_SIZE = store_layout.TOP_HIT_CHUNK_SIZE

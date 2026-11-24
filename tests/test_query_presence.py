@@ -198,7 +198,7 @@ def hybrid_two_sided(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_hybrid_lookup_is_analysis_major_across_both_components(hybrid_two_sided) -> None:
     with query_store(hybrid_two_sided) as query:
         alids = [row["alid"] for row in query.variants_table().values()]
-        on_panel = query._on_panel_mask(np.arange(len(alids)))
+        on_panel = query._panel_split(np.arange(len(alids)))[0]
         assert on_panel.any() and not on_panel.all()  # both components hold the variants
         for order in (["trait_a", "trait_b"], ["trait_b", "trait_a"]):
             result = query.lookup(alids, order)
