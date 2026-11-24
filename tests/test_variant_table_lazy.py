@@ -117,8 +117,8 @@ def test_questions_a_search_index_answers_never_load_pysam_or_sqlite(
     sizes = probe["sizes"]
     assert all(n > 0 for key, n in sizes.items() if key.startswith(("phewas", "lookup")))
     assert sizes["phewas_alid_0_rows"] > 0 and sizes["lookup_rsid_0_rows"] > 0
-    # `range_phewas` answers (its digests are pinned in tests/golden/store_reader_digests.json,
-    # written by the code before #464), and on 0.3.0 without opening the table (#468).
+    # `range_phewas` answers (its digests are pinned in tests/store_reader_contract/expected/,
+    # the Store Reader contract, #474), and on 0.3.0 without opening the table (#468).
     assert sizes["range_phewas"] > 0
     assert probe["after_range_phewas"] == []
 

@@ -43,11 +43,14 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 
-from opengwasdb.layouts.dense.indexed_subsets import indexed_subset_namespace_path
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX
 from opengwasdb.store_reader.analyses import AnalysesTable, analysis_label
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
-from opengwasdb.store_reader.indexed import IndexedSubsetError, open_indexed_subset
+from opengwasdb.store_reader.indexed import (
+    IndexedSubsetError,
+    indexed_subset_namespace_path,
+    open_indexed_subset,
+)
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.stored import stored_attributes

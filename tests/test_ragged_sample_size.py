@@ -306,7 +306,8 @@ def test_an_empty_result_from_a_sampled_release_still_names_n(sampled: Path) -> 
     from opengwasdb.query import query_store
 
     query = query_store(sampled)
-    assert len(query.analysis("not-an-analysis")["n"]) == 0
+    # An unknown Analysis is refused (#474), so the empty answers are of known ones.
+    assert len(query.phewas("1:1:A:C")["n"]) == 0
     assert len(query.lookup(["rs4"], [P1])["n"]) == 0
 
 

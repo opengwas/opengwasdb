@@ -42,6 +42,19 @@ class VariantNormalisationError(ValueError):
     """Raised when a source row cannot be represented as a canonical variant."""
 
 
+class UnsupportedChromosome(VariantNormalisationError):
+    """A chromosome no ALID can spell: a number outside 1-26 (ADR 0052). `fields` is what a
+    reader of the Store Reader contract compares (#474); the message is for people."""
+
+    def __init__(self, chromosome: str) -> None:
+        self.chromosome = chromosome
+        super().__init__(f"unsupported chromosome {chromosome!r}")
+
+    @property
+    def fields(self) -> dict[str, object]:
+        return {"chromosome": self.chromosome}
+
+
 class MalformedIdentity(VariantNormalisationError):
     """A source row whose identity no ALID can spell (issue #365).
 
@@ -84,7 +97,7 @@ def normalise_chromosome(chromosome: str) -> str:
     if chrom.upper() in _MISSING_CHROMOSOMES:
         raise MissingChromosome(f"chromosome is missing: {chromosome!r}")
     if chrom.isdigit():
-        raise VariantNormalisationError(f"unsupported chromosome {chromosome!r}")
+        raise UnsupportedChromosome(chromosome)
     return chrom
 
 

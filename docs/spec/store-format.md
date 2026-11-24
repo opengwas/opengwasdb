@@ -1993,7 +1993,8 @@ path, and answering it from the primary matrix would silently return the slow
 path's result while appearing to be indexed. The named subset is resolved and
 structurally validated **before** the Analysis ID is resolved, so a typo'd,
 stale or corrupt selector always fails even when the Analysis ID is also unknown;
-a *valid* subset with an unknown Analysis ID keeps the ordinary empty result.
+a *valid* subset with an unknown Analysis ID raises `UnknownAnalysisError`, as the
+ordinary read does (§19, #474).
 Before decoding any value, independent of whether `validate` has been run, the
 read path re-checks the declared name, schema, profile and `order`, the declared
 Analysis and requested/resolved/absent/Overflow-only counts, the exact array set, every plane's
@@ -2461,7 +2462,7 @@ Top-hit results from Reference-Completed releases include imputed associations b
 - **Hybrid** answers at a stored tier only, because its Dense Component cannot scan; an unstored threshold raises the same error, so the Overflow never gives part of an answer. At a stored tier its Overflow reads its tier, or scans when the Overflow has no such tier, and `limit` applies to each component and then to the merge.
 - **Ragged** answers an unstored threshold by scanning the CSR a window at a time, never a whole Analysis at once, against the same `z_critical` the index is built with, so a scan and a stored tier agree at the boundary.
 - A stored tier **without `analysis_offsets`** answers one Analysis on every layout from that tier: a reader filters the tier's rows by `analysis_index`, and a Dense reader never scans the grid.
-- An `analysis_id` the release does not hold MUST raise an error naming it (`UnknownAnalysisError`) on every layout; an empty answer is indistinguishable from "no association".
+- An `analysis_id` the release does not hold MUST raise an error naming it (`UnknownAnalysisError`) on every layout; an empty answer is indistinguishable from "no association". Every other query that names an Analysis raises it too (§19).
 
 ## 19. Query result contract
 
@@ -2537,6 +2538,14 @@ release with no association-frequency plane, except an imputed one, whose
 
 Reference-Completed queries include imputed associations by default. Query APIs MUST provide an Observed-Only mode that excludes imputed associations.
 
+**An Analysis the release does not hold is refused** (#474, the owner, 24 Nov 2026). Every
+query that names an `analysis_id` -- `analysis()` (with or without an Indexed Variant
+Subset), `lookup()`, `top_hits(analysis_id=...)`, `rho()`, `rho_row()` and `rho_matrix()`
+-- raises `UnknownAnalysisError` naming it, on every layout, before reading anything; a
+`lookup()` naming one unknown Analysis among known ones raises too. An empty answer would be
+indistinguishable from "no association". `range_by_analysis()` names a region, not an
+Analysis, and answers the Analyses whose Trait position falls in it.
+
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.
 
 ### Variant-only reads (issue #484)
@@ -2561,6 +2570,26 @@ chromosome the release lacks, answers no rows; a chromosome the release cannot s
 refused. From 0.3.0 none reads `variants.tsv.gz`, and none loads pysam or sqlite3.
 `opengwasdb.store.query_digests` digests all three (`variant_reads`), so the rewrite's proof
 and the golden contract (#474) compare them.
+
+### The Store Reader contract (issue #474)
+
+`tests/store_reader_contract/` is the contract every reader of format 0.3.0 is held to:
+nine small 0.3.0 Store Releases (Dense, Ragged and Hybrid, each Observed-Only and
+Reference-Completed) and, for each, what it answers -- every question
+`opengwasdb.store.query_digests.questions` asks, rendered as digests and as readable rows
+(`release_answers`). The refusals asked are `top_hits`, `analysis()` and `lookup()` of an
+Analysis the release does not hold (`UnknownAnalysisError`, above), a range on a
+chromosome no ALID can spell (`UnsupportedChromosome`) and, on Dense and Hybrid,
+`top_hits` at a threshold with no stored tier (`UnstoredThresholdError`, §18). A refusal is
+its type and the values it names (`fields`: the `analysis_id`; the `chromosome`; the
+`threshold` and the `stored` thresholds); its message is informative. A reader in another
+language compares the readable rows; the digests are the Python readers'. Its `VERSION`
+names the bundle's version and the `format_version` its releases are; its README names what
+each release exercises. Two of its states are ones the validator refuses at 0.3.0 and a
+reader still meets, an infinite SE (above) and a tier without `analysis_offsets` (§18).
+The bundle is read through the Store Reader alone, `open_release(path)` with no Variant
+Table reader: a 0.3.0 release needs none, and its table refuses every read (§1.1, ADR 0105
+§7). It loads none of pandas, scipy, pysam or sqlite3.
 
 ## 20. Validation rules
 

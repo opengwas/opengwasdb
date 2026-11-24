@@ -350,9 +350,10 @@ class StoreQuery(_StoreQueryBase):
         if self._owns_axis:
             self._variant_axis.close()
 
-    def _analysis_index(self, analysis_id: str) -> int | None:
-        analysis = self._analyses.by_id(analysis_id)
-        return None if analysis is None else int(analysis["analysis_index"])
+    def _analysis_index(self, analysis_id: str) -> int:
+        """`analysis_id`'s Store-local index; an Analysis the release does not hold raises
+        `UnknownAnalysisError` (spec §19), never an empty answer."""
+        return self._analyses.require_index(analysis_id)
 
     def analysis(
         self,
@@ -375,8 +376,6 @@ class StoreQuery(_StoreQueryBase):
                 analysis_id, indexed_subset, observed_only=observed_only
             )
         col = self._analysis_index(analysis_id)
-        if col is None:
-            return Associations.empty()
         return self._grid.read(Cells.analysis(col), observed_only=observed_only)
 
     def _indexed_analysis(
@@ -389,12 +388,10 @@ class StoreQuery(_StoreQueryBase):
         selector always fails even when the Analysis is also unknown -- the
         caller explicitly asked for an indexed answer, and an unknown ID does
         not excuse the selector.  A *valid* subset with an unknown Analysis ID
-        keeps the ordinary empty-result semantics.
+        raises `UnknownAnalysisError`, as the ordinary read does.
         """
         subset = SubsetReader.open(self.store.path, subset_name)
         col = self._analysis_index(analysis_id)
-        if col is None:
-            return Associations.empty()
         return subset.read(Cells.analysis(col), observed_only=observed_only)
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> Associations:
@@ -448,7 +445,7 @@ class StoreQuery(_StoreQueryBase):
         What `lookup` does once it has resolved its identifiers, and what a Hybrid
         asks of its Dense Component after naming the panel rows itself.
         """
-        cols = [i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None]
+        cols = [self._analysis_index(aid) for aid in analysis_ids]
         if not len(rows) or not cols:
             return Associations.empty()
         # Surgical orthogonal read: only the chunks intersecting the requested
@@ -499,24 +496,19 @@ class StoreQuery(_StoreQueryBase):
     def rho(self, *ids: str) -> dict[str, np.ndarray]:
         """Long-format pairwise Rho for a set of Analysis IDs (positional, or a
         single iterable of IDs); self-pairs excluded. Empty when the store has
-        no Rho Matrix (opt-in, ADR 0025) or no ID resolves."""
+        no Rho Matrix (opt-in, ADR 0025); an unknown ID raises `UnknownAnalysisError`."""
         if len(ids) == 1 and not isinstance(ids[0], str):
             ids = tuple(ids[0])
+        resolved = [(aid, self._analysis_index(aid)) for aid in ids]
         if self._rho_reader is None:
             return _empty_rho_result()
-        resolved = [
-            (aid, int(a["analysis_index"]))
-            for aid in ids
-            if (a := self._analyses.by_id(aid)) is not None
-        ]
         return _rho_pairs(self._rho_reader, resolved)
 
     def rho_row(self, analysis_id: str) -> dict[str, np.ndarray]:
         """One Analysis's Rho and support against every other Analysis."""
-        analysis = self._analyses.by_id(analysis_id)
-        if self._rho_reader is None or analysis is None:
+        idx = self._analysis_index(analysis_id)
+        if self._rho_reader is None:
             return _empty_rho_row_result()
-        idx = int(analysis["analysis_index"])
         rho_vals, n_vals = self._rho_reader.row(idx)
         id_by_index = self._analyses.all()
         others = [i for i in range(self._rho_reader.n_analyses) if i != idx]
@@ -529,20 +521,16 @@ class StoreQuery(_StoreQueryBase):
     def rho_matrix(self, ids: list[str] | None = None) -> dict[str, np.ndarray]:
         """Wide-format Rho: the full symmetric matrix (diagonal 1.0), or the
         dense submatrix for a given vector of Analysis IDs, in that order."""
+        resolved = None if ids is None else [(aid, self._analysis_index(aid)) for aid in ids]
         if self._rho_reader is None:
             return _empty_rho_matrix_result()
-        if ids is None:
+        if resolved is None:
             id_by_index = self._analyses.all()
             ordered_ids = [
                 id_by_index[i]["analysis_id"] for i in range(self._rho_reader.n_analyses)
             ]
             rho_mat, n_mat = self._rho_reader.matrix(None)
         else:
-            resolved = [
-                (aid, int(a["analysis_index"]))
-                for aid in ids
-                if (a := self._analyses.by_id(aid)) is not None
-            ]
             ordered_ids = [aid for aid, _ in resolved]
             rho_mat, n_mat = self._rho_reader.matrix([idx for _, idx in resolved])
         return {
@@ -608,9 +596,9 @@ class RaggedStoreQuery(_StoreQueryBase):
     def close(self) -> None:
         self._variant_axis.close()
 
-    def _resolve_analysis_id(self, analysis_id: str) -> int | None:
-        row = self._analyses.by_id(analysis_id)
-        return None if row is None else int(row["analysis_index"])
+    def _resolve_analysis_id(self, analysis_id: str) -> int:
+        """`analysis_id`'s Store-local index, or `UnknownAnalysisError` (spec §19)."""
+        return self._analyses.require_index(analysis_id)
 
 
     def analysis(
@@ -629,8 +617,6 @@ class RaggedStoreQuery(_StoreQueryBase):
         if indexed_subset is not None:
             _refuse_indexed_subset(self.store.path, "Ragged", indexed_subset)
         idx = self._resolve_analysis_id(analysis_id)
-        if idx is None:
-            return self._empty()
         return self._reader.read(Cells.analysis(idx), observed_only=observed_only)
 
     def range_phewas(
@@ -743,13 +729,11 @@ class RaggedStoreQuery(_StoreQueryBase):
         Requested Analysis order and duplicates carry through; a request that
         resolves nothing yields the empty result.
         """
+        analyses = [self._resolve_analysis_id(aid) for aid in analysis_ids]
         found = self._variant_axis.indices_by_identifiers(identifiers)
         if not len(found):
             return self._empty()
         wanted = np.array(sorted({int(i) for i in found}), dtype=np.int32)
-        analyses = [
-            idx for aid in analysis_ids if (idx := self._resolve_analysis_id(aid)) is not None
-        ]
         return self._reader.read(Cells.cross(wanted, analyses), observed_only=observed_only)
 
 
@@ -879,13 +863,9 @@ class HybridStoreQuery(_StoreQueryBase):
                 raise rescope_indexed_subset_error(
                     self.store.path, self._dense.store.path, exc
                 ) from exc
+        index = self._analysis_index(analysis_id)
         dense = self._remap_dense(self._dense.analysis(analysis_id, observed_only=observed_only))
-        analysis = self._analyses.by_id(analysis_id)
-        if analysis is None:
-            return dense
-        overflow = self._overflow_read(
-            Cells.analysis(int(analysis["analysis_index"])), observed_only=observed_only
-        )
+        overflow = self._overflow_read(Cells.analysis(index), observed_only=observed_only)
         return Associations.concat([dense, overflow])
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> Associations:
@@ -920,6 +900,7 @@ class HybridStoreQuery(_StoreQueryBase):
         # Resolved once, against the shared Variant Axis: an identifier its index
         # holds never reaches a Dense Component whose own index lacks it (an
         # off-panel variant), which on a 0.2 release would consult `variant_aliases`.
+        requested = [self._analysis_index(aid) for aid in analysis_ids]
         shared = np.unique(self._variant_axis.indices_by_identifiers(identifiers)).astype(np.int64)
         on_panel, rows = self._panel_split(shared)
         panel_rows = rows[on_panel]
@@ -931,18 +912,14 @@ class HybridStoreQuery(_StoreQueryBase):
             return dense
         # Each requested Analysis's sorted segment is binary-searched for the
         # wanted variants, in ascending Analysis order (#252).
-        columns = sorted(
-            {i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None}
-        )
         overflow = self._overflow_read(
-            Cells.cross(off_panel, columns), observed_only=observed_only
+            Cells.cross(off_panel, sorted(set(requested))), observed_only=observed_only
         )
-        requested = [i for aid in analysis_ids if (i := self._analysis_index(aid)) is not None]
         return _analysis_major(Associations.concat([dense, overflow]), requested)
 
-    def _analysis_index(self, analysis_id: str) -> int | None:
-        analysis = self._analyses.by_id(analysis_id)
-        return None if analysis is None else int(analysis["analysis_index"])
+    def _analysis_index(self, analysis_id: str) -> int:
+        """`analysis_id`'s Store-local index, or `UnknownAnalysisError` (spec §19)."""
+        return self._analyses.require_index(analysis_id)
 
     def _overflow_top_hits(
         self, threshold: float, analysis_index: int | None = None

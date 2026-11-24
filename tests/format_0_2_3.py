@@ -33,7 +33,9 @@ component of a release (a Hybrid's nested Dense Component included):
   holds the layout keys only): no reader or rule reads either;
 - `index.sqlite` and the tiers' `abs_z` and `p_value` come back
   (`with_0_2_derived_components`, as the builders before #471 wrote them);
-- each manifest's `format_version` is re-spelt `0.2.3`, byte for byte otherwise.
+- each manifest's `format_version` is re-spelt `0.2.3`, byte for byte otherwise, and so
+  is the `source_format_version` each Indexed Variant Subset records of the release it
+  was built on (#474), which a rewrite refuses a subset for when it is not the source's.
 
 That this gives what the builders at `e93fba8f` wrote was checked once, by building
 the six `store_reader_digests` releases at `e93fba8f` and at #467 and comparing every
@@ -282,9 +284,15 @@ def component_as_0_2_3(directory: Path) -> Path:
     with_own_copies(directory)
     with_fixed_width_alid_index(directory)
     with_0_2_derived_components(directory)
-    manifest = directory / "manifest.json"
-    text = manifest.read_text(encoding="utf-8")
-    stamp = '"format_version": "0.3.0"'
-    assert text.count(stamp) == 1, f"{manifest} is not stamped 0.3.0 once"
-    manifest.write_text(text.replace(stamp, '"format_version": "0.2.3"'), encoding="utf-8")
+    _restamp(directory / "manifest.json", "format_version")
+    for subset in sorted((directory / "data.zarr" / "indexed_subsets").glob("*/zarr.json")):
+        _restamp(subset, "source_format_version")
     return directory
+
+
+def _restamp(path: Path, key: str) -> None:
+    """Re-spell `path`'s one `"<key>": "0.3.0"` as 0.2.3, byte for byte otherwise."""
+    text = path.read_text(encoding="utf-8")
+    stamp = f'"{key}": "0.3.0"'
+    assert text.count(stamp) == 1, f"{path} does not record {key} 0.3.0 once"
+    path.write_text(text.replace(stamp, f'"{key}": "0.2.3"'), encoding="utf-8")

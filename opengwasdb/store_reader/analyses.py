@@ -21,8 +21,17 @@ class UnknownAnalysisError(ValueError):
     """A query named an `analysis_id` the Store Release does not hold.
 
     An empty answer would read as "no association"; a name nothing holds is a
-    mistake the caller must see (#483).
+    mistake the caller must see (#483, #474). `fields` is what a reader of the Store
+    Reader contract compares; the message is for people.
     """
+
+    def __init__(self, analysis_id: str) -> None:
+        self.analysis_id = analysis_id
+        super().__init__(f"unknown analysis_id {analysis_id!r}: not in this Store Release")
+
+    @property
+    def fields(self) -> dict[str, object]:
+        return {"analysis_id": self.analysis_id}
 
 
 @dataclass(frozen=True)
@@ -96,9 +105,7 @@ class AnalysesIndex:
         """The Store-local Analysis index of `analysis_id`; raises `UnknownAnalysisError`."""
         row = self._by_id.get(analysis_id)
         if row is None:
-            raise UnknownAnalysisError(
-                f"unknown analysis_id {analysis_id!r}: not in this Store Release"
-            )
+            raise UnknownAnalysisError(analysis_id)
         return int(row["analysis_index"])
 
     def all(self) -> dict[int, dict[str, str]]:

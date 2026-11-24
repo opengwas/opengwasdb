@@ -29,8 +29,23 @@ class UnstoredThresholdError(ValueError):
 
     A Dense or Hybrid release answers `top_hits` from its tiers and never scans the grid
     (#483): at OGS-00016's scale a scan is hours. The error names the thresholds
-    the release does store, so the caller can ask one of them.
+    the release does store, so the caller can ask one of them. `fields` is what a reader
+    of the Store Reader contract compares (#474); the message is for people.
     """
+
+    def __init__(self, threshold: float, stored: list[float]) -> None:
+        self.threshold = threshold
+        self.stored = list(stored)
+        named = ", ".join(f"{t:g}" for t in self.stored) or "none"
+        super().__init__(
+            f"threshold {threshold:g} is not a stored top-hit tier of this release "
+            f"(stored: {named}); a Dense or Hybrid release answers top_hits at a "
+            "stored tier only"
+        )
+
+    @property
+    def fields(self) -> dict[str, object]:
+        return {"threshold": self.threshold, "stored": self.stored}
 
 
 def threshold_key(threshold: float) -> str:
@@ -254,10 +269,5 @@ class TopHitTiers:
         """The tier for `threshold`; `UnstoredThresholdError` when there is none."""
         tier = self.tier(threshold)
         if tier is None:
-            stored = ", ".join(f"{t:g}" for t in self.stored_thresholds()) or "none"
-            raise UnstoredThresholdError(
-                f"threshold {threshold:g} is not a stored top-hit tier of this release "
-                f"(stored: {stored}); a Dense or Hybrid release answers top_hits at a "
-                "stored tier only"
-            )
+            raise UnstoredThresholdError(threshold, self.stored_thresholds())
         return tier

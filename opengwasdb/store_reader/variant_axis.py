@@ -99,6 +99,45 @@ class LegacyVariantTable(Protocol):
     def close(self) -> None: ...
 
 
+class VariantTableUnread(RuntimeError):
+    """A read of the Variant Table of a release opened without a Variant Table reader."""
+
+
+class NoVariantTable:
+    """The `LegacyVariantTable` of a format 0.3.0 release opened without one.
+
+    No 0.3.0 query reads `variants.tsv.gz`: the ALID, position, rsID and `source_alid`
+    sidecars answer every read (ADR 0105 §7, §8). A release opened with no `legacy`
+    opener gets this table, whose every read raises `VariantTableUnread` naming the
+    read, so a read that did reach the table fails loudly rather than needing pysam.
+    """
+
+    def __init__(self, store_path: Path) -> None:
+        self.store_path = store_path
+
+    def _refused(self, read: str) -> VariantTableUnread:
+        return VariantTableUnread(
+            f"{self.store_path}: {read} reads the Store Variant Table, and this release "
+            "was opened without a reader for it (open_release(..., legacy=...)); no 0.3.0 "
+            "query reads it"
+        )
+
+    def fetch(self, chromosome: str, start: int, end: int) -> Iterable[str]:
+        raise self._refused("fetch")
+
+    def line_at(self, offset: int) -> str:
+        raise self._refused("line_at")
+
+    def rows(self) -> Iterator[str]:
+        raise self._refused("rows")
+
+    def alias_index(self, alias: str) -> int | None:
+        raise self._refused("alias_index")
+
+    def close(self) -> None:
+        """Nothing was opened."""
+
+
 class LegacyTableOpener(Protocol):
     """Opens a Store's `LegacyVariantTable`; `aliases` asks for its `variant_aliases` too."""
 

@@ -55,7 +55,7 @@ from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.store.arrays import open_group_for_write
-from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
 from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.associations import statistics_of
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
@@ -2150,6 +2150,9 @@ def query_analysis_command(
     query = query_store(store_path)
     try:
         result = query.analysis(analysis_id, indexed_subset=indexed_subset)
+    except UnknownAnalysisError as refused:
+        typer.echo(f"error: {refused}", err=True)
+        raise typer.Exit(1) from refused
     except IndexedSubsetError as exc:
         # An explicit selector must never silently degrade to the primary
         # matrix (issue #265): name the Store and subset and stop.
@@ -2169,10 +2172,14 @@ def query_lookup_command(
     """Query comma-separated variants against comma-separated analyses."""
 
     query = query_store(store_path)
-    result = query.lookup(
-        [item for item in identifiers.split(",") if item],
-        [item for item in analysis_ids.split(",") if item],
-    )
+    try:
+        result = query.lookup(
+            [item for item in identifiers.split(",") if item],
+            [item for item in analysis_ids.split(",") if item],
+        )
+    except UnknownAnalysisError as refused:
+        typer.echo(f"error: {refused}", err=True)
+        raise typer.Exit(1) from refused
     _emit(query, result, output_format, include_variant_info)
 
 
