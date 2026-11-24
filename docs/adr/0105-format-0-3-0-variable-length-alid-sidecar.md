@@ -666,7 +666,17 @@ range probes and 3 rsID misses, and every answer matched; it took 715 s on the s
 `hybrid.dense_to_shared`, `hybrid.coverage` and closed envelope pass; it fails only what
 the bypass brings (a 0.2.2 `analyses.tsv` has no `n_missing_se_out_of_range`) and its
 `hm3` Indexed Variant Subset, which named the source's `release_id` and version; the
-`indexed_subsets` step now carries it over (above). The Dense Component's
+`indexed_subsets` step now carries it over (above). Rewritten again with it (fix round 2,
+`scratch/472/real_rewrite_472_v3.py`, 1,264 s), the proof matched on every question, the
+16 subset questions included; the whole validator, `subsets.indexed` included, passed the
+copy but for the `n_missing_se_out_of_range` column the 0.2.2 source lacks; and `hm3`
+named the new `release_id` and 0.3.0 with its `builder_version` and `created_at` kept. In
+the same run the package before #472 (the integration tip, `34fa74c5`, in its own
+interpreter, its path asserted) digested the source: it and this package reading the copy
+agree on all 142 questions, both `range_phewas` included, the 9 ALID probes, the 20 range
+probes, the 3 misses and both tables (`scratch/472/OGS-00004.tip-vs-472.txt`). That, and
+the unchanged golden digests of the two Hybrid fixtures, which the pre-#472 reader pinned,
+are the comparison of the old read path with the new. The Dense Component's
 0.2 copies came to 1,098,940,214 B, the figure ADR 0102 §4 gives. A 0.3.0 component that
 kept its copy would carry 1,265,761,783 B: its table, `.tbi`, rsID index, `analyses.tsv`
 and `overview.html` as the source holds them, and the ALID and position sidecars sized
