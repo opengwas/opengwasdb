@@ -12,6 +12,7 @@ liftover and whose table holds no `source_alid` at all.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -387,13 +388,25 @@ def test_the_rule_refuses_a_lift_block_that_does_not_say_how_many_it_lifted(
 
 
 def test_a_hybrid_is_judged_on_its_shared_table_alone(tmp_path: Path) -> None:
-    """The Dense Component's copy of the table is gone at 0.3.0 (#472), so a blank copy is
-    no finding, and a blank shared table is."""
+    """The Dense Component's copy of the table is gone at 0.3.0 (#472): there is no copy to
+    blank, and its rows' `source_alid` are the shared table's, so a blank shared table is
+    the finding. A 0.2.3 Hybrid still carries the copy, and a blank copy is no finding
+    there either: the rule judges the shared table alone."""
+    from format_0_2_3 import as_0_2_3, with_fixed_width_alid_index
+
     source = thc._build_source(tmp_path)
     assert StoreManifest.load(source).provenance.get("chain_file"), "the fixture records a liftover"
     assert validate_store(source).failed() == frozenset()
-    _blank_source_alids(source / "dense")
-    assert validate_store(source).failed() == frozenset()
+    assert not (source / "dense" / "variants.tsv.gz").exists(), "#472: no Dense copy"
+
+    legacy = as_0_2_3(Path(shutil.copytree(source, tmp_path / "legacy")))
+    assert (legacy / "dense" / "variants.tsv.gz").exists(), "fixture: the 0.2.3 Dense copy"
+    assert validate_store(legacy).failed() == frozenset()
+    _blank_source_alids(legacy / "dense")
+    with_fixed_width_alid_index(legacy / "dense")  # the copy's indexes, as 0.2 lays them out
+    assert all(r.source_alid is None for r in _records(legacy / "dense")), "fixture: blanked"
+    assert validate_store(legacy).failed() == frozenset()
+
     _blank_source_alids(source)
     assert validate_store(source).failed() == {RULE}
 

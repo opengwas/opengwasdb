@@ -30,9 +30,12 @@ from rsid_releases import RELEASE_NAMES
 from test_variant_table_off_read_path import _answers
 
 from opengwasdb.query import query_store
+from opengwasdb.store.open import open_store
 from opengwasdb.store.rewrite import rewrite_release
 from opengwasdb.store_reader import source_alid_sidecar as codec
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar
+from opengwasdb.store_reader.hybrid import DenseComponentSharesAxis
+from opengwasdb.store_reader.panel_axis import PanelVariantAxis
 from opengwasdb.store_reader.source_alid_sidecar import (
     SOURCE_ALID_SIDECAR_FILENAMES,
     MalformedSourceAlidSidecar,
@@ -235,15 +238,17 @@ def _rewrite_axis(store: Path, sources: dict[str, str | None]) -> None:
 
 
 def plant(release: Path) -> dict[str, str | None]:
-    """Plant `planted_sources` in every component of `release` (a Hybrid's Dense
-    Component by the same ALIDs). Returns them."""
+    """Plant `planted_sources` in every component of `release` that carries its own
+    Variant Axis. A 0.3.0 Hybrid's Dense Component carries none: its rows are the shared
+    ones (#472). Returns them."""
     axis = VariantAxis(release)
     try:
         sources = planted_sources(axis.all())
     finally:
         axis.close()
     for directory in components(release):
-        _rewrite_axis(directory, sources)
+        if (directory / "variants.tsv.gz").exists():
+            _rewrite_axis(directory, sources)
     return sources
 
 
@@ -302,6 +307,54 @@ def _resolved_rows(release: Path) -> list[dict[str, Any]]:
         return list(q.resolve(result, include_variant_info=True))
 
 
+@pytest.mark.parametrize("name", ["hybrid_observed", "hybrid_completed"])
+def test_a_0_3_0_hybrid_dense_component_answers_source_alid_from_the_shared_table(
+    planted, name: str
+):
+    """#472's Dense Component carries no sidecar of its own: each panel row's
+    `source_alid` is its shared row's, through `PanelVariantAxis`, in every read, and a
+    Dense Analysis's resolved rows give it (opengwasdb-stores#499)."""
+    current, _, values = planted[name]
+    dense_dir = current / "dense"
+    assert not any((dense_dir / f).exists() for f in SOURCE_ALID_SIDECAR_FILENAMES)
+    assert all((current / f).exists() for f in SOURCE_ALID_SIDECAR_FILENAMES)
+    shared = open_store(current).variant_axis(aliases=False)
+    dense = open_store(dense_dir).variant_axis(aliases=False)
+    try:
+        assert isinstance(dense, PanelVariantAxis)
+        with pytest.raises(DenseComponentSharesAxis, match="source_alid sidecar"):
+            _ = dense.source_alid_sidecar  # the component has none of its own
+        mapped = np.asarray(dense.dense_to_shared, dtype=np.int64)
+        expected = shared.source_alids_by_indices(mapped).tolist()
+        planted_on_panel = [values[a] for a in shared.identity_by_indices(mapped)["alid"]]
+        assert expected == planted_on_panel
+        assert any(v and len(v) == 130 for v in expected), "a planted long value is on the panel"
+        assert any(v is None for v in expected) and any(v for v in expected)
+        rows = np.arange(dense.n_variants)
+        assert dense.source_alids_by_indices(rows).tolist() == expected
+        assert [r["source_alid"] for _, r in sorted(dense.variants_table().items())] == expected
+        assert [r.source_alid for r in dense.records()] == expected
+        by = dense.by_indices(rows.tolist())
+        assert [by[int(k)].source_alid for k in rows] == expected
+        lifted = {v: int(k) for k, v in enumerate(expected) if v and v not in {None}}
+        found = dense.indices_by_source_alid(set(lifted))
+        assert found == {v: k for v, k in lifted.items() if expected.index(v) == k}
+    finally:
+        dense.close()
+    with open_store(current).query() as q:
+        ids = [row["analysis_id"] for row in q.analyses_table().values()]
+        nested = q._dense
+        # The nested Dense query resolves in panel rows; the Hybrid facade in shared rows.
+        rows_out = [
+            row
+            for a in ids
+            for query in (nested, q)
+            for row in query.resolve(query.analysis(a), include_variant_info=True)
+        ]
+    assert len({r["alid"] for r in rows_out}) > 5, "the Dense Analyses answer rows"
+    assert [r["source_alid"] for r in rows_out] == [values[r["alid"]] or "." for r in rows_out]
+
+
 def test_a_completed_ragged_release_keeps_the_sidecar_observed_rows_sourced_panel_rows_empty(
     digest_releases: dict[str, Path],
 ):
@@ -342,13 +395,22 @@ def test_a_lifted_hybrid_release_completes_with_its_sidecar(tmp_path: Path):
     assert lifted, "nothing was lifted: the fixture proves nothing"
     assert {a: after[a] for a in before} == before
     assert all(after[a] is None for a in set(after) - set(before))
-    for directory in components(completed):
-        table = {r.alid: r.source_alid for r in _table_records(directory)}
-        with_sidecar = VariantAxis(directory)
-        try:
-            assert {r.alid: r.source_alid for r in with_sidecar.records()} == table, directory
-        finally:
-            with_sidecar.close()
+    table = {r.alid: r.source_alid for r in _table_records(completed)}
+    with_sidecar = VariantAxis(completed)
+    try:
+        assert {r.alid: r.source_alid for r in with_sidecar.records()} == table
+    finally:
+        with_sidecar.close()
+    # The completed Dense Component carries no copy (#472); its rows answer from the
+    # shared sidecar, whatever its dropped copy held (opengwasdb-stores#499).
+    assert not any((completed / "dense" / f).exists() for f in SOURCE_ALID_SIDECAR_FILENAMES)
+    dense = open_store(completed / "dense").variant_axis(aliases=False)
+    try:
+        panel = {r.alid: r.source_alid for r in dense.records()}
+    finally:
+        dense.close()
+    assert panel and {a: after[a] for a in panel} == panel
+    assert any(a in lifted for a in panel), "a lifted row is on the panel"
 
 
 def test_a_lifted_dense_release_completes_with_its_sidecar(tmp_path: Path):
@@ -466,18 +528,16 @@ def test_the_rewrite_fills_the_sidecar_from_the_table_and_the_proof_passes(
 ):
     current, legacy, values = planted[name]
     destination = rewrite_release(legacy, tmp_path / "rewritten")
-    for directory in components(destination):
-        sidecar = SourceAlidSidecar.open(directory)
-        assert sidecar is not None, directory
+    assert SourceAlidSidecar.open(destination) is not None
+    # a Hybrid's Dense Component gets none: its rows are the shared ones (#472)
+    assert all(SourceAlidSidecar.open(d) is None for d in components(destination)[1:])
     with query_store(destination) as q:
         got = {row["alid"]: row["source_alid"] for row in q.variants_table().values()}
     assert got == values
     assert _answers(destination) == _answers(legacy)
-    for directory in components(destination):
-        relative = directory.relative_to(destination)
-        for name in SOURCE_ALID_SIDECAR_FILENAMES:
-            written, built = np.load(directory / name), np.load(current / relative / name)
-            assert written.dtype == built.dtype and np.array_equal(written, built), name
+    for name in SOURCE_ALID_SIDECAR_FILENAMES:
+        written, built = np.load(destination / name), np.load(current / name)
+        assert written.dtype == built.dtype and np.array_equal(written, built), name
 
 
 def _as_seven_columns(directory: Path) -> None:

@@ -3,15 +3,24 @@
 From #467 every build and completion writes format 0.3.0. The 0.2 series is still
 read, and `ogdb rewrite-release` turns a 0.2.3 release into a 0.3.0 one, so the tests
 need 0.2.3 releases. A 0.3.0 release differs from the 0.2.3 one the same build would
-have written in four things: it carries the variable-length ALID sidecar where 0.2.3
-carried the fixed-width pair (#467, ADR 0105), the position and `source_alid` sidecars
-0.2.3 did not carry (#468, #470), no `variant_offsets.npy`, which 0.2.3 carried (#469),
-and it drops what nothing but the validator read (#471, ADR 0102). `as_0_2_3`
-undoes exactly that, in every component of a release (a Hybrid's nested Dense
-Component included):
+have written in five things: it carries the variable-length ALID sidecar where 0.2.3
+carried the fixed-width pair (#467, ADR 0105), the position and `source_alid`
+sidecars 0.2.3 did not carry (#468, #470), no `variant_offsets.npy`, which 0.2.3
+carried (#469), it drops what nothing but the validator read (#471, ADR 0102), and a
+Hybrid's Dense Component carries no copy
+of the shared variants or Analyses (#472). `as_0_2_3` undoes exactly that, in every
+component of a release (a Hybrid's nested Dense Component included):
 
+- a Hybrid's Dense Component first gets its copies back (`with_dense_copies`): its
+  Variant Table and sidecars, written by `write_variant_axis` from the shared rows
+  `dense_to_shared.npy` names, as the build wrote them (a completed component's
+  without `source_alid`, which its completion never wrote, #449); and its
+  `analyses.tsv` and `overview.html`, the root's rows with the component's own Top-Hit
+  Counts. Its `n_missing_se_out_of_range` cannot be recovered from 0.3.0, which keeps
+  only the root's count of both components, so it is restored only where the root
+  counts none and is refused otherwise;
 - the ALID sidecar's four files, the position sidecar's three and the `source_alid`
-  sidecar's two are deleted;
+  sidecar's three are deleted;
 - `variant_alid_bytes.npy`/`variant_alid_rows.npy` are written by
   `write_fixed_width_alid_index`, a copy of what `write_variant_axis` wrote at
   `e93fba8f` -- the only other writer of the pair, and only ever in tests;
@@ -179,9 +188,19 @@ def follow_stamp(directory: Path) -> None:
     version = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))[
         "format_version"
     ]
+    if not _sidecar_version(version):
+        with_own_copies(directory)
     if not _sidecar_version(version) and AlidSidecar.open(directory) is not None:
         with_fixed_width_alid_index(directory)
         with_0_2_derived_components(directory)
+
+
+def with_own_copies(directory: Path) -> None:
+    """Give `directory`, if it is a 0.3.0 Hybrid's Dense Component, the copies of the
+    shared variants and Analyses a release before 0.3.0 carries (`with_dense_copies`)."""
+    if directory.name == "dense" and not (directory / "variants.tsv.gz").exists():
+        if (directory / "dense_to_shared.npy").exists():
+            with_dense_copies(directory.parent)
 
 
 def _sidecar_version(version: str) -> bool:
@@ -219,10 +238,48 @@ def as_0_2_3(release: Path) -> Path:
     return release
 
 
+def with_dense_copies(release: Path) -> None:
+    """Give the 0.3.0 Hybrid at `release` the copies its Dense Component carried before
+    0.3.0 (#472): its Variant Table and sidecars, `analyses.tsv` and `overview.html`."""
+    from opengwasdb.layouts.dense.build import write_analyses_tsv
+    from opengwasdb.model.analyses import read_analysis_records, reset_top_hit_counts
+    from opengwasdb.top_hits import add_hit_counts
+    from opengwasdb.variants import CanonicalVariant, write_variant_axis
+    from opengwasdb.variants.legacy_table import iter_variant_records
+
+    dense = release / "dense"
+    mapped = np.load(dense / "dense_to_shared.npy").tolist()
+    wanted = set(mapped)
+    shared = {
+        record.variant_index: record
+        for record in iter_variant_records(release / "variants.tsv.gz")
+        if record.variant_index in wanted
+    }
+    records = [shared[row] for row in mapped]
+    manifest = json.loads((dense / "manifest.json").read_text(encoding="utf-8"))
+    completed = manifest["completion_state"] == "reference_completed"
+    write_variant_axis(
+        dense,
+        [CanonicalVariant(r.chromosome, r.position, r.effect_allele, r.other_allele)
+         for r in records],
+        {r.alid: r.rsid for r in records if r.rsid},
+        None if completed else [r.source_alid for r in records],
+    )
+    analyses = read_analysis_records(release / "analyses.tsv")
+    counted = [a for a in analyses if a.n_missing_se_out_of_range not in ("", "0")]
+    assert not counted, (
+        f"{release}: the root counts associations left out for an SE above 65,504 for "
+        f"{counted[0].analysis_id!r}; which of them were its Dense Component's is not "
+        "recorded at 0.3.0, so its 0.2.3 analyses.tsv cannot be restored"
+    )
+    write_analyses_tsv(dense, add_hit_counts(dense, reset_top_hit_counts(analyses)))
+
+
 def component_as_0_2_3(directory: Path) -> Path:
     """One Store Release directory -- a release, or a Hybrid's nested Dense Component --
     turned from 0.3.0 into 0.2.3: the fixed-width pair, what 0.3.0 dropped, and the stamp
     that carries them."""
+    with_own_copies(directory)
     with_fixed_width_alid_index(directory)
     with_0_2_derived_components(directory)
     manifest = directory / "manifest.json"

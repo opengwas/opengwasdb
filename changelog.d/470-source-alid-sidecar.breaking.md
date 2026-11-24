@@ -33,3 +33,6 @@
   compares `source_alid` through `variants_table()` and the resolved rows.
 - opengwasdb-stores' release manifests and walkthrough name the envelope's files, so they
   change when opengwasdb-stores moves its pin to this version.
+- **A 0.3.0 Hybrid carries the sidecar at its root only**: its Dense Component, which
+  carries no Variant Axis (#472), answers each row's `source_alid` as its shared row's
+  through `PanelVariantAxis`, and the rewrite writes the Dense Component none.

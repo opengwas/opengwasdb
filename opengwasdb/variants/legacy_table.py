@@ -47,9 +47,15 @@ def iter_variant_records(table_path: str | Path) -> Iterator[VariantRecord]:
 
 
 def _table_lines(table_path: str | Path) -> Iterator[str]:
-    """A Store Variant Table's rows as text, header lines skipped."""
+    """A Store Variant Table's rows as text, header lines skipped.
+
+    A missing table raises `FileNotFoundError`: pysam's BGZF reader crashes the
+    process on one, and a 0.3.0 Hybrid's Dense Component carries none (#472).
+    """
     import pysam
 
+    if not Path(table_path).is_file():
+        raise FileNotFoundError(f"no Store Variant Table at {table_path}")
     with pysam.BGZFile(str(table_path), "r", None) as handle:
         for raw_line in handle:
             line = raw_line.decode("utf-8")

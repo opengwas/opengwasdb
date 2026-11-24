@@ -68,7 +68,9 @@ def test_manifest_analytical_metadata_passes_through_unchanged(tmp_path: Path, l
             store_id="metadata-test",
             release_id="r1",
         )
-        analyses_paths = [store / "analyses.tsv", store / "dense" / "analyses.tsv"]
+        # From 0.3.0 the Dense Component carries no analyses.tsv: the root's is its (#472).
+        assert not (store / "dense" / "analyses.tsv").exists()
+        analyses_paths = [store / "analyses.tsv"]
 
     expected = {
         "sample_size_kind": "case_control",

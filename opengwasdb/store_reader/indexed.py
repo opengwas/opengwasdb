@@ -418,14 +418,35 @@ def _refuse_stale_subset(
     name: str, attrs: dict[str, Any], encoding: StoreEncoding, manifest: StoreManifest
 ) -> None:
     """Raise when a published subset does not belong to `manifest`'s release."""
-    mismatches = _source_identity_mismatches(name, attrs, manifest)
-    if encoding != manifest.encoding:
-        mismatches.append(
-            f"indexed subset {name!r} was built with an encoding that is not the "
-            "release's; its values cannot be decoded against the authoritative planes"
-        )
+    mismatches = stale_subset_findings(name, attrs, encoding, manifest)
     if mismatches:
         raise IndexedSubsetStaleError("; ".join(mismatches))
+
+
+def stale_subset_findings(
+    name: str, attrs: dict[str, Any], encoding: StoreEncoding, manifest: StoreManifest
+) -> list[str]:
+    """Every way a published subset is stale for `manifest`'s release: the one
+    definition the reader, `subsets.indexed` and the rewrite refuse by. Its recorded
+    source identity (`_source_identity_mismatches`) and its declared `encoding` must
+    both be the release's."""
+    findings = _source_identity_mismatches(name, attrs, manifest)
+    mismatch = encoding_mismatch(name, encoding, manifest)
+    if mismatch is not None:
+        findings.append(mismatch)
+    return findings
+
+
+def encoding_mismatch(
+    name: str, encoding: StoreEncoding, manifest: StoreManifest
+) -> str | None:
+    """The finding for a subset built under another encoding than the release's."""
+    if encoding == manifest.encoding:
+        return None
+    return (
+        f"indexed subset {name!r} was built with an encoding that is not the "
+        "release's; its values cannot be decoded against the authoritative planes"
+    )
 
 
 def _side_table_length(group: Any, name: str) -> int:

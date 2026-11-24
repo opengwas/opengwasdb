@@ -163,13 +163,20 @@ def test_the_rule_judges_every_layout(built: dict[str, Path], tmp_path: Path, la
     assert validate_store(store).failed() == {RULE}
 
 
-def test_the_rule_judges_a_hybrids_dense_component(built: dict[str, Path], tmp_path: Path) -> None:
+def test_a_hybrids_dense_component_carries_none_and_a_stray_one_is_not_read(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    """From 0.3.0 the Dense Component answers its ranges from the shared sidecar (#472):
+    it carries none, the rule does not judge it, and one copied in fails its envelope."""
     store = Path(shutil.copytree(built["hybrid"], tmp_path / "hybrid"))
     nested = store / "dense"
+    assert not any((nested / name).exists() for name in POSITION_SIDECAR_FILENAMES)
+    for name in POSITION_SIDECAR_FILENAMES:
+        shutil.copy(store / name, nested / name)
     _edit(nested, POSITION_FILENAME, _set(0, 999))
     result = validate_store(store)
-    assert result.failed() == {RULE}, result.errors
-    assert any("dense" in f.target for f in result.findings if f.rule == RULE), result.errors
+    assert result.failed() == {"envelope.closed"}, result.errors
+    assert not [f for f in result.findings if f.rule == RULE and "dense" in f.target]
 
 
 def test_a_0_2_release_is_not_judged_and_a_stray_sidecar_is_not_read(dense: Path) -> None:

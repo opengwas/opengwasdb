@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.compare_store_releases import compare_releases
+from opengwasdb.store.open import open_store
 
 
 @dataclass(frozen=True)
@@ -52,8 +53,13 @@ def assert_same_release(left: Path, right: Path) -> None:
     assert report["arrays_only_left"] == [] and report["arrays_only_right"] == []
     assert report["arrays_with_metadata_differences"] == []
     assert report["arrays_with_value_differences"] == []
-    assert report["analyses_tsv"]["differing_cells_by_column"] == {}
-    assert report["variants_tsv_gz"]["identical"]
+    if open_store(left).shared_root is None:
+        assert report["analyses_tsv"]["differing_cells_by_column"] == {}
+        assert report["variants_tsv_gz"]["identical"]
+    else:
+        # A 0.3.0 Hybrid's Dense Component carries neither table (#472): the Hybrid's
+        # own are its, compared where the Hybrid is.
+        assert "analyses_tsv" not in report and "variants_tsv_gz" not in report
     assert report["encoding_plan"]["left"] == report["encoding_plan"]["right"]
     assert quality_rows(left) == quality_rows(right)
     assert _manifest_without_timestamp(left) == _manifest_without_timestamp(right)

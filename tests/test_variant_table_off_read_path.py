@@ -163,11 +163,15 @@ print(json.dumps({
 
 
 def _unreadable_tables(release: Path) -> list[Path]:
-    """Make every component's `variants.tsv.gz` and `.tbi` unreadable; return them."""
+    """Make every component's `variants.tsv.gz` and `.tbi` unreadable; return them. A
+    0.3.0 Hybrid's Dense Component carries neither (#472): it reads the shared table's."""
     locked = []
     for directory in components(release):
         for name in ("variants.tsv.gz", "variants.tsv.gz.tbi"):
             path = directory / name
+            if directory.name == "dense" and directory != release:
+                assert not path.exists(), path
+                continue
             assert path.exists(), path
             path.chmod(0)
             locked.append(path)

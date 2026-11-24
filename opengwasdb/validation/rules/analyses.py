@@ -281,10 +281,11 @@ def se_out_of_range_count(target: Target) -> Iterator[str]:
 
 def se_out_of_range_partition(target: Target) -> Iterator[str]:
     """A Hybrid root counts at least what its Dense Component counts, Analysis by
-    Analysis: the root's count is both components' (issue #338)."""
+    Analysis: the root's count is both components' (issue #338). From 0.3.0 the
+    component counts nothing of its own (#472), so there is nothing to compare."""
     root = _counts(target.analyses.rows)
     for child in target.children:
-        if not child.store.analyses_path.exists():
+        if child.shares_variant_axis or not child.store.analyses_path.exists():
             continue
         dense = _counts(read_analyses(child.store.analyses_path).rows)
         for analysis, count in dense.items():
@@ -306,8 +307,9 @@ def _counts(rows: Iterable[dict[str, str]]) -> dict[str, int | None]:
 
 
 def _with_analyses(target: Target) -> bool:
-    """Any release with an `analyses.tsv`, a Hybrid root's included."""
-    return target.store.analyses_path.exists()
+    """Any release with an `analyses.tsv`, a Hybrid root's included; not a 0.3.0 Dense
+    Component, whose Analyses are its root's (#472)."""
+    return not target.shares_variant_axis and target.store.analyses_path.exists()
 
 
 def _hybrid_root(target: Target) -> bool:
@@ -474,8 +476,13 @@ def _with_regions(target: Target) -> bool:
 
 
 def _validated_table(target: Target) -> bool:
-    """Dense and Ragged releases and a Hybrid's Dense Component, but not its outer one."""
-    return target.layout is not PrimaryStorageLayout.HYBRID
+    """The releases whose `analyses.tsv` is judged as a table of Analyses: Dense and
+    Ragged releases, and in a Hybrid the one copy it carries of its Analyses. Before
+    0.3.0 that is the Dense Component's, as it always was; from 0.3.0 the component
+    carries none and reads the outer release's, which is judged there instead (#472)."""
+    if target.layout is PrimaryStorageLayout.HYBRID:
+        return any(child.shares_variant_axis for child in target.children)
+    return not target.shares_variant_axis
 
 
 def _top_level_with_table(target: Target) -> bool:

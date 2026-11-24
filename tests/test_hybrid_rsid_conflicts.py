@@ -292,10 +292,10 @@ def test_drop_blanks_a_variant_another_allele_order_still_names(tmp_path, on_ref
     names = ("rs376674031", "rs113800458")
     _assert_one_variant_unnamed(result, store, "1:154311889:T:C", names, SNV_ALID)
     assert _hybrid_axis_rsids(store) == {SNV_ALID: "", AGREED: "rs3"}
-    if on_reference:
-        # The disputed order is off the reference, so the fold reaches this
-        # Dense row after the skeleton was named: the Dense table is rewritten.
-        assert _table_rsid_cells(store / "dense")[SNV_ALID] == "."
+    # From 0.3.0 the Dense Component has no table of its own to rewrite when the fold
+    # renames a panel row after the skeleton (#472): it names its rows through the
+    # shared table, which `_hybrid_axis_rsids` read.
+    assert not (store / "dense" / "variants.tsv.gz").exists()
 
 
 def _agreeing_fixture(tmp_path: Path) -> tuple[Path, Path]:

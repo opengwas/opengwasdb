@@ -3,9 +3,11 @@
 A Hybrid store is a thin integration layer over the existing dense and ragged
 components (ADR 0026):
 
-- The **Dense Component** is a self-contained Dense store nested at ``<store>/dense``
-  whose variant axis is the completion reference panel. It is built, completed,
-  top-hit-indexed, and validated by the *unchanged* dense machinery.
+- The **Dense Component** is a Dense store nested at ``<store>/dense`` whose variant
+  axis is the completion reference panel. It is built, completed, top-hit-indexed,
+  and validated by the *unchanged* dense machinery. From format 0.3.0 it carries no
+  variant table or ``analyses.tsv`` of its own: opened as a release, its axis is the
+  shared one seen through ``dense_to_shared.npy`` (#472).
 - The **Ragged Overflow Component** is a CSR at ``<store>/data.zarr/ragged`` holding
   each Analysis's off-panel observed associations. Its ``variant_index`` values
   reference the **shared** Store Variant Table at ``<store>/variants.tsv.gz`` (the

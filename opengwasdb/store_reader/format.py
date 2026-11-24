@@ -220,6 +220,18 @@ def carries_source_alid_sidecar(version: str) -> bool:
     return parse_format_version(version) >= SOURCE_ALID_SIDECAR_SINCE
 
 
+#: The first `format_version` whose Hybrid Dense Component carries no Variant Axis
+#: and no `analyses.tsv` of its own: it reads the shared ones through
+#: `dense_to_shared.npy` (#472, ADR 0102 §4). 0.3.0 is one format version.
+DENSE_COMPONENT_SHARES_AXIS_SINCE = ALID_SIDECAR_SINCE
+
+
+def dense_component_shares_axis(version: str) -> bool:
+    """Whether a Hybrid Dense Component of ``version`` reads its variants and Analyses
+    from the release that nests it, rather than carrying its own copy of each."""
+    return parse_format_version(version) >= DENSE_COMPONENT_SHARES_AXIS_SINCE
+
+
 def zarr_format_for_version(version: str, *, source: str = "release") -> int:
     """The Zarr on-disk format a readable ``format_version`` is stored in.
 
