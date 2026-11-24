@@ -6,9 +6,10 @@ releases: Dense, Ragged and Hybrid, each Observed-Only and Reference-Completed
 before `opengwasdb.store_reader` existed. They were regenerated at `826b36bb`, when
 every record gained `beta` and `pval` (ADR 0104). With those two dropped, every
 digest equalled the `5d600a1d` pins, and `log10_p` was within 9.7e-16. They were
-regenerated at `30cb20cc`, when `variants_table()` and resolved rows gained
-`source_alid` (#470); with it dropped, every digest and `log10_p` equalled the
-pins #483 left. A difference names the release, the question and the array.
+regenerated at `1ca2d349`, when `variants_table()`, resolved rows and #484's variant
+reads gained `source_alid`, and `build-dense` came to write each row's own (#470); with
+it dropped, every pinned digest and `log10_p` equalled the pins #484 left. A
+difference names the release, the question and the array.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ def test_the_pins_cover_every_layout_and_completion_state():
         # Each row's `source_alid` is pinned, in the table and in resolved rows (#470).
         assert "source_alid" in PINS[name]["variants_table"], name
         assert any("source_alid" in fields for fields in PINS[name]["resolved"].values()), name
+        assert any("source_alid" in f for f in PINS[name]["variant_reads"].values()), name
 
 
 def test_the_variant_reads_are_the_one_section_the_pins_gained_with_484():
