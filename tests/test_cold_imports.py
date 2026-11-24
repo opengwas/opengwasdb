@@ -56,7 +56,9 @@ def test_the_targets_are_meaningful() -> None:
 def test_every_entry_point_imports_cold() -> None:
     targets = sorted({"opengwasdb", *_subpackages(), *ENTRY_MODULES})
     with ThreadPoolExecutor(max_workers=8) as pool:
-        failures = {t: e for t, e in zip(targets, pool.map(_cold_import, targets), strict=True) if e}
+        failures = {
+            t: e for t, e in zip(targets, pool.map(_cold_import, targets), strict=True) if e
+        }
     assert not failures, "\n".join(f"{t}: {e}" for t, e in failures.items())
 
 
