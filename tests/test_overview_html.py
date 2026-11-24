@@ -967,3 +967,25 @@ def test_indexed_subsets_total_counts_each_traversal_once(
         real(path) for path in overview_module._published_subset_paths(store)
     )
     assert len(subsets.rows) == 2
+
+
+@pytest.mark.parametrize("format_version", ["0.2.3", "0.3.0"])
+def test_guide_describes_every_file_a_release_carries(format_version: str) -> None:
+    # The fallback keeps an unknown file visible, but a file this package
+    # writes must say what it is: 0.3.0's sidecars once read "Internal store
+    # file." and `variants.tsv.gz` "Read via the query API", which 0.3.0's
+    # queries never do (ADR 0102).
+    from opengwasdb.store.open import envelope_at
+    from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+
+    names: set[str] = set()
+    for layout in PrimaryStorageLayout:
+        for state in CompletionState:
+            for component in (False, True) if layout is PrimaryStorageLayout.HYBRID else (False,):
+                names |= envelope_at(layout, format_version, state, dense_component=component)
+    assert {"variants.tsv.gz", "manifest.json"} <= names
+    undescribed = sorted(names - overview_module._FILE_DESCRIPTIONS.keys())
+    assert undescribed == []
+    if format_version == "0.3.0":
+        description = overview_module._FILE_DESCRIPTIONS["variants.tsv.gz"][1]
+        assert "no query reads it" in description

@@ -2091,8 +2091,9 @@ _VARIANT_INFO_OPTION = typer.Option(
         "Include the per-variant rsid column in tsv output. Off by default: "
         "unlike chromosome/position/alleles (derived for free from the alid) "
         "and eaf (already materialised in the query result), rsid isn't "
-        "derivable in-store and costs an extra variants.tsv.gz lookup that can "
-        "dominate query time on a large result."
+        "derivable from the alid and costs a read of the rsid index (format "
+        "0.3.0) or of variants.tsv.gz (format 0.2) that can dominate query "
+        "time on a large result."
     ),
 )
 _INDEXED_SUBSET_QUERY_OPTION = typer.Option(

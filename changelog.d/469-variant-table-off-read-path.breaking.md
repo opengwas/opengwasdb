@@ -16,6 +16,9 @@
   builds and rewrites alike (#471). `variants.tsv.gz` and its `.tbi` still ship, written with htslib,
   as a convenience for tabix, bedtools and R. Spec §4 gives the command that rebuilds a lost
   `.tbi`: `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`.
+- **`overview.html`'s file guide says so.** `variants.tsv.gz` is a file to open directly,
+  which no 0.3.0 query reads, and every sidecar and `regions.tsv` is described rather than
+  listed as "Internal store file". `--variant-info`'s help names the rsID index it reads.
 - **A 0.3.0 release without its rsID index is refused** (`MissingRsidIndex`), rather than read
   as naming no rsID. A 0.2 release built before #109 still opens without one.
 - **The variant-axis writer refuses an rsID wider than 24 bytes** (`UnindexableRsidError`).
