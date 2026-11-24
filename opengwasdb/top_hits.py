@@ -140,7 +140,7 @@ def _write_tier(
     group = store_arrays.create_group(top, threshold_key(threshold))
 
     # The cut is on |z|; neither it nor the p it implies is stored (ADR 0102, #471).
-    keep = abs_z >= reader_stats.z_critical(threshold)
+    keep = reader_stats.clears_cutoff(abs_z, threshold)
     kept = {name: values[keep] for name, values in columns.items()}
 
     order = np.lexsort((kept["variant_index"], kept["analysis_index"]))

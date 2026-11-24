@@ -62,6 +62,7 @@ from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLay
 from opengwasdb.store_reader.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_stored_p
 from opengwasdb.store_reader.indexed import IndexedSubsetError
+from opengwasdb.store_reader.top_hits import UnstoredThresholdError
 from opengwasdb.top_hits import write_stored_p
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.routing import (
@@ -2183,10 +2184,14 @@ def query_top_hits_command(
     output_format: OutputFormat = _FORMAT_OPTION,
     include_variant_info: bool = _VARIANT_INFO_OPTION,
 ) -> None:
-    """Return ranked top-hit associations."""
+    """Return top-hit associations in genomic order (analysis, then variant)."""
 
     query = query_store(store_path)
-    result = query.top_hits(threshold=threshold, limit=limit)
+    try:
+        result = query.top_hits(threshold=threshold, limit=limit)
+    except UnstoredThresholdError as refused:
+        typer.echo(str(refused), err=True)
+        raise typer.Exit(code=1) from refused
     _emit(query, result, output_format, include_variant_info)
 
 

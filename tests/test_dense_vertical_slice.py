@@ -8,7 +8,7 @@ import pytest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES
-from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
 from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.validation import validate_store
 
@@ -156,7 +156,9 @@ def test_query_facade_supports_variant_range_analysis_phewas_top_hits_and_metada
     a2_top_hits = query.top_hits(analysis_id="a2", threshold=5e-8, limit=1)
     assert a2_top_hits["variant_index"].tolist() == [0]
     assert a2_top_hits["analysis_index"].tolist() == [1]
-    assert query.top_hits(analysis_id="unknown", threshold=5e-8)["z"].size == 0
+    # an Analysis the release does not hold is refused, not answered with nothing (#483)
+    with pytest.raises(UnknownAnalysisError, match="GCST-no-such"):
+        query.top_hits(analysis_id="GCST-no-such", threshold=5e-8)
 
     # metadata accessors
     variants = query.variants_table()
