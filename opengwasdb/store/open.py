@@ -50,13 +50,13 @@ from opengwasdb.store_reader.format import (
 )
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
-from opengwasdb.store_reader.source_alid_sidecar import SOURCE_ALID_SIDECAR_FILENAMES
 from opengwasdb.store_reader.release import (
     ReleasePaths,
     StoreRelease,
     open_release,
     release_paths,
 )
+from opengwasdb.store_reader.source_alid_sidecar import SOURCE_ALID_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import VARIANT_OFFSETS_FILENAME
 from opengwasdb.variants.legacy_table import open_legacy_variant_table
 
