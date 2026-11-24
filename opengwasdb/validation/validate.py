@@ -548,18 +548,35 @@ def _resolve_fidelity_rows(
 ) -> _ResolvedRows:
     """Row-resolution phase: map each sampled source variant to a store row.
 
-    Assembly-dependent: same-assembly samples join through the canonical ALID.
-    Cross-assembly samples are lifted, always, because only the chain says which
-    of them a reverse-strand block re-oriented -- a palindromic pair's ALID reads
-    the same on either strand (#486). Their rows come from the stored
-    `source_alid` column, or from the lifted ALID where the store predates it.
-    A sample the Store holds by `source_alid` where the chain does not place it
-    cannot be oriented, so it is reported, not compared under a guessed strand.
+    Assembly-dependent: same-assembly samples join through the canonical ALID;
+    cross-assembly ones are lifted (`_resolve_lifted_rows`).
     """
     src_alids = {f"{c}:{p}:{a1}:{a2}" for (_a, c, p, a1, a2, _z, _s) in samples}
-    if src_asm == store_asm:
-        same = _lookup_variant_rows(store_path, {a: a for a in src_alids})
-        return _ResolvedRows(same, frozenset())
+    if src_asm != store_asm:
+        return _resolve_lifted_rows(
+            store_path, samples, src_alids, errors,
+            src_asm=src_asm, store_asm=store_asm, chain_file=chain_file,
+        )
+    same = _lookup_variant_rows(store_path, {a: a for a in src_alids})
+    return _ResolvedRows(same, frozenset())
+
+
+def _resolve_lifted_rows(
+    store_path: Path,
+    samples: list[_FidelitySample],
+    src_alids: set[str],
+    errors: list[str],
+    *,
+    src_asm: str,
+    store_asm: str,
+    chain_file: str | Path | None,
+) -> _ResolvedRows:
+    """Cross-assembly row resolution. The samples are lifted, always, because only
+    the chain says which of them a reverse-strand block re-oriented -- a
+    palindromic pair's ALID reads the same on either strand (#486). Their rows come
+    from the stored `source_alid` column, or from the lifted ALID where the store
+    has none (`_held_where_placed`).
+    """
     lifted = _lift_samples(
         {(c, p, a1, a2) for (_a, c, p, a1, a2, _z, _s) in samples},
         src_asm=src_asm,
@@ -570,7 +587,18 @@ def _resolve_fidelity_rows(
     by_lift = _lookup_variant_rows(store_path, {a: hg38 for a, (hg38, _s) in lifted.items()})
     origin_map = _resolve_via_origin(store_path, src_alids)
     if origin_map is None:
-        return _ResolvedRows(by_lift, reoriented)  # the store predates source_alid
+        return _ResolvedRows(by_lift, reoriented)  # the store records no source_alid
+    return _ResolvedRows(_held_where_placed(origin_map, by_lift, errors), reoriented)
+
+
+def _held_where_placed(
+    origin_map: dict[str, int], by_lift: dict[str, int], errors: list[str]
+) -> dict[str, int]:
+    """The rows the Store holds by `source_alid` that the chain places on the same row.
+
+    Any other cannot be oriented, so it is reported, naming the chain, rather than
+    compared under a guessed strand or dropped unsaid.
+    """
     unplaced = sorted(a for a, row in origin_map.items() if by_lift.get(a) != row)
     if unplaced:
         errors.append(
@@ -578,8 +606,8 @@ def _resolve_fidelity_rows(
             f"association(s) on the row the Store holds by source_alid (e.g. {unplaced[0]}), "
             f"so their strand is unknown -- give the chain the build lifted with"
         )
-    held = {a: row for a, row in origin_map.items() if a not in set(unplaced)}
-    return _ResolvedRows(held, reoriented)
+    skip = set(unplaced)
+    return {a: row for a, row in origin_map.items() if a not in skip}
 
 
 def _match_fidelity_pairs(
