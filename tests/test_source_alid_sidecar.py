@@ -696,17 +696,20 @@ def _forget_the_lift(release: Path) -> None:
 
 
 def _fidelity(release: Path, source: Path, chain: Path, monkeypatch: pytest.MonkeyPatch):
-    """`validate --source` of `release`, and how many times it lifted the samples."""
+    """`validate --source` of `release`, and how many times it lifted the samples.
+
+    A cross-assembly check lifts its samples whenever it runs, to orient them (#486);
+    the join decides only where their rows come from."""
     import opengwasdb.build.liftover as liftover
 
     lifts: list[int] = []
-    lift = liftover.build_liftover_lookup
+    lift = liftover.lifted_rows
 
     def counted(*args: Any, **kwargs: Any) -> Any:
         lifts.append(1)
         return lift(*args, **kwargs)
 
-    monkeypatch.setattr(liftover, "build_liftover_lookup", counted)
+    monkeypatch.setattr(liftover, "lifted_rows", counted)
     result = validate_store(release, source=source, source_assembly="hg19", chain_file=chain)
     return result, len(lifts)
 
@@ -714,14 +717,17 @@ def _fidelity(release: Path, source: Path, chain: Path, monkeypatch: pytest.Monk
 def test_a_release_naming_no_source_alid_and_recording_no_lift_lifts_its_samples(
     lifted_without_sources, monkeypatch: pytest.MonkeyPatch
 ):
-    """The join says it cannot answer (None), so `validate --source` lifts the samples
-    itself and every one matches its stored cell (#473, ADR 0105 §8)."""
+    """The join says it cannot answer (None), so `validate --source` takes the samples'
+    rows from its own lift and every one matches its stored cell (#473, ADR 0105 §8).
+    The lift count does not tell the two answers apart -- a cross-assembly check lifts
+    once either way, to orient its samples (#486) -- the outcome does: answering {}
+    instead matches no sample."""
     release, source, chain = lifted_without_sources
     _forget_the_lift(release)
 
     result, lifts = _fidelity(release, source, chain, monkeypatch)
 
-    assert lifts == 1, "the validator lifted the samples itself"
+    assert lifts == 1, "lifted once: for the rows and the orientation alike"
     assert result.failed() == frozenset(), result.errors
     assert "fidelity.source" not in result.skipped, "fidelity was judged"
     # Were the join to answer {} (no row found) instead, no sample would match.
@@ -729,7 +735,7 @@ def test_a_release_naming_no_source_alid_and_recording_no_lift_lifts_its_samples
 
     monkeypatch.setattr(variant_axis.VariantAxis, "indices_by_source_alid", lambda self, w: {})
     result, lifts = _fidelity(release, source, chain, monkeypatch)
-    assert lifts == 0
+    assert lifts == 1, "lifted to orient the samples; their rows come from the join"
     assert "fidelity.source" in result.failed()
     assert any("none of 3 sampled source associations" in e for e in result.errors)
 

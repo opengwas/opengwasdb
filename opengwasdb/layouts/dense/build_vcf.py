@@ -34,7 +34,7 @@ from opengwasdb.build.eaf_orientation import (
     site_hashes,
     verify_eaf_orientation,
 )
-from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
 from opengwasdb.encoding import (
     EafExceptionBuilder,
@@ -1833,7 +1833,7 @@ def _write_manifest(
                 if variant_reference is not None
                 else "opengwasdb.v0.1_dense_vcf_two_pass"
             ),
-            "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+            "chain_file": str(chain_file) if chain_file else BUILTIN_CHAIN_LABEL,
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": {

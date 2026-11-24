@@ -506,6 +506,9 @@ made completion keep it).
   (#449) fails first and `fidelity.source`, which runs behind it, is skipped: such a
   release is rebuilt, and the fallback is never reached. Both are tested end to end on
   a lifted Dense build whose states are all 0 (`tests/test_source_alid_sidecar.py`).
+  Since 24 Nov 2026 (#486) every cross-assembly check also lifts its samples whatever
+  the join finds, through the chain the release records, to orient them: the join
+  still decides only which row a sample is compared with.
 - **The column is new on every format.** `variants_table()`, the variant-only reads #484
   added (`variants()`, `variants_in_range()`) and resolved rows with variant info gain
   `source_alid`, as they name rsIDs. The three reads share one projection of a row, the

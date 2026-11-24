@@ -11,8 +11,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
-from opengwasdb.readers.interface import ImputationScoreDeclaration, ImputationScoreKind
+from opengwasdb.model.imputation_score import (
+    GWAS_SSF_CAPABILITY,
+    ImputationScoreDeclaration,
+    ImputationScoreKind,
+)
 
 INFO_SCORE_COLUMNS: tuple[str, ...] = (
     "info_score_threshold",

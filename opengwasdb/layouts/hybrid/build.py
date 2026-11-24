@@ -54,7 +54,7 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.info_score_filter import declared_score_state
-from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
 from opengwasdb.encoding import combine_eaf_measurements, optimise_dense_se_joint
 from opengwasdb.encoding.association_codec import (
@@ -3528,7 +3528,7 @@ def _write_dense_manifest(
         reference_assembly="GRCh38",
         provenance={
             "builder": "opengwasdb.v0.1_hybrid_dense_component",
-            "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+            "chain_file": str(chain_file) if chain_file else BUILTIN_CHAIN_LABEL,
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": dense_provenance_block(
@@ -3566,7 +3566,7 @@ def _write_hybrid_manifest(
             if variant_reference is not None
             else "opengwasdb.v0.1_hybrid_vcf"
         ),
-        "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+        "chain_file": str(chain_file) if chain_file else BUILTIN_CHAIN_LABEL,
         "n_variants": n_variants,
         "n_analyses": n_analyses,
         "hybrid": {

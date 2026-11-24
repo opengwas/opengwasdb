@@ -39,6 +39,10 @@ _COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
 #: A source variant as the lift is given it: ``(chrom, pos, ref, alt)``.
 SourceVariantKey = tuple[str, int, str, str]
 
+#: What a build records as `provenance.chain_file` when it lifted with pyliftover's
+#: built-in hg19->hg38 chain rather than a chain file it was given.
+BUILTIN_CHAIN_LABEL = "pyliftover_builtin_hg19_hg38"
+
 
 class LiftoverFailureError(RuntimeError):
     """Raised when the liftover failure rate exceeds the configured threshold."""
