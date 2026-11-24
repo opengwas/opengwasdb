@@ -907,7 +907,15 @@ def _write_variant_axis(store_path: Path, state: _SourceState, axis: _MergedAxis
     # no rsid -- they are positions the reference panel supplies, which the
     # source never named.
     rsid_by_alid = {v.alid: v.rsid for v in state.src_variants if v.rsid}
-    write_variant_axis(store_path, axis.variants, rsid_by_alid)
+    # Observed rows keep the ALID the build lifted them from; panel-added rows stay "."
+    # and a blank source row stays blank (#449).
+    source_alid_by_alid = {v.alid: v.source_alid for v in state.src_variants if v.source_alid}
+    write_variant_axis(
+        store_path,
+        axis.variants,
+        rsid_by_alid,
+        [source_alid_by_alid.get(v.alid) for v in axis.variants],
+    )
 
 
 def _run_pending_blocks(

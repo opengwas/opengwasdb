@@ -578,7 +578,15 @@ def _write_union_axis_tables(
 
     rsid_by_alid = {v.alid: v.rsid for v in source_variants if v.rsid}
     print("Writing variants.tsv.gz...")
-    write_variant_axis(staged.path, merged_variants, rsid_by_alid)
+    # Observed rows keep the ALID the build lifted them from; rows added from the panel
+    # no source observed stay "." (#449). A blank source row stays blank.
+    source_alid_by_alid = {v.alid: v.source_alid for v in source_variants if v.source_alid}
+    write_variant_axis(
+        staged.path,
+        merged_variants,
+        rsid_by_alid,
+        [source_alid_by_alid.get(v.alid) for v in merged_variants],
+    )
 
     out_to_src = np.full(n_variants, -1, dtype=np.int64)
     for v in source_variants:

@@ -564,6 +564,47 @@ class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
             )
 
 
+@dataclass(frozen=True)
+class _SourceAlidRows:
+    """How many table rows there are, and how many of them carry a ``source_alid``."""
+
+    n_rows: int = 0
+    n_sourced: int = 0
+
+    def __add__(self, other: _SourceAlidRows) -> _SourceAlidRows:
+        return _SourceAlidRows(self.n_rows + other.n_rows, self.n_sourced + other.n_sourced)
+
+
+def records_liftover(target: Target) -> bool:
+    """Whether the manifest records that the release's variants were lifted from another
+    assembly: a ``provenance.chain_file`` (Dense, Hybrid) or a ``provenance.lift`` block
+    (Ragged)."""
+    provenance = target.store.manifest.provenance
+    if not isinstance(provenance, dict):
+        return False
+    return bool(provenance.get("chain_file")) or isinstance(provenance.get("lift"), dict)
+
+
+def _source_alid_rows(_target: Target, block: TableBlock) -> _SourceAlidRows:
+    sourced = sum(1 for record in block.records if record.source_alid)
+    return _SourceAlidRows(len(block.records), sourced)
+
+
+def _judge_source_alid_rows(_target: Target, found: _SourceAlidRows) -> Iterator[str]:
+    """A lifted release has an observed row with a ``source_alid``, or none was kept.
+
+    Rows Reference Completion adds from the panel are blank by design and a collision
+    blanks its row, so one blank row is no fault. A table with *no* ``source_alid`` at
+    all holds none on any observed row: the provenance was dropped (#449).
+    """
+    if found.n_rows and not found.n_sourced:
+        yield (
+            f"manifest.json records a liftover but none of the {found.n_rows} rows of "
+            "variants.tsv.gz carries a source_alid: the lift's provenance was dropped, as "
+            "Reference Completion did before #449 -- rebuild the release from source"
+        )
+
+
 def variant_aliases(target: Target) -> Iterator[str]:
     """Every alias names a variant the table holds.
 
@@ -678,6 +719,16 @@ RULES: tuple[Rule, ...] = (
         zero=_LiftedOffPrimary(),
         measure=_lifted_off_primary,
         judge=_judge_lifted_off_primary,
+    ),
+    Fold(
+        name="variant_table.source_alid",
+        kinds=Kind.RELEASE,
+        when=records_liftover,
+        after=(REQUIRED,),
+        scan=VARIANT_TABLE,
+        zero=_SourceAlidRows(),
+        measure=_source_alid_rows,
+        judge=_judge_source_alid_rows,
     ),
     Check(
         name="sqlite.variant_aliases",
