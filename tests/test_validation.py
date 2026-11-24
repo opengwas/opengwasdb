@@ -177,7 +177,8 @@ def test_validator_rejects_inconsistent_top_hit_index(dense_store_path):
 def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_store_path):
     # Issue #55's acceptance case: two independent defects in one release. The
     # Top-Hit Index was checked only when nothing else had failed, so the offset
-    # error hid the tier's.
+    # error hid the tier's. Offsets are the 0.2 series' (#469).
+    as_0_2_3(dense_store_path)
     offsets_path = dense_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     offsets[1] = offsets[0]
@@ -187,10 +188,12 @@ def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_sto
 
     result = validate_store(dense_store_path)
 
+    # The 0.2.3 form stores the tier's abs_z and p_value (#471), which no longer match z.
     assert result.failed() == {
         "variant_table.representatives",
         "top_hits.z",
         "top_hits.threshold",
+        "top_hits.abs_z",
     }
 
 
@@ -287,6 +290,7 @@ def test_a_0_3_0_release_carrying_the_fixed_width_pair_fails_its_envelope(dense_
 
 
 def test_validator_rejects_bad_variant_offset(dense_store_path):
+    as_0_2_3(dense_store_path)  # a 0.3.0 release has no offsets (#469)
     offsets_path = dense_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     offsets[1] = offsets[0]
@@ -342,7 +346,9 @@ def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_pa
 
 def test_a_ragged_release_has_its_variant_table_checked(ragged_store_path):
     # Issue #55: the variant-table rules ran on Dense and Hybrid releases only; a
-    # Ragged release's offset sidecar could point at the wrong row unremarked.
+    # Ragged release's offset sidecar could point at the wrong row unremarked. Offsets
+    # are the 0.2 series' (#469).
+    as_0_2_3(ragged_store_path)
     offsets_path = ragged_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     assert len(offsets) >= 2, "the fixture must have a second row to misdirect"

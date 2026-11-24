@@ -32,6 +32,7 @@ from opengwasdb.store_reader.format import (
     UnsupportedFormatVersion,
     carries_index_metadata,
     carries_position_sidecar,
+    carries_variant_offsets,
     indels_reference_first,
     split_format_version,
     zarr_format_for_version,
@@ -246,6 +247,14 @@ def _position_sidecar_entries(target: Target) -> list[tuple[str, Path]]:
     ]
 
 
+def _variant_offsets_entries(target: Target) -> list[tuple[str, Path]]:
+    """`variant_offsets.npy`, which a Dense release of the 0.2 and 0.1 series carries and
+    a 0.3.0 release does not (#469)."""
+    if not carries_variant_offsets(target.store.manifest.format_version):
+        return []
+    return [("missing variant_offsets.npy", variant_offsets_path(target.store.path))]
+
+
 def _dense_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
@@ -255,7 +264,7 @@ def _dense_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing analyses.tsv", store.analyses_path),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
-        ("missing variant_offsets.npy", variant_offsets_path(path)),
+        *_variant_offsets_entries(target),
         *_alid_index_entries(target, rebuild=True),
         *_position_sidecar_entries(target),
     ]

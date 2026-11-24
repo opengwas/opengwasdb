@@ -77,6 +77,7 @@ from opengwasdb.store_reader.format import (
 from opengwasdb.store_reader.position_sidecar import PositionSidecar, write_position_sidecar
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.variant_axis import (
+    VARIANT_OFFSETS_FILENAME,
     VariantRecord,
     variant_alid_bytes_path,
     variant_alid_rows_path,
@@ -189,8 +190,11 @@ def _write_alid_sidecar(context: RewriteContext) -> None:
     rewrites only the ALID index). Before the step ends, every ALID is searched for
     and must name its own row: the proof's questions reach only some of them.
     """
-    for directory in context.staged_components():
-        alids = [record.alid for record in _records_in_row_order(directory)]
+    for component in context.components:
+        directory = context.staged / component.relative
+        alids = [
+            record.alid for record in _records_in_row_order(directory, _offset_rows(component))
+        ]
         write_alid_sidecar(directory, alids)
         _require_every_alid_resolves(directory, alids)
         variant_alid_bytes_path(directory).unlink()
@@ -225,10 +229,11 @@ def _write_position_sidecar(context: RewriteContext) -> None:
     the proof's range questions reach only some of them. The tabix index stays, a
     convenience no 0.3.0 query reads (spec §1.1).
     """
-    for directory in context.staged_components():
+    for component in context.components:
+        directory = context.staged / component.relative
         chromosomes: list[str] = []
         positions: list[int] = []
-        for record in _records_in_row_order(directory):
+        for record in _records_in_row_order(directory, _offset_rows(component)):
             chromosomes.append(record.chromosome)
             positions.append(record.position)
         write_position_sidecar(
@@ -254,16 +259,14 @@ def _require_every_row_placed(
         )
 
 
-def _records_in_row_order(directory: Path) -> Iterator[VariantRecord]:
+def _records_in_row_order(directory: Path, n_rows: int) -> Iterator[VariantRecord]:
     """Every row of the Variant Table, in row order, read without its search indexes.
 
     Each step rewrites some of those indexes, so none of them is opened here: the
-    table is streamed, and its rows are checked against `variant_offsets.npy`.
+    table is streamed, and its rows are checked against the `n_rows` the source's
+    `variant_offsets.npy` counts (`_offset_rows`; the copy leaves the file out).
     """
-    import numpy as np
-
     table = variant_table_path(directory)
-    n_rows = len(np.load(variant_offsets_path(directory), mmap_mode="r"))
     row = -1
     for row, record in enumerate(iter_variant_records(table)):
         if record.variant_index != row:
@@ -277,6 +280,60 @@ def _records_in_row_order(directory: Path) -> Iterator[VariantRecord]:
             f"{table} has {row + 1} rows but variant_offsets.npy has {n_rows}; a table that "
             "disagrees with its offsets is not rewritten"
         )
+
+
+def _offset_rows(component: Component) -> int:
+    """How many rows the source component's `variant_offsets.npy` counts (#469).
+
+    The copy leaves the file out (`_variant_offsets_left_out`), so the steps that stream
+    the staged table check its rows against the source's offsets.
+    """
+    import numpy as np
+
+    return len(np.load(variant_offsets_path(component.path), mmap_mode="r"))
+
+
+def _variant_offsets_left_out(_component: Component) -> Iterable[str]:
+    """`variant_offsets.npy`, each row's BGZF offset, which no 0.3.0 query reads (#469)."""
+    return (VARIANT_OFFSETS_FILENAME,)
+
+
+def _check_sidecars_count_offsets(context: RewriteContext) -> None:
+    """Refuse unless each staged component's ALID and position sidecars count the rows
+    its source's `variant_offsets.npy` did, and drop the manifest's note of the file.
+
+    A 0.3.0 Store Reader never reads the Variant Table, so nothing seeks a row's BGZF
+    offset: the ALID sidecar counts the variants. The copy left the file out; this
+    checks the sidecars that replace it, after the steps that wrote them. A Dense
+    build's `provenance.dense.variant_axis.row_offsets`, which names it, goes too.
+    """
+    for component in context.components:
+        directory = context.staged / component.relative
+        n_offsets = _offset_rows(component)
+        counted = {
+            "ALID": _rows_of(AlidSidecar.open(directory)),
+            "position": _rows_of(PositionSidecar.open(directory)),
+        }
+        wrong = {name: n for name, n in counted.items() if n != n_offsets}
+        if wrong:
+            raise RewriteError(
+                f"{directory}: variant_offsets.npy counts {n_offsets} rows, but the "
+                + ", ".join(f"{name} sidecar {n}" for name, n in wrong.items())
+                + "; the offsets are not dropped while the sidecars disagree"
+            )
+        _forget_row_offsets(directory / "manifest.json")
+
+
+def _rows_of(sidecar: AlidSidecar | PositionSidecar | None) -> int | None:
+    return None if sidecar is None else sidecar.n_rows
+
+
+def _forget_row_offsets(manifest: Path) -> None:
+    """Remove `provenance.dense.variant_axis.row_offsets` from `manifest`, if it names it."""
+    data: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
+    axis = data.get("provenance", {}).get("dense", {}).get("variant_axis", {})
+    if axis.pop("row_offsets", None) is not None:
+        manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _keeps_index(component: Component) -> bool:
@@ -496,6 +553,13 @@ STEPS: tuple[RewriteStep, ...] = (
         "(ADR 0102)",
         leaves_out=_stored_p_left_out,
         refuse=_refuse_stored_p_drop,
+    ),
+    RewriteStep(
+        "variant_offsets",
+        "drop variant_offsets.npy, each row's BGZF offset in the Variant Table, which no "
+        "0.3.0 query reads: the ALID sidecar counts the variants (#469)",
+        run=_check_sidecars_count_offsets,
+        leaves_out=_variant_offsets_left_out,
     ),
 )
 

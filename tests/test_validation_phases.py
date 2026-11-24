@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from format_0_2_3 import as_0_2_3
+from format_0_2_3 import as_0_2_3, count_one_row_fewer
 from validation_bands import band_rows
 
 from opengwasdb.layouts.dense import indexed_subsets
@@ -339,19 +339,16 @@ def test_a_pass_that_runs_past_its_count_shows_the_overrun(
 
     The progress line has to keep saying `k/N` past `N` — that is how an operator sees
     the disagreement before `variant_table.rows` reports it — and the pass warns once.
+    The count is the ALID sidecar's on 0.3.0 (#469).
     """
     monkeypatch.setattr(variants, "_BLOCK_ROWS", 1)
-    offsets_path = dense_store_path / "variant_offsets.npy"
-    offsets = np.load(offsets_path)
-    assert len(offsets) > 1, "fixture is meaningful only if the table has several rows"
-    np.save(offsets_path, offsets[:-1])  # the sidecar now claims one row fewer
+    total = count_one_row_fewer(dense_store_path)  # the sidecar now claims one row fewer
 
     validate_store(dense_store_path)
 
     messages = _messages(logged)
-    total = len(offsets) - 1
     lines = _progress(messages, "scan variant_table on .")
-    assert _counts(lines) == [f"{done}/{total}" for done in range(1, len(offsets) + 1)], lines
+    assert _counts(lines) == [f"{done}/{total}" for done in range(1, total + 2)], lines
     warnings = [message for message in messages if "more than its sidecar" in message]
     assert len(warnings) == 1, warnings
 

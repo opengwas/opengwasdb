@@ -1599,8 +1599,8 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
         right_axis = handle.read()
     assert left_axis == right_axis
     np.testing.assert_array_equal(
-        np.load(reference / "variant_offsets.npy"),
-        np.load(candidate / "variant_offsets.npy"),
+        np.load(reference / "variant_alid_offsets.npy"),
+        np.load(candidate / "variant_alid_offsets.npy"),
     )
 
     left_root = open_store(reference).arrays(mode="r")

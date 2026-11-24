@@ -137,12 +137,16 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
         assert all((directory / f).exists() for f in ALID_SIDECAR_FILENAMES), directory
         assert all((directory / f).exists() for f in POSITION_SIDECAR_FILENAMES), directory
         assert not any((directory / f).exists() for f in FIXED_WIDTH), directory
+        assert not (directory / "variant_offsets.npy").exists(), directory
+        assert (source / directory.relative_to(destination) / "variant_offsets.npy").exists()
+        assert "row_offsets" not in json.dumps(manifest["provenance"].get("dense", {}))
         record = manifest["provenance"]["format_rewrite"]
         assert record["source_release_id"] != manifest["release_id"]
         assert (record["from_format_version"], record["to_format_version"]) == ("0.2.3", "0.3.0")
         assert record["steps"] == [step.name for step in rewrite.STEPS]
         assert record["steps"][:2] == ["alid_sidecar", "position_sidecar"]
         assert {"provenance_index", "tier_stored_p"} <= set(record["steps"])
+        assert record["steps"][-1] == "variant_offsets", "it checks the sidecars the others wrote"
         assert record["range_questions_not_posed"] == NOT_POSED[name]
         release_ids.add(manifest["release_id"])
     assert len(release_ids) == 1, "a Hybrid's two manifests name one release"
@@ -403,8 +407,9 @@ def test_the_step_refuses_a_table_out_of_variant_index_order(sources, tmp_path):
         return "\t".join(fields)
 
     _rewrite_table(source, first_row_names_row_1)
+    n_rows = len(np.load(source / "variant_offsets.npy"))
     with pytest.raises(RewriteError, match="row 0 has variant_index 1; a table out of order"):
-        list(rewrite._records_in_row_order(source))
+        list(rewrite._records_in_row_order(source, n_rows))
 
 
 def test_the_step_refuses_a_table_that_disagrees_with_its_offsets(sources, tmp_path):
@@ -413,8 +418,9 @@ def test_the_step_refuses_a_table_that_disagrees_with_its_offsets(sources, tmp_p
     source = Path(shutil.copytree(sources["dense_observed"], tmp_path / "source"))
     offsets = np.load(source / "variant_offsets.npy")
     np.save(source / "variant_offsets.npy", np.append(offsets, offsets[-1]))
+    n_rows = len(np.load(source / "variant_offsets.npy"))  # what the step reads: one too many
     with pytest.raises(RewriteError, match="rows but variant_offsets.npy has"):
-        list(rewrite._records_in_row_order(source))
+        list(rewrite._records_in_row_order(source, n_rows))
 
 
 def _move_the_first_row(context: rewrite.RewriteContext) -> None:
@@ -462,6 +468,47 @@ def test_the_proof_asks_the_first_variants_range_and_refuses_a_moved_row(sources
         )
     probes = [d for d in refused.value.differences if d.startswith("range_probes/")]
     assert any(d.startswith("range_probes/range_phewas/first/") for d in probes), probes
+    assert not (tmp_path / "rewritten").exists()
+
+
+
+def test_the_offsets_step_drops_the_file_and_the_manifest_note_of_it(sources, tmp_path):
+    """A Dense build of the 0.2 series named `variant_offsets.npy` in its provenance
+    (`provenance.dense.variant_axis.row_offsets`); the step drops the note with the file."""
+    source = Path(shutil.copytree(sources["dense_observed"], tmp_path / "source"))
+    manifest_path = source / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    axis = manifest["provenance"]["dense"]["variant_axis"]
+    axis["row_offsets"] = "variant_offsets.npy"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    destination = rewrite_release(source, tmp_path / "rewritten")
+
+    rewritten = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    kept = rewritten["provenance"]["dense"]["variant_axis"]
+    assert "row_offsets" not in kept
+    assert kept == {k: v for k, v in axis.items() if k != "row_offsets"}
+    assert not (destination / "variant_offsets.npy").exists()
+
+
+def _drop_last_alid(context: rewrite.RewriteContext) -> None:
+    """A step that leaves the staged root's ALID sidecar one row short."""
+    staged = context.staged
+    sidecar = AlidSidecar.open(staged)
+    assert sidecar is not None and sidecar.n_rows > 1
+    alids = sidecar.alids(np.arange(sidecar.n_rows - 1)).tolist()
+    del sidecar
+    write_alid_sidecar(staged, alids)
+
+
+def test_the_offsets_step_refuses_sidecars_that_count_other_rows(sources, tmp_path):
+    short = RewriteStep("short_alid_sidecar", "drop the last ALID", run=_drop_last_alid)
+    at = [step.name for step in rewrite.STEPS].index("position_sidecar") + 1
+    steps = (*rewrite.STEPS[:at], short, *rewrite.STEPS[at:])
+    assert steps[-1].name == "variant_offsets"
+
+    with pytest.raises(RewriteError, match=r"counts \d+ rows, but the ALID sidecar \d+"):
+        rewrite_release(sources["ragged_observed"], tmp_path / "rewritten", steps=steps)
     assert not (tmp_path / "rewritten").exists()
 
 

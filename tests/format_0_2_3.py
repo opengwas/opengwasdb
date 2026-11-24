@@ -3,9 +3,10 @@
 From #467 every build and completion writes format 0.3.0. The 0.2 series is still
 read, and `ogdb rewrite-release` turns a 0.2.3 release into a 0.3.0 one, so the tests
 need 0.2.3 releases. A 0.3.0 release differs from the 0.2.3 one the same build would
-have written in three things: it carries the variable-length ALID sidecar where 0.2.3
+have written in four things: it carries the variable-length ALID sidecar where 0.2.3
 carried the fixed-width pair (#467, ADR 0105), the position sidecar 0.2.3 did not carry
-(#468), and it drops what nothing but the validator read (#471, ADR 0102). `as_0_2_3`
+(#468), no `variant_offsets.npy`, which 0.2.3 carried (#469), and it drops what nothing
+but the validator read (#471, ADR 0102). `as_0_2_3`
 undoes exactly that, in every component of a release (a Hybrid's nested Dense
 Component included):
 
@@ -13,6 +14,13 @@ Component included):
 - `variant_alid_bytes.npy`/`variant_alid_rows.npy` are written by
   `write_fixed_width_alid_index`, a copy of what `write_variant_axis` wrote at
   `e93fba8f` -- the only other writer of the pair, and only ever in tests;
+- `variant_offsets.npy` is written by `write_variant_offsets`, each row's BGZF virtual
+  offset as a read of the table finds it. The writer at `e93fba8f` took them while
+  writing; the two agree on a table of one BGZF block, as every fixture's is, and on a
+  longer one may name a block boundary by either side of it, which seeks the same row;
+- a Dense build's `provenance.dense.variant_axis.row_offsets` is not restored, nor is
+  the `row_offsets` the old Dense builder put in the `dense` blob (the restored blob
+  holds the layout keys only): no reader or rule reads either;
 - `index.sqlite` and the tiers' `abs_z` and `p_value` come back
   (`with_0_2_derived_components`, as the builders before #471 wrote them);
 - each manifest's `format_version` is re-spelt `0.2.3`, byte for byte otherwise.
@@ -36,7 +44,11 @@ from opengwasdb import top_hits
 from opengwasdb.index.sqlite import initialise_schema, set_metadata
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store_reader.alid import ALID_DTYPE, is_indexable_alid
-from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES, AlidSidecar
+from opengwasdb.store_reader.alid_sidecar import (
+    ALID_SIDECAR_FILENAMES,
+    AlidSidecar,
+    write_alid_sidecar,
+)
 from opengwasdb.store_reader.format import UnsupportedFormatVersion, carries_alid_sidecar
 from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path, variant_alid_rows_path
@@ -52,6 +64,23 @@ def write_fixed_width_alid_index(directory: Path, alids: list[str]) -> None:
     np.save(variant_alid_rows_path(directory), row_indices[sort_order])
 
 
+def write_variant_offsets(directory: Path) -> None:
+    """`variant_offsets.npy`: each row's BGZF virtual offset in `directory`'s Variant
+    Table, header lines skipped, as the 0.2 series carries it."""
+    import pysam
+
+    offsets: list[int] = []
+    with pysam.BGZFile(str(directory / "variants.tsv.gz"), "r", None) as handle:
+        while True:
+            at = int(handle.tell())
+            line = handle.readline()
+            if not line:
+                break
+            if not line.startswith(b"#"):
+                offsets.append(at)
+    np.save(directory / "variant_offsets.npy", np.asarray(offsets, dtype=np.uint64))
+
+
 def with_0_2_derived_components(directory: Path) -> None:
     """Give a 0.3.0 component back what the 0.2 builders also wrote and 0.3.0 drops
     (ADR 0102, #471), as the builders before #471 wrote it:
@@ -62,6 +91,7 @@ def with_0_2_derived_components(directory: Path) -> None:
       its manifest records -- and an empty `variant_aliases`, as every real release
       measured held (ADR 0102 §1). An existing index (a completion's, holding
       `completion_quality`) keeps that table.
+    - `variant_offsets.npy` (#469), where it is not there yet (`write_variant_offsets`);
     - each tier's `abs_z` (|z|, `float32`) and `p_value` (`erfc(|z| / sqrt 2)`,
       `float64`), as `opengwasdb.top_hits._write_tier` wrote them, through the
       package's one 0.2 writer of the pair (`top_hits.write_stored_p`).
@@ -70,6 +100,8 @@ def with_0_2_derived_components(directory: Path) -> None:
     gave a component these before re-laying it out (`legacy_fixtures`) keeps them.
     """
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    if not (directory / "variant_offsets.npy").exists():  # 0.3.0 drops it too (#469)
+        write_variant_offsets(directory)
     _with_0_2_index(directory, manifest)
     _with_stored_p(directory / "data.zarr")
 
@@ -120,8 +152,9 @@ def components(release: Path) -> list[Path]:
 
 
 def with_fixed_width_alid_index(directory: Path) -> None:
-    """Replace `directory`'s sidecars by the fixed-width pair a 0.2 release carries: the
-    ALID sidecar's files give way to the pair, and the position sidecar's are deleted."""
+    """Replace `directory`'s sidecars by the files a 0.2 release carries: the ALID
+    sidecar's files give way to the fixed-width pair, the position sidecar's are deleted,
+    and `variant_offsets.npy` is written (`write_variant_offsets`)."""
     sidecar = AlidSidecar.open(directory)
     assert sidecar is not None, f"{directory} has no ALID sidecar: not a 0.3.0 build"
     alids = sidecar.alids(np.arange(sidecar.n_rows)).tolist()
@@ -131,6 +164,7 @@ def with_fixed_width_alid_index(directory: Path) -> None:
     for name in POSITION_SIDECAR_FILENAMES:
         (directory / name).unlink()
     write_fixed_width_alid_index(directory, alids)
+    write_variant_offsets(directory)
 
 
 def follow_stamp(directory: Path) -> None:
@@ -153,6 +187,27 @@ def _sidecar_version(version: str) -> bool:
         return carries_alid_sidecar(version)
     except UnsupportedFormatVersion:
         return False
+
+
+def count_one_row_fewer(directory: Path) -> int:
+    """Make what counts `directory`'s variants claim one row fewer than its table holds,
+    and return the count it now claims: `variant_offsets.npy` on a 0.2 release, the ALID
+    sidecar on 0.3.0, which counts them there (#469)."""
+    offsets_path = directory / "variant_offsets.npy"
+    version = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))[
+        "format_version"
+    ]
+    if not _sidecar_version(version):
+        offsets = np.load(offsets_path)
+        assert len(offsets) >= 2, "the release must have a row to drop"
+        np.save(offsets_path, offsets[:-1])
+        return len(offsets) - 1
+    sidecar = AlidSidecar.open(directory)
+    assert sidecar is not None and sidecar.n_rows >= 2, "the release must have a row to drop"
+    alids = sidecar.alids(np.arange(sidecar.n_rows - 1)).tolist()
+    del sidecar
+    write_alid_sidecar(directory, alids)
+    return len(alids)
 
 
 def as_0_2_3(release: Path) -> Path:

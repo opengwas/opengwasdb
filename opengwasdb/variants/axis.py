@@ -16,7 +16,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
-import pysam
 
 from opengwasdb.store_reader import variant_axis as reader_axis
 from opengwasdb.store_reader.alid import (
@@ -35,7 +34,6 @@ from opengwasdb.store_reader.position_sidecar import write_position_sidecar
 from opengwasdb.store_reader.variant_axis import variant_alid_bytes_path as variant_alid_bytes_path
 from opengwasdb.store_reader.variant_axis import variant_alid_rows_path as variant_alid_rows_path
 from opengwasdb.store_reader.variant_axis import (
-    variant_offsets_path,
     variant_rsid_bytes_path,
     variant_rsid_rows_path,
 )
@@ -120,9 +118,9 @@ def write_variant_axis(
     source_alids: Sequence[str | None] | None = None,
 ) -> None:
     """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
-    row offsets, the ALID sidecar (`opengwasdb.store_reader.alid_sidecar`), the position
-    sidecar (`opengwasdb.store_reader.position_sidecar`) and the rsid index: the axis's
-    one writer, which every build and completion path calls, a Hybrid's nested Dense
+    ALID sidecar (`opengwasdb.store_reader.alid_sidecar`), the position sidecar
+    (`opengwasdb.store_reader.position_sidecar`) and the rsid index: the axis's one
+    writer, which every build and completion path calls, a Hybrid's nested Dense
     Component included. Each sidecar's own one writer is its codec's
     (`write_alid_sidecar`, `write_position_sidecar`), which this calls and the rewrite
     to 0.3.0 calls directly.
@@ -139,6 +137,10 @@ def write_variant_axis(
             f"source_alids has {len(source_alids)} entries but there are {len(variants)} variants"
         )
     store = Path(store_path)
+    # Before any file is written: a 0.3.0 Store Reader names a row's rsID from the rsID
+    # index alone (#469), so an rsID the index cannot hold would be lost from every
+    # answer while the table still showed it.
+    _refuse_unindexable_rsids(variants, rsid_by_alid)
     _write_table(store, variants, rsid_by_alid, source_alids)
     # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
     # however long, by row and by search. The 0.2 series' fixed-width pair
@@ -163,13 +165,18 @@ def _write_table(
     rsid_by_alid: Mapping[str, str],
     source_alids: Sequence[str | None] | None,
 ) -> None:
-    """`variants.tsv.gz`, its row offsets (`variant_offsets.npy`) and its tabix index."""
+    """`variants.tsv.gz` and its tabix index, both written with htslib.
+
+    From format 0.3.0 no query reads either (#469): they are a convenience restating the
+    sidecars, for tabix, bedtools and R (spec §1.1). The 0.2 series' `variant_offsets.npy`,
+    each row's BGZF offset, is not written.
+    """
+    import pysam  # on use: importing the axis module, as every query does, loads no htslib
+
     table_path = variant_table_path(store)
-    offsets: list[int] = []
     with pysam.BGZFile(str(table_path), "w") as handle:  # type: ignore[call-arg]
         handle.write(VARIANT_HEADER.encode("utf-8"))
         for variant_index, variant in enumerate(variants):
-            offsets.append(int(handle.tell()))
             rsid = rsid_by_alid.get(variant.alid) or "."
             source_alid = (source_alids[variant_index] if source_alids is not None else None) or "."
             line = (
@@ -178,7 +185,6 @@ def _write_table(
                 f"{source_alid}\n"
             )
             handle.write(line.encode("utf-8"))
-    np.save(variant_offsets_path(store), np.asarray(offsets, dtype=np.uint64))
     pysam.tabix_index(
         str(table_path),
         seq_col=0,
@@ -188,6 +194,35 @@ def _write_table(
         zerobased=False,
         force=True,
     )
+
+
+class UnindexableRsidError(ValueError):
+    """A variant's rsID is too wide for the rsID index, which names a 0.3.0 row's rsID."""
+
+
+def _refuse_unindexable_rsids(
+    variants: list[CanonicalVariant], rsid_by_alid: Mapping[str, str]
+) -> None:
+    """Refuse a variant whose rsID the rsID index cannot hold (`is_indexable_rsid`).
+
+    The 0.2 series left such an rsID out of the index and kept it in the table, so it
+    was shown but not found by name. From 0.3.0 the Store Reader names every row's rsID
+    from the index (#469), so it would be shown nowhere, while the table kept it: a
+    wrong answer that looks right. None of the four releases measured holds one
+    (OGS-00003, -00004, -00007, -00025: 41,789,333 named rows, all `rs` and digits).
+    """
+    wide = [
+        (variant.alid, rsid)
+        for variant in variants
+        if (rsid := rsid_by_alid.get(variant.alid)) and not is_indexable_rsid(rsid)
+    ]
+    if wide:
+        alid, rsid = wide[0]
+        raise UnindexableRsidError(
+            f"{len(wide)} variant(s) name an rsID wider than the rsID index's {RSID_WIDTH} "
+            f"bytes, which a 0.3.0 release cannot name a row by; first, {alid} named "
+            f"{rsid!r}. Shorten or drop such names at the source"
+        )
 
 
 def _write_rsid_index(
@@ -202,8 +237,9 @@ def _write_rsid_index(
     real "no association." Deriving the index from the same `rsid_by_alid`
     the table rows are written from makes the two impossible to disagree.
 
-    Rows whose rsid does not fit `RSID_WIDTH` are left out rather than stored
-    truncated, which would make them resolve *another* variant's lookup.
+    An rsid that does not fit `RSID_WIDTH` is never stored truncated, which would make
+    it resolve *another* variant's lookup; `write_variant_axis` refuses one before this
+    runs (`_refuse_unindexable_rsids`).
 
     Rows with no rsid are omitted, so a store whose source carries none writes
     a pair of empty arrays -- present but matching nothing, which is the
@@ -212,23 +248,11 @@ def _write_rsid_index(
     several rows one rsid can name (multi-allelic site, or one position stored
     under both allele orders) come back in ascending variant_index.
     """
-    rows = []
-    n_too_long = 0
-    for index, variant in enumerate(variants):
-        rsid = rsid_by_alid.get(variant.alid)
-        if not rsid:
-            continue
-        if not is_indexable_rsid(rsid):
-            n_too_long += 1
-            continue
-        rows.append((rsid, index))
-    if n_too_long:
-        log.warning(
-            "%d variant identifier(s) longer than %d bytes left out of the rsid index: "
-            "they are not resolvable by name in this store",
-            n_too_long,
-            RSID_WIDTH,
-        )
+    rows = [
+        (rsid, index)
+        for index, variant in enumerate(variants)
+        if (rsid := rsid_by_alid.get(variant.alid))
+    ]
     rsid_bytes = np.array([rsid for rsid, _ in rows], dtype=RSID_DTYPE)
     rsid_rows = np.array([index for _, index in rows], dtype="int32")
     order = np.argsort(rsid_bytes, kind="stable")

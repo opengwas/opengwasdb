@@ -178,6 +178,13 @@ version: `variant_position.npy`, `variant_position_chromosomes.npy` and
 answers by tabix as before. A 0.3.0 release written on the integration branch before
 #468 lacks them and is refused by name: rebuild or rewrite it.
 
+**#469 takes the Variant Table off 0.3.0's read path (ADR 0105 §7)**, in the same
+unreleased version. A 0.3.0 release no longer carries `variant_offsets.npy`, and its
+queries never read `variants.tsv.gz`: the sidecars answer `variants_table()` and a
+resolved row's rsID. A 0.3.0 release written on the integration branch before #469
+carries the offsets and fails `envelope.closed`: rebuild it, or delete the file. A 0.2
+release is read as before.
+
 **#471 drops from 0.3.0 what nothing read, or only the validator read and recomputes
 (ADR 0102).** `index.sqlite` holds only `completion_quality`, so an Observed-Only 0.3.0
 release, and a Hybrid's outer release, carries none; its `metadata` table and
