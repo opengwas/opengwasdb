@@ -11,11 +11,12 @@
   1,098,940,214 B, and on OGS-00011 as completed (14,267,257 panel rows) to
   1,175,803,588 B; a 0.3.0 component that kept its copy would carry 1,265,761,783 B and
   1,347,866,437 B. Both were rewritten read only with the version refusal bypassed
-  (neither is 0.2.3). OGS-00004's proof matched on every question; its copy then failed
-  `subsets.indexed` on its `hm3` subset, which the rewrite now carries over (below).
-  OGS-00011's comparison left out the one broad `range_phewas`, too large for it, and
-  changed no answer on the rest. The closed envelope fails a 0.3.0 Dense Component
-  carrying any of the dropped files.
+  (neither is 0.2.3). OGS-00004, with its `hm3` Indexed Variant Subset, was rewritten
+  with this package: the proof matched on every question, the subset's 16 included, and
+  the whole validator passed the copy but for the `n_missing_se_out_of_range` column a
+  0.2.2 source lacks. OGS-00011's comparison, both sides read by this package, left out
+  the one broad `range_phewas`, too large for it, and changed no answer on the rest. The
+  closed envelope fails a 0.3.0 Dense Component carrying any of the dropped files.
 - **The Dense Component's variants are the shared axis's, through `dense_to_shared`.**
   Opened as a release, its `variant_axis()` is the shared axis in its panel rows
   (`opengwasdb.store_reader.panel_axis.PanelVariantAxis`), and its `analyses_path` is
@@ -28,8 +29,11 @@
   Dense Component is now read through the shared Variant Axis and the shared Analyses,
   never its own copy, because a completed 0.2 Hybrid's copy lost rsIDs and every
   `source_alid` the shared table keeps (#481). `range_phewas` was the last query still
-  reading the copy, by position, which the copy had kept; `phewas` and `lookup` had read
-  the shared axis since #465. No answer changed on OGS-00004 or OGS-00011.
+  reading the copy, by position; `phewas` and `lookup` had read the shared axis since
+  #465. What shows the old read path gives the same answers: the golden digests of the
+  two Hybrid fixtures, pinned by the reader before #472, are unchanged; and on OGS-00004
+  the package before #472 reading the 0.2.2 source and this one reading the rewritten
+  0.3.0 copy agreed on all 142 questions, both `range_phewas` included, and every probe.
 - **The Dense Component's own `n_missing_se_out_of_range` is gone with
   `dense/analyses.tsv`.** The Hybrid's `analyses.tsv` counts both components, as it did;
   the Dense Component's own count is no longer recorded anywhere. What its completion left
