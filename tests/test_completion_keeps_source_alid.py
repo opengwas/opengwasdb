@@ -88,6 +88,22 @@ def _strand_source_alids() -> dict[str, str]:
     return {row[5]: canonical_alid(row[1], row[2], row[3], row[4]) for row in STRAND_ROWS}
 
 
+def _besd_source_alids(tb) -> dict[str, str]:
+    """The hg38 ALID of each BESD strand-fixture variant, and the ALID its own hg19
+    coordinate spells."""
+    from opengwasdb.variants.normalise import orient_to_canonical
+
+    return {
+        alid: orient_to_canonical(
+            snp["chr"], snp["bp"], snp["a1"], snp["a2"], other_is_reference=False
+        ).variant.alid
+        for alid, snp in (
+            (tb._REVERSE_SNP_HG38_ALID, tb._REVERSE_SNP),
+            (tb._FORWARD_SNP_HG38_ALID, tb._FORWARD_SNP),
+        )
+    }
+
+
 def _strand_panel(root: Path) -> Path:
     """Panel blocks over the three lifted variants and one new variant on each of chr2, chr3."""
     from ld_blocks import write_ld_block
@@ -155,17 +171,7 @@ def test_a_lifted_ragged_source_keeps_its_source_alid_through_completion(tmp_pat
         observed, completed, _strand_panel(tmp_path / "panel"),
         ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
     )
-    from opengwasdb.variants.normalise import orient_to_canonical
-
-    alids = {
-        alid: orient_to_canonical(
-            snp["chr"], snp["bp"], snp["a1"], snp["a2"], other_is_reference=False
-        ).variant.alid
-        for alid, snp in (
-            (tb._REVERSE_SNP_HG38_ALID, tb._REVERSE_SNP),
-            (tb._FORWARD_SNP_HG38_ALID, tb._FORWARD_SNP),
-        )
-    }
+    alids = _besd_source_alids(tb)
     assert_lifted_provenance_kept(observed, completed, alids)
 
 
@@ -441,7 +447,6 @@ def test_a_lifted_besd_build_records_each_rows_pre_lift_alid(tmp_path: Path) -> 
     import test_ragged_build_besd as tb
     from liftover_fixtures import write_two_strand_chain
 
-    from opengwasdb.variants.normalise import orient_to_canonical
 
     chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
     prefix = tb._write_strand_fixture(tmp_path)
@@ -454,15 +459,7 @@ def test_a_lifted_besd_build_records_each_rows_pre_lift_alid(tmp_path: Path) -> 
         variant_reference=reference, association_coverage="cis_and_signals",
     )
     got = {r.alid: r.source_alid for r in _records(out)}
-    expected = {
-        alid: orient_to_canonical(
-            snp["chr"], snp["bp"], snp["a1"], snp["a2"], other_is_reference=False
-        ).variant.alid
-        for alid, snp in (
-            (tb._REVERSE_SNP_HG38_ALID, tb._REVERSE_SNP),
-            (tb._FORWARD_SNP_HG38_ALID, tb._FORWARD_SNP),
-        )
-    }
+    expected = _besd_source_alids(tb)
     assert got == expected
     assert any(a != s for a, s in expected.items()), "nothing moved: the fixture proves nothing"
 
