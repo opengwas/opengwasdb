@@ -81,7 +81,7 @@ import pandas as pd
 
 import opengwasdb.readers.columnar as columnar
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.model.imputation_score import GWAS_SSF_CAPABILITY
+from opengwasdb.model.imputation_score import GWAS_SSF_CAPABILITY as GWAS_SSF_CAPABILITY
 from opengwasdb.readers.effect_source import (
     EffectSource,
     EffectSourceKind,

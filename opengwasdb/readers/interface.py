@@ -40,7 +40,10 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.model.imputation_score import ImputationScoreDeclaration, ImputationScoreKind
+from opengwasdb.model.imputation_score import (
+    ImputationScoreDeclaration as ImputationScoreDeclaration,
+)
+from opengwasdb.model.imputation_score import ImputationScoreKind as ImputationScoreKind
 from opengwasdb.stats import FrequencyTally
 from opengwasdb.variants.normalise import IdentityFaults
 
