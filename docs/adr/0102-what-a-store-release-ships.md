@@ -349,6 +349,11 @@ The duplication is removed (#472). What the rewrite command must do because of i
   - records how many Dense Component values it superseded (#481: the rsID of 850,273 rows and the
     `source_alid` of 14,267,080 on OGS-00011).
 
+    > **24 Nov 2026 (#472).** The rewrite records no such count. It compares only the ALIDs
+    > of the two copies (`misnamed_panel_rows`) and drops the Dense copy whole; the counts
+    > above were measured once, by #463's audit and #472's check
+    > (`scratch/472/rsid_481_check.py`), and are in ADR 0105's #472 section.
+
   An rsID `lookup` of those 850,273 on-panel variants then finds their cells. That is a fix, so on
   OGS-00011 the digest check of #467's rewrite command must expect those rsID lookups to change.
   It must not treat the change as a regression, and it must not drop those identifiers from the

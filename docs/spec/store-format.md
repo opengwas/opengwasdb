@@ -1864,6 +1864,16 @@ existed records neither and is read as `0` (ADR 0065). On a Hybrid release the
 the nested Dense Component, the self-contained release the index physically
 belongs to and the one the read seam validates it against.
 
+*24 Nov 2026 (#472).* `ogdb rewrite-release` carries a subset to the release it
+derives (§21.4, [ADR 0105](../adr/0105-format-0-3-0-variable-length-alid-sidecar.md)).
+It changes no Store Variant Index and no stored code, so the subset holds the same
+cells; it writes the new release's `release_id` into `source_release_id` and its
+`format_version` into `source_format_version`, and keeps every other attribute. So
+after a rewrite `builder_version` and `created_at` still describe the subset's
+original build, not the rewrite, and `source_release_id` names a release the subset
+was not built from. `subsets.indexed` then compares every decoded cell with the
+release's primary planes, and a subset already stale on the source is refused.
+
 A regenerated `overview.html` lists every published subset: the name, the
 requested/resolved/absent/Overflow-only counts, the input checksum, the
 Reference Assembly and
