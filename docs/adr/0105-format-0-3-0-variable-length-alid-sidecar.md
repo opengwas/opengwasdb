@@ -607,6 +607,22 @@ strictly ascending, and holding that row's ALID. It does not compare the copies'
 shared table, which every query already reads, kept them. The proof needs no new question:
 every question it asks of a Hybrid now reaches the Dense Component through the map.
 
+**Indexed Variant Subsets** (fix round 1). A subset records the release it was built
+from, its `source_release_id` and `source_format_version`, so that a reader refuses one
+built from another release (ADR 0061). The rewrite mints a new `release_id` and
+version, so a subset copied unchanged was stale: OGS-00004's `hm3` failed
+`subsets.indexed`, and the live OGS-00011's would have failed after its proof. ADR 0061
+makes a subset a non-authoritative derived artifact, rebuildable from the release and the
+variant list. The rewrite changes no Store Variant Index and no stored code, so the subset
+holds the same cells of the new release, and its step `indexed_subsets` renames it rather
+than rebuilding it: it writes the two attributes (`restamp_indexed_subsets`) and keeps
+the rest. It refuses a source whose subset already names another release, and never
+freshens a stale one. The proof now asks each subset the spread Analyses, Observed-Only
+and not, on both sides, and `subsets.indexed`, which compares every decoded cell of the
+subset with the primary planes, judges the result. Rebuilding was the alternative; it
+costs a full build of each subset (956 s for `hm3` on the completed OGS-00011) and
+proves nothing the comparison does not.
+
 **Validation.** The `variant_table.*` rules do not judge a 0.3.0 Dense Component: it has no
 table. `hybrid.dense_to_shared` judges the map against the shared axis (in range, strictly
 ascending, no row twice, each by its own finding); `hybrid.coverage` against the Dense side,

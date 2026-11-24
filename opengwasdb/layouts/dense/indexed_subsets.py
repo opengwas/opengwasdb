@@ -1439,6 +1439,52 @@ def list_indexed_subsets(store_path: str | Path) -> tuple[str, ...]:
     )
 
 
+def subset_identity_mismatches(store_path: str | Path) -> list[str]:
+    """Every way a published subset of `store_path` does not name the release it sits in
+    (`_source_identity_mismatches`, the rule `subsets.indexed` and the reader apply).
+
+    `store_path` is a Dense release, or a Hybrid's Dense Component, which holds its own
+    subsets."""
+    path = Path(store_path)
+    manifest = StoreManifest.load(path)
+    found: list[str] = []
+    for name in list_indexed_subsets(path):
+        attrs = dict(release_arrays(path)[INDEXED_SUBSETS_GROUP][name].attrs)
+        found.extend(_source_identity_mismatches(name, attrs, manifest))
+    return found
+
+
+def restamp_indexed_subsets(
+    store_path: str | Path, *, release_id: str, format_version: str
+) -> tuple[str, ...]:
+    """Record a derived release's identity in each subset it carries unchanged; return
+    their names.
+
+    A subset is a non-authoritative derived artifact that records the release it was
+    built from, so a reader can refuse one built from another (ADR 0061). A derived
+    release that changes neither the Store Variant Indices nor a stored code -- the
+    0.3.0 rewrite (#467-#472) -- holds the same subset of the same cells, so the subset
+    is renamed to it, not rebuilt: its `source_release_id` and `source_format_version`
+    become the new release's. Everything else it records is kept. Nothing proves here
+    that the cells are unchanged; the caller's proof and `subsets.indexed`, which
+    compares every decoded cell with the primary planes, do.
+    """
+    path = Path(store_path)
+    names = list_indexed_subsets(path)
+    for name in names:
+        # Opened to add to it, in the Zarr format the release's version is stored in;
+        # one under a consolidated-metadata record is refused, as every write is.
+        group = store_arrays.open_group_for_write(
+            indexed_subset_namespace_path(path) / name,
+            "a",
+            zarr_format=zarr_format_for_version(format_version),
+        )
+        group.attrs.update(
+            {ATTR_SOURCE_RELEASE_ID: release_id, ATTR_SOURCE_FORMAT_VERSION: format_version}
+        )
+    return names
+
+
 # ── Validation seam ─────────────────────────────────────────────────────────
 
 

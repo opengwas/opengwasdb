@@ -626,3 +626,69 @@ def test_a_completed_source_without_completion_quality_is_refused(sources, tmp_p
     with pytest.raises(RewriteError, match="has no completion_quality table"):
         rewrite_release(source, tmp_path / "rewritten")
     assert not (tmp_path / "rewritten").exists()
+
+
+# ── Indexed Variant Subsets (#472 fix round 1) ───────────────────────────────
+
+
+def _with_subset(source: Path, tmp_path: Path) -> Path:
+    """Build the subset `hm3` on the 0.2.3 `source`, over three of its Dense rows, and
+    return the subset group; the source must validate with it."""
+    from opengwasdb.layouts.dense.indexed_subsets import (
+        build_indexed_subset,
+        indexed_subset_namespace_path,
+    )
+    from opengwasdb.store.open import open_store
+
+    holder = source / "dense" if (source / "dense" / "manifest.json").exists() else source
+    axis = open_store(holder).variant_axis(aliases=False)
+    try:
+        alids = [record.alid for record in axis.all()][:3]
+    finally:
+        axis.close()
+    listed = tmp_path / "hm3.txt"
+    listed.write_text("\n".join(alids) + "\n", encoding="utf-8")
+    build_indexed_subset(
+        source, "hm3", listed,
+        reference_assembly=open_store(source).manifest.reference_assembly,
+    )
+    result = validate_store(source)
+    assert result.ok, result.errors
+    return indexed_subset_namespace_path(source) / "hm3"
+
+
+@pytest.mark.parametrize("name", ["dense_completed", "hybrid_observed"])
+def test_a_rewrite_carries_an_indexed_variant_subset_to_the_new_release(
+    sources, tmp_path, name
+):
+    """The rewrite renames each subset to the new release and proves it answers as on
+    its source; the published release passes the whole validator, `subsets.indexed`
+    and its comparison of every decoded cell included."""
+    import zarr
+
+    source = _source_copy(sources, tmp_path, name)
+    _with_subset(source, tmp_path)
+    reference = release_digests(source)
+    assert reference["indexed_subsets"], "the proof asks the subset questions"
+
+    destination = rewrite_release(source, tmp_path / "rewritten")
+
+    result = validate_store(destination)
+    assert result.ok, result.errors
+    holder = destination / "dense" if name.startswith("hybrid") else destination
+    manifest = json.loads((holder / "manifest.json").read_text(encoding="utf-8"))
+    attrs = dict(zarr.open_group(str(holder / "data.zarr" / "indexed_subsets" / "hm3")).attrs)
+    assert attrs["source_release_id"] == manifest["release_id"]
+    assert attrs["source_format_version"] == "0.3.0"
+    assert release_digests(destination)["indexed_subsets"] == reference["indexed_subsets"]
+
+
+def test_a_stale_indexed_variant_subset_is_refused_not_freshened(sources, tmp_path):
+    import zarr
+
+    source = _source_copy(sources, tmp_path, "dense_observed")
+    group = zarr.open_group(str(_with_subset(source, tmp_path)), mode="r+")
+    group.attrs["source_release_id"] = "another-release"
+    with pytest.raises(RewriteError, match="stale Indexed Variant Subset"):
+        rewrite_release(source, tmp_path / "rewritten")
+    assert not (tmp_path / "rewritten").exists()

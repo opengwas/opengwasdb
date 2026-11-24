@@ -47,6 +47,10 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.index.release_index import ReleaseIndex
+from opengwasdb.layouts.dense.indexed_subsets import (
+    restamp_indexed_subsets,
+    subset_identity_mismatches,
+)
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.convert import (
@@ -151,6 +155,8 @@ class RewriteContext:
     source: Path
     staged: Path
     components: tuple[Component, ...]
+    #: The rewritten release's `release_id`, which `_stamp` writes into every manifest.
+    release_id: str = ""
 
     def staged_components(self) -> Iterator[Path]:
         for component in self.components:
@@ -650,6 +656,43 @@ def _dense_copies_left_out(component: Component) -> Iterable[str]:
     return sorted(name for name in names if (component.path / name).exists())
 
 
+def _subset_holder(component: Component) -> bool:
+    """Whether the component holds Indexed Variant Subsets: a Dense release, or a
+    Hybrid's Dense Component (a Hybrid's outer release keeps none of its own)."""
+    return component.store.manifest.primary_layout is PrimaryStorageLayout.DENSE
+
+
+def _refuse_stale_subsets(component: Component) -> None:
+    """Refuse a source carrying a subset that already does not name it: the rewrite
+    renames a subset that belongs to its source, and never freshens a stale one."""
+    if not _subset_holder(component):
+        return
+    stale = subset_identity_mismatches(component.path)
+    if stale:
+        raise RewriteError(
+            f"{component.path}: {'; '.join(stale)}; a stale Indexed Variant Subset is "
+            "rebuilt or removed before the release is rewritten"
+        )
+
+
+def _restamp_subsets(context: RewriteContext) -> None:
+    """Point each Indexed Variant Subset at the rewritten release (ADR 0061).
+
+    The rewrite changes no Store Variant Index and no stored code, so a subset holds
+    the same cells of the rewritten release as of its source; it records its parent's
+    `release_id` and `format_version`, and those are what change. The proof asks each
+    subset the spread Analyses on both sides, and `subsets.indexed` then compares every
+    decoded cell of it with the primary planes.
+    """
+    for component in context.components:
+        if _subset_holder(component):
+            restamp_indexed_subsets(
+                context.staged / component.relative,
+                release_id=context.release_id,
+                format_version=TARGET_FORMAT_VERSION,
+            )
+
+
 #: The rewrite's steps, in the order they run (`RewriteStep`). #468-#472 each add one.
 STEPS: tuple[RewriteStep, ...] = (
     RewriteStep(
@@ -680,6 +723,13 @@ STEPS: tuple[RewriteStep, ...] = (
         "(ADR 0102)",
         leaves_out=_stored_p_left_out,
         refuse=_refuse_stored_p_drop,
+    ),
+    RewriteStep(
+        "indexed_subsets",
+        "record the rewritten release's release_id and format_version in each Indexed "
+        "Variant Subset, which holds the same cells of it as of its source (ADR 0061)",
+        run=_restamp_subsets,
+        refuse=_refuse_stale_subsets,
     ),
     RewriteStep(
         "dense_shared_axis",
@@ -719,13 +769,17 @@ def rewrite_release(
     _log_phase(
         f"asked the source {len(reference['shapes'])} questions, "
         f"{len(reference['alid_probes'])} ALID probes, "
-        f"{len(reference['range_probes'])} range probes and "
+        f"{len(reference['range_probes'])} range probes, "
+        f"{len(reference['indexed_subsets'])} Indexed Variant Subset questions and "
         f"{len(reference['misses'])} rsID misses; "
         + _unposed_said(reference["unposed_range_questions"]),
         started,
     )
     with OpenGWASDBStore.staging(destination) as staged:
-        context = RewriteContext(source=source, staged=staged.path, components=components)
+        release_id = str(uuid.uuid4())
+        context = RewriteContext(
+            source=source, staged=staged.path, components=components, release_id=release_id
+        )
         started = time.perf_counter()
         left_out = _left_out(components, steps)
         _copy_release(source, staged.path, left_out)
@@ -738,7 +792,7 @@ def rewrite_release(
         _stamp(
             context,
             steps,
-            release_id=str(uuid.uuid4()),
+            release_id=release_id,
             now=datetime.now(UTC).isoformat(),
             unposed=reference["unposed_range_questions"],
         )

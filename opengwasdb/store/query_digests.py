@@ -391,6 +391,27 @@ def _miss_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict
     return out
 
 
+def _subset_digests(q: Any, path: str | Path) -> dict[str, dict[str, str]]:
+    """Each Indexed Variant Subset's answer for the spread Analyses, Observed-Only and
+    not (ADR 0061): a subset records its parent release, so a derived release that
+    carries it on must answer through it as its source did. None for a release that
+    carries none, so the golden pins keep their shapes."""
+    from opengwasdb.layouts.dense.indexed_subsets import list_indexed_subsets
+
+    names = list_indexed_subsets(path)
+    if not names:
+        return {}
+    ids = _spread([row["analysis_id"] for _, row in sorted(q.analyses_table().items())],
+                  N_ANALYSES_ASKED)
+    out: dict[str, dict[str, str]] = {}
+    for name in names:
+        for analysis_id in ids:
+            for observed_only, flag in ((False, "all"), (True, "observed_only")):
+                result = q.analysis(analysis_id, observed_only=observed_only, indexed_subset=name)
+                out[f"{name}/{analysis_id}/{flag}"] = result_digests(dict(result))
+    return out
+
+
 def release_digests(path: str | Path) -> dict[str, Any]:
     """Every answer the release at `path` gives, digested; `log10_p` per resolved shape."""
     from opengwasdb.query import query_store
@@ -411,6 +432,7 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
         out["alid_probes"] = _probe_digests(q, variants)
+        out["indexed_subsets"] = _subset_digests(q, path)
         out["misses"] = _miss_digests(q, variants)
         asked = range_questions(variants)
         out["range_probes"] = _range_digests(q, asked)
@@ -431,6 +453,11 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
     for section in ("shapes", "resolved", "alid_probes", "range_probes", "misses"):
         found += _shape_differences(section, reference[section], candidate[section])
+    found += _shape_differences(
+        "indexed_subsets",
+        reference.get("indexed_subsets", {}),
+        candidate.get("indexed_subsets", {}),
+    )
     return found + _log10_p_differences(reference["log10_p"], candidate["log10_p"])
 
 
