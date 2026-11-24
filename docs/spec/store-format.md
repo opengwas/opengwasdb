@@ -3270,7 +3270,18 @@ the manifest's rows in order.
   association with the Store after that standardisation, reads a source as the
   build does (a row the build dropped as malformed is not a failure), and
   reports `fidelity.source` for a bare association TSV, which names no Analysis,
-  or a manifest with no rows.
+  or a manifest with no rows. A source on another assembly has its samples
+  lifted through the build's own lift, whatever the join finds, because only
+  the chain says which of them a reverse-strand block re-oriented: such a
+  sample's z is compared negated, as the build stored it (§5, #284, #486). The
+  chain is the one the release records in `provenance.chain_file` (and
+  `provenance.chain_sha256`, where recorded): a given chain with another label
+  or other bytes is refused, and with none given the recorded one is used if it
+  is pyliftover's built-in hg19→hg38 chain or a file on disk at the recorded
+  path (matching its sha256, where recorded); otherwise the check is refused,
+  naming the recorded chain and asking for one. A sample the release holds by
+  `source_alid` where that chain places it nowhere, or on another row, fails
+  the check, naming the chain.
 
 ## 21. Compatibility
 
