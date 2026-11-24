@@ -79,18 +79,23 @@ def _given_chain(given: Path, recorded: object, recorded_sha: object) -> Fidelit
     """``given``, unless it contradicts the recorded chain."""
     if not given.is_file():
         raise ChainRefused(f"the chain {given} given as chain_file does not exist")
-    chosen = FidelityChain(given, str(given))
-    if recorded is None or recorded == "":
-        return chosen  # nothing recorded to contradict
     if recorded == BUILTIN_CHAIN_LABEL:
         raise ChainRefused(
             f"the release records {BUILTIN_CHAIN_NAME}, not the chain {given}; "
             "give no chain_file to lift with the built-in one"
         )
-    expected = recorded_sha if recorded_sha is not None else _sha256_if_file(Path(str(recorded)))
+    if recorded is not None and recorded != "":
+        _require_recorded_file(given, str(recorded), recorded_sha)
+    return FidelityChain(given, str(given))  # nothing else recorded to contradict it
+
+
+def _require_recorded_file(given: Path, recorded: str, recorded_sha: object) -> None:
+    """Refuse ``given`` unless it holds the recorded chain file's bytes: its recorded
+    sha256, or, where none is recorded, the file still at the recorded path."""
+    expected = recorded_sha if recorded_sha is not None else _sha256_if_file(Path(recorded))
     if expected is None:
-        if given.resolve() == Path(str(recorded)).resolve():
-            return chosen
+        if given.resolve() == Path(recorded).resolve():
+            return
         raise ChainRefused(
             f"the release records {_describe(recorded)}, which is not on disk and records "
             f"no sha256, so the chain {given} cannot be shown to be it"
@@ -100,7 +105,6 @@ def _given_chain(given: Path, recorded: object, recorded_sha: object) -> Fidelit
             f"the chain {given} is not the one the release records ({_describe(recorded)}, "
             f"sha256 {expected})"
         )
-    return chosen
 
 
 def _sha256_if_file(path: Path) -> str | None:
