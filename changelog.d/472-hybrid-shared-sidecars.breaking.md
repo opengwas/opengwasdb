@@ -8,7 +8,9 @@
   `analyses.tsv` or `overview.html`. Each is the shared one's rows again, and on a
   completed release the copy had lost rsIDs and every `source_alid` (#481). On
   OGS-00004 (Hybrid Observed-Only, 13,718,605 panel rows) the 0.2 copies come to
-  1,098,940,214 B; a 0.3.0 component that kept its copy would carry 1,265,761,783 B.
+  1,098,940,214 B, and on OGS-00011 as completed (14,267,257 panel rows) to
+  1,175,803,588 B; a 0.3.0 component that kept its copy would carry 1,265,761,783 B and
+  1,347,866,437 B. Both rewrote with no answer changed.
   The closed envelope fails a 0.3.0 Dense Component carrying any of them.
 - **The Dense Component's variants are the shared axis's, through `dense_to_shared`.**
   Opened as a release, its `variant_axis()` is the shared axis in its panel rows
