@@ -2537,6 +2537,29 @@ Reference-Completed queries include imputed associations by default. Query APIs 
 
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.
 
+### Variant-only reads (issue #484)
+
+A caller that wants variants, not associations, asks the query facade (every layout, every
+readable `format_version`) for them, and does not read `variants_table()`, which builds
+every variant in the release, or a Store file by name:
+
+| Method | Answers |
+|---|---|
+| `variant_count()` | the number of variants in the release, an `int` (the Variant Axis's length) |
+| `variants(identifiers)` | the rows for rsIDs or ALIDs, a `dict` keyed by `variant_index`, ascending |
+| `variants_in_range(chromosome, start, end)` | the rows at a position in `[start, end]` on `chromosome`, keyed the same way: the rows `range_phewas` reads |
+
+A row is a `variants_table()` row, spelt as it spells it (`alid`, `chromosome`,
+`position`, `effect_allele`, `other_allele`, `rsid`); each method equals `variants_table()`
+filtered to the rows asked. They resolve through the Variant Axis `lookup` and
+`range_phewas` use, and add no index. An identifier the release lacks is absent, not an
+error; an rsID naming several rows gives every row, as `lookup` does, and a cell naming
+several rsIDs (`rs1;rs2`) is one name, whole (§4). A range ending before it starts, or on a
+chromosome the release lacks, answers no rows; a chromosome the release cannot spell is
+refused. From 0.3.0 none reads `variants.tsv.gz`, and none loads pysam or sqlite3.
+`opengwasdb.store.query_digests` digests all three (`variant_reads`), so the rewrite's proof
+and the golden contract (#474) compare them.
+
 ## 20. Validation rules
 
 Validators MUST check at least:

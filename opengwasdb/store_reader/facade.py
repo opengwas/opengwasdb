@@ -71,7 +71,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import NoReturn, Self
+from typing import Any, NoReturn, Self
 
 import numpy as np
 
@@ -98,6 +98,7 @@ from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.resolve import resolve_rows
 from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
+from opengwasdb.store_reader.variant_axis import VARIANTS_TABLE_COLUMNS
 
 
 def _ragged_tier_record(
@@ -211,6 +212,25 @@ def _variants_table(variant_axis: AnyVariantAxis) -> dict[int, dict]:
     return variant_axis.variants_table()
 
 
+def _variant_rows(variant_axis: AnyVariantAxis, rows: np.ndarray) -> dict[int, dict[str, Any]]:
+    """The `variants_table()` rows for `rows` alone, keyed by variant_index, ascending.
+
+    The same fields and spelling as `_variants_table`, read through the axis's
+    `identity_by_indices` and `rsids_by_indices`, so a 0.3.0 release answers from
+    its sidecars and no second index is built.
+    """
+    unique = np.unique(np.asarray(rows, dtype=np.int64))
+    if unique.size == 0:
+        return {}
+    identity = variant_axis.identity_by_indices(unique)
+    columns = {name: values.tolist() for name, values in identity.items()}
+    columns["rsid"] = variant_axis.rsids_by_indices(unique).tolist()
+    return {
+        int(row): {name: columns[name][slot] for name in VARIANTS_TABLE_COLUMNS}
+        for slot, row in enumerate(unique.tolist())
+    }
+
+
 def _is_completed(store: StoreRelease) -> bool:
     """Whether a release is Reference-Completed, and so must say per cell which are imputed."""
     return store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
@@ -260,6 +280,25 @@ class _StoreQueryBase:
     def variants_table(self) -> dict[int, dict]:
         """Return all variants keyed by variant_index."""
         return _variants_table(self._variant_axis)
+
+    def variant_count(self) -> int:
+        """The number of variants in the release (the Variant Axis's length)."""
+        return int(self._variant_axis.n_variants)
+
+    def variants(self, identifiers: list[str]) -> dict[int, dict[str, Any]]:
+        """The `variants_table()` rows for rsIDs or ALIDs, keyed by variant_index.
+
+        Every row a multi-allelic rsID names is returned, as `lookup` resolves it; an
+        identifier the release lacks is absent, not an error.
+        """
+        axis = self._variant_axis
+        return _variant_rows(axis, axis.indices_by_identifiers(identifiers))
+
+    def variants_in_range(self, chromosome: str, start: int, end: int) -> dict[int, dict[str, Any]]:
+        """The `variants_table()` rows at a position in ``[start, end]`` on `chromosome`,
+        keyed by variant_index: the rows `range_phewas` reads."""
+        axis = self._variant_axis
+        return _variant_rows(axis, axis.range_indices(chromosome, start, end))
 
     def analyses_table(self) -> dict[int, dict]:
         """Return all analyses keyed by analysis_index -- every analyses.tsv column."""
