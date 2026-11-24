@@ -788,8 +788,10 @@ class TestQuery:
 
     def test_top_hits_observed_only(self, completed_store):
         q = query_store(completed_store)
-        result = q.top_hits(threshold=1.0, observed_only=True)
-        assert "imputed" not in set(result["association_status"].tolist())
+        # the loosest stored tier: a Dense release answers a stored tier only (#483)
+        # (this fixture holds no imputed hit at a stored tier; the golden fixtures do)
+        result = q.top_hits(threshold=5e-4, observed_only=True)
+        assert len(result["z"]) and "imputed" not in set(result["association_status"].tolist())
         q.close()
 
     def test_analysis_top_hits_match_global_subset_and_use_indexed_status(self, completed_store):

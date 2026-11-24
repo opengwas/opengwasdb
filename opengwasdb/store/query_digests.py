@@ -11,7 +11,10 @@ Every association-returning question the query facade answers is asked: each
 Analysis's associations; a PheWAS of variants spread over the axis, by ALID and by
 rsID, and of two identifiers no release holds; a range PheWAS; a lookup; and the
 top hits at five thresholds, overall and per Analysis, both Observed-Only and with
-imputed cells. Every array each answer holds is digested (`result_digests`), with
+imputed cells. A Dense or Hybrid release refuses the two thresholds it stores no tier
+for (#483); the digest of that answer is of the refusal's type and message
+(`refusal_digest`), so the proof compares the refusal where it cannot compare rows.
+Every array each answer holds is digested (`result_digests`), with
 the `variants_table()` and `analyses_table()` column by column, and the lookup, range
 and widest top-hit answers resolved to rows, with variant info. Both name each row's
 rsID and `source_alid`, so every row's `source_alid` is compared through
@@ -54,13 +57,15 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.store_reader.associations import Associations
+from opengwasdb.store_reader.top_hits import UnstoredThresholdError
 
 #: The arrays every association result holds; a digest that could not see one of them
 #: could call two different answers equal.
 RESULT_ARRAY_NAMES: tuple[str, ...] = tuple(Associations.empty())
 
 #: The thresholds asked of `top_hits`: the three a Top-Hit Index holds, and two
-#: it does not, which a release answers by scanning (`z_critical`).
+#: it does not, which a Ragged release answers by scanning (`z_critical`) and a Dense
+#: or Hybrid one refuses.
 THRESHOLDS = (5e-8, 5e-6, 5e-4, 1e-2, 0.2)
 
 #: How many variants the PheWAS and lookup shapes name, spread over the axis.
@@ -94,6 +99,26 @@ CHROMOSOME_END = 500_000_000
 
 class IncompleteResultError(ValueError):
     """A query result lacks one of `RESULT_ARRAY_NAMES`, so its digest would not see it."""
+
+
+#: The thresholds `THRESHOLDS` asks that no Top-Hit Index stores, and the `top_hits`
+#: shapes that ask them.
+UNSTORED_THRESHOLDS = (1e-2, 0.2)
+UNSTORED_SHAPES = tuple(f"top_hits/{t}" for t in UNSTORED_THRESHOLDS) + ("top_hits/limit",)
+
+
+def expects_refusal(q: Any, shape: str) -> bool:
+    """Whether `shape` is one `q` is expected to refuse: a Dense or Hybrid release asked
+    `top_hits` at a threshold it stores no tier for (#483). Any other refusal is a failure."""
+    return type(q).__name__ in ("StoreQuery", "HybridStoreQuery") and shape.startswith(
+        UNSTORED_SHAPES
+    )
+
+
+def refusal_digest(refused: Exception) -> dict[str, str]:
+    """A refused question's answer: one `error` digest of the exception's type and message."""
+    text = f"{type(refused).__name__}: {refused}"
+    return {"error": hashlib.sha256(text.encode()).hexdigest()}
 
 
 def digest_array(values: np.ndarray) -> str:
@@ -410,7 +435,13 @@ def release_digests(path: str | Path) -> dict[str, Any]:
             "log10_p": {},
         }
         for name, shape in query_shapes(q, variants).items():
-            result = shape()
+            try:
+                result = shape()
+            except UnstoredThresholdError as refused:
+                if not expects_refusal(q, name):
+                    raise
+                out["shapes"][name] = refusal_digest(refused)
+                continue
             out["shapes"][name] = result_digests(dict(result))
             if name.startswith(RESOLVED_SHAPES):
                 out["resolved"][name], out["log10_p"][name] = _resolved(q, result)

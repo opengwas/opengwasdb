@@ -2372,14 +2372,15 @@ Observed off-panel variants inside a Ragged Reference-Completed region have ordi
 
 ## 18. Top-hit query contract
 
-Top-Hit Queries return associations ranked by statistical significance.
+Top-Hit Queries return the associations whose two-sided p clears a threshold (|z| at least `z_critical(threshold)`), in `(analysis_index, variant_index)` order: the order a tier is stored in, not an order of significance. `limit` keeps the first rows of that order, after `observed_only`.
 
-Dense, Ragged, Ragged Overflow, observed, and imputed associations have equal priority. Ranking is by significance, not storage component or Association Status.
+Dense, Ragged, Ragged Overflow, observed, and imputed associations have equal priority: the answer does not depend on storage component or Association Status.
 
 Both Dense and Ragged components SHOULD provide Top-Hit Indexes using the same thresholds and result contract. The physical index encoding MAY differ by layout.
 
-Each threshold tier stores `analysis_offsets`, `variant_index`,
-`analysis_index`, `z` and `se` in `(analysis_index, variant_index)` order. A 0.2
+Each threshold tier stores `variant_index`, `analysis_index`, `z` and `se` in
+`(analysis_index, variant_index)` order, and `analysis_offsets` addressing one
+Analysis's slice; an index that predates `analysis_offsets` is still read (below). A 0.2
 tier also stores `abs_z` (|z|, `float32`) and `p_value` (`erfc(|z| / sqrt 2)`,
 `float64`); nothing but the validator read them, and it recomputes both from `z`,
 so a 0.3.0 tier MUST NOT carry them (ADR 0102, #471). Every row's |z| clears the
@@ -2400,6 +2401,14 @@ Default thresholds:
 ```
 
 Top-hit results from Reference-Completed releases include imputed associations by default. Observed-Only Query mode applies to Top-Hit Queries as well as exact and range queries.
+
+**What each layout answers, and when** (#483, the owner, 24 Nov 2026). A Top-Hit Index is an accelerator; the answer at a stored tier is the same on every layout, and the layouts differ only in what they do for a threshold with no stored tier.
+
+- **Dense** answers at a stored tier only and MUST NOT scan the grid: a scan reads every cell of an Analysis and takes hours on a release of OGS-00016's size. A `threshold` that is not a stored tier MUST raise an error naming the threshold and the stored tiers (`UnstoredThresholdError`); it MUST NOT return an empty answer.
+- **Hybrid** answers at a stored tier only, because its Dense Component cannot scan; an unstored threshold raises the same error, so the Overflow never gives part of an answer. At a stored tier its Overflow reads its tier, or scans when the Overflow has no such tier, and `limit` applies to each component and then to the merge.
+- **Ragged** answers an unstored threshold by scanning the CSR a window at a time, never a whole Analysis at once, against the same `z_critical` the index is built with, so a scan and a stored tier agree at the boundary.
+- A stored tier **without `analysis_offsets`** answers one Analysis on every layout from that tier: a reader filters the tier's rows by `analysis_index`, and a Dense reader never scans the grid.
+- An `analysis_id` the release does not hold MUST raise an error naming it (`UnknownAnalysisError`) on every layout; an empty answer is indistinguishable from "no association".
 
 ## 19. Query result contract
 

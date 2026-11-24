@@ -171,3 +171,13 @@ def z_critical(threshold: float) -> float:
     """
 
     return -statistics.NormalDist().inv_cdf(threshold / 2.0)
+
+
+def clears_cutoff(z: np.ndarray, threshold: float) -> np.ndarray:
+    """Which of `z` have two-sided p <= `threshold`: ``|z| >= z_critical``.
+
+    The one comparison the index build, the Ragged scan and a reader's tier
+    agree on; a NaN clears nothing.
+    """
+    out: np.ndarray = np.abs(z) >= z_critical(threshold)
+    return out
