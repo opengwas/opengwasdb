@@ -3,9 +3,10 @@
 A rewrite (`opengwasdb.store.rewrite`) changes how a release is stored, never what
 it answers. Before it publishes, it asks the source and the staged release the same
 deterministic set of questions and refuses on any difference. This module is that
-set of questions and the digest of each answer. It has one owner, here: the
-store-reader golden test (`tests/store_reader_digests.py`) calls it, and so does the
-store-comparison benchmark for `digest_array` and `result_digests`.
+set of questions and the digest of each answer. It has one owner, here: the Store
+Reader contract bundle's expected answers are its output (`tests/store_reader_contract/`,
+#474), and the store-comparison benchmark calls it for `digest_array` and
+`result_digests`.
 
 Every association-returning question the query facade answers is asked: each
 Analysis's associations; a PheWAS of variants spread over the axis, by ALID and by
@@ -21,9 +22,9 @@ reads, name each row's rsID and `source_alid`, so every row's `source_alid` is c
 `variants_table()`, and the rows an answer reaches through its resolved rows: a 0.2
 release reads them from its Variant Table, a 0.3.0 one from its sidecars (#469, #470).
 A resolved row's `log10_p` is kept as a
-number, because a test compares it with a tolerance against pins written by code
-that computed it otherwise (`tests/test_store_reader_digests.py`); `differences`
-compares it exactly, which is right between two releases read by one build.
+number, so a reader in another language can be held to it with a tolerance; `differences`
+compares it exactly, NaN at the same place counting as equal, which is right between two
+releases read by one build.
 
 The **ALID probes** ask about the ALIDs a spread of variants misses: the longest the
 release holds, and one at each length where an ALID index changes how it searches
@@ -43,6 +44,20 @@ The **misses** ask about rsIDs no release names, by PheWAS and inside a lookup o
 spread identifiers. A 0.2 Dense or Hybrid release looks such an rsID up in
 `index.sqlite`'s `variant_aliases`; a 0.3.0 release has no such table and answers it
 as a miss without opening SQLite (ADR 0102, #471). Their own section, as the probes.
+
+The **refusals** ask what the contract answers with an error (spec §18, §19): `top_hits`
+of an Analysis the release does not hold (`UnknownAnalysisError`) and a range on a
+chromosome no ALID can spell (`VariantNormalisationError`). A refusal's digest is of its
+type and message (`refusal_digest`); a refusal that answers instead is digested as an
+answer, so either way `differences` sees the change. `analysis()` of an unknown Analysis is
+asked beside them: it answers empty today, and the contract defines no refusal for it.
+
+`release_digests` and `release_readable` open a release through `query_store` unless a
+caller passes its own `query`: the Store Reader contract test (#474,
+`tests/store_reader_contract/`) passes the Store Reader's `query_release` over
+`open_release`, so it reads the committed bundle with nothing but the Store Reader.
+`release_readable` spells out the first rows of each answer, and each refusal's type and
+message, for a reader that cannot reproduce Python's digests.
 """
 
 from __future__ import annotations
@@ -56,8 +71,14 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.store_reader.analyses import UnknownAnalysisError
 from opengwasdb.store_reader.associations import Associations
+from opengwasdb.store_reader.identity import VariantNormalisationError
+from opengwasdb.store_reader.indexed import list_indexed_subsets
 from opengwasdb.store_reader.top_hits import UnstoredThresholdError
+
+#: Opens a release for its questions: the query facade over the release at a path.
+QueryOpener = Callable[[Path], Any]
 
 #: The arrays every association result holds; a digest that could not see one of them
 #: could call two different answers equal.
@@ -95,6 +116,14 @@ PROBED_CHROMOSOMES = (*(str(n) for n in range(1, 23)), "X", "Y", "MT")
 #: The end of a range that runs to a chromosome's end: past every human position, and
 #: within what a tabix index addresses (2**29), so a 0.2 release answers it too.
 CHROMOSOME_END = 500_000_000
+
+#: An Analysis no release holds, and a chromosome no ALID can spell: a number outside
+#: 1-26 (`identity.normalise_chromosome`). The refusals ask them.
+UNKNOWN_ANALYSIS = "absent"
+UNSUPPORTED_CHROMOSOME = "27"
+
+#: The errors a refusal question may raise; any other is a failure, not an answer.
+REFUSAL_ERRORS = (UnknownAnalysisError, VariantNormalisationError)
 
 
 class IncompleteResultError(ValueError):
@@ -438,9 +467,7 @@ def _subset_digests(q: Any, path: str | Path) -> dict[str, dict[str, str]]:
     """Each Indexed Variant Subset's answer for the spread Analyses, Observed-Only and
     not (ADR 0061): a subset records its parent release, so a derived release that
     carries it on must answer through it as its source did. None for a release that
-    carries none, so the golden pins keep their shapes."""
-    from opengwasdb.layouts.dense.indexed_subsets import list_indexed_subsets
-
+    carries none."""
     names = list_indexed_subsets(path)
     if not names:
         return {}
@@ -455,11 +482,54 @@ def _subset_digests(q: Any, path: str | Path) -> dict[str, dict[str, str]]:
     return out
 
 
-def release_digests(path: str | Path) -> dict[str, Any]:
-    """Every answer the release at `path` gives, digested; `log10_p` per resolved shape."""
-    from opengwasdb.query import query_store
+def refusal_questions(q: Any) -> dict[str, Callable[[], Any]]:
+    """The questions the contract answers with an error, by a stable name (module
+    docstring), and `analysis()` of an unknown Analysis, which answers empty today."""
+    return {
+        "top_hits/unknown_analysis": partial(
+            q.top_hits, analysis_id=UNKNOWN_ANALYSIS, threshold=THRESHOLDS[0]
+        ),
+        "analysis/unknown_analysis": partial(q.analysis, UNKNOWN_ANALYSIS),
+        "range_phewas/unsupported_chromosome": partial(
+            q.range_phewas, UNSUPPORTED_CHROMOSOME, 1, CHROMOSOME_END
+        ),
+        "variants_in_range/unsupported_chromosome": partial(
+            q.variants_in_range, UNSUPPORTED_CHROMOSOME, 1, CHROMOSOME_END
+        ),
+    }
 
-    with query_store(path) as q:
+
+def _answer_digests(answer: Any) -> dict[str, str]:
+    """An association answer's arrays, or a variant-only read's rows, digested."""
+    if isinstance(answer, Associations):
+        return result_digests(dict(answer))
+    return _table_digests(answer)
+
+
+def _refusal_digests(q: Any) -> dict[str, dict[str, str]]:
+    """Each refusal question's refusal, or its answer where it gives one, digested."""
+    out = {}
+    for name, ask in refusal_questions(q).items():
+        try:
+            out[name] = _answer_digests(ask())
+        except REFUSAL_ERRORS as refused:
+            out[name] = refusal_digest(refused)
+    return out
+
+
+def _open(path: str | Path, query: QueryOpener | None) -> Any:
+    if query is None:
+        from opengwasdb.query import query_store
+
+        query = query_store
+    return query(Path(path))
+
+
+def release_digests(path: str | Path, *, query: QueryOpener | None = None) -> dict[str, Any]:
+    """Every answer the release at `path` gives, digested; `log10_p` per resolved shape.
+
+    `query` opens the release (`query_store` by default; module docstring)."""
+    with _open(path, query) as q:
         variants = q.variants_table()
         out: dict[str, Any] = {
             "adapter": type(q).__name__,
@@ -487,7 +557,113 @@ def release_digests(path: str | Path) -> dict[str, Any]:
         asked = range_questions(variants)
         out["range_probes"] = _range_digests(q, asked)
         out["unposed_range_questions"] = unposed_range_questions(asked)
+        out["refusals"] = _refusal_digests(q)
     return out
+
+
+#: How many rows of each answer `release_readable` spells out.
+READABLE_ROWS = 2
+
+
+def readable_value(value: Any) -> Any:
+    """`value` as JSON can hold it exactly: a float as itself, NaN as ``"NaN"`` and an
+    infinity as ``"Infinity"`` or ``"-Infinity"`` (JSON has neither), a numpy scalar as
+    the Python value it holds."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        if value != value:
+            return "NaN"
+        if value in (float("inf"), float("-inf")):
+            return "Infinity" if value > 0 else "-Infinity"
+    return value
+
+
+def _readable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{name: readable_value(v) for name, v in sorted(row.items())} for row in rows]
+
+
+def readable_answer(
+    answer: Any, rows: int = READABLE_ROWS, *, key: str = "variant_index"
+) -> dict[str, Any]:
+    """How many rows `answer` holds, and its first `rows`, spelt out: an association
+    answer's arrays row by row, or a table's rows (a variant-only read's, keyed by
+    `variant_index`; `analyses_table()`'s, by `analysis_index`) with their `key`."""
+    if isinstance(answer, Associations):
+        names = sorted(answer)
+        n = len(answer["z"])
+        head = [{name: answer[name][i] for name in names} for i in range(min(n, rows))]
+    else:
+        keys = sorted(answer)
+        n = len(keys)
+        head = [{key: k, **answer[k]} for k in keys[:rows]]
+    return {"rows": n, "head": _readable_rows(head)}
+
+
+def _readable_refusal(refused: Exception) -> dict[str, str]:
+    return {"error": type(refused).__name__, "message": str(refused)}
+
+
+def _readable_shapes(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, shape in query_shapes(q, variants).items():
+        try:
+            out[name] = readable_answer(shape())
+        except UnstoredThresholdError as refused:
+            if not expects_refusal(q, name):
+                raise
+            out[name] = _readable_refusal(refused)
+    return out
+
+
+def _readable_refusals(q: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, ask in refusal_questions(q).items():
+        try:
+            out[name] = readable_answer(ask())
+        except REFUSAL_ERRORS as refused:
+            out[name] = _readable_refusal(refused)
+    return out
+
+
+def _readable_variant_reads(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    records = [variants[key] for key in sorted(variants)]
+    identifiers = [*_identifiers(_spread(records, N_VARIANTS_ASKED)), *ABSENT_IDENTIFIERS]
+    out: dict[str, Any] = {
+        "variant_count": q.variant_count(),
+        "variants": readable_answer(q.variants(identifiers)),
+    }
+    for name, (chrom, start, end) in range_questions(variants).items():
+        out[f"variants_in_range/{name}"] = readable_answer(q.variants_in_range(chrom, start, end))
+    return out
+
+
+def release_readable(path: str | Path, *, query: QueryOpener | None = None) -> dict[str, Any]:
+    """The answers `release_digests` digests, spelt out where a reader in another language
+    can compare them: the first `READABLE_ROWS` rows of every shape, of each ALID probe's
+    PheWAS and of each variant-only read, with its row count; the Variant Table's first
+    rows and the rows of the probed ALIDs; every Analysis; and each refusal's type and
+    message. `query` opens the release, as for `release_digests`."""
+    with _open(path, query) as q:
+        variants = q.variants_table()
+        by_alid = {row["alid"]: key for key, row in variants.items()}
+        probed = {by_alid[alid]: variants[by_alid[alid]] for alid in probed_alids(variants)}
+        first = {key: variants[key] for key in sorted(variants)[:READABLE_ROWS]}
+        analyses = q.analyses_table()
+        return {
+            "variants_table": {
+                "rows": len(variants),
+                "head": readable_answer(first, READABLE_ROWS)["head"],
+                "probed": readable_answer(probed, len(probed))["head"],
+            },
+            "analyses_table": readable_answer(analyses, len(analyses), key="analysis_index"),
+            "shapes": _readable_shapes(q, variants),
+            "alid_probes": {
+                f"phewas/{alid}": readable_answer(q.phewas(alid)) for alid in probed_alids(variants)
+            },
+            "variant_reads": _readable_variant_reads(q, variants),
+            "refusals": _readable_refusals(q),
+        }
 
 
 def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
@@ -501,7 +677,9 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found.append(f"adapter: {reference['adapter']} != {candidate['adapter']}")
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
-    for section in ("shapes", "resolved", "alid_probes", "range_probes", "misses", "variant_reads"):
+    for section in (
+        "shapes", "resolved", "alid_probes", "range_probes", "misses", "variant_reads", "refusals"
+    ):
         found += _shape_differences(section, reference[section], candidate[section])
     found += _shape_differences(
         "indexed_subsets",
@@ -540,13 +718,18 @@ def _differing(reference: Mapping[str, str], candidate: Mapping[str, str]) -> li
 
 __all__ = [
     "IncompleteResultError",
+    "QueryOpener",
     "RANGE_QUESTIONS",
     "RESULT_ARRAY_NAMES",
     "differences",
     "digest_array",
     "query_shapes",
     "range_questions",
+    "readable_answer",
+    "readable_value",
+    "refusal_questions",
     "release_digests",
+    "release_readable",
     "result_digests",
     "unposed_range_questions",
 ]

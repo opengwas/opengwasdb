@@ -297,6 +297,41 @@ def indexed_subset_store_path(store_path: str | Path) -> Path:
     return path
 
 
+def is_valid_indexed_subset_name(name: str) -> bool:
+    """Whether `name` could be a published subset name (no raise)."""
+    return bool(_NAME_RE.match(name))
+
+
+def indexed_subset_namespace_path(store_path: str | Path) -> Path:
+    """The `indexed_subsets` directory for `store_path`, resolving a Hybrid root.
+
+    The one place the physical namespace is located, so discovery, removal,
+    overview and reading cannot disagree about where a Hybrid release keeps
+    its index (issue #271).
+    """
+    return indexed_subset_store_path(store_path) / "data.zarr" / INDEXED_SUBSETS_GROUP
+
+
+def list_indexed_subsets(store_path: str | Path) -> tuple[str, ...]:
+    """The published subset names under one release, sorted.
+
+    `store_path` may be a Dense release or a Hybrid root; a Hybrid root resolves
+    to its nested Dense Component (issue #271).  Read from the filesystem so a
+    stray entry that is not a group is visible to validation rather than
+    silently absent from the listing.
+    """
+    namespace = indexed_subset_namespace_path(Path(store_path))
+    if not namespace.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            entry.name
+            for entry in namespace.iterdir()
+            if entry.is_dir() and is_valid_indexed_subset_name(entry.name)
+        )
+    )
+
+
 def _missing_required_attrs(attrs: dict[str, Any]) -> list[str]:
     return [key for key in _REQUIRED_ATTRS if key not in attrs]
 

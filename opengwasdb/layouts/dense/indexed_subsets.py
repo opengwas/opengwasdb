@@ -115,7 +115,6 @@ from opengwasdb.store_reader.format import zarr_format_for_version
 from opengwasdb.store_reader.hybrid import dense_component_path
 from opengwasdb.store_reader.indexed import (
     _IMPUTED_MASK,
-    _NAME_RE,
     _SE_EXCEPTION_INDEX,
     _SE_EXCEPTION_VALUE,
     _SUBSET_ORDER,
@@ -152,7 +151,9 @@ from opengwasdb.store_reader.indexed import (
     _plane_shape_findings,
     _source_identity_mismatches,
     encoding_mismatch,
-    indexed_subset_store_path,
+    indexed_subset_namespace_path,
+    is_valid_indexed_subset_name,
+    list_indexed_subsets,
     parse_indexed_subset_name,
     stale_subset_findings,
 )
@@ -400,11 +401,6 @@ class _SubsetPlan:
 # ── Input contract ──────────────────────────────────────────────────────────
 
 
-def is_valid_indexed_subset_name(name: str) -> bool:
-    """Whether `name` could be a published subset name (no raise)."""
-    return bool(_NAME_RE.match(name))
-
-
 def _is_staging_name(name: str) -> bool:
     """Whether a namespace entry is a staging/replacement directory.
 
@@ -455,16 +451,6 @@ def _canonical_alid_or_none(candidate: str) -> str | None:
         parsed.chromosome, parsed.position, parsed.effect_allele, parsed.other_allele
     )
     return canonical if canonical == candidate else None
-
-
-def indexed_subset_namespace_path(store_path: str | Path) -> Path:
-    """The `indexed_subsets` directory for `store_path`, resolving a Hybrid root.
-
-    The one place the physical namespace is located, so discovery, removal,
-    overview and reading cannot disagree about where a Hybrid release keeps
-    its index (issue #271).
-    """
-    return indexed_subset_store_path(store_path) / "data.zarr" / INDEXED_SUBSETS_GROUP
 
 
 def resolve_variant_list(
@@ -1419,26 +1405,6 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
 
 
 # ── Read seam ───────────────────────────────────────────────────────────────
-
-
-def list_indexed_subsets(store_path: str | Path) -> tuple[str, ...]:
-    """The published subset names under one release, sorted.
-
-    `store_path` may be a Dense release or a Hybrid root; a Hybrid root resolves
-    to its nested Dense Component (issue #271).  Read from the filesystem so a
-    stray entry that is not a group is visible to validation rather than
-    silently absent from the listing.
-    """
-    namespace = indexed_subset_namespace_path(Path(store_path))
-    if not namespace.is_dir():
-        return ()
-    return tuple(
-        sorted(
-            entry.name
-            for entry in namespace.iterdir()
-            if entry.is_dir() and is_valid_indexed_subset_name(entry.name)
-        )
-    )
 
 
 def subset_identity_mismatches(store_path: str | Path) -> list[str]:
