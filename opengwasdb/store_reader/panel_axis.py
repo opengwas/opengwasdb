@@ -76,7 +76,8 @@ class PanelAlidIndex:
     def unindexed_rows(self, n_rows: int) -> np.ndarray:
         shared = self._shared.unindexed_rows(self._n_shared)
         on_panel, panel = panel_rows(self._dense_to_shared, shared)
-        return panel[on_panel]
+        unindexed: np.ndarray = panel[on_panel]
+        return unindexed
 
     def problems(self, table_rows: int, expected_indexed: int) -> Iterator[str]:
         raise NoComponentIndex(
