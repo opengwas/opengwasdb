@@ -2829,3 +2829,19 @@ def test_a_hybrid_spilled_column_whose_arrays_are_not_parallel_is_refused_and_wr
     ):
         hybrid_build._spill_hybrid_column(spill_dir, 0, dense, overflow, off_reference)
     assert list(spill_dir.iterdir()) == []
+
+
+def test_pass_2_hands_back_freed_memory_after_each_analysis(tmp_path, monkeypatch):
+    """Issue #451: a Pass 2 worker lives for the whole pass, and kept the
+    high-water of every Analysis it had routed until it gave back what each
+    freed. A single-pass build, as OGS-00011's is; serial, so the routing runs
+    here and the count is this process's."""
+    calls: list[int] = []
+    monkeypatch.setattr(hybrid_build, "release_freed_heap", lambda: calls.append(1))
+    manifest = _rsid_hybrid_manifest(tmp_path)
+    build_hybrid_from_vcf_manifest(
+        manifest, tmp_path / "store.opengwasdb", variant_reference=_panel_file(tmp_path),
+        store_id="s", release_id="r", n_workers=1,
+    )
+
+    assert len(calls) == 2, "one hand-back for each of the two Analyses routed"

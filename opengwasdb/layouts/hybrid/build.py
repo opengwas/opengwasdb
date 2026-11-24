@@ -70,6 +70,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.memory import release_freed_heap
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.layouts.build_manifest import (
@@ -434,6 +435,19 @@ class _Pass2Context:
 
 
 def _route_column(
+    context: _Pass2Context, task: tuple[int, ManifestRow]
+) -> tuple[int, int, int]:
+    """Route and spill one Analysis (`_route_and_spill_column`), then hand what
+    it freed back to the host: a Pass 2 worker lives for the whole pass, and
+    would otherwise keep the high-water of every Analysis it routes (#451)."""
+    routed = _route_and_spill_column(context, task)
+    # The Analysis's columns went out of scope as it returned, so their pages
+    # are among those handed back.
+    release_freed_heap()
+    return routed
+
+
+def _route_and_spill_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
 ) -> tuple[int, int, int]:
     """Route one study and spill it; its Admission part is written beside the

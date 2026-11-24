@@ -17,11 +17,18 @@ The reading is deliberately strict. `/proc/meminfo` is a kernel format, not a
 free-form file: a field that is not exactly a whole number of kilobytes is
 `None`, so a caller runs one worker and says why, rather than dividing a number
 nothing meant.
+
+A worker that lives for a whole pass also gives back what it has freed between
+units (`release_freed_heap`), so that what it holds is one unit's working set
+rather than the high-water of every unit it has worked (#451).
 """
 
 from __future__ import annotations
 
+import ctypes
+import functools
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from opengwasdb.build.ordered_pool import RESULTS_HELD_PER_WORKER
@@ -185,3 +192,31 @@ def pool_workers(
         "unknown" if budget is None else f"{budget >> 20} MiB",
     )
     return workers
+
+
+@functools.cache
+def _malloc_trim() -> Callable[[int], int] | None:
+    """glibc's `malloc_trim`, or `None`, said once, where the C library has none."""
+    try:
+        trim: Callable[[int], int] = ctypes.CDLL(None).malloc_trim
+    except AttributeError:
+        log.warning(
+            "this C library has no malloc_trim, so a long-lived worker keeps the memory "
+            "it has freed (#451)"
+        )
+        return None
+    return trim
+
+
+def release_freed_heap() -> None:
+    """Hand the pages the C heap holds free back to the host.
+
+    A long-lived worker otherwise keeps the high-water of every unit it has
+    worked: Python frees a source's buffers, but glibc keeps their pages for
+    reuse, and a freed page under a live allocation is never returned (#451
+    has the measurements). Only glibc offers `malloc_trim`; on any other C
+    library nothing is released, and the first call says so.
+    """
+    trim = _malloc_trim()
+    if trim is not None:
+        trim(0)

@@ -1065,7 +1065,7 @@ directly, in bounded windows: one pass over each chromosome, and a second read o
 
 **Direct numeric decoding** (ogld#40; ADR 0095). For a one-dimensional numeric array whose
 metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
-CRC32C in an end-located shard index, `location.py` reads through the store's async interface
+CRC32C in an end-located shard index, `opengwasdb/ld/store/location.py` reads through the store's async interface
 using its `decoding.py` backend. A one-byte dtype's `bytes` codec declares no byte order, and the
 backend reads it as it lies (ADR 0096); that is how the ALID index's keys are decoded directly. That backend owns shard/frame parsing and one process-shared
 seven-worker I/O/decode pool. Both declared
