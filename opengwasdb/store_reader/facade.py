@@ -216,6 +216,29 @@ def _is_completed(store: StoreRelease) -> bool:
     return store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
 
 
+def _scan_csr_hits(reader: CsrReader, region: Cells | None, threshold: float) -> np.ndarray:
+    """Flat CSR positions of `region`'s rows -- every row, with None -- clearing
+    `threshold`.
+
+    The scan reads Z a window at a time and keeps only what clears the cutoff,
+    so peak memory is a window, not the association count (#252): at
+    OGS-00011's 3,085,080,783-cell Overflow a whole-array decode held 12.3 GB
+    of `variant_index` and 3.1 GB of mask at once. The cutoff is
+    `reader_stats.clears_cutoff`, the one the index is built with, so a scan and
+    an index agree on the boundary. The reader refuses a non-canonical marker the
+    cutoff would otherwise drop.
+    """
+    hits: list[np.ndarray] = []
+    for window in reader.windows(region):
+        assert window.pos is not None
+        mask = reader_stats.clears_cutoff(reader.z(window), threshold)
+        if mask.any():
+            hits.append(window.pos[mask])
+    if not hits:
+        return np.empty(0, dtype=np.int64)
+    return np.concatenate(hits)
+
+
 class _StoreQueryBase:
     """What every adapter answers the same way: its tables, result resolution,
     and the context manager. `analyses_table()` returns every `analyses.tsv`
@@ -385,15 +408,16 @@ class StoreQuery(_StoreQueryBase):
         self, *, analysis_id: str | None = None, threshold: float = 5e-8,
         limit: int | None = None, observed_only: bool = False,
     ) -> Associations:
-        """Return genomic-order top hits, optionally for one analysis."""
-        tier = self._top_hits.tier(threshold)
-        if tier is None:
-            return Associations.empty()
-        analysis_index: int | None = None
-        if analysis_id is not None:
-            analysis_index = self._analysis_index(analysis_id)
-            if analysis_index is None or not tier.has_offsets:
-                return Associations.empty()
+        """Return genomic-order top hits, optionally for one analysis.
+
+        A Dense release answers from its Top-Hit Index and never scans the grid
+        (#483): `threshold` must be a stored tier, else `UnstoredThresholdError`
+        names the tiers there are, and an unknown `analysis_id` raises
+        `UnknownAnalysisError`. A tier without per-Analysis offsets still answers
+        one Analysis, by filtering its rows.
+        """
+        analysis_index = None if analysis_id is None else self._analyses.require_index(analysis_id)
+        tier = self._top_hits.require(threshold)
         record = self._top_hit_record(tier.read(analysis_index))
         return record.observed_only(observed_only).head(limit)
 
@@ -615,19 +639,17 @@ class RaggedStoreQuery(_StoreQueryBase):
         falls back to a full CSR scan otherwise. The two paths return the
         same shape of answer for the same call.
         """
+        analysis_index = (
+            None if analysis_id is None else self._analyses.require_index(analysis_id)
+        )
         tier = self._top_hits.tier(threshold)
         if tier is None:
             return self._top_hits_by_scan(
-                analysis_id=analysis_id,
+                analysis_index=analysis_index,
                 threshold=threshold,
                 limit=limit,
                 observed_only=observed_only,
             )
-        analysis_index = None
-        if analysis_id is not None:
-            analysis_index = self._resolve_analysis_id(analysis_id)
-            if analysis_index is None or not tier.has_offsets:
-                return self._empty()
         record = _ragged_tier_record(
             tier,
             analysis_index,
@@ -637,33 +659,10 @@ class RaggedStoreQuery(_StoreQueryBase):
         )
         return record.observed_only(observed_only).head(limit)
 
-    def _scan_threshold_hits(self, region: Cells | None, threshold: float) -> np.ndarray:
-        """Flat CSR positions of `region`'s rows -- every row, with None -- clearing
-        `threshold`.
-
-        The scan reads Z a window at a time and keeps only what clears the cutoff,
-        so peak memory is a window, not the association count (#252): at
-        OGS-00011's 3,085,080,783-cell Overflow a whole-array decode held 12.3 GB
-        of `variant_index` and 3.1 GB of mask at once. The cutoff is
-        `z_critical`, the one the index is built with, so a scan and an index
-        agree on the boundary. The reader refuses a non-canonical marker the
-        cutoff would otherwise drop.
-        """
-        cutoff = reader_stats.z_critical(threshold)
-        hits: list[np.ndarray] = []
-        for window in self._reader.windows(region):
-            assert window.pos is not None
-            mask = np.abs(self._reader.z(window)) >= cutoff
-            if mask.any():
-                hits.append(window.pos[mask])
-        if not hits:
-            return np.empty(0, dtype=np.int64)
-        return np.concatenate(hits)
-
     def _top_hits_by_scan(
         self,
         *,
-        analysis_id: str | None,
+        analysis_index: int | None,
         threshold: float,
         limit: int | None,
         observed_only: bool,
@@ -671,18 +670,11 @@ class RaggedStoreQuery(_StoreQueryBase):
         """Top hits with no index to read: scan the CSR and threshold it.
 
         Returns the same shape of answer as the indexed path, applying
-        `observed_only` before `limit` exactly as that path does. `analysis_id`
-        is resolved here too, so a caller passing one gets a filtered result on
-        both paths rather than an unfiltered store-wide scan on this one. The
+        `observed_only` before `limit` exactly as that path does. The
         hits are read at their flat positions, which ascend in genomic order.
         """
-        region = None
-        if analysis_id is not None:
-            analysis_index = self._resolve_analysis_id(analysis_id)
-            if analysis_index is None:
-                return self._empty()
-            region = Cells.analysis(analysis_index)
-        hit_positions = self._scan_threshold_hits(region, threshold)
+        region = None if analysis_index is None else Cells.analysis(analysis_index)
+        hit_positions = _scan_csr_hits(self._reader, region, threshold)
         if len(hit_positions) == 0:
             return self._empty()
         found = self._reader.read(Cells.positions(hit_positions), observed_only=observed_only)
@@ -924,9 +916,11 @@ class HybridStoreQuery(_StoreQueryBase):
     ) -> Associations:
         tier = self._top_hits.tier(threshold)
         if tier is None:
-            return Associations.empty()
-        if analysis_index is not None and not tier.has_offsets:
-            return Associations.empty()
+            region = None if analysis_index is None else Cells.analysis(analysis_index)
+            positions = _scan_csr_hits(self._overflow, region, threshold)
+            if len(positions) == 0:
+                return Associations.empty()
+            return self._overflow_read(Cells.positions(positions), observed_only=False)
         return _ragged_tier_record(
             tier,
             analysis_index,
@@ -939,19 +933,29 @@ class HybridStoreQuery(_StoreQueryBase):
         self, *, analysis_id: str | None = None, threshold: float = 5e-8,
         limit: int | None = None, observed_only: bool = False,
     ) -> Associations:
-        analysis_index = None
-        if analysis_id is not None:
-            analysis = self._analyses.by_id(analysis_id)
-            if analysis is None:
-                return Associations.empty()
-            analysis_index = int(analysis["analysis_index"])
-        dense = self._remap_dense(
-            self._dense.top_hits(
-                analysis_id=analysis_id, threshold=threshold, observed_only=observed_only
-            )
+        """Genomic-order top hits of both components, at a stored tier only.
+
+        The Dense Component answers from its tiers and cannot scan, so an
+        unstored `threshold` raises `UnstoredThresholdError` here too, rather
+        than the Overflow answering alone with part of the answer (#483). Within
+        a stored tier the Overflow reads its own tier, or scans when it has none.
+        `limit` is pushed down to each component: the panel map is ascending
+        (`_panel_split` searches it), so each component's first `limit` hits
+        contain the merged first `limit`.
+        """
+        analysis_index = (
+            None if analysis_id is None else self._analyses.require_index(analysis_id)
+        )
+        dense = self._dense.top_hits(
+            analysis_id=analysis_id,
+            threshold=threshold,
+            limit=limit,
+            observed_only=observed_only,
         )
         overflow = self._overflow_top_hits(threshold, analysis_index)
-        merged = Associations.concat([dense, overflow.observed_only(observed_only)])
+        merged = Associations.concat(
+            [self._remap_dense(dense), overflow.observed_only(observed_only).head(limit)]
+        )
         return merged.in_genomic_order().head(limit)
 
 

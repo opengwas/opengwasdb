@@ -42,7 +42,7 @@ with query_store(path) as q:
     seen["opened"] = loaded()
     shapes = {
         "analysis": lambda: q.analysis(ids[0]),
-        "top_hits": lambda: q.top_hits(threshold=0.2),
+        "top_hits": lambda: q.top_hits(threshold=5e-4),
     }
     for kind, names in (("alid", alids), ("rsid", rsids)):
         for i, name in enumerate(names):

@@ -411,7 +411,9 @@ def test_variant_shapes_never_decode_whole_planes(
         # `top_hits` uses the precomputed index when one exists; the scan
         # fallback is the variant-side path this test is about, so call it
         # directly rather than depend on the fixture having no index.
-        query._top_hits_by_scan(analysis_id=None, threshold=5e-8, limit=None, observed_only=False)
+        query._top_hits_by_scan(
+            analysis_index=None, threshold=5e-8, limit=None, observed_only=False
+        )
     assert widths and max(widths) <= window, f"widest slice {max(widths, default=0)}"
 
 

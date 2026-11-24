@@ -24,6 +24,15 @@ TOP_HIT_GROUP = "top_hits"
 TOP_HIT_THRESHOLDS = (5e-8, 5e-6, 5e-4)
 
 
+class UnstoredThresholdError(ValueError):
+    """A Dense or Hybrid query named a threshold the release stores no Top-Hit tier for.
+
+    A Dense or Hybrid release answers `top_hits` from its tiers and never scans the grid
+    (#483): at OGS-00016's scale a scan is hours. The error names the thresholds
+    the release does store, so the caller can ask one of them.
+    """
+
+
 def threshold_key(threshold: float) -> str:
     """Stable Zarr group key for a p-value threshold."""
 
@@ -157,7 +166,7 @@ class TopHitTier:
 
     @property
     def has_offsets(self) -> bool:
-        """Whether an Analysis's slice can be addressed (older indexes cannot)."""
+        """Whether an Analysis's slice can be addressed by offset (older indexes cannot)."""
         return self.has("analysis_offsets")
 
     def _bounds(self, analysis_index: int | None) -> tuple[int, int]:
@@ -183,10 +192,23 @@ class TopHitTier:
 
         An `analysis_index` outside the index addresses an empty slice. Naming an
         optional array in `require` makes its absence a KeyError rather than a
-        None, for a caller (a Ragged read) that has no fallback for it.
+        None, for a caller (a Ragged read) that has no fallback for it. A tier
+        with no `analysis_offsets` answers one Analysis by filtering its rows on
+        `analysis_index`: still the pre-built tier, and no grid is read (#483).
         """
         for name in require:
             self._required(name)
+        if analysis_index is not None and not self.has_offsets:
+            whole = self.read(None, require=require)
+            keep = whole.analysis_index == analysis_index
+            return TierRows(
+                variant_index=whole.variant_index[keep],
+                analysis_index=whole.analysis_index[keep],
+                z=whole.z[keep],
+                se=None if whole.se is None else whole.se[keep],
+                eaf=None if whole.eaf is None else whole.eaf[keep],
+                imputed=None if whole.imputed is None else whole.imputed[keep],
+            )
         bounds = self._bounds(analysis_index)
         return TierRows(
             variant_index=self._read("variant_index", bounds, "int32"),
@@ -219,3 +241,23 @@ class TopHitTiers:
             except KeyError:
                 self._tiers[key] = None
         return self._tiers[key]
+
+    def stored_thresholds(self) -> list[float]:
+        """The thresholds this store has a tier for, tightest first."""
+        try:
+            group = self._root[TOP_HIT_GROUP]
+        except KeyError:
+            return []
+        return sorted(tier_threshold(key, group[key]) for key in group)
+
+    def require(self, threshold: float) -> TopHitTier:
+        """The tier for `threshold`; `UnstoredThresholdError` when there is none."""
+        tier = self.tier(threshold)
+        if tier is None:
+            stored = ", ".join(f"{t:g}" for t in self.stored_thresholds()) or "none"
+            raise UnstoredThresholdError(
+                f"threshold {threshold:g} is not a stored top-hit tier of this release "
+                f"(stored: {stored}); a Dense or Hybrid release answers top_hits at a "
+                "stored tier only"
+            )
+        return tier

@@ -53,7 +53,7 @@ from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
@@ -474,7 +474,9 @@ def test_top_hits_selects_and_merges_one_analysis(hybrid_store):
     for name in ("variant_index", "analysis_index", "z", "se", "association_status"):
         np.testing.assert_array_equal(selected[name], global_result[name][expected])
     assert len(selected["z"]) == 2  # one Dense hit and one overflow hit
-    assert q.top_hits(analysis_id="unknown", threshold=5e-4)["z"].size == 0
+    # an Analysis the release does not hold is refused, not answered with nothing (#483)
+    with pytest.raises(UnknownAnalysisError, match="GCST-no-such"):
+        q.top_hits(analysis_id="GCST-no-such", threshold=5e-4)
 
 
 def test_top_hit_counts_sum_dense_and_overflow_components(hybrid_store):

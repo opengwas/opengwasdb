@@ -21,8 +21,9 @@ import pytest
 from store_reader_digests import GOLDEN, release_digests
 
 from opengwasdb.query import query_store
-from opengwasdb.store.query_digests import query_shapes
+from opengwasdb.store.query_digests import expects_refusal, query_shapes
 from opengwasdb.store_reader.stats import association_statistics
+from opengwasdb.store_reader.top_hits import UnstoredThresholdError
 
 PINS: dict[str, Any] = json.loads(GOLDEN.read_text(encoding="utf-8"))
 RELEASES = sorted(name for name in PINS if not name.startswith("__"))
@@ -96,7 +97,12 @@ def test_every_answer_carries_beta_and_pval_from_the_one_function(
     counts = {"rows": 0, "missing": 0, "resolved": 0}
     with query_store(releases[name]) as q:
         for shape, ask in query_shapes(q).items():
-            result = ask()
+            try:
+                result = ask()
+            except UnstoredThresholdError:
+                # only the shapes a Dense or Hybrid release is expected to refuse (#483)
+                assert expects_refusal(q, shape), shape
+                continue
             derived = association_statistics(result["z"], result["se"])
             for key in DERIVED:
                 assert key in result, (shape, key)
