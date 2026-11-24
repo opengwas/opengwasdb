@@ -87,6 +87,7 @@ from opengwasdb.variants.normalise import (
     chromosome_sort_key,
 )
 from opengwasdb.variants.routing import SourceKey, collapse_duplicates, union_names
+from opengwasdb.variants.routing.keys import note_origin
 from opengwasdb.variants.rsid import RsidConflictPolicy
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
@@ -449,7 +450,7 @@ def _build_ssf_release(
         allow_unverified_eaf=request.allow_unverified_eaf,
     )
     variants, alid_to_idx = _build_variant_axis(
-        staged, ingested.alid_variant, ingested.rsid_by_alid
+        staged, ingested.alid_variant, ingested.rsid_by_alid, ingested.source_alid_by_alid
     )
     csr, encoding, eaf_scopes = _encode_ssf_csr(
         ingested.per_analysis, alid_to_idx, len(analytes), len(variants), staged.path,
@@ -578,6 +579,8 @@ class _Ingested:
     alid_variant: dict[str, CanonicalVariant]
     rsid_by_alid: dict[str, str]
     lift: dict[str, object] | None = None
+    #: Each variant's `source_alid` (`_Harvest.origin`).
+    source_alid_by_alid: dict[str, str | None] = field(default_factory=dict)
 
 
 def _ingest_ssf_sources(
@@ -614,7 +617,9 @@ def _ingest_ssf_sources(
         per_analysis.append(recs)
         _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     record.finish()
-    return _Ingested(per_analysis, harvest.alid_variant, harvest.names())
+    return _Ingested(
+        per_analysis, harvest.alid_variant, harvest.names(), source_alid_by_alid=harvest.origin
+    )
 
 
 def _ingest_lifted(
@@ -651,7 +656,7 @@ def _ingest_lifted(
         raise ValueError(_nothing_placed(summary))
     return _Ingested(
         per_analysis, harvest.alid_variant, harvest.names(),
-        placement.provenance(options.chain_file),
+        placement.provenance(options.chain_file), harvest.origin,
     )
 
 
@@ -734,6 +739,10 @@ class _Harvest:
     #: A lifted source's named sites: each one's variant on GRCh38. A GRCh38
     #: site is its own, so only a lifted one is held here.
     placed: dict[str, str] = field(default_factory=dict)
+    #: Each variant's `source_alid`: the ALID its rows' source spelt, itself where the source
+    #: is on GRCh38. Rows of one variant that name different origins make it `None`, never a
+    #: guess (the routing's rule, #85).
+    origin: dict[str, str | None] = field(default_factory=dict)
 
     def add_lifted(self, batch: ReaderBatch, source_alid: np.ndarray) -> None:
         """`add` for a lifted source's rows.
@@ -748,6 +757,7 @@ class _Harvest:
             source_alid.tolist(), batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(),
             batch.rsid.tolist(), strict=True,
         ):
+            note_origin(self.origin, target, source)
             if target not in alid_variant:
                 chromosome, position, a1, a2 = target.split(":")
                 alid_variant[target] = CanonicalVariant(chromosome, int(position), a1, a2)
@@ -771,6 +781,7 @@ class _Harvest:
             batch.alid.tolist(), batch.ref.tolist(), batch.alt.tolist(), batch.rsid.tolist(),
             strict=True,
         ):
+            note_origin(self.origin, alid, alid)
             site = f"{alid}\t{ref}\t{alt}"
             if site in named:
                 continue
@@ -887,6 +898,7 @@ def _build_variant_axis(
     staged: StagedRelease,
     alid_variant: dict[str, CanonicalVariant],
     rsid_by_alid: dict[str, str],
+    source_alid_by_alid: dict[str, str | None],
 ) -> tuple[list[CanonicalVariant], dict[str, int]]:
     """Sort the unique canonical variants into the axis and index the store.
 
@@ -901,7 +913,9 @@ def _build_variant_axis(
     )
     alid_to_idx = {v.alid: i for i, v in enumerate(variants)}
     print(f"Canonical variants: {len(variants):,}")
-    write_variant_axis(staged.path, variants, rsid_by_alid)
+    write_variant_axis(
+        staged.path, variants, rsid_by_alid, [source_alid_by_alid.get(v.alid) for v in variants]
+    )
     return variants, alid_to_idx
 
 

@@ -128,6 +128,7 @@ from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, chromosome_sort_key, write_variant_axis
+from opengwasdb.variants.axis import carried_source_alids
 
 log = logging.getLogger(__name__)
 
@@ -582,7 +583,12 @@ def _write_union_axis_tables(
 
     rsid_by_alid = {v.alid: v.rsid for v in source_variants if v.rsid}
     print("Writing variants.tsv.gz...")
-    write_variant_axis(staged.path, merged_variants, rsid_by_alid)
+    write_variant_axis(
+        staged.path,
+        merged_variants,
+        rsid_by_alid,
+        carried_source_alids(source_variants, merged_variants),
+    )
 
     out_to_src = np.full(n_variants, -1, dtype=np.int64)
     for v in source_variants:

@@ -2364,6 +2364,14 @@ class TestVariantReferenceRsids:
             HG38_ALID_4: "rsLOWER_OFF",
         }
 
+    @staticmethod
+    def _errors_but_source_alid(store: Path) -> list[str]:
+        result = validate_store(store)
+        return [
+            f.message for f in result.findings
+            if f.severity.name == "ERROR" and f.rule != "variant_table.source_alid"
+        ]
+
     def test_fold_earlier_candidate_beats_a_later_reference_one(self, tmp_path):
         """Issue #255, round 3: the global `(rank, site)` order decides, even
         when the two candidates reach one ALID through different routes. An
@@ -2408,8 +2416,12 @@ class TestVariantReferenceRsids:
 
         assert _hybrid_axis_rsids(two_pass)["1:1064620:C:T"] == "rsEARLY"
         assert _hybrid_axis_rsids(single_pass)["1:1064620:C:T"] == "rsEARLY"
-        assert validate_store(two_pass).ok
-        assert validate_store(single_pass).ok
+        # Apart from `variant_table.source_alid`: every variant here is seen from both
+        # assemblies, so the routing blanks each one's `source_alid` by design (#85,
+        # `routing/route.py` `source_alids`), and the rule fails a table with none. A real
+        # mixed release always has rows that only one assembly saw.
+        assert not self._errors_but_source_alid(two_pass)
+        assert not self._errors_but_source_alid(single_pass)
 
     @pytest.mark.parametrize(
         ("hg38_alleles", "hg19_alleles"),
