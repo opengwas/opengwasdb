@@ -24,6 +24,8 @@ What this ADR changes in other documents:
 - From #471 (the dated section below): spec §1, §1.1, §10a, §18, §20 and §20.0 for what
   0.3.0 drops, and banners on [ADR 0001](0001-hybrid-sqlite-zarr-store-envelope.md) and
   [ADR 0057](0057-store-format-0-2-0-zarr-v3-with-sharding.md) §5.
+- From #472 (the dated section below): spec §1, §1.1, §16, §20.0 and §21.4 for the Hybrid
+  Dense Component that shares the variant sidecars, and `CONTEXT.md`'s **Dense Component**.
 - [ADR 0038](0038-store-format-versioning-and-migration-policy.md) and
   [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md) stand: this applies them.
 
@@ -532,6 +534,178 @@ components whose tiers total under 1.2 GB (|z| up to 200.8).
 
 ADR 0102's Consequences gives the same drops on the large releases: 575 MB of tier arrays
 on OGS-00009, and 2.09 GB on OGS-00011's Dense Component.
+
+## 24 Nov 2026 (#472): the Hybrid Dense Component shares the variant sidecars
+
+[ADR 0102](0102-what-a-store-release-ships.md) §4 removes the Hybrid duplication: a 0.2
+Hybrid's Dense Component carries its own copy of the shared Variant Table's rows, of every
+search index over them, and of `analyses.tsv`. Issue
+[#472](https://github.com/opengwas/opengwasdb/issues/472) carries it into 0.3.0, the same
+format version, so there is still one backfill.
+
+**What the Dense Component carries from 0.3.0.** `manifest.json`, `data.zarr/`,
+`dense_to_shared.npy` and, when Reference-Completed, `index.sqlite` with its
+`completion_quality` (`SHARED_AXIS_DENSE_COMPONENT_ENVELOPE`, `envelope_at`). No Variant
+Table, `.tbi`, ALID, position or rsID sidecar, `analyses.tsv` or `overview.html`. What is
+dropped is derived from the envelopes, never listed again: `DENSE_COMPONENT_COPIES` is the
+0.2.3 component's envelope less the 0.3.0 one's (what the rewrite leaves out), and
+`COMPLETED_DENSE_COMPONENT_COPIES` a standalone 0.3.0 Dense release's less it (what
+completion drops). Each would have been one more file per sidecar for #467, #468
+and #470 to write twice, and on a completed Hybrid the copy is already wrong (#481).
+
+**How it is read.** One function decides that a release is a Dense Component that shares
+the axis, `shared_axis_root`: the version chooses, as everywhere in 0.3.0
+(`dense_component_shares_axis`), and the component's place says it is one (`hybrid_root_of`:
+the `dense/` directory of a release whose manifest says `hybrid`; a parent manifest that
+exists but cannot be read is refused, `UnreadableHybridManifest`). `StoreRelease`, the
+Variant Axis's guard, the rewrite and the validator ask it. It reads the filesystem, so it
+changes when a staged root's manifest lands; completion writes that manifest before it
+drops the copies, and nothing opens the component in between.
+
+- `StoreRelease.variant_axis()` of such a component is `PanelVariantAxis`
+  (`opengwasdb.store_reader.panel_axis`): the shared axis seen through the map. A panel row's
+  variant is the shared row the map names; a shared row's panel row is a binary search of the
+  map, `hybrid.panel_rows`, the one search of it, which the query facade asks too. It answers
+  what a `VariantAxis` answers, in panel rows, without inheriting from it; readers are typed
+  `AnyVariantAxis`, so each is checked against both. It refuses
+  (`DenseComponentSharesAxis`) to hand out an index the component does not carry. Its
+  `analyses_path` is the root's. So completion, the validator and the Indexed Variant Subset builder, which open the
+  component as a release, read the shared copies without knowing it.
+- `HybridStoreQuery` resolves an identifier and a range once, against the shared sidecars,
+  and reaches Dense rows through the map. `phewas` and `lookup` already did (#465);
+  `range_phewas` now does too. Its nested Dense query is handed the shared Analyses and a
+  `PanelVariantAxis` over the facade's own shared axis, on every format, so it opens no axis
+  of its own.
+
+**What `dense/analyses.tsv` held that the root does not.** Two columns differ. Its Top-Hit
+Counts count the Dense Component alone (#107); nothing reads them. Its
+`n_missing_se_out_of_range` counts the associations left out of the Dense Component alone
+(ADR 0068). Two things read that:
+- Hybrid completion carried the source Overflow's count forward as the root's less the
+  component's. On 0.3.0 the Dense completion reads the root's Analyses through the
+  component, so it carries the root's count, both components', into the completed Dense
+  Component's, and the source Overflow's count is already there: the completed root counts
+  what a completion of the 0.2.3 form counts (`_root_analyses`).
+- `analyses.se_out_of_range_partition` held the root's count at least the component's. On
+  0.3.0 there is nothing to compare, and it does not judge the component.
+
+The table rules (`analyses.*`) judge a 0.3.0 Hybrid's root `analyses.tsv`, its one copy of
+the Analyses; before 0.3.0 they judged the Dense Component's copy and never the root's, and
+they still do.
+
+**Builds** write the map and no copy. The build's #255 read-back of the Dense Component's
+table against its names becomes a read-back of the map against the shared ALID sidecar
+just written (`require_panel_mapped`). The map's invariants are stated once,
+`check_dense_to_shared` (in range, strictly ascending, one entry per Dense row), and the
+comparison of each Dense row's ALID with its mapped shared row's once, `misnamed_panel_rows`:
+the build's read-back, the rewrite's refusal and the validator ask both. The single-pass build's rewrite of the Dense table
+when the global rsID rekey moved a panel name is gone with the table.
+
+**Completion** runs the unchanged Dense completion on the component, as before. It writes
+the completed component as a standalone Dense release, own Variant Table included, and the
+Hybrid completion reads the completed panel from it. Once the shared table and the map are
+written, the map is read back against the shared ALID sidecar, and the copies are dropped
+(`_drop_dense_copies`). Writing them to drop them costs one Variant Table write of the
+panel: 9.5 ms of a 3.0 s fixture completion, and on OGS-00011's 14,267,257-row panel 94 s
+to write 1,371,261,555 B and 0.08 s to drop them, against that release's 73,388 s
+completion (`scratch/472/copy_cost.py`). Not writing them would mean a second Dense completion path, which the module's
+design (one Dense completion, reused unchanged) is there to avoid.
+
+**The rewrite step**, `dense_shared_axis`, runs before `variant_offsets`, which stays last
+to count the sidecars the others wrote. It leaves the Dense Component's copies out of the
+copy, and the earlier steps write it no sidecar
+(`Component.carries_axis`). Its `refuse` hook streams both Variant Tables of the source side
+by side, once, and refuses unless the map names one shared row for each Dense row, in range,
+strictly ascending, and holding that row's ALID. It does not compare the copies' rsID or
+`source_alid` columns: on a completed release the Dense copy lost some of each (#481), and the
+shared table, which every query already reads, kept them. The proof needs no new question:
+every question it asks of a Hybrid now reaches the Dense Component through the map.
+
+**Indexed Variant Subsets** (fix round 1). A subset records the release it was built
+from, its `source_release_id` and `source_format_version`, so that a reader refuses one
+built from another release (ADR 0061). The rewrite mints a new `release_id` and
+version, so a subset copied unchanged was stale: OGS-00004's `hm3` failed
+`subsets.indexed`, and the live OGS-00011's would have failed after its proof. ADR 0061
+makes a subset a non-authoritative derived artifact, rebuildable from the release and the
+variant list. The rewrite changes no Store Variant Index and no stored code, so the subset
+holds the same cells of the new release, and its step `indexed_subsets` renames it rather
+than rebuilding it: it writes the two attributes (`restamp_indexed_subsets`) and keeps
+the rest. It refuses a source whose subset already names another release, and never
+freshens a stale one. The proof now asks each subset the spread Analyses, Observed-Only
+and not, on both sides, and `subsets.indexed`, which compares every decoded cell of the
+subset with the primary planes, judges the result. Rebuilding was the alternative; it
+costs a full build of each subset (956 s for `hm3` on the completed OGS-00011) and
+proves nothing the comparison does not.
+
+**Validation.** The `variant_table.*` rules do not judge a 0.3.0 Dense Component: it has no
+table. `hybrid.dense_to_shared` judges the map against the shared axis (in range, strictly
+ascending, no row twice, each by its own finding); `hybrid.coverage` against the Dense side,
+which from 0.3.0 is only the panel, the rows of its grid: one map entry for each. Before
+0.3.0 the Dense side is still the component's Variant Table, whose representative rows' ALIDs
+are compared, as they were.
+
+**Evidence.** `tests/test_hybrid_shared_axis_0_3_0.py`. Both Hybrid digest releases,
+Observed-Only and Reference-Completed, carry only the four entries above, validate clean,
+and refuse a stray copy (`envelope.closed`). Their Dense axis answers, row by row, what the
+shared axis answers at the mapped row. Each corruption of the map fails one rule by itself:
+a row out of range, a row named twice and a descending pair fail `hybrid.dense_to_shared`,
+a map one row short fails `hybrid.coverage`. A Hybrid completed from its 0.3.0 form, from
+its 0.2.3 form, and rewritten from the 0.2.3 form of that completion, answer every
+question of the proof identically. The rewrite drops the copies, refuses three maps that
+misname a Dense row, and publishes a source whose Dense copy has lost every rsID, naming
+each row by the shared table's. After fix round 1 the module holds 26 tests; on the code
+before #472, 22 fail and the 3 sharing one rewrite fixture error in it. The one that passes,
+a 0.2 map naming another variant, holds behaviour that was already there.
+`test_rewrite_release` proves both Hybrid digest releases through the rewrite, as before.
+
+**OGS-00004** (Hybrid Observed-Only, 0.2.2, 23,726,262 shared rows, 13,718,605 panel
+rows, 10 Analyses) was rewritten read only, its version refusal bypassed as for #467
+(`scratch/472/real_rewrite_472.py`). The proof asked 142 questions, 9 ALID probes, 20
+range probes and 3 rsID misses, and every answer matched; it took 715 s on the source and
+487 s on the copy, and 1,662 s in all, at 20 GB peak RSS. The copy's
+`hybrid.dense_to_shared`, `hybrid.coverage` and closed envelope pass; it fails only what
+the bypass brings (a 0.2.2 `analyses.tsv` has no `n_missing_se_out_of_range`) and its
+`hm3` Indexed Variant Subset, which named the source's `release_id` and version; the
+`indexed_subsets` step now carries it over (above). Rewritten again with it (fix round 2,
+`scratch/472/real_rewrite_472_v3.py`, 1,264 s), the proof matched on every question, the
+16 subset questions included; the whole validator, `subsets.indexed` included, passed the
+copy but for the `n_missing_se_out_of_range` column the 0.2.2 source lacks; and `hm3`
+named the new `release_id` and 0.3.0 with its `builder_version` and `created_at` kept. In
+the same run the package before #472 (the integration tip, `34fa74c5`, in its own
+interpreter, its path asserted) digested the source: it and this package reading the copy
+agree on all 142 questions, both `range_phewas` included, the 9 ALID probes, the 20 range
+probes, the 3 misses and both tables (`scratch/472/OGS-00004.tip-vs-472.txt`). That, and
+the unchanged golden digests of the two Hybrid fixtures, which the pre-#472 reader pinned,
+are the comparison of the old read path with the new. The Dense Component's
+0.2 copies came to 1,098,940,214 B, the figure ADR 0102 §4 gives. A 0.3.0 component that
+kept its copy would carry 1,265,761,783 B: its table, `.tbi`, rsID index, `analyses.tsv`
+and `overview.html` as the source holds them, and the ALID and position sidecars sized
+from the shared ones at the mapped rows (`scratch/472/dense_bytes.py`).
+
+**OGS-00011 as completed** (Hybrid Reference-Completed, 0.2.0, the release #481 describes,
+now under `replaced/20261122T224238Z`; 48,069,918 shared rows, 14,267,257 panel rows,
+3,169 Analyses) was rewritten the same way, read only. Its whole proof is too large for
+it (ADR 0105 §3): the one broad `range_phewas`, from the first variant of chromosome 1 to
+the last variant's position, would read about 600,000 panel rows by 3,169 Analyses on each
+side. So the comparison ran outside the proof, as the #472 ruling preferred to a named
+allowance (`scratch/472/real_rewrite_472_v2.py`): every other question was asked of both
+sides, 140 questions, 9 ALID probes, 20 range probes and 3 rsID misses, in 3,693 s and
+2,448 s at 57 GB peak RSS, and **no answer changed**. The rewrite then published, and the
+rules it touches (the envelope, `hybrid.*`, `variant_table.*`, `sqlite.provenance_only`,
+the Analysis ids) pass on the copy; a whole validation of this release takes 9.7 h on one
+worker (its `completion-validate` record), so the rest was not run. The Dense Component's
+0.2 copies came to 1,175,803,588 B, ADR 0102 §4's figure; a 0.3.0 component keeping its
+copy would carry 1,347,866,437 B.
+
+**No digest changed on the rsID lookups #481 lost**, because the miss was already gone
+from the read path: #465 made `HybridStoreQuery.lookup` resolve identifiers against the
+shared axis, and `phewas` always had. The loss is still in the 0.2 Dense copy, and the
+rewrite drops it. Of the 850,273 Dense rows whose copy names no rsID where the shared
+table does, 200 spread over the axis were asked by rsID and by ALID, as a PheWAS and as a
+lookup over five of their Analyses, of the source read with this package and of the
+rewritten copy (`scratch/472/rsid_481_check.py`). All 200 gave the same answers on both,
+and by rsID the same as by ALID; `rs761832497`, #481's example, gives 3,131 rows to the
+PheWAS and 5 to the lookup either way.
 
 ## Alternatives considered
 

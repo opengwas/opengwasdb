@@ -172,6 +172,7 @@ from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.encoding.plan import (
     EafMeasurements,
     EncodingMeasurements,
@@ -179,7 +180,13 @@ from opengwasdb.store_reader.encoding.plan import (
 )
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.format import format_version_for
-from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.hybrid import (
+    DENSE_SUBDIR,
+    check_dense_to_shared,
+    dense_component_path,
+    dense_to_shared_path,
+    misnamed_panel_rows,
+)
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
@@ -921,16 +928,11 @@ def _lift_and_partition(
 
 
 def _write_dense_component_skeleton(staged: StagedRelease, axis: _SourceAxis) -> np.ndarray:
-    """Write the Dense Component's valid-store skeleton: its Store Variant
-    Table and the dense row -> shared variant_index sidecar. ``dense_to_shared``
-    is returned because the EAF survey samples both components on the shared
-    axis through it and the query facade reads it back."""
-    write_variant_table(
-        axis.dense_dir,
-        axis.partition.panel_sorted,
-        axis.hg38_to_source,
-        axis.names.rsid_by_alid,
-    )
+    """Write the dense row -> shared variant_index map, the Dense Component's one
+    record of its variants: from format 0.3.0 it carries no Variant Table, sidecar or
+    `analyses.tsv` of its own, and reads the shared ones through this map (#472).
+    ``dense_to_shared`` is returned because the EAF survey samples both components on
+    the shared axis through it and the query facade reads it back."""
     # Ascending: the panel keeps genomic order, so dense row i is shared row
     # dense_to_shared[i] -- the mapping validation checks against.
     dense_to_shared = (
@@ -1705,11 +1707,9 @@ def _merge_off_reference_rsids(
     if not names.pending:
         _warn_fold_left_rows_blank(prepared, fold)
         return prepared
-    finished = names.finish(_fold_route(fold))
-    if finished.rsid_by_alid == names.rsid_by_alid:
-        return replace(prepared, names=finished)
-    _rewrite_dense_table_if_needed(prepared, finished.rsid_by_alid)
-    return replace(prepared, names=finished)
+    # The shared table, the one that names a row (#472), is written from the
+    # finished names, after this.
+    return replace(prepared, names=names.finish(_fold_route(fold)))
 
 
 def _warn_fold_left_rows_blank(
@@ -1734,28 +1734,6 @@ def _warn_fold_left_rows_blank(
         "the sources are not harvested (issue #255 finding 3)",
         unnamed,
     )
-
-
-def _rewrite_dense_table_if_needed(
-    prepared: _PreparedBuild, merged: Mapping[str, str]
-) -> None:
-    """Rewrite the Dense Component table when the global rekey moved a panel row.
-
-    The skeleton's table was written before Pass 2 from the on-reference map.
-    A fold-routed candidate that sorts earlier can only change a *panel* row if
-    its own resolution lands on a panel ALID, so the rewrite is conditional and
-    normally does not happen; without it the Dense Component would carry one
-    name and the shared table another (issue #255).
-    """
-    panel = prepared.partition.panel_sorted
-    written = prepared.names.rsid_by_alid
-    if all(merged.get(alid, "") == written.get(alid, "") for alid in panel):
-        return
-    log.warning(
-        "Single-pass build: the global rsid rekey moved a Dense Component name; "
-        "rewriting the component's variant table"
-    )
-    write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
 
 
 def _fold_recorded_axis(
@@ -2242,10 +2220,10 @@ def _finish_dense_component(
     evidence: _EafEvidence,
     options: _BuildOptions,
 ) -> dict[str, Any]:
-    """Phase - finish the Dense Component as a valid dense store: top-hit
-    index (after the SE decision -- the index carries the values a query reads
-    back), manifest.json, and its own analyses.tsv counting only on-panel hits
-    (the shared root counts both; issue #107)."""
+    """Phase - finish the Dense Component: top-hit index (after the SE decision --
+    the index carries the values a query reads back) and manifest.json. It writes
+    no `analyses.tsv` of its own (#472): the shared root's, written later, counts
+    both components (issue #107)."""
     write_top_hit_indexes_for_store(
         prepared.dense_dir,
         dense.all_rows,
@@ -2269,7 +2247,6 @@ def _finish_dense_component(
         eaf_orientation=eaf_provenance,
         association_coverage=options.association_coverage,
     )
-    write_analyses_tsv(prepared.dense_dir, add_hit_counts(prepared.dense_dir, analyses))
     return eaf_provenance
 
 
@@ -2423,14 +2400,16 @@ def _write_shared_metadata(
         prepared.hg38_to_source,
         prepared.names.rsid_by_alid,
     )
-    # The tables just written must be the tables the resolved map describes: a
+    # The table just written must be the table the resolved map describes: a
     # partial harvest loss, an off-reference row dropped from the write, or a
     # table written from a stale map fails here, on the bytes a query reads,
     # rather than being trusted from the map that produced them (issue #255).
-    # Root first, then the Dense Component -- its table was written before
-    # Pass 2 and must carry the same identifiers as the shared table.
     prepared.names.require_written(prepared.staged.path, prepared.partition.shared_sorted)
-    prepared.names.require_written(prepared.dense_dir, prepared.partition.panel_sorted)
+    # The Dense Component names its rows through `dense_to_shared` alone (#472):
+    # each must reach the shared row of its own panel variant.
+    require_panel_mapped(
+        prepared.staged.path, prepared.dense_to_shared, prepared.partition.panel_sorted
+    )
 
 
 def _prepare_build(
@@ -3500,6 +3479,31 @@ def write_variant_table(
     ]
     source_alids = [hg38_to_source.get(alid) for alid in alids]
     write_variant_axis(store_path, canonical, rsid_by_alid, source_alids)
+
+
+def require_panel_mapped(
+    store_path: Path, dense_to_shared: np.ndarray, panel_alids: Sequence[str]
+) -> None:
+    """Refuse a Hybrid whose `dense_to_shared` does not name, for each Dense Component
+    row, the written shared row holding that row's variant.
+
+    From format 0.3.0 the map is the Dense Component's only record of its variants
+    (#472), so it is read back against the shared ALID sidecar just written, as the
+    shared table is against its names (issue #255).
+    """
+    sidecar = AlidSidecar.open(store_path)
+    if sidecar is None:
+        raise ValueError(f"{store_path}: the shared ALID sidecar was not written")
+    mapped = np.asarray(dense_to_shared, dtype=np.int64)
+    faults = check_dense_to_shared(mapped, sidecar.n_rows, len(panel_alids))
+    if faults:
+        raise ValueError(f"{store_path}: " + "; ".join(faults))
+    shared = zip(mapped.tolist(), sidecar.alids(mapped).tolist(), strict=True)
+    for row, alid, held in misnamed_panel_rows(mapped, panel_alids, shared):
+        raise ValueError(
+            f"{store_path}: dense_to_shared maps Dense Component row {row} ({alid}) to "
+            f"shared row {int(mapped[row])}, which holds {held or 'no row'}"
+        )
 
 
 def _write_dense_manifest(

@@ -132,9 +132,12 @@ completed without it.
 
 This is the complete envelope for a standalone Dense or Ragged Store Release.
 A Hybrid release additionally nests a `dense/` Dense Component directory
-holding a self-contained Dense Store Release of its own (same envelope as
-above, plus `dense_to_shared.npy` mapping its rows into the Hybrid release's
-shared variant table) — see §16. §20 requires every Store Release's
+holding a Dense Store Release of its own, with `dense_to_shared.npy` mapping its
+rows into the Hybrid release's shared variant table — see §16. From format 0.3.0
+that component carries only `manifest.json`, `data.zarr/`, `dense_to_shared.npy`
+and, when Reference-Completed, `index.sqlite`: no `analyses.tsv`, `overview.html`,
+Variant Table, `.tbi` or variant sidecar, as it reads the Hybrid release's through
+the map (#472). Before 0.3.0 it carried the envelope above as well. §20 requires every Store Release's
 directory to be closed: no file or directory beyond what its `primary_layout`
 legitimately produces per this section and §10/§11/§16/§17.
 
@@ -194,10 +197,10 @@ keep their envelope.
 | `index.sqlite` table `metadata`: keys `dense`, `n_variants`, `n_analyses`, `schema_version` | Dense; Hybrid; 0.2 only | validator (`dense`, 0.2); nothing (the other three) | dropped: `manifest.json` and the arrays carry the same facts | #471 |
 | `index.sqlite` table `variant_aliases` | Dense; Hybrid; 0.2 only | Store Reader (0.2: fallback after an rsID index miss); validator (0.2) | dropped: empty in every release measured, and the rsID sidecar covers it; from 0.3.0 an rsID the rsID index lacks is a miss | #471 |
 | `dense` (the Dense Component), with its `manifest.json` and `data.zarr` | Hybrid | Store Reader | read | — |
-| `dense_to_shared.npy` (in `dense`) | Hybrid | Store Reader; validator | read | — |
-| `dense/variants.tsv.gz` and its `.tbi`, `dense/variant_offsets.npy`, `dense/variant_alid_*.npy`, `dense/variant_position*.npy`, `dense/variant_rsid_*.npy` | Hybrid | Store Reader (the nested query) | dropped: the shared sidecars through `dense_to_shared.npy` replace them | #472 |
-| `dense/analyses.tsv` | Hybrid | Store Reader (the nested query) | dropped: it repeats the root `analyses.tsv` and undercounts Top-Hit Counts (issue #107) | #472 |
-| `dense/overview.html` | Hybrid | nothing | dropped: the root `overview.html` presents the same Analyses | #472 |
+| `dense_to_shared.npy` (in `dense`) | Hybrid | Store Reader (every variant question about the Dense Component, from 0.3.0); validator | read | #472 |
+| `dense/variants.tsv.gz` and its `.tbi`, `dense/variant_offsets.npy`, `dense/variant_alid_*.npy`, `dense/variant_position*.npy`, `dense/variant_rsid_*.npy` | Hybrid, 0.2 only | nothing from 0.3.0, which does not ship them; on 0.2, the validator, completion and the Indexed Variant Subset builder (the Hybrid query reads the shared axis on every format) | dropped: the shared sidecars through `dense_to_shared.npy` replace them | #472 |
+| `dense/analyses.tsv` | Hybrid, 0.2 only | nothing from 0.3.0; on 0.2, completion (its `n_missing_se_out_of_range`) and the validator | dropped: it repeats the root `analyses.tsv`, undercounts Top-Hit Counts (issue #107), and its one fact the root lacks, the Dense Component's own `n_missing_se_out_of_range`, no reader needs (§16) | #472 |
+| `dense/overview.html` | Hybrid, 0.2 only | nothing | dropped: the root `overview.html` presents the same Analyses | #472 |
 | `dense/index.sqlite` | Hybrid: every 0.2 release; from 0.3.0 a Reference-Completed one | nothing from 0.3.0; on 0.2, the nested query facade | provenance, as `index.sqlite` above (Reference-Completed only) | #471, #472 |
 
 ## 2. Manifest contract
@@ -1861,6 +1864,16 @@ existed records neither and is read as `0` (ADR 0065). On a Hybrid release the
 the nested Dense Component, the self-contained release the index physically
 belongs to and the one the read seam validates it against.
 
+*24 Nov 2026 (#472).* `ogdb rewrite-release` carries a subset to the release it
+derives (§21.4, [ADR 0105](../adr/0105-format-0-3-0-variable-length-alid-sidecar.md)).
+It changes no Store Variant Index and no stored code, so the subset holds the same
+cells; it writes the new release's `release_id` into `source_release_id` and its
+`format_version` into `source_format_version`, and keeps every other attribute. So
+after a rewrite `builder_version` and `created_at` still describe the subset's
+original build, not the rewrite, and `source_release_id` names a release the subset
+was not built from. `subsets.indexed` then compares every decoded cell with the
+release's primary planes, and a subset already stale on the source is refused.
+
 A regenerated `overview.html` lists every published subset: the name, the
 requested/resolved/absent/Overflow-only counts, the input checksum, the
 Reference Assembly and
@@ -2238,13 +2251,37 @@ The imputed mask is not a sparse offsets index like the top-hit significance ind
 
 ## 16. Dense Reference-Completed layout and overflow
 
-A Hybrid Store Release physically nests its Dense Component as a
-self-contained Dense Store Release at `<store>/dense` (§1) — same envelope,
-opened the same way as a standalone Dense release, plus `dense_to_shared.npy`
-mapping each Dense Component row to its index in the Hybrid release's shared
-variant table. Its Ragged Overflow Component lives in the Hybrid release's
-own `data.zarr/ragged`, alongside the shared `variants.tsv.gz`/`index.sqlite`
-covering both components (§4).
+A Hybrid Store Release physically nests its Dense Component as a Dense Store
+Release at `<store>/dense` (§1), opened the same way as a standalone Dense
+release, with `dense_to_shared.npy` mapping each Dense Component row to its
+index in the Hybrid release's shared variant table. Its Ragged Overflow
+Component lives in the Hybrid release's own `data.zarr/ragged`, alongside the
+shared `variants.tsv.gz` and its sidecars covering both components (§4).
+
+**From format 0.3.0 the Dense Component shares the Hybrid release's variants and
+Analyses** (#472, ADR 0102 §4). Its envelope is `manifest.json`, `data.zarr/`,
+`dense_to_shared.npy` and, when Reference-Completed, `index.sqlite` holding its
+`completion_quality`. Its rows are the panel's, `0..n_panel-1`, the rows of its
+grid, and:
+
+- `dense_to_shared.npy` is `int32`, one entry per grid row, strictly ascending, each
+  a row of the shared table. It is the component's whole variant identity: a reader
+  names a Dense row's variant by the shared row the map gives, and a shared row's
+  Dense row by a binary search of the map (a shared row it does not hold is off the
+  panel);
+- an identifier or a range is resolved once, against the shared sidecars, and its
+  Dense rows reached through the map, so there is no second index to disagree with
+  the first (#481, where a completed release's Dense copy had lost rsIDs and every
+  `source_alid` the shared table kept);
+- the Analyses are the root `analyses.tsv`'s. It counts each Analysis's Top-Hit
+  Counts and `n_missing_se_out_of_range` over both components. Before 0.3.0 the
+  Dense Component's own copy counted only its own, so it undercounted the first
+  (issue #107); no reader needs its own count of the second, since a completion of a
+  0.3.0 Hybrid carries the root's count into the completed root, which then counts
+  what a completion of the 0.2.3 form counts.
+
+A 0.2 Hybrid's Dense Component carries the full Dense envelope (§1) as well, a
+copy of the shared table's rows and of the Analyses.
 
 For Dense Reference-Completed releases:
 
@@ -2514,6 +2551,14 @@ target:
 - *grid*: a Dense grid, a Dense Component's included;
 - *sequence*: a Ragged release's association sequence, or a Hybrid's Ragged Overflow.
 
+From format 0.3.0 a Hybrid's Dense Component carries no Variant Table and no
+`analyses.tsv` (§16, #472). The `variant_table.*` rules and `sqlite.variant_aliases` do
+not judge it; the rules that read its variants read the shared axis in its panel rows,
+and its `envelope.required` names the shared search indexes it reads. The
+`analyses.*` table rules judge the Hybrid's own `analyses.tsv`, its one copy of the
+Analyses, as before 0.3.0 they judged the Dense Component's copy; and
+`analyses.se_out_of_range_partition` has no component count to compare.
+
 A rule may run after others. It is skipped, and recorded as skipped with the rules
 that blocked it, when one of those failed or was skipped on its target or a target it
 belongs to. A skip is not a pass. Whether a rule applies to a target is asked only
@@ -2581,16 +2626,16 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.sd_scale_standardised` | release | check | an Analysis with `stored_effect_scale=sd` has a rescaling `original_sd_method` or `declared_standardised`, at every `format_version` (§7) |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
 | `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
-| `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a) |
+| `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a); from 0.3.0 the component counts none of its own, so nothing is compared (§16) |
 | `regions.table` | release | check | `regions.tsv`, when present or declared, is declared by the manifest's `regions` entry, has its SHA-256, parses as a region table and names only Analyses the release holds (§2, §17) |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
 | `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
 | `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |
 | `csr.observed_only` | sequence | check | an Overflow holds no imputed array |
-| `hybrid.dense_to_shared` | release | check | `dense_to_shared` names distinct rows of the shared variant table |
+| `hybrid.dense_to_shared` | release | check | `dense_to_shared` against the shared variant axis: it names only rows of the shared variant table, in strictly ascending order, so no row twice; each fault is reported by itself (§16) |
 | `hybrid.component` | release | check | the Dense Component opens, as a Dense release |
 | `hybrid.plan` | release | check | both components declare one statistic encoding |
-| `hybrid.coverage` | release | check | each Dense Component row's shared row holds its variant |
+| `hybrid.coverage` | release | check | `dense_to_shared` against the Dense side: it names one shared row for each Dense Component row, and each Dense row's shared row holds its variant. From format 0.3.0 the Dense side is only the panel, the rows of its grid, as the component carries no variant of its own (§16, #472); before it, the component's Variant Table, whose representative rows' ALIDs are compared |
 | `encoding.dtypes` | grid, sequence | check | each plane has the dtype its declared encoding stores |
 | `encoding.per_variant_chunks` | grid, sequence | check | no per-variant array is chunked as one block |
 | `encoding.eaf` | grid, sequence | check | the `eaf` plane, baseline, exception table and reference match the plan |
@@ -3276,7 +3321,7 @@ association data and no Analytical Metadata, and every edited Store is
 re-validated.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `ogdb rewrite-release SOURCE DESTINATION` (`opengwasdb.store.rewrite`, issue #467) derives a new `0.3.0` release from a `0.2.3` one: it copies the source (by reflink where the filesystem can), runs its named steps on the copy — #467's writes the ALID sidecar from the Variant Table and drops the fixed-width pair; #468's writes the position sidecar from the same table; #471's drop `index.sqlite`'s `metadata` and `variant_aliases` (an Observed-Only release then has no `index.sqlite`; a Reference-Completed one keeps `completion_quality`) and every tier's `abs_z` and `p_value`, which the copy leaves out rather than copying to delete, and refuse, before anything is written, a source whose `index.sqlite` holds a table 0.3.0 neither keeps nor drops, whose `variant_aliases` names an rsID its rsID index lacks, whose `dense` blob disagrees with its manifest, which is Reference-Completed with no `completion_quality`, or which has a tier storing one of `abs_z` and `p_value` without the other, storing values its `z` does not imply, or described by a consolidated-metadata record; #469's leaves `variant_offsets.npy` out of the copy and drops the Dense provenance's `row_offsets` that names it (the `dense` blob that also named it goes with `metadata`), refusing unless the ALID and position sidecars count the rows the offsets did; #470 and #472 each add one — and stamps every manifest `0.3.0` with a fresh `release_id` and `created_at`, `store_id` kept, and a `format_rewrite` provenance block naming the source `release_id`, the steps, and the range probes the release could not pose (`range_questions_not_posed`, which the log line also names). Before it publishes, it asks the source and the staged copy the same deterministic set of questions (`opengwasdb.store.query_digests`: each Analysis, PheWAS and lookups of variants spread over the axis, a range, the top hits at five thresholds, Observed-Only and not, the ALID probes: the release's longest ALIDs and one at each of 23, 24, 25, 32 and 33 bytes, and the range probes: ranges at the first and last variant, either side of a chromosome boundary, between two variants, on a chromosome the release lacks, and on a position several variants share, and the misses: rsIDs no release names, by PheWAS and inside a lookup) and refuses on any difference in any array of any answer; #467's step also refuses unless every ALID it wrote resolves to its own row, #468's unless the sidecar places every row where the table does, and the table steps unless the table holds the rows the source's offsets count; then it validates the copy and publishes by rename only if it is clean. It never writes its source, refuses a destination that exists or lies inside the source, and refuses every source but `0.2.3`: 0.3.0 keeps 0.2.3's reference-first indels and its count of associations left out for an SE above 65,504, which an earlier release lacks and no rewrite can add, so such a release is rebuilt. Hosted releases are not rewritten: every Store is rebuilt from source at `0.3.0` once #467–#472 are in (the owner, 23 Nov 2026, in the #450 run; opengwas/opengwasdb-stores#498). The rewrite is the proof that each format step changes no answer, sized for the fixture releases and small real ones; on a large Dense release some of its questions cannot run (ADR 0105 §3). `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `ogdb rewrite-release SOURCE DESTINATION` (`opengwasdb.store.rewrite`, issue #467) derives a new `0.3.0` release from a `0.2.3` one: it copies the source (by reflink where the filesystem can), runs its named steps on the copy — #467's writes the ALID sidecar from the Variant Table and drops the fixed-width pair; #468's writes the position sidecar from the same table; #471's drop `index.sqlite`'s `metadata` and `variant_aliases` (an Observed-Only release then has no `index.sqlite`; a Reference-Completed one keeps `completion_quality`) and every tier's `abs_z` and `p_value`, which the copy leaves out rather than copying to delete, and refuse, before anything is written, a source whose `index.sqlite` holds a table 0.3.0 neither keeps nor drops, whose `variant_aliases` names an rsID its rsID index lacks, whose `dense` blob disagrees with its manifest, which is Reference-Completed with no `completion_quality`, or which has a tier storing one of `abs_z` and `p_value` without the other, storing values its `z` does not imply, or described by a consolidated-metadata record; #469's leaves `variant_offsets.npy` out of the copy and drops the Dense provenance's `row_offsets` that names it (the `dense` blob that also named it goes with `metadata`), refusing unless the ALID and position sidecars count the rows the offsets did; #472's leaves a Hybrid Dense Component's own Variant Table, `.tbi`, ALID index, rsID index, `variant_offsets.npy`, `analyses.tsv` and `overview.html` out of the copy (the earlier steps write it no sidecar), refusing, before anything is written, unless `dense_to_shared.npy` names one shared row for each of its rows, in range and strictly ascending, holding that row's ALID; it does not compare the two copies' rsID or `source_alid` columns, as the shared table, which every query reads, kept what a completed release's Dense copy lost (#481); the `indexed_subsets` step records the new `release_id` and `format_version` in each Indexed Variant Subset the release carries, as it holds the same cells of the rewritten release (§10b, ADR 0061), and refuses a source whose subset already names another release; #470 adds one — and stamps every manifest `0.3.0` with a fresh `release_id` and `created_at`, `store_id` kept, and a `format_rewrite` provenance block naming the source `release_id`, the steps, and the range probes the release could not pose (`range_questions_not_posed`, which the log line also names). Before it publishes, it asks the source and the staged copy the same deterministic set of questions (`opengwasdb.store.query_digests`: each Analysis, PheWAS and lookups of variants spread over the axis, a range, the top hits at five thresholds, Observed-Only and not, the ALID probes: the release's longest ALIDs and one at each of 23, 24, 25, 32 and 33 bytes, and the range probes: ranges at the first and last variant, either side of a chromosome boundary, between two variants, on a chromosome the release lacks, and on a position several variants share, the misses: rsIDs no release names, by PheWAS and inside a lookup, and each Indexed Variant Subset's answer for the spread Analyses) and refuses on any difference in any array of any answer; #467's step also refuses unless every ALID it wrote resolves to its own row, #468's unless the sidecar places every row where the table does, and the table steps unless the table holds the rows the source's offsets count; then it validates the copy and publishes by rename only if it is clean. It never writes its source, refuses a destination that exists or lies inside the source, and refuses every source but `0.2.3`: 0.3.0 keeps 0.2.3's reference-first indels and its count of associations left out for an SE above 65,504, which an earlier release lacks and no rewrite can add, so such a release is rebuilt. Hosted releases are not rewritten: every Store is rebuilt from source at `0.3.0` once #467–#472 are in (the owner, 23 Nov 2026, in the #450 run; opengwas/opengwasdb-stores#498). The rewrite is the proof that each format step changes no answer, sized for the fixture releases and small real ones; on a large Dense release some of its questions cannot run (ADR 0105 §3). `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.

@@ -27,9 +27,9 @@ from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stored import sequence_arrays
-from opengwasdb.store_reader.variant_axis import VariantAxis
 
 #: What one scan yields: a block of the data it reads.
 B = TypeVar("B")
@@ -163,6 +163,14 @@ class Target:
         return release is not None and release.parent is not None
 
     @property
+    def shares_variant_axis(self) -> bool:
+        """Whether this target's release reads the variants and Analyses of the Hybrid
+        that nests it: a Dense Component from format 0.3.0, which carries no Variant
+        Table, sidecar or `analyses.tsv` of its own (#472). Its `variant_axis` is the
+        shared one in its panel rows, and its `analyses` are the root's."""
+        return self.store.shared_root is not None
+
+    @property
     def group(self) -> Any:
         """The Zarr group this target's arrays are in, opened on first use.
 
@@ -220,7 +228,7 @@ class Target:
         return read_analyses(self.store.analyses_path)
 
     @cached_property
-    def variant_axis(self) -> VariantAxis:
+    def variant_axis(self) -> AnyVariantAxis:
         """The release's Variant Axis, opened on first use and closed by `close`."""
         return self.store.variant_axis(aliases=False)
 

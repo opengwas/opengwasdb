@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 import numpy as np
@@ -650,7 +650,15 @@ def variant_aliases(target: Target) -> Iterator[str]:
             yield f"alias {alias!r} points to missing variant {variant_index}"
 
 
-RULES: tuple[Rule, ...] = (
+def _own_table_only(rule: Rule) -> Rule:
+    """`rule`, judging only a release that carries its own Variant Table: never a 0.3.0
+    Dense Component, whose rows the shared table names (#472); `hybrid.dense_to_shared`
+    judges its map instead."""
+    when = rule.when
+    return replace(rule, when=lambda target: not target.shares_variant_axis and when(target))
+
+
+_RULES: tuple[Rule, ...] = (
     Fold(
         name=ROWS,
         kinds=Kind.RELEASE,
@@ -765,3 +773,5 @@ RULES: tuple[Rule, ...] = (
         run=variant_aliases,
     ),
 )
+
+RULES: tuple[Rule, ...] = tuple(_own_table_only(rule) for rule in _RULES)

@@ -73,13 +73,19 @@ def analysis_label(row: Mapping[str, str]) -> str:
 
 
 class AnalysesIndex:
-    """`analyses.tsv` read once, keyed by `analysis_id` and by `analysis_index`."""
+    """`analyses.tsv` read once, keyed by `analysis_id` and by `analysis_index`.
 
-    def __init__(self, store_path: str | Path):
-        table = read_analyses(Path(store_path) / "analyses.tsv")
+    Built from a release's directory, or from `table`, the `analyses.tsv` a release
+    reads when it is not its own (a 0.3.0 Hybrid Dense Component's is its Hybrid's,
+    `StoreRelease.analyses_path`, #472).
+    """
+
+    def __init__(self, store_path: str | Path, *, table: str | Path | None = None):
+        path = Path(table) if table is not None else Path(store_path) / "analyses.tsv"
+        rows = read_analyses(path).rows
         self._by_id: dict[str, dict[str, str]] = {}
         self._by_index: dict[int, dict[str, str]] = {}
-        for row in table.rows:
+        for row in rows:
             self._by_id[row["analysis_id"]] = row
             self._by_index[int(row["analysis_index"])] = row
 

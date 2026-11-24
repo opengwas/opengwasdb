@@ -286,6 +286,12 @@ identifiers through the nested Dense Component's own rsID index (`query/facade.p
 | `lookup(["1:782676:A:G"], five of those Analyses)` | 5 |
 | `lookup(["rs761832497"], the same five)` | **0** |
 
+> **24 Nov 2026 (#472).** By the time #472 landed this table no longer described the reader:
+> #465 had made `HybridStoreQuery.lookup` resolve identifiers against the shared axis, so the
+> last row gives 5, not 0, on the release above, and no digest changed on OGS-00011 when
+> its Dense copy was dropped. See [ADR 0105's #472 section](0105-format-0-3-0-variable-length-alid-sidecar.md#24-nov-2026-472-the-hybrid-dense-component-shares-the-variant-sidecars).
+> The decision stands.
+
 `dense/analyses.tsv` also undercounts Top-Hit Counts (issue #107): on OGS-00011, `n_hits_5e8`
 differs from the release root's for 1,629 of 3,169 Analyses.
 
@@ -343,10 +349,19 @@ The duplication is removed (#472). What the rewrite command must do because of i
   - records how many Dense Component values it superseded (#481: the rsID of 850,273 rows and the
     `source_alid` of 14,267,080 on OGS-00011).
 
+    > **24 Nov 2026 (#472).** The rewrite records no such count. It compares only the ALIDs
+    > of the two copies (`misnamed_panel_rows`) and drops the Dense copy whole; the counts
+    > above were measured once, by #463's audit and #472's check
+    > (`scratch/472/rsid_481_check.py`), and are in ADR 0105's #472 section.
+
   An rsID `lookup` of those 850,273 on-panel variants then finds their cells. That is a fix, so on
   OGS-00011 the digest check of #467's rewrite command must expect those rsID lookups to change.
   It must not treat the change as a regression, and it must not drop those identifiers from the
   check.
+
+  > **24 Nov 2026 (#472).** No such change happened: #465 had already made the lookup find
+  > them, so the rewrite of OGS-00011 changed no digest. See
+  > [ADR 0105's #472 section](0105-format-0-3-0-variable-length-alid-sidecar.md#24-nov-2026-472-the-hybrid-dense-component-shares-the-variant-sidecars).
 - **Code that needs a component this ADR drops** moves with the ticket that drops it:
   - `variant_offsets.npy` (#469): `VariantAxis`; the validator's presence check; the manifest's
     `provenance.dense.variant_axis.row_offsets`, which names the file (`layouts/dense/build.py:528`);

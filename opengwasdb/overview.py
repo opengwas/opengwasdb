@@ -236,8 +236,9 @@ _FILE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     ),
     "dense": (
         "internal",
-        "Dense Component -- a nested Dense store holding the Hybrid layout's shared "
-        "reference-panel variants (has its own manifest.json/analyses.tsv/overview.html).",
+        "Dense Component -- a nested Dense store holding the Hybrid layout's "
+        "reference-panel grid. From format 0.3.0 it has its own manifest.json but no "
+        "variant table or analyses.tsv: its variants and Analyses are this release's.",
     ),
     "dense_to_shared.npy": ("internal", "Dense Component row -> shared variant table index map."),
 }

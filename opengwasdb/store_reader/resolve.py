@@ -36,12 +36,12 @@ import numpy as np
 
 from opengwasdb.store_reader.analyses import AnalysesIndex
 from opengwasdb.store_reader.associations.record import statistics_of
-from opengwasdb.store_reader.variant_axis import VariantAxis
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 
 
 def resolve_rows(
     analyses: AnalysesIndex,
-    variant_axis: VariantAxis,
+    variant_axis: AnyVariantAxis,
     result: Mapping[str, np.ndarray],
     *,
     include_variant_info: bool = False,

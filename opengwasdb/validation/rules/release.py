@@ -39,6 +39,10 @@ from opengwasdb.store_reader.format import (
 )
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
+from opengwasdb.store_reader.rsid_index import (
+    VARIANT_RSID_BYTES_FILENAME,
+    VARIANT_RSID_ROWS_FILENAME,
+)
 from opengwasdb.store_reader.variant_axis import (
     variant_offsets_path,
     variant_tabix_path,
@@ -258,6 +262,15 @@ def _variant_offsets_entries(target: Target) -> list[tuple[str, Path]]:
 def _dense_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
+    if target.shares_variant_axis:
+        # A 0.3.0 Dense Component: its grid, the map the Hybrid's entries name, and the
+        # shared axis it reads its variants from, without which none of its rules can
+        # name a row (#472).
+        return [
+            *_index_entry(target),
+            ("missing data.zarr", store.data_path),
+            *_shared_axis_entries(target),
+        ]
     return [
         *_index_entry(target),
         ("missing data.zarr", store.data_path),
@@ -267,6 +280,25 @@ def _dense_entries(target: Target) -> list[tuple[str, Path]]:
         *_variant_offsets_entries(target),
         *_alid_index_entries(target, rebuild=True),
         *_position_sidecar_entries(target),
+    ]
+
+
+def _shared_axis_entries(target: Target) -> list[tuple[str, Path]]:
+    """The Hybrid release's search indexes a 0.3.0 Dense Component reads its variants
+    from: those the Hybrid's own `format_version` carries, as its own axis opens them."""
+    root = target.store.shared_root
+    assert root is not None and target.parent is not None, "only a nested Dense Component"
+    version = target.parent.store.manifest.format_version
+    names = (
+        *alid_index_kind(version).FILENAMES,
+        *(POSITION_SIDECAR_FILENAMES if carries_position_sidecar(version) else ()),
+        VARIANT_RSID_BYTES_FILENAME,
+        VARIANT_RSID_ROWS_FILENAME,
+    )
+    return [
+        (f"missing {name} in the Hybrid release, whose variant axis the Dense Component "
+         "reads", root / name)
+        for name in names
     ]
 
 

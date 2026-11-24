@@ -44,7 +44,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from opengwasdb.index.release_index import ReleaseIndex
+from opengwasdb.layouts.dense.indexed_subsets import (
+    restamp_indexed_subsets,
+    subset_identity_mismatches,
+)
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.convert import (
@@ -55,6 +61,7 @@ from opengwasdb.store.convert import (
     require_valid_staged_release,
 )
 from opengwasdb.store.open import (
+    DENSE_COMPONENT_COPIES,
     INDEX_FILENAME,
     OpenGWASDBStore,
     connect_index,
@@ -73,6 +80,12 @@ from opengwasdb.store_reader.format import (
     carries_alid_sidecar,
     check_format_version,
     format_version_for,
+)
+from opengwasdb.store_reader.hybrid import (
+    check_dense_to_shared,
+    dense_to_shared_path,
+    misnamed_panel_rows,
+    shared_axis_root,
 )
 from opengwasdb.store_reader.position_sidecar import PositionSidecar, write_position_sidecar
 from opengwasdb.store_reader.release import release_arrays
@@ -128,6 +141,12 @@ class Component:
     def path(self) -> Path:
         return self.store.path
 
+    @property
+    def carries_axis(self) -> bool:
+        """Whether the 0.3.0 release made of it carries a Variant Axis of its own: every
+        component but a Hybrid's Dense Component, which reads the shared one (#472)."""
+        return shared_axis_root(self.path, TARGET_FORMAT_VERSION) is None
+
 
 @dataclass(frozen=True)
 class RewriteContext:
@@ -140,10 +159,17 @@ class RewriteContext:
     source: Path
     staged: Path
     components: tuple[Component, ...]
+    #: The rewritten release's `release_id`: `_stamp` writes it into every manifest, and
+    #: `_restamp_subsets` into every Indexed Variant Subset.
+    release_id: str
 
     def staged_components(self) -> Iterator[Path]:
         for component in self.components:
             yield self.staged / component.relative
+
+    def axis_components(self) -> Iterator[Component]:
+        """The components whose Variant Axis the steps rewrite (`Component.carries_axis`)."""
+        return (component for component in self.components if component.carries_axis)
 
 
 def _nothing_to_refuse(_component: Component) -> None:
@@ -188,9 +214,10 @@ def _write_alid_sidecar(context: RewriteContext) -> None:
     sidecar is written by its one writer, the codec's `write_alid_sidecar` (a build
     reaches it through `write_variant_axis`, which writes the whole axis; this step
     rewrites only the ALID index). Before the step ends, every ALID is searched for
-    and must name its own row: the proof's questions reach only some of them.
+    and must name its own row: the proof's questions reach only some of them. A
+    Hybrid's Dense Component gets none: `dense_shared_axis` drops its axis (#472).
     """
-    for component in context.components:
+    for component in context.axis_components():
         directory = context.staged / component.relative
         alids = [
             record.alid for record in _records_in_row_order(directory, _offset_rows(component))
@@ -227,9 +254,10 @@ def _write_position_sidecar(context: RewriteContext) -> None:
     reaches through `write_variant_axis`), refuses rows not in genomic order. Before
     the step ends, the sidecar read back must place every row where the table does:
     the proof's range questions reach only some of them. The tabix index stays, a
-    convenience no 0.3.0 query reads (spec §1.1).
+    convenience no 0.3.0 query reads (spec §1.1). A Hybrid's Dense Component gets
+    none (#472).
     """
-    for component in context.components:
+    for component in context.axis_components():
         directory = context.staged / component.relative
         chromosomes: list[str] = []
         positions: list[int] = []
@@ -305,9 +333,11 @@ def _check_sidecars_count_offsets(context: RewriteContext) -> None:
     A 0.3.0 Store Reader never reads the Variant Table, so nothing seeks a row's BGZF
     offset: the ALID sidecar counts the variants. The copy left the file out; this
     checks the sidecars that replace it, after the steps that wrote them. A Dense
-    build's `provenance.dense.variant_axis.row_offsets`, which names it, goes too.
+    build's `provenance.dense.variant_axis.row_offsets`, which names it, goes too. A
+    Hybrid's Dense Component has no sidecars to count: `dense_shared_axis` checked its
+    rows against the map instead (#472).
     """
-    for component in context.components:
+    for component in context.axis_components():
         directory = context.staged / component.relative
         n_offsets = _offset_rows(component)
         counted = {
@@ -523,6 +553,111 @@ def _stored_p_left_out(component: Component) -> Iterable[str]:
     ]
 
 
+def _refuse_unmapped_dense_rows(component: Component) -> None:
+    """Refuse a Hybrid whose `dense_to_shared.npy` does not map every Dense Component
+    row to the shared row holding that row's own variant (#472).
+
+    The 0.3.0 Dense Component names its rows through the map alone, so the map must be
+    sound (`check_dense_to_shared`: in range, strictly ascending, one entry per Dense
+    row) and reach, for each row, a shared row whose ALID is the dropped copy's
+    (`misnamed_panel_rows`). Both Variant Tables of the source are streamed once, side by
+    side. The copies' rsID and `source_alid` columns are not compared: a completed
+    release's Dense copy lost some of each, and the shared table, which every query
+    already reads, keeps them (#481).
+    """
+    if component.carries_axis:
+        return
+    root = component.path.parent
+    mapped = np.load(dense_to_shared_path(root), mmap_mode="r").astype(np.int64)
+    n_shared = len(np.load(variant_offsets_path(root), mmap_mode="r"))
+    faults = check_dense_to_shared(mapped, n_shared, _offset_rows(component))
+    if faults:
+        raise RewriteError(
+            f"{dense_to_shared_path(root)}: {'; '.join(faults)}; the Dense Component's copy "
+            "of the variants is not dropped"
+        )
+    with (
+        closing(component.store.variant_axis(aliases=False)) as dense_axis,
+        closing(open_store(root).variant_axis(aliases=False)) as shared_axis,
+    ):
+        dense = (_in_order(component, row, r).alid for row, r in enumerate(dense_axis.records()))
+        shared = ((r.variant_index, r.alid) for r in shared_axis.records())
+        for row, alid, held in misnamed_panel_rows(mapped, dense, shared):
+            raise RewriteError(
+                f"{dense_to_shared_path(root)} maps Dense Component row {row} ({alid}) to "
+                f"shared row {int(mapped[row])}, which holds {held or 'no row'}; the Dense "
+                "Component's copy of the variants is not dropped"
+            )
+
+
+def _in_order(component: Component, row: int, record: VariantRecord) -> VariantRecord:
+    _refuse_out_of_order(component, row, record)
+    return record
+
+
+def _refuse_out_of_order(component: Component, row: int, record: VariantRecord) -> None:
+    if record.variant_index != row:
+        raise RewriteError(
+            f"{variant_table_path(component.path)}: row {row} has variant_index "
+            f"{record.variant_index}; a table out of order is not rewritten"
+        )
+
+
+def _dense_copies_left_out(component: Component) -> Iterable[str]:
+    """What a Hybrid Dense Component carried at 0.2.3 and does not at 0.3.0
+    (`DENSE_COMPONENT_COPIES`, from the two envelopes): its Variant Table, `.tbi`,
+    fixed-width ALID pair, `variant_offsets.npy`, rsID index, `analyses.tsv` and
+    `overview.html` (#472). It reads the shared ones through `dense_to_shared.npy`."""
+    if component.carries_axis:
+        return ()
+    return sorted(name for name in DENSE_COMPONENT_COPIES if (component.path / name).exists())
+
+
+def _subset_holder(component: Component) -> bool:
+    """Whether the component holds Indexed Variant Subsets: a Dense release, or a
+    Hybrid's Dense Component (a Hybrid's outer release keeps none of its own)."""
+    return component.store.manifest.primary_layout is PrimaryStorageLayout.DENSE
+
+
+def _refuse_stale_subsets(component: Component) -> None:
+    """Refuse a source carrying a subset that already does not name it: the rewrite
+    renames a subset that belongs to its source, and never freshens a stale one."""
+    if not _subset_holder(component):
+        return
+    stale = subset_identity_mismatches(component.path)
+    if stale:
+        raise RewriteError(
+            f"{component.path}: {'; '.join(stale)}; a stale Indexed Variant Subset is "
+            "rebuilt or removed before the release is rewritten"
+        )
+
+
+def _restamp_subsets(context: RewriteContext) -> None:
+    """Point each Indexed Variant Subset at the rewritten release (ADR 0061).
+
+    The rewrite changes no Store Variant Index and no stored code, so a subset holds
+    the same cells of the rewritten release as of its source; it records its parent's
+    `release_id` and `format_version`, and those are what change. The proof asks each
+    subset the spread Analyses on both sides, and `subsets.indexed` then compares every
+    decoded cell of it with the primary planes.
+    """
+    for component in context.components:
+        if _subset_holder(component):
+            directory = context.staged / component.relative
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+            restamp_indexed_subsets(
+                directory,
+                release_id=context.release_id,
+                format_version=_stamped_format_version(manifest),
+            )
+
+
+def _stamped_format_version(manifest: dict[str, Any]) -> str:
+    """The `format_version` the rewrite stamps on a component whose source manifest is
+    `manifest`: what `_stamp` writes, and what each Indexed Variant Subset records."""
+    return format_version_for(carries_regions="regions" in manifest, reference_first_indels=True)
+
+
 #: The rewrite's steps, in the order they run (`RewriteStep`). #468-#472 each add one.
 STEPS: tuple[RewriteStep, ...] = (
     RewriteStep(
@@ -555,6 +690,22 @@ STEPS: tuple[RewriteStep, ...] = (
         refuse=_refuse_stored_p_drop,
     ),
     RewriteStep(
+        "indexed_subsets",
+        "record the rewritten release's release_id and format_version in each Indexed "
+        "Variant Subset, which holds the same cells of it as of its source (ADR 0061)",
+        run=_restamp_subsets,
+        refuse=_refuse_stale_subsets,
+    ),
+    RewriteStep(
+        "dense_shared_axis",
+        "drop a Hybrid Dense Component's own Variant Table, its .tbi, ALID, position and "
+        "rsID indexes, analyses.tsv and overview.html; it reads the shared ones through "
+        "dense_to_shared.npy, which must map each of its rows to the shared row of its "
+        "own variant (#472)",
+        leaves_out=_dense_copies_left_out,
+        refuse=_refuse_unmapped_dense_rows,
+    ),
+    RewriteStep(
         "variant_offsets",
         "drop variant_offsets.npy, each row's BGZF offset in the Variant Table, which no "
         "0.3.0 query reads: the ALID sidecar counts the variants (#469)",
@@ -583,13 +734,17 @@ def rewrite_release(
     _log_phase(
         f"asked the source {len(reference['shapes'])} questions, "
         f"{len(reference['alid_probes'])} ALID probes, "
-        f"{len(reference['range_probes'])} range probes and "
+        f"{len(reference['range_probes'])} range probes, "
+        f"{len(reference['indexed_subsets'])} Indexed Variant Subset questions and "
         f"{len(reference['misses'])} rsID misses; "
         + _unposed_said(reference["unposed_range_questions"]),
         started,
     )
     with OpenGWASDBStore.staging(destination) as staged:
-        context = RewriteContext(source=source, staged=staged.path, components=components)
+        release_id = str(uuid.uuid4())
+        context = RewriteContext(
+            source=source, staged=staged.path, components=components, release_id=release_id
+        )
         started = time.perf_counter()
         left_out = _left_out(components, steps)
         _copy_release(source, staged.path, left_out)
@@ -602,7 +757,6 @@ def rewrite_release(
         _stamp(
             context,
             steps,
-            release_id=str(uuid.uuid4()),
             now=datetime.now(UTC).isoformat(),
             unposed=reference["unposed_range_questions"],
         )
@@ -713,7 +867,6 @@ def _stamp(
     context: RewriteContext,
     steps: tuple[RewriteStep, ...],
     *,
-    release_id: str,
     now: str,
     unposed: list[str],
 ) -> None:
@@ -728,11 +881,9 @@ def _stamp(
     for path in manifest_paths(context.staged):
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         source_release_id = str(data["release_id"])
-        data["release_id"] = release_id
+        data["release_id"] = context.release_id
         data["created_at"] = now
-        data["format_version"] = format_version_for(
-            carries_regions="regions" in data, reference_first_indels=True
-        )
+        data["format_version"] = _stamped_format_version(data)
         data["provenance"] = {
             **data.get("provenance", {}),
             "format_rewrite": {

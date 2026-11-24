@@ -151,16 +151,18 @@ from opengwasdb.store_reader.indexed import (
     _parse_subset_encoding,
     _plane_shape_findings,
     _source_identity_mismatches,
+    encoding_mismatch,
     indexed_subset_store_path,
     parse_indexed_subset_name,
+    stale_subset_findings,
 )
 
 # Re-exported: opengwasdb-stores opens a subset through this module.
 from opengwasdb.store_reader.indexed import open_indexed_subset as open_indexed_subset
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 from opengwasdb.store_reader.release import release_arrays
-from opengwasdb.store_reader.variant_axis import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 
@@ -996,7 +998,7 @@ def _resolve_build_target(store_path: Path) -> tuple[Path, StoreManifest, Path |
     return store_path, release.manifest, None
 
 
-def _matched_alids(axis: VariantAxis, variant_index: np.ndarray) -> set[str]:
+def _matched_alids(axis: AnyVariantAxis, variant_index: np.ndarray) -> set[str]:
     """The canonical ALIDs of `variant_index` in `axis`, without a table scan.
 
     `identity_by_indices` reads the mmap'd ALID index when the store carries
@@ -1439,6 +1441,57 @@ def list_indexed_subsets(store_path: str | Path) -> tuple[str, ...]:
     )
 
 
+def subset_identity_mismatches(store_path: str | Path) -> list[str]:
+    """Every way a published subset of `store_path` is stale for the release it sits in:
+    its recorded identity or its encoding (`stale_subset_findings`, which the reader and
+    `subsets.indexed` refuse by), or an encoding block that cannot be read.
+
+    `store_path` is a Dense release, or a Hybrid's Dense Component, which holds its own
+    subsets."""
+    path = Path(store_path)
+    manifest = StoreManifest.load(path)
+    found: list[str] = []
+    for name in list_indexed_subsets(path):
+        attrs = dict(release_arrays(path)[INDEXED_SUBSETS_GROUP][name].attrs)
+        encoding = _parse_subset_encoding(name, attrs, found)
+        if encoding is None:
+            found.extend(_source_identity_mismatches(name, attrs, manifest))
+        else:
+            found.extend(stale_subset_findings(name, attrs, encoding, manifest))
+    return found
+
+
+def restamp_indexed_subsets(
+    store_path: str | Path, *, release_id: str, format_version: str
+) -> tuple[str, ...]:
+    """Record a derived release's identity in each subset it carries unchanged; return
+    their names.
+
+    A subset is a non-authoritative derived artifact that records the release it was
+    built from, so a reader can refuse one built from another (ADR 0061). A derived
+    release that changes neither the Store Variant Indices nor a stored code -- the
+    0.3.0 rewrite (#467-#472) -- holds the same subset of the same cells, so the subset
+    is renamed to it, not rebuilt: its `source_release_id` and `source_format_version`
+    become the new release's. Everything else it records is kept. Nothing proves here
+    that the cells are unchanged; the caller's proof and `subsets.indexed`, which
+    compares every decoded cell with the primary planes, do.
+    """
+    path = Path(store_path)
+    names = list_indexed_subsets(path)
+    for name in names:
+        # Opened to add to it, in the Zarr format the release's version is stored in;
+        # one under a consolidated-metadata record is refused, as every write is.
+        group = store_arrays.open_group_for_write(
+            indexed_subset_namespace_path(path) / name,
+            "a",
+            zarr_format=zarr_format_for_version(format_version),
+        )
+        group.attrs.update(
+            {ATTR_SOURCE_RELEASE_ID: release_id, ATTR_SOURCE_FORMAT_VERSION: format_version}
+        )
+    return names
+
+
 # ── Validation seam ─────────────────────────────────────────────────────────
 
 
@@ -1745,11 +1798,9 @@ def _read_declared_encoding(
     declared = _parse_subset_encoding(name, attrs, errors)
     if declared is None:
         return None
-    if declared != manifest.encoding:
-        errors.append(
-            f"indexed subset {name!r} was built with an encoding that is not the "
-            "release's; the index cannot be decoded against the authoritative planes"
-        )
+    mismatch = encoding_mismatch(name, declared, manifest)
+    if mismatch is not None:
+        errors.append(mismatch)
         return None
     return declared
 

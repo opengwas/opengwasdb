@@ -283,7 +283,8 @@ def test_the_hybrid_builder_stores_it_as_missing_in_both_components(tmp_path: Pa
     # |z| is 2 wherever the SE is held (ES = 2 SE); each oversized association is absent.
     assert held == [("trait_a", 2.0, 0.2), ("trait_b", 2.0, 0.3), ("trait_b", 2.0, 0.5)]
     assert _counts(store) == ["2", "1"], "the root counts both components"
-    assert _counts(store / "dense") == ["1", "0"], "the Dense Component its own"
+    # The Dense Component has no analyses.tsv of its own from 0.3.0 (#472).
+    assert not (store / "dense" / "analyses.tsv").exists()
     dense = open_store(store).dense_component().arrays(mode="r")
     assert not np.isinf(np.asarray(dense["se"][:], dtype=np.float32)).any()
     _validates_cleanly(store)

@@ -185,7 +185,7 @@ def pair(tmp_path: Path, _pair_seed: tuple[Path, Path]) -> tuple[Path, Path]:
 
 
 def _dense_alids(store: Path) -> list[str]:
-    axis = VariantAxis(store / "dense")
+    axis = open_store(store / "dense").variant_axis(aliases=False)
     try:
         return [record.alid for record in axis.all()]
     finally:

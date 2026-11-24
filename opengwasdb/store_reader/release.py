@@ -6,6 +6,13 @@ build cannot interpret before anything else is read (ADR 0038 §2).
 live, its Zarr data group opened read-only, its Hybrid Dense Component, its
 Variant Axis, and the query facade over it.
 
+From format 0.3.0 a Hybrid's Dense Component carries no Variant Axis and no
+`analyses.tsv` of its own (#472): opened as a release, its `variant_axis` is the
+shared one seen through `dense_to_shared.npy` (`panel_axis.PanelVariantAxis`), and
+its `analyses_path` is the root's. Every reader of the component -- the query
+facade, completion, the validator, the Indexed Variant Subset builder -- gets
+them from here, so none reads a second copy.
+
 Writing to a release -- staging, publishing, amending its provenance, opening
 its arrays for writing or its `index.sqlite` -- is `opengwasdb.store.open`'s,
 whose `OpenGWASDBStore` is this class with those added (#464). So is the Store
@@ -19,10 +26,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from opengwasdb.store_reader.arrays import open_group
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import check_format_version
+from opengwasdb.store_reader.hybrid import DENSE_TO_SHARED_FILENAME, shared_axis_root
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis, PanelVariantAxis
 from opengwasdb.store_reader.variant_axis import LegacyTableOpener, VariantAxis
 
 if TYPE_CHECKING:
@@ -104,16 +115,28 @@ class StoreRelease(ReleasePaths):
     manifest: StoreManifest
     legacy: LegacyTableOpener | None = field(default=None, repr=False, compare=False)
     _paths: dict[str, Path] = field(init=False, repr=False)
+    _shared_root: Path | None = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_paths", release_paths(self.path))
+        root = shared_axis_root(self.path, self.manifest.format_version)
+        object.__setattr__(self, "_shared_root", root)
+        if root is not None:
+            self._paths["analyses"] = release_paths(root)["analyses"]
+
+    @property
+    def shared_root(self) -> Path | None:
+        """The Hybrid release whose Variant Axis and `analyses.tsv` this one reads: set
+        for a Dense Component from format 0.3.0 (#472), None for every other release."""
+        return self._shared_root
 
     def dense_component(self) -> StoreRelease:
         """Open a Hybrid release's nested Dense Component release.
 
-        The Dense Component (ADR 0026) is a self-contained Dense Store
-        Release at ``<store>/dense``, built and completed by the unchanged
-        dense machinery -- it is opened the same way any release is.
+        The Dense Component (ADR 0026) is a Dense Store Release at
+        ``<store>/dense``, built and completed by the unchanged dense machinery --
+        it is opened the same way any release is. From 0.3.0 its Variant Axis and
+        `analyses_path` are its Hybrid's (`shared_root`, #472).
         """
         self._require_hybrid()
         return open_release(self.path / "dense", legacy=self.legacy)
@@ -129,8 +152,22 @@ class StoreRelease(ReleasePaths):
         """Open this release's ``data.zarr`` group read-only (`release_arrays`)."""
         return release_arrays(self.path)
 
-    def variant_axis(self, *, aliases: bool) -> VariantAxis:
-        """This release's Variant Axis; `aliases` also consults `variant_aliases`."""
+    def variant_axis(self, *, aliases: bool) -> AnyVariantAxis:
+        """This release's Variant Axis; `aliases` also consults `variant_aliases`. For a
+        0.3.0 Hybrid's Dense Component, the shared axis in its panel rows (#472)."""
+        if self._shared_root is not None:
+            # The Dense Component's rows, named by the shared axis: one ALID, position
+            # and rsID index, the root's (#472). A 0.3.0 release has no `variant_aliases`.
+            root = open_release(self._shared_root, legacy=self.legacy)
+            return PanelVariantAxis(
+                root.own_variant_axis(aliases=False),
+                np.load(self.path / DENSE_TO_SHARED_FILENAME, mmap_mode="r"),
+            )
+        return self.own_variant_axis(aliases=aliases)
+
+    def own_variant_axis(self, *, aliases: bool) -> VariantAxis:
+        """The Variant Axis this release's own files hold: every release's but a 0.3.0
+        Dense Component's, which holds none and is refused (`DenseComponentSharesAxis`)."""
         if self.legacy is None:
             raise ValueError(
                 f"{self.path} was opened without a reader for its Store Variant Table "

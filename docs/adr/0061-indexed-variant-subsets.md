@@ -95,6 +95,16 @@ its self-contained Dense Component: issue #271 resolves a Hybrid root to
 ``<root>/dense``, indexes only that component's on-panel variants, and never
 unifies it with the Ragged Overflow (see the amendment below).
 
+> **24 Nov 2026 (#472): a derived release restamps a subset.** `ogdb rewrite-release`
+> derives a 0.3.0 release that changes no Store Variant Index and no stored code, so a
+> subset it carries holds the same cells. Rather than rebuild it, the rewrite's
+> `indexed_subsets` step writes the new `release_id` and `format_version` into its
+> `source_release_id` and `source_format_version` (`restamp_indexed_subsets`) and keeps the
+> rest: `builder_version` and `created_at` still describe the original build. It refuses a
+> subset already stale on the source (identity or encoding), and `subsets.indexed`
+> compares every decoded cell of the result with the primary planes. See
+> [ADR 0105's #472 section](0105-format-0-3-0-variable-length-alid-sidecar.md#24-nov-2026-472-the-hybrid-dense-component-shares-the-variant-sidecars).
+
 ## Amendment: Hybrid roots index their self-contained Dense Component (#271)
 
 Issue #271 extends the public interface without widening the artifact: an
