@@ -30,8 +30,8 @@ log = logging.getLogger(__name__)
 #: `0.3` since #467: 0.2.3's features, with the variable-length ALID sidecar in place
 #: of the fixed-width `|S32` index (ADR 0105). A reader of the 0.2 series would find
 #: no ALID index and misread every ALID lookup, so 0.3.0 is a new series that an
-#: older package refuses by name (ADR 0041). It is in development on the epic #450
-#: branch, and released once #468-#472 are in.
+#: older package refuses by name (ADR 0041). #468-#472 add the rest of 0.3.0 in the
+#: same version: the position and `source_alid` sidecars, and what nothing reads.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
     {(0, 1): (0,), (0, 2): (3,), (0, 3): (0,)}
 )

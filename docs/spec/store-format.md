@@ -1,16 +1,15 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version written (on the epic #450 branch, released once #468-#472 are in): `0.3.0`, `0.2.3`'s features with the variable-length ALID sidecar, the position sidecar and the `source_alid` sidecar, and without `variant_offsets.npy` (§4, ADR 0105) or what only the validator read (§1.1, ADR 0102, #471), which every build and completion writes and `ogdb rewrite-release` derives from a `0.2.3` release (§21.4)  
+Format version written: `0.3.0`, `0.2.3`'s features with the variable-length ALID sidecar, the position sidecar and the `source_alid` sidecar, and without `variant_offsets.npy` (§4, ADR 0105), what only the validator read (§1.1, ADR 0102, #471) or a Hybrid Dense Component's own copy of the shared variants and Analyses (§16, ADR 0102 §4, #472), which every build and completion writes and `ogdb rewrite-release` derives from a `0.2.3` release (§21.4)  
 Also readable: `0.2.3`, `0.2.2`, `0.2.1` and `0.2.0` (Zarr v3 with sharding, §10a; the fixed-width ALID index; indels spelt reference first from `0.2.2`, sorted before it), and `0.1.0` (Zarr v2); nothing else (§21). Sections below that name no version describe `0.2.2` and every later one.
 
-This document defines the contract for valid OpenGWASDB Store Releases. On the
-epic #450 branch every builder and completion of this package writes
-`format_version` **0.3.0**: 0.2.3's features with the variable-length ALID sidecar
+This document defines the contract for valid OpenGWASDB Store Releases. Every
+builder and completion of this package writes `format_version` **0.3.0**: 0.2.3's features with the variable-length ALID sidecar
 in place of the fixed-width ALID index (§4, ADR 0105), and without `index.sqlite`'s
 `metadata` and `variant_aliases` or the Top-Hit tiers' `abs_z` and `p_value`, so an
-Observed-Only release carries no `index.sqlite` (§1, §18; ADR 0102, #471); it is
-released once #468-#472 are in. It also describes **0.2.3**, which every builder wrote from #338 to #467
+Observed-Only release carries no `index.sqlite` (§1, §18; ADR 0102, #471), and with a
+Hybrid's Dense Component reading the shared variants and Analyses (§16, #472). It also describes **0.2.3**, which every builder wrote from #338 to #467
 (0.2.2 and the count of associations left out for an SE above 65,504, §7a); **0.2.2**,
 what every builder wrote from #381 to #338: Zarr v3 with the sharding codec (§10a),
 an indel's ALID spelt reference first (§4, ADR 0079), and a Ragged release's optional
@@ -170,9 +169,8 @@ recomputes it. What only the validator reads is never, by that alone, a reason t
 §2 states the rule as the steps a reviewer applies to a new component.
 
 The table gives each component's class from format **0.3.0**, the version that applies these
-decisions (epic #450). The ticket that moves a component to its class is in the last column. Until
-that ticket lands, the component is as §1 and the column "Read today by" describe it; 0.2.x releases
-keep their envelope.
+decisions (epic #450). The ticket that moved a component to its class is in the last column;
+0.2.x releases keep their envelope.
 
 | Component | Where | Read today by | From 0.3.0 | Ticket |
 |---|---|---|---|---|
@@ -3369,6 +3367,11 @@ The distinction is defined by **what a reader that does not know about the chang
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 | the fixed-width ALID index replaced by the variable-length ALID sidecar (0.3.0, issue #467, ADR 0105) | **minor** |
+| the position sidecar required (0.3.0, issue #468, ADR 0105 §6) | **minor** |
+| `variant_offsets.npy` removed, and no query reading the Variant Table (0.3.0, issue #469, ADR 0105 §7) | **minor** |
+| the `source_alid` sidecar required (0.3.0, issue #470, ADR 0105 §8) | **minor** |
+| `index.sqlite`'s `metadata` and `variant_aliases`, an Observed-Only release's `index.sqlite`, and the Top-Hit tiers' `abs_z` and `p_value` removed (0.3.0, issue #471, ADR 0102) | **minor** |
+| a Hybrid Dense Component's own Variant Table and `.tbi`, ALID, position and rsID indexes, `analyses.tsv` and `overview.html` removed: it reads the shared ones through `dense_to_shared.npy` (0.3.0, issue #472, ADR 0102 §4) | **minor** |
 
 An **Indexed Variant Subset** (§10b, ADR 0061) is not one of those compatible
 additions: it is a rebuildable, non-authoritative acceleration artifact that can
@@ -3390,7 +3393,7 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads three series, `0.1` (Zarr v2, readable but no longer written), `0.2` (Zarr v3 with sharding, §10a, what every builder wrote from #247 to #467), and `0.3` (in development on the epic #450 branch: what every builder and completion writes since #467). The 0.2 series has four releases, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+This build reads three series, `0.1` (Zarr v2, readable but no longer written), `0.2` (Zarr v3 with sharding, §10a, what every builder wrote from #247 to #467), and `0.3` (what every builder and completion writes since epic #450, #467-#472). The 0.2 series has four releases, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
 `0.2.2` moves the remainder, not the series. A reader that knows only `0.2.0` or `0.2.1` reads a `0.2.2` release's data as written — an ALID is a string it looks up as given, and a statistic is signed for the ALID's `A1` in all three — and warns that the release is newer. What such a reader does not know is how a `0.2.2` builder spells an indel: a completion run by it would spell its panel's indels sorted, beside the release's reference-first deletions. Only a build that knows `0.2.2` completes one. Nor does it know which stamp a `0.2.2` release's features give: package 0.9.0's `validate` fails every `0.2.2` release with one error, `release is stamped 0.2.2, but a release carrying no region table is 0.2.0` (`… carrying regions.tsv is 0.2.1` with the table). The remedy is to upgrade the package, never to re-stamp the release: re-stamped, it passes 0.9.0's `validate`, and 0.9.0 completes it. So this build does not judge the stamp of a release newer than every version it writes: `manifest.format_stamp` warns that the package must be upgraded (§20).
 
@@ -3413,7 +3416,7 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 | `0.2.1` | a Ragged release's optional `regions.tsv`, declared by the manifest's `regions` entry (§1, §2, §17; issue #430) | no release this build writes: package 0.9.0's, for a Ragged release carrying one |
 | `0.2.2` | an indel's ALID spelt reference first (§4, ADR 0079; issue #381), `regions.tsv` still optional | no release this build writes: package 0.11's, and earlier builds since #381 |
 | `0.2.3` | `analyses.tsv`'s `n_missing_se_out_of_range` on every row, and no association whose SE is above 65,504 (§7a, §15; ADR 0068, issue #338), on 0.2.2's features | no release this build writes: every build and completion from #338 to #467 |
-| `0.3.0` | the variable-length ALID sidecar in place of the fixed-width ALID index (§4; ADR 0105, issue #467), the position sidecar a range is answered from (§4; ADR 0105 §6, issue #468), and no `variant_offsets.npy`: no query reads the Variant Table (§4; ADR 0105 §7, issue #469), the `source_alid` sidecar (§4; ADR 0105 §8, issue #470), on 0.2.3's features; `index.sqlite` only beside `completion_quality`, and no `metadata`, `variant_aliases`, or tier `abs_z` and `p_value` (§1, §18; ADR 0102, issue #471); in development on the epic #450 branch | every release this build builds, completes or rewrites from `0.2.3` (§21.4) |
+| `0.3.0` | the variable-length ALID sidecar in place of the fixed-width ALID index (§4; ADR 0105, issue #467), the position sidecar a range is answered from (§4; ADR 0105 §6, issue #468), and no `variant_offsets.npy`: no query reads the Variant Table (§4; ADR 0105 §7, issue #469), the `source_alid` sidecar (§4; ADR 0105 §8, issue #470), on 0.2.3's features; `index.sqlite` only beside `completion_quality`, and no `metadata`, `variant_aliases`, or tier `abs_z` and `p_value` (§1, §18; ADR 0102, issue #471); a Hybrid Dense Component without its own copy of the shared variants and Analyses, read through `dense_to_shared.npy` (§16; ADR 0102 §4, issue #472) | every release this build builds, completes or rewrites from `0.2.3` (§21.4) |
 
 A package before 0.2.1 reads a 0.2.1 release, warned that it is newer than it fully understands (§21.2), and ignores the `regions` entry; its `validate` refuses `regions.tsv` as an entry outside the envelope, and its completion refuses the release, whose format it reads but cannot write (§21.4), so it cannot complete one outside its regions or drop its table (`docs/store-format-compatibility.md`). A package before 0.2.2 reads a 0.2.2 release the same way, warned, and its completion refuses it too, so it cannot spell its panel's indels sorted beside the release's reference-first ones. Package 0.9.0's `validate` also fails a 0.2.2 release, on its stamp rule (§21.2): upgrade the package, do not re-stamp the release. A package before 0.2.3 reads a 0.2.3 release, warned, and its completion refuses it. Its `validate` does not judge the newer stamp: packages 0.10.0 to 0.12.0 warn that the package must be upgraded (§21.2), and 0.9.0, whose stamp rule judges every 0.2 release, fails it, as it fails a 0.2.2 one (`docs/store-format-compatibility.md`). The remedy is again to upgrade, not to re-stamp.
 

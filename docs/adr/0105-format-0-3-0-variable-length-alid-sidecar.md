@@ -3,10 +3,9 @@
 ## Status
 
 Accepted. Issue [#467](https://github.com/opengwas/opengwasdb/issues/467), the tracer of epic
-[#450](https://github.com/opengwas/opengwasdb/issues/450)'s format tickets (#467-#472). **In
-development:** format 0.3.0 is written on the epic's integration branch and released only once
-#468-#472 are in, so it is one format version with one backfill (the owner's plan of record, 23 Nov
-2026).
+[#450](https://github.com/opengwas/opengwasdb/issues/450)'s format tickets (#467-#472). #467-#472
+ship in one package release, so format 0.3.0 is one format version with one backfill (the
+owner's plan of record, 23 Nov 2026).
 
 What this ADR changes in other documents:
 
