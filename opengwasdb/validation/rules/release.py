@@ -299,14 +299,16 @@ def _dense_entries(target: Target) -> list[tuple[str, Path]]:
 
 
 def _shared_axis_entries(target: Target) -> list[tuple[str, Path]]:
-    """The Hybrid release's search indexes a 0.3.0 Dense Component reads its variants
-    from: those the Hybrid's own `format_version` carries, as its own axis opens them."""
+    """The Hybrid release's search indexes and sidecars a 0.3.0 Dense Component reads its
+    variants from: those the Hybrid's own `format_version` carries, as its own axis opens
+    them, the `source_alid` sidecar included (#470)."""
     root = target.store.shared_root
     assert root is not None and target.parent is not None, "only a nested Dense Component"
     version = target.parent.store.manifest.format_version
     names = (
         *alid_index_kind(version).FILENAMES,
         *(POSITION_SIDECAR_FILENAMES if carries_position_sidecar(version) else ()),
+        *(SOURCE_ALID_SIDECAR_FILENAMES if carries_source_alid_sidecar(version) else ()),
         VARIANT_RSID_BYTES_FILENAME,
         VARIANT_RSID_ROWS_FILENAME,
     )

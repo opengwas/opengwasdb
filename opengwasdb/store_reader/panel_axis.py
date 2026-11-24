@@ -21,7 +21,7 @@ a reader typed `AnyVariantAxis` is checked against both. Its `alid_index` is the
 ALID index seen the same way (`PanelAlidIndex`), for the readers that search ALIDs
 without the axis. The component has no other index of its own, so asking it for one
 (`rsid_index`, `position_sidecar`, `source_alid_sidecar`), for an index's `problems`, or
-for a read of a table it does not carry (`tabix_range`, `table_records`) raises
+for a read of a table it does not carry (`tabix_range`, `written_table_records`) raises
 `DenseComponentSharesAxis` rather than answer from the shared axis's rows.
 """
 
@@ -166,7 +166,7 @@ class PanelVariantAxis:
     def tabix_range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:
         raise self._refused("Variant Table or tabix index")
 
-    def table_records(self) -> Iterator[VariantRecord]:
+    def written_table_records(self) -> Iterator[VariantRecord]:
         raise self._refused("Variant Table")
 
     def close(self) -> None:

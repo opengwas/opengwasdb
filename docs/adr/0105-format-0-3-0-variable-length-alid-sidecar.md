@@ -444,7 +444,9 @@ Variant Table through the axis's private attributes. Its owner moves its pin (#4
 
 **Context.** A row's `source_alid` is the ALID its source spelt it by: for a lifted row the
 pre-liftover ALID, the one link from a GRCh38 row back to the dataset it came from. Every
-build writes an unlifted row's as its own ALID. A collision (#85) leaves a row none, and so
+build writes an unlifted row's as its own ALID: the VCF, SSF, BESD and Hybrid builds take
+it from their routing, and `ogdb build-dense`, which lifts nothing, writes each row's own
+ALID (from #470; before it, that build wrote none). A collision (#85) leaves a row none, and so
 does a row Reference Completion added from the panel. After §7 only the Variant Table held
 it, in its eighth column, so a 0.3.0 query could not return it, and completion of a 0.3.0
 source, the record methods and the source-fidelity join still read the table for it (#449
@@ -492,8 +494,14 @@ made completion keep it).
   `by_index`, `by_indices`, `all`, `records` and `range` name their rows from the sidecars
   alone (`sidecar_records`), which retires §7's last exception: no 0.3.0 read of a row,
   query or not, opens `variants.tsv.gz`. The validator reads the table through
-  `table_records`, which it checks the sidecars against, and through `tabix_range`.
-  `indices_by_source_alid` scans the sidecar.
+  `written_table_records`, which it checks the sidecars against, and through
+  `tabix_range`. Every one of these reads makes the one version split, `reads_table`.
+- **The source-fidelity join keeps its liftover fallback.** `indices_by_source_alid` finds
+  a state-1 row through the ALID index and scans the lifted text for the rest. When no row
+  has a `source_alid`, every state 0, it returns None, as it does for a 0.2 table that
+  predates the column: a 0.3.0 release rewritten from such a table holds nothing to join
+  on, and `validate --source` then lifts its samples itself (#473) rather than count them
+  unmatched.
 - **The column is new on every format.** `variants_table()` and resolved rows with variant
   info gain `source_alid`, as they name rsIDs: `None` in `variants_table()` and `.` in a
   resolved row where a row has none. A 0.2 release reads it from its table, so the
@@ -539,7 +547,7 @@ one, and lifted values of 24, 32, 33 and 130 bytes. Each 0.3.0 release returns t
 `variants_table()` and resolved rows, exactly as its 0.2.3 form does from its table. A lifted
 Dense and a lifted Hybrid completion keep every observed row's value and give a panel row none.
 The codec writes a collision row state 0, an unlifted row state 1 and a lifted row state 2
-with its text, and a 160-byte value round-trips whole. The validator fails a sidecar that
+with its text, and a 169-byte value round-trips whole. The validator fails a sidecar that
 makes a collision row lifted, gives a lifted row other text, is one row short, or holds a
 state byte of 3. #469's
 fresh-interpreter probe now also asks each row's `source_alid` and every record method, with

@@ -88,15 +88,15 @@ def _n_blocks(target: Target) -> int:
 def _blocks(target: Target) -> Iterator[TableBlock]:
     """Consecutive rows of the table, `_block_limits` at a time, until the stream ends.
 
-    The table as it is written (`VariantAxis.table_records`), on every version: on 0.3.0
-    the axis names rows from the sidecars, which these rows are checked against.
+    The table as it is written (`VariantAxis.written_table_records`), on every version:
+    on 0.3.0 the axis names rows from the sidecars, which these rows are checked against.
     """
     limits = _block_limits(None)
     limit = next(limits)
     previous: VariantRecord | None = None
     start = 0
     records: list[VariantRecord] = []
-    for record in target.variant_axis.table_records():
+    for record in target.variant_axis.written_table_records():
         records.append(record)
         if start + len(records) >= limit[1]:
             yield TableBlock(start, records, previous)
@@ -679,10 +679,10 @@ def _source_alid_rows(target: Target, block: TableBlock) -> _SourceAlidRows:
     """How many of the block's rows carry a ``source_alid``: the sidecar's count on
     0.3.0, where the Store Reader names it from the sidecar (#470), the table's on the
     0.2 series. `variant_table.source_alid_sidecar` holds the two to one another."""
-    sidecar = target.variant_axis.source_alid_sidecar
-    if sidecar is not None:
+    if _carries_source_alid_sidecar(target):
         start, stop = block.start, block.start + len(block.records)
-        return _SourceAlidRows(len(block.records), sidecar.sourced(start, stop))
+        sourced = _source_alid_sidecar(target).sourced(start, stop)
+        return _SourceAlidRows(len(block.records), sourced)
     sourced = sum(1 for record in block.records if record.source_alid)
     return _SourceAlidRows(len(block.records), sourced)
 

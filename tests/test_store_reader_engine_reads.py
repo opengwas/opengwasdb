@@ -142,11 +142,12 @@ def test_a_table_without_the_source_alid_column_says_so_rather_than_matching_not
     assert axis.indices_by_source_alid({"1:1000:A:G"}) is None
 
 
-def test_on_0_3_0_a_sidecar_naming_none_matches_nothing(tmp_path: Path):
-    """A 0.3.0 release rewritten from a table without the column holds an empty value on
-    every row (#470): its sidecar says there is none, which is no match."""
+def test_on_0_3_0_a_sidecar_naming_none_says_so_rather_than_matching_nothing(tmp_path: Path):
+    """A 0.3.0 release rewritten from a table without the column names no row's
+    `source_alid` (#470): like that table, it says so (None), so the caller lifts the
+    ALIDs itself, and reads no table to say it."""
     axis, table = _axis(tmp_path, [_row(0, None), _row(1, None)])
-    assert axis.indices_by_source_alid({"1:1000:A:G"}) == {}
+    assert axis.indices_by_source_alid({"1:1000:A:G"}) is None
     assert table.read == 0
 
 
@@ -164,12 +165,12 @@ def test_records_stream_what_all_materialises(tmp_path: Path, version: str):
     assert streamed == [parse_variant_line(row) for row in rows]  # the table's rows, either way
 
 
-def test_table_records_read_the_table_on_0_3_0(tmp_path: Path):
+def test_written_table_records_read_the_table_on_0_3_0(tmp_path: Path):
     """The validator's read: the table as it is written, which it checks the sidecars
     against, on 0.3.0 as on 0.2."""
     rows = [_row(i, None if i % 2 else f"1:{i}:A:G") for i in range(5)]
     axis, table = _axis(tmp_path, rows)
-    assert list(axis.table_records()) == [parse_variant_line(row) for row in rows]
+    assert list(axis.written_table_records()) == [parse_variant_line(row) for row in rows]
     assert table.read == 5
 
 

@@ -176,10 +176,10 @@
    "variant_rsid_bytes.npy": "107ec1b2e38ebc648ea2b396d14b6cba2ea700b6f74cd316bf27849321974186",
    "variant_rsid_rows.npy": "8af39e45c00652bf313bb23722ffa3dad6772451476a56708ef25ee6dcc0e2fa",
    "variant_source_alid_offsets.npy": "30c0c0f336e69b86ee3da30f0f4ce1d9a138d503845c586e993ff31e8003fee1",
-   "variant_source_alid_state.npy": "4402c5d849add37c33c0ab2e214b9507b6e89f167249559f623f86c8e261447a",
+   "variant_source_alid_state.npy": "67844a8d5f3fc4cf944b4bf05a9cebc9a0359444c4cc48e2a410c07b886243be",
    "variant_source_alid_utf8.npy": "4ca930d4c39dd441d095d27d2ac61750ccb0f54238f1eed588061be710bf4bb6",
-   "variants.tsv.gz": "3bafb7e3ef96930ad1a1953932bf78930ba5611e93f890aa1204d9b909299784",
-   "variants.tsv.gz.tbi": "8cd4fb413b5da53bc548aa1c30058dcdabd7e14ae1991c70c97332a8846e737a",
+   "variants.tsv.gz": "7fd9f5725de6451d2bbee7ea42bba702031b6b96033c94e215b7bfe149f8a5d6",
+   "variants.tsv.gz.tbi": "a2aa021523fb2f8472bcf7813092d3a32d2a8963a5909fda4bd65bb80f710f64",
    "zarr": {
     "data.zarr/eaf_reference": {
      "compressor": {
@@ -811,7 +811,7 @@
    "n_missing_off_panel": 0,
    "n_variants": 12
   },
-  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin); overview.html re-worded for index.sqlite at #471 review round 1 (re-rendered with the previous wording, it hashes to the previous pin); no variant_offsets.npy, which #469 stops writing (every other entry is the previous pin's but the Dense overview.html, which lists the files, and manifest.json, whose dense provenance no longer names it); plus the source_alid sidecar's three files, which #470 adds (every other entry is the previous pin's but the file list and the Dense overview.html, which lists the files)"
+  "written_by": "1ab2b09; format_version and the panel placement record #381 writes; the count column, format_version 0.2.3 and provenance.completion.se_out_of_range #338 writes; format_version 0.3.0 and the ALID sidecar in place of variant_alid_bytes.npy/variant_alid_rows.npy #467 writes (turned back into 0.2.3, the release matches the previous pin in every entry but the Dense overview.html, which lists the files); the position sidecar's three files #468 writes (every other entry is the previous pin's but the Dense overview.html, which lists the files); each tier's abs_z and p_value dropped, and the Dense index.sqlite without its metadata table and variant_aliases, as #471 writes (every other entry unchanged; the Dense index.sqlite with the pre-#471 metadata added back, and its overview.html re-rendered with the pre-#471 file-guide wording, hash to the previous pin); overview.html re-worded for index.sqlite at #471 review round 1 (re-rendered with the previous wording, it hashes to the previous pin); no variant_offsets.npy, which #469 stops writing (every other entry is the previous pin's but the Dense overview.html, which lists the files, and manifest.json, whose dense provenance no longer names it); plus the source_alid sidecar's three files, which #470 adds (every other entry is the previous pin's but the file list and the Dense overview.html, which lists the files); and the source_alid each observed row carries, its own ALID, which #470 makes build-dense write (the table's eighth column, its .tbi and the sidecar's state)"
  },
  "ragged_besd": {
   "store": {

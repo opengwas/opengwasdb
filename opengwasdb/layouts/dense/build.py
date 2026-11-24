@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -175,13 +175,22 @@ def build_dense_observed_store(
             encoding,
             coverage,
         )
-        write_variant_axis(staged.path, variants, rsid_by_alid)
+        _write_unlifted_axis(staged.path, variants, rsid_by_alid)
         _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(
             staged.path, with_se_out_of_range(add_hit_counts(staged.path, analyses), left_out)
         )
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _write_unlifted_axis(
+    store: Path, variants: list[CanonicalVariant], rsid_by_alid: Mapping[str, str]
+) -> None:
+    """The Variant Axis of a build that lifts nothing: each source names its rows on the
+    release's own assembly, so a row's `source_alid` is its own ALID, as every build
+    writes an unlifted row's (#470; `build_vcf` takes the routing's, which a lift moves)."""
+    write_variant_axis(store, variants, rsid_by_alid, [variant.alid for variant in variants])
 
 
 def _stored_grid(

@@ -43,7 +43,15 @@ from typing import ClassVar
 
 import numpy as np
 
-from opengwasdb.store_reader.npy_sidecar import holds_sidecar, open_sidecar_arrays
+from opengwasdb.store_reader.npy_sidecar import (
+    OFFSET_DTYPE,
+    WINDOW_ROWS,
+    encode_utf8_offsets,
+    holds_sidecar,
+    offsets_fault,
+    open_sidecar_arrays,
+    slice_texts,
+)
 
 SOURCE_ALID_STATE_FILENAME = "variant_source_alid_state.npy"
 SOURCE_ALID_UTF8_FILENAME = "variant_source_alid_utf8.npy"
@@ -61,11 +69,6 @@ NONE, OWN_ALID, OTHER = 0, 1, 2
 
 STATE_DTYPE = np.dtype("|u1")
 UTF8_DTYPE = np.dtype("uint8")
-OFFSET_DTYPE = np.dtype("<u8")
-
-#: Rows a scan or a comparison reads at a time: `rows_of` gathers a window's values
-#: of one length into a rows x length array of `int64` positions.
-_WINDOW = 65_536
 
 #: Characters a Variant Table cell cannot hold, so a `source_alid` holding one could
 #: never agree with the table it restates: the column and row separators, and NUL.
@@ -133,10 +136,7 @@ def encode_source_alids(values: Sequence[str | None], alids: Sequence[str]) -> E
     ]
     for row in np.flatnonzero(state == OWN_ALID).tolist():
         _encoded(int(row), values[int(row)])  # refused alike, though not stored
-    lengths = np.fromiter((len(item) for item in encoded), dtype=OFFSET_DTYPE, count=len(encoded))
-    offsets = np.zeros(len(encoded) + 1, dtype=OFFSET_DTYPE)
-    np.cumsum(lengths, out=offsets[1:])
-    utf8 = np.frombuffer(b"".join(encoded), dtype=UTF8_DTYPE)
+    utf8, offsets = encode_utf8_offsets(encoded)
     return EncodedSourceAlids(state=state, utf8=utf8, offsets=offsets)
 
 
@@ -185,8 +185,10 @@ class SourceAlidSidecar:
         if fault:
             raise MalformedSourceAlidSidecar(f"the {_WHAT} cannot be read: {fault}")
         self._text = memoryview(np.asarray(utf8))
-        self._lifted: np.ndarray | None = None
+        #: The `OTHER` rows, gathered once (`_other_rows`), and whether `lifted_rows`
+        #: has checked that the state and offsets agree on them.
         self._others: np.ndarray | None = None
+        self._checked = False
 
     @classmethod
     def open(cls, store_path: str | Path) -> SourceAlidSidecar | None:
@@ -209,12 +211,12 @@ class SourceAlidSidecar:
         """The `OTHER` rows, ascending: the `k`-th holds the `k`-th text. Gathered once,
         from the state; refused unless the offsets number them plus one, or if a state
         is outside 0-2."""
-        if self._lifted is None:
+        if not self._checked:
             fault = _state_fault(self.state) or _count_fault(self.state, self.offsets)
             if fault:
                 raise MalformedSourceAlidSidecar(f"the {_WHAT} cannot be read: {fault}")
-            self._lifted = self._other_rows()
-        return self._lifted
+            self._checked = True
+        return self._other_rows()
 
     def _other_rows(self) -> np.ndarray:
         """The `OTHER` rows, ascending, whatever else the state holds."""
@@ -243,11 +245,7 @@ class SourceAlidSidecar:
 
     def texts(self, ranks: np.ndarray) -> list[str]:
         """The `source_alid` of each of the `OTHER` rows at `ranks` among them."""
-        ranks = np.asarray(ranks, dtype=np.int64)
-        starts = np.asarray(self.offsets[ranks], dtype=np.int64).tolist()
-        stops = np.asarray(self.offsets[ranks + 1], dtype=np.int64).tolist()
-        text = self._text
-        return [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
+        return slice_texts(self._text, self.offsets, ranks)
 
     def sourced(self, start: int, stop: int) -> int:
         """How many rows in ``[start, stop)`` have a `source_alid`."""
@@ -312,10 +310,11 @@ class SourceAlidSidecar:
         time, that stops once each is found."""
         remaining = {value.encode("utf-8"): value for value in queries}
         n_lifted = len(self.lifted_rows())
-        for start in range(0, n_lifted, _WINDOW):
+        for start in range(0, n_lifted, WINDOW_ROWS):
             if not remaining:
                 return
-            for rank, query in self._matches(start, min(start + _WINDOW, n_lifted), remaining):
+            stop = min(start + WINDOW_ROWS, n_lifted)
+            for rank, query in self._matches(start, stop, remaining):
                 yield remaining.pop(query), rank
 
     def _matches(
@@ -335,26 +334,24 @@ class SourceAlidSidecar:
     def problems(self, table_rows: int) -> Iterator[str]:
         """Its structure, and one row per row of the table.
 
-        Each array is 1-d of its dtype; every state is 0, 1 or 2; the offsets number
-        the `OTHER` rows plus one and rise with each, so text is held for those rows
-        alone and none is empty. That they start at 0 and end at the byte array's end
-        is checked at open. Whether each row's state and text are the table's is
+        Every state is 0, 1 or 2; the offsets number the `OTHER` rows plus one and rise
+        with each, so text is held for those rows alone and none is empty. The dtypes,
+        and that the offsets start at 0 and end at the byte array's end, are checked at
+        open (`__init__`). Whether each row's state and text are the table's is
         `differing`'s.
         """
         fault = (
-            _dtype_fault(self.state, self.utf8, self.offsets)
-            or _state_fault(self.state)
+            _state_fault(self.state)
             or _count_fault(self.state, self.offsets)
+            or offsets_fault(
+                self.offsets,
+                len(self.utf8),
+                names=(SOURCE_ALID_OFFSETS_FILENAME, SOURCE_ALID_UTF8_FILENAME),
+                rising=("lifted row", "each holds a source_alid"),
+            )
         )
         if fault:
             yield fault
-            return
-        falling = _first_not_rising(self.offsets)
-        if falling is not None:
-            yield (
-                f"{SOURCE_ALID_OFFSETS_FILENAME} does not rise at lifted row {falling}: "
-                "each holds a source_alid"
-            )
             return
         if self.n_rows != table_rows:
             yield f"the {_WHAT} holds {self.n_rows} rows but variants.tsv.gz has {table_rows}"
@@ -380,22 +377,15 @@ def _ranks_holding(
 
 
 def _slicing_fault(state: np.ndarray, utf8: np.ndarray, offsets: np.ndarray) -> str:
-    """Why `offsets` cannot slice `utf8` at all, or ``""``."""
-    fault = _dtype_fault(state, utf8, offsets)
-    if fault:
-        return fault
-    if not len(offsets):
-        return (
-            f"{SOURCE_ALID_OFFSETS_FILENAME} is empty; it holds one more entry than the "
-            "lifted rows"
-        )
-    first, last = int(offsets[0]), int(offsets[-1])
-    if first != 0 or last != len(utf8):
-        return (
-            f"{SOURCE_ALID_OFFSETS_FILENAME} runs from {first} to {last}, not from 0 to the "
-            f"{len(utf8)} bytes of {SOURCE_ALID_UTF8_FILENAME}"
-        )
-    return ""
+    """Why `offsets` cannot slice `utf8` at all, or ``""``: the dtypes, and offsets that
+    do not start at 0 and end at the byte array's end (`offsets_fault`, without the read
+    of every offset that whether they rise needs)."""
+    return _dtype_fault(state, utf8, offsets) or offsets_fault(
+        offsets,
+        len(utf8),
+        names=(SOURCE_ALID_OFFSETS_FILENAME, SOURCE_ALID_UTF8_FILENAME),
+        rising=None,
+    )
 
 
 def _dtype_fault(state: np.ndarray, utf8: np.ndarray, offsets: np.ndarray) -> str:
@@ -412,13 +402,12 @@ def _dtype_fault(state: np.ndarray, utf8: np.ndarray, offsets: np.ndarray) -> st
 
 
 def _state_fault(state: np.ndarray) -> str:
-    """The first row whose state is not 0, 1 or 2, or ``""``."""
-    for start in range(0, len(state), _WINDOW * 16):
-        block = np.asarray(state[start : start + _WINDOW * 16])
-        bad = np.flatnonzero(block > OTHER)
-        if bad.size:
-            row = start + int(bad[0])
-            return f"{SOURCE_ALID_STATE_FILENAME} holds state {int(block[bad[0]])} at row {row}"
+    """The first row whose state is not 0, 1 or 2, or ``""``: one byte a row, read whole."""
+    values = np.asarray(state)
+    bad = np.flatnonzero(values > OTHER)
+    if bad.size:
+        row = int(bad[0])
+        return f"{SOURCE_ALID_STATE_FILENAME} holds state {int(values[row])} at row {row}"
     return ""
 
 
@@ -431,14 +420,3 @@ def _count_fault(state: np.ndarray, offsets: np.ndarray) -> str:
             "row(s); it holds one more than they"
         )
     return ""
-
-
-def _first_not_rising(offsets: np.ndarray) -> int | None:
-    """The first lifted row whose end offset is not above its start, a window at a time."""
-    n = len(offsets) - 1
-    for start in range(0, n, _WINDOW * 16):
-        block = np.asarray(offsets[start : min(start + _WINDOW * 16, n) + 1])
-        flat = np.flatnonzero(block[1:] <= block[:-1])
-        if flat.size:
-            return start + int(flat[0])
-    return None

@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components, write_variant_offsets
 from rsid_releases import RELEASE_NAMES
-from test_variant_table_off_read_path import _answers
+from variant_info_answers import answers
 
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
@@ -102,7 +102,7 @@ def test_the_codec_round_trips_every_value_whole(tmp_path: Path):
 def test_the_scan_finds_the_first_row_of_each_value_however_long(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(codec, "_WINDOW", 2)  # several windows, a value in a later one
+    monkeypatch.setattr(codec, "WINDOW_ROWS", 2)  # several windows, a value in a later one
     long = "2:9:" + "T" * 120 + ":G"
     alids = [f"1:{i}:A:G" for i in range(1, 10)]
     sources = ["0:1:A:G", None, "0:2:A:G", long, "1:5:A:G", "0:2:A:G", None, "0:4:A:GG", long]
@@ -295,7 +295,7 @@ def test_0_3_0_returns_each_rows_source_alid_through_the_table_and_resolved_rows
     long = next(v for v in values.values() if v and len(v) == 130)
     assert {".", long} <= {row["source_alid"] for row in rows}, "rows reach the planted ones"
     assert [row["source_alid"] for row in rows] == [values[row["alid"]] or "." for row in rows]
-    assert _answers(current) == _answers(legacy), "0.3.0 answers as its 0.2.3 form does"
+    assert answers(current) == answers(legacy), "0.3.0 answers as its 0.2.3 form does"
 
 
 def _resolved_rows(release: Path) -> list[dict[str, Any]]:
@@ -395,7 +395,7 @@ def test_a_lifted_hybrid_release_completes_with_its_sidecar(tmp_path: Path):
     assert lifted, "nothing was lifted: the fixture proves nothing"
     assert {a: after[a] for a in before} == before
     assert all(after[a] is None for a in set(after) - set(before))
-    table = {r.alid: r.source_alid for r in _table_records(completed)}
+    table = {r.alid: r.source_alid for r in _written_table_records(completed)}
     with_sidecar = VariantAxis(completed)
     try:
         assert {r.alid: r.source_alid for r in with_sidecar.records()} == table
@@ -425,17 +425,40 @@ def test_a_lifted_dense_release_completes_with_its_sidecar(tmp_path: Path):
         got = {row["alid"]: row["source_alid"] for row in q.variants_table().values()}
     assert {a: got[a] for a in lifted} == lifted
     assert any(v is None for v in got.values()), "a panel row"
-    table = {r.alid: r.source_alid for r in _table_records(completed)}
+    table = {r.alid: r.source_alid for r in _written_table_records(completed)}
     assert table == got
     assert validate_store(completed).failed() == frozenset()
 
 
-def _table_records(release: Path) -> list[Any]:
+def _written_table_records(release: Path) -> list[Any]:
     axis = VariantAxis(release)
     try:
-        return list(axis.table_records())
+        return list(axis.written_table_records())
     finally:
         axis.close()
+
+
+def test_a_tsv_dense_build_gives_every_row_its_own_alid(tmp_path: Path):
+    """`ogdb build-dense` lifts nothing: every row's source spelt it on the release's
+    assembly, so its `source_alid` is its own ALID (state 1), as every other build writes
+    an unlifted row's."""
+    import test_dense_completion as tdc
+    from dense_sources import build_dense_fixture
+
+    source_tsv = tmp_path / "associations.tsv"
+    source_tsv.write_text(
+        tdc.SOURCE_HEADER + "\n" + "\n".join(tdc.SOURCE_ROWS) + "\n", encoding="utf-8"
+    )
+    store = tmp_path / "obs.opengwasdb"
+    build_dense_fixture(
+        [source_tsv], store, store_id="t", release_id="r", reference_assembly="GRCh38"
+    )
+    state = np.load(store / codec.SOURCE_ALID_STATE_FILENAME)
+    assert state.size > 1 and set(state.tolist()) == {codec.OWN_ALID}
+    with query_store(store) as q:
+        rows = q.variants_table().values()
+    assert all(row["source_alid"] == row["alid"] for row in rows)
+    assert {r.source_alid for r in _written_table_records(store)} - {None}
 
 
 # ── the validator ───────────────────────────────────────────────────────────
@@ -522,11 +545,13 @@ def test_a_stray_sidecar_beside_a_0_2_3_release_fails_its_envelope(planted, tmp_
 # ── the rewrite ─────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", ["dense_completed", "hybrid_observed", "ragged_observed"])
 def test_the_rewrite_fills_the_sidecar_from_the_table_and_the_proof_passes(
-    planted, tmp_path: Path, name: str
+    planted, tmp_path: Path
 ):
-    current, legacy, values = planted[name]
+    """The step is the same on every layout but for a Hybrid's Dense Component, which
+    gets none, so a Hybrid asks all of it; `test_rewrite_release` compares the files of
+    a completed Hybrid with its build's too."""
+    current, legacy, values = planted["hybrid_observed"]
     destination = rewrite_release(legacy, tmp_path / "rewritten")
     assert SourceAlidSidecar.open(destination) is not None
     # a Hybrid's Dense Component gets none: its rows are the shared ones (#472)
@@ -534,7 +559,7 @@ def test_the_rewrite_fills_the_sidecar_from_the_table_and_the_proof_passes(
     with query_store(destination) as q:
         got = {row["alid"]: row["source_alid"] for row in q.variants_table().values()}
     assert got == values
-    assert _answers(destination) == _answers(legacy)
+    assert answers(destination) == answers(legacy)
     for name in SOURCE_ALID_SIDECAR_FILENAMES:
         written, built = np.load(destination / name), np.load(current / name)
         assert written.dtype == built.dtype and np.array_equal(written, built), name
@@ -560,12 +585,30 @@ def _as_seven_columns(directory: Path) -> None:
     write_variant_offsets(directory)
 
 
+def _source_alid_join(release: Path, wanted: set[str]) -> dict[str, int] | None:
+    axis = VariantAxis(release)
+    try:
+        return axis.indices_by_source_alid(wanted)
+    finally:
+        axis.close()
+
+
 def test_a_seven_column_table_rewrites_to_a_sidecar_naming_none(planted, tmp_path: Path):
-    _, legacy, _ = planted["ragged_observed"]
+    """A lifted release whose table predates the column: its rewrite names no row's
+    `source_alid`, and the source-fidelity join says it cannot answer (None) on both
+    forms, so the validator lifts the samples itself rather than count them unmatched."""
+    _, legacy, values = planted["ragged_observed"]
+    lifted = {v for a, v in values.items() if v and v != a}
+    assert lifted, "the planted release is lifted"
+    found = _source_alid_join(legacy, lifted)
+    row_alids = list(values)  # planted in row order
+    assert found is not None and set(found) == lifted
+    assert all(values[row_alids[row]] == value for value, row in found.items())
     source = Path(shutil.copytree(legacy, tmp_path / "source"))
     _as_seven_columns(source)
     with query_store(source) as q:
         assert all(row["source_alid"] is None for row in q.variants_table().values())
+    assert _source_alid_join(source, lifted) is None
 
     destination = rewrite_release(source, tmp_path / "rewritten")
 
@@ -573,3 +616,4 @@ def test_a_seven_column_table_rewrites_to_a_sidecar_naming_none(planted, tmp_pat
     assert sidecar is not None and sidecar.n_rows > 0
     assert sidecar.sourced(0, sidecar.n_rows) == 0
     assert len(sidecar.utf8) == 0
+    assert _source_alid_join(destination, lifted) is None

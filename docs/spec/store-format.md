@@ -803,7 +803,9 @@ value is stored whole, however long (an indel's runs past 100 bytes). It holds n
 tab, newline or NUL and is never `.`, the table's blank: the writer refuses such a
 value, which the table would read otherwise than the sidecar. Nothing searches the
 text, so it has no sort keys; the source-fidelity join (`validate --source`) finds a
-state-1 row through the ALID index and scans the text for the rest. Each row's state
+state-1 row through the ALID index and scans the text for the rest; a release whose
+every state is 0 holds nothing to join on, and the join says so, as for a table without
+the column, so `validate --source` lifts the samples itself. Each row's state
 and text equal the table's `source_alid` column row for row, a blank (`.`) there
 being state 0, which `variant_table.source_alid_sidecar` (§20.0) holds a release
 to. `variants_table()` gives it as `source_alid` (`None` where empty), and a resolved

@@ -1,5 +1,5 @@
 - **Format 0.3.0 carries each row's `source_alid` in a sidecar (issue #470, ADR 0105 §8).**
-  Not released until #472 lands on epic #450's branch. `variant_source_alid_state.npy`
+  `variant_source_alid_state.npy`
   gives each row a byte: 0, no `source_alid`; 1, its own ALID; 2, another ALID, which
   `variant_source_alid_utf8.npy` and `variant_source_alid_offsets.npy` hold for those
   rows alone, whole however long (an indel past 100 bytes). A release built on its own
@@ -19,9 +19,13 @@
 - **On 0.3.0 the record methods read no Variant Table.** `VariantAxis.by_index`,
   `by_indices`, `all`, `records`, `range` and `by_identifier` name each row from the
   sidecars, so neither completion of a 0.3.0 source nor `validate --source`'s join
-  (`indices_by_source_alid`, which scans the sidecar) reads `variants.tsv.gz`. The
-  validator reads the table through the new `VariantAxis.table_records`. A 0.2 release
-  is read as before.
+  (`indices_by_source_alid`) reads `variants.tsv.gz`. The join returns None, as for a
+  table that predates the column, when no row has a `source_alid`, so `validate
+  --source` lifts its samples itself. The validator reads the table through the new
+  `VariantAxis.written_table_records`. A 0.2 release is read as before.
+- **`ogdb build-dense` writes each row's own ALID as its `source_alid`.** It lifts
+  nothing, and wrote none before, so its releases now say each row's source named it
+  as stored, as every other build's do for an unlifted row.
 - **New validation rule `variant_table.source_alid_sidecar`** (0.3.0): each row's state is
   the one the table's `source_alid` and ALID give, each lifted row's text is the table's,
   every state is 0-2, text is held for lifted rows alone, and it holds one row per row.

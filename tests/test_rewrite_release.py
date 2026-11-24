@@ -48,6 +48,7 @@ from opengwasdb.store_reader.position_sidecar import (
     PositionSidecar,
     write_position_sidecar,
 )
+from opengwasdb.store_reader.source_alid_sidecar import SOURCE_ALID_SIDECAR_FILENAMES
 from opengwasdb.validation import validate_store
 
 FIXED_WIDTH = ("variant_alid_bytes.npy", "variant_alid_rows.npy")
@@ -246,7 +247,8 @@ def test_the_rewritten_sidecars_are_what_a_build_writes(built, sources, tmp_path
     """Rewritten from the 0.2.3 table, each sidecar is the 0.3.0 build's, byte for byte;
     the Dense Component has none, as the build's has none (#472)."""
     destination = rewrite_release(sources["hybrid_completed"], tmp_path / "rewritten")
-    for name in (*ALID_SIDECAR_FILENAMES, *POSITION_SIDECAR_FILENAMES):
+    names = (*ALID_SIDECAR_FILENAMES, *POSITION_SIDECAR_FILENAMES, *SOURCE_ALID_SIDECAR_FILENAMES)
+    for name in names:
         rewritten = (destination / name).read_bytes()
         assert rewritten == (built["hybrid_completed"] / name).read_bytes(), name
         assert not (destination / "dense" / name).exists(), name

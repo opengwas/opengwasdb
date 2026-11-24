@@ -289,6 +289,9 @@ def test_the_rule_fails_a_lifted_release_whose_rows_all_lack_a_source_alid(
     observed_dense: Path,
 ) -> None:
     assert validate_store(observed_dense).failed() == frozenset()  # a valid release to begin with
+    # The TSV build names each row's own ALID (#470); a release that kept none is blanked.
+    assert all(r.source_alid == r.alid for r in _records(observed_dense))
+    _blank_source_alids(observed_dense)
     assert all(r.source_alid is None for r in _records(observed_dense))  # meaningful fixture
     record_liftover(observed_dense)
     result = validate_store(observed_dense)
@@ -304,6 +307,7 @@ def test_the_rule_passes_when_one_row_carries_a_source_alid(observed_dense: Path
 
 
 def test_the_rule_passes_a_release_that_records_no_liftover(observed_dense: Path) -> None:
+    _blank_source_alids(observed_dense)
     assert all(r.source_alid is None for r in _records(observed_dense))
     assert validate_store(observed_dense).failed() == frozenset()
 

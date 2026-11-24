@@ -21,14 +21,13 @@ import json
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components
 from rsid_releases import RELEASE_NAMES, rsid_names, with_rsids
+from variant_info_answers import answers
 
 from opengwasdb.query import query_store
 from opengwasdb.store_reader import rsid_index
@@ -71,31 +70,6 @@ def planted(
     return _Planted(sources, tmp_path_factory.mktemp("planted"))
 
 
-def _reprs(rows: Iterator[dict[str, Any]] | list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Each row's values as `repr` writes them: what the proof digests, so an int and a
-    numpy int, or None and ``"."``, differ."""
-    return [{name: repr(value) for name, value in row.items()} for row in rows]
-
-
-def _answers(release: Path) -> dict[str, Any]:
-    """`variants_table()`, and the resolved rows of every Analysis, a lookup of every
-    variant, and the widest indexed top hits, with variant info."""
-    with query_store(release) as q:
-        table = q.variants_table()
-        ids = [row["analysis_id"] for _, row in sorted(q.analyses_table().items())]
-        alids = [table[key]["alid"] for key in sorted(table)]
-        results = {f"analysis/{a}": q.analysis(a) for a in ids}
-        results["lookup"] = q.lookup(alids, ids)
-        # A tier every layout stores: a Dense or Hybrid release refuses any other
-        # threshold (#483), which `query_digests` compares as a refusal.
-        results["top_hits"] = q.top_hits(threshold=5e-4)
-        resolved = {
-            name: _reprs(q.resolve(result, include_variant_info=True))
-            for name, result in results.items()
-        }
-    return {"variants_table": {k: _reprs([row])[0] for k, row in table.items()}, **resolved}
-
-
 @pytest.mark.parametrize("name", FIXTURES)
 def test_every_fixture_plants_each_case_a_row_can_be_in(planted, name: str):
     """A row naming no rsID, two naming one, one naming several: in the 0.2.3 table,
@@ -108,7 +82,7 @@ def test_every_fixture_plants_each_case_a_row_can_be_in(planted, name: str):
     assert rsids[: len(PLANTED)] == list(PLANTED)
     expected = rsid_names(alids, PLANTED)
     assert rsids == [expected.get(alid) for alid in alids]
-    resolved = _answers(legacy)
+    resolved = answers(legacy)
     assert resolved["top_hits"] and resolved["lookup"], "an empty answer would compare nothing"
     reached = {
         row["rsid"]
@@ -127,7 +101,7 @@ def test_0_3_0_answers_the_variant_table_and_resolved_rows_as_0_2_3(
     current, legacy = planted[name]
     if inverted:
         monkeypatch.setattr(rsid_index, "_SCANNED_ROWS", 0)
-    ours, theirs = _answers(current), _answers(legacy)
+    ours, theirs = answers(current), answers(legacy)
     assert ours.keys() == theirs.keys()
     for shape in theirs:
         assert ours[shape] == theirs[shape], (name, shape)
@@ -385,7 +359,7 @@ def test_the_rewrite_proves_each_planted_fixture_with_its_variant_info(
         assert not (directory / "variant_offsets.npy").exists(), directory
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["provenance"]["format_rewrite"]["steps"][-1] == "variant_offsets"
-    assert _answers(destination) == _answers(legacy)
+    assert answers(destination) == answers(legacy)
 
 
 def test_a_0_3_0_build_writes_no_offsets_and_a_stray_one_fails_its_envelope(
