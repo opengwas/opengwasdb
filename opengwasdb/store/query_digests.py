@@ -23,13 +23,15 @@ reads, name each row's rsID and `source_alid`, so every row's `source_alid` is c
 release reads them from its Variant Table, a 0.3.0 one from its sidecars (#469, #470).
 
 **Values, not digests: `pval` and `log10_p`.** Every answer's `pval`, and a resolved row's
-`pval` and `log10_p`, are kept as numbers (`VALUES`), not digested. `pval` is the libm's
-`erfc` (`store_reader.stats`), which differs in the last ulp between one C library and
-another, so answers written on one machine and read on another are compared with
-`differences(..., pval_rtol=CROSS_MACHINE_PVAL_RTOL)`: four float64 ulps, NaN at the same
-place counting as equal. Between two releases read by one build -- the rewrite's proof --
-`differences` compares them exactly, its default: there a difference is a difference in
-what was stored. `readable_differences` compares readable rows by the same rule.
+`pval` and `log10_p`, are kept as numbers (`VALUES`), not digested. Both are the libm's
+(`store_reader.stats`: `erfc`, `erf`, `log` and `log1p`), which differ in the last ulp
+between one C library and another, so answers written on one machine and read on another
+are compared with `differences(..., rtol=CROSS_MACHINE_RTOL)`: four float64 ulps, NaN at
+the same place counting as equal. They are the only values so derived: every other float
+an answer holds is stored, or `beta`, ``z * se``, which IEEE rounds the same everywhere.
+Between two releases read by one build -- the rewrite's proof -- `differences` compares
+them exactly, its default: there a difference is a difference in what was stored.
+`readable_differences` compares readable rows by the same rule.
 
 The **ALID probes** ask about the ALIDs a spread of variants misses: the longest the
 release holds, and one at each length where an ALID index changes how it searches
@@ -139,10 +141,10 @@ PVAL = "pval"
 LOG10_P = "log10_p"
 VALUES = (LOG10_P, PVAL)
 
-#: How far apart two `pval`s read on different machines may be, relatively: four
-#: float64 ulps. `erfc` differs between C libraries in the last ulp (#474); a relative
-#: change of 1e-9 is still a difference.
-CROSS_MACHINE_PVAL_RTOL = 4 * float(np.finfo(np.float64).eps)
+#: How far apart two `VALUES` read on different machines may be, relatively: four
+#: float64 ulps. The libm differs between C libraries in the last ulp (#474); a
+#: relative change of 1e-9 is still a difference.
+CROSS_MACHINE_RTOL = 4 * float(np.finfo(np.float64).eps)
 
 
 class IncompleteResultError(ValueError):
@@ -730,14 +732,14 @@ def _readable_variants(variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
 
 
 def differences(
-    reference: dict[str, Any], candidate: dict[str, Any], *, pval_rtol: float = 0.0
+    reference: dict[str, Any], candidate: dict[str, Any], *, rtol: float = 0.0
 ) -> list[str]:
     """Every place two `release_digests` disagree, by section, question and array; none if equal.
 
-    `log10_p` and `pval` are compared as values, NaN at the same place counting as equal
-    (`values_agree`). By default both exactly: both sides are read by this build, so a
-    difference is a difference in what was stored. Answers read on another machine pass
-    `pval_rtol=CROSS_MACHINE_PVAL_RTOL` (module docstring).
+    `VALUES` -- `log10_p` and `pval` -- are compared as values, by one rule, NaN at the same
+    place counting as equal (`values_agree`). By default exactly: both sides are read by
+    this build, so a difference is a difference in what was stored. Answers read on
+    another machine pass `rtol=CROSS_MACHINE_RTOL` (module docstring).
     """
     found: list[str] = []
     if reference["adapter"] != candidate["adapter"]:
@@ -753,8 +755,9 @@ def differences(
         reference.get("indexed_subsets", {}),
         candidate.get("indexed_subsets", {}),
     )
-    found += _value_differences(LOG10_P, reference[LOG10_P], candidate[LOG10_P], 0.0)
-    return found + _value_differences(PVAL, reference[PVAL], candidate[PVAL], pval_rtol)
+    for kind in VALUES:
+        found += _value_differences(kind, reference[kind], candidate[kind], rtol)
+    return found
 
 
 def _shape_differences(
@@ -796,33 +799,33 @@ def values_agree(ours: Sequence[Any], theirs: Sequence[Any], *, rtol: float = 0.
 
 
 def readable_differences(
-    reference: dict[str, Any], candidate: dict[str, Any], *, pval_rtol: float = 0.0
+    reference: dict[str, Any], candidate: dict[str, Any], *, rtol: float = 0.0
 ) -> list[str]:
     """Every readable answer two `release_answers` disagree on, as
     ``readable/<section>/<question>``; none if equal. Every value is compared exactly
-    but a row's `pval`, which is compared as `differences` compares it."""
+    but a row's `VALUES` field, which is compared as `differences` compares it."""
     found = []
     for section in sorted(set(reference) | set(candidate)):
         ours, theirs = reference.get(section), candidate.get(section)
         if not (isinstance(ours, dict) and isinstance(theirs, dict)):
-            if not _readable_agree(ours, theirs, pval_rtol):
+            if not _readable_agree(ours, theirs, rtol):
                 found.append(f"readable/{section}/(whole section)")
             continue
         found += [
             f"readable/{section}/{name}"
             for name in sorted(set(ours) | set(theirs))
-            if not _readable_agree(ours.get(name), theirs.get(name), pval_rtol)
+            if not _readable_agree(ours.get(name), theirs.get(name), rtol)
         ]
     return found
 
 
 def _readable_agree(ours: Any, theirs: Any, rtol: float, key: str | None = None) -> bool:
-    """Whether two readable values agree, a `pval` field by `values_agree`."""
+    """Whether two readable values agree, a `VALUES` field by `values_agree`."""
     if isinstance(ours, dict) and isinstance(theirs, dict):
         return _readable_rows_agree(ours, theirs, rtol)
     if isinstance(ours, list) and isinstance(theirs, list):
         return _readable_lists_agree(ours, theirs, rtol, key)
-    if key == PVAL and _is_float(ours) and _is_float(theirs):
+    if key in VALUES and _is_float(ours) and _is_float(theirs):
         return values_agree([ours], [theirs], rtol=rtol)
     return bool(ours == theirs)
 
@@ -850,7 +853,7 @@ def _differing(reference: Mapping[str, str], candidate: Mapping[str, str]) -> li
 
 
 __all__ = [
-    "CROSS_MACHINE_PVAL_RTOL",
+    "CROSS_MACHINE_RTOL",
     "IncompleteResultError",
     "QueryOpener",
     "RANGE_QUESTIONS",

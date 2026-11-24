@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import gzip
+from collections.abc import Iterator
 from pathlib import Path
 from shutil import copytree
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 import pytest
 import shared_releases
@@ -42,6 +43,32 @@ SOURCE_ROWS = [
     # Source effect allele is not canonical A1, so stored z becomes positive.
     "a2\tp2\tDisease\tDisease primary\t1\t300\tG\tA\t-6.0\t0.5\trs3\tlog_or",
 ]
+
+
+#: The chains pyliftover's built-in lifts read in the test suite: UCSC's hg19 -> hg38
+#: (`tests/data/liftover/README.md`).
+LIFTOVER_CHAINS = Path(__file__).resolve().parent / "data" / "liftover"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _builtin_liftover_reads_the_committed_chain() -> Iterator[None]:
+    """pyliftover's built-in lift (`LiftOver("hg19", "hg38")`) opens the committed chain,
+    never `~/.pyliftover` and never UCSC: a runner whose download failed failed 347 tests
+    (#474). A build pair with no chain committed finds none and fails loudly. A build given
+    a `chain_file` reads that file, as it does outside the tests."""
+    import pyliftover.liftover
+    from pyliftover.chainfile import open_liftover_chain_file
+
+    def committed(from_db: str, to_db: str, **_where: object) -> IO[bytes] | None:
+        opened: IO[bytes] | None = open_liftover_chain_file(
+            from_db, to_db, search_dir=str(LIFTOVER_CHAINS), cache_dir=None, use_web=False,
+            write_cache=False,
+        )
+        return opened
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pyliftover.liftover, "open_liftover_chain_file", committed)
+        yield
 
 
 #: Test modules whose every GWAS-SSF read is also made as batches and compared

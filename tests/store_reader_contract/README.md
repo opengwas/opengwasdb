@@ -14,7 +14,7 @@ other port of the Store Reader test against. `VERSION` names the bundle's versio
 | `generate.py` | writes `releases/`, `expected/` and `VERSION`; runs in opengwasdb only |
 | `.gitattributes` | every file is bytes: no line-ending conversion on checkout |
 
-The bundle is 2.7 MB: 1,081,452 bytes of releases in 1,033 files and 1,660,547 bytes of
+The bundle is 3.9 MB: 1,083,672 bytes of releases in 1,033 files and 2,806,742 bytes of
 expected answers.
 
 ## The releases
@@ -104,13 +104,13 @@ values it names: `analysis_id` for `UnknownAnalysisError`, `chromosome` for
 `UnstoredThresholdError`. A port must raise an error of that kind carrying those values;
 `message` is informative, not contract. JSON holds no NaN or infinity, so a float that is
 one is spelt `"NaN"`, `"Infinity"` or `"-Infinity"`; every other float is the exact value
-read, which JSON round-trips. **libm.** `pval` is the libm's `erfc`, which differs in the
-last ulp between C libraries -- between this bundle's generating host and GitHub's runner,
-both glibc -- so every reader, the Python ones included, compares `pval` to within four
-float64 ulps: relative `4 * 2**-52`, about 8.9e-16, NaN equal to NaN
-(`query_digests.CROSS_MACHINE_PVAL_RTOL`); a relative change of 1e-9 is a difference. Every
-other value is compared exactly. A port's `log10_p` comes from its own `log` too, and may
-need the same tolerance; the Python readers have matched it exactly so far.
+read, which JSON round-trips. **libm.** `pval` and `log10_p` are the libm's (`erfc`, `erf`,
+`log`, `log1p`), which differ in the last ulp between C libraries -- both do between this
+bundle's generating host and GitHub's runner, two glibcs -- so every reader, the Python ones
+included, compares both to within four float64 ulps: relative `4 * 2**-52`, about
+8.9e-16, NaN equal to NaN (`query_digests.CROSS_MACHINE_RTOL`); a relative change of 1e-9
+is a difference. They are the only values a reader derives with the libm, so every other
+value is compared exactly: `beta` is ``z * se``, which IEEE rounds alike everywhere.
 
 **`digests` are opengwasdb's and ogquery's, not a port's.** A digest is a sha256 over a
 numpy array's dtype string, its shape and its bytes in native order, and over Python's
@@ -118,10 +118,10 @@ numpy array's dtype string, its shape and its bytes in native order, and over Py
 outside Python means reproducing numpy's dtype names and Python's `repr` of floats, None
 and strings, which is a second implementation of both rather than of the Store Reader. So
 the Python readers compare every digest, and a port compares `readable`, which reaches every
-answer, every row count and every status, with fewer rows. `pval` is no digest's: it is
-kept as numbers beside them, since a digest cannot be compared to a few ulps (above).
-Between two releases read by one build -- the rewrite's proof -- `query_digests.differences`
-compares it exactly, its default.
+answer, every row count and every status, with fewer rows. `pval` and `log10_p` are no
+digest's: they are kept as numbers beside them, since a digest cannot be compared to a few
+ulps (above). Between two releases read by one build -- the rewrite's proof --
+`query_digests.differences` compares them exactly, its default.
 
 ## Running the contract
 

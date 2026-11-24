@@ -73,26 +73,31 @@ def test_every_release_answers_as_expected(name: str):
     assert mismatches(RELEASES / name, expected(name)) == []
 
 
-def _nudged(answers: dict, change) -> tuple[dict, int]:
-    """A copy of `answers` with every finite `pval` -- carried as a value in `digests`, or
-    a field of a readable row -- passed through `change(value, i)`; and how many it changed."""
-    changed = 0
+#: The values the libm derives (`query_digests.VALUES`), compared to a few ulps across machines.
+LIBM_VALUES = ("pval", "log10_p")
+
+
+def _nudged(answers: dict, change) -> tuple[dict, dict[str, int]]:
+    """A copy of `answers` with every finite, non-zero `pval` and `log10_p` -- carried as
+    values in `digests`, or a field of a readable row -- passed through `change(value, i)`;
+    and how many of each it changed."""
+    changed = dict.fromkeys(LIBM_VALUES, 0)
 
     def walk(node, key=None):
-        nonlocal changed
         if isinstance(node, dict):
             return {k: walk(v, k) for k, v in node.items()}
         if isinstance(node, list):
             return [walk(v, key) for v in node]
-        if key == "pval" and isinstance(node, float) and node:
-            changed += 1
-            return change(node, changed)
+        if key in changed and isinstance(node, float) and node:
+            changed[key] += 1
+            return change(node, changed[key])
         return node
 
     copy = json.loads(json.dumps(answers))
-    copy["digests"]["pval"] = {
-        shape: walk(values, "pval") for shape, values in copy["digests"]["pval"].items()
-    }
+    for kind in LIBM_VALUES:
+        copy["digests"][kind] = {
+            shape: walk(values, kind) for shape, values in copy["digests"][kind].items()
+        }
     copy["readable"] = walk(copy["readable"])
     return copy, changed
 
@@ -105,23 +110,27 @@ def _ulps(value: float, i: int) -> float:
     return value
 
 
-def test_pval_is_compared_to_a_few_ulps_across_machines_and_exactly_within_one():
-    """`erfc` differs between C libraries in the last ulp, so the contract, which reads on
-    one machine what another wrote, takes `pval` within `CROSS_MACHINE_PVAL_RTOL`; the
-    rewrite's proof, which reads both sides in one build, stays exact (`differences`)."""
+def test_libm_values_are_compared_to_a_few_ulps_across_machines_and_exactly_within_one():
+    """The libm differs between C libraries in the last ulp, so the contract, which reads on
+    one machine what another wrote, takes `pval` and `log10_p` within `CROSS_MACHINE_RTOL`;
+    the rewrite's proof, which reads both sides in one build, stays exact (`differences`)."""
     want = expected("dense_observed")
     found = answers(RELEASES / "dense_observed")
     nudged, changed = _nudged(want, _ulps)
-    readable_pvals = _nudged({"digests": {"pval": {}}, "readable": want["readable"]}, _ulps)[1]
-    assert changed > 1000 and readable_pvals > 100, (changed, readable_pvals)
+    empty = dict.fromkeys(LIBM_VALUES, {})
+    readable = _nudged({"digests": empty, "readable": want["readable"]}, _ulps)[1]
+    assert changed["pval"] > 1000 and changed["log10_p"] > 100, changed
+    assert readable["pval"] > 100, readable
     assert disagreements(found, want) == []
     assert disagreements(found, nudged) == []
     exact = differences(nudged["digests"], found["digests"])
-    assert exact and all(d.startswith("pval/") for d in exact), exact[:3]
+    assert {d.split("/")[0] for d in exact} == set(LIBM_VALUES), exact[:3]
     assert readable_differences(nudged["readable"], found["readable"])
     far, _ = _nudged(want, lambda p, i: p * (1 + 1e-9))
-    assert {d.split("/")[0] for d in disagreements(found, far)} == {"pval", "readable"}
+    assert {d.split("/")[0] for d in disagreements(found, far)} == {*LIBM_VALUES, "readable"}
     assert differences(far["digests"], found["digests"])
+    far_log10_p = {**want, "digests": {**want["digests"], "log10_p": far["digests"]["log10_p"]}}
+    assert {d.split("/")[0] for d in disagreements(found, far_log10_p)} == {"log10_p"}
 
 
 def test_the_bundle_holds_every_state_it_claims():
