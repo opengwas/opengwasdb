@@ -82,13 +82,23 @@ def test_the_bundle_holds_every_state_it_claims():
     site = readable["dense_ranges"]["variant_reads"]["variants_in_range/shared"]["head"]
     assert [row["rsid"] for row in site] == ["rs5000", "rs5000"], "a multi-allelic rsID"
     refused = {
-        a["error"] for r in readable.values() for a in r["refusals"].values() if "error" in a
-    } | {
-        a["error"] for r in readable.values() for a in r["shapes"].values() if "error" in a
+        a["error"]: a["fields"]
+        for r in readable.values()
+        for section in ("refusals", "shapes")
+        for a in r[section].values()
+        if "error" in a
     }
-    assert refused == {
-        "UnknownAnalysisError", "UnstoredThresholdError", "VariantNormalisationError",
+    assert set(refused) == {
+        "UnknownAnalysisError", "UnstoredThresholdError", "UnsupportedChromosome",
     }
+    # A port compares a refusal's type and its named fields, never its message (README).
+    assert refused["UnknownAnalysisError"] == {"analysis_id": "absent"}
+    assert refused["UnsupportedChromosome"] == {"chromosome": "27"}
+    assert set(refused["UnstoredThresholdError"]) == {"threshold", "stored"}
+    for name in NAMES:
+        unknown = {k: a for k, a in readable[name]["refusals"].items() if "unknown" in k}
+        assert {a["error"] for a in unknown.values()} == {"UnknownAnalysisError"}, name
+        assert len(unknown) == 3, (name, sorted(unknown))
     infinite = [
         row
         for shape in readable["dense_ranges"]["shapes"].values()
@@ -107,6 +117,26 @@ def test_the_bundle_holds_every_state_it_claims():
     for name in NAMES:
         answered = [s for s, a in readable[name]["shapes"].items() if a.get("rows")]
         assert len(answered) > 10, (name, len(answered))
+
+
+def _statuses(readable: dict) -> set[str]:
+    return {
+        status
+        for section in ("shapes", "alid_probes", "misses", "range_probes", "indexed_subsets")
+        for answer in readable[section].values()
+        for status in answer.get("by_status", {})
+    }
+
+
+def test_the_readable_rows_reach_every_status_a_release_holds():
+    """A port checks imputed and missing rows from `by_status`, without the digests: each
+    Reference-Completed release spells out an imputed row, and the Ragged one, whose CSR
+    stores a row where imputation failed, a missing row (spec §19)."""
+    for name in NAMES:
+        statuses = _statuses(expected(name)["readable"])
+        want = {"observed"} | ({"imputed"} if name.endswith("_completed") else set())
+        want |= {"missing"} if name == "ragged_completed" else set()
+        assert statuses == want, (name, statuses)
 
 
 @pytest.mark.parametrize("name", [n for n in NAMES if not n.endswith("_ranges")])

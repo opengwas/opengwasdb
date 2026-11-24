@@ -117,10 +117,15 @@ lines.
 ## Consequences
 
 - **Every result carries two more arrays**, `beta` and `pval`, both float64. Every array a result
-  held before is unchanged. On the six fixture releases (`tests/golden/store_reader_digests.json`),
-  once `beta` and `pval` are dropped, every query digest is identical to the pins written at
-  `5d600a1d`. The `log10_p` values agree with those pins to 1e-12, the tolerance the pins already
-  used.
+  held before is unchanged. On the six fixture releases (`tests/golden/store_reader_digests.json`
+  as it was then), once `beta` and `pval` are dropped, every query digest was identical to the
+  pins written at `5d600a1d`, and the `log10_p` values agreed with those pins to 1e-12, the
+  tolerance the pins used.
+
+  *24 Nov 2026 (#474):* those pins are gone. The Store Reader contract bundle
+  (`tests/store_reader_contract/`) replaced them: its expected answers carry `beta` and `pval`
+  for every shape, and `tests/test_store_reader_digests.py` still checks both against
+  `association_statistics` on the six releases.
 - **The first read of `beta` or `pval` costs one evaluation per distinct |z|**, with the same
   method as `log10_p_two_sided`, twice: once for `pval` and once for `log10_p`. A caller that reads
   only z and SE pays nothing, because the record derives lazily.

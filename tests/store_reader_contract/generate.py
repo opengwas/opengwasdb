@@ -297,32 +297,53 @@ def give_legacy_states(name: str, release: Path) -> None:
 # ── byte for byte ──────────────────────────────────────────────────────────────────
 
 _STAMPED = re.compile(r'"(created_at|builder_version)": "([^"]*)"')
+#: The files `normalise` reads as text; every other file of a release is binary
+#: (`.npy`, Zarr chunks, BGZF, SQLite), where a short stamp could match by chance.
 _TEXT_SUFFIXES = (".json", ".html", ".tsv")
+#: An ISO-8601 time, and an absolute path: what a build records of when and where it ran.
+_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[+-]\d{2}:\d{2}|Z)?")
+_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/<])/(?:[\w.-]+/)+[\w.-]+")
 
 
 def normalise(release: Path, build_root: Path) -> None:
     """Re-stamp what a build records of when, by which version and from where it ran
-    (module docstring), in every text file of `release`, and refuse a release in which
-    any of the originals is left, in any file."""
-    replacements = {str(build_root.resolve()): BUILD_ROOT, str(build_root): BUILD_ROOT}
-    for path in sorted(release.rglob("*.json")):
-        for key, value in _STAMPED.findall(path.read_text(encoding="utf-8")):
-            replacements[value] = STAMP if key == "created_at" else BUILDER_VERSION
+    (module docstring) in every text file of `release`, then refuse the release if any
+    text file still holds a time other than `STAMP` or an absolute path other than under
+    `BUILD_ROOT` -- whatever field a builder records it in -- or any file, binary
+    included, holds the build root."""
+    roots = {str(build_root.resolve()), str(build_root)}
+    texts = sorted(p for p in release.rglob("*") if p.is_file() and p.suffix in _TEXT_SUFFIXES)
+    replacements = dict.fromkeys(roots, BUILD_ROOT)
+    for path in texts:
+        if path.suffix == ".json":
+            for key, value in _STAMPED.findall(path.read_text(encoding="utf-8")):
+                replacements[value] = STAMP if key == "created_at" else BUILDER_VERSION
     for kept in (STAMP, BUILDER_VERSION):
         replacements.pop(kept, None)
-    for path in sorted(p for p in release.rglob("*") if p.suffix in _TEXT_SUFFIXES):
+    for path in texts:
         text = original = path.read_text(encoding="utf-8")
         for old in sorted(replacements, key=len, reverse=True):
             text = text.replace(old, replacements[old])
         if text != original:
             path.write_text(text, encoding="utf-8")
-    left = [
-        (path, old)
+    _require_no_stamp_left(release, texts, roots)
+
+
+def _require_no_stamp_left(release: Path, texts: list[Path], roots: set[str]) -> None:
+    left = []
+    for path in texts:
+        text = path.read_text(encoding="utf-8")
+        left += [(path, t) for t in _TIME.findall(text) if t != STAMP]
+        left += [
+            (path, a) for a in _ABSOLUTE_PATH.findall(text) if not a.startswith(BUILD_ROOT)
+        ]
+    left += [
+        (path, root)
         for path in sorted(p for p in release.rglob("*") if p.is_file())
-        for old in replacements
-        if old.encode() in path.read_bytes()
+        for root in roots
+        if root.encode() in path.read_bytes()
     ]
-    assert not left, f"a build's stamp or path is left in the bundle: {left[:3]}"
+    assert not left, f"a build's time or path is left in the bundle: {left[:5]}"
 
 
 # ── the bundle ─────────────────────────────────────────────────────────────────────
@@ -332,8 +353,6 @@ def write_bundle(built: dict[str, Path], build_root: Path, out: Path) -> None:
     """Copy each of `built` into `out/releases`, plant it (`PLANTINGS`), normalise it,
     and write what it answers to `out/expected` and the bundle's `VERSION`."""
     from contract_reader import answers
-
-    from opengwasdb.store.query_digests import differences, release_digests
 
     assert set(built) == set(PLANTINGS), sorted(set(built) ^ set(PLANTINGS))
     for name in ("releases", "expected"):
@@ -346,8 +365,6 @@ def write_bundle(built: dict[str, Path], build_root: Path, out: Path) -> None:
         normalise(release, build_root)
         _require_contract_release(release)
         found = answers(release)
-        # The Store Reader alone answers as opengwasdb's injector does (`query_store`).
-        assert not differences(release_digests(release), found["digests"]), name
         _require_meaningful(name, found)
         document = {
             "bundle_version": BUNDLE_VERSION,
@@ -376,17 +393,24 @@ def _require_contract_release(release: Path) -> None:
     assert not empty, f"an empty directory git would drop: {empty[:3]}"
 
 
+#: The refusal every release is asked for, by question (`query_digests.refusal_questions`).
+REFUSED = {
+    "top_hits/unknown_analysis": "UnknownAnalysisError",
+    "analysis/unknown_analysis": "UnknownAnalysisError",
+    "lookup/unknown_analysis": "UnknownAnalysisError",
+    "range_phewas/unsupported_chromosome": "UnsupportedChromosome",
+    "variants_in_range/unsupported_chromosome": "UnsupportedChromosome",
+}
+
+
 def _require_meaningful(name: str, found: dict[str, Any]) -> None:
-    """A release whose answers are all empty would pass whatever a reader did."""
+    """A release whose answers are all empty would pass whatever a reader did, and one
+    that answers a refusal question has lost the refusal."""
     shapes = found["readable"]["shapes"]
     answered = [s for s, a in shapes.items() if a.get("rows")]
     assert len(answered) > 10, (name, len(answered))
-    refused = {s: a["error"] for s, a in found["readable"]["refusals"].items() if "error" in a}
-    assert refused == {
-        "top_hits/unknown_analysis": "UnknownAnalysisError",
-        "range_phewas/unsupported_chromosome": "VariantNormalisationError",
-        "variants_in_range/unsupported_chromosome": "VariantNormalisationError",
-    }, (name, refused)
+    refused = {s: a.get("error") for s, a in found["readable"]["refusals"].items()}
+    assert refused == REFUSED, (name, refused)
 
 
 #: The environment the bundle is generated in (module docstring): the test task's, and

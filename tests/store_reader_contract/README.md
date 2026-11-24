@@ -14,7 +14,7 @@ other port of the Store Reader test against. `VERSION` names the bundle's versio
 | `generate.py` | writes `releases/`, `expected/` and `VERSION`; runs in opengwasdb only |
 | `.gitattributes` | every file is bytes: no line-ending conversion on checkout |
 
-The bundle is 2.6 MB: 1,231,530 bytes of releases in 1,033 files and 1,363,886 bytes of
+The bundle is 2.7 MB: 1,081,452 bytes of releases in 1,033 files and 1,660,547 bytes of
 expected answers.
 
 ## The releases
@@ -44,15 +44,17 @@ What each planted state is:
   `rs77;rs78`, which is one name, whole (spec §19), and every other names its own.
 - **`source_alid`.** A collision row (state 0, none), an unlifted row (state 1, its own
   ALID) and lifted rows (state 2), lifted values of 24, 32, 33 and 130 bytes among them.
-- **Refusals.** Every release is asked `top_hits` of an Analysis it does not hold
-  (`UnknownAnalysisError`) and a range on chromosome `27`, which no ALID can spell
-  (`VariantNormalisationError`). A Dense or Hybrid release refuses `top_hits` at the two
-  thresholds it stores no tier for (`UnstoredThresholdError`); a Ragged one scans.
-  `analysis()` of an unknown Analysis is asked too: it answers empty, and the contract
-  defines no refusal for it yet.
+- **Refusals.** Every release is asked `top_hits`, `analysis()` and `lookup()` of an
+  Analysis it does not hold (`UnknownAnalysisError`, the owner's ruling of 24 Nov 2026:
+  every shape that names an Analysis refuses one it lacks) and a range on chromosome
+  `27`, which no ALID can spell (`UnsupportedChromosome`). A Dense or Hybrid release
+  refuses `top_hits` at the two thresholds it stores no tier for (`UnstoredThresholdError`);
+  a Ragged one scans.
 
-Two of the states are ones no release the validator passes holds, which a reader still
-meets, so `ogdb validate` fails four releases by design, each on that rule alone:
+`generate.py` gives two of the states as `LEGACY_STATES`, after every other planting: they
+are states a reader still meets that no release the validator passes holds, and the
+rewrite publishes only a release that passes, so the format parity test gives them to the
+rewritten release.
 
 - an **infinite SE** (`dense_ranges`): from format 0.2.3 a build stores an SE above
   65,504 as missing (ADR 0068), and a release before it may hold `+inf`. Its `beta`,
@@ -60,37 +62,69 @@ meets, so `ogdb validate` fails four releases by design, each on that rule alone
 - a **tier without `analysis_offsets`** (the three `*_completed`): every format requires
   it, and a reader answers one Analysis from such a tier by filtering its rows (spec §18).
 
+`ogdb validate` therefore fails exactly these four releases, each on this rule alone and
+every other release on none (`tests/test_store_reader_contract_bundle.py` holds it):
+
+<!-- validate-fails -->
+| Release | Rule | Target |
+|---|---|---|
+| `dense_completed` | `top_hits.arrays` | `data.zarr` |
+| `ragged_completed` | `top_hits.arrays` | `data.zarr/ragged` |
+| `hybrid_completed` | `top_hits.arrays` | `data.zarr/ragged` |
+| `hybrid_completed` | `top_hits.arrays` | `dense/data.zarr` |
+| `dense_ranges` | `associations.se_out_of_range` | `data.zarr` |
+<!-- /validate-fails -->
+
 ## What a release must answer
 
-`expected/<release>.json` holds `bundle_version`, `format_version`, `release` and:
+`expected/<release>.json` holds `bundle_version`, `format_version`, `release`, and every
+answer of `opengwasdb.store.query_digests.release_answers` rendered twice: as `digests`
+and as `readable`. The questions are one enumeration (`query_digests.questions`), so both
+hold the same answers, in sections:
 
-- `digests`: `opengwasdb.store.query_digests.release_digests`. A sha256 per array of every
-  answer: each shape `query_shapes` asks, Observed-Only and not (`analysis`, `phewas`,
+- `shapes`: each shape `query_shapes` asks, Observed-Only and not: `analysis`, `phewas`,
   `range_phewas`, `lookup`, `top_hits` at five thresholds, overall and per Analysis, and
-  `range_by_analysis` on Ragged), `variants_table()` and `analyses_table()` column by
-  column, the resolved rows of the lookup, the range and the widest top hits, with their
-  `log10_p`, the ALID probes, the range probes, the rsID misses, the Indexed Variant
-  Subsets, the variant-only reads (`variant_count`, `variants`, `variants_in_range`) and
-  the refusals. A refusal's digest is of its type and message.
-- `readable`: `release_readable`, the same answers spelt out for a reader in another
-  language: each shape's row count and first two rows; the Variant Table's first rows
-  and the rows of the probed ALIDs; every Analysis; each ALID probe's PheWAS; the
-  variant-only reads; and each refusal's `error` and `message`.
+  `range_by_analysis` on Ragged;
+- `alid_probes`, `range_probes`, `misses` and `indexed_subsets`: the PheWAS of the longest
+  ALIDs and of one at each probed length, a range at each place a position index can go
+  wrong, rsIDs no release names, and each Indexed Variant Subset;
+- `variant_reads`: `variant_count`, `variants` and `variants_in_range`;
+- `refusals`: the questions above whose answer is an error;
+- and, beside them, `variants_table` and `analyses_table`, and in `digests` the resolved
+  rows of the lookup, the range and the widest top hits (`resolved`) with their `log10_p`.
 
-JSON holds no NaN or infinity, so a float that is one is spelt `"NaN"`, `"Infinity"` or
-`"-Infinity"`, in `readable` and in `digests.log10_p`. Every other float is the exact
-value read, which JSON round-trips.
+**What a port compares: `readable`.** For each answer, `rows` is its row count, `head` its
+first two rows, and `by_status` the first row of each `association_status` it holds
+(observed, imputed, missing) with its place in the answer, `at`; a table's rows carry their
+`variant_index` or `analysis_index`. A refusal is `error`, its type, and `fields`, the
+values it names: `analysis_id` for `UnknownAnalysisError`, `chromosome` for
+`UnsupportedChromosome`, and `threshold` and the `stored` thresholds for
+`UnstoredThresholdError`. A port must raise an error of that kind carrying those values;
+`message` is informative, not contract. JSON holds no NaN or infinity, so a float that is
+one is spelt `"NaN"`, `"Infinity"` or `"-Infinity"`; every other float is the exact value
+read, which JSON round-trips. A port's `pval` and `log10_p` come from its own libm `erfc`
+and `log`, which may differ from Linux glibc's in the last unit; compare those two with a
+relative tolerance of about 1e-15.
+
+**`digests` are opengwasdb's and ogquery's, not a port's.** A digest is a sha256 over a
+numpy array's dtype string, its shape and its bytes in native order, and over Python's
+`repr` of each value of an object array (`query_digests.digest_array`). Reproducing that
+outside Python means reproducing numpy's dtype names and Python's `repr` of floats, None
+and strings, which is a second implementation of both rather than of the Store Reader. So
+the Python readers compare every digest, and a port compares `readable`, which reaches every
+answer, every row count and every status, with fewer rows.
 
 ## Running the contract
 
     pytest tests/store_reader_contract
 
-The test opens each release with `open_release` and `query_release` and a Variant Table
-reader that fails any read made of it, since no 0.3.0 read opens `variants.tsv.gz`, and
-compares every digest and readable value with `expected/`. It loads none of pandas, scipy,
-pysam, sqlite3 or threadpoolctl. It imports only the Store Reader and
-`opengwasdb.store.query_digests`: in ogquery those two imports, in `contract_reader.py`,
-are the lines that change.
+The test opens each release with the Store Reader alone, `open_release(path)` and
+`query_release`, with no Variant Table reader: a 0.3.0 release's table refuses every
+read, so a read that reached `variants.tsv.gz` fails. It compares every digest and readable
+value with `expected/`, and loads none of pandas, scipy, pysam, sqlite3 or threadpoolctl.
+It imports only the Store Reader and `opengwasdb.store.query_digests`. The questions move
+with the reader in ogquery#1, so in ogquery those imports, in `contract_reader.py`, are the
+lines that change.
 
 ## Regenerating
 
@@ -98,17 +132,22 @@ From the opengwasdb repository root:
 
     pixi run -e dev python tests/store_reader_contract/generate.py
 
-It builds the releases, plants the states above, and writes the bundle beside itself.
-Two runs write the same bytes, and `tests/test_store_reader_contract_bundle.py` fails
-unless a fresh run writes the committed bundle byte for byte, so a change to a builder or
-to an answer shows as a change to the bundle. Raise `BUNDLE_VERSION` in `generate.py`
-when the bundle changes. A build stamps when, by which version and from where it ran; the
-generator re-stamps those as fixed values (its docstring). It re-executes itself in the
-test task's environment -- `PYTHONNOUSERSITE=1`, so a numpy in the user's site-packages
-cannot shadow the locked one, and one BLAS thread -- with `BLOSC_NTHREADS=1`, since a
-threaded Blosc writes a chunk's blocks in the order its threads finish.
+It builds the releases, plants the states above, and writes the bundle beside itself. Raise
+`BUNDLE_VERSION` in `generate.py` whenever the committed bundle changes after it is first
+merged. A build stamps when, by which version and from where it ran; the generator
+re-stamps those as fixed values and refuses a release in which any other time or absolute
+path is left in a text file (its docstring). It re-executes itself in the test task's
+environment -- `PYTHONNOUSERSITE=1`, so a numpy in the user's site-packages cannot shadow
+the locked one, and one BLAS thread -- with `BLOSC_NTHREADS=1`, since a threaded Blosc
+writes a chunk's blocks in the order its threads finish.
 
-`tests/test_store_reader_contract_parity.py` holds the format parity: each release, built with the same plantings
-at format 0.2.3 (`tests/format_0_2_3.py`) and rewritten by `ogdb rewrite-release`, with
-the two validator-refused states given after the rewrite, answers exactly as the
-committed release does.
+    pixi run -e dev contract-check
+
+runs what is too slow for every test run (`CONTRIBUTING.md`, Test tiers): the generator
+into a temporary directory, then `git diff --no-index --exit-code` against `releases`,
+`expected` and `VERSION`, so a builder, planting or answer that changed without the bundle
+fails; and the six format-parity cases `tests/test_store_reader_contract_parity.py` leaves
+to it. That file runs three in every test run (`dense_ranges`, `ragged_completed`,
+`hybrid_completed`: one per layout, both legacy states): each release, built with the same
+plantings at format 0.2.3 (`tests/format_0_2_3.py`), rewritten by `ogdb rewrite-release`
+and given its `LEGACY_STATES`, answers exactly as the committed release does.

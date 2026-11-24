@@ -891,24 +891,34 @@ Format 0.3.0 is what ogquery, opengwaspy, opengwasr and any other port read, so 
   spec §18 still answers. A reader meets both, so the contract holds them; `ogdb validate`
   fails those four releases on those rules alone. The rewrite publishes only a release
   the validator passes, so the format parity test gives them to the rewritten release.
-- **Answers.** `expected/<release>.json` is `query_digests.release_digests`, which now
-  also asks the refusals (`top_hits` of an unknown Analysis, a range on chromosome `27`),
-  so the rewrite's proof compares them too, and `release_readable`: each answer's row count
-  and first rows, and each refusal's type and message, for a reader that cannot reproduce
-  Python's digests. JSON holds no NaN, so a NaN or infinite value is spelt as a string.
-- **Read through the Store Reader alone.** `release_digests` and `release_readable` take
-  the facade's opener (`query`, default `query_store`), and the subsets are listed by the
-  Store Reader (`list_indexed_subsets` moved to `opengwasdb.store_reader.indexed`). The
-  contract test opens each release with `open_release` and `query_release` and a Variant
-  Table reader that fails any read, and loads no pandas, scipy, pysam or sqlite3.
+- **Answers.** `query_digests.questions` enumerates every question once, the refusals
+  among them (`top_hits`, `analysis()` and `lookup()` of an unknown Analysis, a range on
+  chromosome `27`), so the rewrite's proof compares them too. `release_answers` asks each
+  once per open and renders it twice: its digest, and readable rows -- the row count, the
+  first rows and the first row of each `association_status`, and a refusal's type and named
+  `fields` -- which a port compares, since the digests hash numpy dtype names and Python
+  `repr`s. JSON holds no NaN, so a NaN or infinite value is spelt as a string.
+- **An unknown Analysis is refused on every shape** (the owner, 24 Nov 2026). `analysis()`,
+  `lookup()` and the Rho reads answered one with an empty result; they raise
+  `UnknownAnalysisError` through `AnalysesIndex.require_index`, as `top_hits` did (#483).
+- **Read through the Store Reader alone.** `release_answers` takes the facade's opener
+  (`query`, default `query_store`), and the subsets are listed by the Store Reader
+  (`list_indexed_subsets` moved to `opengwasdb.store_reader.indexed`, and its callers with
+  it). `open_release(path)` refused a 0.3.0 release opened without a Variant Table reader,
+  though no 0.3.0 read uses one; it now gives the axis `NoVariantTable`, which refuses
+  every read by name, and still refuses a 0.2 release. The contract test calls
+  `open_release(path)` plainly and loads no pandas, scipy, pysam or sqlite3.
 - **Byte for byte, with no new seam.** No builder takes its time, its version or its
   source paths as an input, so the generator re-stamps them after the build -- every
   `created_at`, an Indexed Variant Subset's `builder_version`, and the build root in a
   Ragged build's provenance -- and refuses a release in which an original is left. It
   runs in the test task's environment with one Blosc thread: without `PYTHONNOUSERSITE`
   a user-site numpy shadowed the locked one and moved completion's quality statistics in
-  their last bits. A test fails unless a fresh run writes the committed
-  bundle exactly, so a change to a builder shows as a change to the bundle.
+  their last bits. It refuses a release in which any other time or absolute path is left
+  in a text file. `pixi run -e dev contract-check` fails unless a fresh run writes the
+  committed bundle exactly, so a change to a builder shows as a change to the bundle; it
+  also runs six of the nine format-parity cases, which every test run would otherwise pay
+  for, and `test` runs the other three.
 - **It replaces `tests/golden/store_reader_digests.json`.** Those pins asked the same
   questions of the six digest releases unplanted; two pin sets of one function would each
   need regenerating on every change to an answer.

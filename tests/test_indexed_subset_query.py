@@ -46,13 +46,14 @@ from test_ragged_build_ssf import _make_fixture
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.layouts.dense.indexed_subsets import list_indexed_subsets
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.analyses import UnknownAnalysisError
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.indexed import (
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
     IndexedSubsetLayoutError,
+    list_indexed_subsets,
     open_indexed_subset,
 )
 from opengwasdb.store_reader.stats import p_value_from_z
@@ -278,11 +279,11 @@ def test_unknown_subset_raises_naming_store_and_subset(indexed_store: Path) -> N
     _assert_refused(indexed_store, "nope", "no Indexed Variant Subset 'nope'")
 
 
-def test_unknown_analysis_keeps_the_ordinary_empty_result(indexed_store: Path) -> None:
-    """Only the subset selector fails loudly; an unknown Analysis ID does not."""
-    result = _analyse(indexed_store, "does-not-exist", indexed_subset="hm3")
-    assert result.keys() == _RESULT_KEYS
-    assert all(len(values) == 0 for values in result.values())
+def test_unknown_analysis_through_a_valid_subset_is_refused(indexed_store: Path) -> None:
+    """A valid subset with an unknown Analysis ID refuses it, as the ordinary read does
+    (#474): an empty answer would read as "no association"."""
+    with pytest.raises(UnknownAnalysisError, match="does-not-exist"):
+        _analyse(indexed_store, "does-not-exist", indexed_subset="hm3")
 
 
 def test_bad_subset_with_an_unknown_analysis_fails_loudly(indexed_copy: Path) -> None:
@@ -290,8 +291,8 @@ def test_bad_subset_with_an_unknown_analysis_fails_loudly(indexed_copy: Path) ->
 
     A typo'd subset must fail even when the Analysis ID is also unknown: the
     caller asked for an indexed answer, and an unknown ID does not excuse the
-    selector.  A valid subset with an unknown Analysis still yields the ordinary
-    empty result (the test above).
+    selector.  A valid subset with an unknown Analysis refuses the Analysis (the
+    test above).
     """
     with pytest.raises(IndexedSubsetError, match="no Indexed Variant Subset"):
         _analyse(indexed_copy, "does-not-exist", indexed_subset="nope")

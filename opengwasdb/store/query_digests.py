@@ -45,25 +45,27 @@ spread identifiers. A 0.2 Dense or Hybrid release looks such an rsID up in
 `index.sqlite`'s `variant_aliases`; a 0.3.0 release has no such table and answers it
 as a miss without opening SQLite (ADR 0102, #471). Their own section, as the probes.
 
-The **refusals** ask what the contract answers with an error (spec §18, §19): `top_hits`
-of an Analysis the release does not hold (`UnknownAnalysisError`) and a range on a
-chromosome no ALID can spell (`VariantNormalisationError`). A refusal's digest is of its
-type and message (`refusal_digest`); a refusal that answers instead is digested as an
-answer, so either way `differences` sees the change. `analysis()` of an unknown Analysis is
-asked beside them: it answers empty today, and the contract defines no refusal for it.
+The **refusals** ask what the contract answers with an error (spec §18, §19): `top_hits`,
+`analysis()` and `lookup()` of an Analysis the release does not hold
+(`UnknownAnalysisError`) and a range on a chromosome no ALID can spell
+(`UnsupportedChromosome`). A refusal's digest is of its type and message
+(`refusal_digest`); a refusal that answers instead raises, since only the refusal is
+expected, so `differences` never has to compare an answer with a refusal.
 
-`release_digests` and `release_readable` open a release through `query_store` unless a
-caller passes its own `query`: the Store Reader contract test (#474,
-`tests/store_reader_contract/`) passes the Store Reader's `query_release` over
-`open_release`, so it reads the committed bundle with nothing but the Store Reader.
-`release_readable` spells out the first rows of each answer, and each refusal's type and
-message, for a reader that cannot reproduce Python's digests.
+**One enumeration.** `questions` yields every question once, with the errors that are its
+answer; `release_answers` asks each once per open and renders the answer twice: its
+digest, and, for a reader in another language that cannot reproduce Python's digests,
+its readable rows (`readable_answer`: the row count, the first rows, and the first row of
+each `association_status`; a refusal's type and named `fields`). `release_digests`, the
+rewrite's proof, is the first rendering alone. A release is opened through `query_store`
+unless a caller passes its own `query`: the Store Reader contract test (#474,
+`tests/store_reader_contract/`) opens it with the Store Reader alone.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -414,82 +416,15 @@ def _neighbouring_positions(rows: list[tuple[str, int]], at: int) -> tuple[int, 
     return max(lower, default=1), min(higher, default=CHROMOSOME_END)
 
 
-def _range_digests(
-    q: Any, asked: dict[str, tuple[str, int, int]]
-) -> dict[str, dict[str, str]]:
-    """Each range probe's `range_phewas`, Observed-Only and not, digested."""
-    out = {}
-    for name, (chrom, start, end) in asked.items():
-        for observed_only, flag in ((False, "all"), (True, "observed_only")):
-            result = q.range_phewas(chrom, start, end, observed_only=observed_only)
-            out[f"range_phewas/{name}/{flag}"] = result_digests(dict(result))
-    return out
-
-
-def _probe_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
-    """Each probed ALID's PheWAS, and one lookup of them all, digested."""
-    alids = probed_alids(variants)
-    ids = _spread(
-        [row["analysis_id"] for _, row in sorted(q.analyses_table().items())], N_ANALYSES_ASKED
-    )
-    out = {f"phewas/{alid}": result_digests(dict(q.phewas(alid))) for alid in alids}
-    out["lookup"] = result_digests(dict(q.lookup(alids, ids)))
-    return out
-
-
-def _miss_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
-    """Each absent rsID's PheWAS, and a lookup of the spread identifiers with them, digested."""
-    records = [variants[key] for key in sorted(variants)]
-    identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
-    ids = _spread(
-        [row["analysis_id"] for _, row in sorted(q.analyses_table().items())], N_ANALYSES_ASKED
-    )
-    out = {f"phewas/{rsid}": result_digests(dict(q.phewas(rsid))) for rsid in ABSENT_RSIDS}
-    out["lookup"] = result_digests(dict(q.lookup([*identifiers, *ABSENT_RSIDS], ids)))
-    return out
-
-
-def _variant_read_digests(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, dict[str, str]]:
-    """The facade's variant-only reads (#484), digested: the count, the rows of the spread
-    identifiers and the absent ones, and the rows of every range probe."""
-    records = [variants[key] for key in sorted(variants)]
-    identifiers = [*_identifiers(_spread(records, N_VARIANTS_ASKED)), *ABSENT_IDENTIFIERS]
-    out = {
-        "variant_count": {"count": digest_array(np.asarray([q.variant_count()], dtype="int64"))},
-        "variants": _table_digests(q.variants(identifiers)),
-    }
-    for name, (chrom, start, end) in range_questions(variants).items():
-        out[f"variants_in_range/{name}"] = _table_digests(q.variants_in_range(chrom, start, end))
-    return out
-
-
-def _subset_digests(q: Any, path: str | Path) -> dict[str, dict[str, str]]:
-    """Each Indexed Variant Subset's answer for the spread Analyses, Observed-Only and
-    not (ADR 0061): a subset records its parent release, so a derived release that
-    carries it on must answer through it as its source did. None for a release that
-    carries none."""
-    names = list_indexed_subsets(path)
-    if not names:
-        return {}
-    ids = _spread([row["analysis_id"] for _, row in sorted(q.analyses_table().items())],
-                  N_ANALYSES_ASKED)
-    out: dict[str, dict[str, str]] = {}
-    for name in names:
-        for analysis_id in ids:
-            for observed_only, flag in ((False, "all"), (True, "observed_only")):
-                result = q.analysis(analysis_id, observed_only=observed_only, indexed_subset=name)
-                out[f"{name}/{analysis_id}/{flag}"] = result_digests(dict(result))
-    return out
-
-
 def refusal_questions(q: Any) -> dict[str, Callable[[], Any]]:
     """The questions the contract answers with an error, by a stable name (module
-    docstring), and `analysis()` of an unknown Analysis, which answers empty today."""
+    docstring)."""
     return {
         "top_hits/unknown_analysis": partial(
             q.top_hits, analysis_id=UNKNOWN_ANALYSIS, threshold=THRESHOLDS[0]
         ),
         "analysis/unknown_analysis": partial(q.analysis, UNKNOWN_ANALYSIS),
+        "lookup/unknown_analysis": partial(q.lookup, list(ABSENT_IDENTIFIERS), [UNKNOWN_ANALYSIS]),
         "range_phewas/unsupported_chromosome": partial(
             q.range_phewas, UNSUPPORTED_CHROMOSOME, 1, CHROMOSOME_END
         ),
@@ -499,22 +434,138 @@ def refusal_questions(q: Any) -> dict[str, Callable[[], Any]]:
     }
 
 
-def _answer_digests(answer: Any) -> dict[str, str]:
-    """An association answer's arrays, or a variant-only read's rows, digested."""
+#: The sections of `release_answers` that `questions` asks into, beside the two tables.
+SECTIONS = (
+    "shapes", "alid_probes", "variant_reads", "indexed_subsets", "misses", "range_probes",
+    "refusals",
+)
+
+
+@dataclass(frozen=True)
+class Question:
+    """One question asked of a release: the section of the answers it belongs to, its
+    name there, how to ask it, the errors that are its answer rather than a failure, and
+    whether its rows are also resolved (`RESOLVED_SHAPES`)."""
+
+    section: str
+    name: str
+    ask: Callable[[], Any]
+    refusals: tuple[type[Exception], ...] = ()
+    resolved: bool = False
+
+
+def questions(
+    q: Any, variants: dict[int, dict[str, Any]], path: str | Path
+) -> Iterator[Question]:
+    """Every question asked of the release `q` reads, once, in a fixed order: the one
+    enumeration both renderings of `release_answers` -- digests and readable rows -- read,
+    so a question added here is in both. `variants` is `q.variants_table()`."""
+    ids = _spread(
+        [row["analysis_id"] for _, row in sorted(q.analyses_table().items())], N_ANALYSES_ASKED
+    )
+    records = [variants[key] for key in sorted(variants)]
+    identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
+    asked = range_questions(variants)
+    yield from _shape_questions(q, variants)
+    yield from _probe_questions(q, variants, ids)
+    yield from _variant_read_questions(q, identifiers, asked)
+    yield from _subset_questions(q, path, ids)
+    yield from _miss_questions(q, identifiers, ids)
+    yield from _range_probe_questions(q, asked)
+    for name, ask in refusal_questions(q).items():
+        yield Question("refusals", name, ask, REFUSAL_ERRORS)
+
+
+def _shape_questions(q: Any, variants: dict[int, dict[str, Any]]) -> Iterator[Question]:
+    """`query_shapes`, with the refusal a Dense or Hybrid release gives an unstored tier."""
+    for name, shape in query_shapes(q, variants).items():
+        refused = (UnstoredThresholdError,) if expects_refusal(q, name) else ()
+        yield Question("shapes", name, shape, refused, name.startswith(RESOLVED_SHAPES))
+
+
+def _probe_questions(
+    q: Any, variants: dict[int, dict[str, Any]], ids: list[str]
+) -> Iterator[Question]:
+    """Each probed ALID's PheWAS, and one lookup of them all (module docstring)."""
+    alids = probed_alids(variants)
+    for alid in alids:
+        yield Question("alid_probes", f"phewas/{alid}", partial(q.phewas, alid))
+    yield Question("alid_probes", "lookup", partial(q.lookup, alids, ids))
+
+
+def _variant_read_questions(
+    q: Any, identifiers: list[str], asked: dict[str, tuple[str, int, int]]
+) -> Iterator[Question]:
+    """The variant-only reads (#484): the count, the spread and absent identifiers' rows,
+    and the rows of every range probe."""
+    yield Question("variant_reads", "variant_count", q.variant_count)
+    yield Question(
+        "variant_reads", "variants", partial(q.variants, [*identifiers, *ABSENT_IDENTIFIERS])
+    )
+    for name, (chrom, start, end) in asked.items():
+        yield Question(
+            "variant_reads", f"variants_in_range/{name}",
+            partial(q.variants_in_range, chrom, start, end),
+        )
+
+
+def _miss_questions(q: Any, identifiers: list[str], ids: list[str]) -> Iterator[Question]:
+    """Each absent rsID's PheWAS, and a lookup of the spread identifiers with them."""
+    for rsid in ABSENT_RSIDS:
+        yield Question("misses", f"phewas/{rsid}", partial(q.phewas, rsid))
+    yield Question("misses", "lookup", partial(q.lookup, [*identifiers, *ABSENT_RSIDS], ids))
+
+
+def _range_probe_questions(
+    q: Any, asked: dict[str, tuple[str, int, int]]
+) -> Iterator[Question]:
+    """Each range probe's `range_phewas`, Observed-Only and not."""
+    for name, (chrom, start, end) in asked.items():
+        for observed_only, flag in ((False, "all"), (True, "observed_only")):
+            yield Question(
+                "range_probes", f"range_phewas/{name}/{flag}",
+                partial(q.range_phewas, chrom, start, end, observed_only=observed_only),
+            )
+
+
+def _subset_questions(q: Any, path: str | Path, ids: list[str]) -> Iterator[Question]:
+    """Each Indexed Variant Subset's answer for the spread Analyses, Observed-Only and
+    not (ADR 0061): a subset records its parent release, so a derived release that
+    carries it on must answer through it as its source did."""
+    for subset in list_indexed_subsets(path):
+        for analysis_id in ids:
+            for observed_only, flag in ((False, "all"), (True, "observed_only")):
+                yield Question(
+                    "indexed_subsets", f"{subset}/{analysis_id}/{flag}",
+                    partial(
+                        q.analysis, analysis_id, observed_only=observed_only,
+                        indexed_subset=subset,
+                    ),
+                )
+
+
+def _walk(
+    q: Any, variants: dict[int, dict[str, Any]], path: str | Path
+) -> Iterator[tuple[Question, Any]]:
+    """Each question with its answer: what it returned, or the refusal it is expected to
+    raise. Any other error is a failure, raised."""
+    for question in questions(q, variants, path):
+        try:
+            yield question, question.ask()
+        except question.refusals as refused:
+            yield question, refused
+
+
+def _digested(answer: Any) -> dict[str, str]:
+    """One answer digested: a refusal's type and message, an association answer's
+    arrays, a count, or a variant-only read's rows column by column."""
+    if isinstance(answer, Exception):
+        return refusal_digest(answer)
     if isinstance(answer, Associations):
         return result_digests(dict(answer))
+    if isinstance(answer, int):
+        return {"count": digest_array(np.asarray([answer], dtype="int64"))}
     return _table_digests(answer)
-
-
-def _refusal_digests(q: Any) -> dict[str, dict[str, str]]:
-    """Each refusal question's refusal, or its answer where it gives one, digested."""
-    out = {}
-    for name, ask in refusal_questions(q).items():
-        try:
-            out[name] = _answer_digests(ask())
-        except REFUSAL_ERRORS as refused:
-            out[name] = refusal_digest(refused)
-    return out
 
 
 def _open(path: str | Path, query: QueryOpener | None) -> Any:
@@ -525,43 +576,57 @@ def _open(path: str | Path, query: QueryOpener | None) -> Any:
     return query(Path(path))
 
 
-def release_digests(path: str | Path, *, query: QueryOpener | None = None) -> dict[str, Any]:
-    """Every answer the release at `path` gives, digested; `log10_p` per resolved shape.
-
-    `query` opens the release (`query_store` by default; module docstring)."""
+def release_answers(
+    path: str | Path, *, query: QueryOpener | None = None, readable: bool = True
+) -> dict[str, Any]:
+    """Every answer the release at `path` gives, asked once (`questions`) and rendered
+    twice: ``digests`` (`release_digests`) and, with `readable`, ``readable``
+    (`readable_answer`). `query` opens the release (`query_store` by default; module
+    docstring)."""
     with _open(path, query) as q:
         variants = q.variants_table()
-        out: dict[str, Any] = {
+        analyses = q.analyses_table()
+        digests: dict[str, Any] = {
             "adapter": type(q).__name__,
             "variants_table": _table_digests(variants),
-            "analyses_table": _table_digests(q.analyses_table()),
-            "shapes": {},
+            "analyses_table": _table_digests(analyses),
             "resolved": {},
             "log10_p": {},
+            **{section: {} for section in SECTIONS},
+            "unposed_range_questions": unposed_range_questions(range_questions(variants)),
         }
-        for name, shape in query_shapes(q, variants).items():
-            try:
-                result = shape()
-            except UnstoredThresholdError as refused:
-                if not expects_refusal(q, name):
-                    raise
-                out["shapes"][name] = refusal_digest(refused)
-                continue
-            out["shapes"][name] = result_digests(dict(result))
-            if name.startswith(RESOLVED_SHAPES):
-                out["resolved"][name], out["log10_p"][name] = _resolved(q, result)
-        out["alid_probes"] = _probe_digests(q, variants)
-        out["variant_reads"] = _variant_read_digests(q, variants)
-        out["indexed_subsets"] = _subset_digests(q, path)
-        out["misses"] = _miss_digests(q, variants)
-        asked = range_questions(variants)
-        out["range_probes"] = _range_digests(q, asked)
-        out["unposed_range_questions"] = unposed_range_questions(asked)
-        out["refusals"] = _refusal_digests(q)
-    return out
+        shown: dict[str, Any] = {
+            "variants_table": _readable_variants(variants),
+            "analyses_table": readable_answer(analyses, len(analyses), key="analysis_index"),
+            **{section: {} for section in SECTIONS},
+        }
+        for question, answer in _walk(q, variants, path):
+            _render(q, question, answer, digests, shown if readable else None)
+    return {"digests": digests, "readable": shown} if readable else {"digests": digests}
 
 
-#: How many rows of each answer `release_readable` spells out.
+def _render(
+    q: Any, question: Question, answer: Any, digests: dict[str, Any], shown: dict[str, Any] | None
+) -> None:
+    """Put one answer in both renderings: its digest (and resolved rows, where the question
+    asks for them), and its readable rows unless `shown` is None."""
+    digests[question.section][question.name] = _digested(answer)
+    if question.resolved and not isinstance(answer, Exception):
+        digests["resolved"][question.name], digests["log10_p"][question.name] = _resolved(
+            q, answer
+        )
+    if shown is not None:
+        shown[question.section][question.name] = _readable(answer)
+
+
+def release_digests(path: str | Path, *, query: QueryOpener | None = None) -> dict[str, Any]:
+    """Every answer the release at `path` gives, digested; `log10_p` per resolved shape.
+    The rewrite's proof (`release_answers`, without the readable rows)."""
+    digests: dict[str, Any] = release_answers(path, query=query, readable=False)["digests"]
+    return digests
+
+
+#: How many of each answer's first rows `readable_answer` spells out.
 READABLE_ROWS = 2
 
 
@@ -579,91 +644,68 @@ def readable_value(value: Any) -> Any:
     return value
 
 
-def _readable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{name: readable_value(v) for name, v in sorted(row.items())} for row in rows]
+def _readable_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: readable_value(v) for name, v in sorted(row.items())}
 
 
 def readable_answer(
     answer: Any, rows: int = READABLE_ROWS, *, key: str = "variant_index"
 ) -> dict[str, Any]:
-    """How many rows `answer` holds, and its first `rows`, spelt out: an association
+    """How many rows `answer` holds and its first `rows`, spelt out: an association
     answer's arrays row by row, or a table's rows (a variant-only read's, keyed by
-    `variant_index`; `analyses_table()`'s, by `analysis_index`) with their `key`."""
+    `variant_index`; `analyses_table()`'s, by `analysis_index`) with their `key`.
+
+    An association answer also spells out, under ``by_status``, the first row of each
+    `association_status` it holds -- observed, imputed, missing -- with its place in the
+    answer (``at``), so each status is read in every answer that holds it, not only where
+    it falls among the first rows."""
     if isinstance(answer, Associations):
         names = sorted(answer)
         n = len(answer["z"])
-        head = [{name: answer[name][i] for name in names} for i in range(min(n, rows))]
-    else:
-        keys = sorted(answer)
-        n = len(keys)
-        head = [{key: k, **answer[k]} for k in keys[:rows]]
-    return {"rows": n, "head": _readable_rows(head)}
 
+        def row(i: int) -> dict[str, Any]:
+            return _readable_row({name: answer[name][i] for name in names})
 
-def _readable_refusal(refused: Exception) -> dict[str, str]:
-    return {"error": type(refused).__name__, "message": str(refused)}
-
-
-def _readable_shapes(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for name, shape in query_shapes(q, variants).items():
-        try:
-            out[name] = readable_answer(shape())
-        except UnstoredThresholdError as refused:
-            if not expects_refusal(q, name):
-                raise
-            out[name] = _readable_refusal(refused)
-    return out
-
-
-def _readable_refusals(q: Any) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for name, ask in refusal_questions(q).items():
-        try:
-            out[name] = readable_answer(ask())
-        except REFUSAL_ERRORS as refused:
-            out[name] = _readable_refusal(refused)
-    return out
-
-
-def _readable_variant_reads(q: Any, variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
-    records = [variants[key] for key in sorted(variants)]
-    identifiers = [*_identifiers(_spread(records, N_VARIANTS_ASKED)), *ABSENT_IDENTIFIERS]
-    out: dict[str, Any] = {
-        "variant_count": q.variant_count(),
-        "variants": readable_answer(q.variants(identifiers)),
-    }
-    for name, (chrom, start, end) in range_questions(variants).items():
-        out[f"variants_in_range/{name}"] = readable_answer(q.variants_in_range(chrom, start, end))
-    return out
-
-
-def release_readable(path: str | Path, *, query: QueryOpener | None = None) -> dict[str, Any]:
-    """The answers `release_digests` digests, spelt out where a reader in another language
-    can compare them: the first `READABLE_ROWS` rows of every shape, of each ALID probe's
-    PheWAS and of each variant-only read, with its row count; the Variant Table's first
-    rows and the rows of the probed ALIDs; every Analysis; and each refusal's type and
-    message. `query` opens the release, as for `release_digests`."""
-    with _open(path, query) as q:
-        variants = q.variants_table()
-        by_alid = {row["alid"]: key for key, row in variants.items()}
-        probed = {by_alid[alid]: variants[by_alid[alid]] for alid in probed_alids(variants)}
-        first = {key: variants[key] for key in sorted(variants)[:READABLE_ROWS]}
-        analyses = q.analyses_table()
+        statuses = answer["association_status"]
+        firsts = {str(s): int(np.flatnonzero(statuses == s)[0]) for s in np.unique(statuses)}
         return {
-            "variants_table": {
-                "rows": len(variants),
-                "head": readable_answer(first, READABLE_ROWS)["head"],
-                "probed": readable_answer(probed, len(probed))["head"],
-            },
-            "analyses_table": readable_answer(analyses, len(analyses), key="analysis_index"),
-            "shapes": _readable_shapes(q, variants),
-            "alid_probes": {
-                f"phewas/{alid}": readable_answer(q.phewas(alid)) for alid in probed_alids(variants)
-            },
-            "variant_reads": _readable_variant_reads(q, variants),
-            "refusals": _readable_refusals(q),
+            "rows": n,
+            "head": [row(i) for i in range(min(n, rows))],
+            "by_status": {status: {"at": i, **row(i)} for status, i in sorted(firsts.items())},
         }
+    keys = sorted(answer)
+    return {"rows": len(keys), "head": [_readable_row({key: k, **answer[k]}) for k in keys[:rows]]}
+
+
+def _readable_refusal(refused: Exception) -> dict[str, Any]:
+    """A refusal as a port compares it: its type and its named fields (`fields`); the
+    message is for people."""
+    fields = getattr(refused, "fields", {})
+    return {
+        "error": type(refused).__name__,
+        "fields": {name: readable_value(v) for name, v in sorted(fields.items())},
+        "message": str(refused),
+    }
+
+
+def _readable(answer: Any) -> Any:
+    if isinstance(answer, Exception):
+        return _readable_refusal(answer)
+    if isinstance(answer, int):
+        return {"count": answer}
+    return readable_answer(answer)
+
+
+def _readable_variants(variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    """The Variant Table's first rows and the rows of the probed ALIDs."""
+    by_alid = {row["alid"]: key for key, row in variants.items()}
+    probed = {by_alid[alid]: variants[by_alid[alid]] for alid in probed_alids(variants)}
+    first = {key: variants[key] for key in sorted(variants)[:READABLE_ROWS]}
+    return {
+        "rows": len(variants),
+        "head": readable_answer(first)["head"],
+        "probed": readable_answer(probed, len(probed))["head"],
+    }
 
 
 def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
@@ -725,11 +767,14 @@ __all__ = [
     "digest_array",
     "query_shapes",
     "range_questions",
+    "Question",
+    "SECTIONS",
+    "questions",
     "readable_answer",
     "readable_value",
     "refusal_questions",
+    "release_answers",
     "release_digests",
-    "release_readable",
     "result_digests",
     "unposed_range_questions",
 ]

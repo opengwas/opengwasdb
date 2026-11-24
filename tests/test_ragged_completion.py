@@ -19,6 +19,7 @@ from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import UnknownAnalysisError
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation.validate import validate_store
@@ -1810,8 +1811,10 @@ class TestRaggedLookupSeam:
     def test_lookup_unknown_identifiers_and_analysis_ids(self, completed_store):
         q = query_store(completed_store)
         assert len(q.lookup(["rs999999"], ["ENSG00000000001::Blood"])["z"]) == 0
-        assert len(q.lookup(["rs1001"], ["ENSG00000000099::Blood"])["z"]) == 0
-        assert len(q.lookup(["rs1001", "rs1002"], ["ENSG00000000099::Blood"])["z"]) == 0
+        # An unknown Analysis is refused, never an empty answer (#474).
+        for identifiers in (["rs1001"], ["rs1001", "rs1002"], []):
+            with pytest.raises(UnknownAnalysisError, match="ENSG00000000099::Blood"):
+                q.lookup(identifiers, ["ENSG00000000099::Blood"])
         empty = q.lookup([], ["ENSG00000000001::Blood"])
         assert tuple(empty) == _RESULT_KEYS
         assert len(empty["z"]) == 0

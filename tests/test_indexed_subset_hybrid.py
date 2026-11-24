@@ -53,8 +53,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetExistsError,
     OverflowOnlyPolicy,
     build_indexed_subset,
-    indexed_subset_namespace_path,
-    list_indexed_subsets,
     remove_indexed_subset,
     resolve_variant_list,
 )
@@ -62,7 +60,7 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
-from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
 from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
 from opengwasdb.store_reader.indexed import (
@@ -70,6 +68,8 @@ from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
     IndexedSubsetLayoutError,
     IndexedSubsetStaleError,
+    indexed_subset_namespace_path,
+    list_indexed_subsets,
     open_indexed_subset,
 )
 from opengwasdb.validation import validate_store
@@ -640,10 +640,10 @@ def test_direct_nested_dense_failure_names_the_nested_path(tmp_path: Path) -> No
     assert not message.startswith(f"store {store}: "), message
 
 
-def test_hybrid_unknown_analysis_keeps_the_ordinary_empty_result(indexed_root: Path) -> None:
-    result = _analyse(indexed_root, "does-not-exist", indexed_subset="hm3")
-    assert result.keys() == _RESULT_KEYS
-    assert all(len(values) == 0 for values in result.values())
+def test_hybrid_unknown_analysis_through_a_valid_subset_is_refused(indexed_root: Path) -> None:
+    """As on Dense (#474): the Analysis is refused, never answered empty."""
+    with pytest.raises(UnknownAnalysisError, match="does-not-exist"):
+        _analyse(indexed_root, "does-not-exist", indexed_subset="hm3")
 
 
 # ── Reference-Completed Hybrid fixture ──────────────────────────────────────

@@ -101,7 +101,7 @@ def test_every_query_returns_an_association_record(stores, name) -> None:
         alid = next(iter(query.variants_table().values()))["alid"]
         results = {
             "analysis": query.analysis(analysis_id),
-            "unknown": query.analysis("no-such-analysis"),
+            "absent": query.phewas("1:1:A:C"),
             "phewas": query.phewas(alid),
             "range_phewas": query.range_phewas("1", 1, 10**9),
             "lookup": query.lookup([alid], [analysis_id]),

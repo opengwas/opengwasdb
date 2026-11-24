@@ -386,23 +386,19 @@
   },
   "refusals": {
    "analysis/unknown_analysis": {
-    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
-    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
-    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
-    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
-    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
-    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
-    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
-    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   },
+   "lookup/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
    },
    "range_phewas/unsupported_chromosome": {
-    "error": "5c2f2ab4c103ad81ca4eec8e4ae31db21f3d4458f4ed55eb0df0dc1f6cbe1533"
+    "error": "60fd1618dc4c0e5aabb68871ed094fe64fd5d4cde1300dcc65e72de31d62c796"
    },
    "top_hits/unknown_analysis": {
     "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
    },
    "variants_in_range/unsupported_chromosome": {
-    "error": "5c2f2ab4c103ad81ca4eec8e4ae31db21f3d4458f4ed55eb0df0dc1f6cbe1533"
+    "error": "60fd1618dc4c0e5aabb68871ed094fe64fd5d4cde1300dcc65e72de31d62c796"
    }
   },
   "resolved": {
@@ -1113,7 +1109,58 @@
  "format_version": "0.3.0",
  "readable": {
   "alid_probes": {
+   "lookup": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 3
+   },
    "phewas/1:1000:A:G": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1129,6 +1176,19 @@
     "rows": 1
    },
    "phewas/1:5000:A:C": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1144,6 +1204,19 @@
     "rows": 1
    },
    "phewas/1:5000:C:G": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1204,26 +1277,695 @@
    ],
    "rows": 1
   },
-  "refusals": {
-   "analysis/unknown_analysis": {
+  "indexed_subsets": {},
+  "misses": {
+   "lookup": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 16
+   },
+   "phewas/rs0": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
+   "phewas/rs999999999": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   }
+  },
+  "range_probes": {
+   "range_phewas/boundary/after/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/boundary/after/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/boundary/before/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/boundary/before/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/empty/between/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/between/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/chromosome/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/chromosome/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/first/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/first/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/from_last/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/from_last/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/last/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/last/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/shared/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 3
+   },
+   "range_phewas/shared/from_before/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/shared/from_before/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/shared/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 3
+   },
+   "range_phewas/shared/to_after/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/shared/to_after/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/to_first/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/to_first/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   }
+  },
+  "refusals": {
+   "analysis/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
+   "lookup/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
    "range_phewas/unsupported_chromosome": {
-    "error": "VariantNormalisationError",
+    "error": "UnsupportedChromosome",
+    "fields": {
+     "chromosome": "27"
+    },
     "message": "unsupported chromosome '27'"
    },
    "top_hits/unknown_analysis": {
     "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
     "message": "unknown analysis_id 'absent': not in this Store Release"
    },
    "variants_in_range/unsupported_chromosome": {
-    "error": "VariantNormalisationError",
+    "error": "UnsupportedChromosome",
+    "fields": {
+     "chromosome": "27"
+    },
     "message": "unsupported chromosome '27'"
    }
   },
   "shapes": {
    "analysis/bmi_irn/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1249,6 +1991,19 @@
     "rows": 8
    },
    "analysis/bmi_irn/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1274,6 +2029,19 @@
     "rows": 8
    },
    "lookup/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1299,6 +2067,19 @@
     "rows": 16
    },
    "lookup/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1324,6 +2105,19 @@
     "rows": 16
    },
    "phewas/1:1000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1339,6 +2133,19 @@
     "rows": 1
    },
    "phewas/1:1000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1354,14 +2161,29 @@
     "rows": 1
    },
    "phewas/1:1:A:C/all": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/1:1:A:C/observed_only": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/1:5000:A:C/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1377,6 +2199,19 @@
     "rows": 1
    },
    "phewas/1:5000:A:C/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1392,6 +2227,19 @@
     "rows": 1
    },
    "phewas/1:5000:C:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1407,6 +2255,19 @@
     "rows": 1
    },
    "phewas/1:5000:C:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1422,6 +2283,19 @@
     "rows": 1
    },
    "phewas/1:9000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1437,6 +2311,19 @@
     "rows": 1
    },
    "phewas/1:9000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1452,6 +2339,19 @@
     "rows": 1
    },
    "phewas/2:300:C:T/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1467,6 +2367,19 @@
     "rows": 1
    },
    "phewas/2:300:C:T/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1482,6 +2395,19 @@
     "rows": 1
    },
    "phewas/2:7000:A:C/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1497,6 +2423,19 @@
     "rows": 1
    },
    "phewas/2:7000:A:C/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1512,6 +2451,19 @@
     "rows": 1
    },
    "phewas/X:2500:G:T/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1527,6 +2479,19 @@
     "rows": 1
    },
    "phewas/X:2500:G:T/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1542,14 +2507,29 @@
     "rows": 1
    },
    "phewas/rs0/all": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/rs0/observed_only": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/rs1000/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1565,6 +2545,19 @@
     "rows": 1
    },
    "phewas/rs1000/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1580,6 +2573,19 @@
     "rows": 1
    },
    "phewas/rs1004/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1595,6 +2601,19 @@
     "rows": 1
    },
    "phewas/rs1004/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1610,6 +2629,19 @@
     "rows": 1
    },
    "phewas/rs1005/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1625,6 +2657,19 @@
     "rows": 1
    },
    "phewas/rs1005/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1640,6 +2685,19 @@
     "rows": 1
    },
    "phewas/rs1006/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1655,6 +2713,19 @@
     "rows": 1
    },
    "phewas/rs1006/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1670,6 +2741,19 @@
     "rows": 1
    },
    "phewas/rs1007/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1685,6 +2769,19 @@
     "rows": 1
    },
    "phewas/rs1007/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1700,6 +2797,19 @@
     "rows": 1
    },
    "phewas/rs5000/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1715,6 +2825,19 @@
     "rows": 1
    },
    "phewas/rs5000/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1730,6 +2853,19 @@
     "rows": 1
    },
    "range_phewas/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1745,6 +2881,19 @@
     "rows": 1
    },
    "range_phewas/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1760,6 +2909,19 @@
     "rows": 1
    },
    "top_hits/0.0005/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1785,6 +2947,19 @@
     "rows": 8
    },
    "top_hits/0.0005/bmi_irn/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1810,6 +2985,19 @@
     "rows": 8
    },
    "top_hits/0.0005/bmi_irn/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1835,6 +3023,19 @@
     "rows": 8
    },
    "top_hits/0.0005/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1861,37 +3062,114 @@
    },
    "top_hits/0.01/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/bmi_irn/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/bmi_irn/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/bmi_irn/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/bmi_irn/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/5e-06/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1917,6 +3195,19 @@
     "rows": 8
    },
    "top_hits/5e-06/bmi_irn/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1942,6 +3233,19 @@
     "rows": 8
    },
    "top_hits/5e-06/bmi_irn/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1967,6 +3271,19 @@
     "rows": 8
    },
    "top_hits/5e-06/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -1992,6 +3309,19 @@
     "rows": 8
    },
    "top_hits/5e-08/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2017,6 +3347,19 @@
     "rows": 8
    },
    "top_hits/5e-08/bmi_irn/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2042,6 +3385,19 @@
     "rows": 8
    },
    "top_hits/5e-08/bmi_irn/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2067,6 +3423,19 @@
     "rows": 8
    },
    "top_hits/5e-08/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2093,15 +3462,33 @@
    },
    "top_hits/limit/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/limit/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    }
   },
   "variant_reads": {
-   "variant_count": 8,
+   "variant_count": {
+    "count": 8
+   },
    "variants": {
     "head": [
      {

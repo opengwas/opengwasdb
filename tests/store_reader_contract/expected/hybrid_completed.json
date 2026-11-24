@@ -1549,23 +1549,19 @@
   },
   "refusals": {
    "analysis/unknown_analysis": {
-    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
-    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
-    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
-    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
-    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
-    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
-    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
-    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   },
+   "lookup/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
    },
    "range_phewas/unsupported_chromosome": {
-    "error": "5c2f2ab4c103ad81ca4eec8e4ae31db21f3d4458f4ed55eb0df0dc1f6cbe1533"
+    "error": "60fd1618dc4c0e5aabb68871ed094fe64fd5d4cde1300dcc65e72de31d62c796"
    },
    "top_hits/unknown_analysis": {
     "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
    },
    "variants_in_range/unsupported_chromosome": {
-    "error": "5c2f2ab4c103ad81ca4eec8e4ae31db21f3d4458f4ed55eb0df0dc1f6cbe1533"
+    "error": "60fd1618dc4c0e5aabb68871ed094fe64fd5d4cde1300dcc65e72de31d62c796"
    }
   },
   "resolved": {
@@ -2324,7 +2320,69 @@
  "format_version": "0.3.0",
  "readable": {
   "alid_probes": {
+   "lookup": {
+    "by_status": {
+     "imputed": {
+      "analysis_index": 1,
+      "association_status": "imputed",
+      "at": 10,
+      "beta": -0.19958986766869202,
+      "eaf": 0.949999988079071,
+      "pval": 0.32685478790430067,
+      "se": 0.20356576144695282,
+      "variant_index": 199,
+      "z": -0.98046875
+     },
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07463487237691879,
+      "eaf": 0.7193470001220703,
+      "pval": 0.31731050786291415,
+      "se": 0.07463487237691879,
+      "variant_index": 51,
+      "z": -1.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07463487237691879,
+      "eaf": 0.7193470001220703,
+      "pval": 0.31731050786291415,
+      "se": 0.07463487237691879,
+      "variant_index": 51,
+      "z": -1.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.6092832088470459,
+      "eaf": 0.4977389872074127,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.07616040110588074,
+      "variant_index": 100,
+      "z": -8.0
+     }
+    ],
+    "rows": 11
+   },
    "phewas/1:101000:A:AACGTACGTACGT": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.6092832088470459,
+      "eaf": 0.4977389872074127,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.07616040110588074,
+      "variant_index": 100,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2350,6 +2408,19 @@
     "rows": 2
    },
    "phewas/1:151000:A:AACGTACGTACGTA": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.5693602561950684,
+      "eaf": 0.27160799503326416,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.07117003202438354,
+      "variant_index": 150,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2375,6 +2446,30 @@
     "rows": 2
    },
    "phewas/1:200000:A:AACGTACGTACGTACGTACGT": {
+    "by_status": {
+     "imputed": {
+      "analysis_index": 1,
+      "association_status": "imputed",
+      "at": 1,
+      "beta": -0.19958986766869202,
+      "eaf": 0.949999988079071,
+      "pval": 0.32685478790430067,
+      "se": 0.20356576144695282,
+      "variant_index": 199,
+      "z": -0.98046875
+     },
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.18165068328380585,
+      "eaf": 0.05000000074505806,
+      "pval": 0.31731050786291415,
+      "se": 0.18165068328380585,
+      "variant_index": 199,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2400,6 +2495,19 @@
     "rows": 2
    },
    "phewas/1:349000:A:AACGTACGTACGTACGTACGTA": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07438523322343826,
+      "eaf": 0.7030150294303894,
+      "pval": 0.31731050786291415,
+      "se": 0.07438523322343826,
+      "variant_index": 249,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2415,6 +2523,19 @@
     "rows": 1
    },
    "phewas/1:399000:A:AACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTA": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07556288689374924,
+      "eaf": 0.5020099878311157,
+      "pval": 0.31731050786291415,
+      "se": 0.07556288689374924,
+      "variant_index": 299,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2430,6 +2551,19 @@
     "rows": 1
    },
    "phewas/1:448000:A:AACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.06951594352722168,
+      "eaf": 0.30502501130104065,
+      "pval": 0.31731050786291415,
+      "se": 0.06951594352722168,
+      "variant_index": 348,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2445,6 +2579,19 @@
     "rows": 1
    },
    "phewas/1:52000:A:AACGTACGTACGT": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07463487237691879,
+      "eaf": 0.7193470001220703,
+      "pval": 0.31731050786291415,
+      "se": 0.07463487237691879,
+      "variant_index": 51,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2555,26 +2702,559 @@
    ],
    "rows": 2
   },
-  "refusals": {
-   "analysis/unknown_analysis": {
+  "indexed_subsets": {
+   "contract/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.14767928421497345,
+      "eaf": 0.9364320039749146,
+      "pval": 0.31731050786291415,
+      "se": 0.14767928421497345,
+      "variant_index": 3,
+      "z": -1.0
+     }
+    ],
+    "rows": 67
+   },
+   "contract/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.14767928421497345,
+      "eaf": 0.9364320039749146,
+      "pval": 0.31731050786291415,
+      "se": 0.14767928421497345,
+      "variant_index": 3,
+      "z": -1.0
+     }
+    ],
+    "rows": 67
+   },
+   "contract/trait_b/all": {
+    "by_status": {
+     "imputed": {
+      "analysis_index": 1,
+      "association_status": "imputed",
+      "at": 66,
+      "beta": -0.24648324826557655,
+      "eaf": 0.9454773664474487,
+      "pval": 0.20599738131665207,
+      "se": 0.19490258395671844,
+      "variant_index": 198,
+      "z": -1.2646484375
+     },
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -0.1814376264810562,
+      "eaf": 0.9364320039749146,
+      "pval": 0.31731050786291415,
+      "se": 0.1814376264810562,
+      "variant_index": 3,
+      "z": -1.0
+     }
+    ],
+    "rows": 67
+   },
+   "contract/trait_b/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -0.1814376264810562,
+      "eaf": 0.9364320039749146,
+      "pval": 0.31731050786291415,
+      "se": 0.1814376264810562,
+      "variant_index": 3,
+      "z": -1.0
+     }
+    ],
+    "rows": 66
+   }
+  },
+  "misses": {
+   "lookup": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.065552718937397,
+      "eaf": 0.6515079736709595,
+      "pval": 0.31731050786291415,
+      "se": 0.065552718937397,
+      "variant_index": 66,
+      "z": -1.0
+     }
+    ],
+    "rows": 10
+   },
+   "phewas/rs0": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
+   "phewas/rs999999999": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   }
+  },
+  "range_probes": {
+   "range_phewas/empty/between/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/between/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/chromosome/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/chromosome/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/first/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    ],
+    "rows": 2
+   },
+   "range_phewas/first/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    ],
+    "rows": 2
+   },
+   "range_phewas/from_last/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/from_last/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/last/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/last/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/to_first/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    ],
+    "rows": 2
+   },
+   "range_phewas/to_first/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     },
+     {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    ],
+    "rows": 2
+   }
+  },
+  "refusals": {
+   "analysis/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
+   "lookup/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
    "range_phewas/unsupported_chromosome": {
-    "error": "VariantNormalisationError",
+    "error": "UnsupportedChromosome",
+    "fields": {
+     "chromosome": "27"
+    },
     "message": "unsupported chromosome '27'"
    },
    "top_hits/unknown_analysis": {
     "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
     "message": "unknown analysis_id 'absent': not in this Store Release"
    },
    "variants_in_range/unsupported_chromosome": {
-    "error": "VariantNormalisationError",
+    "error": "UnsupportedChromosome",
+    "fields": {
+     "chromosome": "27"
+    },
     "message": "unsupported chromosome '27'"
    }
   },
   "shapes": {
    "analysis/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2600,6 +3280,19 @@
     "rows": 400
    },
    "analysis/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2625,6 +3318,30 @@
     "rows": 400
    },
    "analysis/trait_b/all": {
+    "by_status": {
+     "imputed": {
+      "analysis_index": 1,
+      "association_status": "imputed",
+      "at": 196,
+      "beta": -0.1768310731567908,
+      "eaf": 0.9364321827888489,
+      "pval": 0.3297540614875164,
+      "se": 0.1814378947019577,
+      "variant_index": 196,
+      "z": -0.974609375
+     },
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -2650,6 +3367,19 @@
     "rows": 200
    },
    "analysis/trait_b/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -2675,6 +3405,19 @@
     "rows": 196
    },
    "lookup/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2700,6 +3443,19 @@
     "rows": 10
    },
    "lookup/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2725,6 +3481,19 @@
     "rows": 10
    },
    "phewas/1:1000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2750,6 +3519,19 @@
     "rows": 2
    },
    "phewas/1:1000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2775,6 +3557,19 @@
     "rows": 2
    },
    "phewas/1:134000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07494188845157623,
+      "eaf": 0.34849199652671814,
+      "pval": 0.31731050786291415,
+      "se": 0.07494188845157623,
+      "variant_index": 133,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2800,6 +3595,19 @@
     "rows": 2
    },
    "phewas/1:134000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07494188845157623,
+      "eaf": 0.34849199652671814,
+      "pval": 0.31731050786291415,
+      "se": 0.07494188845157623,
+      "variant_index": 133,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2825,14 +3633,29 @@
     "rows": 2
    },
    "phewas/1:1:A:C/all": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/1:1:A:C/observed_only": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/1:300000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.9377024173736572,
+      "eaf": 0.8999999761581421,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.11721280217170715,
+      "variant_index": 200,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2848,6 +3671,19 @@
     "rows": 1
    },
    "phewas/1:300000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.9377024173736572,
+      "eaf": 0.8999999761581421,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.11721280217170715,
+      "variant_index": 200,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2863,6 +3699,19 @@
     "rows": 1
    },
    "phewas/1:366000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.06477490812540054,
+      "eaf": 0.634672999382019,
+      "pval": 0.31731050786291415,
+      "se": 0.06477490812540054,
+      "variant_index": 266,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2878,6 +3727,19 @@
     "rows": 1
    },
    "phewas/1:366000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.06477490812540054,
+      "eaf": 0.634672999382019,
+      "pval": 0.31731050786291415,
+      "se": 0.06477490812540054,
+      "variant_index": 266,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2893,6 +3755,19 @@
     "rows": 1
    },
    "phewas/1:432000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07444358617067337,
+      "eaf": 0.3693470060825348,
+      "pval": 0.31731050786291415,
+      "se": 0.07444358617067337,
+      "variant_index": 332,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2908,6 +3783,19 @@
     "rows": 1
    },
    "phewas/1:432000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07444358617067337,
+      "eaf": 0.3693470060825348,
+      "pval": 0.31731050786291415,
+      "se": 0.07444358617067337,
+      "variant_index": 332,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2923,6 +3811,19 @@
     "rows": 1
    },
    "phewas/1:499000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2938,6 +3839,19 @@
     "rows": 1
    },
    "phewas/1:499000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2953,6 +3867,19 @@
     "rows": 1
    },
    "phewas/1:67000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.065552718937397,
+      "eaf": 0.6515079736709595,
+      "pval": 0.31731050786291415,
+      "se": 0.065552718937397,
+      "variant_index": 66,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -2978,6 +3905,19 @@
     "rows": 2
    },
    "phewas/1:67000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.065552718937397,
+      "eaf": 0.6515079736709595,
+      "pval": 0.31731050786291415,
+      "se": 0.065552718937397,
+      "variant_index": 66,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3003,14 +3943,29 @@
     "rows": 2
    },
    "phewas/rs0/all": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/rs0/observed_only": {
+    "by_status": {},
     "head": [],
     "rows": 0
    },
    "phewas/rs1066/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.065552718937397,
+      "eaf": 0.6515079736709595,
+      "pval": 0.31731050786291415,
+      "se": 0.065552718937397,
+      "variant_index": 66,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3036,6 +3991,19 @@
     "rows": 2
    },
    "phewas/rs1066/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.065552718937397,
+      "eaf": 0.6515079736709595,
+      "pval": 0.31731050786291415,
+      "se": 0.065552718937397,
+      "variant_index": 66,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3061,6 +4029,19 @@
     "rows": 2
    },
    "phewas/rs1133/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07494188845157623,
+      "eaf": 0.34849199652671814,
+      "pval": 0.31731050786291415,
+      "se": 0.07494188845157623,
+      "variant_index": 133,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3086,6 +4067,19 @@
     "rows": 2
    },
    "phewas/rs1133/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07494188845157623,
+      "eaf": 0.34849199652671814,
+      "pval": 0.31731050786291415,
+      "se": 0.07494188845157623,
+      "variant_index": 133,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3111,6 +4105,19 @@
     "rows": 2
    },
    "phewas/rs1200/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.9377024173736572,
+      "eaf": 0.8999999761581421,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.11721280217170715,
+      "variant_index": 200,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3126,6 +4133,19 @@
     "rows": 1
    },
    "phewas/rs1200/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.9377024173736572,
+      "eaf": 0.8999999761581421,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.11721280217170715,
+      "variant_index": 200,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3141,6 +4161,19 @@
     "rows": 1
    },
    "phewas/rs1266/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.06477490812540054,
+      "eaf": 0.634672999382019,
+      "pval": 0.31731050786291415,
+      "se": 0.06477490812540054,
+      "variant_index": 266,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3156,6 +4189,19 @@
     "rows": 1
    },
    "phewas/rs1266/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.06477490812540054,
+      "eaf": 0.634672999382019,
+      "pval": 0.31731050786291415,
+      "se": 0.06477490812540054,
+      "variant_index": 266,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3171,6 +4217,19 @@
     "rows": 1
    },
    "phewas/rs1332/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07444358617067337,
+      "eaf": 0.3693470060825348,
+      "pval": 0.31731050786291415,
+      "se": 0.07444358617067337,
+      "variant_index": 332,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3186,6 +4245,19 @@
     "rows": 1
    },
    "phewas/rs1332/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07444358617067337,
+      "eaf": 0.3693470060825348,
+      "pval": 0.31731050786291415,
+      "se": 0.07444358617067337,
+      "variant_index": 332,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3201,6 +4273,19 @@
     "rows": 1
    },
    "phewas/rs1399/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3216,6 +4301,19 @@
     "rows": 1
    },
    "phewas/rs1399/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.13190756738185883,
+      "eaf": 0.10000000149011612,
+      "pval": 0.31731050786291415,
+      "se": 0.13190756738185883,
+      "variant_index": 399,
+      "z": -1.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3231,6 +4329,30 @@
     "rows": 1
    },
    "range_phewas/all": {
+    "by_status": {
+     "imputed": {
+      "analysis_index": 1,
+      "association_status": "imputed",
+      "at": 393,
+      "beta": -0.1768310731567908,
+      "eaf": 0.9364321827888489,
+      "pval": 0.3297540614875164,
+      "se": 0.1814378947019577,
+      "variant_index": 196,
+      "z": -0.974609375
+     },
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3256,6 +4378,19 @@
     "rows": 600
    },
    "range_phewas/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3281,6 +4416,19 @@
     "rows": 596
    },
    "top_hits/0.0005/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3306,6 +4454,19 @@
     "rows": 12
    },
    "top_hits/0.0005/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3331,6 +4492,19 @@
     "rows": 12
    },
    "top_hits/0.0005/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3356,6 +4530,19 @@
     "rows": 8
    },
    "top_hits/0.0005/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3381,6 +4568,19 @@
     "rows": 8
    },
    "top_hits/0.0005/trait_b/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -3406,6 +4606,19 @@
     "rows": 4
    },
    "top_hits/0.0005/trait_b/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -3432,53 +4645,162 @@
    },
    "top_hits/0.01/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/trait_a/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/trait_a/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/trait_b/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.01/trait_b/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.01
+    },
     "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/trait_a/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/trait_a/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/trait_b/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/0.2/trait_b/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/5e-06/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3504,6 +4826,19 @@
     "rows": 12
    },
    "top_hits/5e-06/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3529,6 +4864,19 @@
     "rows": 12
    },
    "top_hits/5e-06/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3554,6 +4902,19 @@
     "rows": 8
    },
    "top_hits/5e-06/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3579,6 +4940,19 @@
     "rows": 8
    },
    "top_hits/5e-06/trait_b/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -3604,6 +4978,19 @@
     "rows": 4
    },
    "top_hits/5e-06/trait_b/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -3629,6 +5016,19 @@
     "rows": 4
    },
    "top_hits/5e-08/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3654,6 +5054,19 @@
     "rows": 12
    },
    "top_hits/5e-08/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3679,6 +5092,19 @@
     "rows": 12
    },
    "top_hits/5e-08/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3704,6 +5130,19 @@
     "rows": 8
    },
    "top_hits/5e-08/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.2913154363632202,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.16141442954540253,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 0,
@@ -3729,6 +5168,19 @@
     "rows": 8
    },
    "top_hits/5e-08/trait_b/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -3754,6 +5206,19 @@
     "rows": 4
    },
    "top_hits/5e-08/trait_b/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 1,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -1.5780333280563354,
+      "eaf": 0.949999988079071,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.19725416600704193,
+      "variant_index": 0,
+      "z": -8.0
+     }
+    },
     "head": [
      {
       "analysis_index": 1,
@@ -3780,15 +5245,33 @@
    },
    "top_hits/limit/all": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    },
    "top_hits/limit/observed_only": {
     "error": "UnstoredThresholdError",
+    "fields": {
+     "stored": [
+      5e-08,
+      5e-06,
+      0.0005
+     ],
+     "threshold": 0.2
+    },
     "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
    }
   },
   "variant_reads": {
-   "variant_count": 400,
+   "variant_count": {
+    "count": 400
+   },
    "variants": {
     "head": [
      {

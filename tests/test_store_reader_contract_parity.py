@@ -1,5 +1,6 @@
 """Each Store Reader contract release built at format 0.2.3 and rewritten answers exactly
-as the committed 0.3.0 release does (#474).
+as the committed 0.3.0 release does (#474). Every test run checks three releases
+(`ALWAYS`); `pixi run -e dev contract-check` checks the other six.
 
 The contract bundle's releases (`tests/store_reader_contract/`) are 0.3.0 builds. Here
 each is built again from the same session fixtures with the same plantings, turned into
@@ -12,6 +13,7 @@ equal the committed `expected/<release>.json`.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from types import ModuleType
@@ -22,7 +24,16 @@ from test_store_reader_contract_bundle import BUNDLE, load_generator
 
 from opengwasdb.store.rewrite import rewrite_release
 
-NAMES = sorted(path.name for path in (BUNDLE / "releases").iterdir() if path.is_dir())
+ALL = sorted(path.name for path in (BUNDLE / "releases").iterdir() if path.is_dir())
+#: The releases every test run checks: one per layout, covering both `LEGACY_STATES`
+#: (the infinite SE, the tiers without `analysis_offsets`). `pixi run -e dev
+#: contract-check` checks the other six (`STORE_READER_CONTRACT_PARITY=rest`).
+ALWAYS = ("dense_ranges", "ragged_completed", "hybrid_completed")
+NAMES = (
+    [name for name in ALL if name not in ALWAYS]
+    if os.environ.get("STORE_READER_CONTRACT_PARITY") == "rest"
+    else list(ALWAYS)
+)
 
 
 @pytest.fixture(scope="module")
@@ -40,7 +51,8 @@ def built(
 
 
 def test_every_committed_release_has_a_build(built: dict[str, Path]):
-    assert sorted(built) == NAMES and len(NAMES) == 9
+    assert sorted(built) == ALL and len(ALL) == 9
+    assert set(ALWAYS) <= set(ALL)
 
 
 @pytest.mark.parametrize("name", NAMES)

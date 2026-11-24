@@ -2,15 +2,12 @@
 
 The bundle (`README.md` beside this file) is a set of small format 0.3.0 Store Releases
 and, for each, what the Store Reader must answer: `expected/<release>.json`. This module
-opens a release with the Store Reader -- `open_release` and `query_release`, never
-opengwasdb's `query_store` -- and compares its answers with that file. It imports the
-Store Reader and the questions (`opengwasdb.store.query_digests`) and nothing else of
-opengwasdb or of its tests, so the directory moves to ogquery whole: there the two
-imports below are the only lines that change.
-
-A 0.3.0 release is read without its Variant Table (ADR 0105 §7, §8), so the release is
-opened with a Variant Table reader that fails any read made of it (`NoVariantTable`):
-a 0.3.0 read that reached `variants.tsv.gz` fails the contract.
+opens a release with the Store Reader -- `open_release(path)` and `query_release`, never
+opengwasdb's `query_store`, and no Variant Table reader: a 0.3.0 release's table refuses
+every read, so a read that reached `variants.tsv.gz` fails the contract -- and compares
+its answers with that file. It imports the Store Reader and the questions
+(`opengwasdb.store.query_digests`) and nothing else of opengwasdb or of its tests, so the
+directory moves to ogquery whole: there the imports below are the only lines that change.
 """
 
 from __future__ import annotations
@@ -19,12 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.store.query_digests import (
-    differences,
-    readable_value,
-    release_digests,
-    release_readable,
-)
+from opengwasdb.store.query_digests import differences, readable_value, release_answers
 from opengwasdb.store_reader.facade import query_release
 from opengwasdb.store_reader.release import open_release
 
@@ -33,30 +25,9 @@ RELEASES = BUNDLE / "releases"
 EXPECTED = BUNDLE / "expected"
 
 
-class VariantTableRead(AssertionError):
-    """A read of a 0.3.0 release reached its Variant Table, which no 0.3.0 read may."""
-
-
-class NoVariantTable:
-    """A `LegacyTableOpener` whose table refuses every read (module docstring)."""
-
-    def __call__(self, store_path: Path, *, aliases: bool) -> NoVariantTable:
-        self.store_path = store_path
-        return self
-
-    def close(self) -> None:
-        """Nothing was opened to close."""
-
-    def __getattr__(self, name: str) -> Any:
-        raise VariantTableRead(
-            f"a 0.3.0 read of {self.__dict__.get('store_path', '?')} asked its Variant Table "
-            f"for {name!r}; from 0.3.0 the sidecars answer every read"
-        )
-
-
 def open_query(path: Path) -> Any:
     """The query facade over the release at `path`, opened by the Store Reader alone."""
-    return query_release(open_release(path, legacy=NoVariantTable()))
+    return query_release(open_release(path))
 
 
 def version() -> dict[str, str]:
@@ -80,11 +51,12 @@ def answers(path: Path) -> dict[str, Any]:
     readable values, in the form `expected/<release>.json` holds them. A resolved row's
     `log10_p` is NaN where its SE is infinite, and JSON holds no NaN, so it is spelt
     as `readable_value` spells it; `differences` reads ``"NaN"`` back as NaN."""
-    digests = release_digests(path, query=open_query)
+    found = release_answers(path, query=open_query)
+    digests = found["digests"]
     digests["log10_p"] = {
         shape: [readable_value(v) for v in values] for shape, values in digests["log10_p"].items()
     }
-    return {"digests": digests, "readable": release_readable(path, query=open_query)}
+    return found
 
 
 def mismatches(path: Path, want: dict[str, Any]) -> list[str]:

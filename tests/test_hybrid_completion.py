@@ -870,9 +870,11 @@ def test_rho_delegates_to_dense_component(completed_hybrid) -> None:
     _src, dst, _result = completed_hybrid
 
     q = query_store(dst)
-    assert len(q.rho("trait_a", "trait_b")["rho"]) == 0
-    assert len(q.rho_row("trait_a")["rho"]) == 0
-    assert q.rho_matrix(["trait_a", "trait_b"])["rho"].shape == (0, 0)
+    ids = [row["analysis_id"] for row in q.analyses_table().values()]
+    assert len(ids) >= 2, ids
+    assert len(q.rho(*ids)["rho"]) == 0
+    assert len(q.rho_row(ids[0])["rho"]) == 0
+    assert q.rho_matrix(ids)["rho"].shape == (0, 0)
 
 
 def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path) -> None:
