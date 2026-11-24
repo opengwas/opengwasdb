@@ -17,6 +17,7 @@ question of the rewrite's proof is answered on 0.3.0 without importing pysam.
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import subprocess
@@ -32,6 +33,7 @@ from rsid_releases import RELEASE_NAMES, rsid_names, with_rsids
 
 from opengwasdb.query import query_store
 from opengwasdb.store_reader import rsid_index
+from opengwasdb.store_reader.identity import VariantNormalisationError
 from opengwasdb.store_reader.rsid_index import MalformedRsidIndex, MissingRsidIndex, RsidIndex
 from opengwasdb.validation import validate_store
 
@@ -151,7 +153,9 @@ with query_store(path) as q:
 print(json.dumps({
     "questions": len(digests["shapes"]) + len(digests["range_probes"]),
     "resolved": sorted(set(resolved)),
+    "variant_reads": len(digests["variant_reads"]),
     "pysam": "pysam" in sys.modules,
+    "sqlite3": "sqlite3" in sys.modules,
 }))
 """
 
@@ -202,7 +206,9 @@ def test_every_query_shape_on_0_3_0_reads_no_variant_table_and_no_pysam(
     found = json.loads(out.stdout)
     assert found["questions"] > 50, "a probe that asked little would prove little"
     assert {".", "rs77", "rs11;rs12"} <= set(found["resolved"])
+    assert found["variant_reads"] > 5, "the variant-only reads (#484) were not asked"
     assert found["pysam"] is False, "a 0.3.0 query loaded pysam"
+    assert found["sqlite3"] is False, "a 0.3.0 query loaded sqlite3"
 
 
 CLI = r"""
@@ -484,50 +490,36 @@ def test_each_read_is_the_variants_table_filtered_by_brute_force(planted, name: 
 
 @pytest.mark.parametrize("name", FIXTURES)
 def test_a_range_is_the_rows_range_phewas_reads(planted, name: str):
-    """`variants_in_range` names the variant indices `range_phewas` returns associations for."""
+    """`variants_in_range` names exactly the variant indices `range_phewas` reads."""
     with query_store(planted[name][0]) as q:
         table = q.variants_table()
-        first, last = table[0], table[len(table) - 1]
+        first = table[0]
         rows = q.variants_in_range(first["chromosome"], 1, 10**9)
         result = q.range_phewas(first["chromosome"], 1, 10**9)
         assert len(result["variant_index"]) > 0
-        assert set(result["variant_index"].tolist()) <= set(rows)
-        edge = q.variants_in_range(last["chromosome"], last["position"], last["position"])
-        assert 0 in q.variants_in_range(first["chromosome"], first["position"], first["position"])
-        assert len(table) - 1 in edge
+        assert set(result["variant_index"].tolist()) == set(rows)
 
 
-VARIANT_READS_PROBE = r"""
-import json, sys
-from opengwasdb.query import query_store
-
-path, alid = sys.argv[1], sys.argv[2]
-with query_store(path) as q:
-    count = q.variant_count()
-    by_identifier = q.variants([alid, "rs77", "rs0"])
-    in_range = q.variants_in_range(by_identifier[min(by_identifier)]["chromosome"], 1, 10**9)
-print(json.dumps({
-    "count": count,
-    "by_identifier": len(by_identifier),
-    "in_range": len(in_range),
-    "pysam": "pysam" in sys.modules,
-    "sqlite3": "sqlite3" in sys.modules,
-}))
-"""
+def test_a_chromosome_the_release_cannot_spell_is_refused(planted):
+    with query_store(planted["dense_observed"][0]) as q:
+        with pytest.raises(VariantNormalisationError):
+            q.variants_in_range("99", 1, 10**9)
 
 
-@pytest.mark.parametrize("name", PROBED)
-def test_the_reads_on_0_3_0_load_no_variant_table_no_pysam_and_no_sqlite3(
-    planted, tmp_path: Path, name: str
-):
-    release = Path(shutil.copytree(planted[name][0], tmp_path / name))
-    with query_store(release) as q:
-        table = q.variants_table()
-    last = table[len(table) - 1]["alid"]
-    out = _run_unreadable(release, ["-c", VARIANT_READS_PROBE, str(release), last])
-    assert out.returncode == 0, out.stderr[-3000:]
-    found = json.loads(out.stdout)
-    assert found["count"] == len(table)
-    assert found["by_identifier"] >= 3 and found["in_range"] >= 1, "a read that found nothing"
-    assert found["pysam"] is False, "a 0.3.0 variant read loaded pysam"
-    assert found["sqlite3"] is False, "a 0.3.0 variant read loaded sqlite3"
+def test_the_proof_reports_a_difference_in_the_variant_reads(planted):
+    """`differences` compares `variant_reads`: a dropped row, a changed count."""
+    from opengwasdb.store.query_digests import differences, release_digests
+
+    reference = release_digests(planted["dense_observed"][0])
+    reads = reference["variant_reads"]
+    assert reads["variant_count"] and reads["variants"] and len(reads) > 3
+    assert differences(reference, reference) == []
+    changed = copy.deepcopy(reference)
+    changed["variant_reads"]["variant_count"]["count"] = "0" * 8
+    assert differences(reference, changed) == ["variant_reads/variant_count/count"]
+    dropped = copy.deepcopy(reference)
+    name = next(n for n in dropped["variant_reads"] if n.startswith("variants_in_range/"))
+    dropped["variant_reads"][name]["alid"] = "0" * 8
+    assert differences(reference, dropped) == [f"variant_reads/{name}/alid"]
+    del dropped["variant_reads"]["variants"]
+    assert any(d.startswith("variant_reads/variants/") for d in differences(reference, dropped))

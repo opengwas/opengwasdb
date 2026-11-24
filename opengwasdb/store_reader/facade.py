@@ -71,7 +71,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import NoReturn, Self
+from typing import Any, NoReturn, Self
 
 import numpy as np
 
@@ -212,7 +212,7 @@ def _variants_table(variant_axis: AnyVariantAxis) -> dict[int, dict]:
     return variant_axis.variants_table()
 
 
-def _variant_rows(variant_axis: AnyVariantAxis, rows: np.ndarray) -> dict[int, dict]:
+def _variant_rows(variant_axis: AnyVariantAxis, rows: np.ndarray) -> dict[int, dict[str, Any]]:
     """The `variants_table()` rows for `rows` alone, keyed by variant_index, ascending.
 
     The same fields and spelling as `_variants_table`, read through the axis's
@@ -285,7 +285,7 @@ class _StoreQueryBase:
         """The number of variants in the release (the Variant Axis's length)."""
         return int(self._variant_axis.n_variants)
 
-    def variants(self, identifiers: list[str]) -> dict[int, dict]:
+    def variants(self, identifiers: list[str]) -> dict[int, dict[str, Any]]:
         """The `variants_table()` rows for rsIDs or ALIDs, keyed by variant_index.
 
         Every row a multi-allelic rsID names is returned, as `lookup` resolves it; an
@@ -294,7 +294,7 @@ class _StoreQueryBase:
         axis = self._variant_axis
         return _variant_rows(axis, axis.indices_by_identifiers(identifiers))
 
-    def variants_in_range(self, chromosome: str, start: int, end: int) -> dict[int, dict]:
+    def variants_in_range(self, chromosome: str, start: int, end: int) -> dict[int, dict[str, Any]]:
         """The `variants_table()` rows at a position in ``[start, end]`` on `chromosome`,
         keyed by variant_index: the rows `range_phewas` reads."""
         axis = self._variant_axis

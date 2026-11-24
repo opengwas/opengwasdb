@@ -497,13 +497,8 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         found.append(f"adapter: {reference['adapter']} != {candidate['adapter']}")
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
-    for section in ("shapes", "resolved", "alid_probes", "range_probes", "misses"):
+    for section in ("shapes", "resolved", "alid_probes", "range_probes", "misses", "variant_reads"):
         found += _shape_differences(section, reference[section], candidate[section])
-    found += _shape_differences(
-        "variant_reads",
-        reference.get("variant_reads", {}),
-        candidate.get("variant_reads", {}),
-    )
     found += _shape_differences(
         "indexed_subsets",
         reference.get("indexed_subsets", {}),
