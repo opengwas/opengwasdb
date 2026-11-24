@@ -902,7 +902,9 @@ Format 0.3.0 is what ogquery, opengwaspy, opengwasr and any other port read, so 
   source paths as an input, so the generator re-stamps them after the build -- every
   `created_at`, an Indexed Variant Subset's `builder_version`, and the build root in a
   Ragged build's provenance -- and refuses a release in which an original is left. It
-  compresses with one Blosc thread. A test fails unless a fresh run writes the committed
+  runs in the test task's environment with one Blosc thread: without `PYTHONNOUSERSITE`
+  a user-site numpy shadowed the locked one and moved completion's quality statistics in
+  their last bits. A test fails unless a fresh run writes the committed
   bundle exactly, so a change to a builder shows as a change to the bundle.
 - **It replaces `tests/golden/store_reader_digests.json`.** Those pins asked the same
   questions of the six digest releases unplanted; two pin sets of one function would each

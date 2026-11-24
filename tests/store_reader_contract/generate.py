@@ -24,9 +24,13 @@ built it. No build takes these as an input, so `normalise` re-stamps them once t
 release is built, as `format_0_2_3.as_0_2_3` re-stamps a `format_version`: every
 `created_at` is `STAMP`, every `builder_version` is `BUILDER_VERSION` and the build root
 is `BUILD_ROOT`, and it refuses a release in which any of the originals is left.
-Threaded Blosc writes a chunk's blocks in the order its threads finish, so
-`generate_bundle` compresses under `BLOSC_NTHREADS=1` (`opengwasdb.store_reader.arrays`,
-#243), which c-blosc reads at every compression.
+Threaded Blosc writes a chunk's blocks in the order its threads finish (#243), and c-blosc
+reads `BLOSC_NTHREADS` at every compression. And the package must run on the locked
+environment's numpy: a numpy in the user's site-packages shadows it unless
+`PYTHONNOUSERSITE=1`, and moved Reference Completion's quality statistics, which
+`index.sqlite` holds, in their last bits (numpy 2.3.5 there, 2.4.6 locked, on the node
+this was written on). So the generator runs in `PINNED_ENVIRONMENT`, the test task's own
+(`pixi run -e dev test`) with one Blosc thread: `main` re-executes itself in it.
 """
 
 from __future__ import annotations
@@ -37,8 +41,7 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -386,30 +389,33 @@ def _require_meaningful(name: str, found: dict[str, Any]) -> None:
     }, (name, refused)
 
 
-@contextmanager
-def one_blosc_thread() -> Iterator[None]:
-    """Compress with one Blosc thread, whose chunks' block order is then fixed (module
-    docstring); the environment is restored after."""
-    before = os.environ.get("BLOSC_NTHREADS")
-    os.environ["BLOSC_NTHREADS"] = "1"
-    try:
-        yield
-    finally:
-        if before is None:
-            del os.environ["BLOSC_NTHREADS"]
-        else:
-            os.environ["BLOSC_NTHREADS"] = before
+#: The environment the bundle is generated in (module docstring): the test task's, and
+#: one Blosc thread. Read when a process starts, so `main` re-executes itself in it.
+PINNED_ENVIRONMENT = {
+    "PYTHONNOUSERSITE": "1",
+    "BLOSC_NTHREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+}
 
 
 def generate_bundle(out: Path) -> None:
-    """Build, plant and answer every release, and write the bundle to `out`."""
-    with one_blosc_thread(), tempfile.TemporaryDirectory() as scratch:
+    """Build, plant and answer every release, and write the bundle to `out`. In
+    `PINNED_ENVIRONMENT` only: run `generate.py`, which re-executes itself in it."""
+    unpinned = {k: os.environ.get(k) for k, v in PINNED_ENVIRONMENT.items()
+                if os.environ.get(k) != v}
+    assert not unpinned, f"the bundle is generated in {PINNED_ENVIRONMENT}, not {unpinned}"
+    with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
         write_bundle(build(root), root, out)
 
 
 def main(argv: list[str]) -> None:
     """``generate.py [OUT]``: write the bundle to `OUT`, by default beside this file."""
+    if any(os.environ.get(k) != v for k, v in PINNED_ENVIRONMENT.items()):
+        environment = {**os.environ, **PINNED_ENVIRONMENT}
+        os.execve(sys.executable, [sys.executable, __file__, *argv[1:]], environment)
     out = Path(argv[1]).resolve() if len(argv) > 1 else BUNDLE
     generate_bundle(out)
     print(f"wrote the Store Reader contract bundle {BUNDLE_VERSION} to {out}")

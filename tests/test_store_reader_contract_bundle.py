@@ -11,6 +11,7 @@ reads it without building anything, is `tests/store_reader_contract/`.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -46,7 +47,12 @@ def test_the_generator_writes_the_committed_bundle_byte_for_byte(tmp_path: Path)
     committed = files(BUNDLE)
     # A comparison of two empty trees would pass whatever the generator wrote.
     assert len(committed) > 1000 and "VERSION" in committed, len(committed)
-    load_generator().generate_bundle(tmp_path)
+    # A subprocess, which `generate.py` runs in its pinned environment whatever this
+    # one's (`PINNED_ENVIRONMENT`): a user-site numpy moved completion's statistics.
+    subprocess.run(
+        [sys.executable, str(BUNDLE / "generate.py"), str(tmp_path)],
+        check=True, capture_output=True, text=True,
+    )
     written = files(tmp_path)
     assert sorted(written) == sorted(committed)
     differing = sorted(path for path in committed if written[path] != committed[path])

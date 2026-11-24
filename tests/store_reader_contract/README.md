@@ -14,7 +14,7 @@ other port of the Store Reader test against. `VERSION` names the bundle's versio
 | `generate.py` | writes `releases/`, `expected/` and `VERSION`; runs in opengwasdb only |
 | `.gitattributes` | every file is bytes: no line-ending conversion on checkout |
 
-The bundle is 2.6 MB: 1,231,570 bytes of releases in 1,033 files and 1,363,886 bytes of
+The bundle is 2.6 MB: 1,231,530 bytes of releases in 1,033 files and 1,363,886 bytes of
 expected answers.
 
 ## The releases
@@ -103,8 +103,10 @@ Two runs write the same bytes, and `tests/test_store_reader_contract_bundle.py` 
 unless a fresh run writes the committed bundle byte for byte, so a change to a builder or
 to an answer shows as a change to the bundle. Raise `BUNDLE_VERSION` in `generate.py`
 when the bundle changes. A build stamps when, by which version and from where it ran; the
-generator re-stamps those as fixed values (its docstring), and compresses with one Blosc
-thread, whose block order is otherwise the order its threads finish.
+generator re-stamps those as fixed values (its docstring). It re-executes itself in the
+test task's environment -- `PYTHONNOUSERSITE=1`, so a numpy in the user's site-packages
+cannot shadow the locked one, and one BLAS thread -- with `BLOSC_NTHREADS=1`, since a
+threaded Blosc writes a chunk's blocks in the order its threads finish.
 
 `tests/test_store_reader_contract_parity.py` holds the format parity: each release, built with the same plantings
 at format 0.2.3 (`tests/format_0_2_3.py`) and rewritten by `ogdb rewrite-release`, with
