@@ -1,8 +1,11 @@
 - **Format 0.3.0 carries each row's `source_alid` in a sidecar (issue #470, ADR 0105 §8).**
-  Not released until #472 lands on epic #450's branch. `variant_source_alid_utf8.npy` and
-  `variant_source_alid_offsets.npy` hold each row's pre-liftover ALID, UTF-8 with row
-  offsets, in row order; an empty value is none, and a long one (an indel past 100 bytes)
-  is stored whole. `write_variant_axis` writes them, so every build and completion does,
+  Not released until #472 lands on epic #450's branch. `variant_source_alid_state.npy`
+  gives each row a byte: 0, no `source_alid`; 1, its own ALID; 2, another ALID, which
+  `variant_source_alid_utf8.npy` and `variant_source_alid_offsets.npy` hold for those
+  rows alone, whole however long (an indel past 100 bytes). A release built on its own
+  assembly so costs one byte a row: 21.3 MB on OGS-00003's 21.3 M rows, 5.8% of its
+  table, where storing every row's text would have cost 489 MB, 1.34 times the table and
+  the ALID sidecar's text again. `write_variant_axis` writes them, so every build and completion does,
   and a Reference-Completed release keeps each observed row's value and gives a panel row
   none. They are in the 0.3.0 envelope: a 0.3.0 release without them fails
   `envelope.required` and is refused at open (`MissingSourceAlidSidecar`), and a 0.2
@@ -19,12 +22,14 @@
   (`indices_by_source_alid`, which scans the sidecar) reads `variants.tsv.gz`. The
   validator reads the table through the new `VariantAxis.table_records`. A 0.2 release
   is read as before.
-- **New validation rule `variant_table.source_alid_sidecar`** (0.3.0): the sidecar names
-  each row's `source_alid` as the table does, and holds one row per row.
+- **New validation rule `variant_table.source_alid_sidecar`** (0.3.0): each row's state is
+  the one the table's `source_alid` and ALID give, each lifted row's text is the table's,
+  every state is 0-2, text is held for lifted rows alone, and it holds one row per row.
   `variant_table.source_alid` counts sourced rows from the sidecar on 0.3.0.
 - **`ogdb rewrite-release` gains a `source_alid_sidecar` step**: it writes the sidecar
-  from the table's `source_alid` column (empty on every row of a seven-column table) and
-  refuses unless the sidecar read back names every row's as the table does. The proof
+  from the table's `source_alid` column and ALIDs (state 0 on every row of a seven-column
+  table) and refuses unless the sidecar read back gives every row the table's state and
+  text. The proof
   compares `source_alid` through `variants_table()` and the resolved rows.
 - opengwasdb-stores' release manifests and walkthrough name the envelope's files, so they
   change when opengwasdb-stores moves its pin to this version.

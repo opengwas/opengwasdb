@@ -523,7 +523,7 @@ class VariantAxis:
             return self._table_column(vi, "source_alid")
         held = (vi >= 0) & (vi < self.n_variants)
         out = np.full(vi.size, None, dtype=object)
-        out[held] = sidecar.values(vi[held])
+        out[held] = sidecar.values(vi[held], self._alid_index.alids)
         return out
 
     def _table_column(self, vi: np.ndarray, column: str) -> np.ndarray:
@@ -660,15 +660,16 @@ class VariantAxis:
         Matched against each row's ``source_alid`` (a blank is none, and matches
         nothing), in one pass that stops once every wanted ALID is found; one the
         release does not hold is absent from the result. Where several rows hold it,
-        the first. On 0.3.0 the `source_alid` sidecar is scanned
-        (`SourceAlidSidecar.rows_of`); on the 0.2 series the table's rows, as
+        the first. On 0.3.0 from the `source_alid` sidecar (`SourceAlidSidecar.rows_of`):
+        a row naming its own ALID through the ALID index, a lifted row by a scan of the
+        lifted rows' text. On the 0.2 series the table's rows, as
         `parse_variant_line` reads them.
         None when a 0.2 table predates the ``source_alid`` column, so the caller
         can lift the ALIDs over itself rather than read no match as no variant (#473).
         """
         sidecar = self.source_alid_sidecar
         if sidecar is not None:
-            return sidecar.rows_of(wanted)
+            return sidecar.rows_of(wanted, self._alid_index.search)
         found: dict[str, int] = {}
         remaining = set(wanted)
         for line in self._legacy.rows():

@@ -287,14 +287,16 @@ def _source_alid_sidecar_rows(target: Target, block: TableBlock) -> _SourceAlidS
     count (`_judge_source_alid_sidecar`)."""
     sidecar = _source_alid_sidecar(target)
     records = block.records
-    differing = sidecar.differing(block.start, [r.source_alid for r in records])
+    differing = sidecar.differing(
+        block.start, [r.source_alid for r in records], [r.alid for r in records]
+    )
     first = ""
     if differing:
         row = differing[0]
-        [named] = sidecar.values([row])
+        record = records[row - block.start]
         first = (
-            f"row {row}: the sidecar names {named!r}, "
-            f"variants.tsv.gz {records[row - block.start].source_alid!r}"
+            f"row {row}: the sidecar holds state {int(sidecar.state[row])}, "
+            f"variants.tsv.gz {record.source_alid!r} for ALID {record.alid!r}"
         )
     return _SourceAlidSidecarRows(len(records), len(differing), first)
 

@@ -186,8 +186,9 @@ carries the offsets and fails `envelope.closed`: rebuild it, or delete the file.
 release is read as before.
 
 **#470 adds the `source_alid` sidecar to 0.3.0 (ADR 0105 §8)**, in the same unreleased
-version: `variant_source_alid_utf8.npy` and `variant_source_alid_offsets.npy` (spec §4),
-each row's pre-liftover ALID in row order. A 0.3.0 release's `variants_table()`, resolved
+version: `variant_source_alid_state.npy`, `variant_source_alid_utf8.npy` and
+`variant_source_alid_offsets.npy` (spec §4): each row's state (none, its own ALID, or
+another), and the pre-liftover ALID of each lifted row. A 0.3.0 release's `variants_table()`, resolved
 rows with variant info and record methods give `source_alid` from them; a 0.2 release
 gives it from its table, as `variants_table()` and resolved rows now do on every format.
 A 0.3.0 release written on the integration branch before #470 lacks them and is refused

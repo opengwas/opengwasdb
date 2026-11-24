@@ -518,7 +518,9 @@ def _rewrite_table(store, edit) -> None:
         # the table does (#467, #470).
         records = list(iter_variant_records(path))
         write_alid_sidecar(store, [r.alid for r in records])
-        write_source_alid_sidecar(store, [r.source_alid for r in records])
+        write_source_alid_sidecar(
+            store, [r.source_alid for r in records], [r.alid for r in records]
+        )
 
 
 def _set_format_version(store, version: str) -> None:

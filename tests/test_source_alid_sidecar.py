@@ -2,8 +2,9 @@
 
 A row's `source_alid` is the ALID its source spelt it by, before a lift. The 0.2 series
 holds it in the Variant Table's eighth column alone, so a 0.3.0 Store Reader, which
-never reads the table (#469), could not return it. `variant_source_alid_utf8.npy` and
-`variant_source_alid_offsets.npy` hold it, in row order (ADR 0105 §8).
+never reads the table (#469), could not return it. `variant_source_alid_state.npy` gives
+each row's state -- none, its own ALID, or another -- and `variant_source_alid_utf8.npy`
+and `variant_source_alid_offsets.npy` hold a lifted row's, whole (ADR 0105 §8).
 
 Every fixture -- the six `store_reader_digests` releases (Dense, Ragged and Hybrid, each
 Observed-Only and Reference-Completed) -- is given `source_alid`s that plant each case a
@@ -31,6 +32,7 @@ from test_variant_table_off_read_path import _answers
 from opengwasdb.query import query_store
 from opengwasdb.store.rewrite import rewrite_release
 from opengwasdb.store_reader import source_alid_sidecar as codec
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
 from opengwasdb.store_reader.source_alid_sidecar import (
     SOURCE_ALID_SIDECAR_FILENAMES,
     MalformedSourceAlidSidecar,
@@ -52,34 +54,62 @@ PLANTED_LENGTHS = (24, 32, 33, 130)
 
 # ── the codec ───────────────────────────────────────────────────────────────
 
+LONG = "1:1000:A:" + "ACGT" * 40
+#: Six rows: each ALID, and its `source_alid`.
+ALIDS = ["1:10:A:G", "1:20:A:G", "1:30:A:G", "1:40:A:G", "1:50:C:T", "1:60:A:G"]
+SOURCES = [None, "1:20:A:G", "", LONG, "X:7:C:T", "1:60:A:G"]
+
+
+def _own(rows: np.ndarray) -> np.ndarray:
+    """`ALIDS` at `rows`, as the ALID sidecar would give them."""
+    return np.array([ALIDS[int(r)] for r in rows], dtype=object)
+
+
+def _written(tmp_path: Path, sources=SOURCES, alids=ALIDS) -> SourceAlidSidecar:
+    write_source_alid_sidecar(tmp_path, sources, alids)
+    sidecar = SourceAlidSidecar.open(tmp_path)
+    assert sidecar is not None
+    return sidecar
+
+
+def test_each_row_has_a_state_and_only_a_lifted_row_has_text(tmp_path: Path):
+    _written(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(SOURCE_ALID_SIDECAR_FILENAMES)
+    # a collision none, an unlifted row its own ALID, a lifted row another, held whole
+    assert np.load(tmp_path / codec.SOURCE_ALID_STATE_FILENAME).tolist() == [0, 1, 0, 2, 2, 1]
+    assert np.load(tmp_path / codec.SOURCE_ALID_STATE_FILENAME).dtype == np.dtype("|u1")
+    text = np.load(tmp_path / codec.SOURCE_ALID_UTF8_FILENAME).tobytes()
+    assert text == (LONG + "X:7:C:T").encode()
+    offsets = np.load(tmp_path / codec.SOURCE_ALID_OFFSETS_FILENAME)
+    assert offsets.tolist() == [0, len(LONG), len(LONG) + 7]
+
 
 def test_the_codec_round_trips_every_value_whole(tmp_path: Path):
-    long = "1:1000:A:" + "ACGT" * 40
-    values = [None, "1:5:A:G", "", long, "X:7:C:T", None]
-    write_source_alid_sidecar(tmp_path, values)
-    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(SOURCE_ALID_SIDECAR_FILENAMES)
-    sidecar = SourceAlidSidecar.open(tmp_path)
-    assert sidecar is not None and sidecar.n_rows == 6
-    expected = [None, "1:5:A:G", None, long, "X:7:C:T", None]
-    assert sidecar.values(np.arange(6)).tolist() == expected
-    assert sidecar.values([3, 0, 3]).tolist() == [long, None, long]
-    assert sidecar.sourced(0, 6) == 3 and sidecar.sourced(2, 4) == 1
+    sidecar = _written(tmp_path)
+    expected = [None, "1:20:A:G", None, LONG, "X:7:C:T", "1:60:A:G"]
+    assert sidecar.values(np.arange(6), _own).tolist() == expected
+    assert sidecar.values([3, 0, 5, 3], _own).tolist() == [LONG, None, "1:60:A:G", LONG]
+    assert sidecar.sourced(0, 6) == 4 and sidecar.sourced(2, 4) == 1
     assert list(sidecar.problems(6)) == []
-    assert sidecar.differing(0, expected) == []
-    assert sidecar.differing(1, ["1:5:A:G", "1:5:A:G"]) == [2]
+    assert sidecar.differing(0, expected, ALIDS) == []
+    # an unlifted row read as lifted, and a lifted row's text another
+    assert sidecar.differing(1, ["X:1:A:G", None, LONG + "A"], ALIDS[1:4]) == [1, 3]
 
 
 def test_the_scan_finds_the_first_row_of_each_value_however_long(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(codec, "_WINDOW", 4)  # several windows, a value in a later one
+    monkeypatch.setattr(codec, "_WINDOW", 2)  # several windows, a value in a later one
     long = "2:9:" + "T" * 120 + ":G"
-    values = ["1:1:A:G", None, "1:2:A:G", long, "1:3:A:G", "1:2:A:G", None, "1:4:A:GG", long]
-    write_source_alid_sidecar(tmp_path, values)
-    sidecar = SourceAlidSidecar.open(tmp_path)
-    assert sidecar is not None
-    found = sidecar.rows_of(["1:2:A:G", long, "1:4:A:GG", "9:9:A:G", ""])
-    assert found == {"1:2:A:G": 2, long: 3, "1:4:A:GG": 7}
+    alids = [f"1:{i}:A:G" for i in range(1, 10)]
+    sources = ["0:1:A:G", None, "0:2:A:G", long, "1:5:A:G", "0:2:A:G", None, "0:4:A:GG", long]
+    sidecar = _written(tmp_path, sources, alids)
+    def search(asked):
+        return np.array([alids.index(a) if a in alids else -1 for a in asked])
+    found = sidecar.rows_of(["0:2:A:G", long, "0:4:A:GG", "1:5:A:G", "9:9:A:G", ""], search)
+    assert found == {"0:2:A:G": 2, long: 3, "0:4:A:GG": 7, "1:5:A:G": 4}
+    # a row whose ALID is asked but whose state is not its own ALID is no match
+    assert sidecar.rows_of(["1:1:A:G"], search) == {}
 
 
 @pytest.mark.parametrize(
@@ -90,55 +120,69 @@ def test_the_writer_refuses_a_value_the_table_could_not_hold_as_given(
     tmp_path: Path, value: str
 ):
     with pytest.raises(UnencodableSourceAlidError, match="row 1"):
-        write_source_alid_sidecar(tmp_path, ["1:1:A:G", value])
+        write_source_alid_sidecar(tmp_path, ["1:1:A:G", value], ["1:1:A:G", "1:2:A:G"])
     assert not list(tmp_path.iterdir()), "nothing is written for a refused value"
 
 
 def test_a_half_written_sidecar_is_refused(tmp_path: Path):
-    write_source_alid_sidecar(tmp_path, ["1:1:A:G"])
-    (tmp_path / SOURCE_ALID_SIDECAR_FILENAMES[0]).unlink()
+    _written(tmp_path)
+    (tmp_path / codec.SOURCE_ALID_STATE_FILENAME).unlink()
     with pytest.raises(FileNotFoundError, match="incomplete"):
         SourceAlidSidecar.open(tmp_path)
 
 
-@pytest.mark.parametrize("fault", ["start", "end", "dtype"])
+@pytest.mark.parametrize("fault", ["start", "end", "dtype", "state-dtype"])
 def test_offsets_that_cannot_slice_the_bytes_are_refused_at_open(tmp_path: Path, fault: str):
-    write_source_alid_sidecar(tmp_path, ["1:1:A:G", "1:2:A:G"])
-    path = tmp_path / codec.SOURCE_ALID_OFFSETS_FILENAME
-    offsets = np.load(path)
+    _written(tmp_path)
+    name = codec.SOURCE_ALID_OFFSETS_FILENAME
+    if fault == "state-dtype":
+        name = codec.SOURCE_ALID_STATE_FILENAME
+    array = np.load(tmp_path / name)
     if fault == "start":
-        offsets[0] = 1
+        array[0] = 1
     elif fault == "end":
-        offsets[-1] += 1
+        array[-1] += 1
     else:
-        offsets = offsets.astype("<i8")
-    np.save(path, offsets)
+        array = array.astype("<i8")
+    np.save(tmp_path / name, array)
     with pytest.raises(MalformedSourceAlidSidecar):
         SourceAlidSidecar.open(tmp_path)
 
 
 def test_a_row_outside_the_sidecar_is_refused_never_read_as_none(tmp_path: Path):
-    write_source_alid_sidecar(tmp_path, ["1:1:A:G", None])
-    sidecar = SourceAlidSidecar.open(tmp_path)
-    assert sidecar is not None
-    with pytest.raises(IndexError, match="row 2 is outside"):
-        sidecar.values([0, 2])
+    sidecar = _written(tmp_path)
+    with pytest.raises(IndexError, match="row 6 is outside"):
+        sidecar.values([0, 6], _own)
 
 
-def test_falling_offsets_and_a_short_sidecar_are_problems(tmp_path: Path):
-    write_source_alid_sidecar(tmp_path, ["1:1:A:G", "1:22:A:G", "1:3:A:G"])
-    path = tmp_path / codec.SOURCE_ALID_OFFSETS_FILENAME
+@pytest.mark.parametrize("fault", ["state-3", "text-for-no-row", "empty-text", "short"])
+def test_each_structural_fault_is_a_problem_and_a_read_refuses_it(tmp_path: Path, fault: str):
+    _written(tmp_path)
+    state_path = tmp_path / codec.SOURCE_ALID_STATE_FILENAME
+    offsets_path = tmp_path / codec.SOURCE_ALID_OFFSETS_FILENAME
+    state, offsets = np.load(state_path), np.load(offsets_path)
+    rows = 6
+    if fault == "state-3":
+        state[1] = 3
+        expected = f"{codec.SOURCE_ALID_STATE_FILENAME} holds state 3 at row 1"
+    elif fault == "text-for-no-row":
+        state[3] = codec.OWN_ALID  # the text of a lifted row now belongs to none
+        expected = "has 3 offsets for 1 lifted row(s)"
+    elif fault == "empty-text":
+        offsets[1] = 0  # the first lifted row's text is empty
+        expected = "does not rise at lifted row 0"
+    else:
+        rows = 7
+        expected = "holds 6 rows but variants.tsv.gz has 7"
+    np.save(state_path, state)
+    np.save(offsets_path, offsets)
     sidecar = SourceAlidSidecar.open(tmp_path)
     assert sidecar is not None
-    assert list(sidecar.problems(4)) == [
-        "the source_alid sidecar holds 3 rows but variants.tsv.gz has 4"
-    ]
-    offsets = np.load(path)
-    offsets[2] = offsets[1] - 1
-    np.save(path, offsets)
-    sidecar = SourceAlidSidecar.open(tmp_path)
-    assert sidecar is not None
-    assert list(sidecar.problems(3)) == [f"{codec.SOURCE_ALID_OFFSETS_FILENAME} falls at row 1"]
+    [problem] = sidecar.problems(rows)
+    assert expected in problem, problem
+    if fault in {"state-3", "text-for-no-row"}:
+        with pytest.raises(MalformedSourceAlidSidecar):
+            sidecar.values([0], _own)
 
 
 # ── the planted fixtures ────────────────────────────────────────────────────
@@ -336,32 +380,54 @@ def _table_records(release: Path) -> list[Any]:
 
 
 def _resave(release: Path, edit) -> None:
+    """Rewrite `release`'s sidecar from its values and ALIDs as `edit` changes them."""
     sidecar = SourceAlidSidecar.open(release)
-    assert sidecar is not None
-    values = sidecar.values(np.arange(sidecar.n_rows)).tolist()
-    write_source_alid_sidecar(release, edit(values))
+    alid_sidecar = AlidSidecar.open(release)
+    assert sidecar is not None and alid_sidecar is not None
+    rows = np.arange(sidecar.n_rows)
+    values = sidecar.values(rows, alid_sidecar.alids).tolist()
+    alids = alid_sidecar.alids(rows).tolist()
+    write_source_alid_sidecar(release, *edit(values, alids))
 
 
-@pytest.mark.parametrize("fault", ["one-row-differs", "one-row-short"])
+def _lifted_row(values: list, alids: list) -> int:
+    return next(k for k, (v, a) in enumerate(zip(values, alids, strict=True)) if v and v != a)
+
+
+def _other_text(values: list, alids: list) -> tuple[list, list]:
+    k = _lifted_row(values, alids)
+    return [*values[:k], values[k] + "A", *values[k + 1 :]], alids
+
+
+#: Each way a sidecar can differ from the table, and the row and words the rule reports.
+FAULTS = {
+    "collision-made-lifted": (lambda v, a: (["1:1:A:G", *v[1:]], a), "names 1 row(s) otherwise"),
+    "lifted-text-differs": (_other_text, "names 1 row(s) otherwise"),
+    "one-row-short": (lambda v, a: (v[:-1], a[:-1]), "rows but variants.tsv.gz has"),
+}
+
+
+@pytest.mark.parametrize("fault", [*FAULTS, "state-out-of-range"])
 def test_the_validator_fails_a_sidecar_that_is_not_the_table(
     planted, tmp_path: Path, fault: str
 ):
     release = Path(shutil.copytree(planted["ragged_observed"][0], tmp_path / "r"))
     assert validate_store(release).ok, "a valid release to begin with"
-    if fault == "one-row-differs":
-        _resave(release, lambda v: [v[0] or "1:1:A:G", *v[1:]])
+    state = np.load(release / codec.SOURCE_ALID_STATE_FILENAME)
+    assert {0, 1, 2} <= set(state.tolist()), "every state is planted"
+    if fault == "state-out-of-range":
+        state[int(np.flatnonzero(state == codec.OWN_ALID)[0])] = 3
+        np.save(release / codec.SOURCE_ALID_STATE_FILENAME, state)
+        words = "holds state 3 at row"
     else:
-        _resave(release, lambda v: v[:-1])
+        edit, words = FAULTS[fault]
+        _resave(release, edit)
 
     result = validate_store(release)
 
     assert result.failed() == {RULE}, result.errors
     [error] = result.errors
-    if fault == "one-row-differs":
-        assert "names 1 row(s) otherwise than variants.tsv.gz" in error, error
-        assert "row 0" in error, error
-    else:
-        assert "holds" in error and "rows but variants.tsv.gz has" in error, error
+    assert words in error, error
 
 
 def test_the_validator_reports_a_missing_sidecar_by_name(planted, tmp_path: Path):
@@ -408,10 +474,10 @@ def test_the_rewrite_fills_the_sidecar_from_the_table_and_the_proof_passes(
     assert got == values
     assert _answers(destination) == _answers(legacy)
     for directory in components(destination):
-        written = np.load(directory / codec.SOURCE_ALID_UTF8_FILENAME)
         relative = directory.relative_to(destination)
-        built = np.load(current / relative / codec.SOURCE_ALID_UTF8_FILENAME)
-        assert np.array_equal(written, built), "the rewrite writes what a build writes"
+        for name in SOURCE_ALID_SIDECAR_FILENAMES:
+            written, built = np.load(directory / name), np.load(current / relative / name)
+            assert written.dtype == built.dtype and np.array_equal(written, built), name
 
 
 def _as_seven_columns(directory: Path) -> None:

@@ -82,7 +82,7 @@ def _axis(
             [record.position for record in records],
             chromosome_key=None,
         )
-        write_source_alid_sidecar(tmp_path, [record.source_alid for record in records])
+        write_source_alid_sidecar(tmp_path, [record.source_alid for record in records], alids)
     np.save(tmp_path / "variant_rsid_bytes.npy", np.empty(0, dtype=RSID_DTYPE))
     np.save(tmp_path / "variant_rsid_rows.npy", np.empty(0, dtype="int32"))
     table = _Table(rows)

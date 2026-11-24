@@ -268,28 +268,33 @@ def _write_source_alid_sidecar(context: RewriteContext) -> None:
 
     The values are the table's eighth column as `parse_variant_line` reads it: a blank
     (``.``) is none, and a table written before the column (seven fields) gives none on
-    every row. The rows come from the table in row order, refused as for the ALID
-    sidecar when out of order. Before the step ends, the sidecar read back must name
-    every row's `source_alid` as the table does: the proof's questions reach only some.
+    every row. Each row's state (none, its own ALID, another) comes from comparing that
+    value with the row's ALID, as a build's does. The rows come from the table in row
+    order, refused as for the ALID sidecar when out of order. Before the step ends, the
+    sidecar read back must give every row the table's state and, for a lifted row, its
+    text: the proof's questions reach only some.
     """
     for component in context.components:
         directory = context.staged / component.relative
-        values = [
-            record.source_alid
-            for record in _records_in_row_order(directory, _offset_rows(component))
-        ]
-        write_source_alid_sidecar(directory, values)
-        _require_every_source_alid_kept(directory, values)
+        values: list[str | None] = []
+        alids: list[str] = []
+        for record in _records_in_row_order(directory, _offset_rows(component)):
+            values.append(record.source_alid)
+            alids.append(record.alid)
+        write_source_alid_sidecar(directory, values, alids)
+        _require_every_source_alid_kept(directory, values, alids)
 
 
-def _require_every_source_alid_kept(directory: Path, values: list[str | None]) -> None:
+def _require_every_source_alid_kept(
+    directory: Path, values: list[str | None], alids: list[str]
+) -> None:
     """Refuse a sidecar that names some row's `source_alid` otherwise than the table
     (`SourceAlidSidecar.differing`, the comparison `variant_table.source_alid_sidecar`
     makes)."""
     sidecar = SourceAlidSidecar.open(directory)
     if sidecar is None:
         raise RewriteError(f"{directory}: the source_alid sidecar was not written")
-    wrong = sidecar.differing(0, values)
+    wrong = sidecar.differing(0, values, alids)
     if wrong or sidecar.n_rows != len(values):
         first = wrong[0] if wrong else min(sidecar.n_rows, len(values))
         raise RewriteError(

@@ -144,10 +144,13 @@ def write_variant_axis(
     # answer while the table still showed it.
     _refuse_unindexable_rsids(variants, rsid_by_alid)
     # The `source_alid` sidecar (format 0.3.0, #470, ADR 0105 §8): each row's pre-liftover
-    # ALID, which the Store Reader returns without reading the table. Written first: it
-    # refuses a value the table's column could not hold as the sidecar does.
+    # ALID, which the Store Reader returns without reading the table; a row's state says
+    # whether it is none, its own ALID or another, held whole. Written first: it refuses a
+    # value the table's column could not hold as the sidecar does.
     write_source_alid_sidecar(
-        store, list(source_alids) if source_alids is not None else [None] * len(variants)
+        store,
+        list(source_alids) if source_alids is not None else [None] * len(variants),
+        [variant.alid for variant in variants],
     )
     _write_table(store, variants, rsid_by_alid, source_alids)
     # The variable-length ALID sidecar (format 0.3.0, #467, ADR 0105): every ALID,
