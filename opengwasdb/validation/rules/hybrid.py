@@ -26,6 +26,7 @@ import numpy as np
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.hybrid import (
     check_dense_to_shared,
+    dense_to_shared_length_fault,
     dense_to_shared_path,
     misnamed_panel_rows,
 )
@@ -115,9 +116,11 @@ def coverage(target: Target) -> Iterator[str]:
         if dense_target.shares_variant_axis
         else dense_target.variant_axis.n_variants
     )
-    faults = check_dense_to_shared(rows, release_rows(target), n_dense)
-    if faults or dense_target.shares_variant_axis:
-        yield from faults
+    # Only the length: range and order are `hybrid.dense_to_shared`'s, which this runs
+    # after, so a bad map fails that rule alone.
+    fault = dense_to_shared_length_fault(rows, n_dense)
+    if fault is not None or dense_target.shares_variant_axis:
+        yield from ([] if fault is None else [fault])
         return
     picked = list(representative_variant_indices(len(rows)))
     named = np.asarray([int(rows[r]) for r in picked], dtype=np.int64)

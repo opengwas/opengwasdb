@@ -692,3 +692,21 @@ def test_a_stale_indexed_variant_subset_is_refused_not_freshened(sources, tmp_pa
     with pytest.raises(RewriteError, match="stale Indexed Variant Subset"):
         rewrite_release(source, tmp_path / "rewritten")
     assert not (tmp_path / "rewritten").exists()
+
+
+def test_a_subset_under_another_encoding_is_refused_as_stale(sources, tmp_path):
+    """A stale subset is one whose identity or encoding is not the release's, for the
+    rewrite as for the reader and `subsets.indexed`."""
+    import zarr
+
+    from opengwasdb.store_reader.encoding.plan import StoreEncoding
+
+    source = _source_copy(sources, tmp_path, "dense_observed")
+    group = zarr.open_group(str(_with_subset(source, tmp_path)), mode="r+")
+    declared = StoreEncoding.from_manifest(dict(group.attrs)["encoding"])
+    other = declared.with_eaf_reference(not declared.eaf.reference)
+    assert other != declared, "fixture: another encoding"
+    group.attrs["encoding"] = other.to_manifest()
+    with pytest.raises(RewriteError, match="encoding that is not the release's"):
+        rewrite_release(source, tmp_path / "rewritten")
+    assert not (tmp_path / "rewritten").exists()

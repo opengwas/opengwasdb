@@ -159,8 +159,9 @@ class RewriteContext:
     source: Path
     staged: Path
     components: tuple[Component, ...]
-    #: The rewritten release's `release_id`, which `_stamp` writes into every manifest.
-    release_id: str = ""
+    #: The rewritten release's `release_id`: `_stamp` writes it into every manifest, and
+    #: `_restamp_subsets` into every Indexed Variant Subset.
+    release_id: str
 
     def staged_components(self) -> Iterator[Path]:
         for component in self.components:
@@ -642,11 +643,19 @@ def _restamp_subsets(context: RewriteContext) -> None:
     """
     for component in context.components:
         if _subset_holder(component):
+            directory = context.staged / component.relative
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
             restamp_indexed_subsets(
-                context.staged / component.relative,
+                directory,
                 release_id=context.release_id,
-                format_version=TARGET_FORMAT_VERSION,
+                format_version=_stamped_format_version(manifest),
             )
+
+
+def _stamped_format_version(manifest: dict[str, Any]) -> str:
+    """The `format_version` the rewrite stamps on a component whose source manifest is
+    `manifest`: what `_stamp` writes, and what each Indexed Variant Subset records."""
+    return format_version_for(carries_regions="regions" in manifest, reference_first_indels=True)
 
 
 #: The rewrite's steps, in the order they run (`RewriteStep`). #468-#472 each add one.
@@ -748,7 +757,6 @@ def rewrite_release(
         _stamp(
             context,
             steps,
-            release_id=release_id,
             now=datetime.now(UTC).isoformat(),
             unposed=reference["unposed_range_questions"],
         )
@@ -859,7 +867,6 @@ def _stamp(
     context: RewriteContext,
     steps: tuple[RewriteStep, ...],
     *,
-    release_id: str,
     now: str,
     unposed: list[str],
 ) -> None:
@@ -874,11 +881,9 @@ def _stamp(
     for path in manifest_paths(context.staged):
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         source_release_id = str(data["release_id"])
-        data["release_id"] = release_id
+        data["release_id"] = context.release_id
         data["created_at"] = now
-        data["format_version"] = format_version_for(
-            carries_regions="regions" in data, reference_first_indels=True
-        )
+        data["format_version"] = _stamped_format_version(data)
         data["provenance"] = {
             **data.get("provenance", {}),
             "format_rewrite": {

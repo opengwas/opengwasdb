@@ -151,8 +151,10 @@ from opengwasdb.store_reader.indexed import (
     _parse_subset_encoding,
     _plane_shape_findings,
     _source_identity_mismatches,
+    encoding_mismatch,
     indexed_subset_store_path,
     parse_indexed_subset_name,
+    stale_subset_findings,
 )
 
 # Re-exported: opengwasdb-stores opens a subset through this module.
@@ -1440,8 +1442,9 @@ def list_indexed_subsets(store_path: str | Path) -> tuple[str, ...]:
 
 
 def subset_identity_mismatches(store_path: str | Path) -> list[str]:
-    """Every way a published subset of `store_path` does not name the release it sits in
-    (`_source_identity_mismatches`, the rule `subsets.indexed` and the reader apply).
+    """Every way a published subset of `store_path` is stale for the release it sits in:
+    its recorded identity or its encoding (`stale_subset_findings`, which the reader and
+    `subsets.indexed` refuse by), or an encoding block that cannot be read.
 
     `store_path` is a Dense release, or a Hybrid's Dense Component, which holds its own
     subsets."""
@@ -1450,7 +1453,11 @@ def subset_identity_mismatches(store_path: str | Path) -> list[str]:
     found: list[str] = []
     for name in list_indexed_subsets(path):
         attrs = dict(release_arrays(path)[INDEXED_SUBSETS_GROUP][name].attrs)
-        found.extend(_source_identity_mismatches(name, attrs, manifest))
+        encoding = _parse_subset_encoding(name, attrs, found)
+        if encoding is None:
+            found.extend(_source_identity_mismatches(name, attrs, manifest))
+        else:
+            found.extend(stale_subset_findings(name, attrs, encoding, manifest))
     return found
 
 
@@ -1791,11 +1798,9 @@ def _read_declared_encoding(
     declared = _parse_subset_encoding(name, attrs, errors)
     if declared is None:
         return None
-    if declared != manifest.encoding:
-        errors.append(
-            f"indexed subset {name!r} was built with an encoding that is not the "
-            "release's; the index cannot be decoded against the authoritative planes"
-        )
+    mismatch = encoding_mismatch(name, declared, manifest)
+    if mismatch is not None:
+        errors.append(mismatch)
         return None
     return declared
 

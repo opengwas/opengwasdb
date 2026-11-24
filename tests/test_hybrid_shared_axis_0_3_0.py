@@ -240,6 +240,46 @@ def test_each_corruption_of_the_map_fails_its_rule(hybrids, tmp_path, corrupt, r
     assert any(says in error for error in result.errors), result.errors
 
 
+@pytest.mark.parametrize(
+    ("corrupt", "rules"),
+    [
+        (_out_of_range, {"hybrid.dense_to_shared"}),
+        (_twice, {"hybrid.dense_to_shared"}),
+        (_descending, {"hybrid.dense_to_shared"}),
+        # One row short, the panel axis the map defines no longer spans the grid, which
+        # `grid.planes` judges of every grid: the one fault, seen from both sides.
+        (_short, {"hybrid.coverage", "grid.planes"}),
+    ],
+)
+def test_each_corruption_fails_one_rule_in_the_whole_validator(
+    hybrids, tmp_path, corrupt, rules
+):
+    """Range and order are `hybrid.dense_to_shared`'s alone; `hybrid.coverage` judges
+    only the length, so neither reports what the other does."""
+    store = _copy(hybrids["hybrid_observed"], tmp_path)
+    n_shared = open_store(store).variant_axis(aliases=False).n_variants
+    _mapped_corruptly(store, lambda mapped: corrupt(mapped, n_shared))
+    result = validate_store(store)
+    assert result.failed() == rules, result.errors
+    assert sum("dense_to_shared" in error for error in result.errors) == 1, result.errors
+
+
+@pytest.mark.parametrize("corrupt", [_twice, _descending])
+def test_coverage_judges_only_the_length(hybrids, tmp_path, corrupt):
+    """Asked directly of a map whose fault is `hybrid.dense_to_shared`'s, `coverage` finds
+    nothing: it never restates the range and order rule, even where nothing skips it."""
+    from opengwasdb.validation.rule import ValidationOptions
+    from opengwasdb.validation.rules.hybrid import coverage
+    from opengwasdb.validation.validate import release_targets
+
+    store = _copy(hybrids["hybrid_observed"], tmp_path)
+    n_shared = open_store(store).variant_axis(aliases=False).n_variants
+    _mapped_corruptly(store, lambda mapped: corrupt(mapped, n_shared))
+    assert validate_store(store, rules=["hybrid.dense_to_shared"]).failed(), "fixture: a bad map"
+    root = release_targets(open_store(store), ValidationOptions())[0]
+    assert list(coverage(root)) == []
+
+
 def test_a_0_2_map_naming_another_variant_fails_coverage(hybrids, tmp_path):
     """Before 0.3.0 the Dense side carries its own ALIDs, and coverage compares them, as
     it did before #472: the one corruption only a Dense copy can show."""

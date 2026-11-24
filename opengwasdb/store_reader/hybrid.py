@@ -170,12 +170,19 @@ def check_dense_to_shared(
             f"Component row {outside} names shared row {int(rows[outside])} of {n_shared}"
         ]
     found = _order_faults(rows)
-    if n_dense is not None and len(rows) != n_dense:
-        found.append(
-            f"dense_to_shared maps {len(rows)} Dense Component rows, but the Dense "
-            f"Component holds {n_dense}: each of its rows must name its shared variant"
-        )
-    return found
+    length = None if n_dense is None else dense_to_shared_length_fault(rows, n_dense)
+    return found if length is None else [*found, length]
+
+
+def dense_to_shared_length_fault(mapped: np.ndarray, n_dense: int) -> str | None:
+    """The finding for a map that does not name one shared row per Dense row, if any:
+    the one part of `check_dense_to_shared` that needs the Dense side."""
+    if len(mapped) == n_dense:
+        return None
+    return (
+        f"dense_to_shared maps {len(mapped)} Dense Component rows, but the Dense "
+        f"Component holds {n_dense}: each of its rows must name its shared variant"
+    )
 
 
 def _order_faults(rows: np.ndarray) -> list[str]:
