@@ -5,8 +5,10 @@ releases: Dense, Ragged and Hybrid, each Observed-Only and Reference-Completed
 (`store_reader_digests`). The pins were first written by the code at `5d600a1d`,
 before `opengwasdb.store_reader` existed. They were regenerated at `826b36bb`, when
 every record gained `beta` and `pval` (ADR 0104). With those two dropped, every
-digest equalled the `5d600a1d` pins, and `log10_p` was within 9.7e-16. A
-difference names the release, the question and the array.
+digest equalled the `5d600a1d` pins, and `log10_p` was within 9.7e-16. They were
+regenerated at `8307194a`, when `variants_table()` and resolved rows gained
+`source_alid` (#470); with it dropped, every digest and `log10_p` equalled the
+`826b36bb` pins. A difference names the release, the question and the array.
 """
 
 from __future__ import annotations
@@ -51,6 +53,9 @@ def test_the_pins_cover_every_layout_and_completion_state():
         # A pin of nothing but empty answers would pass whatever the reader did.
         assert len(answered) > 20, (name, len(answered))
         assert sum(len(values) for values in PINS[name]["log10_p"].values()) > 500, name
+        # Each row's `source_alid` is pinned, in the table and in resolved rows (#470).
+        assert "source_alid" in PINS[name]["variants_table"], name
+        assert any("source_alid" in fields for fields in PINS[name]["resolved"].values()), name
 
 
 @pytest.mark.parametrize("name", RELEASES)
