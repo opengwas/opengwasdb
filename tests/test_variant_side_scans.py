@@ -409,11 +409,11 @@ def test_variant_shapes_never_decode_whole_planes(
         query.range_phewas("1", 900_000, 1_600_000)
         query.lookup([alid], _analysis_ids(query))
         # `top_hits` uses the precomputed index when one exists; the scan
-        # fallback is the variant-side path this test is about, so call it
-        # directly rather than depend on the fixture having no index.
-        query._top_hits_by_scan(
-            analysis_index=None, threshold=5e-8, limit=None, observed_only=False
-        )
+        # fallback is the variant-side path this test is about, so hide the
+        # tier rather than depend on the fixture having no index.
+        assert query._top_hits.tier(5e-8) is not None, "the fixture stores the tier"
+        monkeypatch.setattr(query._top_hits, "tier", lambda _threshold: None)
+        assert len(query.top_hits(threshold=5e-8)["z"]) > 0, "the scan found no hit"
     assert widths and max(widths) <= window, f"widest slice {max(widths, default=0)}"
 
 
