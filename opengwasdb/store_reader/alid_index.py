@@ -29,6 +29,7 @@ import numpy as np
 from opengwasdb.store_reader.alid import ALID_DTYPE, is_indexable_alid
 from opengwasdb.store_reader.alid_sidecar import ABSENT, AlidSidecar
 from opengwasdb.store_reader.format import carries_alid_sidecar
+from opengwasdb.store_reader.npy_sidecar import invert_rows, open_pair_or_none
 
 __all__ = [
     "ABSENT",
@@ -103,10 +104,8 @@ class FixedWidthAlidIndex:
 
     @classmethod
     def open(cls, store_path: str | Path) -> FixedWidthAlidIndex | None:
-        keys_path, rows_path = (Path(store_path) / name for name in cls.FILENAMES)
-        if not (keys_path.exists() and rows_path.exists()):
-            return None
-        return cls(np.load(keys_path, mmap_mode="r"), np.load(rows_path, mmap_mode="r"))
+        arrays = open_pair_or_none(store_path, cls.FILENAMES)
+        return None if arrays is None else cls(*arrays)
 
     def search(self, alids: Sequence[str]) -> np.ndarray:
         found = np.full(len(alids), ABSENT, dtype=np.int64)
@@ -173,9 +172,7 @@ class FixedWidthAlidIndex:
         rows = np.asarray(self.rows, dtype=np.int64)
         size = max(at_least, int(rows.max()) + 1 if rows.size else 0)
         if self._inverse is None or len(self._inverse) < size:
-            inverse = np.full(size, -1, dtype=np.int64)
-            inverse[rows] = np.arange(rows.size, dtype=np.int64)
-            self._inverse = inverse
+            self._inverse = invert_rows(rows, size, np.int64)
         return self._inverse
 
 

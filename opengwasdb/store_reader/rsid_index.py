@@ -11,16 +11,23 @@ most once, because the Variant Table gives a row one rsID cell.
 
 **An rsID's rows** are a binary search of the sorted names (`rows_of`).
 
-**A row's rsID** (`rsids`) inverts the index, as `alid_index.FixedWidthAlidIndex`
-inverts the 0.2 series' ALID pair. On format 0.3.0 this is how the Store Reader names a
-row's rsID without reading `variants.tsv.gz` (#469). The inversion is sized to what is
-asked. Up to `_SCANNED_ROWS` rows are found by a chunked scan of the rows array, which
-allocates nothing the size of the axis. More rows invert the whole index once, into
-one `int32` per row of the axis, and keep that for every later call. Measured on
-OGS-00004 (23,726,262 rows, 20,008,480 indexed): the scan takes 0.04 s for one row and
-0.25 s for 32; the inversion takes 1.0 s and keeps 95 MB, after which any number of rows
-is a gather (`scratch/469/invert_cost.txt`). The inversion refuses an index that names a row
-twice, which would give that row whichever rsID came last.
+**A row's rsID** (`rsids`) inverts the index (`npy_sidecar.invert_rows`), as
+`alid_index.FixedWidthAlidIndex` inverts the 0.2 series' ALID pair. On format 0.3.0
+this is how the Store Reader names a row's rsID without reading `variants.tsv.gz`
+(#469). Until it is inverted, a call asking for few rows scans the rows array in
+chunks instead, which allocates nothing the size of the axis. The index inverts once
+what the scans have cost would pass what one inversion costs (`_scan_cost`), and keeps
+the inverse for every later call. Measured on OGS-00004 (23,726,262 rows, 20,008,480
+indexed; `scratch/469/invert_cost.txt`): a scan takes 0.04 s for one row and 0.25 s for
+32, and slows sharply past that (1.2 s for 128); the inversion takes 1.0 s and keeps
+95 MB, after which any number of rows is a gather.
+
+Both paths refuse an index that names a row twice, which would give that row whichever
+rsID came last, and one that names a row outside the axis.
+
+**Threads.** Two threads asking at once may both scan, or both invert: each builds the
+same inverse, the second assignment replaces the first, and nothing is lost but the
+work and, for a moment, a second copy of the inverse. No lock is held.
 
 This module imports numpy and the standard library only.
 """
@@ -32,15 +39,22 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.store_reader.alid import RSID_DTYPE, is_indexable_rsid
+from opengwasdb.store_reader.npy_sidecar import invert_rows, open_pair_or_none
 
-RSID_BYTES_FILENAME = "variant_rsid_bytes.npy"
-RSID_ROWS_FILENAME = "variant_rsid_rows.npy"
+VARIANT_RSID_BYTES_FILENAME = "variant_rsid_bytes.npy"
+VARIANT_RSID_ROWS_FILENAME = "variant_rsid_rows.npy"
 
 #: The rsID index's two files, names then rows.
-RSID_INDEX_FILENAMES: tuple[str, str] = (RSID_BYTES_FILENAME, RSID_ROWS_FILENAME)
+RSID_INDEX_FILENAMES: tuple[str, str] = (VARIANT_RSID_BYTES_FILENAME, VARIANT_RSID_ROWS_FILENAME)
 
-#: Up to this many distinct rows, `rsids` scans the rows array rather than inverting it.
+#: More distinct rows than this in one call are never scanned: past it a scan slows
+#: sharply (numpy's `isin` changes method), and one call would cost an inversion.
 _SCANNED_ROWS = 32
+
+#: What one scan costs, as a share of one inversion (measured on OGS-00004, above):
+#: reading the rows array once, and each distinct row asked on top of that.
+_SCAN_COST_PER_CALL = 0.04
+_SCAN_COST_PER_ROW = 0.0066
 
 #: Entries of the rows array one step of the scan compares at once.
 _SCAN_CHUNK = 1 << 20
@@ -55,18 +69,24 @@ class MalformedRsidIndex(ValueError):
     row named twice or outside the axis."""
 
 
+def _scan_cost(n_wanted: int) -> float:
+    """What scanning for `n_wanted` distinct rows costs, as a share of one inversion."""
+    return _SCAN_COST_PER_CALL + _SCAN_COST_PER_ROW * n_wanted
+
+
 class RsidIndex:
     """A release's rsID index, memory-mapped."""
 
     def __init__(self, names: np.ndarray, rows: np.ndarray) -> None:
         if len(names) != len(rows):
             raise MalformedRsidIndex(
-                f"{RSID_BYTES_FILENAME} has {len(names)} entries but {RSID_ROWS_FILENAME} "
-                f"has {len(rows)}"
+                f"{VARIANT_RSID_BYTES_FILENAME} has {len(names)} entries but "
+                f"{VARIANT_RSID_ROWS_FILENAME} has {len(rows)}"
             )
         self.names = names
         self.rows = rows
-        self._slot_of_row: np.ndarray | None = None  # row -> entry, built on first wide ask
+        self._slot_of_row: np.ndarray | None = None  # row -> entry, once inverted
+        self._scanned = 0.0  # what the scans so far have cost, in inversions
 
     @classmethod
     def open(cls, store_path: str | Path) -> RsidIndex | None:
@@ -74,13 +94,16 @@ class RsidIndex:
 
         A release built before issue #109 has neither, and resolves no rsID by name.
         """
-        names_path, rows_path = (Path(store_path) / name for name in RSID_INDEX_FILENAMES)
-        if not (names_path.exists() and rows_path.exists()):
-            return None
-        return cls(np.load(names_path, mmap_mode="r"), np.load(rows_path, mmap_mode="r"))
+        arrays = open_pair_or_none(store_path, RSID_INDEX_FILENAMES)
+        return None if arrays is None else cls(*arrays)
 
     def __len__(self) -> int:
         return len(self.names)
+
+    @property
+    def inverted(self) -> bool:
+        """Whether the index has been inverted, so naming any row is a gather."""
+        return self._slot_of_row is not None
 
     def rows_of(self, rsid: str) -> np.ndarray:
         """Every row `rsid` names, ascending, as int32; none for a name the index cannot
@@ -113,18 +136,27 @@ class RsidIndex:
         return out
 
     def _slots(self, rows: np.ndarray, n_rows: int) -> np.ndarray:
-        """Each row's entry in the index, -1 for a row it does not name."""
+        """Each row's entry in the index, -1 for a row it does not name: scanned while
+        the scans so far and this one cost less than one inversion, else inverted."""
         wanted = np.unique(rows)
-        if self._slot_of_row is None and wanted.size <= _SCANNED_ROWS:
-            return self._scanned_slots(rows, wanted)
+        cost = _scan_cost(wanted.size)
+        if (
+            self._slot_of_row is None
+            and wanted.size <= _SCANNED_ROWS
+            and self._scanned + cost <= 1.0
+        ):
+            self._scanned += cost
+            return self._scanned_slots(rows, wanted, n_rows)
         slots: np.ndarray = self._inverse(n_rows)[rows].astype(np.int64)
         return slots
 
-    def _scanned_slots(self, rows: np.ndarray, wanted: np.ndarray) -> np.ndarray:
-        """`_slots` by a chunked scan of the rows array for the few `wanted` rows."""
+    def _scanned_slots(self, rows: np.ndarray, wanted: np.ndarray, n_rows: int) -> np.ndarray:
+        """`_slots` by a chunked scan of the rows array for the few `wanted` rows, which
+        refuses what the inversion refuses: a row named twice, or outside the axis."""
         slot_of = dict.fromkeys(wanted.tolist(), -1)
         for lo in range(0, len(self.rows), _SCAN_CHUNK):
             block = np.asarray(self.rows[lo : lo + _SCAN_CHUNK])
+            _refuse_outside(block, n_rows)
             for at in np.flatnonzero(np.isin(block, wanted)).tolist():
                 row = int(block[at])
                 if slot_of[row] >= 0:
@@ -137,16 +169,20 @@ class RsidIndex:
         if self._slot_of_row is not None:
             return self._slot_of_row
         rows = np.asarray(self.rows, dtype=np.int64)
-        if rows.size and (int(rows.min()) < 0 or int(rows.max()) >= n_rows):
-            raise MalformedRsidIndex(
-                f"the rsID index names rows {int(rows.min())}..{int(rows.max())}, outside "
-                f"the axis of {n_rows}"
-            )
+        _refuse_outside(rows, n_rows)
+        inverse = invert_rows(rows, n_rows, np.int32)
         entries = np.arange(rows.size, dtype=np.int32)
-        inverse = np.full(n_rows, -1, dtype=np.int32)
-        inverse[rows] = entries
         if not np.array_equal(inverse[rows], entries):
             twice = int(rows[np.flatnonzero(inverse[rows] != entries)[0]])
             raise MalformedRsidIndex(f"the rsID index names row {twice} twice")
         self._slot_of_row = inverse
         return inverse
+
+
+def _refuse_outside(rows: np.ndarray, n_rows: int) -> None:
+    """Refuse index rows outside an axis of `n_rows`."""
+    if rows.size and (int(rows.min()) < 0 or int(rows.max()) >= n_rows):
+        raise MalformedRsidIndex(
+            f"the rsID index names rows {int(rows.min())}..{int(rows.max())}, outside "
+            f"the axis of {n_rows}"
+        )

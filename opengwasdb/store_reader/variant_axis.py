@@ -43,8 +43,8 @@ from opengwasdb.store_reader.format import carries_position_sidecar, carries_var
 from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.store_reader.position_sidecar import MissingPositionSidecar, PositionSidecar
 from opengwasdb.store_reader.rsid_index import (
-    RSID_BYTES_FILENAME,
-    RSID_ROWS_FILENAME,
+    VARIANT_RSID_BYTES_FILENAME,
+    VARIANT_RSID_ROWS_FILENAME,
     MissingRsidIndex,
     RsidIndex,
 )
@@ -54,8 +54,6 @@ VARIANT_TABIX_FILENAME = "variants.tsv.gz.tbi"
 VARIANT_OFFSETS_FILENAME = "variant_offsets.npy"
 VARIANT_ALID_BYTES_FILENAME = "variant_alid_bytes.npy"
 VARIANT_ALID_ROWS_FILENAME = "variant_alid_rows.npy"
-VARIANT_RSID_BYTES_FILENAME = RSID_BYTES_FILENAME
-VARIANT_RSID_ROWS_FILENAME = RSID_ROWS_FILENAME
 
 class LegacyVariantTable(Protocol):
     """The 0.2.x Store Variant Table and `variant_aliases` reads, which need pysam and SQLite.
@@ -200,10 +198,11 @@ class VariantAxis:
         # before that index existed). On 0.3.0 it is also how a row's rsID is named,
         # so a 0.3.0 release without it is refused rather than read as naming none.
         self._rsid_index = RsidIndex.open(self.store_path)
-        if self._rsid_index is None and self._offsets is None:
+        if self._rsid_index is None and not self.reads_table:
             raise MissingRsidIndex(
                 f"{self.store_path}: format_version {format_version} names each row's rsID "
-                f"from {RSID_BYTES_FILENAME} and {RSID_ROWS_FILENAME}, which are missing; "
+                f"from {VARIANT_RSID_BYTES_FILENAME} and {VARIANT_RSID_ROWS_FILENAME}, which "
+                "are missing; "
                 "the release is incomplete. Rebuild it (spec §1, §4)"
             )
 
@@ -364,10 +363,13 @@ class VariantAxis:
         return None
 
     def range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:
-        """The rows at a position in ``[start, end]`` on `chromosome`, in row order.
+        """The rows at a position in ``[start, end]`` on `chromosome`, in row order, every
+        column of each.
 
-        On 0.3.0 the position sidecar finds the rows and `by_indices` reads them; on
-        the 0.2 series they are a tabix fetch (`tabix_range`).
+        Reads the Variant Table on every version, so no query calls it: a query asks
+        `range_indices`. On 0.3.0 the position sidecar finds the rows and `by_indices`
+        reads them, one tabix fetch a row; on the 0.2 series they are one tabix fetch
+        (`tabix_range`).
         """
         if not self._ranges_by_sidecar:
             return self.tabix_range(chromosome, start, end)
@@ -416,7 +418,7 @@ class VariantAxis:
         """
         if variant_index < 0 or variant_index >= self.n_variants:
             return None
-        if self._offsets is None:
+        if self._offsets is None:  # `not self.reads_table`, spelt so mypy narrows `_offsets`
             return self._fetched_record(int(variant_index))
         line = self._legacy.line_at(int(self._offsets[int(variant_index)]))
         record = parse_variant_line(line)
@@ -453,7 +455,7 @@ class VariantAxis:
         the 0.2 series the table's rows (`by_indices`), as it always was.
         """
         vi = np.asarray(variant_index, dtype=np.int64).reshape(-1)
-        if self._offsets is None:
+        if not self.reads_table:
             assert self._rsid_index is not None, "a 0.3.0 axis is refused without one"
             return self._rsid_index.rsids(vi, self.n_variants)
         records = self.by_indices(vi.tolist())
@@ -472,7 +474,7 @@ class VariantAxis:
         its rsID. On the 0.2 series from the table's rows. The two agree column by column
         (`tests/test_variant_table_off_read_path.py`).
         """
-        if self._offsets is not None:
+        if self.reads_table:
             return {r.variant_index: _table_row(r) for r in self.all()}
         rows = np.arange(self.n_variants, dtype=np.int64)
         columns = {name: values.tolist() for name, values in self.identity_by_indices(rows).items()}
@@ -483,7 +485,11 @@ class VariantAxis:
         }
 
     def by_indices(self, indices: Iterable[int]) -> dict[int, VariantRecord]:
-        """Resolve many Store-local Variant Indices to `VariantRecord`s.
+        """Resolve many Store-local Variant Indices to `VariantRecord`s, every column.
+
+        Reads the Variant Table on every version, so no query calls it: a query names a
+        row by `identity_by_indices` and `rsids_by_indices`, which on 0.3.0 read the
+        sidecars. On 0.3.0 a seek is one tabix fetch a row (`by_index`).
 
         Adaptively picks between two strategies (issue #104 follow-up,
         measured on the UKB pilot store's ~9.85M-row Store Variant Table):
@@ -536,10 +542,18 @@ class VariantAxis:
         return _identity_of(alids)
 
     def all(self) -> list[VariantRecord]:
+        """Every row of the Variant Table, every column, in ``variant_index`` order.
+
+        Reads the whole table on every version, so no query calls it: `variants_table()`
+        reads the sidecars on 0.3.0. The builders, completion and the validator ask it,
+        for `source_alid` (`records`, which streams the same rows).
+        """
         return list(self.records())
 
     def records(self) -> Iterator[VariantRecord]:
         """Every row, streamed in ``variant_index`` order: what `all` materialises.
+
+        Reads the whole table on every version, so no query calls it (`all`).
 
         A caller that needs one field per row -- the EAF orientation audit, the
         rsid-index rule -- would otherwise hold tens of millions of records at
