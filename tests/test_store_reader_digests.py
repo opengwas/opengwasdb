@@ -6,9 +6,9 @@ releases: Dense, Ragged and Hybrid, each Observed-Only and Reference-Completed
 before `opengwasdb.store_reader` existed. They were regenerated at `826b36bb`, when
 every record gained `beta` and `pval` (ADR 0104). With those two dropped, every
 digest equalled the `5d600a1d` pins, and `log10_p` was within 9.7e-16. They were
-regenerated at `8307194a`, when `variants_table()` and resolved rows gained
+regenerated at `30cb20cc`, when `variants_table()` and resolved rows gained
 `source_alid` (#470); with it dropped, every digest and `log10_p` equalled the
-`826b36bb` pins. A difference names the release, the question and the array.
+pins #483 left. A difference names the release, the question and the array.
 """
 
 from __future__ import annotations
