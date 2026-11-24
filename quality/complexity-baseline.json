@@ -20,13 +20,6 @@
    "lines": 64
   },
   {
-   "file": "opengwasdb/variants/axis.py",
-   "text": "def indices_by_identifiers(self, identifiers: Sequence[str]) -> np.ndarray:",
-   "line": 457,
-   "cc": 20,
-   "lines": 64
-  },
-  {
    "file": "scripts/profile_corpus.py",
    "text": "def _profile(trait_id: str, vcf: str, sample: int) -> dict:",
    "line": 37,
@@ -43,7 +36,7 @@
   {
    "file": "opengwasdb/ancestry/subset.py",
    "text": "def subset_catalogue(",
-   "line": 53,
+   "line": 54,
    "cc": 14,
    "lines": 71
   },
@@ -55,13 +48,6 @@
    "lines": 49
   },
   {
-   "file": "opengwasdb/variants/axis.py",
-   "text": "def write_variant_axis(",
-   "line": 255,
-   "cc": 12,
-   "lines": 61
-  },
-  {
    "file": "opengwasdb/ancestry/calibrate.py",
    "text": "def operating_point(rows: list[dict[str, str]]) -> dict[str, int]:",
    "line": 153,
@@ -71,16 +57,16 @@
   {
    "file": "opengwasdb/model/analyses.py",
    "text": "def validate_analyses(table: AnalysesTable) -> list[str]:",
-   "line": 266,
+   "line": 224,
    "cc": 11,
    "lines": 41
   },
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def calibrate_ancestry_command(",
-   "line": 1473,
+   "line": 1470,
    "cc": 10,
-   "lines": 56
+   "lines": 55
   },
   {
    "file": "opengwasdb/completion/ancestry_filter.py",
@@ -99,14 +85,14 @@
   {
    "file": "opengwasdb/completion/ld_panel.py",
    "text": "def blocks_over_variants(",
-   "line": 666,
+   "line": 670,
    "cc": 10,
    "lines": 51
   },
   {
    "file": "opengwasdb/encoding/measure.py",
    "text": "def combine_eaf_measurements(parts: list[EafMeasurements]) -> EafMeasurements:",
-   "line": 409,
+   "line": 408,
    "cc": 10,
    "lines": 26
   },
@@ -127,14 +113,14 @@
   {
    "file": "opengwasdb/layouts/dense/complete.py",
    "text": "def complete_dense_store(",
-   "line": 290,
+   "line": 284,
    "cc": 3,
    "lines": 74
   },
   {
    "file": "opengwasdb/layouts/ragged/complete.py",
    "text": "def complete_ragged_store(",
-   "line": 317,
+   "line": 308,
    "cc": 2,
    "lines": 73
   },
@@ -148,35 +134,21 @@
   {
    "file": "opengwasdb/ancestry/subset.py",
    "text": "def build_hybrid_from_catalogue(",
-   "line": 143,
+   "line": 144,
    "cc": 3,
    "lines": 71
   },
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def build_hybrid_from_catalogue_command(",
-   "line": 1033,
+   "line": 1020,
    "cc": 1,
    "lines": 69
   },
   {
-   "file": "opengwasdb/encoding/planes.py",
-   "text": "def __init__(",
-   "line": 313,
-   "cc": 9,
-   "lines": 37
-  },
-  {
-   "file": "opengwasdb/query/facade.py",
-   "text": "def rho(self, *ids: str) -> dict[str, np.ndarray]:",
-   "line": 385,
-   "cc": 9,
-   "lines": 34
-  },
-  {
    "file": "opengwasdb/encoding/codec.py",
    "text": "def encode_eaf(",
-   "line": 1431,
+   "line": 732,
    "cc": 7,
    "lines": 65
   },
@@ -190,7 +162,7 @@
   {
    "file": "opengwasdb/cli/main.py",
    "text": "def assign_ancestry_command(",
-   "line": 1105,
+   "line": 1092,
    "cc": 1,
    "lines": 63
   }

@@ -22,7 +22,7 @@
   {
    "file": "opengwasdb/completion/block.py",
    "text": "except Exception as exc:  # noqa: BLE001",
-   "line": 199,
+   "line": 231,
    "escape": "noqa",
    "count": 1
   },
@@ -36,16 +36,9 @@
   {
    "file": "opengwasdb/completion/ld_panel.py",
    "text": "except Exception as exc:  # noqa: BLE001",
-   "line": 131,
+   "line": 643,
    "escape": "noqa",
    "count": 3
-  },
-  {
-   "file": "opengwasdb/completion/parallel.py",
-   "text": "from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]",
-   "line": 7,
-   "escape": "type ignore",
-   "count": 1
   },
   {
    "file": "opengwasdb/layouts/dense/rho.py",
@@ -63,85 +56,36 @@
   },
   {
    "file": "opengwasdb/layouts/dense/rho.py",
-   "text": "from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]",
-   "line": 26,
-   "escape": "type ignore",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/layouts/dense/rho.py",
    "text": "return np.concatenate(results)  # type: ignore[arg-type]",
-   "line": 266,
-   "escape": "type ignore",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/layouts/hybrid/build.py",
-   "text": "with pysam.BGZFile(str(path), \"r\") as handle:  # type: ignore[call-arg]",
-   "line": 259,
-   "escape": "type ignore",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/layouts/hybrid/build.py",
-   "text": "opener = gzip.open  # type: ignore[assignment]",
-   "line": 276,
-   "escape": "type ignore",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/layouts/hybrid/build.py",
-   "text": "with opener(path, \"rt\", encoding=\"utf-8\") as handle:  # type: ignore[operator]",
-   "line": 277,
+   "line": 258,
    "escape": "type ignore",
    "count": 1
   },
   {
    "file": "opengwasdb/readers/gwas_vcf.py",
    "text": "from pyliftover import LiftOver  # type: ignore[import-untyped]",
-   "line": 99,
+   "line": 103,
    "escape": "type ignore",
    "count": 1
   },
   {
    "file": "opengwasdb/readers/gwas_vcf.py",
    "text": "mapped = liftover.convert_coordinate(f\"chr{bare}\", int(pos_str) - 1)  # type: ignore[attr-defined]",
-   "line": 163,
+   "line": 167,
    "escape": "type ignore",
    "count": 1
   },
   {
    "file": "opengwasdb/validation/validate.py",
    "text": "except Exception as exc:  # noqa: BLE001",
-   "line": 279,
+   "line": 258,
    "escape": "noqa",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/validation/validate.py",
-   "text": "with pysam.BGZFile(str(variant_table_path(store_path)), \"r\") as handle:  # type: ignore[call-arg]",
-   "line": 465,
-   "escape": "type ignore",
    "count": 1
   },
   {
    "file": "opengwasdb/variants/axis.py",
    "text": "with pysam.BGZFile(str(table_path), \"w\") as handle:  # type: ignore[call-arg]",
-   "line": 270,
-   "escape": "type ignore",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/variants/axis.py",
-   "text": "with pysam.BGZFile(str(self.table_path), \"r\") as handle:  # type: ignore[call-arg]",
-   "line": 562,
-   "escape": "type ignore",
-   "count": 1
-  },
-  {
-   "file": "opengwasdb/variants/axis.py",
-   "text": "with pysam.BGZFile(str(table_path), \"r\") as handle:  # type: ignore[call-arg]",
-   "line": 695,
+   "line": 207,
    "escape": "type ignore",
    "count": 1
   },
@@ -169,7 +113,7 @@
   {
    "file": "tests/test_eaf_encoding.py",
    "text": "eaf = EafMeasurements(**fields)  # type: ignore[arg-type]",
-   "line": 42,
+   "line": 43,
    "escape": "type ignore",
    "count": 1
   },
@@ -183,21 +127,21 @@
   {
    "file": "tests/test_hybrid_build.py",
    "text": "pytest.skip(\"no overflow associations to corrupt\")",
-   "line": 526,
+   "line": 531,
    "escape": "skipped test",
    "count": 1
   },
   {
    "file": "tests/test_readers.py",
    "text": "def convert_coordinate(self, chrom, pos0):  # noqa: D401",
-   "line": 803,
+   "line": 799,
    "escape": "noqa",
    "count": 1
   },
   {
    "file": "tests/test_variant_axis_source_alid.py",
    "text": "else:  # pragma: no cover",
-   "line": 41,
+   "line": 42,
    "escape": "no cover",
    "count": 1
   }
