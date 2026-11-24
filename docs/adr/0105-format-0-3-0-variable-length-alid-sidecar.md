@@ -343,9 +343,11 @@ and drops the offsets.
   is `None` in `variants_table()` and `.` in a resolved row. A cell naming several (a GWAS-VCF
   `ID` such as `rs1;rs2`) is that cell, whole. The rsID index holds each row's cell whole, so its
   inversion gives the same. An rsID naming several rows (a multi-allelic site) names each.
-- **The inversion is sized to what is asked.** Up to 32 rows are found by a chunked scan of
-  `variant_rsid_rows.npy`, which allocates nothing the size of the axis. More rows invert the index
-  once into one `int32` per row, kept for later calls. Measured on OGS-00004 (23,726,262 rows,
+- **The inversion is paid for once it would cost less than the scans.** Until it is inverted, a
+  call asking for up to 32 rows scans `variant_rsid_rows.npy` in chunks, which allocates nothing
+  the size of the axis. The index counts what its scans have cost and inverts, once, into one
+  `int32` per row, kept for later calls, when the next scan would take the total past one
+  inversion. A call asking more than 32 rows inverts at once. Measured on OGS-00004 (23,726,262 rows,
   20,008,480 named, page cache warm): the scan takes 0.04 s for 1 row, 0.07 s for 7 and 0.25 s
   for 32; the inversion takes 1.0 s and keeps 95 MB (184 MB at its peak), then any number of rows
   is a gather. Inverting the whole index to name one row would repeat #465's mistake.
@@ -353,9 +355,14 @@ and drops the offsets.
   alone. A new rule, `variant_table.rsid_rows`, checks that the inverted index names every row by
   the table's rsID, and a blank row by none. The 0.2 series left an rsID wider than the index's
   24-byte slot out of the index and kept it in the table. On 0.3.0 that rsID would vanish from
-  every answer, so `write_variant_axis` refuses one (`UnindexableRsidError`). None of the four
-  releases measured holds one: OGS-00003, OGS-00004, OGS-00007 and OGS-00025, 41,789,333 named
-  rows of 46,400,721, every one `rs` and digits (`scratch/469/rsid_census.txt`).
+  every answer, so `write_variant_axis` refuses one (`UnindexableRsidError`). None of the six
+  releases measured holds one. OGS-00003, OGS-00004, OGS-00007 and OGS-00025 hold 41,789,333 named
+  rows of 46,400,721, every one `rs` and digits (`scratch/469/rsid_census.txt`); OGS-00009 and
+  OGS-00016 (39.1 M rows) hold none over 12 bytes (`scratch/469-review/census.txt`). The owner
+  chose the refusal (24 Nov, #469 review). The caveat: the 0.3.0 rebuild reads sources, not these
+  tables, and the GWAS-VCF reader keeps an `ID` cell whole (`readers/gwas_vcf.py`), so a source
+  whose cell names several rsIDs past 24 bytes (three of nine digits already are) is refused at
+  build.
 - **A 0.3.0 release without the rsID index is refused** (`MissingRsidIndex`). Read as it stands,
   it would name no row's rsID. A 0.2 release built before #109 still opens without one.
 - **`variant_offsets.npy` is not written from 0.3.0.** A 0.3.0 release carrying it fails its
@@ -365,14 +372,19 @@ and drops the offsets.
 - **The record methods still read the table.** `by_index`, `by_indices`, `all`, `records` and
   `range` return every column, `source_alid` included, and only the table holds `source_alid` until
   #470. The builders, completion and the validator call them; no query does. On 0.3.0 `by_index`
-  fetches the row by tabix where the position sidecar places it.
+  fetches the row by tabix where the position sidecar places it, one fetch a row, so `by_indices`
+  and `range` cost one fetch a row there too. Each says so in its docstring.
+- **The CLI loads no pysam for a query.** `opengwasdb query-*` imports only what a query needs:
+  Reference Completion, whose LD panel reader loads pysam, is imported inside the `complete-*`
+  commands, and the variant-axis writer imports pysam when it writes.
 - **The validator.** `variant_table.rows` counts against the ALID sidecar on 0.3.0.
   `variant_table.representatives` checks only the tabix index there: the position sidecar places
   the rows, and `variant_table.position_sidecar` judges that row by row. `hybrid.coverage`
   compares ALIDs from the sidecars on 0.3.0.
 - **The `.tbi` can be rebuilt** with `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`. On OGS-00007 the
   rebuilt index decompresses to the bytes of the shipped one, and answers all 170,943 positions
-  identically. Spec §4 gives the `Rsamtools::indexTabix()` call too.
+  identically. So does `Rsamtools::indexTabix("variants.tsv.gz", seq = 1, start = 2, end = 2,
+  comment = "#")` (Rsamtools 2.28.0), which spec §4 gives too.
 
 **The rewrite step**, `variant_offsets`, runs last. It refuses unless the ALID and position
 sidecars each count the rows `variant_offsets.npy` does. Then it deletes the file and the Dense
@@ -383,9 +395,10 @@ and the widest top hits, with variant info, so it needs no new question.
 **Evidence.** `tests/test_variant_table_off_read_path.py` gives every fixture rsIDs that plant a row
 naming none, two rows naming one, and a cell naming several. These fixtures are the six digest
 releases and the three one-source layouts. Each 0.3.0 release answers `variants_table()` and the
-resolved rows of every Analysis, a lookup and the top hits exactly as its 0.2.3 form, scanned and
-inverted. In a fresh interpreter, with each table and `.tbi` made unreadable, every question of the
-proof is answered without importing pysam.
+resolved rows of every Analysis, a lookup and the top hits at 5e-4 exactly as its 0.2.3 form, scanned
+and inverted. In a fresh interpreter, with each table and `.tbi` made unreadable, every question of the
+proof is answered without importing pysam, on each layout Observed-Only and Reference-Completed; so is
+every `opengwasdb query-*` command, with `--variant-info`.
 
 On OGS-00007 (Ragged, 171,006 variants, 0.2.1, read only, its version refusal bypassed as
 for #467), the rewrite runs every step and its proof passes in 18.8 s. The proof asks 146
@@ -397,6 +410,13 @@ fresh process, twice, with the same answer digest on both formats:
 |---|---:|---:|---|
 | `variants_table()`, 171,006 rows | 0.93 s | 0.54 s | no |
 | `resolve(analysis, include_variant_info=True)`, 14,894 rows | 0.89 s | 0.12 s | no |
+
+The spec review (`scratch/469-review/`) rewrote two more, read only. OGS-00024 (Ragged, 7,067,555
+rows, 1,034 Analyses) published in 849 s, and its proof matched on all 146 questions. Its
+`variants_table()` was identical column by column, and so were its resolved rows. With the table at
+mode 0, `variants_table()` took 20.5 s on 0.3.0 against 34.0 s on 0.2.1. OGS-00002 holds 37,575 rows
+with no rsID. Its proof passed, and its resolved rows carried the same count of `.` in each
+Analysis.
 
 **ogdb-api breaks on a 0.3.0 release.** It reads `variant_offsets.npy` and seeks into the
 Variant Table through the axis's private attributes. Its owner moves its pin (#450, 23 Nov).
