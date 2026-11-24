@@ -675,9 +675,12 @@ def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_pa
 
 
 def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
+    """From 0.3.0 a Hybrid carries one analyses.tsv, its own, which its Dense Component
+    reads (#472): that one is judged, once, at the release's root."""
     from opengwasdb.store_reader.hybrid import dense_component_path
 
-    analyses_path = dense_component_path(hybrid_store_path) / "analyses.tsv"
+    assert not (dense_component_path(hybrid_store_path) / "analyses.tsv").exists()
+    analyses_path = hybrid_store_path / "analyses.tsv"
     table = read_analyses(analyses_path)
     rows = [{**row, "analysis_id": table.rows[0]["analysis_id"]} for row in table.rows]
     write_analyses(analyses_path, type(table)(fieldnames=table.fieldnames, rows=tuple(rows)))
@@ -685,7 +688,7 @@ def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
     result = validate_store(hybrid_store_path)
 
     assert result.failed() == {"analyses.analysis_id"}
-    assert [f.target for f in result.of("analyses.analysis_id")] == ["dense"]
+    assert [f.target for f in result.of("analyses.analysis_id")] == ["."]
 
 
 def test_validator_rejects_duplicate_analysis_id(dense_store_path):

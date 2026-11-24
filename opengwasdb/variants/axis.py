@@ -120,8 +120,10 @@ def write_variant_axis(
     """Write the Store Variant Table, its tabix index, and the sidecars beside it: the
     ALID sidecar (`opengwasdb.store_reader.alid_sidecar`), the position sidecar
     (`opengwasdb.store_reader.position_sidecar`) and the rsid index: the axis's one
-    writer, which every build and completion path calls, a Hybrid's nested Dense
-    Component included. Each sidecar's own one writer is its codec's
+    writer, which every build and completion path calls. A Hybrid's nested Dense
+    Component carries none from 0.3.0 (#472): a Hybrid completion writes one for it,
+    as the unchanged Dense completion does, and drops it once the shared table and
+    `dense_to_shared.npy` are written. Each sidecar's own one writer is its codec's
     (`write_alid_sidecar`, `write_position_sidecar`), which this calls and the rewrite
     to 0.3.0 calls directly.
 

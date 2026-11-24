@@ -113,7 +113,7 @@ def _judged_at(judged: list[tuple[str, CellValues]], where: str, se: float) -> l
 def _dense_cell(opened, alid: str, analysis: int) -> tuple[float, float, float, int]:
     """`(z, se, eaf, imputed)` of one cell of a Dense grid (a Store or a Component)."""
     root, encoding = opened.arrays(mode="r"), opened.manifest.encoding
-    axis = VariantAxis(opened.path)
+    axis = opened.variant_axis(aliases=False)  # a 0.3.0 Component's is the shared one (#472)
     try:
         record = axis.by_identifier(alid)
     finally:

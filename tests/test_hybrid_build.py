@@ -202,9 +202,10 @@ def test_hybrid_build_refuses_a_coverage_it_cannot_hold(hybrid_store, tmp_path):
 
 
 def test_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_label(hybrid_store):
-    """ADR 0034/issue #68: the Hybrid builder writes the unified schema at
-    both the Dense Component and shared/top-level analyses.tsv."""
-    for path in (hybrid_store / "dense" / "analyses.tsv", hybrid_store / "analyses.tsv"):
+    """ADR 0034/issue #68: the Hybrid builder writes the unified schema in its one
+    analyses.tsv, the shared one: from 0.3.0 its Dense Component carries none (#472)."""
+    assert not (hybrid_store / "dense" / "analyses.tsv").exists()
+    for path in (hybrid_store / "analyses.tsv",):
         table = read_analyses(path)
         assert "phenotype_id" not in table.fieldnames
         assert "phenotype_label" not in table.fieldnames
@@ -736,12 +737,7 @@ def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_pat
     # association behind.
     assert len(rejected["z"]) == 0
 
-    from opengwasdb.variants.legacy_table import iter_variant_records
-
-    dense_alids = [
-        record.alid
-        for record in iter_variant_records(store_path / "dense" / "variants.tsv.gz")
-    ]
+    dense_alids = [record.alid for record in _dense_records(store_path)]
     assert HG38_ALID_3 in dense_alids, "the panel variant keeps its Pass-1 name (#255)"
 
 
@@ -877,17 +873,24 @@ def test_analyses_table_reports_shared_not_dense_only_hit_counts(hybrid_store):
     include the Ragged Overflow Component's hits, not the Dense Component's
     panel-local counts (issue #107).
 
-    The two files legitimately differ: `add_hit_counts()` is applied once
-    against the Dense Component's own index and again against the whole
-    store's, so the Dense Component's own `analyses.tsv` counts only on-panel
-    hits. Delegating to it silently undercounts every Analysis with off-panel
-    hits -- on the `gwas-catalog-eur-hybrid` pilot that hides 4,476 real hits,
-    one Analysis by 27%.
+    The two legitimately differ: the Dense Component's own Top-Hit Index counts
+    only on-panel hits. Before 0.3.0 its own `analyses.tsv` held those counts, and
+    delegating to it silently undercounted every Analysis with off-panel hits --
+    on the `gwas-catalog-eur-hybrid` pilot that hid 4,476 real hits, one Analysis
+    by 27%. From 0.3.0 the component carries no `analyses.tsv` (#472); its
+    panel-local counts are read from its own index here, to show they differ.
     """
+    from opengwasdb.model.analyses import read_analysis_records, reset_top_hit_counts
+    from opengwasdb.top_hits import add_hit_counts
+
+    assert not (hybrid_store / "dense" / "analyses.tsv").exists()
     shared = read_analyses(hybrid_store / "analyses.tsv").rows
-    dense_only = read_analyses(hybrid_store / "dense" / "analyses.tsv").rows
+    dense_only = add_hit_counts(
+        hybrid_store / "dense",
+        reset_top_hit_counts(read_analysis_records(hybrid_store / "analyses.tsv")),
+    )
     shared_by_id = {r["analysis_id"]: r for r in shared}
-    dense_by_id = {r["analysis_id"]: r for r in dense_only}
+    dense_by_id = {a.analysis_id: {"n_hits_5e6": a.n_hits_5e6} for a in dense_only}
 
     # trait_a's middle variant is off-panel (routed to the Overflow) with
     # z = -5.0 -> p ~ 5.7e-7, so it clears 5e-6/5e-4 but not 5e-8. That makes
@@ -980,7 +983,7 @@ def test_two_assemblies_colliding_on_one_hg38_alid_record_no_source_origin(tmp_p
     # Unambiguous origin survives the build.
     assert shared_rows[HG38_ALID_3].source_alid == "1:1500000:A:G"
 
-    dense_rows = {r.alid: r for r in iter_variant_records(store_path / "dense" / "variants.tsv.gz")}
+    dense_rows = {r.alid: r for r in _dense_records(store_path)}
     assert set(dense_rows) == {HG38_ALID_3}
     assert dense_rows[HG38_ALID_3].source_alid == "1:1500000:A:G"
 
@@ -1043,7 +1046,7 @@ def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_p
     # effect allele C: the store answers the frequency of C, i.e. 1 - 0.2.
     assert off_panel["eaf"][0] == pytest.approx(0.8, rel=5e-3)
 
-    for path in (store_path / "analyses.tsv", store_path / "dense" / "analyses.tsv"):
+    for path in (store_path / "analyses.tsv",):
         row = read_analyses(path).rows[0]
         assert row["analysis_id"] == "trait_a"
         assert row["eaf_scope"] == "association", (
@@ -1200,12 +1203,22 @@ def _write_reference_artifact(
     return path
 
 
+def _dense_records(store: Path) -> list:
+    """The Dense Component's variants, in its rows: from 0.3.0 the shared table's rows
+    `dense_to_shared.npy` names (#472)."""
+    axis = open_store(store / "dense").variant_axis(aliases=False)
+    try:
+        return axis.all()
+    finally:
+        axis.close()
+
+
 def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
     """Every stored data artifact matches: variant tables, dense matrix,
     overflow CSR, top hits and analyses.tsv (manifest timestamps excluded)."""
     assert validate_store(candidate).ok, validate_store(candidate).errors
 
-    for name in ("variants.tsv.gz", "dense/variants.tsv.gz"):
+    for name in ("variants.tsv.gz",):
         with gzip.open(reference / name, "rt", encoding="utf-8") as handle:
             left = handle.read()
         with gzip.open(candidate / name, "rt", encoding="utf-8") as handle:

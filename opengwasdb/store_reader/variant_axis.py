@@ -45,7 +45,9 @@ from opengwasdb.store_reader.format import (
     carries_position_sidecar,
     carries_variant_aliases,
     carries_variant_offsets,
+    dense_component_shares_axis,
 )
+from opengwasdb.store_reader.hybrid import DenseComponentSharesAxis, hybrid_root_of
 from opengwasdb.store_reader.identity import normalise_chromosome
 from opengwasdb.store_reader.position_sidecar import MissingPositionSidecar, PositionSidecar
 from opengwasdb.store_reader.rsid_index import (
@@ -175,6 +177,12 @@ class VariantAxis:
         self, store_path: str | Path, legacy: LegacyVariantTable, *, format_version: str
     ):
         self.store_path = Path(store_path)
+        if dense_component_shares_axis(format_version) and hybrid_root_of(self.store_path):
+            raise DenseComponentSharesAxis(
+                f"{self.store_path} is a Hybrid's Dense Component at format_version "
+                f"{format_version}, which carries no Variant Axis of its own (#472); open "
+                "it as a release, whose variant_axis() is the shared one in its panel rows"
+            )
         self.table_path = variant_table_path(self.store_path)
         self.tabix_path = variant_tabix_path(self.store_path)
         self.offsets_path = variant_offsets_path(self.store_path)

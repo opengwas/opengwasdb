@@ -87,12 +87,13 @@ from opengwasdb.store_reader.associations import (
 from opengwasdb.store_reader.csr import RaggedCSRReader
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.format import carries_variant_aliases
-from opengwasdb.store_reader.hybrid import dense_to_shared_path
+from opengwasdb.store_reader.hybrid import dense_to_shared_path, panel_rows
 from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
     IndexedSubsetLayoutError,
     rescope_indexed_subset_error,
 )
+from opengwasdb.store_reader.panel_axis import PanelVariantAxis
 from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.resolve import resolve_rows
 from opengwasdb.store_reader.rho import DenseRhoReader
@@ -255,15 +256,31 @@ class _StoreQueryBase:
 class StoreQuery(_StoreQueryBase):
     """Public query object that hides the physical store layout — Dense stores."""
 
-    def __init__(self, store: StoreRelease):
+    def __init__(
+        self,
+        store: StoreRelease,
+        *,
+        variant_axis: VariantAxis | None = None,
+        analyses: AnalysesIndex | None = None,
+    ):
+        """`variant_axis` and `analyses`, when given, are read in place of the release's
+        own and are not closed with it: a Hybrid hands its Dense Component its shared
+        Analyses and its shared axis seen in panel rows (#472)."""
         self.store = store
-        self._analyses = AnalysesIndex(store.path)
+        self._analyses = (
+            analyses
+            if analyses is not None
+            else AnalysesIndex(store.path, table=store.analyses_path)
+        )
         self._root = store.arrays()
         # The Store Variant Table, with a 0.2 release's `index.sqlite`
         # `variant_aliases` for an rsid the rsid index does not hold; both closed
         # with the axis. A 0.3.0 release has neither the table nor the fallback.
-        self._variant_axis = store.variant_axis(
-            aliases=carries_variant_aliases(store.manifest.format_version)
+        self._owns_axis = variant_axis is None
+        self._variant_axis = (
+            variant_axis
+            if variant_axis is not None
+            else store.variant_axis(aliases=carries_variant_aliases(store.manifest.format_version))
         )
         # Every association read goes through the grid reader: the store's
         # declared encoding (ADR 0037) and the presence rule (ADR 0070) are
@@ -282,7 +299,8 @@ class StoreQuery(_StoreQueryBase):
         self._top_hits = TopHitTiers(self._root)
 
     def close(self) -> None:
-        self._variant_axis.close()
+        if self._owns_axis:
+            self._variant_axis.close()
 
     def _analysis_index(self, analysis_id: str) -> int | None:
         analysis = self._analyses.by_id(analysis_id)
@@ -349,7 +367,15 @@ class StoreQuery(_StoreQueryBase):
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
     ) -> Associations:
         """Return present associations for all variants in a genomic range (regional PheWAS)."""
-        rows = self._variant_axis.range_indices(chromosome, start, end)
+        return self._range_at(
+            self._variant_axis.range_indices(chromosome, start, end), observed_only=observed_only
+        )
+
+    def _range_at(self, rows: np.ndarray, *, observed_only: bool = False) -> Associations:
+        """`range_phewas` for the rows a range already named, ascending.
+
+        What a Hybrid asks of its Dense Component, after naming the panel rows itself.
+        """
         if len(rows) == 0:
             return Associations.empty()
         return self._grid.read(Cells.variants(rows), observed_only=observed_only)
@@ -724,7 +750,6 @@ class HybridStoreQuery(_StoreQueryBase):
     def __init__(self, store: StoreRelease):
         self.store = store
         self._dense_store = store.dense_component()
-        self._dense = StoreQuery(self._dense_store)
         self._dense_to_shared = np.load(dense_to_shared_path(store.path)).astype("int32")
         # The Overflow at store/data.zarr/ragged.
         # The Overflow is observed by construction (ADR 0026): it never carries an
@@ -741,6 +766,16 @@ class HybridStoreQuery(_StoreQueryBase):
         self._variant_axis = store.variant_axis(
             aliases=carries_variant_aliases(store.manifest.format_version)
         )
+        # The Dense Component reads the shared Analyses and the shared axis in its
+        # panel rows, on every format: an identifier, a range and a resolved row are
+        # each answered once, by the shared indexes (#472). It never opens an axis of
+        # its own, which a 0.3.0 Dense Component does not carry and a 0.2 one may let
+        # fall out of step with the shared table (#481).
+        self._dense = StoreQuery(
+            self._dense_store,
+            variant_axis=PanelVariantAxis(self._variant_axis, self._dense_to_shared),
+            analyses=self._analyses,
+        )
         self._overflow.open_variant_index(self._variant_axis.n_variants)
         self._top_hits = TopHitTiers(store.arrays())  # overflow's own tiers
 
@@ -750,23 +785,19 @@ class HybridStoreQuery(_StoreQueryBase):
 
     # ── shared tables ────────────────────────────────────────────────────────
     # `analyses_table()`, `variants_table()` and `resolve()` are the base
-    # class's, over the *shared* tables this facade opened -- deliberately not
-    # the Dense Component's. Hybrid builds write `analyses.tsv` twice: once
-    # under `dense/` counting only that component's on-panel top hits, once at
-    # the shared root where `add_hit_counts()` has additionally counted the
-    # Ragged Overflow Component's, so the Dense Component's own copy undercounts
-    # `n_hits_*` for any Analysis with off-panel hits (issue #107). The
-    # Analytical Metadata columns are identical in both; only the counts
-    # differ, which is exactly what makes the wrong one easy to miss. Results
-    # resolve against the shared variant table, the `variant_index` space they
-    # are remapped into.
+    # class's, over the *shared* tables this facade opened, on every format.
+    # Before 0.3.0 a Hybrid release also carried a copy of each under `dense/`:
+    # its `analyses.tsv` counted only that component's on-panel top hits, so it
+    # undercounted `n_hits_*` for any Analysis with off-panel hits (issue #107),
+    # and a completed release's variant table lost rsIDs the shared one kept
+    # (#481). From 0.3.0 neither copy ships (#472). Results resolve against the
+    # shared variant table, the `variant_index` space they are remapped into.
 
     # ── Rho Matrix (ADR 0025, Dense-only artifact) ───────────────────────────
-    # Delegated to the Dense Component: Rho is opt-in, built against a Dense
-    # store's own variant axis. A Hybrid release's Dense Component is a
-    # self-contained Dense Store Release, so if Rho was built against it these
-    # just work; otherwise they return the same empty result StoreQuery
-    # returns for a Dense store with no Rho Matrix.
+    # Delegated to the Dense Component: Rho is opt-in, built over a Dense grid's
+    # Analyses, and reads no variant. If Rho was built against the component these
+    # just work; otherwise they return the same empty result StoreQuery returns
+    # for a Dense store with no Rho Matrix.
     def rho(self, *ids: str) -> dict[str, np.ndarray]:
         return self._dense.rho(*ids)
 
@@ -782,35 +813,9 @@ class HybridStoreQuery(_StoreQueryBase):
         return result.remap_variants(self._dense_to_shared)
 
     def _panel_split(self, shared_indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """`(on_panel, rows)` for shared variant indices: which are rows of the Dense
-        Component's panel, and the panel row of each that is (-1 for each that is not).
-
-        The one place the panel map is searched. It is one vectorised `searchsorted`
-        with the needles cast to the map's own dtype. The per-variant Python form cast
-        the whole 13.4 M-entry `int32` map on every call (22.6 ms against 0.004 ms for
-        an `int32` scalar on OGS-00011), and `range_phewas` made one call per shared
-        variant -- 58,006 of them for a 1 Mb TCF7L2 window (#252). Searching that map
-        with `int64` needles still promoted and copied it on every call (review round
-        1, and again in #465 for one needle: 38 ms on OGS-00004), so the needles are
-        narrowed instead; a needle outside the map's range cannot be a panel row and
-        is masked out before the cast, so narrowing cannot wrap it into range, and a
-        needle between two panel rows is off panel, never its neighbour's row.
-        """
-        shared_indices = np.asarray(shared_indices)
-        on_panel = np.zeros(shared_indices.shape, dtype=bool)
-        rows = np.full(shared_indices.shape, -1, dtype=np.int64)
-        panel = self._dense_to_shared
-        if shared_indices.size == 0 or panel.size == 0:
-            return on_panel, rows
-        low, high = int(panel[0]), int(panel[-1])
-        in_range = (shared_indices >= low) & (shared_indices <= high)
-        if in_range.any():
-            needles = shared_indices[in_range].astype(panel.dtype, copy=False)
-            pos = np.minimum(np.searchsorted(panel, needles), panel.size - 1)
-            hit = panel[pos] == needles
-            on_panel[in_range] = hit
-            rows[np.flatnonzero(in_range)[hit]] = pos[hit]
-        return on_panel, rows
+        """`(on_panel, rows)` for shared variant indices (`hybrid.panel_rows`, the one
+        search of the panel map, which the Dense Component's axis asks too)."""
+        return panel_rows(self._dense_to_shared, shared_indices)
 
     def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
         """Which shared variant indices are rows of the Dense Component's panel."""
@@ -879,11 +884,13 @@ class HybridStoreQuery(_StoreQueryBase):
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
     ) -> Associations:
-        dense = self._remap_dense(
-            self._dense.range_phewas(chromosome, start, end, observed_only=observed_only)
-        )
+        # One range, asked of the shared axis; its panel rows are the Dense Component's.
         shared_idx = np.asarray(self._variant_axis.range_indices(chromosome, start, end))
-        off_panel = shared_idx[~self._on_panel_mask(shared_idx)]
+        on_panel, rows = self._panel_split(shared_idx)
+        dense = self._remap_dense(
+            self._dense._range_at(rows[on_panel], observed_only=observed_only)
+        )
+        off_panel = shared_idx[~on_panel]
         if not len(off_panel):
             return dense
         overflow = self._overflow_read(Cells.variants(off_panel), observed_only=observed_only)

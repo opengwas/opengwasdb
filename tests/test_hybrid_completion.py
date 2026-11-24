@@ -318,11 +318,12 @@ def test_completed_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_la
     completed_hybrid,
 ) -> None:
     """ADR 0034/issue #68: hybrid completion must carry the unified schema
-    forward (no phenotype_id/phenotype_label) at both the completed Dense
-    Component and the shared/top-level analyses.tsv."""
+    forward (no phenotype_id/phenotype_label) to the shared analyses.tsv, the one
+    a 0.3.0 Hybrid carries: its completed Dense Component has none (#472)."""
     _src, dst, _result = completed_hybrid
 
-    for path in (dst / "dense" / "analyses.tsv", dst / "analyses.tsv"):
+    assert not (dst / "dense" / "analyses.tsv").exists()
+    for path in (dst / "analyses.tsv",):
         table = read_analyses(path)
         assert "phenotype_id" not in table.fieldnames
         assert "phenotype_label" not in table.fieldnames
@@ -518,7 +519,7 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
     )
     assert StoreManifest.load(src).encoding.se.is_residual
 
-    dense_axis = VariantAxis(src / "dense")
+    dense_axis = open_store(src / "dense").variant_axis(aliases=False)
     assert crossover_alid not in {row.alid for row in dense_axis.all()}
     dense_axis.close()
     shared = VariantAxis(src)
@@ -580,7 +581,7 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
     dense_top = zarr.open_group(
         str(dst / "dense" / "data.zarr" / "top_hits" / threshold_key(5e-8)), mode="r"
     )
-    dense_axis = VariantAxis(dst / "dense")
+    dense_axis = open_store(dst / "dense").variant_axis(aliases=False)
     dense_alid_by_index = {r.variant_index: r.alid for r in dense_axis.all()}
     dense_axis.close()
     hit_alids = {
@@ -627,7 +628,7 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
 
     # The crossed-over variant is on the Dense Component's own axis now.
     dense_axis = open_store(dst).dense_component()
-    axis = VariantAxis(dense_axis.path)
+    axis = open_store(dense_axis.path).variant_axis(aliases=False)
     dense_alids = {r.alid for r in axis.all()}
     axis.close()
     assert OFF_PANEL_ALID in dense_alids
@@ -740,7 +741,7 @@ def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_bloc
     }
     with query_store(completed) as query:
         assert query.lookup([crossover], ["trait_a"])["association_status"].tolist() == ["observed"]
-    assert read_analyses(completed / "dense" / "analyses.tsv").rows[0][
+    assert read_analyses(completed / "analyses.tsv").rows[0][
         "completion_n_imputed_total"
     ] == "1", "the unaffected block's fill must survive the corrections"
     file_ops.rmtree(panel)
@@ -769,7 +770,7 @@ def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
     shared_records = shared_axis.all()
     shared_axis.close()
     shared_by_alid = {r.alid: r.variant_index for r in shared_records}
-    dense_axis = VariantAxis(dst / "dense")
+    dense_axis = open_store(dst / "dense").variant_axis(aliases=False)
     dense_records = dense_axis.all()
     dense_axis.close()
 

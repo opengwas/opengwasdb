@@ -317,7 +317,7 @@ def complete_dense_store(
 
     if impute_analysis_ids is None:
         impute_analysis_ids = derive_impute_analysis_ids(
-            read_analyses(Path(source_path) / "analyses.tsv").rows, ancestry
+            read_analyses(source.analyses_path).rows, ancestry
         )
 
     (checkpoint_dir / "blocks").mkdir(parents=True)
@@ -455,13 +455,16 @@ def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _Sourc
     which is what a source with no ``assigned_ancestry`` column gets; a set
     keeps only the matching Analyses imputed and carries the rest through
     observed-only (ADR 0028)."""
-    src_variant_axis = open_store(src).variant_axis(aliases=False)
+    # A 0.3.0 Hybrid's Dense Component reads both from the Hybrid that nests it, its
+    # variants in its own panel rows (#472): `open_store` says where.
+    source = open_store(src)
+    src_variant_axis = source.variant_axis(aliases=False)
     src_variants = src_variant_axis.all()
     src_variant_axis.close()
     src_alid_to_idx = {v.alid: v.variant_index for v in src_variants}
 
     src_analyses = sorted(
-        read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+        read_analysis_records(source.analyses_path), key=lambda a: int(a.analysis_index)
     )
     n_analyses = len(src_analyses)
     print(f"Source: {len(src_variants):,} variants, {n_analyses:,} analyses")

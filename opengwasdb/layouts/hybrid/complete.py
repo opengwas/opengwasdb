@@ -58,7 +58,7 @@ from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
-from opengwasdb.layouts.hybrid.build import write_variant_table
+from opengwasdb.layouts.hybrid.build import require_panel_mapped, write_variant_table
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -66,6 +66,7 @@ from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_o
 from opengwasdb.store import check_format_version_stamp, completed_format_version
 from opengwasdb.store.arrays import open_group_for_write
 from opengwasdb.store.open import (
+    DENSE_COMPONENT_COPIES,
     OpenGWASDBStore,
     StagedRelease,
     check_writable_format_version,
@@ -478,6 +479,13 @@ def _root_analyses(
     two partition an Analysis's associations, as ADR 0032's counts do. A source
     before 0.2.3 records neither, so it is unknown and nothing is carried
     (`counted`).
+
+    A 0.3.0 source's Dense Component has no `analyses.tsv` of its own (#472): it
+    reads the root's, and so did its completion, which carried the root's count --
+    both components' -- into the completed Dense Component's. The source Overflow's
+    count is then already there, and this carries nothing more. The completed root
+    counts what it would from the 0.2.3 form of the source, whose Dense Component
+    carried only its own and this added the Overflow's.
     """
     root, dense = open_store(src), open_store(dense_component_path(src))
     carried_root = carried_counts(
@@ -485,7 +493,8 @@ def _root_analyses(
         source=f"source release {src}",
     )
     carried_dense = carried_counts(
-        _read_analyses(dense_component_path(src)), dense.manifest.format_version,
+        sorted(read_analysis_records(dense.analyses_path), key=lambda a: int(a.analysis_index)),
+        dense.manifest.format_version,
         source=f"source Dense Component {dense_component_path(src)}",
     )
     source_overflow = (
@@ -738,6 +747,8 @@ def _finalize_completed_hybrid(
     # Overflow Component's counts on top -- the two partition an Analysis's
     # associations disjointly (ADR 0032).
     write_analyses_tsv(staged.path, top_hits.add_hit_counts(staged.path, analyses))
+    # The completed Dense Component names its rows through the map alone (#472).
+    _drop_dense_copies(staged.path, axis)
 
     log.info(
         "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "
@@ -748,6 +759,24 @@ def _finalize_completed_hybrid(
         axis.n_imputed,
         n_overflow,
     )
+
+
+def _drop_dense_copies(staged_path: Path, axis: _SharedAxis) -> None:
+    """Drop what a 0.3.0 Dense Component does not carry (#472): the Variant Table, its
+    `.tbi`, the ALID, position and rsID sidecars, `analyses.tsv` and `overview.html`.
+
+    The unchanged Dense completion wrote them, as it does for a standalone Dense
+    release, and this completion read the completed panel from them. From here the
+    shared table names every row, so the map must reach, for each completed Dense row,
+    the shared row of its own variant; it is read back against the written shared
+    ALID sidecar before anything is dropped.
+    """
+    dense_dir = dense_component_path(staged_path)
+    require_panel_mapped(
+        staged_path, np.load(dense_to_shared_path(staged_path)), axis.dense_alids
+    )
+    for name in sorted(DENSE_COMPONENT_COPIES):
+        (dense_dir / name).unlink()
 
 
 def _fold_panel_crossovers(

@@ -51,7 +51,6 @@ from opengwasdb.store_reader.encoding.plan import (
 )
 from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.variants.axis import VariantAxis
 
 N_VARIANTS = 8
 N_ANALYSES = 3
@@ -678,7 +677,7 @@ def test_a_subset_refuses_a_non_canonical_marker(tmp_path) -> None:
     """A subset built on a float16-SE Dense Component can hold a payload NaN too."""
     hybrid = build_stores(tmp_path)["hybrid"]
     dense = open_store(hybrid / "dense")
-    alids = [str(row.alid) for row in VariantAxis(dense.path).all()]
+    alids = [str(row.alid) for row in dense.variant_axis(aliases=False).all()]
     _build(hybrid, "all", _alid_list(tmp_path / "all.txt", alids))
     subset = zarr.open_group(
         hybrid / "dense" / "data.zarr" / INDEXED_SUBSETS_GROUP / "all", mode="r+"

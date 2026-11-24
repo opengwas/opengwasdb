@@ -163,6 +163,14 @@ class Target:
         return release is not None and release.parent is not None
 
     @property
+    def shares_variant_axis(self) -> bool:
+        """Whether this target's release reads the variants and Analyses of the Hybrid
+        that nests it: a Dense Component from format 0.3.0, which carries no Variant
+        Table, sidecar or `analyses.tsv` of its own (#472). Its `variant_axis` is the
+        shared one in its panel rows, and its `analyses` are the root's."""
+        return self.store.shared_root is not None
+
+    @property
     def group(self) -> Any:
         """The Zarr group this target's arrays are in, opened on first use.
 

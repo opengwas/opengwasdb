@@ -44,6 +44,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store import arrays as store_arrays
@@ -55,6 +57,7 @@ from opengwasdb.store.convert import (
     require_valid_staged_release,
 )
 from opengwasdb.store.open import (
+    DENSE_COMPONENT_COPIES,
     INDEX_FILENAME,
     OpenGWASDBStore,
     connect_index,
@@ -72,8 +75,10 @@ from opengwasdb.store_reader.format import (
     UnsupportedFormatVersion,
     carries_alid_sidecar,
     check_format_version,
+    dense_component_shares_axis,
     format_version_for,
 )
+from opengwasdb.store_reader.hybrid import dense_to_shared_path
 from opengwasdb.store_reader.position_sidecar import PositionSidecar, write_position_sidecar
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.variant_axis import (
@@ -128,6 +133,12 @@ class Component:
     def path(self) -> Path:
         return self.store.path
 
+    @property
+    def carries_axis(self) -> bool:
+        """Whether the 0.3.0 release made of it carries a Variant Axis of its own: every
+        component but a Hybrid's Dense Component, which reads the shared one (#472)."""
+        return not (self.dense_component and dense_component_shares_axis(TARGET_FORMAT_VERSION))
+
 
 @dataclass(frozen=True)
 class RewriteContext:
@@ -144,6 +155,10 @@ class RewriteContext:
     def staged_components(self) -> Iterator[Path]:
         for component in self.components:
             yield self.staged / component.relative
+
+    def axis_components(self) -> Iterator[Component]:
+        """The components whose Variant Axis the steps rewrite (`Component.carries_axis`)."""
+        return (component for component in self.components if component.carries_axis)
 
 
 def _nothing_to_refuse(_component: Component) -> None:
@@ -188,9 +203,10 @@ def _write_alid_sidecar(context: RewriteContext) -> None:
     sidecar is written by its one writer, the codec's `write_alid_sidecar` (a build
     reaches it through `write_variant_axis`, which writes the whole axis; this step
     rewrites only the ALID index). Before the step ends, every ALID is searched for
-    and must name its own row: the proof's questions reach only some of them.
+    and must name its own row: the proof's questions reach only some of them. A
+    Hybrid's Dense Component gets none: `dense_shared_axis` drops its axis (#472).
     """
-    for component in context.components:
+    for component in context.axis_components():
         directory = context.staged / component.relative
         alids = [
             record.alid for record in _records_in_row_order(directory, _offset_rows(component))
@@ -227,9 +243,10 @@ def _write_position_sidecar(context: RewriteContext) -> None:
     reaches through `write_variant_axis`), refuses rows not in genomic order. Before
     the step ends, the sidecar read back must place every row where the table does:
     the proof's range questions reach only some of them. The tabix index stays, a
-    convenience no 0.3.0 query reads (spec §1.1).
+    convenience no 0.3.0 query reads (spec §1.1). A Hybrid's Dense Component gets
+    none (#472).
     """
-    for component in context.components:
+    for component in context.axis_components():
         directory = context.staged / component.relative
         chromosomes: list[str] = []
         positions: list[int] = []
@@ -305,9 +322,11 @@ def _check_sidecars_count_offsets(context: RewriteContext) -> None:
     A 0.3.0 Store Reader never reads the Variant Table, so nothing seeks a row's BGZF
     offset: the ALID sidecar counts the variants. The copy left the file out; this
     checks the sidecars that replace it, after the steps that wrote them. A Dense
-    build's `provenance.dense.variant_axis.row_offsets`, which names it, goes too.
+    build's `provenance.dense.variant_axis.row_offsets`, which names it, goes too. A
+    Hybrid's Dense Component has no sidecars to count: `dense_shared_axis` checked its
+    rows against the map instead (#472).
     """
-    for component in context.components:
+    for component in context.axis_components():
         directory = context.staged / component.relative
         n_offsets = _offset_rows(component)
         counted = {
@@ -523,6 +542,114 @@ def _stored_p_left_out(component: Component) -> Iterable[str]:
     ]
 
 
+def _refuse_unmapped_dense_rows(component: Component) -> None:
+    """Refuse a Hybrid whose `dense_to_shared.npy` does not map every Dense Component
+    row to the shared row holding that row's own variant (#472).
+
+    The 0.3.0 Dense Component names its rows through the map alone, so the map must be
+    strictly ascending, name a shared row for each of the component's rows and no
+    other, and reach, for each, a shared row whose ALID is the dropped copy's. Both
+    Variant Tables are streamed once, side by side, from the source. The copies' rsID
+    and `source_alid` columns are not compared: a completed release's Dense copy lost
+    some of each, and the shared table, which every query already reads, keeps them
+    (#481).
+    """
+    if not component.dense_component:
+        return
+    root = component.path.parent
+    mapped = np.load(dense_to_shared_path(root), mmap_mode="r")
+    n_dense = _offset_rows(component)
+    n_shared = len(np.load(variant_offsets_path(root), mmap_mode="r"))
+    where = dense_to_shared_path(root)
+    if len(mapped) != n_dense:
+        raise RewriteError(
+            f"{where} maps {len(mapped)} rows, but the Dense Component holds {n_dense}; its "
+            "copy of the variants is not dropped while the map does not name each row"
+        )
+    if len(mapped) and (int(mapped.min()) < 0 or int(mapped.max()) >= n_shared):
+        raise RewriteError(
+            f"{where} names shared rows outside 0..{n_shared - 1}; the Dense Component's "
+            "copy of the variants is not dropped"
+        )
+    if (np.diff(mapped.astype(np.int64)) <= 0).any():
+        raise RewriteError(
+            f"{where} is not strictly ascending; the Dense Component's copy of the variants "
+            "is not dropped while the map cannot be searched"
+        )
+    _refuse_other_variants(component, root, mapped)
+
+
+def _refuse_other_variants(component: Component, root: Path, mapped: np.ndarray) -> None:
+    """Refuse unless each Dense Component row's mapped shared row holds its ALID.
+
+    Both Variant Axes of the source are streamed (`VariantAxis.records`), side by side.
+    """
+    wanted = mapped.tolist()
+    with (
+        closing(component.store.variant_axis(aliases=False)) as dense_axis,
+        closing(open_store(root).variant_axis(aliases=False)) as shared_axis,
+    ):
+        checked = _check_each_row(
+            component, root, wanted, dense_axis.records(), shared_axis.records()
+        )
+    if checked != len(wanted):
+        raise RewriteError(
+            f"{variant_table_path(component.path)} holds {checked} rows, but "
+            f"{dense_to_shared_path(root)} maps {len(wanted)}"
+        )
+
+
+def _check_each_row(
+    component: Component,
+    root: Path,
+    wanted: list[int],
+    dense: Iterator[VariantRecord],
+    shared: Iterator[VariantRecord],
+) -> int:
+    """Walk the Dense rows and the shared rows they map to; return the Dense rows seen."""
+    checked = 0
+    for row, record in enumerate(dense):
+        _refuse_out_of_order(component, row, record)
+        target = wanted[row] if row < len(wanted) else -1
+        held = _alid_at(shared, target)
+        if held != record.alid:
+            raise RewriteError(
+                f"{dense_to_shared_path(root)} maps Dense Component row {row} "
+                f"({record.alid}) to shared row {target}, which holds {held or 'no row'}; "
+                "the Dense Component's copy of the variants is not dropped"
+            )
+        checked += 1
+    return checked
+
+
+def _alid_at(shared: Iterator[VariantRecord], target: int) -> str | None:
+    """The ALID of shared row `target`, read on from where the walk is; None if no row."""
+    found = next((s for s in shared if s.variant_index >= target), None)
+    return None if found is None or found.variant_index != target else found.alid
+
+
+def _refuse_out_of_order(component: Component, row: int, record: VariantRecord) -> None:
+    if record.variant_index != row:
+        raise RewriteError(
+            f"{variant_table_path(component.path)}: row {row} has variant_index "
+            f"{record.variant_index}; a table out of order is not rewritten"
+        )
+
+
+def _dense_copies_left_out(component: Component) -> Iterable[str]:
+    """A Hybrid Dense Component's own Variant Table, `.tbi`, ALID index (the 0.2
+    fixed-width pair), `variant_offsets.npy`, rsID index, `analyses.tsv` and
+    `overview.html` (#472): it reads the shared ones through `dense_to_shared.npy`."""
+    if component.carries_axis:
+        return ()
+    names = (
+        DENSE_COMPONENT_COPIES
+        | {VARIANT_OFFSETS_FILENAME}
+        | {variant_alid_bytes_path(".").name, variant_alid_rows_path(".").name}
+    )
+    return sorted(name for name in names if (component.path / name).exists())
+
+
 #: The rewrite's steps, in the order they run (`RewriteStep`). #468-#472 each add one.
 STEPS: tuple[RewriteStep, ...] = (
     RewriteStep(
@@ -553,6 +680,15 @@ STEPS: tuple[RewriteStep, ...] = (
         "(ADR 0102)",
         leaves_out=_stored_p_left_out,
         refuse=_refuse_stored_p_drop,
+    ),
+    RewriteStep(
+        "dense_shared_axis",
+        "drop a Hybrid Dense Component's own Variant Table, its .tbi, ALID, position and "
+        "rsID indexes, analyses.tsv and overview.html; it reads the shared ones through "
+        "dense_to_shared.npy, which must map each of its rows to the shared row of its "
+        "own variant (#472)",
+        leaves_out=_dense_copies_left_out,
+        refuse=_refuse_unmapped_dense_rows,
     ),
     RewriteStep(
         "variant_offsets",

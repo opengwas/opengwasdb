@@ -29,6 +29,7 @@ from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.store import rewrite
+from opengwasdb.store.open import DENSE_COMPONENT_COPIES
 from opengwasdb.store.query_digests import differences, probed_alids, release_digests
 from opengwasdb.store.rewrite import (
     RewriteError,
@@ -134,8 +135,16 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
     for directory in components(destination):
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["format_version"] == "0.3.0"
-        assert all((directory / f).exists() for f in ALID_SIDECAR_FILENAMES), directory
-        assert all((directory / f).exists() for f in POSITION_SIDECAR_FILENAMES), directory
+        if directory.name == "dense":
+            # A Hybrid's Dense Component keeps no copy of the shared axis (#472).
+            assert not any((directory / f).exists() for f in DENSE_COMPONENT_COPIES)
+            assert sorted(p.name for p in directory.iterdir()) == sorted(
+                {"manifest.json", "data.zarr", "dense_to_shared.npy"}
+                | ({"index.sqlite"} if name.endswith("completed") else set())
+            ), directory
+        else:
+            assert all((directory / f).exists() for f in ALID_SIDECAR_FILENAMES), directory
+            assert all((directory / f).exists() for f in POSITION_SIDECAR_FILENAMES), directory
         assert not any((directory / f).exists() for f in FIXED_WIDTH), directory
         assert not (directory / "variant_offsets.npy").exists(), directory
         assert (source / directory.relative_to(destination) / "variant_offsets.npy").exists()
@@ -234,12 +243,14 @@ def test_the_proof_asks_every_range_question_of_each_layout(
 
 
 def test_the_rewritten_sidecars_are_what_a_build_writes(built, sources, tmp_path):
-    """Rewritten from the 0.2.3 table, each sidecar is the 0.3.0 build's, byte for byte."""
+    """Rewritten from the 0.2.3 table, each sidecar is the 0.3.0 build's, byte for byte;
+    the Dense Component has none, as the build's has none (#472)."""
     destination = rewrite_release(sources["hybrid_completed"], tmp_path / "rewritten")
-    for directory in ("", "dense"):
-        for name in (*ALID_SIDECAR_FILENAMES, *POSITION_SIDECAR_FILENAMES):
-            rewritten = (destination / directory / name).read_bytes()
-            assert rewritten == (built["hybrid_completed"] / directory / name).read_bytes(), name
+    for name in (*ALID_SIDECAR_FILENAMES, *POSITION_SIDECAR_FILENAMES):
+        rewritten = (destination / name).read_bytes()
+        assert rewritten == (built["hybrid_completed"] / name).read_bytes(), name
+        assert not (destination / "dense" / name).exists(), name
+        assert not (built["hybrid_completed"] / "dense" / name).exists(), name
 
 
 def test_an_existing_destination_is_refused(sources, tmp_path):

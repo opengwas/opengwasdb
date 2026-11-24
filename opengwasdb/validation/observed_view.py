@@ -54,7 +54,7 @@ from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
-from opengwasdb.store_reader.alid_index import UNINDEXED, open_alid_index
+from opengwasdb.store_reader.alid_index import UNINDEXED, AlidIndex, open_alid_index
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
@@ -438,7 +438,13 @@ class _AxisRows:
 
     def __init__(self, path: Path, n_rows: int) -> None:
         self._path = path
-        self._index = open_alid_index(path, open_store(path).manifest.format_version)
+        store = open_store(path)
+        if store.shared_root is not None:
+            # A 0.3.0 Dense Component: the shared index, in its panel rows (#472).
+            with closing(store.variant_axis(aliases=False)) as axis:
+                self._index: AlidIndex = axis.alid_index
+        else:
+            self._index = open_alid_index(path, store.manifest.format_version)
         self.unindexed = self._index.unindexed_rows(n_rows)
         self._scanned: dict[int, str] | None = None
 
@@ -640,6 +646,12 @@ def se_out_of_range_accounting(
 
     A target before format 0.2.3 records no count and left nothing out: every
     cell found is unaccounted.
+
+    A 0.3.0 Hybrid's Dense Component records no count of its own (#472): the
+    Hybrid's `analyses.tsv` counts both components, and the Hybrid's own accounting
+    judges it. The component's parts are still its own, so only what it left out is
+    accounted here, against its `observed` part; nothing is miscounted unless its
+    parts cannot be read.
     """
     n = len(found)
     if not records_se_out_of_range(target.manifest.format_version):
@@ -647,6 +659,8 @@ def se_out_of_range_accounting(
             {"se_out_of_range_miscounted": 0, "se_out_of_range_unaccounted": int(found.sum())},
             {"recorded": False, "found": _named(target, found)},
         )
+    if target.shared_root is not None:
+        return _component_accounting(source, target, found, exact)
     parts, carried, problems = _recorded_parts(source, target, n)
     recorded = _recorded_counts(_analyses_of(target))
     expected = counted(carried, parts.total).tolist()
@@ -667,6 +681,28 @@ def se_out_of_range_accounting(
             "found": _named(target, found),
             "every_source_cell_compared": bool(np.all(exact)),
             "miscounted": sorted(_named(target, wrong.astype(np.int64))),
+        },
+    )
+
+
+def _component_accounting(
+    source: OpenGWASDBStore, target: OpenGWASDBStore, found: np.ndarray, exact: np.ndarray
+) -> tuple[dict[str, int], dict[str, Any]]:
+    """`se_out_of_range_accounting` for a Dense Component with no count of its own."""
+    n = len(found)
+    parts, _carried, problems = _recorded_parts(source, target, n)
+    over = np.maximum(found - parts.observed, 0)
+    under = np.where(exact, np.maximum(parts.observed - found, 0), 0)
+    return (
+        {
+            "se_out_of_range_miscounted": n if problems else 0,
+            "se_out_of_range_unaccounted": int(over.sum() + under.sum()),
+        },
+        {
+            "recorded": "by the Hybrid release, for both components",
+            "problems": problems,
+            "found": _named(target, found),
+            "every_source_cell_compared": bool(np.all(exact)),
         },
     )
 
@@ -694,7 +730,8 @@ def _recorded_parts(
 
 
 def _analyses_of(store: OpenGWASDBStore) -> list[Analysis]:
-    return read_analysis_records(store.path / "analyses.tsv")
+    """The release's Analyses: a 0.3.0 Dense Component's are its Hybrid's (#472)."""
+    return read_analysis_records(store.analyses_path)
 
 
 def _recorded_counts(analyses: list[Analysis]) -> list[int | None]:
