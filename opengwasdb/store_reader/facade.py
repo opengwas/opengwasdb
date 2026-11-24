@@ -93,12 +93,11 @@ from opengwasdb.store_reader.indexed import (
     IndexedSubsetLayoutError,
     rescope_indexed_subset_error,
 )
-from opengwasdb.store_reader.panel_axis import PanelVariantAxis
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis, PanelVariantAxis
 from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.resolve import resolve_rows
 from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
-from opengwasdb.store_reader.variant_axis import VariantAxis
 
 
 def _ragged_tier_record(
@@ -202,7 +201,7 @@ def _rho_pairs(reader: DenseRhoReader, resolved: list[tuple[str, int]]) -> dict[
     }
 
 
-def _variants_table(variant_axis: VariantAxis) -> dict[int, dict]:
+def _variants_table(variant_axis: AnyVariantAxis) -> dict[int, dict]:
     """Return all variants keyed by variant_index (`VariantAxis.variants_table`).
 
     The Store Variant Table's shape is layout-independent, so all three
@@ -224,7 +223,7 @@ class _StoreQueryBase:
     shares); a Hybrid reads the *shared* table (see `HybridStoreQuery`)."""
 
     _analyses: AnalysesIndex
-    _variant_axis: VariantAxis
+    _variant_axis: AnyVariantAxis
 
     def close(self) -> None:
         raise NotImplementedError
@@ -260,7 +259,7 @@ class StoreQuery(_StoreQueryBase):
         self,
         store: StoreRelease,
         *,
-        variant_axis: VariantAxis | None = None,
+        variant_axis: AnyVariantAxis | None = None,
         analyses: AnalysesIndex | None = None,
     ):
         """`variant_axis` and `analyses`, when given, are read in place of the release's
@@ -763,9 +762,10 @@ class HybridStoreQuery(_StoreQueryBase):
         self._csr = self._overflow.structure
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
         # The shared union table; `variant_aliases` as for a Dense release.
-        self._variant_axis = store.variant_axis(
+        shared = store.own_variant_axis(
             aliases=carries_variant_aliases(store.manifest.format_version)
         )
+        self._variant_axis = shared
         # The Dense Component reads the shared Analyses and the shared axis in its
         # panel rows, on every format: an identifier, a range and a resolved row are
         # each answered once, by the shared indexes (#472). It never opens an axis of
@@ -773,7 +773,7 @@ class HybridStoreQuery(_StoreQueryBase):
         # fall out of step with the shared table (#481).
         self._dense = StoreQuery(
             self._dense_store,
-            variant_axis=PanelVariantAxis(self._variant_axis, self._dense_to_shared),
+            variant_axis=PanelVariantAxis(shared, self._dense_to_shared),
             analyses=self._analyses,
         )
         self._overflow.open_variant_index(self._variant_axis.n_variants)

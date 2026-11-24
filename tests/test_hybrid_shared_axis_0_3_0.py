@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -31,11 +32,20 @@ import pytest
 from format_0_2_3 import as_0_2_3
 
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.store.open import DENSE_COMPONENT_COPIES, open_store
+from opengwasdb.store.open import (
+    COMPLETED_DENSE_COMPONENT_COPIES,
+    DENSE_COMPONENT_COPIES,
+    open_store,
+)
 from opengwasdb.store.query_digests import differences, release_digests
 from opengwasdb.store.rewrite import RewriteError, rewrite_release
-from opengwasdb.store_reader.hybrid import DenseComponentSharesAxis, panel_rows
-from opengwasdb.store_reader.panel_axis import NoComponentIndex, PanelVariantAxis
+from opengwasdb.store_reader.hybrid import (
+    DenseComponentSharesAxis,
+    UnreadableHybridManifest,
+    hybrid_root_of,
+    panel_rows,
+)
+from opengwasdb.store_reader.panel_axis import PanelVariantAxis
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 
@@ -72,7 +82,7 @@ def test_a_build_and_a_completion_write_no_dense_copy(hybrids, name):
     dense = hybrids[name] / "dense"
     completed = name.endswith("completed")
     assert _entries(dense) == CARRIED | ({"index.sqlite"} if completed else set())
-    assert not DENSE_COMPONENT_COPIES & _entries(dense)
+    assert not (DENSE_COMPONENT_COPIES | COMPLETED_DENSE_COMPONENT_COPIES) & _entries(dense)
     manifest = json.loads((dense / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["format_version"] == "0.3.0"
     result = validate_store(hybrids[name])
@@ -122,7 +132,7 @@ def test_the_dense_axis_is_the_shared_one_at_the_mapped_rows(hybrids, name):
         off_panel = sorted(set(range(shared.n_variants)) - set(mapped.tolist()))
         off_alid = shared.identity_by_indices(np.array(off_panel[:1]))["alid"][0]
         assert len(dense.indices_by_identifiers([off_alid])) == 0, "off the panel: no row"
-        with pytest.raises(NoComponentIndex):
+        with pytest.raises(DenseComponentSharesAxis):
             _ = dense.rsid_index
     finally:
         dense.close()
@@ -132,6 +142,26 @@ def test_the_dense_axis_is_the_shared_one_at_the_mapped_rows(hybrids, name):
 def test_the_component_cannot_be_opened_as_though_it_had_an_axis(hybrids):
     with pytest.raises(DenseComponentSharesAxis, match="#472"):
         VariantAxis(hybrids["hybrid_observed"] / "dense")
+
+
+@pytest.mark.parametrize("written", ["{not json", '["a", "list"]', None])
+def test_a_dense_component_under_an_unreadable_manifest_is_refused(hybrids, tmp_path, written):
+    """Whether `dense/` is a Hybrid's Dense Component is read from its parent's manifest;
+    one that exists but cannot be read is refused, never taken for "not a Hybrid"."""
+    store = _copy(hybrids["hybrid_observed"], tmp_path)
+    manifest = store / "manifest.json"
+    if written is None:
+        manifest.chmod(0)
+        assert not os.access(manifest, os.R_OK), "fixture: the manifest is unreadable"
+    else:
+        manifest.write_text(written, encoding="utf-8")
+    try:
+        with pytest.raises(UnreadableHybridManifest, match="manifest"):
+            hybrid_root_of(store / "dense")
+        with pytest.raises(UnreadableHybridManifest):
+            open_store(store / "dense")
+    finally:
+        manifest.chmod(0o644)
 
 
 def test_a_missing_variant_table_raises_rather_than_crashing(hybrids):
@@ -198,7 +228,7 @@ def _short(mapped: np.ndarray, _n_shared: int) -> np.ndarray:
         (_out_of_range, "hybrid.dense_to_shared", "outside the shared variant table: Dense"),
         (_twice, "hybrid.dense_to_shared", "to one shared row: rows 0 and 1 both name"),
         (_descending, "hybrid.dense_to_shared", "is not ascending"),
-        (_short, "hybrid.coverage", "but its grid holds"),
+        (_short, "hybrid.coverage", "but the Dense Component holds"),
     ],
 )
 def test_each_corruption_of_the_map_fails_its_rule(hybrids, tmp_path, corrupt, rule, says):
@@ -225,32 +255,26 @@ def test_a_0_2_map_naming_another_variant_fails_coverage(hybrids, tmp_path):
 # ── completion ──────────────────────────────────────────────────────────────
 
 
-def test_completing_a_0_3_0_hybrid_answers_as_completing_its_0_2_3_form(tmp_path):
-    """Ruling 5: the same digests from the 0.3.0 source, from its 0.2.3 form, and from
-    the rewrite of that form's completion turned back to 0.2.3."""
-    from test_hybrid_completion import (
-        _residual_hybrid_crossover_source,
-        _residual_ld_panel_with_crossover,
-    )
-
-    source, crossover, _se, eaf = _residual_hybrid_crossover_source(tmp_path)
-    ld = _residual_ld_panel_with_crossover(tmp_path, crossover, eaf)
+def test_completing_a_0_3_0_hybrid_answers_as_completing_its_0_2_3_form(
+    digest_releases, tmp_path
+):
+    """Ruling 5: the completed 0.3.0 Hybrid the session already built answers every
+    question as a completion of its source's 0.2.3 form. The rewrite of a completion's
+    0.2.3 form is `rewritten_completed`'s."""
+    current = digest_releases["hybrid_completed"]
+    source, ld = current.parent / "src.opengwasdb", current.parent / "ld_panel"
+    assert source.is_dir() and ld.is_dir(), "fixture: the completion's source and panel"
     legacy = as_0_2_3(_copy(source, tmp_path, "legacy"))
     assert (legacy / "dense" / "variants.tsv.gz").exists(), "fixture: a 0.2.3 Dense copy"
 
-    current = tmp_path / "current.opengwasdb"
-    complete_hybrid_store(source, current, ld, min_cor=0.0, thresh=0.9)
     from_legacy = tmp_path / "from_legacy.opengwasdb"
     complete_hybrid_store(legacy, from_legacy, ld, min_cor=0.0, thresh=0.9)
 
     reference = release_digests(current)
     assert reference["shapes"], "fixture: the completion answers questions"
     assert _entries(current / "dense") == CARRIED | {"index.sqlite"}
+    assert _entries(from_legacy / "dense") == CARRIED | {"index.sqlite"}
     assert differences(reference, release_digests(from_legacy)) == []
-    rewritten = rewrite_release(
-        as_0_2_3(_copy(current, tmp_path, "completed_legacy")), tmp_path / "rewritten"
-    )
-    assert differences(reference, release_digests(rewritten)) == []
 
 
 # ── the rewrite ─────────────────────────────────────────────────────────────
@@ -261,27 +285,15 @@ def legacy_hybrid(hybrids, tmp_path_factory) -> Path:
     """The Observed-Only Hybrid in its 0.2.3 form, with a Dense copy to drop."""
     root = tmp_path_factory.mktemp("legacy-hybrid")
     legacy = as_0_2_3(Path(shutil.copytree(hybrids["hybrid_observed"], root / "store")))
-    copies = {
-        "variants.tsv.gz", "variants.tsv.gz.tbi", "variant_offsets.npy", "analyses.tsv",
-        "overview.html", "variant_alid_bytes.npy", "variant_alid_rows.npy",
-        "variant_rsid_bytes.npy", "variant_rsid_rows.npy",
-    }
-    assert copies <= _entries(legacy / "dense"), "fixture: the 0.2.3 copies"
+    assert DENSE_COMPONENT_COPIES <= _entries(legacy / "dense"), "fixture: the 0.2.3 copies"
     return legacy
-
-
-def test_the_rewrite_drops_the_dense_copies(legacy_hybrid, tmp_path):
-    destination = rewrite_release(legacy_hybrid, tmp_path / "rewritten")
-    assert _entries(destination / "dense") == CARRIED
-    record = json.loads((destination / "dense" / "manifest.json").read_text(encoding="utf-8"))
-    assert "dense_shared_axis" in record["provenance"]["format_rewrite"]["steps"]
 
 
 @pytest.mark.parametrize(
     ("edit", "says"),
     [
         (lambda m: m[:-1], "maps"),
-        (lambda m: m[[1, 0, *range(2, len(m))]], "not strictly ascending"),
+        (lambda m: m[[1, 0, *range(2, len(m))]], "is not ascending"),
         (lambda m: np.concatenate([m[:-1], [m[-1] + 1]]), "which holds"),
     ],
 )
@@ -298,14 +310,20 @@ def test_the_rewrite_refuses_a_map_that_misnames_a_dense_row(
     assert not (tmp_path / "rewritten").exists()
 
 
-def test_the_rewrite_takes_rsids_from_the_shared_table(rsid_releases, tmp_path):
-    """#481: a completed release's Dense copy lost rsIDs the shared table kept. The
-    rewrite does not require the copies to agree, and the rewritten release names each
-    Dense row by the shared table's rsID."""
-    source = as_0_2_3(_copy(rsid_releases["hybrid_completed"], tmp_path, "source"))
-    shared = {
-        r.alid: r.rsid for r in open_store(source).variant_axis(aliases=False).all() if r.rsid
-    }
+@pytest.fixture(scope="module")
+def rewritten_completed(rsid_releases, tmp_path_factory) -> tuple[Path, Path, dict[str, str]]:
+    """One rewrite, shared by the tests below: the completed Hybrid, every row naming an
+    rsID, turned back to 0.2.3, with every rsID blanked in its Dense copy, as #481 found
+    on OGS-00011. Returns the 0.3.0 build, the rewritten release and the shared rsIDs."""
+    root = tmp_path_factory.mktemp("rewritten-completed")
+    built = rsid_releases["hybrid_completed"]
+    source = as_0_2_3(Path(shutil.copytree(built, root / "source")))
+    assert DENSE_COMPONENT_COPIES <= _entries(source / "dense"), "fixture: the 0.2.3 copies"
+    axis = open_store(source).variant_axis(aliases=False)
+    try:
+        shared = {r.alid: r.rsid for r in axis.all() if r.rsid}
+    finally:
+        axis.close()
     assert shared, "fixture: the shared table names some rsIDs"
     table = source / "dense" / "variants.tsv.gz"
     with gzip.open(table, "rt", encoding="utf-8") as handle:
@@ -319,7 +337,28 @@ def test_the_rewrite_takes_rsids_from_the_shared_table(rsid_releases, tmp_path):
             blanked += 1
     assert blanked, "fixture: the Dense copy names some rsIDs to lose"
     _rewrite_bgzf(table, "".join(lines))
-    destination = rewrite_release(source, tmp_path / "rewritten")
+    return built, rewrite_release(source, root / "rewritten"), shared
+
+
+def test_the_rewrite_drops_the_dense_copies(rewritten_completed):
+    _built, destination, _shared = rewritten_completed
+    assert _entries(destination / "dense") == CARRIED | {"index.sqlite"}
+    record = json.loads((destination / "dense" / "manifest.json").read_text(encoding="utf-8"))
+    assert "dense_shared_axis" in record["provenance"]["format_rewrite"]["steps"]
+
+
+def test_the_rewritten_completion_answers_as_its_0_3_0_build(rewritten_completed):
+    """Ruling 5, through the rewrite: a completion's 0.2.3 form, rewritten, answers as
+    the completion this build wrote."""
+    built, destination, _shared = rewritten_completed
+    assert differences(release_digests(built), release_digests(destination)) == []
+
+
+def test_the_rewrite_takes_rsids_from_the_shared_table(rewritten_completed):
+    """#481: a completed release's Dense copy lost rsIDs the shared table kept. The
+    rewrite does not require the copies to agree, and the rewritten release names each
+    Dense row by the shared table's rsID."""
+    _built, destination, shared = rewritten_completed
     dense = open_store(destination / "dense").variant_axis(aliases=False)
     try:
         named = {r["alid"]: r["rsid"] for r in dense.variants_table().values() if r["rsid"]}

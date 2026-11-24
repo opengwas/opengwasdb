@@ -30,10 +30,10 @@ import numpy as np
 
 from opengwasdb.store_reader.arrays import open_group
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.format import check_format_version, dense_component_shares_axis
-from opengwasdb.store_reader.hybrid import DENSE_TO_SHARED_FILENAME, hybrid_root_of
+from opengwasdb.store_reader.format import check_format_version
+from opengwasdb.store_reader.hybrid import DENSE_TO_SHARED_FILENAME, shared_axis_root
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.store_reader.panel_axis import PanelVariantAxis
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis, PanelVariantAxis
 from opengwasdb.store_reader.variant_axis import LegacyTableOpener, VariantAxis
 
 if TYPE_CHECKING:
@@ -119,7 +119,7 @@ class StoreRelease(ReleasePaths):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_paths", release_paths(self.path))
-        root = shares_root_of(self.path, self.manifest)
+        root = shared_axis_root(self.path, self.manifest.format_version)
         object.__setattr__(self, "_shared_root", root)
         if root is not None:
             self._paths["analyses"] = release_paths(root)["analyses"]
@@ -152,21 +152,27 @@ class StoreRelease(ReleasePaths):
         """Open this release's ``data.zarr`` group read-only (`release_arrays`)."""
         return release_arrays(self.path)
 
-    def variant_axis(self, *, aliases: bool) -> VariantAxis:
-        """This release's Variant Axis; `aliases` also consults `variant_aliases`."""
-        if self.legacy is None:
-            raise ValueError(
-                f"{self.path} was opened without a reader for its Store Variant Table "
-                "(a 0.2.x BGZF/tabix file); open it with opengwasdb.store.open.open_store, "
-                "or pass open_release(..., legacy=...)"
-            )
+    def variant_axis(self, *, aliases: bool) -> AnyVariantAxis:
+        """This release's Variant Axis; `aliases` also consults `variant_aliases`. For a
+        0.3.0 Hybrid's Dense Component, the shared axis in its panel rows (#472)."""
         if self._shared_root is not None:
             # The Dense Component's rows, named by the shared axis: one ALID, position
             # and rsID index, the root's (#472). A 0.3.0 release has no `variant_aliases`.
             root = open_release(self._shared_root, legacy=self.legacy)
             return PanelVariantAxis(
-                root.variant_axis(aliases=False),
+                root.own_variant_axis(aliases=False),
                 np.load(self.path / DENSE_TO_SHARED_FILENAME, mmap_mode="r"),
+            )
+        return self.own_variant_axis(aliases=aliases)
+
+    def own_variant_axis(self, *, aliases: bool) -> VariantAxis:
+        """The Variant Axis this release's own files hold: every release's but a 0.3.0
+        Dense Component's, which holds none and is refused (`DenseComponentSharesAxis`)."""
+        if self.legacy is None:
+            raise ValueError(
+                f"{self.path} was opened without a reader for its Store Variant Table "
+                "(a 0.2.x BGZF/tabix file); open it with opengwasdb.store.open.open_store, "
+                "or pass open_release(..., legacy=...)"
             )
         return VariantAxis(
             self.path,
@@ -179,17 +185,6 @@ class StoreRelease(ReleasePaths):
         from opengwasdb.store_reader.facade import query_release
 
         return query_release(self)
-
-
-def shares_root_of(path: Path, manifest: StoreManifest) -> Path | None:
-    """The Hybrid root a release at `path` reads its variants and Analyses from: its
-    nesting release, when it is a Dense Component of a version that carries no copy of
-    its own (`dense_component_shares_axis`); otherwise None."""
-    if manifest.primary_layout is not PrimaryStorageLayout.DENSE:
-        return None
-    if not dense_component_shares_axis(manifest.format_version):
-        return None
-    return hybrid_root_of(path)
 
 
 def open_release(path: str | Path, *, legacy: LegacyTableOpener | None = None) -> StoreRelease:

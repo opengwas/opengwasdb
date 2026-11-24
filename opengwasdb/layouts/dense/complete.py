@@ -124,7 +124,8 @@ from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
-from opengwasdb.store_reader.variant_axis import VariantAxis, VariantRecord
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
+from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, chromosome_sort_key, write_variant_axis
 
@@ -190,7 +191,7 @@ class _BlockTask:
     ceded: frozenset[str] = frozenset()
 
 
-def _source_row_for(src_axis: VariantAxis, alid: str | None) -> int | None:
+def _source_row_for(src_axis: AnyVariantAxis, alid: str | None) -> int | None:
     """The source row an ALID maps to, or ``None`` for an absent/absent-looking one."""
     parsed = parse_canonical_alid(alid) if alid is not None else None
     rec = src_axis.by_alid(parsed) if parsed is not None else None

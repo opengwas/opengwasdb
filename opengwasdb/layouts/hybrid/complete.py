@@ -66,7 +66,7 @@ from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_o
 from opengwasdb.store import check_format_version_stamp, completed_format_version
 from opengwasdb.store.arrays import open_group_for_write
 from opengwasdb.store.open import (
-    DENSE_COMPONENT_COPIES,
+    COMPLETED_DENSE_COMPONENT_COPIES,
     OpenGWASDBStore,
     StagedRelease,
     check_writable_format_version,
@@ -747,7 +747,10 @@ def _finalize_completed_hybrid(
     # Overflow Component's counts on top -- the two partition an Analysis's
     # associations disjointly (ADR 0032).
     write_analyses_tsv(staged.path, top_hits.add_hit_counts(staged.path, analyses))
-    # The completed Dense Component names its rows through the map alone (#472).
+    # The completed Dense Component names its rows through the map alone (#472). The
+    # root manifest was written above, so from here `shared_axis_root` reads the
+    # component as one that shares the axis: the copies go next, and nothing between
+    # opens it (the order `shared_axis_root` names).
     _drop_dense_copies(staged.path, axis)
 
     log.info(
@@ -775,7 +778,7 @@ def _drop_dense_copies(staged_path: Path, axis: _SharedAxis) -> None:
     require_panel_mapped(
         staged_path, np.load(dense_to_shared_path(staged_path)), axis.dense_alids
     )
-    for name in sorted(DENSE_COMPONENT_COPIES):
+    for name in sorted(COMPLETED_DENSE_COMPONENT_COPIES):
         (dense_dir / name).unlink()
 
 

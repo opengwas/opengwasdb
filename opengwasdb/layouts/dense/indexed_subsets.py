@@ -159,8 +159,8 @@ from opengwasdb.store_reader.indexed import (
 from opengwasdb.store_reader.indexed import open_indexed_subset as open_indexed_subset
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 from opengwasdb.store_reader.release import release_arrays
-from opengwasdb.store_reader.variant_axis import VariantAxis
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.version import installed_version
 
@@ -996,7 +996,7 @@ def _resolve_build_target(store_path: Path) -> tuple[Path, StoreManifest, Path |
     return store_path, release.manifest, None
 
 
-def _matched_alids(axis: VariantAxis, variant_index: np.ndarray) -> set[str]:
+def _matched_alids(axis: AnyVariantAxis, variant_index: np.ndarray) -> set[str]:
     """The canonical ALIDs of `variant_index` in `axis`, without a table scan.
 
     `identity_by_indices` reads the mmap'd ALID index when the store carries

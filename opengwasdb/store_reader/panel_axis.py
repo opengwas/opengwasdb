@@ -15,12 +15,14 @@ So an identifier is resolved once, against the shared sidecars: there is no seco
 ALID, position or rsID index to disagree with the first (#481). A record's
 `variant_index` is its panel row; every other column is the shared row's.
 
-It is a `VariantAxis` to its callers, and overrides every method one answers. Its
-`alid_index` is the shared ALID index seen the same way (`PanelAlidIndex`), for the
-readers that search ALIDs without the axis. The component has no other index of its
-own, so asking it for one (`rsid_index`, `position_sidecar`), for an index's
-`problems`, or for a tabix read of a table it does not carry is refused by name
-rather than answered from the shared axis's rows.
+It answers what a `VariantAxis` answers, with the same names, and is not one: it
+inherits nothing, so a method `VariantAxis` gains is not silently half-present here, and
+a reader typed `AnyVariantAxis` is checked against both. Its `alid_index` is the shared
+ALID index seen the same way (`PanelAlidIndex`), for the readers that search ALIDs
+without the axis. The component has no other index of its own, so asking it for one
+(`rsid_index`, `position_sidecar`), for an index's `problems`, or for a tabix read of a
+table it does not carry raises `DenseComponentSharesAxis` rather than answer from the
+shared axis's rows.
 """
 
 from __future__ import annotations
@@ -33,16 +35,12 @@ import numpy as np
 
 from opengwasdb.store_reader.alid import ParsedAlid
 from opengwasdb.store_reader.alid_index import ABSENT, AlidIndex
-from opengwasdb.store_reader.hybrid import panel_rows
+from opengwasdb.store_reader.hybrid import DenseComponentSharesAxis, panel_rows
 from opengwasdb.store_reader.variant_axis import (
     VARIANTS_TABLE_COLUMNS,
     VariantAxis,
     VariantRecord,
 )
-
-
-class NoComponentIndex(TypeError):
-    """A 0.3.0 Dense Component was asked for an index it does not carry (#472)."""
 
 
 class PanelAlidIndex:
@@ -80,17 +78,16 @@ class PanelAlidIndex:
         return unindexed
 
     def problems(self, table_rows: int, expected_indexed: int) -> Iterator[str]:
-        raise NoComponentIndex(
+        raise DenseComponentSharesAxis(
             "a Hybrid's Dense Component carries no ALID index of its own from format 0.3.0 "
             "(#472): the shared one is judged at the release's root"
         )
 
 
-class PanelVariantAxis(VariantAxis):
+class PanelVariantAxis:
     """The shared `VariantAxis` of a 0.3.0 Hybrid, in its Dense Component's panel rows."""
 
     def __init__(self, shared: VariantAxis, dense_to_shared: np.ndarray) -> None:
-        # Deliberately not `VariantAxis.__init__`: this axis opens no index of its own.
         self._shared = shared
         self._dense_to_shared = np.asarray(dense_to_shared)
         self.store_path = shared.store_path
@@ -139,8 +136,8 @@ class PanelVariantAxis(VariantAxis):
         """Never: a 0.3.0 axis reads its sidecars (#469)."""
         return False
 
-    def _refused(self, what: str) -> NoComponentIndex:
-        return NoComponentIndex(
+    def _refused(self, what: str) -> DenseComponentSharesAxis:
+        return DenseComponentSharesAxis(
             f"a Hybrid's Dense Component carries no {what} of its own from format 0.3.0 "
             f"(#472): its rows are named by the shared axis at {self._shared.store_path}"
         )
@@ -272,3 +269,8 @@ class PanelVariantAxis(VariantAxis):
             for name, hit, row in zip(names, on_panel.tolist(), panel.tolist(), strict=True)
             if hit
         }
+
+
+#: A release's Variant Axis as `StoreRelease.variant_axis()` gives it: its own, or, for a
+#: 0.3.0 Hybrid's Dense Component, the shared one in its panel rows.
+AnyVariantAxis = VariantAxis | PanelVariantAxis

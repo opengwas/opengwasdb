@@ -180,7 +180,13 @@ from opengwasdb.store_reader.encoding.plan import (
 )
 from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.format import format_version_for
-from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.hybrid import (
+    DENSE_SUBDIR,
+    check_dense_to_shared,
+    dense_component_path,
+    dense_to_shared_path,
+    misnamed_panel_rows,
+)
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
@@ -3488,19 +3494,15 @@ def require_panel_mapped(
     sidecar = AlidSidecar.open(store_path)
     if sidecar is None:
         raise ValueError(f"{store_path}: the shared ALID sidecar was not written")
-    if len(dense_to_shared) != len(panel_alids):
+    mapped = np.asarray(dense_to_shared, dtype=np.int64)
+    faults = check_dense_to_shared(mapped, sidecar.n_rows, len(panel_alids))
+    if faults:
+        raise ValueError(f"{store_path}: " + "; ".join(faults))
+    shared = zip(mapped.tolist(), sidecar.alids(mapped).tolist(), strict=True)
+    for row, alid, held in misnamed_panel_rows(mapped, panel_alids, shared):
         raise ValueError(
-            f"{store_path}: dense_to_shared maps {len(dense_to_shared)} rows, but the Dense "
-            f"Component holds {len(panel_alids)}"
-        )
-    named = sidecar.alids(np.asarray(dense_to_shared, dtype=np.int64)).tolist()
-    wrong = [row for row, (a, b) in enumerate(zip(named, panel_alids, strict=True)) if a != b]
-    if wrong:
-        row = wrong[0]
-        raise ValueError(
-            f"{store_path}: dense_to_shared maps {len(wrong)} Dense Component row(s) to a "
-            f"shared row holding another variant; first, row {row} ({panel_alids[row]}) "
-            f"to shared row {int(dense_to_shared[row])} ({named[row]})"
+            f"{store_path}: dense_to_shared maps Dense Component row {row} ({alid}) to "
+            f"shared row {int(mapped[row])}, which holds {held or 'no row'}"
         )
 
 

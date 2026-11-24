@@ -79,10 +79,14 @@ from opengwasdb.store_reader.format import (
     UnsupportedFormatVersion,
     carries_alid_sidecar,
     check_format_version,
-    dense_component_shares_axis,
     format_version_for,
 )
-from opengwasdb.store_reader.hybrid import dense_to_shared_path
+from opengwasdb.store_reader.hybrid import (
+    check_dense_to_shared,
+    dense_to_shared_path,
+    misnamed_panel_rows,
+    shared_axis_root,
+)
 from opengwasdb.store_reader.position_sidecar import PositionSidecar, write_position_sidecar
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.variant_axis import (
@@ -141,7 +145,7 @@ class Component:
     def carries_axis(self) -> bool:
         """Whether the 0.3.0 release made of it carries a Variant Axis of its own: every
         component but a Hybrid's Dense Component, which reads the shared one (#472)."""
-        return not (self.dense_component and dense_component_shares_axis(TARGET_FORMAT_VERSION))
+        return shared_axis_root(self.path, TARGET_FORMAT_VERSION) is None
 
 
 @dataclass(frozen=True)
@@ -553,85 +557,41 @@ def _refuse_unmapped_dense_rows(component: Component) -> None:
     row to the shared row holding that row's own variant (#472).
 
     The 0.3.0 Dense Component names its rows through the map alone, so the map must be
-    strictly ascending, name a shared row for each of the component's rows and no
-    other, and reach, for each, a shared row whose ALID is the dropped copy's. Both
-    Variant Tables are streamed once, side by side, from the source. The copies' rsID
-    and `source_alid` columns are not compared: a completed release's Dense copy lost
-    some of each, and the shared table, which every query already reads, keeps them
-    (#481).
+    sound (`check_dense_to_shared`: in range, strictly ascending, one entry per Dense
+    row) and reach, for each row, a shared row whose ALID is the dropped copy's
+    (`misnamed_panel_rows`). Both Variant Tables of the source are streamed once, side by
+    side. The copies' rsID and `source_alid` columns are not compared: a completed
+    release's Dense copy lost some of each, and the shared table, which every query
+    already reads, keeps them (#481).
     """
-    if not component.dense_component:
+    if component.carries_axis:
         return
     root = component.path.parent
-    mapped = np.load(dense_to_shared_path(root), mmap_mode="r")
-    n_dense = _offset_rows(component)
+    mapped = np.load(dense_to_shared_path(root), mmap_mode="r").astype(np.int64)
     n_shared = len(np.load(variant_offsets_path(root), mmap_mode="r"))
-    where = dense_to_shared_path(root)
-    if len(mapped) != n_dense:
+    faults = check_dense_to_shared(mapped, n_shared, _offset_rows(component))
+    if faults:
         raise RewriteError(
-            f"{where} maps {len(mapped)} rows, but the Dense Component holds {n_dense}; its "
-            "copy of the variants is not dropped while the map does not name each row"
+            f"{dense_to_shared_path(root)}: {'; '.join(faults)}; the Dense Component's copy "
+            "of the variants is not dropped"
         )
-    if len(mapped) and (int(mapped.min()) < 0 or int(mapped.max()) >= n_shared):
-        raise RewriteError(
-            f"{where} names shared rows outside 0..{n_shared - 1}; the Dense Component's "
-            "copy of the variants is not dropped"
-        )
-    if (np.diff(mapped.astype(np.int64)) <= 0).any():
-        raise RewriteError(
-            f"{where} is not strictly ascending; the Dense Component's copy of the variants "
-            "is not dropped while the map cannot be searched"
-        )
-    _refuse_other_variants(component, root, mapped)
-
-
-def _refuse_other_variants(component: Component, root: Path, mapped: np.ndarray) -> None:
-    """Refuse unless each Dense Component row's mapped shared row holds its ALID.
-
-    Both Variant Axes of the source are streamed (`VariantAxis.records`), side by side.
-    """
-    wanted = mapped.tolist()
     with (
         closing(component.store.variant_axis(aliases=False)) as dense_axis,
         closing(open_store(root).variant_axis(aliases=False)) as shared_axis,
     ):
-        checked = _check_each_row(
-            component, root, wanted, dense_axis.records(), shared_axis.records()
-        )
-    if checked != len(wanted):
-        raise RewriteError(
-            f"{variant_table_path(component.path)} holds {checked} rows, but "
-            f"{dense_to_shared_path(root)} maps {len(wanted)}"
-        )
-
-
-def _check_each_row(
-    component: Component,
-    root: Path,
-    wanted: list[int],
-    dense: Iterator[VariantRecord],
-    shared: Iterator[VariantRecord],
-) -> int:
-    """Walk the Dense rows and the shared rows they map to; return the Dense rows seen."""
-    checked = 0
-    for row, record in enumerate(dense):
-        _refuse_out_of_order(component, row, record)
-        target = wanted[row] if row < len(wanted) else -1
-        held = _alid_at(shared, target)
-        if held != record.alid:
+        dense = (_in_order(component, row, r).alid for row, r in enumerate(dense_axis.records()))
+        shared = ((r.variant_index, r.alid) for r in shared_axis.records())
+        for row, alid, held in misnamed_panel_rows(mapped, dense, shared):
             raise RewriteError(
-                f"{dense_to_shared_path(root)} maps Dense Component row {row} "
-                f"({record.alid}) to shared row {target}, which holds {held or 'no row'}; "
-                "the Dense Component's copy of the variants is not dropped"
+                f"{dense_to_shared_path(root)} maps Dense Component row {row} ({alid}) to "
+                f"shared row {int(mapped[row])}, which holds {held or 'no row'}; the Dense "
+                "Component's copy of the variants is not dropped"
             )
-        checked += 1
-    return checked
 
 
-def _alid_at(shared: Iterator[VariantRecord], target: int) -> str | None:
-    """The ALID of shared row `target`, read on from where the walk is; None if no row."""
-    found = next((s for s in shared if s.variant_index >= target), None)
-    return None if found is None or found.variant_index != target else found.alid
+def _in_order(component: Component, row: int, record: VariantRecord) -> VariantRecord:
+    _refuse_out_of_order(component, row, record)
+    return record
 
 
 def _refuse_out_of_order(component: Component, row: int, record: VariantRecord) -> None:
@@ -643,17 +603,13 @@ def _refuse_out_of_order(component: Component, row: int, record: VariantRecord) 
 
 
 def _dense_copies_left_out(component: Component) -> Iterable[str]:
-    """A Hybrid Dense Component's own Variant Table, `.tbi`, ALID index (the 0.2
-    fixed-width pair), `variant_offsets.npy`, rsID index, `analyses.tsv` and
-    `overview.html` (#472): it reads the shared ones through `dense_to_shared.npy`."""
+    """What a Hybrid Dense Component carried at 0.2.3 and does not at 0.3.0
+    (`DENSE_COMPONENT_COPIES`, from the two envelopes): its Variant Table, `.tbi`,
+    fixed-width ALID pair, `variant_offsets.npy`, rsID index, `analyses.tsv` and
+    `overview.html` (#472). It reads the shared ones through `dense_to_shared.npy`."""
     if component.carries_axis:
         return ()
-    names = (
-        DENSE_COMPONENT_COPIES
-        | {VARIANT_OFFSETS_FILENAME}
-        | {variant_alid_bytes_path(".").name, variant_alid_rows_path(".").name}
-    )
-    return sorted(name for name in names if (component.path / name).exists())
+    return sorted(name for name in DENSE_COMPONENT_COPIES if (component.path / name).exists())
 
 
 def _subset_holder(component: Component) -> bool:

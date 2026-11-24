@@ -24,9 +24,13 @@ from collections.abc import Iterator
 import numpy as np
 
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.hybrid import dense_to_shared_path
+from opengwasdb.store_reader.hybrid import (
+    check_dense_to_shared,
+    dense_to_shared_path,
+    misnamed_panel_rows,
+)
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 from opengwasdb.store_reader.release import release_arrays
-from opengwasdb.store_reader.variant_axis import VariantAxis
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.rules.variants import representative_variant_indices
@@ -64,36 +68,9 @@ def dense_to_shared(target: Target) -> np.ndarray:
 
 
 def mapping(target: Target) -> Iterator[str]:
-    """`dense_to_shared` is a strictly-increasing set of valid shared rows.
-
-    Each fault is named by itself: a row outside the shared table, a shared row named
-    twice, and an order that is not ascending, which `searchsorted` cannot search.
-    """
-    rows = np.asarray(dense_to_shared(target), dtype=np.int64)
-    n_shared = release_rows(target)
-    if len(rows) and (int(rows.min()) < 0 or int(rows.max()) >= n_shared):
-        outside = int(np.flatnonzero((rows < 0) | (rows >= n_shared))[0])
-        yield (
-            "dense_to_shared references rows outside the shared variant table: Dense "
-            f"Component row {outside} names shared row {int(rows[outside])} of {n_shared}"
-        )
-        return
-    steps = np.diff(rows)
-    if (steps == 0).any():
-        twice = int(np.flatnonzero(steps == 0)[0])
-        yield (
-            "dense_to_shared maps two Dense Component rows to one shared row: rows "
-            f"{twice} and {twice + 1} both name {int(rows[twice])}"
-        )
-    elif len(rows) != len(np.unique(rows)):
-        yield "dense_to_shared maps two Dense Component rows to one shared row"
-    if (steps < 0).any():
-        down = int(np.flatnonzero(steps < 0)[0])
-        yield (
-            "dense_to_shared is not ascending: Dense Component row "
-            f"{down + 1} names shared row {int(rows[down + 1])}, before row {down}'s "
-            f"{int(rows[down])}; the map is searched, and must keep the panel's order"
-        )
+    """`dense_to_shared` against the shared axis: in range and strictly ascending
+    (`check_dense_to_shared`), each fault by itself."""
+    yield from check_dense_to_shared(dense_to_shared(target), release_rows(target))
 
 
 RULES: tuple[Rule, ...] = (
@@ -131,39 +108,30 @@ def coverage(target: Target) -> Iterator[str]:
     """
     rows = dense_to_shared(target)
     dense_target = component(target)
-    if dense_target.shares_variant_axis:
-        yield from _panel_coverage(rows, dense_target)
-        return
-    n_dense = dense_target.variant_axis.n_variants
-    if len(rows) != n_dense:
-        yield (
-            f"dense_to_shared maps {len(rows)} Dense Component rows, but its Variant Table "
-            f"holds {n_dense}"
-        )
+    # From 0.3.0 the Dense side is only the panel, its grid's rows (#472); before, the
+    # component's own Variant Table.
+    n_dense = (
+        int(release_arrays(dense_target.store.path)["z"].shape[0])
+        if dense_target.shares_variant_axis
+        else dense_target.variant_axis.n_variants
+    )
+    faults = check_dense_to_shared(rows, release_rows(target), n_dense)
+    if faults or dense_target.shares_variant_axis:
+        yield from faults
         return
     picked = list(representative_variant_indices(len(rows)))
+    named = np.asarray([int(rows[r]) for r in picked], dtype=np.int64)
     dense = _alids(dense_target.variant_axis, picked)
-    shared = _alids(target.variant_axis, [int(rows[r]) for r in picked])
-    for r, dense_alid, shared_alid in zip(picked, dense, shared, strict=True):
-        if dense_alid is None or shared_alid is None or dense_alid != shared_alid:
-            yield (
-                "dense_to_shared coverage violated: Dense Component row "
-                f"{r} does not match its shared variant table row"
-            )
-            return
-
-
-def _panel_coverage(rows: np.ndarray, dense_target: Target) -> Iterator[str]:
-    """From 0.3.0: the map names one shared row for each row of the component's grid."""
-    n_panel = int(release_arrays(dense_target.store.path)["z"].shape[0])
-    if len(rows) != n_panel:
+    shared = zip(named.tolist(), _alids(target.variant_axis, named.tolist()), strict=True)
+    for k, _alid, _held in misnamed_panel_rows(named, dense, shared):
         yield (
-            f"dense_to_shared maps {len(rows)} Dense Component rows, but its grid holds "
-            f"{n_panel}: each grid row must name its shared variant"
+            "dense_to_shared coverage violated: Dense Component row "
+            f"{picked[k]} does not match its shared variant table row"
         )
+        return
 
 
-def _alids(axis: VariantAxis, rows: list[int]) -> list[str | None]:
+def _alids(axis: AnyVariantAxis, rows: list[int]) -> list[str | None]:
     """Each row's ALID, None for a row the axis lacks: from the table's rows on the 0.2
     series, from the ALID sidecar on 0.3.0, whose Store Reader reads no table (#469)."""
     if axis.reads_table:

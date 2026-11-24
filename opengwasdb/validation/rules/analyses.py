@@ -46,7 +46,6 @@ from opengwasdb.store.open import records_se_out_of_range
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.plan import EafEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.format import dense_component_shares_axis
 from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.release import REQUIRED
 
@@ -482,7 +481,7 @@ def _validated_table(target: Target) -> bool:
     0.3.0 that is the Dense Component's, as it always was; from 0.3.0 the component
     carries none and reads the outer release's, which is judged there instead (#472)."""
     if target.layout is PrimaryStorageLayout.HYBRID:
-        return dense_component_shares_axis(target.store.manifest.format_version)
+        return any(child.shares_variant_axis for child in target.children)
     return not target.shares_variant_axis
 
 

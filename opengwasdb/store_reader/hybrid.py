@@ -33,9 +33,12 @@ of step with the shared table (#481).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import numpy as np
+
+from opengwasdb.store_reader.format import dense_component_shares_axis
 
 DENSE_SUBDIR = "dense"
 DENSE_TO_SHARED_FILENAME = "dense_to_shared.npy"
@@ -52,9 +55,14 @@ def dense_to_shared_path(store_path: str | Path) -> Path:
 
 
 class DenseComponentSharesAxis(ValueError):
-    """A 0.3.0 Hybrid's Dense Component was opened as though it carried a Variant Axis of
-    its own. It carries none (#472): `StoreRelease.variant_axis()` gives the shared one,
-    in its panel rows."""
+    """A 0.3.0 Hybrid's Dense Component was asked for a Variant Axis, an index or a table
+    of its own. It carries none (#472): `StoreRelease.variant_axis()` gives the shared
+    axis in its panel rows, and that axis refuses an index it does not have."""
+
+
+class UnreadableHybridManifest(ValueError):
+    """A `dense/` directory sits under a `manifest.json` that cannot be read as JSON, so
+    whether it is a Hybrid's Dense Component cannot be told."""
 
 
 def hybrid_root_of(component_path: str | Path) -> Path | None:
@@ -63,7 +71,9 @@ def hybrid_root_of(component_path: str | Path) -> Path | None:
 
     A Dense Component is the `dense/` directory of a release whose manifest's
     `primary_layout` is `hybrid` (spec §16). Its own manifest says `dense`, so only its
-    place says what it is.
+    place says what it is. A parent `manifest.json` that exists but cannot be read is
+    refused (`UnreadableHybridManifest`), never read as "not a Hybrid": that would open
+    a 0.3.0 Dense Component as a standalone Dense release, missing every index.
     """
     path = Path(component_path)
     if path.name != DENSE_SUBDIR:
@@ -72,10 +82,38 @@ def hybrid_root_of(component_path: str | Path) -> Path | None:
     if not manifest.is_file():
         return None
     try:
-        layout = json.loads(manifest.read_text(encoding="utf-8")).get("primary_layout")
-    except (OSError, ValueError):
+        recorded = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise UnreadableHybridManifest(
+            f"{manifest}: cannot read the manifest of the release {path} would be the Dense "
+            f"Component of: {exc}"
+        ) from exc
+    if not isinstance(recorded, dict):
+        raise UnreadableHybridManifest(
+            f"{manifest}: the manifest of the release {path} would be the Dense Component "
+            f"of is not a JSON object"
+        )
+    return path.parent if recorded.get("primary_layout") == "hybrid" else None
+
+
+def shared_axis_root(component_path: str | Path, format_version: str) -> Path | None:
+    """The Hybrid whose Variant Axis and `analyses.tsv` the release at `component_path`,
+    of `format_version`, reads; None when it carries its own.
+
+    The one decision of whether a release is a Dense Component that shares the axis
+    (#472): a Hybrid's Dense Component (`hybrid_root_of`) of a version that carries no
+    copy (`dense_component_shares_axis`). `StoreRelease`, the Variant Axis's guard, the
+    rewrite and the validator all ask it.
+
+    It is decided from the filesystem, so it changes when the root's `manifest.json`
+    appears. Hybrid completion writes the root manifest (phase 4) before it drops the
+    completed component's own copies (`_drop_dense_copies`); between the two, the
+    component opens as one that shares the axis, beside copies it is about to lose.
+    Nothing opens it there today; anything added there would read the shared axis.
+    """
+    if not dense_component_shares_axis(format_version):
         return None
-    return path.parent if layout == "hybrid" else None
+    return hybrid_root_of(component_path)
 
 
 def panel_rows(
@@ -111,3 +149,75 @@ def panel_rows(
         on_panel[in_range] = hit
         rows[np.flatnonzero(in_range)[hit]] = pos[hit]
     return on_panel, rows
+
+
+def check_dense_to_shared(
+    mapped: np.ndarray, n_shared: int, n_dense: int | None = None
+) -> list[str]:
+    """What is structurally wrong with a `dense_to_shared` map; nothing if it is sound.
+
+    The one statement of the map's invariants, which the validator, the rewrite and the
+    build each judge a map by: every entry names a row of the shared table of `n_shared`
+    rows; the entries strictly ascend, so no shared row is named twice and `panel_rows`
+    can search it; and, when `n_dense` is given, there is one entry per Dense row. Each
+    fault is a finding of its own, naming the first row it is at.
+    """
+    rows = np.asarray(mapped, dtype=np.int64).reshape(-1)
+    if len(rows) and (int(rows.min()) < 0 or int(rows.max()) >= n_shared):
+        outside = int(np.flatnonzero((rows < 0) | (rows >= n_shared))[0])
+        return [
+            "dense_to_shared references rows outside the shared variant table: Dense "
+            f"Component row {outside} names shared row {int(rows[outside])} of {n_shared}"
+        ]
+    found = _order_faults(rows)
+    if n_dense is not None and len(rows) != n_dense:
+        found.append(
+            f"dense_to_shared maps {len(rows)} Dense Component rows, but the Dense "
+            f"Component holds {n_dense}: each of its rows must name its shared variant"
+        )
+    return found
+
+
+def _order_faults(rows: np.ndarray) -> list[str]:
+    """A shared row named twice, and a descending pair: each a finding of its own."""
+    found: list[str] = []
+    steps = np.diff(rows)
+    if (steps == 0).any():
+        twice = int(np.flatnonzero(steps == 0)[0])
+        found.append(
+            "dense_to_shared maps two Dense Component rows to one shared row: rows "
+            f"{twice} and {twice + 1} both name {int(rows[twice])}"
+        )
+    elif len(rows) != len(np.unique(rows)):
+        found.append("dense_to_shared maps two Dense Component rows to one shared row")
+    if (steps < 0).any():
+        down = int(np.flatnonzero(steps < 0)[0])
+        found.append(
+            "dense_to_shared is not ascending: Dense Component row "
+            f"{down + 1} names shared row {int(rows[down + 1])}, before row {down}'s "
+            f"{int(rows[down])}; the map is searched, and must keep the panel's order"
+        )
+    return found
+
+
+def misnamed_panel_rows(
+    mapped: np.ndarray,
+    dense_alids: Iterable[str | None],
+    shared_alids: Iterable[tuple[int, str | None]],
+) -> Iterator[tuple[int, str, str | None]]:
+    """Each Dense row whose mapped shared row holds another variant, or none: `(row,
+    its ALID, the shared row's ALID or None)`.
+
+    The one walk comparing a Dense Component's variants with the shared rows the map
+    names. `dense_alids` are the Dense rows' ALIDs in row order; `shared_alids` are
+    `(shared row, ALID)` pairs ascending, every shared row or only the mapped ones; a
+    Dense or shared ALID that is None (a row an index leaves out) is a mismatch. Both
+    are read once, side by side, so a streamed table costs no more than its read. Call it
+    after `check_dense_to_shared`, which it relies on for the map's order and length.
+    """
+    shared = iter(shared_alids)
+    for row, (target, alid) in enumerate(zip(mapped.tolist(), dense_alids, strict=True)):
+        found = next(((r, a) for r, a in shared if r >= target), None)
+        held = found[1] if found is not None and found[0] == target else None
+        if alid is None or held != alid:
+            yield row, str(alid), held

@@ -137,7 +137,7 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
         assert manifest["format_version"] == "0.3.0"
         if directory.name == "dense":
             # A Hybrid's Dense Component keeps no copy of the shared axis (#472).
-            assert not any((directory / f).exists() for f in DENSE_COMPONENT_COPIES)
+            assert not DENSE_COMPONENT_COPIES & {p.name for p in directory.iterdir()}
             assert sorted(p.name for p in directory.iterdir()) == sorted(
                 {"manifest.json", "data.zarr", "dense_to_shared.npy"}
                 | ({"index.sqlite"} if name.endswith("completed") else set())

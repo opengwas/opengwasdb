@@ -27,9 +27,9 @@ from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stored import sequence_arrays
-from opengwasdb.store_reader.variant_axis import VariantAxis
 
 #: What one scan yields: a block of the data it reads.
 B = TypeVar("B")
@@ -228,7 +228,7 @@ class Target:
         return read_analyses(self.store.analyses_path)
 
     @cached_property
-    def variant_axis(self) -> VariantAxis:
+    def variant_axis(self) -> AnyVariantAxis:
         """The release's Variant Axis, opened on first use and closed by `close`."""
         return self.store.variant_axis(aliases=False)
 

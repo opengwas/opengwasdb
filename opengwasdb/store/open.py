@@ -34,6 +34,7 @@ from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 # CURRENT_FORMAT_VERSION here.
 from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION as CURRENT_FORMAT_VERSION
 from opengwasdb.store_reader.format import (
+    LAST_0_2_FORMAT_VERSION,
     WRITTEN_FORMAT_VERSIONS,
     UnsupportedFormatVersion,
     carries_alid_sidecar,
@@ -301,13 +302,6 @@ HYBRID_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html", "dense"}
 #: release) carries.
 HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_shared.npy"}
 
-#: What a Dense Component carried before format 0.3.0 and does not from it (#472):
-#: its own copy of the variant identity and the Analyses the Hybrid root holds.
-DENSE_COMPONENT_COPIES: frozenset[str] = (_BASE_ENVELOPE | {"overview.html"}) - {
-    "manifest.json",
-    "data.zarr",
-}
-
 #: The same component from format 0.3.0 (#472, ADR 0102 §4): its grid, its manifest
 #: and the map. It carries no Variant Table, `.tbi`, ALID, position or rsID sidecar,
 #: `analyses.tsv` or `overview.html`: it reads the shared ones through the map. Its
@@ -397,6 +391,33 @@ def ships_index(
         return True
     holds_its_own = dense_component or layout is not PrimaryStorageLayout.HYBRID
     return completion_state is CompletionState.REFERENCE_COMPLETED and holds_its_own
+
+
+def _component_envelope(format_version: str, *, dense_component: bool) -> frozenset[str]:
+    """A Reference-Completed Dense release's envelope at `format_version`: a Hybrid's
+    Dense Component's when `dense_component`, a standalone one's otherwise. Taken
+    Reference-Completed so `index.sqlite`, which #471 ships by state, is on both sides."""
+    return envelope_at(
+        PrimaryStorageLayout.DENSE,
+        format_version,
+        CompletionState.REFERENCE_COMPLETED,
+        dense_component=dense_component,
+    )
+
+
+#: What a Hybrid's Dense Component carried at 0.2.3 and does not at 0.3.0 (#472): its
+#: copy of the shared variants and Analyses, and the 0.2 indexes over that copy. What
+#: the rewrite leaves out of a 0.2.3 component.
+DENSE_COMPONENT_COPIES: frozenset[str] = _component_envelope(
+    LAST_0_2_FORMAT_VERSION, dense_component=True
+) - _component_envelope(CURRENT_FORMAT_VERSION, dense_component=True)
+
+#: What the unchanged Dense completion writes for a completed Dense Component, as for
+#: a standalone 0.3.0 Dense release, and a 0.3.0 Dense Component does not carry: the
+#: copies Hybrid completion drops once the shared table and the map are written (#472).
+COMPLETED_DENSE_COMPONENT_COPIES: frozenset[str] = _component_envelope(
+    CURRENT_FORMAT_VERSION, dense_component=False
+) - _component_envelope(CURRENT_FORMAT_VERSION, dense_component=True)
 
 
 @contextmanager
