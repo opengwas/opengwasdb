@@ -18,8 +18,8 @@ asked. Up to `_SCANNED_ROWS` rows are found by a chunked scan of the rows array,
 allocates nothing the size of the axis. More rows invert the whole index once, into
 one `int32` per row of the axis, and keep that for every later call. Measured on
 OGS-00004 (23,726,262 rows, 20,008,480 indexed): the scan takes 0.04 s for one row and
-0.25 s for 32; the inversion takes 1.0 s and 95 MB, after which any number of rows is a
-gather (`scratch/469/invert_cost.txt`). The inversion refuses an index that names a row
+0.25 s for 32; the inversion takes 1.0 s and keeps 95 MB, after which any number of rows
+is a gather (`scratch/469/invert_cost.txt`). The inversion refuses an index that names a row
 twice, which would give that row whichever rsID came last.
 
 This module imports numpy and the standard library only.

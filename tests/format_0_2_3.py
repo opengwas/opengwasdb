@@ -3,15 +3,22 @@
 From #467 every build and completion writes format 0.3.0. The 0.2 series is still
 read, and `ogdb rewrite-release` turns a 0.2.3 release into a 0.3.0 one, so the tests
 need 0.2.3 releases. A 0.3.0 release differs from the 0.2.3 one the same build would
-have written in two things (ADR 0105): it carries the variable-length ALID sidecar
-where 0.2.3 carried the fixed-width pair (#467), and the position sidecar 0.2.3 did
-not carry (#468). `as_0_2_3` undoes exactly that, in every component of a release (a
-Hybrid's nested Dense Component included):
+have written in three things (ADR 0105): it carries the variable-length ALID sidecar
+where 0.2.3 carried the fixed-width pair (#467), the position sidecar 0.2.3 did not
+carry (#468), and no `variant_offsets.npy`, which 0.2.3 carried (#469). `as_0_2_3`
+undoes exactly that, in every component of a release (a Hybrid's nested Dense
+Component included):
 
 - the ALID sidecar's four files and the position sidecar's three are deleted;
 - `variant_alid_bytes.npy`/`variant_alid_rows.npy` are written by
   `write_fixed_width_alid_index`, a copy of what `write_variant_axis` wrote at
   `e93fba8f` -- the only other writer of the pair, and only ever in tests;
+- `variant_offsets.npy` is written by `write_variant_offsets`, each row's BGZF virtual
+  offset as a read of the table finds it. The writer at `e93fba8f` took them while
+  writing; the two agree on a table of one BGZF block, as every fixture's is, and on a
+  longer one may name a block boundary by either side of it, which seeks the same row;
+- a Dense build's `provenance.dense.variant_axis.row_offsets` and its `index.sqlite`
+  `dense` blob's are not restored: no reader or rule reads either;
 - each manifest's `format_version` is re-spelt `0.2.3`, byte for byte otherwise.
 
 That this gives what the builders at `e93fba8f` wrote was checked once, by building
@@ -47,6 +54,23 @@ def write_fixed_width_alid_index(directory: Path, alids: list[str]) -> None:
     np.save(variant_alid_rows_path(directory), row_indices[sort_order])
 
 
+def write_variant_offsets(directory: Path) -> None:
+    """`variant_offsets.npy`: each row's BGZF virtual offset in `directory`'s Variant
+    Table, header lines skipped, as the 0.2 series carries it."""
+    import pysam
+
+    offsets: list[int] = []
+    with pysam.BGZFile(str(directory / "variants.tsv.gz"), "r", None) as handle:
+        while True:
+            at = int(handle.tell())
+            line = handle.readline()
+            if not line:
+                break
+            if not line.startswith(b"#"):
+                offsets.append(at)
+    np.save(directory / "variant_offsets.npy", np.asarray(offsets, dtype=np.uint64))
+
+
 def components(release: Path) -> list[Path]:
     """The release, and its nested Dense Component if it is a Hybrid."""
     nested = release / "dense"
@@ -54,8 +78,9 @@ def components(release: Path) -> list[Path]:
 
 
 def with_fixed_width_alid_index(directory: Path) -> None:
-    """Replace `directory`'s sidecars by the fixed-width pair a 0.2 release carries: the
-    ALID sidecar's files give way to the pair, and the position sidecar's are deleted."""
+    """Replace `directory`'s sidecars by the files a 0.2 release carries: the ALID
+    sidecar's files give way to the fixed-width pair, the position sidecar's are deleted,
+    and `variant_offsets.npy` is written (`write_variant_offsets`)."""
     sidecar = AlidSidecar.open(directory)
     assert sidecar is not None, f"{directory} has no ALID sidecar: not a 0.3.0 build"
     alids = sidecar.alids(np.arange(sidecar.n_rows)).tolist()
@@ -65,6 +90,7 @@ def with_fixed_width_alid_index(directory: Path) -> None:
     for name in POSITION_SIDECAR_FILENAMES:
         (directory / name).unlink()
     write_fixed_width_alid_index(directory, alids)
+    write_variant_offsets(directory)
 
 
 def follow_stamp(directory: Path) -> None:

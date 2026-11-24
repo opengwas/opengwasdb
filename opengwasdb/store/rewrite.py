@@ -223,6 +223,46 @@ def _records_in_row_order(directory: Path) -> Iterator[VariantRecord]:
         )
 
 
+def _drop_variant_offsets(context: RewriteContext) -> None:
+    """Delete each component's `variant_offsets.npy`, and the manifest's note of it (#469).
+
+    A 0.3.0 Store Reader never reads the Variant Table, so nothing seeks a row's BGZF
+    offset: the ALID sidecar counts the variants. It runs after the steps that write the
+    sidecars, which read the offsets to check the table, and refuses unless the ALID and
+    position sidecars each count the rows the offsets do. A Dense build's
+    `provenance.dense.variant_axis.row_offsets`, which names the file, goes with it.
+    """
+    import numpy as np
+
+    for directory in context.staged_components():
+        n_offsets = len(np.load(variant_offsets_path(directory), mmap_mode="r"))
+        counted = {
+            "ALID": _rows_of(AlidSidecar.open(directory)),
+            "position": _rows_of(PositionSidecar.open(directory)),
+        }
+        wrong = {name: n for name, n in counted.items() if n != n_offsets}
+        if wrong:
+            raise RewriteError(
+                f"{directory}: variant_offsets.npy counts {n_offsets} rows, but the "
+                + ", ".join(f"{name} sidecar {n}" for name, n in wrong.items())
+                + "; the offsets are not dropped while the sidecars disagree"
+            )
+        _forget_row_offsets(directory / "manifest.json")
+        variant_offsets_path(directory).unlink()
+
+
+def _rows_of(sidecar: AlidSidecar | PositionSidecar | None) -> int | None:
+    return None if sidecar is None else sidecar.n_rows
+
+
+def _forget_row_offsets(manifest: Path) -> None:
+    """Remove `provenance.dense.variant_axis.row_offsets` from `manifest`, if it names it."""
+    data: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
+    axis = data.get("provenance", {}).get("dense", {}).get("variant_axis", {})
+    if axis.pop("row_offsets", None) is not None:
+        manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 #: The rewrite's steps, in the order they run. #468-#472 each add one.
 STEPS: tuple[RewriteStep, ...] = (
     RewriteStep(
@@ -237,6 +277,12 @@ STEPS: tuple[RewriteStep, ...] = (
         "from the Variant Table, so a range is a binary search and not a tabix fetch "
         "(ADR 0105 §6)",
         _write_position_sidecar,
+    ),
+    RewriteStep(
+        "variant_offsets",
+        "drop variant_offsets.npy, each row's BGZF offset in the Variant Table, which no "
+        "0.3.0 query reads: the ALID sidecar counts the variants (#469)",
+        _drop_variant_offsets,
     ),
 )
 

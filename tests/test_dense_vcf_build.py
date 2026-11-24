@@ -157,7 +157,8 @@ def test_build_creates_standard_store_envelope(two_trait_store):
     assert (two_trait_store / "index.sqlite").exists()
     assert (two_trait_store / "data.zarr").exists()
     assert (two_trait_store / "variants.tsv.gz").exists()
-    assert (two_trait_store / "variant_offsets.npy").exists()
+    assert (two_trait_store / "variant_alid_offsets.npy").exists()
+    assert not (two_trait_store / "variant_offsets.npy").exists()  # 0.2 only (#469)
 
 
 def test_validate_store_passes(two_trait_store):
@@ -2069,7 +2070,8 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
         candidate_axis = b.read()
     assert reference_axis == candidate_axis
     np.testing.assert_array_equal(
-        np.load(reference / "variant_offsets.npy"), np.load(candidate / "variant_offsets.npy")
+        np.load(reference / "variant_alid_offsets.npy"),
+        np.load(candidate / "variant_alid_offsets.npy"),
     )
     assert {r.alid for r in iter_variant_records(reference / "variants.tsv.gz")} == {
         r.alid for r in iter_variant_records(candidate / "variants.tsv.gz")

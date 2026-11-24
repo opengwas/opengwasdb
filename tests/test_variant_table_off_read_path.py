@@ -262,3 +262,64 @@ def test_an_rsid_index_naming_rows_otherwise_than_the_table_fails_on_0_3_0(
     assert result.failed() == {"variant_table.rsid_rows"}, result.errors
     [error] = result.errors
     assert "the rsID index names 2 row(s) otherwise than variants.tsv.gz" in error, error
+
+
+@pytest.mark.parametrize(
+    "name", ["one_source_dense", "one_source_ragged", "one_source_hybrid", "dense_completed"]
+)
+def test_the_rewrite_proves_each_planted_fixture_with_its_variant_info(
+    planted, tmp_path: Path, name: str
+):
+    """The rewrite's proof asks `variants_table()` and resolved rows with variant info;
+    with the planted rsIDs it passes, and the published release carries no offsets."""
+    from opengwasdb.store.rewrite import rewrite_release
+
+    _, legacy = planted[name]
+    destination = rewrite_release(legacy, tmp_path / "rewritten")
+
+    for directory in components(destination):
+        assert not (directory / "variant_offsets.npy").exists(), directory
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["provenance"]["format_rewrite"]["steps"][-1] == "variant_offsets"
+    assert _answers(destination) == _answers(legacy)
+
+
+def test_a_0_3_0_build_writes_no_offsets_and_a_stray_one_fails_its_envelope(
+    planted, tmp_path: Path
+):
+    current, legacy = planted["one_source_dense"]
+    assert not (current / "variant_offsets.npy").exists()
+    assert (legacy / "variant_offsets.npy").exists(), "the 0.2.3 form carries them"
+    release = Path(shutil.copytree(current, tmp_path / "stray"))
+    shutil.copy(legacy / "variant_offsets.npy", release / "variant_offsets.npy")
+
+    result = validate_store(release)
+
+    assert result.failed() == {"envelope.closed"}, result.errors
+    assert any("variant_offsets.npy" in error for error in result.errors), result.errors
+
+
+def test_a_0_2_3_dense_release_without_its_offsets_is_incomplete(planted, tmp_path: Path):
+    release = Path(shutil.copytree(planted["one_source_dense"][1], tmp_path / "r"))
+    (release / "variant_offsets.npy").unlink()
+
+    result = validate_store(release)
+
+    assert "envelope.required" in result.failed(), result.errors
+    assert "missing variant_offsets.npy" in result.errors, result.errors
+
+
+def test_the_writer_refuses_an_rsid_the_index_cannot_hold(tmp_path: Path):
+    """The 0.2 series kept such an rsID in the table and out of the index; on 0.3.0 the
+    index alone names a row's rsID, so it would vanish from every answer."""
+    from opengwasdb.store_reader.alid import RSID_WIDTH
+    from opengwasdb.variants.axis import UnindexableRsidError, write_variant_axis
+    from opengwasdb.variants.normalise import CanonicalVariant
+
+    variants = [CanonicalVariant("1", 100, "A", "G"), CanonicalVariant("1", 200, "C", "T")]
+    wide = "rs1;rs2;rs3;rs4;rs5;rs6;rs7"
+    assert len(wide.encode()) > RSID_WIDTH
+
+    with pytest.raises(UnindexableRsidError, match=r"1 variant\(s\) .* first, 1:200:C:T"):
+        write_variant_axis(tmp_path, variants, {variants[0].alid: "rs1", variants[1].alid: wide})
+    assert list(tmp_path.iterdir()) == [], "nothing is written"

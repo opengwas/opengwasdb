@@ -17,6 +17,10 @@ What this ADR changes in other documents:
   answered; §20.0 adds `variant_table.position_sidecar`; §21.3 and §21.4 add it to 0.3.0 and to
   the rewrite.
 - Spec §21.1-§21.4: 0.3.0 in each table, and `ogdb rewrite-release` among the migrations.
+- From #469 (§7): spec §1, §1.1 and §4 drop `variant_offsets.npy` from 0.3.0 and say how a row's
+  rsID and the variant count are read without the Variant Table, and give the `.tbi` rebuild
+  command; §20.0 adds `variant_table.rsid_rows` and restates `rows` and `representatives`;
+  §21.3 and §21.4 add the change to 0.3.0 and to the rewrite.
 - [ADR 0038](0038-store-format-versioning-and-migration-policy.md) and
   [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md) stand: this applies them.
 
@@ -320,6 +324,81 @@ against the table is `PositionSidecar.misplaced`, shared by the rule and the rew
 - *`int64` positions.* 8 bytes a row for nothing: no position needs more than 32 bits.
 - *Keep tabix on 0.3.0.* pysam would stay on the query path, and #476 could not remove it.
 
+### 7. The Variant Table leaves the read path (#469, 24 Nov 2026)
+
+**Context.** After §1-§6 a 0.3.0 query still read `variants.tsv.gz` for two things: the rsID of a
+resolved row (`resolve(include_variant_info=True)`), and `variants_table()`. Both went through
+pysam: a BGZF seek per row, located by `variant_offsets.npy`, or a whole-table scan. The variant
+count was the length of `variant_offsets.npy`. ADR 0102 classes the table a convenience from 0.3.0
+and drops the offsets.
+
+**Decision.**
+
+- **A row's identity comes from the sidecars.** Its ALID is the ALID sidecar's. Its chromosome,
+  position and alleles are its ALID's, parsed by the existing owner (`identity_by_indices`). Its
+  rsID is the rsID index's, inverted (`opengwasdb.store_reader.rsid_index`). The variant count is
+  the ALID sidecar's rows. `VariantAxis.variants_table()` and `rsids_by_indices` answer from these
+  on 0.3.0, and from the table on 0.2.x, unchanged.
+- **How 0.2.x spells a row's rsID, kept.** The table gives a row one rsID cell. A blank cell (`.`)
+  is `None` in `variants_table()` and `.` in a resolved row. A cell naming several (a GWAS-VCF
+  `ID` such as `rs1;rs2`) is that cell, whole. The rsID index holds each row's cell whole, so its
+  inversion gives the same. An rsID naming several rows (a multi-allelic site) names each.
+- **The inversion is sized to what is asked.** Up to 32 rows are found by a chunked scan of
+  `variant_rsid_rows.npy`, which allocates nothing the size of the axis. More rows invert the index
+  once into one `int32` per row, kept for later calls. Measured on OGS-00004 (23,726,262 rows,
+  20,008,480 named, page cache warm): the scan takes 0.04 s for 1 row, 0.07 s for 7 and 0.25 s
+  for 32; the inversion takes 1.0 s and keeps 95 MB (184 MB at its peak), then any number of rows
+  is a gather. Inverting the whole index to name one row would repeat #465's mistake.
+- **What the table's rsID is, the index must say.** The reader names a row's rsID from the index
+  alone. A new rule, `variant_table.rsid_rows`, checks that the inverted index names every row by
+  the table's rsID, and a blank row by none. The 0.2 series left an rsID wider than the index's
+  24-byte slot out of the index and kept it in the table. On 0.3.0 that rsID would vanish from
+  every answer, so `write_variant_axis` refuses one (`UnindexableRsidError`). None of the four
+  releases measured holds one: OGS-00003, OGS-00004, OGS-00007 and OGS-00025, 41,789,333 named
+  rows of 46,400,721, every one `rs` and digits (`scratch/469/rsid_census.txt`).
+- **A 0.3.0 release without the rsID index is refused** (`MissingRsidIndex`). Read as it stands,
+  it would name no row's rsID. A 0.2 release built before #109 still opens without one.
+- **`variant_offsets.npy` is not written from 0.3.0.** A 0.3.0 release carrying it fails its
+  closed envelope; a 0.2 Dense release missing it fails `envelope.required`, as before. The Dense
+  builder's `provenance.dense.variant_axis.row_offsets` and its `index.sqlite` `dense` blob no
+  longer name it.
+- **The record methods still read the table.** `by_index`, `by_indices`, `all`, `records` and
+  `range` return every column, `source_alid` included, and only the table holds `source_alid` until
+  #470. The builders, completion and the validator call them; no query does. On 0.3.0 `by_index`
+  fetches the row by tabix where the position sidecar places it.
+- **The validator.** `variant_table.rows` counts against the ALID sidecar on 0.3.0.
+  `variant_table.representatives` checks only the tabix index there: the position sidecar places
+  the rows, and `variant_table.position_sidecar` judges that row by row. `hybrid.coverage`
+  compares ALIDs from the sidecars on 0.3.0.
+- **The `.tbi` can be rebuilt** with `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`. On OGS-00007 the
+  rebuilt index decompresses to the bytes of the shipped one, and answers all 170,943 positions
+  identically. Spec §4 gives the `Rsamtools::indexTabix()` call too.
+
+**The rewrite step**, `variant_offsets`, runs last. It refuses unless the ALID and position
+sidecars each count the rows `variant_offsets.npy` does. Then it deletes the file and the Dense
+provenance's `row_offsets`. The `index.sqlite` `dense` blob keeps its `row_offsets` key: #471 drops
+that blob. The proof already asked `variants_table()` and the resolved rows of the lookup, the range
+and the widest top hits, with variant info, so it needs no new question.
+
+**Evidence.** `tests/test_variant_table_off_read_path.py` gives every fixture rsIDs that plant a row
+naming none, two rows naming one, and a cell naming several. These fixtures are the six digest
+releases and the three one-source layouts. Each 0.3.0 release answers `variants_table()` and the
+resolved rows of every Analysis, a lookup and the top hits exactly as its 0.2.3 form, scanned and
+inverted. In a fresh interpreter, with each table and `.tbi` made unreadable, every question of the
+proof is answered without importing pysam. On OGS-00007 the rewrite passes its proof; the
+timings are in #469's report.
+
+**ogdb-api breaks on a 0.3.0 release.** It reads `variant_offsets.npy` and seeks into the
+Variant Table through the axis's private attributes. Its owner moves its pin (#450, 23 Nov).
+
+**Alternatives considered.**
+- *Invert the whole index on first use, always.* It is simpler, but it costs 1.0 s and 95 MB on
+  OGS-00004 to name one row.
+- *Keep the rsID in a row-ordered sidecar.* It would make a row's rsID a slice, at the cost of a
+  second copy of every name. The inversion's one-off second does not justify it.
+- *Write `.` to the table for an over-wide rsID.* The table and the index would then agree, but
+  the answer would differ from what 0.2.x gave. Refusing the build loses nothing silently.
+
 ## Consequences
 
 - **A range on 0.3.0 reads neither the Variant Table nor its tabix index** (#468):
@@ -331,7 +410,7 @@ against the table is `PositionSidecar.misplaced`, shared by the rule and the rew
   (`tests/test_long_alid_0_3_0.py`). On 0.2.3 the same questions return the same rows by the scan.
 - **Size.** The sidecar holds every ALID whole, so it is about 40% larger than the pair it
   replaces. On OGS-00024 (7.07 M rows) the pair is 254 MB and the sidecar 359 MB, of which 57 MB
-  is the 8-byte offsets. #469 drops `variant_offsets.npy`, 8 bytes per row.
+  is the 8-byte offsets. #469 drops `variant_offsets.npy`, 8 bytes per row (§7).
 - **Nothing hosted is rewritten.** Of the 20 hosted releases under `/data/opengwasdb/stores`:
   - 11 are 0.2.0;
   - 5 are 0.2.1;

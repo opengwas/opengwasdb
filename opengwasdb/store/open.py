@@ -37,6 +37,7 @@ from opengwasdb.store_reader.format import (
     UnsupportedFormatVersion,
     carries_alid_sidecar,
     carries_position_sidecar,
+    carries_variant_offsets,
     check_format_version,
     format_version_for,
     indels_reference_first,
@@ -52,6 +53,7 @@ from opengwasdb.store_reader.release import (
     open_release,
     release_paths,
 )
+from opengwasdb.store_reader.variant_axis import VARIANT_OFFSETS_FILENAME
 from opengwasdb.variants.legacy_table import open_legacy_variant_table
 
 if TYPE_CHECKING:
@@ -266,7 +268,6 @@ _BASE_ENVELOPE: frozenset[str] = frozenset(
         "data.zarr",
         "variants.tsv.gz",
         "variants.tsv.gz.tbi",
-        "variant_offsets.npy",
         # rsid search index (issue #109). Every layout writes it, empty when the
         # source names no variants, so it belongs in the base envelope rather than
         # being optional per layout.
@@ -297,18 +298,27 @@ HYBRID_DENSE_COMPONENT_ENVELOPE: frozenset[str] = DENSE_ENVELOPE | {"dense_to_sh
 
 def envelope_at(envelope: frozenset[str], format_version: str) -> frozenset[str]:
     """`envelope`, one of the constants above, as a release of `format_version` carries it:
-    with the ALID index that version carries (`alid_index_kind`) and no other, and the
-    position sidecar only from 0.3.0 (`carries_position_sidecar`).
+    with the ALID index that version carries (`alid_index_kind`) and no other, the
+    position sidecar only from 0.3.0 (`carries_position_sidecar`), and
+    `variant_offsets.npy` only before it (`carries_variant_offsets`, #469).
 
     The constants are what this build writes (0.3.0, the sidecars). A 0.2 release
-    carries the fixed-width pair instead and no position sidecar, and either one
-    carrying the other's files fails its closed envelope (spec §1, §20).
+    carries the fixed-width pair and the row offsets instead and no position sidecar,
+    and either one carrying the other's files fails its closed envelope (spec §1, §20).
     """
     return (
         (envelope - ALID_INDEX_FILENAMES - set(POSITION_SIDECAR_FILENAMES))
         | set(alid_index_kind(format_version).FILENAMES)
         | _position_sidecar_at(format_version)
+        | _variant_offsets_at(format_version)
     )
+
+
+def _variant_offsets_at(format_version: str) -> frozenset[str]:
+    """`variant_offsets.npy`, in a release of `format_version` that carries it: the 0.2
+    and 0.1 series, which read their Variant Table by row offset."""
+    carried = carries_variant_offsets(format_version)
+    return frozenset({VARIANT_OFFSETS_FILENAME}) if carried else frozenset()
 
 
 def _position_sidecar_at(format_version: str) -> frozenset[str]:

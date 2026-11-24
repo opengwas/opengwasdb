@@ -50,7 +50,6 @@ from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLay
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 from opengwasdb.store_reader.variant_axis import (
-    VARIANT_OFFSETS_FILENAME,
     VARIANT_TABIX_FILENAME,
     VARIANT_TABLE_FILENAME,
 )
@@ -523,7 +522,6 @@ def _write_manifest(
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
                     "tabix_index": VARIANT_TABIX_FILENAME,
-                    "row_offsets": VARIANT_OFFSETS_FILENAME,
                 },
             },
         },
@@ -553,7 +551,6 @@ def _write_index(
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
                     "tabix_index": VARIANT_TABIX_FILENAME,
-                    "row_offsets": VARIANT_OFFSETS_FILENAME,
                 },
             ),
         )

@@ -506,7 +506,8 @@ def _rewrite_table(store, edit) -> None:
                 offsets.append(handle.tell())
                 line = edit(line)
             handle.write(line.encode("utf-8"))
-    np.save(store / "variant_offsets.npy", np.asarray(offsets, dtype=np.uint64))
+    if (store / "variant_offsets.npy").exists():  # a 0.2 release's only (#469)
+        np.save(store / "variant_offsets.npy", np.asarray(offsets, dtype=np.uint64))
     pysam.tabix_index(
         str(path), seq_col=0, start_col=1, end_col=1, meta_char="#", zerobased=False,
         force=True,

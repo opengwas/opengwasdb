@@ -45,7 +45,7 @@ def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
     assert (dense_store_path / "data.zarr").exists()
     assert (dense_store_path / "variants.tsv.gz").exists()
     assert (dense_store_path / "variants.tsv.gz.tbi").exists()
-    assert (dense_store_path / "variant_offsets.npy").exists()
+    assert not (dense_store_path / "variant_offsets.npy").exists()  # 0.2 only (#469)
     for name in ALID_SIDECAR_FILENAMES:  # format 0.3.0's ALID index (ADR 0105)
         assert (dense_store_path / name).exists(), name
     assert not (dense_store_path / "variant_alid_bytes.npy").exists()
