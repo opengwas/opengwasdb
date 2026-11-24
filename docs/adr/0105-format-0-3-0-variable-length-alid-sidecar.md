@@ -627,6 +627,44 @@ each row by the shared table's. 21 of these 22 tests fail on the code before thi
 the 22nd, a 0.2 map naming another variant, holds behaviour that was already there.
 `test_rewrite_release` proves both Hybrid digest releases through the rewrite, as before.
 
+**OGS-00004** (Hybrid Observed-Only, 0.2.2, 23,726,262 shared rows, 13,718,605 panel
+rows, 10 Analyses) was rewritten read only, its version refusal bypassed as for #467
+(`scratch/472/real_rewrite_472.py`). The proof asked 142 questions, 9 ALID probes, 20
+range probes and 3 rsID misses, and every answer matched; it took 715 s on the source and
+487 s on the copy, and 1,662 s in all, at 20 GB peak RSS. The copy's
+`hybrid.dense_to_shared`, `hybrid.coverage` and closed envelope pass; it fails only what
+the bypass brings (a 0.2.2 `analyses.tsv` has no `n_missing_se_out_of_range`) and its
+`hm3` Indexed Variant Subset, which names the source's `release_id`. The Dense Component's
+0.2 copies came to 1,098,940,214 B, the figure ADR 0102 §4 gives. A 0.3.0 component that
+kept its copy would carry 1,265,761,783 B: its table, `.tbi`, rsID index, `analyses.tsv`
+and `overview.html` as the source holds them, and the ALID and position sidecars sized
+from the shared ones at the mapped rows (`scratch/472/dense_bytes.py`).
+
+**OGS-00011 as completed** (Hybrid Reference-Completed, 0.2.0, the release #481 describes,
+now under `replaced/20261122T224238Z`; 48,069,918 shared rows, 14,267,257 panel rows,
+3,169 Analyses) was rewritten the same way, read only. Its whole proof is too large for
+it (ADR 0105 §3): the one broad `range_phewas`, from the first variant of chromosome 1 to
+the last variant's position, would read about 600,000 panel rows by 3,169 Analyses on each
+side. So the comparison ran outside the proof, as the #472 ruling preferred to a named
+allowance (`scratch/472/real_rewrite_472_v2.py`): every other question was asked of both
+sides, 140 questions, 9 ALID probes, 20 range probes and 3 rsID misses, in 3,693 s and
+2,448 s at 57 GB peak RSS, and **no answer changed**. The rewrite then published, and the
+rules it touches (the envelope, `hybrid.*`, `variant_table.*`, `sqlite.provenance_only`,
+the Analysis ids) pass on the copy; a whole validation of this release takes 9.7 h on one
+worker (its `completion-validate` record), so the rest was not run. The Dense Component's
+0.2 copies came to 1,175,803,588 B, ADR 0102 §4's figure; a 0.3.0 component keeping its
+copy would carry 1,347,866,437 B.
+
+**No digest changed on the rsID lookups #481 lost**, because the miss was already gone
+from the read path: #465 made `HybridStoreQuery.lookup` resolve identifiers against the
+shared axis, and `phewas` always had. The loss is still in the 0.2 Dense copy, and the
+rewrite drops it. Of the 850,273 Dense rows whose copy names no rsID where the shared
+table does, 200 spread over the axis were asked by rsID and by ALID, as a PheWAS and as a
+lookup over five of their Analyses, of the source read with this package and of the
+rewritten copy (`scratch/472/rsid_481_check.py`). All 200 gave the same answers on both,
+and by rsID the same as by ALID; `rs761832497`, #481's example, gives 3,131 rows to the
+PheWAS and 5 to the lookup either way.
+
 ## Alternatives considered
 
 - **Widen the fixed slot** (`|S64`, `|S128`). It still leaves some ALID out (OGS-00007 holds one of
