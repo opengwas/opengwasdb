@@ -20,9 +20,9 @@ inherits nothing, so a method `VariantAxis` gains is not silently half-present h
 a reader typed `AnyVariantAxis` is checked against both. Its `alid_index` is the shared
 ALID index seen the same way (`PanelAlidIndex`), for the readers that search ALIDs
 without the axis. The component has no other index of its own, so asking it for one
-(`rsid_index`, `position_sidecar`), for an index's `problems`, or for a tabix read of a
-table it does not carry raises `DenseComponentSharesAxis` rather than answer from the
-shared axis's rows.
+(`rsid_index`, `position_sidecar`, `source_alid_sidecar`), for an index's `problems`, or
+for a read of a table it does not carry (`tabix_range`, `written_table_records`) raises
+`DenseComponentSharesAxis` rather than answer from the shared axis's rows.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from opengwasdb.store_reader.alid import ParsedAlid
 from opengwasdb.store_reader.alid_index import ABSENT, AlidIndex
 from opengwasdb.store_reader.hybrid import DenseComponentSharesAxis, panel_rows
 from opengwasdb.store_reader.variant_axis import (
-    VARIANTS_TABLE_COLUMNS,
     VariantAxis,
     VariantRecord,
 )
@@ -157,8 +156,17 @@ class PanelVariantAxis:
     def position_sidecar(self) -> Any:
         raise self._refused("position sidecar")
 
+    @property
+    def source_alid_sidecar(self) -> Any:
+        """Refused: the component's rows give their shared rows' `source_alid`
+        (`source_alids_by_indices`, #470), and the sidecar is the shared axis's."""
+        raise self._refused("source_alid sidecar")
+
     def tabix_range(self, chromosome: str, start: int, end: int) -> list[VariantRecord]:
         raise self._refused("Variant Table or tabix index")
+
+    def written_table_records(self) -> Iterator[VariantRecord]:
+        raise self._refused("Variant Table")
 
     def close(self) -> None:
         self._shared.close()
@@ -194,20 +202,35 @@ class PanelVariantAxis:
             out[inside] = self._shared.rsids_by_indices(shared[inside])
         return out
 
+    def source_alids_by_indices(self, variant_index: np.ndarray) -> np.ndarray:
+        """Each panel row's `source_alid`, the shared row's (#470); None for one that has
+        none or lies outside the panel."""
+        shared = self._to_shared(variant_index)
+        out = np.full(shared.size, None, dtype=object)
+        inside = shared >= 0
+        if inside.any():
+            out[inside] = self._shared.source_alids_by_indices(shared[inside])
+        return out
+
     def variants_table(self) -> dict[int, dict[str, Any]]:
-        rows = np.arange(self.n_variants, dtype=np.int64)
-        shared = self._dense_to_shared.astype(np.int64)
-        columns = {
-            name: values.tolist()
-            for name, values in self._shared.identity_by_indices(shared).items()
-        }
-        columns["rsid"] = self._shared.rsids_by_indices(shared).tolist()
+        """Every panel row's `variants_table()` row: `rows_by_indices` of every row."""
+        return self.rows_by_indices(np.arange(self.n_variants, dtype=np.int64))
+
+    def rows_by_indices(self, rows: np.ndarray) -> dict[int, dict[str, Any]]:
+        """The `variants_table()` rows of panel rows `rows`, keyed by panel row, ascending:
+        each its shared row's (`VariantAxis.rows_by_indices`), `source_alid` included. A
+        row outside the panel is refused."""
+        panel = np.unique(np.asarray(rows, dtype=np.int64))
+        shared = self._to_shared(panel)
+        if (shared < 0).any():
+            raise ValueError(f"no variant row at index {int(panel[shared < 0][0])}")
+        found = self._shared.rows_by_indices(shared)
         return {
-            row: {name: columns[name][row] for name in VARIANTS_TABLE_COLUMNS}
-            for row in rows.tolist()
+            int(row): found[int(shared_row)]
+            for row, shared_row in zip(panel.tolist(), shared.tolist(), strict=True)
         }
 
-    # ── the record reads: the shared table's rows (builders, completion, validator) ──
+    # ── the record reads: the shared axis's rows, its `source_alid` included (#470) ──
     def by_index(self, variant_index: int) -> VariantRecord | None:
         [shared] = self._to_shared(np.array([variant_index])).tolist()
         return None if shared < 0 else self._record(self._shared.by_index(int(shared)))

@@ -40,6 +40,7 @@ from opengwasdb.store_reader.format import (
     carries_alid_sidecar,
     carries_index_metadata,
     carries_position_sidecar,
+    carries_source_alid_sidecar,
     carries_variant_offsets,
     check_format_version,
     dense_component_shares_axis,
@@ -57,6 +58,7 @@ from opengwasdb.store_reader.release import (
     open_release,
     release_paths,
 )
+from opengwasdb.store_reader.source_alid_sidecar import SOURCE_ALID_SIDECAR_FILENAMES
 from opengwasdb.store_reader.variant_axis import VARIANT_OFFSETS_FILENAME
 from opengwasdb.variants.legacy_table import open_legacy_variant_table
 
@@ -264,20 +266,25 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
 # 0.3.0 that table is all `index.sqlite` holds, so the file ships only with it
 # (ADR 0102, #471): the constants leave it out, and `envelope_at` adds it by
 # version and completion state.
-_BASE_ENVELOPE: frozenset[str] = frozenset(
-    {
-        "manifest.json",
-        "analyses.tsv",
-        "data.zarr",
-        "variants.tsv.gz",
-        "variants.tsv.gz.tbi",
-        # rsid search index (issue #109). Every layout writes it, empty when the
-        # source names no variants, so it belongs in the base envelope rather than
-        # being optional per layout.
-        "variant_rsid_bytes.npy",
-        "variant_rsid_rows.npy",
-    }
-) | set(AlidSidecar.FILENAMES) | set(POSITION_SIDECAR_FILENAMES)
+_BASE_ENVELOPE: frozenset[str] = (
+    frozenset(
+        {
+            "manifest.json",
+            "analyses.tsv",
+            "data.zarr",
+            "variants.tsv.gz",
+            "variants.tsv.gz.tbi",
+            # rsid search index (issue #109). Every layout writes it, empty when the
+            # source names no variants, so it belongs in the base envelope rather than
+            # being optional per layout.
+            "variant_rsid_bytes.npy",
+            "variant_rsid_rows.npy",
+        }
+    )
+    | set(AlidSidecar.FILENAMES)
+    | set(POSITION_SIDECAR_FILENAMES)
+    | set(SOURCE_ALID_SIDECAR_FILENAMES)
+)
 
 #: A release's `index.sqlite`: in every 0.2 release; from 0.3.0 only where it holds
 #: `completion_quality` (`ships_index`).
@@ -333,15 +340,17 @@ def envelope_at(
     """The closed envelope of a release of `layout` (a Hybrid's nested Dense Component
     when `dense_component`), `format_version` and `completion_state`: its layout's
     constant (`layout_envelope`) with the ALID index that version carries
-    (`alid_index_kind`) and no other, the position sidecar only from 0.3.0
-    (`carries_position_sidecar`), `variant_offsets.npy` only before it
+    (`alid_index_kind`) and no other, the position and `source_alid` sidecars only from
+    0.3.0 (`carries_position_sidecar`, `carries_source_alid_sidecar`, #470),
+    `variant_offsets.npy` only before it
     (`carries_variant_offsets`, #469), and `index.sqlite` where it ships (`ships_index`).
     A Dense Component from 0.3.0 is `SHARED_AXIS_DENSE_COMPONENT_ENVELOPE` and that
     `index.sqlite` alone (#472).
 
     The constants are what this build writes (0.3.0, the sidecars, no offsets, no
     `index.sqlite`). A 0.2 release carries the fixed-width pair and the offsets instead
-    and no position sidecar, and either one carrying the other's files fails its closed
+    and neither the position nor the `source_alid` sidecar, and either one carrying the
+    other's files fails its closed
     envelope (spec §1, §20); so does a 0.3.0 Observed-Only release carrying an
     `index.sqlite`.
     """
@@ -350,9 +359,10 @@ def envelope_at(
         return SHARED_AXIS_DENSE_COMPONENT_ENVELOPE | ({INDEX_FILENAME} if ships else set())
     envelope = layout_envelope(layout, dense_component=dense_component)
     return (
-        (envelope - ALID_INDEX_FILENAMES - set(POSITION_SIDECAR_FILENAMES))
+        (envelope - ALID_INDEX_FILENAMES - _VERSIONED_SIDECARS)
         | set(alid_index_kind(format_version).FILENAMES)
         | _position_sidecar_at(format_version)
+        | _source_alid_sidecar_at(format_version)
         | _variant_offsets_at(format_version)
         | ({INDEX_FILENAME} if ships else set())
     )
@@ -363,6 +373,19 @@ def _variant_offsets_at(format_version: str) -> frozenset[str]:
     and 0.1 series, which read their Variant Table by row offset."""
     carried = carries_variant_offsets(format_version)
     return frozenset({VARIANT_OFFSETS_FILENAME}) if carried else frozenset()
+
+
+#: The sidecars a release carries from 0.3.0 on, which `envelope_at` adds by version.
+_VERSIONED_SIDECARS = frozenset(POSITION_SIDECAR_FILENAMES) | frozenset(
+    SOURCE_ALID_SIDECAR_FILENAMES
+)
+
+
+def _source_alid_sidecar_at(format_version: str) -> frozenset[str]:
+    """The `source_alid` sidecar's files, in a release of `format_version` that carries
+    them (#470); a 0.2 release holds `source_alid` in its Variant Table alone."""
+    carried = carries_source_alid_sidecar(format_version)
+    return frozenset(SOURCE_ALID_SIDECAR_FILENAMES) if carried else frozenset()
 
 
 def _position_sidecar_at(format_version: str) -> frozenset[str]:

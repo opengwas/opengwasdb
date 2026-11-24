@@ -209,6 +209,17 @@ def carries_variant_offsets(version: str) -> bool:
     return parse_format_version(version) < VARIANT_OFFSETS_DROPPED_SINCE
 
 
+#: The first `format_version` that carries each row's `source_alid` in its own sidecar
+#: (`opengwasdb.store_reader.source_alid_sidecar`, ADR 0105 §8, #470) and not only in the
+#: Variant Table's eighth column. 0.3.0 is one format version, so it is the ALID sidecar's.
+SOURCE_ALID_SIDECAR_SINCE = ALID_SIDECAR_SINCE
+
+
+def carries_source_alid_sidecar(version: str) -> bool:
+    """Whether a Store of ``version`` names each row's `source_alid` from its sidecar."""
+    return parse_format_version(version) >= SOURCE_ALID_SIDECAR_SINCE
+
+
 #: The first `format_version` whose Hybrid Dense Component carries no Variant Axis
 #: and no `analyses.tsv` of its own: it reads the shared ones through
 #: `dense_to_shared.npy` (#472, ADR 0102 §4). 0.3.0 is one format version.

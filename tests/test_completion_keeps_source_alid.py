@@ -135,7 +135,9 @@ def assert_lifted_provenance_kept(source: Path, completed: Path, alids: dict[str
     assert all(after[a] is None for a in added), "a panel row was given a source_alid"
 
 
-def test_a_lifted_dense_source_keeps_its_source_alid_through_completion(tmp_path: Path) -> None:
+def lifted_dense_completion(tmp_path: Path) -> tuple[Path, Path]:
+    """A Dense release built from an hg19 VCF over a two-strand chain, and its completion
+    over a panel that adds rows: ``(observed, completed)``."""
     from liftover_fixtures import strand_vcf_rows, write_two_strand_chain
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
@@ -153,6 +155,11 @@ def test_a_lifted_dense_source_keeps_its_source_alid_through_completion(tmp_path
         observed, completed, _strand_panel(tmp_path / "panel"),
         ancestry="EUR", min_cor=0.0, release_id="comp-v1",
     )
+    return observed, completed
+
+
+def test_a_lifted_dense_source_keeps_its_source_alid_through_completion(tmp_path: Path) -> None:
+    observed, completed = lifted_dense_completion(tmp_path)
     assert_lifted_provenance_kept(observed, completed, _strand_source_alids())
     assert validate_store(completed).failed() == frozenset()
 
@@ -282,6 +289,9 @@ def test_the_rule_fails_a_lifted_release_whose_rows_all_lack_a_source_alid(
     observed_dense: Path,
 ) -> None:
     assert validate_store(observed_dense).failed() == frozenset()  # a valid release to begin with
+    # The TSV build names each row's own ALID (#470); a release that kept none is blanked.
+    assert all(r.source_alid == r.alid for r in _records(observed_dense))
+    _blank_source_alids(observed_dense)
     assert all(r.source_alid is None for r in _records(observed_dense))  # meaningful fixture
     record_liftover(observed_dense)
     result = validate_store(observed_dense)
@@ -297,6 +307,7 @@ def test_the_rule_passes_when_one_row_carries_a_source_alid(observed_dense: Path
 
 
 def test_the_rule_passes_a_release_that_records_no_liftover(observed_dense: Path) -> None:
+    _blank_source_alids(observed_dense)
     assert all(r.source_alid is None for r in _records(observed_dense))
     assert validate_store(observed_dense).failed() == frozenset()
 

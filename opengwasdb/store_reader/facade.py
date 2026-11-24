@@ -98,7 +98,6 @@ from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.resolve import resolve_rows
 from opengwasdb.store_reader.rho import DenseRhoReader
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
-from opengwasdb.store_reader.variant_axis import VARIANTS_TABLE_COLUMNS
 
 
 def _ragged_tier_record(
@@ -213,22 +212,10 @@ def _variants_table(variant_axis: AnyVariantAxis) -> dict[int, dict]:
 
 
 def _variant_rows(variant_axis: AnyVariantAxis, rows: np.ndarray) -> dict[int, dict[str, Any]]:
-    """The `variants_table()` rows for `rows` alone, keyed by variant_index, ascending.
-
-    The same fields and spelling as `_variants_table`, read through the axis's
-    `identity_by_indices` and `rsids_by_indices`, so a 0.3.0 release answers from
-    its sidecars and no second index is built.
-    """
-    unique = np.unique(np.asarray(rows, dtype=np.int64))
-    if unique.size == 0:
-        return {}
-    identity = variant_axis.identity_by_indices(unique)
-    columns = {name: values.tolist() for name, values in identity.items()}
-    columns["rsid"] = variant_axis.rsids_by_indices(unique).tolist()
-    return {
-        int(row): {name: columns[name][slot] for name in VARIANTS_TABLE_COLUMNS}
-        for slot, row in enumerate(unique.tolist())
-    }
+    """The `variants_table()` rows for `rows` alone, keyed by variant_index, ascending:
+    the axis's one projection of a row (`rows_by_indices`), so a 0.3.0 release answers
+    from its sidecars, `source_alid` included (#470), and no second index is built."""
+    return variant_axis.rows_by_indices(rows)
 
 
 def _is_completed(store: StoreRelease) -> bool:

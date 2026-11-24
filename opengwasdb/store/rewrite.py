@@ -89,6 +89,10 @@ from opengwasdb.store_reader.hybrid import (
 )
 from opengwasdb.store_reader.position_sidecar import PositionSidecar, write_position_sidecar
 from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.source_alid_sidecar import (
+    SourceAlidSidecar,
+    write_source_alid_sidecar,
+)
 from opengwasdb.store_reader.variant_axis import (
     VARIANT_OFFSETS_FILENAME,
     VariantRecord,
@@ -287,6 +291,50 @@ def _require_every_row_placed(
         )
 
 
+def _write_source_alid_sidecar(context: RewriteContext) -> None:
+    """Write each component's `source_alid` sidecar from its Variant Table (#470).
+
+    The values are the table's eighth column as `parse_variant_line` reads it: a blank
+    (``.``) is none, and a table written before the column (seven fields) gives none on
+    every row. Each row's state (none, its own ALID, another) comes from comparing that
+    value with the row's ALID, as a build's does. The rows come from the table in row
+    order, refused as for the ALID sidecar when out of order. Before the step ends, the
+    sidecar read back must give every row the table's state and, for a lifted row, its
+    text: the proof's questions reach only some.
+
+    A Hybrid's Dense Component gets none (`axis_components`): from 0.3.0 its rows answer
+    `source_alid` from the shared table's sidecar (#472), not from its own copy of the
+    table, which completion left blank (#449, opengwasdb-stores#499).
+    """
+    for component in context.axis_components():
+        directory = context.staged / component.relative
+        values: list[str | None] = []
+        alids: list[str] = []
+        for record in _records_in_row_order(directory, _offset_rows(component)):
+            values.append(record.source_alid)
+            alids.append(record.alid)
+        write_source_alid_sidecar(directory, values, alids)
+        _require_every_source_alid_kept(directory, values, alids)
+
+
+def _require_every_source_alid_kept(
+    directory: Path, values: list[str | None], alids: list[str]
+) -> None:
+    """Refuse a sidecar that names some row's `source_alid` otherwise than the table
+    (`SourceAlidSidecar.differing`, the comparison `variant_table.source_alid_sidecar`
+    makes)."""
+    sidecar = SourceAlidSidecar.open(directory)
+    if sidecar is None:
+        raise RewriteError(f"{directory}: the source_alid sidecar was not written")
+    wrong = sidecar.differing(0, values, alids)
+    if wrong or sidecar.n_rows != len(values):
+        first = wrong[0] if wrong else min(sidecar.n_rows, len(values))
+        raise RewriteError(
+            f"{directory}: the written source_alid sidecar holds {sidecar.n_rows} rows and "
+            f"names {len(wrong)} of the table's {len(values)} otherwise; first, row {first}"
+        )
+
+
 def _records_in_row_order(directory: Path, n_rows: int) -> Iterator[VariantRecord]:
     """Every row of the Variant Table, in row order, read without its search indexes.
 
@@ -327,8 +375,9 @@ def _variant_offsets_left_out(_component: Component) -> Iterable[str]:
 
 
 def _check_sidecars_count_offsets(context: RewriteContext) -> None:
-    """Refuse unless each staged component's ALID and position sidecars count the rows
-    its source's `variant_offsets.npy` did, and drop the manifest's note of the file.
+    """Refuse unless each staged component's ALID, position and `source_alid` sidecars
+    count the rows its source's `variant_offsets.npy` did, and drop the manifest's note
+    of the file.
 
     A 0.3.0 Store Reader never reads the Variant Table, so nothing seeks a row's BGZF
     offset: the ALID sidecar counts the variants. The copy left the file out; this
@@ -343,6 +392,7 @@ def _check_sidecars_count_offsets(context: RewriteContext) -> None:
         counted = {
             "ALID": _rows_of(AlidSidecar.open(directory)),
             "position": _rows_of(PositionSidecar.open(directory)),
+            "source_alid": _rows_of(SourceAlidSidecar.open(directory)),
         }
         wrong = {name: n for name, n in counted.items() if n != n_offsets}
         if wrong:
@@ -354,7 +404,7 @@ def _check_sidecars_count_offsets(context: RewriteContext) -> None:
         _forget_row_offsets(directory / "manifest.json")
 
 
-def _rows_of(sidecar: AlidSidecar | PositionSidecar | None) -> int | None:
+def _rows_of(sidecar: AlidSidecar | PositionSidecar | SourceAlidSidecar | None) -> int | None:
     return None if sidecar is None else sidecar.n_rows
 
 
@@ -672,6 +722,13 @@ STEPS: tuple[RewriteStep, ...] = (
         "from the Variant Table, so a range is a binary search and not a tabix fetch "
         "(ADR 0105 §6)",
         _write_position_sidecar,
+    ),
+    RewriteStep(
+        "source_alid_sidecar",
+        "write the source_alid sidecar, each row's pre-liftover ALID, from the Variant "
+        "Table's source_alid column (none on a table without one), so no query reads the "
+        "table for it (#470)",
+        _write_source_alid_sidecar,
     ),
     RewriteStep(
         "provenance_index",
