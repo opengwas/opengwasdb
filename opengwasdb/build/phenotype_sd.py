@@ -32,6 +32,7 @@ outcome over a defaulted value.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TypeGuard
 
 import numpy as np
@@ -51,6 +52,24 @@ _ESTIMATION_METHODS = frozenset(
 #: `estimate-phenotype-sd` CLI, issue #176) read one definition rather than
 #: re-listing the tiers.
 ESTIMATION_METHODS = _ESTIMATION_METHODS
+
+#: How many qualifying evidence rows one Analysis's phenotype-SD estimate is
+#: drawn from. A robust median-implied-SD estimate needs nowhere near this many
+#: sites (ADR 0029's estimator is a median over per-variant values, not a fit),
+#: so the bound costs the estimate nothing measurable while capping what a
+#: 40M-row file costs in memory. It matches
+#: `opengwasdb.build.eaf_orientation.DEFAULT_SAMPLE_SITES`'s scale deliberately:
+#: both are "an Analysis's own variants, bounded". It lives here, beside the
+#: estimator, so the CLI can name it as a default without importing the resolver
+#: (and pandas and scipy with it).
+DEFAULT_EVIDENCE_SAMPLE = 20_000
+
+
+class AfSource(StrEnum):
+    """Where the allele frequency in the ADR-0029 estimator comes from."""
+
+    source = "source"
+    reference = "reference"
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,5 @@
 - **A 0.3.0 release answers `range_phewas` from a position sidecar, without tabix or
-  pysam (issue #468, ADR 0105 §6).** Not released until #469–#472 land on epic #450's
-  branch. Every build and completion writes three more files beside the Variant Table:
+  pysam (issue #468, ADR 0105 §6).** Every build and completion writes three more files beside the Variant Table:
   `variant_position.npy` (each row's position, `<u4`), `variant_position_chromosomes.npy`
   and `variant_position_chromosome_offsets.npy` (each chromosome's rows). A range is two
   binary searches in its chromosome's slice. It answers exactly as a 0.2 release answers

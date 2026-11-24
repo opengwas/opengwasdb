@@ -10,5 +10,6 @@
   `opengwasdb.store_reader.analyses.UnknownAnalysisError` (a `ValueError`) on every
   layout, naming it. A stored tier without offsets answers one Analysis by
   filtering its rows. A Ragged release still scans an unstored threshold. A
-  Hybrid's `limit` is applied to each component. `analysis`, `phewas` and
-  `range_by_analysis` are unchanged.
+  Hybrid's `limit` is applied to each component. `phewas` and
+  `range_by_analysis`, which name no Analysis, are unchanged; every other query that
+  names one refuses an unknown one the same way (#474).

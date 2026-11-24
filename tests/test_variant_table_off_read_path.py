@@ -216,7 +216,8 @@ for argv in json.loads(sys.argv[1]):
         else:
             code = 0
     out[argv[0]] = {"code": code, "stdout": written.getvalue()}
-print(json.dumps({"answers": out, "pysam": "pysam" in sys.modules}))
+HEAVY = ("pysam", "sqlite3", "pandas", "scipy")
+print(json.dumps({"answers": out, "loaded": [m for m in HEAVY if m in sys.modules]}))
 """
 
 
@@ -225,8 +226,10 @@ def test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam(
     planted, tmp_path: Path, name: str
 ):
     """`opengwasdb query-*` loads no pysam on 0.3.0: Reference Completion's modules, which
-    do, are imported by the `complete-*` commands alone. The five commands run in one
-    fresh interpreter, which loads nothing a command could have loaded for another."""
+    do, are imported by the `complete-*` commands alone. Nor sqlite3, pandas or scipy,
+    which the builders, resolvers, validation and `overview.html` load: each command
+    imports those on use (#450). The five commands run in one fresh interpreter, which
+    loads nothing a command could have loaded for another."""
     release = Path(shutil.copytree(planted[name][0], tmp_path / name))
     with query_store(release) as q:
         table = q.variants_table()
@@ -248,7 +251,7 @@ def test_every_cli_query_on_0_3_0_reads_no_variant_table_and_no_pysam(
         assert answer["code"] == 0, (command, out.stderr[-3000:])
         assert answer["stdout"].count("\n") > 1, (command, "a query that answered nothing")
     assert "\trs77\t" in found["answers"]["query-lookup"]["stdout"], "the planted rsID"
-    assert found["pysam"] is False, "a 0.3.0 CLI query loaded pysam"
+    assert found["loaded"] == [], "a 0.3.0 CLI query loaded pysam, sqlite3, pandas or scipy"
 
 
 def test_a_0_3_0_release_without_its_rsid_index_is_refused(planted, tmp_path: Path):

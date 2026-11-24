@@ -217,21 +217,61 @@ _FILE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
         "Plain tab-delimited text.",
     ),
     "overview.html": ("human", "This page."),
+    "regions.tsv": (
+        "human",
+        "The region boundaries and leads a Ragged build recorded (provenance). Plain "
+        "tab-delimited text.",
+    ),
     "index.sqlite": (
         "internal",
         "Reference Completion Quality per LD block and Analysis (provenance). From format "
         "0.3.0 no query reads it; a 0.2 release also keeps its layout and the rsID aliases "
         "its Dense and Hybrid queries fall back to here.",
     ),
-    "variants.tsv.gz": ("internal", "Tabix-indexed variant table. Read via the query API."),
-    "variants.tsv.gz.tbi": ("internal", "Tabix index for variants.tsv.gz."),
-    "variant_offsets.npy": ("internal", "Variant axis row-offset index."),
-    "variant_alid_bytes.npy": ("internal", "Variant axis identifier index."),
-    "variant_alid_rows.npy": ("internal", "Variant axis identifier index."),
+    "variants.tsv.gz": (
+        "human",
+        "The Store Variant Table, one row per variant: tab-delimited, bgzipped and "
+        "tabix-indexed, for tabix, bedtools and R. From format 0.3.0 no query reads it: "
+        "queries read the variant sidecars below. A 0.2 release's queries read it.",
+    ),
+    "variants.tsv.gz.tbi": (
+        "internal",
+        "Tabix index for variants.tsv.gz. From format 0.3.0 no query reads it.",
+    ),
+    "variant_offsets.npy": ("internal", "Variant axis row-offset index (format 0.2)."),
+    "variant_alid_bytes.npy": ("internal", "Variant axis identifier index (format 0.2)."),
+    "variant_alid_rows.npy": ("internal", "Variant axis identifier index (format 0.2)."),
     "variant_alid_utf8.npy": ("internal", "Every variant's ALID, in row order (ALID sidecar)."),
     "variant_alid_offsets.npy": ("internal", "Where each row's ALID starts (ALID sidecar)."),
     "variant_alid_keys.npy": ("internal", "Sorted ALID search keys (ALID sidecar)."),
     "variant_alid_order.npy": ("internal", "The row of each sorted ALID key (ALID sidecar)."),
+    "variant_position.npy": (
+        "internal",
+        "Every variant's position, in row order (position sidecar).",
+    ),
+    "variant_position_chromosomes.npy": (
+        "internal",
+        "The chromosomes the rows are on, in order (position sidecar).",
+    ),
+    "variant_position_chromosome_offsets.npy": (
+        "internal",
+        "Where each chromosome's rows start (position sidecar).",
+    ),
+    "variant_rsid_bytes.npy": ("internal", "Sorted rsID search keys (rsID index)."),
+    "variant_rsid_rows.npy": ("internal", "The row of each sorted rsID key (rsID index)."),
+    "variant_source_alid_state.npy": (
+        "internal",
+        "Whether each row has a pre-liftover ALID, and whether it is the row's own "
+        "(source_alid sidecar).",
+    ),
+    "variant_source_alid_utf8.npy": (
+        "internal",
+        "The pre-liftover ALID of each lifted row (source_alid sidecar).",
+    ),
+    "variant_source_alid_offsets.npy": (
+        "internal",
+        "Where each lifted row's pre-liftover ALID starts (source_alid sidecar).",
+    ),
     "data.zarr": (
         "internal",
         "Association statistics (Z/SE) and top-hit indexes, chunked and compressed. "

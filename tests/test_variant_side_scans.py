@@ -193,7 +193,7 @@ def _any_alid(query, *, off_panel: bool | None = None) -> str:
     if off_panel is None:
         chosen = indices
     else:
-        on_panel = query._on_panel_mask(indices)
+        on_panel = query._panel_split(indices)[0]
         chosen = indices[~on_panel] if off_panel else indices[on_panel]
     assert len(chosen), "the fixture must have a variant of the requested panel membership"
     return str(table[int(chosen[0])]["alid"])
@@ -320,7 +320,7 @@ def test_hybrid_off_panel_shapes_match_the_overflow_side(
         # rows and compare those with the Overflow oracle.
         whole_range = query.range_phewas("1", 1, 600_000)
         off_rows = np.asarray(whole_range["variant_index"])
-        off_keep = ~query._on_panel_mask(off_rows)
+        off_keep = ~query._panel_split(off_rows)[0]
         assert off_keep.any(), "the range must return off-panel rows"
         _same_oracle(
             {key: np.asarray(whole_range[key])[off_keep] for key in _RESULT_KEYS},
@@ -330,7 +330,7 @@ def test_hybrid_off_panel_shapes_match_the_overflow_side(
 
         lookup = query.lookup([off_alid], analysis_ids)
         lookup_rows = np.asarray(lookup["variant_index"])
-        lookup_keep = ~query._on_panel_mask(lookup_rows)
+        lookup_keep = ~query._panel_split(lookup_rows)[0]
         assert lookup_keep.any(), "the lookup must return off-panel rows"
         _same_oracle(
             {key: np.asarray(lookup[key])[lookup_keep] for key in _RESULT_KEYS},
@@ -409,11 +409,11 @@ def test_variant_shapes_never_decode_whole_planes(
         query.range_phewas("1", 900_000, 1_600_000)
         query.lookup([alid], _analysis_ids(query))
         # `top_hits` uses the precomputed index when one exists; the scan
-        # fallback is the variant-side path this test is about, so call it
-        # directly rather than depend on the fixture having no index.
-        query._top_hits_by_scan(
-            analysis_index=None, threshold=5e-8, limit=None, observed_only=False
-        )
+        # fallback is the variant-side path this test is about, so hide the
+        # tier rather than depend on the fixture having no index.
+        assert query._top_hits.tier(5e-8) is not None, "the fixture stores the tier"
+        monkeypatch.setattr(query._top_hits, "tier", lambda _threshold: None)
+        assert len(query.top_hits(threshold=5e-8)["z"]) > 0, "the scan found no hit"
     assert widths and max(widths) <= window, f"widest slice {max(widths, default=0)}"
 
 

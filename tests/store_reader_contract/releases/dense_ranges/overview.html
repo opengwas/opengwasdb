@@ -158,16 +158,16 @@ table.guide td.fdesc { color: var(--ink-soft); }
 <tr><td class="fname">variant_alid_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Where each row&#x27;s ALID starts (ALID sidecar).</td></tr>
 <tr><td class="fname">variant_alid_order.npy<span class="badge internal">internal</span></td><td class="fdesc">The row of each sorted ALID key (ALID sidecar).</td></tr>
 <tr><td class="fname">variant_alid_utf8.npy<span class="badge internal">internal</span></td><td class="fdesc">Every variant&#x27;s ALID, in row order (ALID sidecar).</td></tr>
-<tr><td class="fname">variant_position.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_position_chromosome_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_position_chromosomes.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_rsid_bytes.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_rsid_rows.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_source_alid_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_source_alid_state.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variant_source_alid_utf8.npy<span class="badge internal">internal</span></td><td class="fdesc">Internal store file.</td></tr>
-<tr><td class="fname">variants.tsv.gz<span class="badge internal">internal</span></td><td class="fdesc">Tabix-indexed variant table. Read via the query API.</td></tr>
-<tr><td class="fname">variants.tsv.gz.tbi<span class="badge internal">internal</span></td><td class="fdesc">Tabix index for variants.tsv.gz.</td></tr>
+<tr><td class="fname">variant_position.npy<span class="badge internal">internal</span></td><td class="fdesc">Every variant&#x27;s position, in row order (position sidecar).</td></tr>
+<tr><td class="fname">variant_position_chromosome_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Where each chromosome&#x27;s rows start (position sidecar).</td></tr>
+<tr><td class="fname">variant_position_chromosomes.npy<span class="badge internal">internal</span></td><td class="fdesc">The chromosomes the rows are on, in order (position sidecar).</td></tr>
+<tr><td class="fname">variant_rsid_bytes.npy<span class="badge internal">internal</span></td><td class="fdesc">Sorted rsID search keys (rsID index).</td></tr>
+<tr><td class="fname">variant_rsid_rows.npy<span class="badge internal">internal</span></td><td class="fdesc">The row of each sorted rsID key (rsID index).</td></tr>
+<tr><td class="fname">variant_source_alid_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Where each lifted row&#x27;s pre-liftover ALID starts (source_alid sidecar).</td></tr>
+<tr><td class="fname">variant_source_alid_state.npy<span class="badge internal">internal</span></td><td class="fdesc">Whether each row has a pre-liftover ALID, and whether it is the row&#x27;s own (source_alid sidecar).</td></tr>
+<tr><td class="fname">variant_source_alid_utf8.npy<span class="badge internal">internal</span></td><td class="fdesc">The pre-liftover ALID of each lifted row (source_alid sidecar).</td></tr>
+<tr><td class="fname">variants.tsv.gz<span class="badge human">human</span></td><td class="fdesc">The Store Variant Table, one row per variant: tab-delimited, bgzipped and tabix-indexed, for tabix, bedtools and R. From format 0.3.0 no query reads it: queries read the variant sidecars below. A 0.2 release&#x27;s queries read it.</td></tr>
+<tr><td class="fname">variants.tsv.gz.tbi<span class="badge internal">internal</span></td><td class="fdesc">Tabix index for variants.tsv.gz. From format 0.3.0 no query reads it.</td></tr>
 </tbody>
 </table>
 </section>

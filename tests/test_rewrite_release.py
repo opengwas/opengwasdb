@@ -14,12 +14,17 @@ refused before anything is published.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import shutil
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -115,20 +120,53 @@ NOT_POSED = {name: UNPOSED for name in NAMES} | {
 }
 
 
+@dataclass(frozen=True)
+class Rewritten:
+    """One source's rewrite, made once for the module: its files and answers before,
+    what the rewrite printed, and the published release. Never written to."""
+
+    source: Path
+    before: dict[str, str]
+    reference: dict[str, Any]
+    said: str
+    destination: Path
+
+
+@pytest.fixture(scope="module")
+def rewritten(
+    sources: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> Callable[[str], Rewritten]:
+    """Each source rewritten, on first ask and kept: the tests of what a rewrite answers,
+    drops and writes read one rewrite rather than making their own (#450)."""
+    root = tmp_path_factory.mktemp("rewritten")
+    made: dict[str, Rewritten] = {}
+
+    def rewrite_of(name: str) -> Rewritten:
+        if name not in made:
+            source = sources[name]
+            before, reference = _files(source), release_digests(source)
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                destination = rewrite_release(source, root / name)
+            made[name] = Rewritten(source, before, reference, printed.getvalue(), destination)
+        return made[name]
+
+    return rewrite_of
+
+
 @pytest.mark.parametrize("name", NAMES)
 def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
-    sources: dict[str, Path], tmp_path: Path, name: str, capsys: pytest.CaptureFixture[str]
+    rewritten: Callable[[str], Rewritten], name: str
 ):
-    source = sources[name]
-    before = _files(source)
-    reference = release_digests(source)
+    made = rewritten(name)
+    source, before, reference, said = made.source, made.before, made.reference, made.said
     empty = reference["shapes"]["phewas/1:1:A:C/all"]
     answered = [shape for shape, digests in reference["shapes"].items() if digests != empty]
     assert len(answered) > 20, "a source of empty answers would prove nothing"
 
-    destination = rewrite_release(source, tmp_path / "rewritten")
+    destination = made.destination
 
-    said = capsys.readouterr().out
+    assert f"Published {destination} as 0.3.0" in said, "the rewrite's output was not caught"
     assert f"it cannot pose {', '.join(NOT_POSED[name])}:" in said, said
     assert _files(source) == before, "the rewrite wrote its source"
     assert differences(reference, release_digests(destination)) == []
@@ -185,10 +223,9 @@ def _quality_rows(index: Path) -> list[tuple]:
 
 @pytest.mark.parametrize("name", NAMES)
 def test_a_rewrite_drops_exactly_what_0_3_0_does_not_carry(
-    built: dict[str, Path], sources: dict[str, Path], tmp_path: Path, name: str
+    built: dict[str, Path], rewritten: Callable[[str], Rewritten], name: str
 ):
-    source = sources[name]
-    destination = rewrite_release(source, tmp_path / "rewritten")
+    source, destination = rewritten(name).source, rewritten(name).destination
     completed = name.endswith("_completed")
     for directory in components(source):
         relative = directory.relative_to(source)
@@ -208,10 +245,6 @@ def test_a_rewrite_drops_exactly_what_0_3_0_does_not_carry(
     # What a 0.3.0 build writes, file for file: the rewrite and the builders agree on
     # what the format carries.
     assert set(_files(destination)) == set(_files(built[name]))
-
-
-def test_the_rewritten_sidecar_is_what_a_build_writes(built, sources, tmp_path):
-    """Rewritten from the 0.2.3 table, the sidecar is the 0.3.0 build's, byte for byte."""
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged", "hybrid"])
@@ -243,10 +276,10 @@ def test_the_proof_asks_every_range_question_of_each_layout(
         assert manifest["provenance"]["format_rewrite"]["range_questions_not_posed"] == []
 
 
-def test_the_rewritten_sidecars_are_what_a_build_writes(built, sources, tmp_path):
+def test_the_rewritten_sidecars_are_what_a_build_writes(built, rewritten):
     """Rewritten from the 0.2.3 table, each sidecar is the 0.3.0 build's, byte for byte;
     the Dense Component has none, as the build's has none (#472)."""
-    destination = rewrite_release(sources["hybrid_completed"], tmp_path / "rewritten")
+    destination = rewritten("hybrid_completed").destination
     names = (*ALID_SIDECAR_FILENAMES, *POSITION_SIDECAR_FILENAMES, *SOURCE_ALID_SIDECAR_FILENAMES)
     for name in names:
         rewritten = (destination / name).read_bytes()

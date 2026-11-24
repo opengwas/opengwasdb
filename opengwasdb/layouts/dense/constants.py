@@ -15,14 +15,21 @@ DEFAULT_CHUNK_SHAPE = DENSE_CHUNK_SHAPE
 #: the `sharding_indexed` codec, and the published record must name that codec.
 DEFAULT_COMPRESSOR = SHARDED_COMPRESSOR_RECORD
 DEFAULT_DTYPE = "float16"
+#: `build-dense-rho`'s defaults (the ADR 0025 Rho estimator, `layouts.dense.rho`): the
+#: distance-thinning window, the |z| below which a variant counts as null, and the
+#: shared null variants below which Rho is NaN. Here rather than in `rho`, which loads
+#: scipy, so the CLI names them without loading it.
+DEFAULT_RHO_WINDOW_BP = 15_000
+DEFAULT_RHO_Z_THRESH = 1.0
+DEFAULT_RHO_MIN_NULLS = 500
 
 
 def dense_layout_records(
     shape: tuple[int, int], *, hint: tuple[int, int] = DEFAULT_CHUNK_SHAPE
 ) -> dict[str, object]:
-    """The layout a Dense plane of `shape` is written with, as the three
-    recordings publish it (manifest `provenance.dense`, the `index.sqlite`
-    `dense` blob, the `data.zarr` root attrs).
+    """The layout a Dense plane of `shape` is written with, as the two
+    recordings publish it (manifest `provenance.dense`, the `data.zarr` root
+    attrs; a 0.2 release's `index.sqlite` `dense` blob was a third, #471).
 
     The **inner chunk** comes from the seam's role policy (the builder's
     `chunk_shape` hint, clipped to the plane), and the **shard** from the shard
@@ -38,22 +45,6 @@ def dense_layout_records(
         "compressor": DEFAULT_COMPRESSOR,
         "zarr_format": SHARDED_STORE_ZARR_FORMAT,
     }
-
-
-def dense_index_metadata(
-    shape: tuple[int, int], *, hint: tuple[int, int] = DEFAULT_CHUNK_SHAPE, **extra: object
-) -> dict[str, object]:
-    """The `dense` blob every Dense-shaped builder writes into `index.sqlite`.
-
-    Deliberately carries no `se_dtype`. Two of the three builders write this
-    before the SE encoding has been measured, and `manifest.json`'s `encoding`
-    block is the authoritative declaration in any case (spec §6a) — a duplicate
-    that cannot be right is worse than no duplicate (issue #118).
-
-    The chunk, shard and compressor come from `dense_layout_records`, so the
-    blob cannot describe a layout the arrays do not have (issue #245, #247).
-    """
-    return {**dense_layout_records(shape, hint=hint), **extra}
 
 
 def dense_provenance_block(

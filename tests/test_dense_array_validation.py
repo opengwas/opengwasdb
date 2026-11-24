@@ -24,7 +24,6 @@ import pytest
 import zarr
 from store_reads import element_reads, times_read
 
-from opengwasdb import top_hits
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits
 from opengwasdb.store import open_store
 from opengwasdb.store_reader import top_hits as reader_top_hits
@@ -83,7 +82,7 @@ def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
     for name, values in arrays.items():
         group.create_array(name, data=values)
 
-    loaded = top_hits.load_tier_arrays(group)
+    loaded = reader_top_hits.tier_arrays(group)
 
     assert loaded["rows"].dtype == np.uint32
     assert loaded["cols"].dtype == np.uint32
@@ -385,8 +384,8 @@ def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str
     """Every `top_hits/…` value a target is asked to hold that is more than a fact.
 
     The structure rules' small facts (a tier's problem, how many of its rows miss its
-    threshold, whether a 0.2 tier's `abs_z` agrees) are kept for the run; what the association scan reads to check the planes
-    against, the tiers' arrays, is not.
+    threshold, whether a 0.2 tier's `abs_z` agrees) are kept for the run; what the
+    association scan reads to check the planes against, the tiers' arrays, is not.
     """
     held: list[tuple[Target, str]] = []
     remember = Target.remember

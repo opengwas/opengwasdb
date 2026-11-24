@@ -1,6 +1,5 @@
 - **A format 0.3.0 Hybrid's Dense Component no longer carries a copy of the shared
-  variants or Analyses (issue #472, ADR 0102 §4, ADR 0105).** Not released until
-  #468–#472 land on epic #450's branch. From 0.3.0, `dense/` holds `manifest.json`,
+  variants or Analyses (issue #472, ADR 0102 §4, ADR 0105).** From 0.3.0, `dense/` holds `manifest.json`,
   `data.zarr/`, `dense_to_shared.npy` and, Reference-Completed, `index.sqlite`. It no
   longer carries `variants.tsv.gz`, `variants.tsv.gz.tbi`, the ALID sidecar
   (`variant_alid_utf8/offsets/keys/order.npy`), the position sidecar

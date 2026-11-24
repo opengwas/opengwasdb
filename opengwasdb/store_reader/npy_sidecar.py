@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -52,19 +53,30 @@ def slice_texts(text: memoryview, offsets: np.ndarray, at: np.ndarray) -> list[s
     return [str(text[a:b], "utf-8") for a, b in zip(starts, stops, strict=True)]
 
 
+def dtype_fault(expected: Sequence[tuple[str, np.ndarray, np.dtype[Any]]]) -> str:
+    """The first of `expected`'s ``(file, array, dtype)`` that is not a 1-d array of its
+    dtype, or ``""``: the check every sidecar makes of its arrays before it reads them."""
+    for name, array, dtype in expected:
+        if array.dtype != dtype or array.ndim != 1:
+            return f"{name} is {array.dtype} of {array.ndim} dimension(s), not 1-d {dtype}"
+    return ""
+
+
 def offsets_fault(
     offsets: np.ndarray,
     n_bytes: int,
     *,
     names: tuple[str, str],
     rising: tuple[str, str] | None,
+    unit: str = "bytes",
 ) -> str:
     """Why `offsets` cannot slice `n_bytes` of text into non-empty texts, or ``""``.
 
     They start at 0 and end at `n_bytes`. With `rising`, ``(what a text is, why it is
     never empty)``, each also lies above the one before: the check reads every offset,
     so a reader that opens a sidecar leaves it out and the validator makes it. `names`
-    is ``(offsets file, text file)``.
+    is ``(offsets file, text file)``, and `unit` what the text file holds `n_bytes` of
+    (the position sidecar's offsets slice rows, not bytes).
     """
     offsets_name, utf8_name = names
     if not len(offsets) or int(offsets[0]) != 0:
@@ -76,7 +88,9 @@ def offsets_fault(
             what, why = rising
             return f"{offsets_name} does not rise at {what} {int(flat[0])}: {why}"
     if int(offsets[-1]) != n_bytes:
-        return f"{offsets_name} ends at {int(offsets[-1])} but {utf8_name} holds {n_bytes} bytes"
+        return (
+            f"{offsets_name} ends at {int(offsets[-1])} but {utf8_name} holds {n_bytes} {unit}"
+        )
     return ""
 
 

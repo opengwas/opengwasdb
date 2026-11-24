@@ -69,7 +69,7 @@ def test_round_trip_names_every_row(tmp_path: Path) -> None:
 def test_every_alid_resolves_to_its_row_however_long(tmp_path: Path) -> None:
     sidecar = _sidecar(tmp_path, ALIDS)
     for row, alid in enumerate(ALIDS):
-        assert sidecar.row_of(alid) == row, alid
+        assert sidecar.rows_of([alid]).tolist() == [row], alid
     assert sidecar.rows_of(ALIDS).tolist() == list(range(len(ALIDS)))
 
 

@@ -19,6 +19,10 @@ from opengwasdb.store_reader.analyses import UnknownAnalysisError
 
 UNKNOWN = "no-such-analysis"
 
+#: The contract bundle's releases (#474): the six digest releases at 0.3.0, planted, and
+#: committed, so the refusals are asked of them without a build. Only read.
+RELEASES = Path(__file__).parent / "store_reader_contract" / "releases"
+
 #: Each shape that names an Analysis, asked of a facade `q` whose first Analysis is
 #: `known` and first variant `alid`.
 SHAPES: dict[str, Callable[[Any, str, str], Any]] = {
@@ -51,24 +55,24 @@ def _asked(release: Path, ask: Callable[[Any, str, str], Any]) -> None:
     [f"{layout}_{state}" for layout in ("dense", "ragged", "hybrid")
      for state in ("observed", "completed")],
 )
-def test_an_unknown_analysis_is_refused_by_name(digest_releases, name: str, shape: str):
+def test_an_unknown_analysis_is_refused_by_name(name: str, shape: str):
     with pytest.raises(UnknownAnalysisError, match=UNKNOWN):
-        _asked(digest_releases[name], SHAPES[shape])
+        _asked(RELEASES / name, SHAPES[shape])
 
 
 @pytest.mark.parametrize("shape", sorted(RHO_SHAPES))
 @pytest.mark.parametrize("name", ["dense_observed", "hybrid_completed"])
 def test_the_rho_reads_refuse_an_unknown_analysis_with_or_without_a_rho_matrix(
-    digest_releases, name: str, shape: str
+    name: str, shape: str
 ):
     with pytest.raises(UnknownAnalysisError, match=UNKNOWN):
-        _asked(digest_releases[name], RHO_SHAPES[shape])
+        _asked(RELEASES / name, RHO_SHAPES[shape])
 
 
 @pytest.mark.parametrize("name", ["dense_observed", "hybrid_observed"])
 def test_a_valid_indexed_subset_refuses_an_unknown_analysis(name: str):
     """The contract bundle's releases carry Indexed Variant Subset `contract`."""
-    release = Path(__file__).parent / "store_reader_contract" / "releases" / name
+    release = RELEASES / name
     with query_store(release) as q:
         known = q.analyses_table()[0]["analysis_id"]
         assert q.analysis(known, indexed_subset="contract")["z"].size
@@ -80,12 +84,12 @@ def test_a_valid_indexed_subset_refuses_an_unknown_analysis(name: str):
     "command",
     [["query-analysis", "{release}", UNKNOWN], ["query-lookup", "{release}", "1:1:A:C", UNKNOWN]],
 )
-def test_the_cli_names_an_unknown_analysis_and_exits_1(digest_releases, command: list[str]):
+def test_the_cli_names_an_unknown_analysis_and_exits_1(command: list[str]):
     from typer.testing import CliRunner
 
     from opengwasdb.cli.main import app
 
-    release = str(digest_releases["dense_observed"])
+    release = str(RELEASES / "dense_observed")
     result = CliRunner().invoke(app, [part.format(release=release) for part in command])
     assert result.exit_code == 1, result.output
     assert f"unknown analysis_id {UNKNOWN!r}" in result.output

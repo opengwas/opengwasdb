@@ -204,7 +204,7 @@ def test_counts_are_the_per_analysis_slice_lengths(tmp_path):
 def test_the_structural_rules_name_what_is_wrong(tmp_path):
     root = _write(tmp_path, _columns(imputed=True))
     group = root["top_hits/p_5e_04"]
-    arrays = top_hits.load_tier_arrays(group)
+    arrays = reader_top_hits.tier_arrays(group)
     assert top_hits.structural_problem(arrays, group, 3, expects_imputed=True) is None
 
     swapped = dict(arrays, rows=arrays["rows"][::-1].copy())

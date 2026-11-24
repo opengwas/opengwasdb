@@ -201,7 +201,7 @@ def _rho_pairs(reader: DenseRhoReader, resolved: list[tuple[str, int]]) -> dict[
     }
 
 
-def _variants_table(variant_axis: AnyVariantAxis) -> dict[int, dict]:
+def _variants_table(variant_axis: AnyVariantAxis) -> dict[int, dict[str, Any]]:
     """Return all variants keyed by variant_index (`VariantAxis.variants_table`).
 
     The Store Variant Table's shape is layout-independent, so all three
@@ -246,6 +246,34 @@ def _scan_csr_hits(reader: CsrReader, region: Cells | None, threshold: float) ->
     return np.concatenate(hits)
 
 
+def _ragged_top_hits(
+    tiers: TopHitTiers,
+    reader: CsrReader,
+    csr: RaggedCSRReader,
+    threshold: float,
+    analysis_index: int | None,
+    *,
+    observed_only: bool,
+    with_n: bool,
+    source: str,
+) -> Associations:
+    """A Ragged component's hits clearing `threshold` -- every Analysis's, with None --
+    in genomic order: its stored tier's rows, or, with no tier at `threshold`, a scan of
+    its CSR (`_scan_csr_hits`), read at the hits' flat positions, which ascend in
+    genomic order. The one choice between the two, for a Ragged release and a Hybrid's
+    Overflow; both paths apply `observed_only`, and the caller `limit`. A Ragged
+    component may scan where a Dense one may not (#483)."""
+    tier = tiers.tier(threshold)
+    if tier is not None:
+        record = _ragged_tier_record(tier, analysis_index, csr, with_n=with_n, source=source)
+        return record.observed_only(observed_only)
+    region = None if analysis_index is None else Cells.analysis(analysis_index)
+    positions = _scan_csr_hits(reader, region, threshold)
+    if len(positions) == 0:
+        return Associations.empty(with_n=with_n)
+    return reader.read(Cells.positions(positions), observed_only=observed_only)
+
+
 class _StoreQueryBase:
     """What every adapter answers the same way: its tables, result resolution,
     and the context manager. `analyses_table()` returns every `analyses.tsv`
@@ -264,7 +292,7 @@ class _StoreQueryBase:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def variants_table(self) -> dict[int, dict]:
+    def variants_table(self) -> dict[int, dict[str, Any]]:
         """Return all variants keyed by variant_index."""
         return _variants_table(self._variant_axis)
 
@@ -287,9 +315,18 @@ class _StoreQueryBase:
         axis = self._variant_axis
         return _variant_rows(axis, axis.range_indices(chromosome, start, end))
 
-    def analyses_table(self) -> dict[int, dict]:
+    def analyses_table(self) -> dict[int, dict[str, str]]:
         """Return all analyses keyed by analysis_index -- every analyses.tsv column."""
         return self._analyses.all()
+
+    def _analysis_index(self, analysis_id: str) -> int:
+        """`analysis_id`'s Store-local index; an Analysis the release does not hold raises
+        `UnknownAnalysisError` (spec §19), never an empty answer."""
+        return self._analyses.require_index(analysis_id)
+
+    def _optional_analysis_index(self, analysis_id: str | None) -> int | None:
+        """`_analysis_index`, or None for no Analysis (every Analysis's top hits)."""
+        return None if analysis_id is None else self._analysis_index(analysis_id)
 
     def resolve(
         self, result: Mapping[str, np.ndarray], *, include_variant_info: bool = False
@@ -349,11 +386,6 @@ class StoreQuery(_StoreQueryBase):
     def close(self) -> None:
         if self._owns_axis:
             self._variant_axis.close()
-
-    def _analysis_index(self, analysis_id: str) -> int:
-        """`analysis_id`'s Store-local index; an Analysis the release does not hold raises
-        `UnknownAnalysisError` (spec §19), never an empty answer."""
-        return self._analyses.require_index(analysis_id)
 
     def analysis(
         self,
@@ -464,7 +496,7 @@ class StoreQuery(_StoreQueryBase):
         `UnknownAnalysisError`. A tier without per-Analysis offsets still answers
         one Analysis, by filtering its rows.
         """
-        analysis_index = None if analysis_id is None else self._analyses.require_index(analysis_id)
+        analysis_index = self._optional_analysis_index(analysis_id)
         tier = self._top_hits.require(threshold)
         record = self._top_hit_record(tier.read(analysis_index))
         return record.observed_only(observed_only).head(limit)
@@ -596,10 +628,6 @@ class RaggedStoreQuery(_StoreQueryBase):
     def close(self) -> None:
         self._variant_axis.close()
 
-    def _resolve_analysis_id(self, analysis_id: str) -> int:
-        """`analysis_id`'s Store-local index, or `UnknownAnalysisError` (spec §19)."""
-        return self._analyses.require_index(analysis_id)
-
 
     def analysis(
         self,
@@ -616,7 +644,7 @@ class RaggedStoreQuery(_StoreQueryBase):
         """
         if indexed_subset is not None:
             _refuse_indexed_subset(self.store.path, "Ragged", indexed_subset)
-        idx = self._resolve_analysis_id(analysis_id)
+        idx = self._analysis_index(analysis_id)
         return self._reader.read(Cells.analysis(idx), observed_only=observed_only)
 
     def range_phewas(
@@ -676,46 +704,17 @@ class RaggedStoreQuery(_StoreQueryBase):
         falls back to a full CSR scan otherwise. The two paths return the
         same shape of answer for the same call.
         """
-        analysis_index = (
-            None if analysis_id is None else self._analyses.require_index(analysis_id)
-        )
-        tier = self._top_hits.tier(threshold)
-        if tier is None:
-            return self._top_hits_by_scan(
-                analysis_index=analysis_index,
-                threshold=threshold,
-                limit=limit,
-                observed_only=observed_only,
-            )
-        record = _ragged_tier_record(
-            tier,
-            analysis_index,
+        hits = _ragged_top_hits(
+            self._top_hits,
+            self._reader,
             self._csr,
+            threshold,
+            self._optional_analysis_index(analysis_id),
+            observed_only=observed_only,
             with_n=self._has_n,
             source=f"Top-Hit Index of {self.store.path}",
         )
-        return record.observed_only(observed_only).head(limit)
-
-    def _top_hits_by_scan(
-        self,
-        *,
-        analysis_index: int | None,
-        threshold: float,
-        limit: int | None,
-        observed_only: bool,
-    ) -> Associations:
-        """Top hits with no index to read: scan the CSR and threshold it.
-
-        Returns the same shape of answer as the indexed path, applying
-        `observed_only` before `limit` exactly as that path does. The
-        hits are read at their flat positions, which ascend in genomic order.
-        """
-        region = None if analysis_index is None else Cells.analysis(analysis_index)
-        hit_positions = _scan_csr_hits(self._reader, region, threshold)
-        if len(hit_positions) == 0:
-            return self._empty()
-        found = self._reader.read(Cells.positions(hit_positions), observed_only=observed_only)
-        return found.head(limit)
+        return hits.head(limit)
 
     def lookup(
         self, identifiers: list[str], analysis_ids: list[str], *, observed_only: bool = False
@@ -729,7 +728,7 @@ class RaggedStoreQuery(_StoreQueryBase):
         Requested Analysis order and duplicates carry through; a request that
         resolves nothing yields the empty result.
         """
-        analyses = [self._resolve_analysis_id(aid) for aid in analysis_ids]
+        analyses = [self._analysis_index(aid) for aid in analysis_ids]
         found = self._variant_axis.indices_by_identifiers(identifiers)
         if not len(found):
             return self._empty()
@@ -818,10 +817,6 @@ class HybridStoreQuery(_StoreQueryBase):
         """`(on_panel, rows)` for shared variant indices (`hybrid.panel_rows`, the one
         search of the panel map, which the Dense Component's axis asks too)."""
         return panel_rows(self._dense_to_shared, shared_indices)
-
-    def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
-        """Which shared variant indices are rows of the Dense Component's panel."""
-        return self._panel_split(shared_indices)[0]
 
     def _overflow_read(self, cells: Cells, *, observed_only: bool) -> Associations:
         """The Overflow's rows for a region, without the `n` a Hybrid never reports."""
@@ -917,28 +912,6 @@ class HybridStoreQuery(_StoreQueryBase):
         )
         return _analysis_major(Associations.concat([dense, overflow]), requested)
 
-    def _analysis_index(self, analysis_id: str) -> int:
-        """`analysis_id`'s Store-local index, or `UnknownAnalysisError` (spec §19)."""
-        return self._analyses.require_index(analysis_id)
-
-    def _overflow_top_hits(
-        self, threshold: float, analysis_index: int | None = None
-    ) -> Associations:
-        tier = self._top_hits.tier(threshold)
-        if tier is None:
-            region = None if analysis_index is None else Cells.analysis(analysis_index)
-            positions = _scan_csr_hits(self._overflow, region, threshold)
-            if len(positions) == 0:
-                return Associations.empty()
-            return self._overflow_read(Cells.positions(positions), observed_only=False)
-        return _ragged_tier_record(
-            tier,
-            analysis_index,
-            self._csr,
-            with_n=False,
-            source=f"Ragged Overflow Top-Hit Index of {self.store.path}",
-        )
-
     def top_hits(
         self, *, analysis_id: str | None = None, threshold: float = 5e-8,
         limit: int | None = None, observed_only: bool = False,
@@ -953,16 +926,23 @@ class HybridStoreQuery(_StoreQueryBase):
         (`_panel_split` searches it), so each component's first `limit` hits
         contain the merged first `limit`.
         """
-        analysis_index = (
-            None if analysis_id is None else self._analyses.require_index(analysis_id)
-        )
+        analysis_index = self._optional_analysis_index(analysis_id)
         dense = self._dense.top_hits(
             analysis_id=analysis_id,
             threshold=threshold,
             limit=limit,
             observed_only=observed_only,
         )
-        overflow = self._overflow_top_hits(threshold, analysis_index)
+        overflow = _ragged_top_hits(
+            self._top_hits,
+            self._overflow,
+            self._csr,
+            threshold,
+            analysis_index,
+            observed_only=False,
+            with_n=False,
+            source=f"Ragged Overflow Top-Hit Index of {self.store.path}",
+        )
         merged = Associations.concat(
             [self._remap_dense(dense), overflow.observed_only(observed_only).head(limit)]
         )

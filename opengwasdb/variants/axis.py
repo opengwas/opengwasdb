@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -41,6 +41,9 @@ from opengwasdb.store_reader.variant_axis import (
 from opengwasdb.store_reader.variant_axis import variant_table_path as variant_table_path
 from opengwasdb.variants.legacy_table import TabixVariantTable
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
+
+if TYPE_CHECKING:
+    import sqlite3
 
 log = logging.getLogger(__name__)
 

@@ -37,7 +37,6 @@ from opengwasdb.store import arrays as store_arrays
 # module, so a test that moves the cut moves every caller with it.
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
-from opengwasdb.store_reader import top_hits as reader_top_hits
 from opengwasdb.store_reader.format import carries_stored_p
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import release_arrays
@@ -50,10 +49,6 @@ from opengwasdb.store_reader.top_hits import (
 )
 
 log = logging.getLogger(__name__)
-
-#: A tier's arrays, as the validator reads them: the Store Reader's read (#473),
-#: under the name this module gave it.
-load_tier_arrays = reader_top_hits.tier_arrays
 
 #: Re-exported from the seam, which owns the role's default layout, so the
 #: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
