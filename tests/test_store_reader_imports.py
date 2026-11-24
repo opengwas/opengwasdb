@@ -111,10 +111,12 @@ def test_importing_the_store_reader_loads_no_heavy_dependency():
 
 
 def test_the_run_time_probe_sees_a_heavy_import():
-    """The probe's check, on a module that does load one, finds it."""
+    """The probe's check, on a module that does load one, finds it: Reference
+    Completion's LD panel reader, which imports pysam at load (the variant-axis writer
+    imports it on use since #469)."""
     probe = (
         "import json, sys\n"
-        "import opengwasdb.variants.axis\n"
+        "import opengwasdb.completion.ld_panel\n"
         f"print(json.dumps([name for name in {HEAVY!r} if name in sys.modules]))\n"
     )
     out = subprocess.run(

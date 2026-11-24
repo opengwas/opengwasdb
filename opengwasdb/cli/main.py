@@ -28,10 +28,6 @@ from opengwasdb.build.resolve import DEFAULT_EVIDENCE_SAMPLE
 from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
 from opengwasdb.layouts.build_manifest import read_manifest
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.complete import (
-    complete_dense_store,
-    resume_dense_completion,
-)
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
@@ -46,11 +42,9 @@ from opengwasdb.layouts.dense.rho import (
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged import RaggedBuildResult
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
-from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.ld.cli import ld_app
 from opengwasdb.model.analyses import read_analysis_records
@@ -88,6 +82,10 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+
+# Reference Completion's modules load pysam (its LD panel reader), so each `complete-*`
+# command imports its own on use: a `query-*` command on a 0.3.0 release loads no pysam
+# (#469). `test_cli_query_loads_no_pysam` holds every module imported here to that.
 
 app = typer.Typer(no_args_is_help=True)
 app.add_typer(ld_app, name="ld")
@@ -1558,6 +1556,9 @@ def complete_hybrid_command(
 ) -> None:
     """Reference-complete a Hybrid store — impute only the Dense Component."""
     import time
+
+    from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+
     t0 = time.time()
     result = complete_hybrid_store(
         source_path,
@@ -1729,6 +1730,9 @@ def complete_ragged_command(
     listed in the summary (regions_without_block).
     """
     import time
+
+    from opengwasdb.layouts.ragged.complete import complete_ragged_store
+
     t0 = time.time()
     result = complete_ragged_store(
         source_path,
@@ -1792,6 +1796,9 @@ def complete_dense_command(
 ) -> None:
     """Produce a Reference-Completed Dense store from a `gwas`-coverage observed-only store."""
     import time
+
+    from opengwasdb.layouts.dense.complete import complete_dense_store
+
     t0 = time.time()
     result = complete_dense_store(
         source_path,
@@ -1819,6 +1826,9 @@ def complete_dense_resume_command(
     loaded from the build_params.json written by the original run.
     """
     import time
+
+    from opengwasdb.layouts.dense.complete import resume_dense_completion
+
     t0 = time.time()
     result = resume_dense_completion(checkpoint_dir, n_workers=n_workers)
     elapsed = time.time() - t0

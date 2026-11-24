@@ -16,7 +16,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
-import pysam
 
 from opengwasdb.store_reader import variant_axis as reader_axis
 from opengwasdb.store_reader.alid import (
@@ -172,6 +171,8 @@ def _write_table(
     sidecars, for tabix, bedtools and R (spec §1.1). The 0.2 series' `variant_offsets.npy`,
     each row's BGZF offset, is not written.
     """
+    import pysam  # on use: importing the axis module, as every query does, loads no htslib
+
     table_path = variant_table_path(store)
     with pysam.BGZFile(str(table_path), "w") as handle:  # type: ignore[call-arg]
         handle.write(VARIANT_HEADER.encode("utf-8"))
