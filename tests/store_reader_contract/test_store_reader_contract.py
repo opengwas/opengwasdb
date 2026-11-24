@@ -19,9 +19,13 @@ import pytest
 from contract_reader import (
     BUNDLE,
     RELEASES,
+    answers,
+    differences,
+    disagreements,
     expected,
     mismatches,
     open_query,
+    readable_differences,
     release_names,
     version,
 )
@@ -67,6 +71,57 @@ def test_the_readme_names_every_release_and_no_other():
 @pytest.mark.parametrize("name", NAMES)
 def test_every_release_answers_as_expected(name: str):
     assert mismatches(RELEASES / name, expected(name)) == []
+
+
+def _nudged(answers: dict, change) -> tuple[dict, int]:
+    """A copy of `answers` with every finite `pval` -- carried as a value in `digests`, or
+    a field of a readable row -- passed through `change(value, i)`; and how many it changed."""
+    changed = 0
+
+    def walk(node, key=None):
+        nonlocal changed
+        if isinstance(node, dict):
+            return {k: walk(v, k) for k, v in node.items()}
+        if isinstance(node, list):
+            return [walk(v, key) for v in node]
+        if key == "pval" and isinstance(node, float) and node:
+            changed += 1
+            return change(node, changed)
+        return node
+
+    copy = json.loads(json.dumps(answers))
+    copy["digests"]["pval"] = {
+        shape: walk(values, "pval") for shape, values in copy["digests"]["pval"].items()
+    }
+    copy["readable"] = walk(copy["readable"])
+    return copy, changed
+
+
+def _ulps(value: float, i: int) -> float:
+    """`value` moved one or two ulps, up or down, by `i`."""
+    toward = np.inf if i % 2 else -np.inf
+    for _ in range(1 + i % 3 // 2):
+        value = float(np.nextafter(value, toward))
+    return value
+
+
+def test_pval_is_compared_to_a_few_ulps_across_machines_and_exactly_within_one():
+    """`erfc` differs between C libraries in the last ulp, so the contract, which reads on
+    one machine what another wrote, takes `pval` within `CROSS_MACHINE_PVAL_RTOL`; the
+    rewrite's proof, which reads both sides in one build, stays exact (`differences`)."""
+    want = expected("dense_observed")
+    found = answers(RELEASES / "dense_observed")
+    nudged, changed = _nudged(want, _ulps)
+    readable_pvals = _nudged({"digests": {"pval": {}}, "readable": want["readable"]}, _ulps)[1]
+    assert changed > 1000 and readable_pvals > 100, (changed, readable_pvals)
+    assert disagreements(found, want) == []
+    assert disagreements(found, nudged) == []
+    exact = differences(nudged["digests"], found["digests"])
+    assert exact and all(d.startswith("pval/") for d in exact), exact[:3]
+    assert readable_differences(nudged["readable"], found["readable"])
+    far, _ = _nudged(want, lambda p, i: p * (1 + 1e-9))
+    assert {d.split("/")[0] for d in disagreements(found, far)} == {"pval", "readable"}
+    assert differences(far["digests"], found["digests"])
 
 
 def test_the_bundle_holds_every_state_it_claims():

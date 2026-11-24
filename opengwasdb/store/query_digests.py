@@ -21,10 +21,15 @@ and widest top-hit answers resolved to rows, with variant info. Both, and the va
 reads, name each row's rsID and `source_alid`, so every row's `source_alid` is compared through
 `variants_table()`, and the rows an answer reaches through its resolved rows: a 0.2
 release reads them from its Variant Table, a 0.3.0 one from its sidecars (#469, #470).
-A resolved row's `log10_p` is kept as a
-number, so a reader in another language can be held to it with a tolerance; `differences`
-compares it exactly, NaN at the same place counting as equal, which is right between two
-releases read by one build.
+
+**Values, not digests: `pval` and `log10_p`.** Every answer's `pval`, and a resolved row's
+`pval` and `log10_p`, are kept as numbers (`VALUES`), not digested. `pval` is the libm's
+`erfc` (`store_reader.stats`), which differs in the last ulp between one C library and
+another, so answers written on one machine and read on another are compared with
+`differences(..., pval_rtol=CROSS_MACHINE_PVAL_RTOL)`: four float64 ulps, NaN at the same
+place counting as equal. Between two releases read by one build -- the rewrite's proof --
+`differences` compares them exactly, its default: there a difference is a difference in
+what was stored. `readable_differences` compares readable rows by the same rule.
 
 The **ALID probes** ask about the ALIDs a spread of variants misses: the longest the
 release holds, and one at each length where an ALID index changes how it searches
@@ -65,7 +70,7 @@ unless a caller passes its own `query`: the Store Reader contract test (#474,
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -126,6 +131,18 @@ UNSUPPORTED_CHROMOSOME = "27"
 
 #: The errors a refusal question may raise; any other is a failure, not an answer.
 REFUSAL_ERRORS = (UnknownAnalysisError, VariantNormalisationError)
+
+#: The fields kept as numbers rather than digested (module docstring): every answer's
+#: `pval`, keyed ``<section>/<question>`` (a resolved row's under ``resolved/``), and a
+#: resolved row's `log10_p`, keyed by its question.
+PVAL = "pval"
+LOG10_P = "log10_p"
+VALUES = (LOG10_P, PVAL)
+
+#: How far apart two `pval`s read on different machines may be, relatively: four
+#: float64 ulps. `erfc` differs between C libraries in the last ulp (#474); a relative
+#: change of 1e-9 is still a difference.
+CROSS_MACHINE_PVAL_RTOL = 4 * float(np.finfo(np.float64).eps)
 
 
 class IncompleteResultError(ValueError):
@@ -293,16 +310,16 @@ class _Asking:
 RESOLVED_SHAPES = ("lookup/", "top_hits/0.2/all", "range_phewas/")
 
 
-def _resolved(q: Any, result: Any) -> tuple[dict[str, str], list[float]]:
-    """A result's resolved rows: every field digested but `log10_p`, which is returned."""
+def _resolved(q: Any, result: Any) -> tuple[dict[str, str], dict[str, list[float]]]:
+    """A result's resolved rows: every field digested but `VALUES`, which are returned."""
     rows = list(q.resolve(result, include_variant_info=True))
-    names = sorted({name for row in rows for name in row} - {"log10_p"})
+    names = sorted({name for row in rows for name in row} - set(VALUES))
     digests = {}
     for name in names:
         values = np.empty(len(rows), dtype=object)
         values[:] = [repr(row.get(name)) for row in rows]
         digests[name] = digest_array(values)
-    return digests, [float(row["log10_p"]) for row in rows]
+    return digests, {kind: [float(row[kind]) for row in rows] for kind in VALUES}
 
 
 def probed_alids(variants: dict[int, dict[str, Any]]) -> list[str]:
@@ -562,7 +579,9 @@ def _digested(answer: Any) -> dict[str, str]:
     if isinstance(answer, Exception):
         return refusal_digest(answer)
     if isinstance(answer, Associations):
-        return result_digests(dict(answer))
+        digests = result_digests(dict(answer))
+        del digests[PVAL]  # kept as values (`_render`)
+        return digests
     if isinstance(answer, int):
         return {"count": digest_array(np.asarray([answer], dtype="int64"))}
     return _table_digests(answer)
@@ -591,7 +610,7 @@ def release_answers(
             "variants_table": _table_digests(variants),
             "analyses_table": _table_digests(analyses),
             "resolved": {},
-            "log10_p": {},
+            **{kind: {} for kind in VALUES},
             **{section: {} for section in SECTIONS},
             "unposed_range_questions": unposed_range_questions(range_questions(variants)),
         }
@@ -611,16 +630,18 @@ def _render(
     """Put one answer in both renderings: its digest (and resolved rows, where the question
     asks for them), and its readable rows unless `shown` is None."""
     digests[question.section][question.name] = _digested(answer)
+    if isinstance(answer, Associations):
+        digests[PVAL][f"{question.section}/{question.name}"] = [float(p) for p in answer[PVAL]]
     if question.resolved and not isinstance(answer, Exception):
-        digests["resolved"][question.name], digests["log10_p"][question.name] = _resolved(
-            q, answer
-        )
+        digests["resolved"][question.name], values = _resolved(q, answer)
+        digests[LOG10_P][question.name] = values[LOG10_P]
+        digests[PVAL][f"resolved/{question.name}"] = values[PVAL]
     if shown is not None:
         shown[question.section][question.name] = _readable(answer)
 
 
 def release_digests(path: str | Path, *, query: QueryOpener | None = None) -> dict[str, Any]:
-    """Every answer the release at `path` gives, digested; `log10_p` per resolved shape.
+    """Every answer the release at `path` gives, digested; `VALUES` kept as numbers.
     The rewrite's proof (`release_answers`, without the readable rows)."""
     digests: dict[str, Any] = release_answers(path, query=query, readable=False)["digests"]
     return digests
@@ -708,11 +729,15 @@ def _readable_variants(variants: dict[int, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
+def differences(
+    reference: dict[str, Any], candidate: dict[str, Any], *, pval_rtol: float = 0.0
+) -> list[str]:
     """Every place two `release_digests` disagree, by section, question and array; none if equal.
 
-    `log10_p` is compared exactly, NaN at the same place counting as equal: both sides
-    are read by this build, so a difference is a difference in what was stored.
+    `log10_p` and `pval` are compared as values, NaN at the same place counting as equal
+    (`values_agree`). By default both exactly: both sides are read by this build, so a
+    difference is a difference in what was stored. Answers read on another machine pass
+    `pval_rtol=CROSS_MACHINE_PVAL_RTOL` (module docstring).
     """
     found: list[str] = []
     if reference["adapter"] != candidate["adapter"]:
@@ -728,7 +753,8 @@ def differences(reference: dict[str, Any], candidate: dict[str, Any]) -> list[st
         reference.get("indexed_subsets", {}),
         candidate.get("indexed_subsets", {}),
     )
-    return found + _log10_p_differences(reference["log10_p"], candidate["log10_p"])
+    found += _value_differences(LOG10_P, reference[LOG10_P], candidate[LOG10_P], 0.0)
+    return found + _value_differences(PVAL, reference[PVAL], candidate[PVAL], pval_rtol)
 
 
 def _shape_differences(
@@ -741,16 +767,81 @@ def _shape_differences(
     ]
 
 
-def _log10_p_differences(
-    ours: dict[str, list[float]], theirs: dict[str, list[float]]
+def _value_differences(
+    kind: str, ours: dict[str, list[Any]], theirs: dict[str, list[Any]], rtol: float
 ) -> list[str]:
+    return [
+        f"{kind}/{shape}"
+        for shape in sorted(set(ours) | set(theirs))
+        if not values_agree(ours.get(shape, []), theirs.get(shape, []), rtol=rtol)
+    ]
+
+
+def values_agree(ours: Sequence[Any], theirs: Sequence[Any], *, rtol: float = 0.0) -> bool:
+    """Whether two runs of floats agree: as many, NaN at the same places, and each other
+    value equal or, with `rtol`, within `rtol` of the larger in magnitude. A value may be
+    spelt as `readable_value` spells it (``"NaN"``). With `rtol` 0 the comparison is of
+    the bytes (`digest_array`), so 0.0 and -0.0 differ."""
+    a = np.asarray([float(v) for v in ours], dtype=np.float64)
+    b = np.asarray([float(v) for v in theirs], dtype=np.float64)
+    if rtol == 0.0:
+        return digest_array(a) == digest_array(b)
+    if a.shape != b.shape:
+        return False
+    finite = np.isfinite(a) & np.isfinite(b)
+    if not np.array_equal(a[~finite], b[~finite], equal_nan=True):
+        return False  # an infinity against a finite value, or against the other infinity
+    a, b = a[finite], b[finite]
+    return bool(np.all(np.abs(a - b) <= rtol * np.maximum(np.abs(a), np.abs(b))))
+
+
+def readable_differences(
+    reference: dict[str, Any], candidate: dict[str, Any], *, pval_rtol: float = 0.0
+) -> list[str]:
+    """Every readable answer two `release_answers` disagree on, as
+    ``readable/<section>/<question>``; none if equal. Every value is compared exactly
+    but a row's `pval`, which is compared as `differences` compares it."""
     found = []
-    for shape in sorted(set(ours) | set(theirs)):
-        a = np.asarray(ours.get(shape, []), dtype=np.float64)
-        b = np.asarray(theirs.get(shape, []), dtype=np.float64)
-        if digest_array(a) != digest_array(b):
-            found.append(f"log10_p/{shape}")
+    for section in sorted(set(reference) | set(candidate)):
+        ours, theirs = reference.get(section), candidate.get(section)
+        if not (isinstance(ours, dict) and isinstance(theirs, dict)):
+            if not _readable_agree(ours, theirs, pval_rtol):
+                found.append(f"readable/{section}/(whole section)")
+            continue
+        found += [
+            f"readable/{section}/{name}"
+            for name in sorted(set(ours) | set(theirs))
+            if not _readable_agree(ours.get(name), theirs.get(name), pval_rtol)
+        ]
     return found
+
+
+def _readable_agree(ours: Any, theirs: Any, rtol: float, key: str | None = None) -> bool:
+    """Whether two readable values agree, a `pval` field by `values_agree`."""
+    if isinstance(ours, dict) and isinstance(theirs, dict):
+        return _readable_rows_agree(ours, theirs, rtol)
+    if isinstance(ours, list) and isinstance(theirs, list):
+        return _readable_lists_agree(ours, theirs, rtol, key)
+    if key == PVAL and _is_float(ours) and _is_float(theirs):
+        return values_agree([ours], [theirs], rtol=rtol)
+    return bool(ours == theirs)
+
+
+def _readable_lists_agree(ours: list[Any], theirs: list[Any], rtol: float, key: str | None) -> bool:
+    if len(ours) != len(theirs):
+        return False
+    return all(_readable_agree(a, b, rtol, key) for a, b in zip(ours, theirs, strict=True))
+
+
+def _readable_rows_agree(ours: dict[str, Any], theirs: dict[str, Any], rtol: float) -> bool:
+    if set(ours) != set(theirs):
+        return False
+    return all(_readable_agree(ours[k], theirs[k], rtol, k) for k in ours)
+
+
+def _is_float(value: Any) -> bool:
+    """A float as `readable_value` spells one: itself, or one of JSON's missing names."""
+    return isinstance(value, float) or value in ("NaN", "Infinity", "-Infinity")
 
 
 def _differing(reference: Mapping[str, str], candidate: Mapping[str, str]) -> list[str]:
@@ -759,6 +850,7 @@ def _differing(reference: Mapping[str, str], candidate: Mapping[str, str]) -> li
 
 
 __all__ = [
+    "CROSS_MACHINE_PVAL_RTOL",
     "IncompleteResultError",
     "QueryOpener",
     "RANGE_QUESTIONS",
@@ -771,10 +863,13 @@ __all__ = [
     "SECTIONS",
     "questions",
     "readable_answer",
+    "readable_differences",
     "readable_value",
     "refusal_questions",
     "release_answers",
     "release_digests",
     "result_digests",
     "unposed_range_questions",
+    "values_agree",
+    "VALUES",
 ]

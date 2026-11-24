@@ -16,7 +16,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.store.query_digests import differences, readable_value, release_answers
+from opengwasdb.store.query_digests import (
+    CROSS_MACHINE_PVAL_RTOL,
+    VALUES,
+    differences,
+    readable_differences,
+    readable_value,
+    release_answers,
+)
 from opengwasdb.store_reader.facade import query_release
 from opengwasdb.store_reader.release import open_release
 
@@ -48,32 +55,30 @@ def expected(name: str) -> dict[str, Any]:
 
 def answers(path: Path) -> dict[str, Any]:
     """What the Store Reader answers on the release at `path`: its digests and its
-    readable values, in the form `expected/<release>.json` holds them. A resolved row's
-    `log10_p` is NaN where its SE is infinite, and JSON holds no NaN, so it is spelt
-    as `readable_value` spells it; `differences` reads ``"NaN"`` back as NaN."""
+    readable values, in the form `expected/<release>.json` holds them. A `pval` or a
+    resolved row's `log10_p` is NaN where its SE is infinite, and JSON holds no NaN, so
+    each is spelt as `readable_value` spells it; `differences` reads ``"NaN"`` back as NaN."""
     found = release_answers(path, query=open_query)
     digests = found["digests"]
-    digests["log10_p"] = {
-        shape: [readable_value(v) for v in values] for shape, values in digests["log10_p"].items()
-    }
+    for kind in VALUES:
+        digests[kind] = {
+            shape: [readable_value(v) for v in values] for shape, values in digests[kind].items()
+        }
     return found
 
 
 def mismatches(path: Path, want: dict[str, Any]) -> list[str]:
     """Every place the release at `path` answers other than `want`; none if it agrees."""
-    found = answers(path)
-    out = differences(want["digests"], found["digests"])
+    return disagreements(answers(path), want)
+
+
+def disagreements(found: dict[str, Any], want: dict[str, Any]) -> list[str]:
+    """Every place `found` (`answers`) differs from `want`. `want` was written on another
+    machine, so `pval` is compared to a few ulps (`CROSS_MACHINE_PVAL_RTOL`); every other
+    value exactly."""
+    out = differences(want["digests"], found["digests"], pval_rtol=CROSS_MACHINE_PVAL_RTOL)
     if found["digests"]["unposed_range_questions"] != want["digests"]["unposed_range_questions"]:
         out.append("unposed_range_questions")
-    out += [
-        f"readable/{section}/{name}"
-        for section in sorted(set(want["readable"]) | set(found["readable"]))
-        for name in _differing(want["readable"].get(section), found["readable"].get(section))
-    ]
-    return out
-
-
-def _differing(ours: Any, theirs: Any) -> list[str]:
-    if isinstance(ours, dict) and isinstance(theirs, dict):
-        return [k for k in sorted(set(ours) | set(theirs)) if ours.get(k) != theirs.get(k)]
-    return [] if ours == theirs else ["(whole section)"]
+    return out + readable_differences(
+        want["readable"], found["readable"], pval_rtol=CROSS_MACHINE_PVAL_RTOL
+    )
