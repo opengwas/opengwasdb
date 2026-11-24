@@ -1,68 +1,24 @@
-"""What the query facade answers on six fixture Store Releases, as digests (#464).
+"""The six fixture Store Releases every Store Reader question is asked of (#464, #474).
 
-The Store Reader (#464) moved every read the facade makes into
-`opengwasdb.store_reader`. Moving code must not change an answer, so this module
-builds a Dense, a Ragged and a Hybrid release, each Observed-Only and
-Reference-Completed, asks each one every question the facade answers, and
-digests every array each answer holds (`benchmark_store_comparison.result_digests`).
+`build_releases` builds a Dense, a Ragged and a Hybrid release, each Observed-Only and
+Reference-Completed: the `digest_releases` session fixture (`conftest.py`), and the base
+of six of the Store Reader contract bundle's releases (`tests/store_reader_contract/`).
 
-The questions and the digests are `opengwasdb.store.query_digests` since #467, which
-moved them here unchanged, so the rewrite to 0.3.0 proves itself with the same ones.
-
-`tests/golden/store_reader_digests.json` holds the digests the code at
-`5d600a1d` -- before the move -- gave. They were written by running this module
-from a `git archive 5d600a1d` of the repository, never by the code it checks:
-
-    git archive 5d600a1d | tar -x -C <scratch>
-    cp tests/store_reader_digests.py <scratch>/tests/
-    cd <scratch> && PYTHONPATH=tests:. python tests/store_reader_digests.py <out> 5d600a1d
-
-and `<out>` is the committed file, byte for byte, header included.
-
-When every record gained `beta` and `pval` (ADR 0104), the pins were regenerated
-the same way from `git archive 826b36bb`, the commit that added them, with that
-commit named in the header. Two runs were byte-identical. With `beta` and `pval`
-dropped, every one of the 352 shapes' digests and every resolved digest equalled
-the `5d600a1d` pins. The 10,913 `log10_p` values differed by at most 9.7e-16
-relative. Only the two arrays were added: 704 result digests and 52 resolved ones.
-
-When `variants_table()`, resolved rows with variant info and the variant reads gained
-`source_alid`, and `build-dense` came to write each row's own (#470), the pins were
-regenerated from `git archive 1ca2d349` the same way, keeping the sections they hold;
-with `source_alid` dropped, every pinned digest and `log10_p` equalled #484's pins
-(`scratch/470/compare_digest_pins_fix2.py`). Earlier, when `variants_table()` and
-resolved rows with variant info first gained `source_alid`
-(#470), the pins were regenerated the same way from `git archive 30cb20cc`, #470's
-merge of #483, whose pins it replaces. Two runs were byte-identical. With
-`source_alid` dropped, the `variants_table()` of each of the 6 releases, every one of
-the 352 shapes' digests, the `analyses_table()` and all 26 resolved shapes equalled
-#483's pins, and the 10,913 `log10_p` values were equal exactly. Only the column was
-added: to 6 variants tables and to the 26 resolved shapes.
-
-It touches only names that are public on both sides of the move
-(`opengwasdb.query.query_store`, the builders the fixtures already call), so the
-same file runs against either.
-
-The resolved rows' `log10_p` is the one value not digested: the move replaced
-scipy's `norm.logsf` with `math.erfc`, which agrees with it to 1e-12
-relative error rather than bit for bit. It is kept as numbers and compared with
-that tolerance; every other resolved field is digested.
+What they answer was pinned in `tests/golden/store_reader_digests.json` from #464 until
+#474, written by the code before the Store Reader move (`5d600a1d`) and regenerated from
+`git archive` at `826b36bb` (`beta`, `pval`) and `1ca2d349` (`source_alid`). The
+contract bundle replaced those pins: its expected answers are the same questions
+(`opengwasdb.store.query_digests`) asked of these releases with every planted state, and
+the generator must reproduce them byte for byte, so a change to a builder or to an
+answer shows there, once.
 """
 
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
-
-# The questions and their digests are production code since #467: the rewrite
-# (`opengwasdb.store.rewrite`) proves itself with them before it publishes.
-from opengwasdb.store.query_digests import release_digests as release_digests
-
-GOLDEN = Path(__file__).resolve().parent / "golden" / "store_reader_digests.json"
 
 
 class _Factory:
@@ -99,30 +55,3 @@ def build_releases(root: Path) -> dict[str, Path]:
         "hybrid_observed": hybrid_observed,
         "hybrid_completed": residual_stores.hybrid_completed(fresh("hybrid_completed")),
     }
-
-
-def digests(root: Path) -> dict[str, Any]:
-    """Every fixture release's digests, by release name."""
-    return {name: release_digests(path) for name, path in build_releases(root).items()}
-
-
-def main(argv: list[str]) -> None:
-    """``store_reader_digests.py OUT COMMIT``: write the digests, headed by the
-    commit whose code wrote them -- exactly the file that is committed."""
-    import tempfile
-
-    out, commit = Path(argv[1]), argv[2]
-    with tempfile.TemporaryDirectory() as scratch:
-        found = digests(Path(scratch))
-    found["__written_by__"] = {
-        "commit": commit,
-        "how": (
-            f"tests/store_reader_digests.py run from a git archive of {commit}; "
-            "see its docstring"
-        ),
-    }
-    out.write_text(json.dumps(found, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-
-
-if __name__ == "__main__":
-    main(sys.argv)

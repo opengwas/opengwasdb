@@ -2562,6 +2562,23 @@ refused. From 0.3.0 none reads `variants.tsv.gz`, and none loads pysam or sqlite
 `opengwasdb.store.query_digests` digests all three (`variant_reads`), so the rewrite's proof
 and the golden contract (#474) compare them.
 
+### The Store Reader contract (issue #474)
+
+`tests/store_reader_contract/` is the contract every reader of format 0.3.0 is held to:
+nine small 0.3.0 Store Releases (Dense, Ragged and Hybrid, each Observed-Only and
+Reference-Completed) and, for each, what it answers -- every question
+`opengwasdb.store.query_digests` asks, as digests (`release_digests`) and as the first
+rows of each answer spelt out (`release_readable`), with each refusal's type and message.
+The refusals asked are `top_hits` of an Analysis the release does not hold
+(`UnknownAnalysisError`, §18), a range on a chromosome no ALID can spell
+(`VariantNormalisationError`) and, on Dense and Hybrid, `top_hits` at a threshold with no
+stored tier (`UnstoredThresholdError`, §18). Its `VERSION` names the bundle's version and
+the `format_version` its releases are; its README names what each release exercises. Two
+of its states are ones the validator refuses at 0.3.0 and a reader still meets, an
+infinite SE (above) and a tier without `analysis_offsets` (§18). The bundle is read
+through the Store Reader alone, with a Variant Table reader that refuses every read, and
+loads none of pandas, scipy, pysam or sqlite3.
+
 ## 20. Validation rules
 
 Validators MUST check at least:

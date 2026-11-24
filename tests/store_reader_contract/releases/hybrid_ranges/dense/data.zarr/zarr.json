@@ -1,0 +1,24 @@
+{
+  "attributes": {
+    "layout": "dense",
+    "completion_state": "observed_only",
+    "chunk_shape": [
+      4,
+      1
+    ],
+    "shard_shape": [
+      4,
+      1
+    ],
+    "compressor": {
+      "library": "zarr.codecs.BloscCodec",
+      "cname": "zstd",
+      "clevel": 3,
+      "shuffle": "bitshuffle",
+      "format": "zarr_v3_sharding"
+    },
+    "zarr_format": 3
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

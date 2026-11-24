@@ -67,7 +67,7 @@ sampling alone, so about 90% of the passing pairs are noise.
    0.001 for UK Biobank EUR.
 5. **Plain files, not Zarr** (D4; refined by the clarification at the end: a Zarr group holding
    one chunk). G rows to a zstd frame, with checksum and content size,
-   concatenated in `frames.bin`, located by `frames.idx`, described by `manifest.json`. A frame
+   concatenated in `frames.bin`, located by `frames.idx`, described by a manifest.json. A frame
    is one positional read or HTTP Range request, then one decompress. Any failed check is a
    refusal naming the chromosome and the frame.
 6. **Format version 0.2.0** (D5).

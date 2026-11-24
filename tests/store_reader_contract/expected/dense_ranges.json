@@ -1,0 +1,2363 @@
+{
+ "bundle_version": "1",
+ "digests": {
+  "adapter": "StoreQuery",
+  "alid_probes": {
+   "lookup": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "bcff0d04dba61d9ebc05187731b1d4dac455b477813130efe793423c732d38e4",
+    "eaf": "2b954304527557bb54d8112f36a17b440bb084c0eb71cdcf783e4f5805cb0c2e",
+    "pval": "91ed6034e2b12a82cd77e40424a1c1a42e3b2045e8d9a8072b0168dc985c2f1c",
+    "se": "aa6e23f9fd1ccf6e776b0f213eccf26077f438d64aa46881ab4cd8d0b4b40650",
+    "variant_index": "e75927918d87398eee2f20247c472ef522ec9d58b491007fdfd25d541acce702",
+    "z": "95b7ac150cadc9fc9e0ca936a01d9dbe7f5eb0f0a742399eb43ede5f32c5f80d"
+   },
+   "phewas/1:1000:A:G": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:5000:A:C": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/1:5000:C:G": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "cddf6312ecb72833002d2936833e39ee62a11f1238a7ce2747a8bbb9de751488",
+    "eaf": "6fca2d941a83211f6e2e07448b60dcd0291b72923dd75dbabf4a4bb3e11eae3d",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "1566054b40459a8d1305849225ccac06f4d90b7e1617fc35f97c81b82c899249",
+    "z": "047bcb618e5ee01a8796e00208997e0d45fab34c162cfdab76c848ac6d3a9d82"
+   }
+  },
+  "analyses_table": {
+   "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+   "analysis_id": "ccb34ed4545ac76c076663ed45cfb79a39dccc188c09c05a3af8e2b68a3225ec",
+   "analysis_index": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
+   "analysis_label": "df307414bf1b96404359fb54e40deb99732de493c1c8da937e80885199dbb930",
+   "ancestry_assignment_method": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "assigned_ancestry": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completed_against": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completion_median_pearson_r": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completion_n_imputed_total": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completion_n_missing_total": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "consortium": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "context": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "eaf_orientation": "3cee78dd9fb7f2ea1a1c95c43733e1dc553b3d337f87be44e89dc2347ba88e79",
+   "eaf_orientation_n": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
+   "eaf_orientation_r": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "eaf_scope": "ecb8eebf1a3cb1da5b8b2faa6cbcf16391ed48ed7f8162d9923804522c616bb3",
+   "first_author": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "license": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "n_cases": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "n_controls": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "n_hits_5e4": "66ac83fc6289026e388ab521b9d53b3d222744f962b70e0b59a6fa74aff14d45",
+   "n_hits_5e6": "66ac83fc6289026e388ab521b9d53b3d222744f962b70e0b59a6fa74aff14d45",
+   "n_hits_5e8": "66ac83fc6289026e388ab521b9d53b3d222744f962b70e0b59a6fa74aff14d45",
+   "n_missing_se_out_of_range": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
+   "original_effect_scale": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "original_sd": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "original_sd_dispersion": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "original_sd_method": "821519c189ad7734b3cfe0a6f421177fc25ac9f41a226d767a5c03e7a60c18b1",
+   "publication_doi": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "publication_pmid": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "sample_size": "5bffc525889d49264fd5b94513ef994af2e882f04ada5ea7097d7aaab964ae9a",
+   "sample_size_kind": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "sample_size_scope": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "stored_effect_scale": "06c951fceeb97e374eb585a4c88c0560026d6f8dc1233689a0d0f9590c243788",
+   "tissue": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_bp": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_chr": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_ontology_id": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_ontology_label": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164"
+  },
+  "indexed_subsets": {},
+  "log10_p": {
+   "lookup/all": [
+    "NaN",
+    -11.591823641811507,
+    -14.905112555353176,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176,
+    "NaN",
+    -11.591823641811507,
+    -14.905112555353176,
+    -11.591823641811507,
+    -14.905112555353176,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176
+   ],
+   "lookup/observed_only": [
+    "NaN",
+    -11.591823641811507,
+    -14.905112555353176,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176,
+    "NaN",
+    -11.591823641811507,
+    -14.905112555353176,
+    -11.591823641811507,
+    -14.905112555353176,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176
+   ],
+   "range_phewas/all": [
+    "NaN"
+   ],
+   "range_phewas/observed_only": [
+    "NaN"
+   ]
+  },
+  "misses": {
+   "lookup": {
+    "analysis_index": "f8c6593b4bde48808e8aea55578c6adad90ad09e2940e32fd648b7f8ec013add",
+    "association_status": "04563735b24f0112931332feeca412ea80a5e01dc1b42aa5096bab4fe39dc847",
+    "beta": "b7ad2d828fae4d10798926f8a3cc12cfa3a03676ae7835cef90fe02f6b3b006f",
+    "eaf": "51df72e0e0ed550efac372b701ef801f9b46be9ae61eb00ac37e6abca6b3ee70",
+    "pval": "a183da050c829c7e192066c23637708621dcd027d95baaa31d61c14d35b1fdb1",
+    "se": "70b52f69dbd73019644707772fb63945f4712db88ac5b3a55cbd30ac4c11e485",
+    "variant_index": "1e9258c92f8d802ed12eabd01220cdcd9e36317d907dab6525ea8bebe0f220d2",
+    "z": "798371bd52420d904c96cac6db8387cf00e7459dafe3e9bb2ea8cc25bcc681f7"
+   },
+   "phewas/rs0": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/rs999999999": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   }
+  },
+  "range_probes": {
+   "range_phewas/boundary/after/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "range_phewas/boundary/after/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "range_phewas/boundary/before/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "6ebfb84b4ec3755b6a7efebdaec499f7de3f71eb79b64a342cefab34d96d56af",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "pval": "b69b67b03d59193e5572b5788dd1afb8928b05f29411c8cc66e98420146b0ae6",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/boundary/before/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "6ebfb84b4ec3755b6a7efebdaec499f7de3f71eb79b64a342cefab34d96d56af",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "pval": "b69b67b03d59193e5572b5788dd1afb8928b05f29411c8cc66e98420146b0ae6",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/empty/between/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/empty/between/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/empty/chromosome/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/empty/chromosome/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/first/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/first/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/from_last/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/from_last/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/last/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/last/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/shared/all": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "a4bc4c484aa163a0450561dfe24ddafde18f863160bbbde9adc90ad5612d5fdc",
+    "eaf": "ef2953875379fda759a7601f16f883d39620dace991ac6946f536fef005ba1f1",
+    "pval": "2ae32e60d31c8634a191f28b53c0e4ac3cc9028d1c139f1c739cb1bfe67eb549",
+    "se": "55bdd412aff577b388c2eea1679005de6a3c952a46aeca2ded466195b3627bd2",
+    "variant_index": "1ecafe988be36831566299f5d2556243c18ee74bf8f14f0e3cf2bdd349e8367c",
+    "z": "1fc8ab08be90a4a69e8665f68c80130b9eeb73273f747034ac569d5bceec07a3"
+   },
+   "range_phewas/shared/from_before/all": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "8013ba16b55f45ba51badf9acdaf3fe7a4561bdc0f10aa629900843ad8352939",
+    "eaf": "f1b9ca2f34d88ed279c14ac24b8c001adf56c3e1ce675962ccdd94f142c8f2f6",
+    "pval": "72850bb4a30919628d9600b8c0e04cc17ffec62dff5e1b6cc31013595eb7a819",
+    "se": "29bebdc2b3dec7df3bb4c3b87cf4c013141456748f931ea2f416d46e783b904e",
+    "variant_index": "ad87fa9776cb959c97cb8384d5c5b69df5f3616508ac2b494309a85f3dc19df6",
+    "z": "b497432cbac365d05d268b08b51d0a625ba6958f88ad834979c236bed46525ab"
+   },
+   "range_phewas/shared/from_before/observed_only": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "8013ba16b55f45ba51badf9acdaf3fe7a4561bdc0f10aa629900843ad8352939",
+    "eaf": "f1b9ca2f34d88ed279c14ac24b8c001adf56c3e1ce675962ccdd94f142c8f2f6",
+    "pval": "72850bb4a30919628d9600b8c0e04cc17ffec62dff5e1b6cc31013595eb7a819",
+    "se": "29bebdc2b3dec7df3bb4c3b87cf4c013141456748f931ea2f416d46e783b904e",
+    "variant_index": "ad87fa9776cb959c97cb8384d5c5b69df5f3616508ac2b494309a85f3dc19df6",
+    "z": "b497432cbac365d05d268b08b51d0a625ba6958f88ad834979c236bed46525ab"
+   },
+   "range_phewas/shared/observed_only": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "a4bc4c484aa163a0450561dfe24ddafde18f863160bbbde9adc90ad5612d5fdc",
+    "eaf": "ef2953875379fda759a7601f16f883d39620dace991ac6946f536fef005ba1f1",
+    "pval": "2ae32e60d31c8634a191f28b53c0e4ac3cc9028d1c139f1c739cb1bfe67eb549",
+    "se": "55bdd412aff577b388c2eea1679005de6a3c952a46aeca2ded466195b3627bd2",
+    "variant_index": "1ecafe988be36831566299f5d2556243c18ee74bf8f14f0e3cf2bdd349e8367c",
+    "z": "1fc8ab08be90a4a69e8665f68c80130b9eeb73273f747034ac569d5bceec07a3"
+   },
+   "range_phewas/shared/to_after/all": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "d622bc283af24c57119bed99971bb806dfdd66c22dfe55373f01cc2721410b77",
+    "eaf": "c720725940d9a9c4d4954544ef97bcd59bbaa6dac2e8d55fa8e468ebe04abc40",
+    "pval": "c0f885e5c272b549ea872e673e44b76786455a0f2debc1f628381c5327498ffe",
+    "se": "6959ed9d0b414222196e404b6facbb1dc089d0b6b5072446580860174c923e6e",
+    "variant_index": "b6fd155c01056a134db72d36d3386d8836799aac5f341b5fac335fe65cf521f8",
+    "z": "988271e0b1e63966bbac94af80753eac6e04bd249d6b369dcfd9cd5f539e9852"
+   },
+   "range_phewas/shared/to_after/observed_only": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "d622bc283af24c57119bed99971bb806dfdd66c22dfe55373f01cc2721410b77",
+    "eaf": "c720725940d9a9c4d4954544ef97bcd59bbaa6dac2e8d55fa8e468ebe04abc40",
+    "pval": "c0f885e5c272b549ea872e673e44b76786455a0f2debc1f628381c5327498ffe",
+    "se": "6959ed9d0b414222196e404b6facbb1dc089d0b6b5072446580860174c923e6e",
+    "variant_index": "b6fd155c01056a134db72d36d3386d8836799aac5f341b5fac335fe65cf521f8",
+    "z": "988271e0b1e63966bbac94af80753eac6e04bd249d6b369dcfd9cd5f539e9852"
+   },
+   "range_phewas/to_first/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/to_first/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   }
+  },
+  "refusals": {
+   "analysis/unknown_analysis": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/unsupported_chromosome": {
+    "error": "5c2f2ab4c103ad81ca4eec8e4ae31db21f3d4458f4ed55eb0df0dc1f6cbe1533"
+   },
+   "top_hits/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   },
+   "variants_in_range/unsupported_chromosome": {
+    "error": "5c2f2ab4c103ad81ca4eec8e4ae31db21f3d4458f4ed55eb0df0dc1f6cbe1533"
+   }
+  },
+  "resolved": {
+   "lookup/all": {
+    "alid": "81fc3ae62b8196ad55689c7344cf1744e8b15d56d76bf1ea53cfb04024a3edbf",
+    "analysis_id": "dfc6d0d0cab90dedf39a125931079e74f0ab18c881bc9bffccc4dc9466abd44e",
+    "analysis_label": "bb672eb244160138f1cc3f8af82de64a7952653e8716a8f1101fae1082e6f5ac",
+    "association_status": "a71267101f4d909a295da8421d70370a622b02c2327d457aaa841b09da1f17bf",
+    "beta": "20ce13cf731b5b18e9025ba095a04dabf7b2084d7ecb506c813b096aef10e7dd",
+    "chromosome": "b0478a2bc85a7585c1c609e5777085c832c75e8751867b2cf740a89c57ab4118",
+    "eaf": "f7553970cfdd4aeb66888ea9b2f4d388aadcbb7f92125e6e2ea5cbe1dcb315b5",
+    "effect_allele": "aff32f300d828ee7353ce240c27f51e18465675ea0cc19811de3dfc5b71732dd",
+    "other_allele": "53d02fe7be640be5ae5785fdb0651bf2ad12b504e1d6b333ad7a582c2a8862f3",
+    "position": "cf96a3a2c5694198fe65237cf6ca64af7345ddc8ac0fb740937b5bf3828ec8bd",
+    "pval": "bb81647a3bc8662607ea6ebdc2f40e797ef1faffa33196bd3e729971237e42f4",
+    "rsid": "2013ab2b8142da2eb087a59cfee47557eb7c7a036345e17420b97de8bd9018f5",
+    "se": "676e649b2e433ff19a4e141ad92569a34ef34713de512a73fe87c6ded5846bfe",
+    "source_alid": "81fc3ae62b8196ad55689c7344cf1744e8b15d56d76bf1ea53cfb04024a3edbf",
+    "z": "ad70b8c9019c5cb379c689977e71feeea1e8d5d64e7307ea4755fd693341b7aa"
+   },
+   "lookup/observed_only": {
+    "alid": "81fc3ae62b8196ad55689c7344cf1744e8b15d56d76bf1ea53cfb04024a3edbf",
+    "analysis_id": "dfc6d0d0cab90dedf39a125931079e74f0ab18c881bc9bffccc4dc9466abd44e",
+    "analysis_label": "bb672eb244160138f1cc3f8af82de64a7952653e8716a8f1101fae1082e6f5ac",
+    "association_status": "a71267101f4d909a295da8421d70370a622b02c2327d457aaa841b09da1f17bf",
+    "beta": "20ce13cf731b5b18e9025ba095a04dabf7b2084d7ecb506c813b096aef10e7dd",
+    "chromosome": "b0478a2bc85a7585c1c609e5777085c832c75e8751867b2cf740a89c57ab4118",
+    "eaf": "f7553970cfdd4aeb66888ea9b2f4d388aadcbb7f92125e6e2ea5cbe1dcb315b5",
+    "effect_allele": "aff32f300d828ee7353ce240c27f51e18465675ea0cc19811de3dfc5b71732dd",
+    "other_allele": "53d02fe7be640be5ae5785fdb0651bf2ad12b504e1d6b333ad7a582c2a8862f3",
+    "position": "cf96a3a2c5694198fe65237cf6ca64af7345ddc8ac0fb740937b5bf3828ec8bd",
+    "pval": "bb81647a3bc8662607ea6ebdc2f40e797ef1faffa33196bd3e729971237e42f4",
+    "rsid": "2013ab2b8142da2eb087a59cfee47557eb7c7a036345e17420b97de8bd9018f5",
+    "se": "676e649b2e433ff19a4e141ad92569a34ef34713de512a73fe87c6ded5846bfe",
+    "source_alid": "81fc3ae62b8196ad55689c7344cf1744e8b15d56d76bf1ea53cfb04024a3edbf",
+    "z": "ad70b8c9019c5cb379c689977e71feeea1e8d5d64e7307ea4755fd693341b7aa"
+   },
+   "range_phewas/all": {
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "analysis_id": "ccb34ed4545ac76c076663ed45cfb79a39dccc188c09c05a3af8e2b68a3225ec",
+    "analysis_label": "df307414bf1b96404359fb54e40deb99732de493c1c8da937e80885199dbb930",
+    "association_status": "91ce7a0e8df5d294b838a6c6cb2b438bbd4742140aaf04f6a335a0cc2a150c1d",
+    "beta": "ce337001f54033d4259c0c74f22fd6be181fd35c3d7a063d53c61cf490d01c17",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "eaf": "a0eeaee0d6dec973c03c826a36af4f3fd5faaf9d2aba20fd3ac3d8a366b80540",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "pval": "ce337001f54033d4259c0c74f22fd6be181fd35c3d7a063d53c61cf490d01c17",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "se": "7a158e275f00c6aeedde7bdabd660345b900d9872243b69ed0ae2f0862c4a4c8",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "z": "e92441883d9f5b757c382896e20acc17b501ebb1bc9247203d5ef86f052e785d"
+   },
+   "range_phewas/observed_only": {
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "analysis_id": "ccb34ed4545ac76c076663ed45cfb79a39dccc188c09c05a3af8e2b68a3225ec",
+    "analysis_label": "df307414bf1b96404359fb54e40deb99732de493c1c8da937e80885199dbb930",
+    "association_status": "91ce7a0e8df5d294b838a6c6cb2b438bbd4742140aaf04f6a335a0cc2a150c1d",
+    "beta": "ce337001f54033d4259c0c74f22fd6be181fd35c3d7a063d53c61cf490d01c17",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "eaf": "a0eeaee0d6dec973c03c826a36af4f3fd5faaf9d2aba20fd3ac3d8a366b80540",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "pval": "ce337001f54033d4259c0c74f22fd6be181fd35c3d7a063d53c61cf490d01c17",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "se": "7a158e275f00c6aeedde7bdabd660345b900d9872243b69ed0ae2f0862c4a4c8",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "z": "e92441883d9f5b757c382896e20acc17b501ebb1bc9247203d5ef86f052e785d"
+   }
+  },
+  "shapes": {
+   "analysis/bmi_irn/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "analysis/bmi_irn/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "lookup/all": {
+    "analysis_index": "f8c6593b4bde48808e8aea55578c6adad90ad09e2940e32fd648b7f8ec013add",
+    "association_status": "04563735b24f0112931332feeca412ea80a5e01dc1b42aa5096bab4fe39dc847",
+    "beta": "b7ad2d828fae4d10798926f8a3cc12cfa3a03676ae7835cef90fe02f6b3b006f",
+    "eaf": "51df72e0e0ed550efac372b701ef801f9b46be9ae61eb00ac37e6abca6b3ee70",
+    "pval": "a183da050c829c7e192066c23637708621dcd027d95baaa31d61c14d35b1fdb1",
+    "se": "70b52f69dbd73019644707772fb63945f4712db88ac5b3a55cbd30ac4c11e485",
+    "variant_index": "1e9258c92f8d802ed12eabd01220cdcd9e36317d907dab6525ea8bebe0f220d2",
+    "z": "798371bd52420d904c96cac6db8387cf00e7459dafe3e9bb2ea8cc25bcc681f7"
+   },
+   "lookup/observed_only": {
+    "analysis_index": "f8c6593b4bde48808e8aea55578c6adad90ad09e2940e32fd648b7f8ec013add",
+    "association_status": "04563735b24f0112931332feeca412ea80a5e01dc1b42aa5096bab4fe39dc847",
+    "beta": "b7ad2d828fae4d10798926f8a3cc12cfa3a03676ae7835cef90fe02f6b3b006f",
+    "eaf": "51df72e0e0ed550efac372b701ef801f9b46be9ae61eb00ac37e6abca6b3ee70",
+    "pval": "a183da050c829c7e192066c23637708621dcd027d95baaa31d61c14d35b1fdb1",
+    "se": "70b52f69dbd73019644707772fb63945f4712db88ac5b3a55cbd30ac4c11e485",
+    "variant_index": "1e9258c92f8d802ed12eabd01220cdcd9e36317d907dab6525ea8bebe0f220d2",
+    "z": "798371bd52420d904c96cac6db8387cf00e7459dafe3e9bb2ea8cc25bcc681f7"
+   },
+   "phewas/1:1000:A:G/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:1000:A:G/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:1:A:C/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/1:1:A:C/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/1:5000:A:C/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/1:5000:A:C/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/1:5000:C:G/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "cddf6312ecb72833002d2936833e39ee62a11f1238a7ce2747a8bbb9de751488",
+    "eaf": "6fca2d941a83211f6e2e07448b60dcd0291b72923dd75dbabf4a4bb3e11eae3d",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "1566054b40459a8d1305849225ccac06f4d90b7e1617fc35f97c81b82c899249",
+    "z": "047bcb618e5ee01a8796e00208997e0d45fab34c162cfdab76c848ac6d3a9d82"
+   },
+   "phewas/1:5000:C:G/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "cddf6312ecb72833002d2936833e39ee62a11f1238a7ce2747a8bbb9de751488",
+    "eaf": "6fca2d941a83211f6e2e07448b60dcd0291b72923dd75dbabf4a4bb3e11eae3d",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "1566054b40459a8d1305849225ccac06f4d90b7e1617fc35f97c81b82c899249",
+    "z": "047bcb618e5ee01a8796e00208997e0d45fab34c162cfdab76c848ac6d3a9d82"
+   },
+   "phewas/1:9000:A:G/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "6ebfb84b4ec3755b6a7efebdaec499f7de3f71eb79b64a342cefab34d96d56af",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "pval": "b69b67b03d59193e5572b5788dd1afb8928b05f29411c8cc66e98420146b0ae6",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:9000:A:G/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "6ebfb84b4ec3755b6a7efebdaec499f7de3f71eb79b64a342cefab34d96d56af",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "pval": "b69b67b03d59193e5572b5788dd1afb8928b05f29411c8cc66e98420146b0ae6",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/2:300:C:T/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/2:300:C:T/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/2:7000:A:C/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/2:7000:A:C/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/X:2500:G:T/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/X:2500:G:T/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/rs0/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/rs0/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "pval": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/rs1000/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1000/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1004/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "6ebfb84b4ec3755b6a7efebdaec499f7de3f71eb79b64a342cefab34d96d56af",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "pval": "b69b67b03d59193e5572b5788dd1afb8928b05f29411c8cc66e98420146b0ae6",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1004/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "6ebfb84b4ec3755b6a7efebdaec499f7de3f71eb79b64a342cefab34d96d56af",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "pval": "b69b67b03d59193e5572b5788dd1afb8928b05f29411c8cc66e98420146b0ae6",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1005/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1005/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1006/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1006/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1007/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/rs1007/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "fc8982ab25d6119d27ab9ce18895a5a2c448cc652add0c9bc939297c9b472172",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "pval": "53839867623aab4a018df6fb3a1e9409c59fbeef353d466b3526cc234da8ac21",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/rs5000/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs5000/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "faf467ddcfd4848efc1957f880bb63b049a0f24f0513f796ae8278b0499d8994",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "pval": "29940f1c51ae3b433a5f0121009c6ac8a21781405933ae83a5371fd7c9c7c206",
+    "se": "fe2acd561e282415f718a8b5f008b2b28f831ee3ecc1fb92d53be3d6ac85acb2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "range_phewas/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "pval": "ed5b2e39ec1ee490d85c1b2aaaec93e20dc48bc1783859202792953a91fe1a89",
+    "se": "4ff07b9e46b3553f6d809cd77ffe667e570d4d6f97bc78d8e75e7f6e737fedbe",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "top_hits/0.0005/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.0005/bmi_irn/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.0005/bmi_irn/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.0005/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.01/all": {
+    "error": "309246deac6735605e40ebb3f456a553f0115c247754cf0b1f3527289eadf788"
+   },
+   "top_hits/0.01/bmi_irn/all": {
+    "error": "309246deac6735605e40ebb3f456a553f0115c247754cf0b1f3527289eadf788"
+   },
+   "top_hits/0.01/bmi_irn/observed_only": {
+    "error": "309246deac6735605e40ebb3f456a553f0115c247754cf0b1f3527289eadf788"
+   },
+   "top_hits/0.01/observed_only": {
+    "error": "309246deac6735605e40ebb3f456a553f0115c247754cf0b1f3527289eadf788"
+   },
+   "top_hits/0.2/all": {
+    "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   },
+   "top_hits/0.2/bmi_irn/all": {
+    "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   },
+   "top_hits/0.2/bmi_irn/observed_only": {
+    "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   },
+   "top_hits/0.2/observed_only": {
+    "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   },
+   "top_hits/5e-06/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/bmi_irn/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/bmi_irn/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/bmi_irn/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/bmi_irn/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "2bac86e75997986556dffc68def0b273ccb024a340205ece6c834047bc82cc32",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "pval": "10db68ac642e1474cf9553aac6854267acd8f8431013cd0437b8bf2bbccbedbe",
+    "se": "d2bd78525683c076bd48c05082a79cb10fdb47fae0532833ee02047ea272a0fc",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/limit/all": {
+    "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   },
+   "top_hits/limit/observed_only": {
+    "error": "c012f3dfd9e5d80abfad036c3eb82325900abd548cd5d44696ec23436b9044f5"
+   }
+  },
+  "unposed_range_questions": [],
+  "variant_reads": {
+   "variant_count": {
+    "count": "392e10e92d4623d9ef444182d9a833dc62a37436cc4607588ee677720cd4d408"
+   },
+   "variants": {
+    "__keys__": "8437cc4e37b91c6bc39a2c929f7117ef88364ad1628505accb24591e20cbb102",
+    "alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094",
+    "chromosome": "45c841e68762de64d703368bb2d38e3c48ac32883d7922a16f46755ba3f163fc",
+    "effect_allele": "f1f52596389b31f94c0a935fe614f15f1079db9e7ea0b6d961d986bcf3a308bd",
+    "other_allele": "e9e573814b42636c74a9d81cf4bb69c8158b37f37cd046696a7a66ebb029add8",
+    "position": "1908b115044ff47eb603b80d45de6e9356e54370d4ecd99a2e2082236a11c4e3",
+    "rsid": "95108844315c007a57828a3576e4286fb5283e14592ee486a5929785ca663b7e",
+    "source_alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094"
+   },
+   "variants_in_range/boundary/after": {
+    "__keys__": "e6a4d52e2165d1c4ecb5eab95a3844677d5606792fdeb7b26cc13137e4ec2727",
+    "alid": "16c6dcbd8e40e8f19ef1ba9dfd04acd7216f4fcac39bb0353d3ba5b13d8a46b3",
+    "chromosome": "13f17d98e5f7a9d1a921c774303703afd7c111c9205248110d45d4a85ff00f72",
+    "effect_allele": "05e997d5882aa98847e311f671255bbe1fe62f9acdba394faa802dd22af48df0",
+    "other_allele": "8580568a7d9c2a48a9ff81dcb13540992e829cf76a8e80ee5e006b715d3b416d",
+    "position": "eabe6ba6db023e35434883010e8685554a4880dcf20fc442931745204d61d026",
+    "rsid": "b4fdc8fe76e115a66c8a892aad8e945b6fa64faa26e7c12485bd4b0abbd3c0bf",
+    "source_alid": "16c6dcbd8e40e8f19ef1ba9dfd04acd7216f4fcac39bb0353d3ba5b13d8a46b3"
+   },
+   "variants_in_range/boundary/before": {
+    "__keys__": "d66faad2e4ac21159d0ed798581fba4b4312f51bd516808cf416e04b1d205e6f",
+    "alid": "e0c933d099ec9fcec7660a50bdbf9af88ce1fe7b22a349618fa9ec5d643bd34f",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "7efe5c1d1b3fcd4df91ed2bf67cc55f417560cbc62baa32211f7745ad666b12b",
+    "rsid": "7650e8d9cab21deca6d18382419f96193ad5943aa2ae16411c5828d0c61d245c",
+    "source_alid": "e0c933d099ec9fcec7660a50bdbf9af88ce1fe7b22a349618fa9ec5d643bd34f"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "834847e0615fada841de7f4be844061d8d44e3ba6c97efb2471963a6c1f0d9ac",
+    "alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32",
+    "chromosome": "aa7fdfc3c13389d628411617df39a27f11e3ab6dafa1d3e33d69bf60cc4a0506",
+    "effect_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "other_allele": "8580568a7d9c2a48a9ff81dcb13540992e829cf76a8e80ee5e006b715d3b416d",
+    "position": "2c93f89cadd0c88052bd00294738ac530e13764da3fbc651a053c75e5bc664cc",
+    "rsid": "19762b4511ff1c2a5bd9110a688ca4186d704713ad8a52f50152d8f25f26be22",
+    "source_alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32"
+   },
+   "variants_in_range/last": {
+    "__keys__": "834847e0615fada841de7f4be844061d8d44e3ba6c97efb2471963a6c1f0d9ac",
+    "alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32",
+    "chromosome": "aa7fdfc3c13389d628411617df39a27f11e3ab6dafa1d3e33d69bf60cc4a0506",
+    "effect_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "other_allele": "8580568a7d9c2a48a9ff81dcb13540992e829cf76a8e80ee5e006b715d3b416d",
+    "position": "2c93f89cadd0c88052bd00294738ac530e13764da3fbc651a053c75e5bc664cc",
+    "rsid": "19762b4511ff1c2a5bd9110a688ca4186d704713ad8a52f50152d8f25f26be22",
+    "source_alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32"
+   },
+   "variants_in_range/shared": {
+    "__keys__": "a3e1e1e381ff97f34ef4d10f80efecd5ff7f32bf50c0c803ed4e2dd8481c19ed",
+    "alid": "f7a511de74584ecb370c4446dee0e7bb8f5d5dea401a540d98991e3d5c5d4d1f",
+    "chromosome": "6f2346baa1a0103cc5dd1bd74c2143834d6f7e2c860302bc608a819a246d97b9",
+    "effect_allele": "70c9f3fe7bd0e82f942422a74c71f3032bdbe3cdf9cc51580674ebc4b09225e7",
+    "other_allele": "e6fb8363bdaf98b12a1855ba8493ce84f3d16416b6c8c581e4c1fe38afda7d0f",
+    "position": "42543dd6c6b1b1e69de2455bcd5317c2a3913e2d25cff564239931b012340600",
+    "rsid": "5eec463cb8d50f7180b10313b269bec6757df56105e9de8f6ddf4a863dbd7ea1",
+    "source_alid": "f7a511de74584ecb370c4446dee0e7bb8f5d5dea401a540d98991e3d5c5d4d1f"
+   },
+   "variants_in_range/shared/from_before": {
+    "__keys__": "4a871df19664c6cb970ed978739dfbc6f1233832666e80bd6ae49678b7a24f23",
+    "alid": "22b028502009358cebd82b3ec028ea29458675618e9b9a3b132ebd2f6f8eafdc",
+    "chromosome": "01725bbaa27f107c91a821d3530fc404c6dd3c4e55bc7f6d249c7eeee36891e2",
+    "effect_allele": "233d60722a5f60f0966151d62d5a97a9f72894c8b3435aed9dd18cc6683b62e8",
+    "other_allele": "123269cf0cd8818eed7b68aa3512ddd33b36abda927fbfdb282f531d4d9ed47d",
+    "position": "b5955f79bfdab6ecf645d75eb15a0284364479e39379b64a1e5498a560d103c5",
+    "rsid": "e42ab152b829bd1236a1e4c901f253aea34c97d333cfdb6f783faf14066e57a7",
+    "source_alid": "22b028502009358cebd82b3ec028ea29458675618e9b9a3b132ebd2f6f8eafdc"
+   },
+   "variants_in_range/shared/to_after": {
+    "__keys__": "744b21d19f6cbcba0c1f3f05392a68dd75dab96c49a7e9195fb2888091fa790f",
+    "alid": "d0ea89fa301e378ca4148c13e12bef4e1279522810f4a83c85ee7d4f4abd2ad1",
+    "chromosome": "01725bbaa27f107c91a821d3530fc404c6dd3c4e55bc7f6d249c7eeee36891e2",
+    "effect_allele": "e99b1a5314137613bba5a6d172bd7bd10c23f9393f5c77df7604d04916298cc0",
+    "other_allele": "cabdaac64c86d77c52ab817477059166ffc3f39821685ba39a6b61ee5d3c7aa5",
+    "position": "b639c036497cc745c0880a75850706238cbb6f662648513189d298164383c582",
+    "rsid": "fe82495dc768de4bb7a8e0c9faf1f21f750435e3531d032443c0153ce8631ad3",
+    "source_alid": "d0ea89fa301e378ca4148c13e12bef4e1279522810f4a83c85ee7d4f4abd2ad1"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
+   }
+  },
+  "variants_table": {
+   "__keys__": "af9b4706917b2f413d1349d61c7d59a6c9dabfcdbb2c41d0f753c19a8f807dd0",
+   "alid": "282c8d8eebdf683767ac82fdf1a6d3f6b1b6bac207b6dfe097046090995077c6",
+   "chromosome": "a917b43b9e1bb08be9e9ed7ca8ebd64c32b895c99c49520fbc4b7be9e985471b",
+   "effect_allele": "e0f3a45aeff73c1223b691a0c30aa93d499b2da6d1c5b4cb3fd164e85b4ebf54",
+   "other_allele": "54d2c8aa3374a7adf7adc7ed50661bb4ce0ca506d27ea133a4bbcfe149314491",
+   "position": "df846e7a916ba5236cbbe3719e302c63135a2c9ea62de6b3b3d9d319cf312d1d",
+   "rsid": "5538146df75cc8a545ec190df7057c03a3a2f698d983af909b00d56edb1e4825",
+   "source_alid": "282c8d8eebdf683767ac82fdf1a6d3f6b1b6bac207b6dfe097046090995077c6"
+  }
+ },
+ "format_version": "0.3.0",
+ "readable": {
+  "alid_probes": {
+   "phewas/1:1000:A:G": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:A:C": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:C:G": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 1
+   }
+  },
+  "analyses_table": {
+   "head": [
+    {
+     "analysis_id": "bmi_irn",
+     "analysis_index": "0",
+     "analysis_label": "BMI_IRN",
+     "ancestry_assignment_method": "",
+     "assigned_ancestry": "",
+     "completed_against": "",
+     "completion_median_pearson_r": "",
+     "completion_n_imputed_total": "",
+     "completion_n_missing_total": "",
+     "consortium": "",
+     "context": "",
+     "eaf_orientation": "unverified",
+     "eaf_orientation_n": "0",
+     "eaf_orientation_r": "",
+     "eaf_scope": "association",
+     "first_author": "",
+     "license": "",
+     "n_cases": "",
+     "n_controls": "",
+     "n_hits_5e4": "8",
+     "n_hits_5e6": "8",
+     "n_hits_5e8": "8",
+     "n_missing_se_out_of_range": "0",
+     "original_effect_scale": "",
+     "original_sd": "",
+     "original_sd_dispersion": "",
+     "original_sd_method": "declared_standardised",
+     "publication_doi": "",
+     "publication_pmid": "",
+     "sample_size": "500000",
+     "sample_size_kind": "",
+     "sample_size_scope": "",
+     "stored_effect_scale": "sd",
+     "tissue": "",
+     "trait_bp": "",
+     "trait_chr": "",
+     "trait_ontology_id": "",
+     "trait_ontology_label": ""
+    }
+   ],
+   "rows": 1
+  },
+  "refusals": {
+   "analysis/unknown_analysis": {
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/unsupported_chromosome": {
+    "error": "VariantNormalisationError",
+    "message": "unsupported chromosome '27'"
+   },
+   "top_hits/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
+   "variants_in_range/unsupported_chromosome": {
+    "error": "VariantNormalisationError",
+    "message": "unsupported chromosome '27'"
+   }
+  },
+  "shapes": {
+   "analysis/bmi_irn/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "analysis/bmi_irn/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "lookup/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 16
+   },
+   "lookup/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 16
+   },
+   "phewas/1:1000:A:G/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:1000:A:G/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:1:A:C/all": {
+    "head": [],
+    "rows": 0
+   },
+   "phewas/1:1:A:C/observed_only": {
+    "head": [],
+    "rows": 0
+   },
+   "phewas/1:5000:A:C/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:A:C/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:C:G/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:C:G/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.08001708984375,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:9000:A:G/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:9000:A:G/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:300:C:T/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:300:C:T/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:7000:A:C/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:7000:A:C/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/X:2500:G:T/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/X:2500:G:T/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs0/all": {
+    "head": [],
+    "rows": 0
+   },
+   "phewas/rs0/observed_only": {
+    "head": [],
+    "rows": 0
+   },
+   "phewas/rs1000/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1000/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1004/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1004/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.0600128173828125,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.01000213623046875,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1005/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1005/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1006/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1006/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1007/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1007/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.08001708984375,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.01000213623046875,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs5000/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs5000/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "top_hits/0.0005/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.0005/bmi_irn/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.0005/bmi_irn/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.0005/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.01/all": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.01/bmi_irn/all": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.01/bmi_irn/observed_only": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.01/observed_only": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.01 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.2/all": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.2/bmi_irn/all": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.2/bmi_irn/observed_only": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/0.2/observed_only": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/5e-06/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/bmi_irn/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/bmi_irn/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/bmi_irn/all": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/bmi_irn/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/observed_only": {
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": "NaN",
+      "eaf": 0.800000011920929,
+      "pval": "NaN",
+      "se": "Infinity",
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07001495361328125,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.01000213623046875,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/limit/all": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   },
+   "top_hits/limit/observed_only": {
+    "error": "UnstoredThresholdError",
+    "message": "threshold 0.2 is not a stored top-hit tier of this release (stored: 5e-08, 5e-06, 0.0005); a Dense or Hybrid release answers top_hits at a stored tier only"
+   }
+  },
+  "variant_reads": {
+   "variant_count": 8,
+   "variants": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     },
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     }
+    ],
+    "rows": 7
+   },
+   "variants_in_range/boundary/after": {
+    "head": [
+     {
+      "alid": "2:300:C:T",
+      "chromosome": "2",
+      "effect_allele": "C",
+      "other_allele": "T",
+      "position": 300,
+      "rsid": "rs1005",
+      "source_alid": "2:300:C:T",
+      "variant_index": 5
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/boundary/before": {
+    "head": [
+     {
+      "alid": "1:9000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 9000,
+      "rsid": "rs1004",
+      "source_alid": "1:9000:A:G",
+      "variant_index": 4
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/empty/between": {
+    "head": [],
+    "rows": 0
+   },
+   "variants_in_range/empty/chromosome": {
+    "head": [],
+    "rows": 0
+   },
+   "variants_in_range/first": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/from_last": {
+    "head": [
+     {
+      "alid": "X:2500:G:T",
+      "chromosome": "X",
+      "effect_allele": "G",
+      "other_allele": "T",
+      "position": 2500,
+      "rsid": "rs1007",
+      "source_alid": "X:2500:G:T",
+      "variant_index": 7
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/last": {
+    "head": [
+     {
+      "alid": "X:2500:G:T",
+      "chromosome": "X",
+      "effect_allele": "G",
+      "other_allele": "T",
+      "position": 2500,
+      "rsid": "rs1007",
+      "source_alid": "X:2500:G:T",
+      "variant_index": 7
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/shared": {
+    "head": [
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     },
+     {
+      "alid": "1:5000:C:G",
+      "chromosome": "1",
+      "effect_allele": "C",
+      "other_allele": "G",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:C:G",
+      "variant_index": 2
+     }
+    ],
+    "rows": 3
+   },
+   "variants_in_range/shared/from_before": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     },
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     }
+    ],
+    "rows": 4
+   },
+   "variants_in_range/shared/to_after": {
+    "head": [
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     },
+     {
+      "alid": "1:5000:C:G",
+      "chromosome": "1",
+      "effect_allele": "C",
+      "other_allele": "G",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:C:G",
+      "variant_index": 2
+     }
+    ],
+    "rows": 4
+   },
+   "variants_in_range/to_first": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     }
+    ],
+    "rows": 1
+   }
+  },
+  "variants_table": {
+   "head": [
+    {
+     "alid": "1:1000:A:G",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "G",
+     "position": 1000,
+     "rsid": "rs1000",
+     "source_alid": "1:1000:A:G",
+     "variant_index": 0
+    },
+    {
+     "alid": "1:5000:A:C",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "C",
+     "position": 5000,
+     "rsid": "rs5000",
+     "source_alid": "1:5000:A:C",
+     "variant_index": 1
+    }
+   ],
+   "probed": [
+    {
+     "alid": "1:1000:A:G",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "G",
+     "position": 1000,
+     "rsid": "rs1000",
+     "source_alid": "1:1000:A:G",
+     "variant_index": 0
+    },
+    {
+     "alid": "1:5000:A:C",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "C",
+     "position": 5000,
+     "rsid": "rs5000",
+     "source_alid": "1:5000:A:C",
+     "variant_index": 1
+    },
+    {
+     "alid": "1:5000:C:G",
+     "chromosome": "1",
+     "effect_allele": "C",
+     "other_allele": "G",
+     "position": 5000,
+     "rsid": "rs5000",
+     "source_alid": "1:5000:C:G",
+     "variant_index": 2
+    }
+   ],
+   "rows": 8
+  }
+ },
+ "release": "dense_ranges"
+}

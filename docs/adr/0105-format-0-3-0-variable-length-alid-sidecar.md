@@ -869,6 +869,45 @@ rewritten copy (`scratch/472/rsid_481_check.py`). All 200 gave the same answers 
 and by rsID the same as by ALID; `rs761832497`, #481's example, gives 3,131 rows to the
 PheWAS and 5 to the lookup either way.
 
+## 24 Nov 2026 (#474): the Store Reader contract bundle
+
+Format 0.3.0 is what ogquery, opengwaspy, opengwasr and any other port read, so what a
+0.3.0 release answers is committed as data they can test against:
+`tests/store_reader_contract/`, whose README is its format. Issue
+[#474](https://github.com/opengwas/opengwasdb/issues/474).
+
+- **Nine releases, versioned apart from the format.** The six digest releases and the
+  three range releases, built by the test suite's builders and given, through the helpers
+  the tests plant with, what so small a build lacks: ALIDs of 23, 24, 25, 32, 33, 101 and
+  160 bytes, rows with no rsID, a two-rsID cell, a multi-allelic rsID, `source_alid` in
+  states 0, 1 and 2 (§8) and an Indexed Variant Subset. `VERSION` names the bundle's own
+  version and the `format_version` it is; a change to a release or an answer raises the
+  first, and a new format is a new bundle.
+- **Two states the validator refuses.** An infinite SE, which a release before 0.2.3 may
+  hold (ADR 0068), and a tier without `analysis_offsets`, which every format requires and
+  spec §18 still answers. A reader meets both, so the contract holds them; `ogdb validate`
+  fails those four releases on those rules alone. The rewrite publishes only a release
+  the validator passes, so the format parity test gives them to the rewritten release.
+- **Answers.** `expected/<release>.json` is `query_digests.release_digests`, which now
+  also asks the refusals (`top_hits` of an unknown Analysis, a range on chromosome `27`),
+  so the rewrite's proof compares them too, and `release_readable`: each answer's row count
+  and first rows, and each refusal's type and message, for a reader that cannot reproduce
+  Python's digests. JSON holds no NaN, so a NaN or infinite value is spelt as a string.
+- **Read through the Store Reader alone.** `release_digests` and `release_readable` take
+  the facade's opener (`query`, default `query_store`), and the subsets are listed by the
+  Store Reader (`list_indexed_subsets` moved to `opengwasdb.store_reader.indexed`). The
+  contract test opens each release with `open_release` and `query_release` and a Variant
+  Table reader that fails any read, and loads no pandas, scipy, pysam or sqlite3.
+- **Byte for byte, with no new seam.** No builder takes its time, its version or its
+  source paths as an input, so the generator re-stamps them after the build -- every
+  `created_at`, an Indexed Variant Subset's `builder_version`, and the build root in a
+  Ragged build's provenance -- and refuses a release in which an original is left. It
+  compresses with one Blosc thread. A test fails unless a fresh run writes the committed
+  bundle exactly, so a change to a builder shows as a change to the bundle.
+- **It replaces `tests/golden/store_reader_digests.json`.** Those pins asked the same
+  questions of the six digest releases unplanted; two pin sets of one function would each
+  need regenerating on every change to an answer.
+
 ## Alternatives considered
 
 - **Widen the fixed slot** (`|S64`, `|S128`). It still leaves some ALID out (OGS-00007 holds one of
