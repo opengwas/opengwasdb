@@ -658,6 +658,7 @@ def test_the_lifted_contig_rule_fails_a_release_its_builders_make_and_warns_on_o
     rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
     target = SimpleNamespace(
         store=SimpleNamespace(manifest=SimpleNamespace(format_version=format_version)),
+        converted_deviations=dict,  # not a converted release (#492)
         label=".",
     )
     found = _LiftedOffPrimary(1, "row 7: x from y")
