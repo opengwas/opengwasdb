@@ -303,8 +303,14 @@ def test_a_completed_hybrid_with_crossovers_passes_with_hand_counted_totals(tmp_
         "child_associations": N_OVERFLOW - N_CROSSOVERS,
     }
     assert overflow["all_analyses"] == dict.fromkeys(
-        ("observed_in_both", "imputed_cells", "analyses_count_mismatch"), 0
+        (
+            "observed_in_both", "imputed_cells", "analyses_count_mismatch",
+            "associations_on_dropped_rows",
+        ),
+        0,
     )
+    assert overflow["axis"]["parent_rows_unmapped"] == 0
+    assert overflow["axis"]["dropped_alids"] == []
     crossovers = verdict["crossovers"]
     assert (crossovers["n"], crossovers["rows"]) == (N_CROSSOVERS, N_CROSSOVER_ROWS)
     assert not any(crossovers["totals"].values())
@@ -637,19 +643,21 @@ def test_an_overflow_observation_moved_onto_an_existing_dense_row_fails(tmp_path
 # --- a part that was not compared is unchecked, not zero (issue #375) ------
 
 
-def _rename_a_dense_alid(store: Path, alid: bytes, replacement: bytes) -> None:
-    """Give one Dense Component row a nearby position's ALID, which no other Store holds.
+def _rename_an_alid(store: Path, component: str, alid: bytes, replacement: bytes) -> None:
+    """Give one row of an axis of `store` a nearby position's ALID, which no other Store holds.
 
-    The caller moves a position by one base (`1:3000:A:G` -> `1:3001:A:G`), so that row
+    `component` is `""` for the shared axis or `"dense"` for the Dense Component's. The
+    caller moves a position by one base (`1:3000:A:G` -> `1:3001:A:G`), so that row
     cannot be mapped. The new key sorts between the same neighbours as the old one, so
-    the component's index stays searchable and only that one row's identity moves.
+    the index stays searchable and only that one row's identity moves.
     """
     as_0_2_3(store)  # the fixed-width pair, a 0.2 release's, is the one corrupted
-    path = store / "dense" / "variant_alid_bytes.npy"
+    path = store / component / "variant_alid_bytes.npy"
     alids = np.load(path)
     at = int(np.flatnonzero(alids == alid)[0])
     assert len(replacement) <= alids.dtype.itemsize
     alids[at] = replacement
+    assert np.all(alids[:-1] < alids[1:]), "the renamed key must keep the index sorted"
     np.save(path, alids)
 
 
@@ -666,7 +674,7 @@ def test_an_unmappable_axis_leaves_every_part_unchecked(tmp_path, pair):
     assert not np.array_equal(
         _lookup(observed, 3000, "trait_b")["z"], _lookup(completed, 3000, "trait_b")["z"]
     ), "fixture must hold a Z the Dense sample would count"
-    _rename_a_dense_alid(observed, b"1:3000:A:G", b"1:3001:A:G")
+    _rename_an_alid(observed, "dense", b"1:3000:A:G", b"1:3001:A:G")
 
     verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
 
@@ -691,6 +699,56 @@ def test_an_unmappable_axis_leaves_every_part_unchecked(tmp_path, pair):
     assert all(value is None for value in crossovers["totals"].values()), crossovers["totals"]
     assert crossovers["max_abs_diff"] == {"z": None, "se": None, "eaf": None}
     assert crossovers["reencoding_max_abs_diff"] == {"z": None, "se": None, "eaf": None}
+
+
+# --- a shared row no association sits on may be dropped (stores#478) ---------
+
+
+def _without_anywhere(shared_row: int):
+    def edit(name: str, rows: _Rows) -> _Rows:
+        keep = np.asarray(rows.variant_index) != shared_row
+        return _Rows(*(np.asarray(column)[keep] for column in rows))
+
+    return edit
+
+
+def test_a_shared_row_no_association_sits_on_may_be_dropped_and_is_listed(tmp_path, pair):
+    """Completion may leave out a shared-axis row that no Analysis observes.
+
+    OGS-00011's completion left out 668 such rows, each with no association in the
+    source (stores#478). Here 1:105000, which only trait_a and trait_c observe, loses
+    both associations in both Stores, and the source's row is renamed so the completed
+    axis does not hold it. The pair still passes, every part is compared, and the
+    verdict lists the row it dropped.
+    """
+    observed, completed = pair
+    for store in pair:
+        _rewrite_overflow(store, _without_anywhere(_shared_row(store, 105_000)))
+    _rename_an_alid(observed, "", b"1:105000:A:G", b"1:105001:A:G")
+
+    result = _run(observed, completed, tmp_path / "verdict.json")
+
+    assert result.exit_code == 0, result.output
+    overflow = _verdict(result, tmp_path / "verdict.json")["components"]["overflow"]
+    assert overflow["axis"]["parent_rows_unmapped"] == 1
+    assert overflow["axis"]["dropped_alids"] == ["1:105001:A:G"]
+    assert overflow["analyses_checked"] == len(ANALYSES)
+    assert overflow["all_analyses"]["associations_on_dropped_rows"] == 0
+
+
+def test_a_dropped_shared_row_an_association_sits_on_fails(tmp_path, pair):
+    """A shared row left out of the completed axis must hold no source association.
+
+    1:100000 is observed by trait_a and trait_b, so dropping it loses two associations.
+    """
+    observed, completed = pair
+    _rename_an_alid(observed, "", b"1:100000:A:G", b"1:100001:A:G")
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert "overflow.associations_on_dropped_rows" in verdict["failures"]
+    assert _counter(verdict, "overflow.associations_on_dropped_rows") == 2
+    assert verdict["components"]["overflow"]["axis"]["dropped_alids"] == ["1:100001:A:G"]
 
 
 # --- an infinite value is a value (issue #337) ------------------------------
