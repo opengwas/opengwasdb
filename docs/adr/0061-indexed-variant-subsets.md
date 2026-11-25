@@ -6,7 +6,9 @@
 > Analytical Metadata: **a derived, rebuildable component and the count columns derived from
 > it, recomputable from the Store and a named LD Store**, which is the Clumps of the 5e-8 tier
 > with `n_loci_5e8` and `n_unclumped_5e8`. The rule for an Indexed Variant Subset is unchanged.
-> Every other change to Analytical Metadata still derives a new release (spec §21.4).
+> Every other change to Analytical Metadata still derives a new release (spec §21.4). This
+> exception is pending the owner's sign-off at epic #62's merge (ADR 0106, *Awaiting the
+> owner's sign-off*).
 
 Issue #262 asks for extraction of the approximately 1.2 million HapMap3 variants
 from one Analysis in under one second; issue #263 specifies the implementation.

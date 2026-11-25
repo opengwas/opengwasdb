@@ -8,7 +8,8 @@
 > existing release in place, keeping its `release_id`: the Clumps of the 5e-8 tier, with
 > `n_loci_5e8` and `n_unclumped_5e8`. They change no existing value, are declared by the
 > manifest's `clumps` entry written last, and do not move `format_version` (spec §18.1,
-> §21.1, §21.4).
+> §21.1, §21.4). This exception is pending the owner's sign-off at epic #62's merge (ADR 0106,
+> *Awaiting the owner's sign-off*).
 >
 > **§3 amended by the owner's decision of 2026-11-11 (issue #430, spec §21.3):**
 > a build stamps each release **the lowest `format_version` whose features it
