@@ -1,5 +1,5 @@
 {
- "bundle_version": "1",
+ "bundle_version": "2",
  "digests": {
   "adapter": "StoreQuery",
   "alid_probes": {
@@ -11345,6 +11345,37 @@
     "z": "05ce9d4e991f12a565bec5ab2f2c9819ce6fad9459febc7e5bb3454ecea5934c"
    }
   },
+  "rho": {
+   "rho/a/b": {
+    "analysis_id_a": "6ede8fee2bd3500981a7ebe4959642dc92ce1cd588892dfaf492b1a55e4e779f",
+    "analysis_id_b": "64ad454bfe31c5ef087240d8dfc55731575c52479a43356c9a7822e6ab6cfcc5",
+    "n_null": "1ab4e40d1a26ee20b503faba7e7aca6bf84bf295504067a810ec0144670b5127",
+    "rho": "8323890390cc290898a542e048a33e90f702b94867834b247a94202d1c4de156"
+   },
+   "rho_matrix": {
+    "analysis_id": "deb95b2f4037be5932d676cf77fd42eb0bf5842ebad6b26ec08ebf1b7790d4ae",
+    "n_null": "3180e8a438b910eef2fcc56cf532dacacfd3f4627cc2c5be2401b25709f11e02",
+    "rho": "82fcbd7769558a3278101102f375cb4165b1ae7ca50ae8c8604cb47ff9e00675"
+   },
+   "rho_matrix/b/a": {
+    "analysis_id": "1d078b3b574a87bf1ce556fefa35b4e011352a1d992c18f27b2c3466378c2748",
+    "n_null": "3180e8a438b910eef2fcc56cf532dacacfd3f4627cc2c5be2401b25709f11e02",
+    "rho": "82fcbd7769558a3278101102f375cb4165b1ae7ca50ae8c8604cb47ff9e00675"
+   },
+   "rho_row/a": {
+    "analysis_id": "64ad454bfe31c5ef087240d8dfc55731575c52479a43356c9a7822e6ab6cfcc5",
+    "n_null": "1ab4e40d1a26ee20b503faba7e7aca6bf84bf295504067a810ec0144670b5127",
+    "rho": "8323890390cc290898a542e048a33e90f702b94867834b247a94202d1c4de156"
+   },
+   "rho_row/b": {
+    "analysis_id": "6ede8fee2bd3500981a7ebe4959642dc92ce1cd588892dfaf492b1a55e4e779f",
+    "n_null": "1ab4e40d1a26ee20b503faba7e7aca6bf84bf295504067a810ec0144670b5127",
+    "rho": "8323890390cc290898a542e048a33e90f702b94867834b247a94202d1c4de156"
+   },
+   "rho_row/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   }
+  },
   "shapes": {
    "analysis/a/all": {
     "analysis_index": "8e679480779bd9f88f408642078b30645ede8183e1c59a3e5b328619ff5a936c",
@@ -12908,6 +12939,187 @@
      "chromosome": "27"
     },
     "message": "unsupported chromosome '27'"
+   }
+  },
+  "rho": {
+   "rho/a/b": {
+    "analysis_id_a": {
+     "shape": [
+      1
+     ],
+     "values": [
+      "a"
+     ]
+    },
+    "analysis_id_b": {
+     "shape": [
+      1
+     ],
+     "values": [
+      "b"
+     ]
+    },
+    "n_null": {
+     "shape": [
+      1
+     ],
+     "values": [
+      593
+     ]
+    },
+    "rho": {
+     "shape": [
+      1
+     ],
+     "values": [
+      1.0
+     ]
+    }
+   },
+   "rho_matrix": {
+    "analysis_id": {
+     "shape": [
+      2
+     ],
+     "values": [
+      "a",
+      "b"
+     ]
+    },
+    "n_null": {
+     "shape": [
+      2,
+      2
+     ],
+     "values": [
+      [
+       0,
+       593
+      ],
+      [
+       593,
+       0
+      ]
+     ]
+    },
+    "rho": {
+     "shape": [
+      2,
+      2
+     ],
+     "values": [
+      [
+       1.0,
+       1.0
+      ],
+      [
+       1.0,
+       1.0
+      ]
+     ]
+    }
+   },
+   "rho_matrix/b/a": {
+    "analysis_id": {
+     "shape": [
+      2
+     ],
+     "values": [
+      "b",
+      "a"
+     ]
+    },
+    "n_null": {
+     "shape": [
+      2,
+      2
+     ],
+     "values": [
+      [
+       0,
+       593
+      ],
+      [
+       593,
+       0
+      ]
+     ]
+    },
+    "rho": {
+     "shape": [
+      2,
+      2
+     ],
+     "values": [
+      [
+       1.0,
+       1.0
+      ],
+      [
+       1.0,
+       1.0
+      ]
+     ]
+    }
+   },
+   "rho_row/a": {
+    "analysis_id": {
+     "shape": [
+      1
+     ],
+     "values": [
+      "b"
+     ]
+    },
+    "n_null": {
+     "shape": [
+      1
+     ],
+     "values": [
+      593
+     ]
+    },
+    "rho": {
+     "shape": [
+      1
+     ],
+     "values": [
+      1.0
+     ]
+    }
+   },
+   "rho_row/b": {
+    "analysis_id": {
+     "shape": [
+      1
+     ],
+     "values": [
+      "a"
+     ]
+    },
+    "n_null": {
+     "shape": [
+      1
+     ],
+     "values": [
+      593
+     ]
+    },
+    "rho": {
+     "shape": [
+      1
+     ],
+     "values": [
+      1.0
+     ]
+    }
+   },
+   "rho_row/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
    }
   },
   "shapes": {

@@ -84,6 +84,7 @@ from opengwasdb.store_reader.analyses import UnknownAnalysisError
 from opengwasdb.store_reader.associations import Associations
 from opengwasdb.store_reader.identity import VariantNormalisationError
 from opengwasdb.store_reader.indexed import list_indexed_subsets
+from opengwasdb.store_reader.rho import OverflowOnlyAnalysisError
 from opengwasdb.store_reader.top_hits import UnstoredThresholdError
 
 #: Opens a release for its questions: the query facade over the release at a path.
@@ -510,7 +511,7 @@ def refusal_questions(q: Any) -> dict[str, Callable[[], Any]]:
 #: The sections of `release_answers` that `questions` asks into, beside the two tables.
 SECTIONS = (
     "shapes", "alid_probes", "variant_reads", "indexed_subsets", "misses", "range_probes",
-    "refusals",
+    "refusals", "rho",
 )
 
 
@@ -545,6 +546,7 @@ def questions(
     yield from _subset_questions(q, path, ids)
     yield from _miss_questions(q, identifiers, ids)
     yield from _range_probe_questions(q, asked)
+    yield from _rho_questions(q, ids)
     for name, ask in refusal_questions(q).items():
         yield Question("refusals", name, ask, REFUSAL_ERRORS)
 
@@ -601,6 +603,31 @@ def _range_probe_questions(
             )
 
 
+#: What a Rho question may be refused with, other than as a failure: an Analysis a Hybrid
+#: release's Rho Matrix holds no Rho for (#496), and one the release does not hold.
+RHO_REFUSALS = (OverflowOnlyAnalysisError, UnknownAnalysisError)
+
+
+def _rho_questions(q: Any, ids: list[str]) -> Iterator[Question]:
+    """The Rho readers (ADR 0025), on a Dense or Hybrid release; a Ragged one has none.
+
+    Each of `ids` is asked `rho_row`, each consecutive pair of them `rho` and
+    `rho_matrix` (in the order named, reversed), and the whole `rho_matrix`: on a release
+    with no Rho Matrix these answer empty, and on a Hybrid release one of whose Analyses
+    is Overflow-only (#496) the questions that name it are refused, and are answered as
+    that refusal (`RHO_REFUSALS`). An Analysis no release holds is refused as unknown."""
+    if not hasattr(q, "rho_matrix"):
+        return
+    yield Question("rho", "rho_matrix", q.rho_matrix, RHO_REFUSALS)
+    yield Question("rho", "rho_row/unknown_analysis", partial(q.rho_row, UNKNOWN_ANALYSIS),
+                   RHO_REFUSALS)
+    for a in ids:
+        yield Question("rho", f"rho_row/{a}", partial(q.rho_row, a), RHO_REFUSALS)
+    for a, b in zip(ids, ids[1:], strict=False):
+        yield Question("rho", f"rho/{a}/{b}", partial(q.rho, a, b), RHO_REFUSALS)
+        yield Question("rho", f"rho_matrix/{b}/{a}", partial(q.rho_matrix, [b, a]), RHO_REFUSALS)
+
+
 def _subset_questions(q: Any, path: str | Path, ids: list[str]) -> Iterator[Question]:
     """Each Indexed Variant Subset's answer for the spread Analyses, Observed-Only and
     not (ADR 0061): a subset records its parent release, so a derived release that
@@ -640,7 +667,14 @@ def _digested(answer: Any) -> dict[str, str]:
         return digests
     if isinstance(answer, int):
         return {"count": digest_array(np.asarray([answer], dtype="int64"))}
+    if _is_arrays(answer):
+        return {name: digest_array(values) for name, values in sorted(answer.items())}
     return _table_digests(answer)
+
+
+def _is_arrays(answer: Any) -> bool:
+    """Whether `answer` is a Rho reader's: named numpy arrays, not a table's rows."""
+    return bool(answer) and all(isinstance(v, np.ndarray) for v in answer.values())
 
 
 def _open(path: str | Path, query: QueryOpener | None) -> Any:
@@ -762,6 +796,22 @@ def readable_answer(
     return {"rows": len(keys), "head": [_readable_row({key: k, **answer[k]}) for k in keys[:rows]]}
 
 
+def readable_arrays(answer: Mapping[str, np.ndarray]) -> dict[str, Any]:
+    """A Rho reader's answer as a port compares it: each array's shape and its values, NaN
+    spelt as `readable_value` spells it. A Rho Matrix is small by construction, so every
+    value is spelt out, none only digested."""
+    return {
+        name: {"shape": list(values.shape), "values": _nested(values.tolist())}
+        for name, values in sorted(answer.items())
+    }
+
+
+def _nested(values: Any) -> Any:
+    if isinstance(values, list):
+        return [_nested(v) for v in values]
+    return readable_value(values)
+
+
 def _readable_refusal(refused: Exception) -> dict[str, Any]:
     """A refusal as a port compares it: its type and its named fields (`fields`); the
     message is for people."""
@@ -778,6 +828,8 @@ def _readable(answer: Any) -> Any:
         return _readable_refusal(answer)
     if isinstance(answer, int):
         return {"count": answer}
+    if not isinstance(answer, Associations) and _is_arrays(answer):
+        return readable_arrays(answer)
     return readable_answer(answer)
 
 
@@ -809,7 +861,8 @@ def differences(
     for section in ("variants_table", "analyses_table"):
         found += [f"{section}/{n}" for n in _differing(reference[section], candidate[section])]
     for section in (
-        "shapes", "resolved", "alid_probes", "range_probes", "misses", "variant_reads", "refusals"
+        "shapes", "resolved", "alid_probes", "range_probes", "misses", "variant_reads", "refusals",
+        "rho",
     ):
         found += _shape_differences(section, reference[section], candidate[section])
     found += _shape_differences(
