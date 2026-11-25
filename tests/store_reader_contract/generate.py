@@ -54,7 +54,7 @@ for _path in (REPOSITORY / "tests", REPOSITORY, BUNDLE):
         sys.path.insert(0, str(_path))
 
 #: The bundle's own version: raised whenever a release or an expected answer changes.
-BUNDLE_VERSION = "1"
+BUNDLE_VERSION = "2"
 #: The `format_version` every release of the bundle is.
 FORMAT_VERSION = "0.3.0"
 #: What `normalise` stamps in place of each build's time, version and build root.
@@ -68,6 +68,18 @@ DIGEST_RELEASES = (
     "hybrid_observed", "hybrid_completed",
 )
 RANGE_RELEASES = {"dense_ranges": "dense", "ragged_ranges": "ragged", "hybrid_ranges": "hybrid"}
+#: The Hybrid release with an Overflow-only Analysis (`overflow_only_hybrid`, #496).
+OVERFLOW_ONLY_RELEASE = "hybrid_overflow_only"
+#: The Dense release of the same four Analyses (`overflow_only_dense`): the standalone Rho
+#: Matrix with an interior estimate. The digest releases' two Analyses are near-identical,
+#: so their off-diagonal Rho is 1.0, which a reader returning the diagonal for every pair
+#: would also answer.
+INTERIOR_RHO_RELEASE = "dense_rho"
+
+#: The Rho Matrix each release carries (`build_rho`), by the options `build-dense-rho` is
+#: given: the digest releases' two Analyses clear a support floor of two over one thinned
+#: variant a base pair, at the Z threshold 2.0 their null Z do not all fall under.
+DIGEST_RHO = {"window_bp": 1, "z_thresh": 2.0, "min_nulls": 2}
 
 #: The ALID lengths, in bytes, `relabel_long_alids` gives one row each: either side of the
 #: ALID sidecar's 24-byte key and of the 0.2 series' 32-byte slot
@@ -82,14 +94,36 @@ SUBSET = "contract"
 OFFSETLESS_TIER = "p_5e_04"
 
 
+def _overflow_only_fixture(root: Path) -> Path:
+    from overflow_only_hybrid import overflow_only_hybrid
+
+    return overflow_only_hybrid(root)
+
+
+def _interior_rho_fixture(root: Path) -> Path:
+    from overflow_only_hybrid import overflow_only_dense
+
+    return overflow_only_dense(root)
+
+
+#: The releases built from `overflow_only_hybrid`'s four Analyses, by their builders (the
+#: fixture module is a test's, so it is imported when one is built).
+RHO_FIXTURES: dict[str, Callable[[Path], Path]] = {
+    OVERFLOW_ONLY_RELEASE: _overflow_only_fixture,
+    INTERIOR_RHO_RELEASE: _interior_rho_fixture,
+}
+
+
 def build(root: Path) -> dict[str, Path]:
-    """The nine releases, as the builders write them, under `root`."""
+    """The ten releases, as the builders write them, under `root`."""
     from one_source_releases import LAYOUTS
     from store_reader_digests import build_releases
 
     built = build_releases(root / "digest")
     for name, layout in RANGE_RELEASES.items():
         built[name] = LAYOUTS[layout](_fresh(root / "ranges" / layout))
+    for name, fixture in RHO_FIXTURES.items():
+        built[name] = fixture(_fresh(root / name))
     return built
 
 
@@ -255,15 +289,70 @@ def drop_analysis_offsets(release: Path) -> list[Path]:
     return changed
 
 
+def build_rho(release: Path) -> dict[str, Any]:
+    """`_build_rho` on a digest release, with `DIGEST_RHO`: no Overflow-only Analysis."""
+    return _build_rho(release, DIGEST_RHO, overflow_only=None)
+
+
+def build_overflow_only_rho(release: Path) -> dict[str, Any]:
+    """`_build_rho` on `OVERFLOW_ONLY_RELEASE`, with the options its fixture is built for:
+    `trait_c`, the third Analysis, is Overflow-only."""
+    from overflow_only_hybrid import ANALYSES, OVERFLOW_ONLY, RHO_OPTIONS
+
+    return _build_rho(release, RHO_OPTIONS, overflow_only=[ANALYSES.index(OVERFLOW_ONLY)])
+
+
+def build_interior_rho(release: Path) -> dict[str, Any]:
+    """`_build_rho` on `INTERIOR_RHO_RELEASE`, with its fixture's options: a Dense release."""
+    from overflow_only_hybrid import RHO_OPTIONS
+
+    return _build_rho(release, RHO_OPTIONS, overflow_only=None)
+
+
+def _build_rho(
+    release: Path, options: dict[str, Any], overflow_only: list[int] | None
+) -> dict[str, Any]:
+    """Build `release`'s Rho Matrix with `opengwasdb build-dense-rho`: a Dense release's own,
+    or a Hybrid release's in its Dense Component, which records its Overflow-only Analyses
+    (#496). Returns what it must hold to answer anything: a finite Rho and, for the
+    Hybrid release with an Overflow-only Analysis, that Analysis recorded."""
+    import zarr
+
+    from opengwasdb.layouts.dense.rho import build_dense_rho
+    from opengwasdb.store_reader.rho import OVERFLOW_ONLY_ATTR
+
+    build_dense_rho(release, **options)
+    component = release / "dense" if (release / "dense").is_dir() else release
+    group = zarr.open_group(component / "data.zarr" / "rho", mode="r")
+    rho = np.asarray(group["rho"][:])
+    assert np.isfinite(rho).any(), f"{release}: no pair has a Rho, so the matrix proves nothing"
+    assert int(np.asarray(group["n_null"][:]).max()) > 0, f"{release}: no pair has null support"
+    recorded = group.attrs.get(OVERFLOW_ONLY_ATTR)
+    expected = overflow_only if overflow_only is not None else recorded
+    assert recorded == expected, (release, recorded, overflow_only)
+    assert overflow_only is not None or not recorded, (release, recorded)
+    return {"rho": rho.tolist(), "overflow_only": recorded}
+
+
 #: What each release is given, in order: the axis first, then what reads it. Each leaves
 #: a release the validator passes, so its 0.2.3 form rewrites (the parity test).
 PLANTINGS: dict[str, tuple[Callable[[Path], Any], ...]] = {
-    "dense_observed": (relabel_long_alids, name_rsids, plant_source_alids, build_subset),
-    "dense_completed": (relabel_long_alids, name_rsids, plant_source_alids, build_subset),
+    "dense_observed": (
+        relabel_long_alids, name_rsids, plant_source_alids, build_subset, build_rho
+    ),
+    "dense_completed": (
+        relabel_long_alids, name_rsids, plant_source_alids, build_subset, build_rho
+    ),
     "ragged_observed": (relabel_long_alids, name_rsids, plant_source_alids),
     "ragged_completed": (relabel_long_alids, name_rsids, plant_source_alids),
-    "hybrid_observed": (relabel_long_alids, name_rsids, plant_source_alids, build_subset),
-    "hybrid_completed": (relabel_long_alids, name_rsids, plant_source_alids, build_subset),
+    "hybrid_observed": (
+        relabel_long_alids, name_rsids, plant_source_alids, build_subset, build_rho
+    ),
+    "hybrid_completed": (
+        relabel_long_alids, name_rsids, plant_source_alids, build_subset, build_rho
+    ),
+    OVERFLOW_ONLY_RELEASE: (build_overflow_only_rho,),
+    INTERIOR_RHO_RELEASE: (build_interior_rho,),
     "dense_ranges": (name_site_rsids,),
     "ragged_ranges": (name_site_rsids,),
     "hybrid_ranges": (name_site_rsids,),
@@ -411,6 +500,28 @@ def _require_meaningful(name: str, found: dict[str, Any]) -> None:
     assert len(answered) > 10, (name, len(answered))
     refused = {s: a.get("error") for s, a in found["readable"]["refusals"].items()}
     assert refused == REFUSED, (name, refused)
+    _require_meaningful_rho(name, found["readable"]["rho"])
+
+
+def _require_meaningful_rho(name: str, rho: dict[str, Any]) -> None:
+    """A release with a Rho Matrix answers a finite Rho, one with an Overflow-only
+    Analysis refuses it by name, and one without a matrix (`ragged_*`, `*_ranges`) asks
+    no Rho question or answers every one empty: an empty answer on a release that holds a
+    matrix would pass whatever a reader did."""
+    carries = bool({build_rho, build_overflow_only_rho, build_interior_rho} & set(PLANTINGS[name]))
+    if not carries:
+        answered = [n for n, a in rho.items() if "error" not in a and a["rho"]["values"]]
+        assert not answered, (name, answered, "answers Rho without a matrix")
+        return
+    support = [v for row in rho["rho_matrix"]["n_null"]["values"] for v in row]
+    assert max(support) > 0, (name, "no pair of the Rho Matrix has null support")
+    if name in (OVERFLOW_ONLY_RELEASE, INTERIOR_RHO_RELEASE):
+        pairs = [v for row in rho["rho_matrix"]["rho"]["values"] for v in row]
+        assert any(isinstance(v, float) and abs(v) < 0.99 for v in pairs), (name, pairs)
+    errors = {a["error"] for a in rho.values() if "error" in a}
+    expected = {"OverflowOnlyAnalysisError", "UnknownAnalysisError"}
+    assert errors == (expected if name == OVERFLOW_ONLY_RELEASE else {"UnknownAnalysisError"}), (
+        name, errors)
 
 
 #: The environment the bundle is generated in (module docstring): the test task's, and

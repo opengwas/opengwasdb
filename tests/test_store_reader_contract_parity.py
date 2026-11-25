@@ -1,6 +1,6 @@
 """Each Store Reader contract release built at format 0.2.3 and rewritten answers exactly
 as the committed 0.3.0 release does (#474). Every test run checks three releases
-(`ALWAYS`); `pixi run -e dev contract-check` checks the other six.
+(`ALWAYS`); `pixi run -e dev contract-check` checks the other eight.
 
 The contract bundle's releases (`tests/store_reader_contract/`) are 0.3.0 builds. Here
 each is built again from the same session fixtures with the same plantings, turned into
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -27,7 +28,7 @@ from opengwasdb.store.rewrite import rewrite_release
 ALL = sorted(path.name for path in (BUNDLE / "releases").iterdir() if path.is_dir())
 #: The releases every test run checks: one per layout, covering both `LEGACY_STATES`
 #: (the infinite SE, the tiers without `analysis_offsets`). `pixi run -e dev
-#: contract-check` checks the other six (`STORE_READER_CONTRACT_PARITY=rest`).
+#: contract-check` checks the other eight (`STORE_READER_CONTRACT_PARITY=rest`).
 ALWAYS = ("dense_ranges", "ragged_completed", "hybrid_completed")
 NAMES = (
     [name for name in ALL if name not in ALWAYS]
@@ -43,25 +44,37 @@ def generator() -> ModuleType:
 
 @pytest.fixture(scope="module")
 def built(
-    digest_releases: dict[str, Path], range_releases: dict[str, Path], generator: ModuleType
-) -> dict[str, Path]:
-    """The builds the bundle's releases are planted on, by release name."""
+    digest_releases: dict[str, Path],
+    range_releases: dict[str, Path],
+    generator: ModuleType,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Callable[[str], Path]:
+    """The build the bundle's release `name` is planted on. The two Rho fixtures
+    (`generator.RHO_FIXTURES`) are built when asked, so only their opt-in cases pay."""
     ranges = {name: range_releases[layout] for name, layout in generator.RANGE_RELEASES.items()}
-    return {**digest_releases, **ranges}
+    ready = {**digest_releases, **ranges}
+
+    def source(name: str) -> Path:
+        if name not in ready:
+            ready[name] = generator.RHO_FIXTURES[name](tmp_path_factory.mktemp(name))
+        return ready[name]
+
+    return source
 
 
-def test_every_committed_release_has_a_build(built: dict[str, Path]):
-    assert sorted(built) == ALL and len(ALL) == 9
+def test_every_committed_release_has_a_build(generator: ModuleType):
+    from_fixtures = {*generator.DIGEST_RELEASES, *generator.RANGE_RELEASES}
+    assert sorted({*from_fixtures, *generator.RHO_FIXTURES}) == ALL and len(ALL) == 11
     assert set(ALWAYS) <= set(ALL)
 
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_0_2_3_form_rewritten_answers_as_the_committed_release(
-    name: str, built: dict[str, Path], generator: ModuleType, tmp_path: Path
+    name: str, built: Callable[[str], Path], generator: ModuleType, tmp_path: Path
 ):
     from contract_reader import expected, mismatches  # on the path `generate.py` puts it on
 
-    source = Path(shutil.copytree(built[name], tmp_path / "0.2.3"))
+    source = Path(shutil.copytree(built(name), tmp_path / "0.2.3"))
     generator.plant(name, source)
     as_0_2_3(source)
     assert '"format_version": "0.2.3"' in (source / "manifest.json").read_text("utf-8")

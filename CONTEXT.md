@@ -141,7 +141,7 @@ The read-only path every reader of a Store Release uses: opening the release and
 _Avoid_: Reader on its own (a **Source Reader** reads a source, not a Store Release), query engine.
 
 **Store Reader Contract Bundle**:
-Nine small format 0.3.0 Store Releases — Dense, Ragged and Hybrid, each Observed-Only and Reference-Completed, and one of each spanning three chromosomes — committed with what the Store Reader answers to every question `ogdb rewrite-release`'s proof asks, refusals included, as digests and as readable rows (`tests/store_reader_contract/`, #474). It is the contract any port of the Store Reader (ogquery, opengwaspy, opengwasr) tests against; `pixi run -e dev contract-check` regenerates it and fails on any difference.
+Eleven small format 0.3.0 Store Releases — Dense, Ragged and Hybrid, each Observed-Only and Reference-Completed, one of each spanning three chromosomes, and two carrying a Rho Matrix with an interior estimate (a Dense, and a Hybrid with an Overflow-only Analysis) — committed with what the Store Reader answers to every question `ogdb rewrite-release`'s proof asks, refusals included, as digests and as readable rows (`tests/store_reader_contract/`, #474). It is the contract any port of the Store Reader (ogquery, opengwaspy, opengwasr) tests against; `pixi run -e dev contract-check` regenerates it and fails on any difference.
 
 **Observed-Only Query**:
 A query mode that excludes Imputed Associations and returns only source-observed results. Reference-Completed releases include imputed associations by default, but callers may request observed-only results.

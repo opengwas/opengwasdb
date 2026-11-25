@@ -1,0 +1,17 @@
+{
+  "attributes": {
+    "z_thresh": 2.0,
+    "min_nulls": 50,
+    "grid_n": 2000,
+    "window_bp": 2000,
+    "n_variants_used": 302,
+    "observed_only": true,
+    "method": "pleiodb-cml",
+    "n_analyses": 4,
+    "overflow_only": [
+      2
+    ]
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

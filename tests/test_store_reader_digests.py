@@ -71,3 +71,20 @@ def test_every_answer_carries_beta_and_pval_from_the_one_function(
         # The one fixture whose answers hold missing rows (12, where imputation
         # failed): their NaN must reach beta and pval.
         assert counts["missing"] > 0, counts
+
+
+def test_a_changed_rho_digest_is_a_difference():
+    """`differences` -- the rewrite proof's comparison, which has no readable rows --
+    compares the `rho` section as it does every other (#497)."""
+    import copy
+    import json
+
+    from opengwasdb.store.query_digests import differences
+
+    bundle = Path(__file__).parent / "store_reader_contract" / "expected"
+    digests = json.loads((bundle / "dense_rho.json").read_text(encoding="utf-8"))["digests"]
+    assert digests["rho"]["rho_matrix"], "the fixture asks no Rho question"
+    assert differences(digests, digests) == []
+    changed = copy.deepcopy(digests)
+    changed["rho"]["rho_matrix"]["rho"] = "0" * 64
+    assert differences(digests, changed) == ["rho/rho_matrix/rho"]

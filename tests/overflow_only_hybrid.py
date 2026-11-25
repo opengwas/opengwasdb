@@ -96,8 +96,9 @@ def _rows(analysis: str, z: np.ndarray) -> list[tuple[str, ...]]:
     return rows
 
 
-def overflow_only_hybrid(root: Path) -> Path:
-    """Build the release under `root` (which must exist) and return its path."""
+def _manifest(root: Path) -> tuple[Path, list[tuple[str, int, bool]]]:
+    """The four Analyses' GWAS-VCF sources and their manifest, under `root`, and the
+    variants they are drawn over."""
     variants = _variants()
     z = _z(len(variants))
     lines = [
@@ -112,5 +113,23 @@ def overflow_only_hybrid(root: Path) -> Path:
         )
     manifest = root / "manifest.tsv"
     manifest.write_text("".join(lines), encoding="utf-8")
+    return manifest, variants
+
+
+def overflow_only_hybrid(root: Path) -> Path:
+    """Build the release under `root` (which must exist) and return its path."""
+    manifest, variants = _manifest(root)
     panel = [f"{chrom}:{position}:A:G" for chrom, position, on_panel in variants if on_panel]
     return build_over_panel(root, manifest, panel)
+
+
+def overflow_only_dense(root: Path) -> Path:
+    """The same four Analyses as a Dense release over every variant, off the panel too:
+    each is observed where its Hybrid is, so none is Overflow-only, and `trait_a` and
+    `trait_b` are as correlated (`CORRELATION`). Built under `root`, which must exist."""
+    from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+
+    manifest, _ = _manifest(root)
+    store = root / "dense.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, store, store_id="dense", release_id="v1")
+    return store
