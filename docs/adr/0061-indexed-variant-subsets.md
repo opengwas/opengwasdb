@@ -1,8 +1,8 @@
 # Indexed Variant Subsets are optional full-statistic Dense query indexes
 
-> **Widened by [ADR 0102](0102-the-5e-8-tier-is-clumped-at-build-time.md) §10**
+> **Widened by [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10**
 > (issue #417): this ADR adds an Indexed Variant Subset in place *because* it changes no
-> association or Analytical Metadata. ADR 0102 admits one in-place addition that does carry
+> association or Analytical Metadata. ADR 0106 admits one in-place addition that does carry
 > Analytical Metadata: **a derived, rebuildable component and the count columns derived from
 > it, recomputable from the Store and a named LD Store**, which is the Clumps of the 5e-8 tier
 > with `n_loci_5e8` and `n_unclumped_5e8`. The rule for an Indexed Variant Subset is unchanged.

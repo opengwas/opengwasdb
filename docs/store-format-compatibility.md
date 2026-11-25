@@ -208,7 +208,7 @@ on a 0.3.0 release raises `DenseComponentSharesAxis`. A 0.2 Hybrid keeps its cop
 the validator and completion still read. `ogdb rewrite-release` drops the copy from a 0.2.3
 source and refuses one whose `dense_to_shared.npy` does not name each Dense row's shared row.
 
-**#417 adds the Clumps of the 5e-8 tier without moving `format_version` (ADR 0102 §9,
+**#417 adds the Clumps of the 5e-8 tier without moving `format_version` (ADR 0106 §9,
 spec §21.1).** A release clumped by #418's step carries `top_hits/p_5e_08/clumps/default/`
 in each component with a 5e-8 tier, declares it in `manifest.json` as `"clumps": {"tier":
 "p_5e_08", "configuration": "default"}`, and has two more `analyses.tsv` columns,

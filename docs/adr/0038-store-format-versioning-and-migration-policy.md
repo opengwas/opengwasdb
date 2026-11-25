@@ -1,6 +1,6 @@
 # Store format versioning, reader obligations, and migration expectations
 
-> **§4–§5 narrowed by [ADR 0102](0102-the-5e-8-tier-is-clumped-at-build-time.md) §10**
+> **§4–§5 narrowed by [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10**
 > (issue #417; the owner's plan of 23 Nov 2026 on #62): a release is still immutable, and a
 > change to association data or Analytical Metadata still derives a new release, with one
 > exception. **A derived, rebuildable component and the count columns derived from it,
