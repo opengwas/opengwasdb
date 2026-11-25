@@ -185,13 +185,18 @@ def write_release_manifest(
     `encoding` and `format_version`: the arrays are the caller's, so the plan
     describes a plain float16/float16/float32 Store.
     """
-    from opengwasdb.encoding import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-    from opengwasdb.model.enums import (
+    from opengwasdb.store_reader.encoding.plan import (
+        EafEncoding,
+        SeEncoding,
+        StoreEncoding,
+        ZEncoding,
+    )
+    from opengwasdb.store_reader.enums import (
         AssociationCoverage,
         CompletionState,
         PrimaryStorageLayout,
     )
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     manifest = StoreManifest(
         store_id=store_id,

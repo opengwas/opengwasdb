@@ -27,16 +27,16 @@ import pytest
 import zarr
 
 from opengwasdb.encoding.measure import fit_se_grid
-from opengwasdb.encoding.plan import (
+from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
+from opengwasdb.encoding.timing import PhaseTimer
+from opengwasdb.store_reader.encoding.plan import (
     EafEncoding,
     NEncoding,
     SeEncoding,
     StoreEncoding,
     ZEncoding,
 )
-from opengwasdb.encoding.planes import DenseSePlane
-from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
-from opengwasdb.encoding.timing import PhaseTimer
+from opengwasdb.store_reader.encoding.planes import DenseSePlane
 
 _N_ROWS = 600
 _ROW_CHUNK = 100

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -11,8 +11,6 @@ import numpy as np
 from opengwasdb import admission
 from opengwasdb.admission.rules import AnalysisRules
 from opengwasdb.encoding import (
-    EncodingMeasurements,
-    StoreEncoding,
     association_codec,
     eaf_baseline_from_grid,
     fit_se_grid,
@@ -26,11 +24,9 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
-    dense_index_metadata,
     dense_layout_records,
     dense_provenance_block,
 )
@@ -42,23 +38,22 @@ from opengwasdb.model.analyses import (
     with_se_out_of_range,
     write_analyses,
 )
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafOrientationOutcome,
-    EafScope,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafOrientationOutcome, EafScope, coverage_for_layout
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.rows import ReaderBatch
-from opengwasdb.store.arrays import ArrayRole, compressor
+from opengwasdb.store.arrays import compressor
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts
-from opengwasdb.variants import (
-    VARIANT_AXIS_FORMAT,
-    VARIANT_OFFSETS_FILENAME,
+from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.store_reader.variant_axis import (
     VARIANT_TABIX_FILENAME,
     VARIANT_TABLE_FILENAME,
+)
+from opengwasdb.top_hits import add_hit_counts
+from opengwasdb.variants import (
+    VARIANT_AXIS_FORMAT,
     CanonicalVariant,
     chromosome_sort_key,
     write_variant_axis,
@@ -180,14 +175,22 @@ def build_dense_observed_store(
             encoding,
             coverage,
         )
-        write_variant_axis(staged.path, variants, rsid_by_alid)
-        _write_index(staged, variants, analyses, records, chunk_shape)
+        _write_unlifted_axis(staged.path, variants, rsid_by_alid)
         _write_zarr(staged, (z, se, eaf), coefficients, chunk_shape, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(
             staged.path, with_se_out_of_range(add_hit_counts(staged.path, analyses), left_out)
         )
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _write_unlifted_axis(
+    store: Path, variants: list[CanonicalVariant], rsid_by_alid: Mapping[str, str]
+) -> None:
+    """The Variant Axis of a build that lifts nothing: each source names its rows on the
+    release's own assembly, so a row's `source_alid` is its own ALID, as every build
+    writes an unlifted row's (#470; `build_vcf` takes the routing's, which a lift moves)."""
+    write_variant_axis(store, variants, rsid_by_alid, [variant.alid for variant in variants])
 
 
 def _stored_grid(
@@ -525,55 +528,11 @@ def _write_manifest(
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
                     "tabix_index": VARIANT_TABIX_FILENAME,
-                    "row_offsets": VARIANT_OFFSETS_FILENAME,
                 },
             },
         },
     )
     staged.write_manifest(manifest)
-
-
-def _write_index(
-    staged: StagedRelease,
-    variants: list[CanonicalVariant],
-    analyses: list[Analysis],
-    records: list[NormalisedAssociation],
-    chunk_shape: tuple[int, int],
-) -> None:
-    with staged.index_connection() as connection:
-        initialise_schema(connection)
-        set_metadata(connection, "schema_version", 2)
-        set_metadata(connection, "n_variants", len(variants))
-        set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(
-            connection,
-            "dense",
-            dense_index_metadata(
-                (len(variants), len(analyses)),
-                hint=chunk_shape,
-                variant_axis={
-                    "format": VARIANT_AXIS_FORMAT,
-                    "table": VARIANT_TABLE_FILENAME,
-                    "tabix_index": VARIANT_TABIX_FILENAME,
-                    "row_offsets": VARIANT_OFFSETS_FILENAME,
-                },
-            ),
-        )
-        # `variant_aliases` is no longer the rsid lookup path -- `write_variant_axis`
-        # writes an rsid search index every layout shares (issue #109), and
-        # `VariantAxis.by_identifier` consults that first. The table is still written
-        # here, and still read as a fallback, so stores built before that index keep
-        # resolving rsids; nothing new depends on it.
-        variant_indices = {variant.alid: i for i, variant in enumerate(variants)}
-        aliases: set[tuple[str, int]] = set()
-        for record in records:
-            if record.rsid:
-                aliases.add((record.rsid, variant_indices[record.variant.alid]))
-        connection.executemany(
-            "INSERT OR IGNORE INTO variant_aliases(alias, variant_index) VALUES (?, ?)",
-            sorted(aliases),
-        )
-        connection.commit()
 
 
 def _write_zarr(

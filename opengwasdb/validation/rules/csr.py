@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from opengwasdb.model.analyses import read_analyses
-from opengwasdb.model.enums import PrimaryStorageLayout
-from opengwasdb.store.arrays import array_length
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.scans import sequence_offsets

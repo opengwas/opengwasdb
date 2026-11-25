@@ -41,7 +41,7 @@ was checked, so there is no verdict to keep.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,20 +49,15 @@ from typing import Any, NamedTuple, assert_never
 
 import numpy as np
 
-from opengwasdb.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
 from opengwasdb.encoding.codec import se_above_bound
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import Analysis, read_analysis_records
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore, open_store, records_se_out_of_range
-from opengwasdb.variants import (
-    VariantAxis,
-    is_indexable_alid,
-    variant_alid_bytes_path,
-    variant_alid_rows_path,
-)
+from opengwasdb.store_reader.alid_index import UNINDEXED, AlidIndex, open_alid_index
+from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 
 __all__ = [
     "FAILING_COUNTERS",
@@ -386,7 +381,7 @@ _STATE_NAMES = {
 
 def _refuse_if_incoherent(path: Path, planes: _Planes, role: str) -> None:
     """A Store whose planes and variant axis disagree cannot be mapped row for row."""
-    with closing(VariantAxis(path)) as axis:
+    with closing(open_store(path).variant_axis(aliases=False)) as axis:
         n_axis = axis.n_variants
     if n_axis != planes.n_rows:
         raise ObservedViewRefused(
@@ -432,74 +427,85 @@ def _shard_rows(z_array: Any) -> int:
 # --- the exhaustive axis map ------------------------------------------------
 
 
-class _AlidIndex(NamedTuple):
-    """A Store's sorted ALID search index, which leaves out ALIDs wider than its key."""
+#: Source rows mapped at a time: their ALIDs are Python strings while they are mapped.
+_MAP_WINDOW = 1_000_000
 
-    alids: np.ndarray
-    rows: np.ndarray
 
-    @classmethod
-    def load(cls, store_path: Path) -> _AlidIndex:
-        bytes_path = variant_alid_bytes_path(store_path)
-        rows_path = variant_alid_rows_path(store_path)
-        if not (bytes_path.exists() and rows_path.exists()):
-            # A Store built before the index existed: every row is resolved by scan.
-            return cls(np.empty(0, dtype=f"S{_CHROMOSOME_WIDTH}"), np.empty(0, dtype="int64"))
-        return cls(np.load(bytes_path, mmap_mode="r"), np.load(rows_path, mmap_mode="r"))
+class _AxisRows:
+    """One Store's axis, by ALID, exactly: the ALID index its `format_version` carries
+    first, and its Variant Table for the rows that index leaves out (a 0.2 ALID over 32
+    bytes, #127). Nothing is skipped, truncated or hashed."""
 
-    def unindexed_rows(self, n_rows: int) -> np.ndarray:
-        indexed = np.zeros(n_rows, dtype=bool)
-        indexed[np.asarray(self.rows, dtype="int64")] = True
-        return np.flatnonzero(~indexed)
+    def __init__(self, path: Path, n_rows: int) -> None:
+        self._path = path
+        store = open_store(path)
+        if store.shared_root is not None:
+            # A 0.3.0 Dense Component: the shared index, in its panel rows (#472).
+            with closing(store.variant_axis(aliases=False)) as axis:
+                self._index: AlidIndex = axis.alid_index
+        else:
+            self._index = open_alid_index(path, store.manifest.format_version)
+        self.unindexed = self._index.unindexed_rows(n_rows)
+        self._scanned: dict[int, str] | None = None
+
+    def alids(self, rows: np.ndarray) -> np.ndarray:
+        """Each row's ALID: from the index, or from the table where the index has none."""
+        alids = self._index.alids(rows)
+        missing = [k for k, alid in enumerate(alids) if alid is None]
+        if missing:
+            scanned = self._scanned_alids()
+            alids[missing] = [scanned[int(rows[k])] for k in missing]
+        return alids
+
+    def rows_of(self, alids: Sequence[str | None]) -> np.ndarray:
+        """Each ALID's row, or -1 where this axis holds none (or the ALID is None)."""
+        found = np.full(len(alids), -1, dtype=np.int64)
+        named = [k for k, alid in enumerate(alids) if alid is not None]
+        if named:
+            asked = [str(alids[k]) for k in named]
+            found[np.asarray(named, dtype=np.int64)] = self._search(asked)
+        return found
+
+    def _search(self, asked: list[str]) -> np.ndarray:
+        """The index's answer, with each `UNINDEXED` ALID found in the table, or -1."""
+        rows = np.asarray(self._index.search(asked), dtype=np.int64)
+        unindexed = np.flatnonzero(rows == UNINDEXED).tolist()
+        if unindexed:
+            by_alid = {alid: row for row, alid in self._scanned_alids().items()}
+            for k in unindexed:
+                rows[k] = by_alid.get(asked[k], -1)
+        return np.asarray(np.maximum(rows, -1), dtype=np.int64)
+
+    def _scanned_alids(self) -> dict[int, str]:
+        """The ALID of every row the index leaves out, read from the table once."""
+        if self._scanned is None:
+            self._scanned = {}
+            if self.unindexed.size:
+                with closing(open_store(self._path).variant_axis(aliases=False)) as axis:
+                    records = axis.by_indices(self.unindexed.tolist())
+                self._scanned = {row: record.alid for row, record in records.items()}
+        return self._scanned
 
 
 def _map_axis(source_path: Path, target_path: Path, n_source: int, n_target: int) -> _AxisMap:
-    """Map every source row to its row in the completed axis, exactly.
-
-    The ALID index is a fast path, not the definition: it holds only ALIDs that
-    fit its fixed key, so a long indel is absent from it (#127). Rows the index
-    does not cover are read from the variant table, so a long-allele row is
-    mapped rather than reported unmapped, and a Store with no index at all is
-    still checkable. Nothing is skipped, truncated or hashed.
-    """
-    source_index, target_index = _AlidIndex.load(source_path), _AlidIndex.load(target_path)
-    source_loose = source_index.unindexed_rows(n_source)
-    target_loose = target_index.unindexed_rows(n_target)
+    """Map every source row to its row in the completed axis, exactly (`_AxisRows`)."""
+    source, target = _AxisRows(source_path, n_source), _AxisRows(target_path, n_target)
     mapped = np.full(n_source, -1, dtype="int64")
-    _map_through_index(mapped, source_index, target_index)
-    chromosome = _source_chromosomes(source_index, n_source)
-    source_alids: dict[int, str] = {}
-    if source_loose.size:
-        with closing(VariantAxis(source_path)) as axis:
-            for row, record in axis.by_indices(source_loose.tolist()).items():
-                source_alids[row] = record.alid
-                chromosome[row] = _chromosome_bytes(record.chromosome)
-    _map_residual(mapped, source_index, source_alids, target_index, target_path, target_loose)
+    chromosome = np.zeros(n_source, dtype=f"S{_CHROMOSOME_WIDTH}")
+    for start in range(0, n_source, _MAP_WINDOW):
+        rows = np.arange(start, min(start + _MAP_WINDOW, n_source), dtype=np.int64)
+        alids = source.alids(rows)
+        mapped[rows] = target.rows_of(alids.tolist())
+        chromosome[rows] = [_chromosome_bytes(alid.partition(":")[0]) for alid in alids]
     found = mapped >= 0
     return _AxisMap(
         source_to_target=mapped,
         chromosome=chromosome,
         unmapped=int((~found).sum()),
         order_preserved=bool(np.all(np.diff(mapped[found]) > 0)),
-        source_unindexed=int(source_loose.size),
-        target_unindexed=int(target_loose.size),
+        source_unindexed=int(source.unindexed.size),
+        target_unindexed=int(target.unindexed.size),
     )
-
-
-def _map_through_index(mapped: np.ndarray, source: _AlidIndex, target: _AlidIndex) -> None:
-    if not (source.alids.size and target.alids.size):
-        return
-    slot = np.minimum(np.searchsorted(target.alids, source.alids), target.alids.size - 1)
-    hit = target.alids[slot] == source.alids
-    mapped[np.asarray(source.rows, dtype="int64")[hit]] = np.asarray(target.rows)[slot[hit]]
-
-
-def _source_chromosomes(index: _AlidIndex, n_rows: int) -> np.ndarray:
-    chromosome = np.zeros(n_rows, dtype=f"S{_CHROMOSOME_WIDTH}")
-    if index.alids.size:
-        names = np.char.partition(index.alids, b":")[:, 0]
-        chromosome[np.asarray(index.rows, dtype="int64")] = names
-    return chromosome
 
 
 def _chromosome_bytes(name: str) -> bytes:
@@ -507,58 +513,6 @@ def _chromosome_bytes(name: str) -> bytes:
     if len(encoded) > _CHROMOSOME_WIDTH:
         raise ValueError(f"chromosome name {name!r} is wider than {_CHROMOSOME_WIDTH} bytes")
     return encoded
-
-
-def _map_residual(
-    mapped: np.ndarray,
-    source_index: _AlidIndex,
-    source_alids: dict[int, str],
-    target_index: _AlidIndex,
-    target_path: Path,
-    target_loose: np.ndarray,
-) -> None:
-    """Resolve, by ALID string, the rows the index fast path did not map.
-
-    A source ALID recovered by scanning can name a target row the target's index
-    covers *or* one it leaves out, so both are searched. Rows of an indexed source
-    that an indexed target does not contain are genuinely unmapped, so the
-    target's table is read only when a scanned source row or an unindexed target
-    row makes there something to find.
-    """
-    _map_scanned_through_index(mapped, source_alids, target_index)
-    residual = np.flatnonzero(mapped < 0)
-    if not (residual.size and target_loose.size):
-        return
-    alids = _unmapped_source_alids(mapped, source_index, source_alids)
-    with closing(VariantAxis(target_path)) as axis:
-        target_row_of = {r.alid: row for row, r in axis.by_indices(target_loose.tolist()).items()}
-    for row in residual.tolist():
-        if alids[row] in target_row_of:
-            mapped[row] = target_row_of[alids[row]]
-
-
-def _map_scanned_through_index(
-    mapped: np.ndarray, source_alids: dict[int, str], target: _AlidIndex
-) -> None:
-    rows = [row for row, alid in source_alids.items() if is_indexable_alid(alid)]
-    if not (rows and target.alids.size):
-        return
-    keys = np.array([source_alids[row].encode("utf-8") for row in rows], dtype=target.alids.dtype)
-    slot = np.minimum(np.searchsorted(target.alids, keys), target.alids.size - 1)
-    hit = target.alids[slot] == keys
-    mapped[np.asarray(rows, dtype="int64")[hit]] = np.asarray(target.rows)[slot[hit]]
-
-
-def _unmapped_source_alids(
-    mapped: np.ndarray, source_index: _AlidIndex, source_alids: dict[int, str]
-) -> dict[int, str]:
-    """The ALID of every source row still unmapped: scanned ones, then indexed ones."""
-    rows = np.asarray(source_index.rows, dtype="int64")
-    unfound = mapped[rows] < 0
-    alids = dict(source_alids)
-    for row, alid in zip(rows[unfound], source_index.alids[unfound], strict=True):
-        alids[int(row)] = bytes(alid).decode("utf-8")
-    return alids
 
 
 # --- the sample -------------------------------------------------------------
@@ -692,6 +646,12 @@ def se_out_of_range_accounting(
 
     A target before format 0.2.3 records no count and left nothing out: every
     cell found is unaccounted.
+
+    A 0.3.0 Hybrid's Dense Component records no count of its own (#472): the
+    Hybrid's `analyses.tsv` counts both components, and the Hybrid's own accounting
+    judges it. The component's parts are still its own, so only what it left out is
+    accounted here, against its `observed` part; nothing is miscounted unless its
+    parts cannot be read.
     """
     n = len(found)
     if not records_se_out_of_range(target.manifest.format_version):
@@ -699,6 +659,8 @@ def se_out_of_range_accounting(
             {"se_out_of_range_miscounted": 0, "se_out_of_range_unaccounted": int(found.sum())},
             {"recorded": False, "found": _named(target, found)},
         )
+    if target.shared_root is not None:
+        return _component_accounting(source, target, found, exact)
     parts, carried, problems = _recorded_parts(source, target, n)
     recorded = _recorded_counts(_analyses_of(target))
     expected = counted(carried, parts.total).tolist()
@@ -719,6 +681,28 @@ def se_out_of_range_accounting(
             "found": _named(target, found),
             "every_source_cell_compared": bool(np.all(exact)),
             "miscounted": sorted(_named(target, wrong.astype(np.int64))),
+        },
+    )
+
+
+def _component_accounting(
+    source: OpenGWASDBStore, target: OpenGWASDBStore, found: np.ndarray, exact: np.ndarray
+) -> tuple[dict[str, int], dict[str, Any]]:
+    """`se_out_of_range_accounting` for a Dense Component with no count of its own."""
+    n = len(found)
+    parts, _carried, problems = _recorded_parts(source, target, n)
+    over = np.maximum(found - parts.observed, 0)
+    under = np.where(exact, np.maximum(parts.observed - found, 0), 0)
+    return (
+        {
+            "se_out_of_range_miscounted": n if problems else 0,
+            "se_out_of_range_unaccounted": int(over.sum() + under.sum()),
+        },
+        {
+            "recorded": "by the Hybrid release, for both components",
+            "problems": problems,
+            "found": _named(target, found),
+            "every_source_cell_compared": bool(np.all(exact)),
         },
     )
 
@@ -746,7 +730,8 @@ def _recorded_parts(
 
 
 def _analyses_of(store: OpenGWASDBStore) -> list[Analysis]:
-    return read_analysis_records(store.path / "analyses.tsv")
+    """The release's Analyses: a 0.3.0 Dense Component's are its Hybrid's (#472)."""
+    return read_analysis_records(store.analyses_path)
 
 
 def _recorded_counts(analyses: list[Analysis]) -> list[int | None]:

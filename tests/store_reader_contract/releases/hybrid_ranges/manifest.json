@@ -1,0 +1,79 @@
+{
+  "association_coverage": "gwas",
+  "completion_state": "observed_only",
+  "created_at": "2026-11-24T00:00:00+00:00",
+  "encoding": {
+    "eaf": {
+      "kind": "absent"
+    },
+    "se": {
+      "kind": "float16"
+    },
+    "version": 3,
+    "z": {
+      "kind": "int16_fixed",
+      "scale": 1024
+    }
+  },
+  "format_version": "0.3.0",
+  "primary_layout": "hybrid",
+  "provenance": {
+    "builder": "opengwasdb.v0.1_hybrid_vcf",
+    "chain_file": "pyliftover_builtin_hg19_hg38",
+    "eaf_orientation": {
+      "allow_unverified": false,
+      "analyses": [
+        {
+          "analysis_id": "bmi_irn",
+          "n_overlap": 0,
+          "note": "this analysis stores no EAF, so there is no orientation to check",
+          "outcome": "unverified",
+          "r": null,
+          "stores_eaf": false
+        }
+      ],
+      "method": "none",
+      "min_overlap": 500,
+      "min_variance": 0.005,
+      "n_reference_variants": 0,
+      "n_sites": 0,
+      "reference_checksum": "",
+      "reference_id": ""
+    },
+    "hybrid": {
+      "chunk_shape": [
+        4,
+        1
+      ],
+      "compressor": {
+        "clevel": 3,
+        "cname": "zstd",
+        "format": "zarr_v3_sharding",
+        "library": "zarr.codecs.BloscCodec",
+        "shuffle": "bitshuffle"
+      },
+      "dense_component": "dense",
+      "n_off_panel": 4,
+      "n_overflow_associations": 4,
+      "n_panel": 4,
+      "se_dtype": "float16",
+      "shard_shape": [
+        4,
+        1
+      ],
+      "zarr_format": 3
+    },
+    "n_analyses": 1,
+    "n_variants": 8,
+    "ragged": {
+      "by_variant": {
+        "group": "by_variant",
+        "n_axis": 8,
+        "n_rows": 4
+      }
+    }
+  },
+  "reference_assembly": "GRCh38",
+  "release_id": "r",
+  "store_id": "s"
+}

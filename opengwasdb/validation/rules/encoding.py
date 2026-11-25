@@ -16,16 +16,16 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.encoding import (
+from opengwasdb.encoding import per_variant_chunk_size
+from opengwasdb.store_reader.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
     EafExceptionTable,
-    StoreEncoding,
     ZOverflowTable,
-    per_variant_chunk_size,
 )
-from opengwasdb.model.enums import PrimaryStorageLayout
-from opengwasdb.store.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.validation.rule import Check, Kind, Ride, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS
 from opengwasdb.validation.rules.release import REQUIRED

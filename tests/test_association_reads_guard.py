@@ -3,11 +3,12 @@
 The query facade and the observed-view checks used to decode their own planes --
 the imputed mask, then EAF with the panel substitution, then SE from that EAF --
 and each copy was a place for the order or the shared read to go wrong (#253).
-They now ask `opengwasdb.associations`, and must not touch a plane at all.
+They now ask the Store Reader's association readers
+(`opengwasdb.store_reader.associations`, #464), and must not touch a plane at all.
 
 Validation -- every module under `validation/` that is not a reader, the
 Validation Rules and their scans included (ADR 0074) -- and the Indexed Variant
-Subset's validation keep decodes of their own, named below by the function each
+Subset's validation and read seam keep decodes of their own, named below by the function each
 sits in. SE decoding is recognised by what is
 called -- the codec's `decode_se`, an SE plane type named (to open one, or to
 annotate a parameter that receives one), or an SE plane read -- so a decode
@@ -23,13 +24,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
-#: Modules that read associations only through `opengwasdb.associations`.
+#: Modules that read associations only through `opengwasdb.store_reader.associations`.
 READERS = (
     "layouts/dense/complete.py",
     "layouts/hybrid/complete.py",
     "layouts/ragged/complete.py",
-    "query/facade.py",
-    "query/resolve.py",
+    "store_reader/facade.py",
+    "store_reader/resolve.py",
     "validation/observed_view.py",
     "validation/observed_view_ragged.py",
     "validation/observed_view_hybrid.py",
@@ -56,10 +57,11 @@ VALIDATION = tuple(
 
 #: Modules that keep reviewed decodes of their own, and only those: every validation
 #: module that is not a reader -- so a new rule or scan module cannot decode SE unseen
-#: -- and the Indexed Variant Subset's validation.
+#: -- and the Indexed Variant Subset's validation and its read seam (#464).
 CHECKED = (
     *(module for module in VALIDATION if module not in READERS),
     "layouts/dense/indexed_subsets.py",
+    "store_reader/indexed.py",
 )
 
 #: The reviewed SE decodes, by the function (or class) each sits in.
@@ -76,7 +78,7 @@ ALLOWED = {
     ("layouts/dense/indexed_subsets.py", "_sample_decoded_view"):
         "the sampled primary cells the subset's EAF is compared against",
     # The planes those decodes read, and the decoders the readers stand on.
-    ("layouts/dense/indexed_subsets.py", "_decode_se_column"):
+    ("store_reader/indexed.py", "_decode_se_column"):
         "the subset's own decoder, which `SubsetReader` reads through",
     ("layouts/dense/indexed_subsets.py", "_decode_index_se"):
         "the subset's own SE band, decoded against its own EAF, which the comparison and "
@@ -110,12 +112,13 @@ CSR_DECODES = frozenset(
 
 #: The modules that may call them, and why.
 CSR_DECODE_CALLERS = {
-    "associations/csr.py": "the CSR adapter",
-    "layouts/ragged/zarr_csr.py": "the reader that defines them",
+    "store_reader/associations/csr.py": "the CSR adapter",
+    "store_reader/csr.py": "the reader that defines them",
     "layouts/ragged/top_hits.py": (
-        "the Top-Hit harvest, a Layout (layer 3) the builders call, which cannot import "
-        "the Association Reader (Query, layer 4) without an upward import "
-        "(docs/architecture/components.yaml)"
+        "the Top-Hit harvest, which decodes each slice's z alone, keeps the cells "
+        "clearing the loosest tier, and decodes SE, EAF and the imputed mask for those "
+        "cells only (#233); `CsrReader` reads a region's every field, so a harvest "
+        "through it would decode every cell's SE and EAF to keep a few"
     ),
 }
 

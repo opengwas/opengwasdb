@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 from top_hit_fixtures import STORES, THRESHOLDS, query_matrix
+
+from opengwasdb.store_reader.stats import association_statistics
 
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "top_hit_queries.json").read_text())
 
@@ -25,8 +28,14 @@ def test_golden_pins_are_not_vacuous(layout):
     # a limit and an Analysis each really cut the answer down
     assert len(pins["0.0005|None|1|False"]["z"]) == 1
     assert len(pins["0.0005|None|None|False"]["z"]) > 1
-    assert pins["0.0005|no-such-analysis|None|False"]["z"] == []
     assert set(THRESHOLDS) == {1e-9, 5e-8, 5e-6, 5e-4, 1e-3}
+    # a threshold no tier holds: Ragged scans it; the others refuse it (#483)
+    for threshold in (1e-9, 1e-3):
+        pin = pins[f"{threshold:g}|None|None|False"]
+        if layout == "ragged":
+            assert "raises" not in pin
+        else:
+            assert pin["raises"][0] == "UnstoredThresholdError", (layout, threshold)
 
 
 def test_the_completed_fixture_has_an_imputed_top_hit():
@@ -44,4 +53,14 @@ def test_top_hits_match_the_pins_from_before_the_module(layout, tmp_path):
     actual = query_matrix(build(tmp_path), analysis_ids)
     assert actual.keys() == GOLDEN[layout].keys()
     for key, expected in GOLDEN[layout].items():
-        assert actual[key] == expected, (layout, key)
+        # The pins predate beta and pval (ADR 0104): each answer carries the one
+        # function's values, and is otherwise what it was.
+        answer = dict(actual[key])
+        if "raises" in answer:
+            assert answer == expected, (layout, key)
+            continue
+        z, se = (np.array(answer[name], dtype=np.float32) for name in ("z", "se"))
+        derived = association_statistics(z, se)
+        for name in ("beta", "pval"):
+            assert answer.pop(name) == [float(v) for v in getattr(derived, name)], (key, name)
+        assert answer == expected, (layout, key)

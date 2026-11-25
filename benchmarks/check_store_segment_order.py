@@ -29,9 +29,10 @@ from pathlib import Path
 import numpy as np
 
 from benchmarks._rss import RssSampler, rss_mb
-from opengwasdb.model.enums import PrimaryStorageLayout
-from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import array_length, open_group
+from opengwasdb.store.arrays import open_group
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation.rules.sequence import segment_order_errors
 
 

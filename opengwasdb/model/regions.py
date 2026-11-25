@@ -20,9 +20,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from opengwasdb.model.analyses import AnalysesTable, write_analyses
-from opengwasdb.model.manifest import RegionsEntry, StoreManifest
-from opengwasdb.variants.normalise import normalise_chromosome
+from opengwasdb.model.analyses import write_analyses
+from opengwasdb.store_reader.analyses import AnalysesTable
+from opengwasdb.store_reader.identity import normalise_chromosome
+from opengwasdb.store_reader.manifest import RegionsEntry, StoreManifest
 
 __all__ = [
     "COMPLETED_KINDS",

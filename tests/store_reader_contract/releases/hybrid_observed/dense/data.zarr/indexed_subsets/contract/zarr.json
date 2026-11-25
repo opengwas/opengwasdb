@@ -1,0 +1,38 @@
+{
+  "attributes": {
+    "indexed_subset_schema": 1,
+    "indexed_subset_name": "contract",
+    "statistic_profile": "full_statistic",
+    "encoding": {
+      "version": 3,
+      "z": {
+        "kind": "int16_fixed",
+        "scale": 1024
+      },
+      "se": {
+        "kind": "int8_residual",
+        "residual_range": 0.5
+      },
+      "eaf": {
+        "kind": "float32"
+      }
+    },
+    "reference_assembly": "hg38",
+    "source_store_id": "hyb-dense",
+    "source_release_id": "v1",
+    "source_format_version": "0.3.0",
+    "n_analyses": 2,
+    "n_subset_variants": 67,
+    "input_sha256": "2ec2425e8bc0e201acfa02583530f3d7d6ad28f413e40b0a987053e40c0e8a66",
+    "requested_count": 67,
+    "resolved_count": 67,
+    "absent_count": 0,
+    "overflow_only_count": 0,
+    "overflow_only_sample": [],
+    "builder_version": "store-reader-contract",
+    "created_at": "2026-11-24T00:00:00+00:00",
+    "order": "analysis,variant"
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

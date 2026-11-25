@@ -1,0 +1,10 @@
+{
+  "attributes": {
+    "layout": "ragged",
+    "completion_state": "observed_only",
+    "n_analyses": 2,
+    "n_associations": 199
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

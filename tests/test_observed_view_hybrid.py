@@ -45,6 +45,7 @@ import numpy as np
 import plane_edits
 import pytest
 from cli_output import normalize_cli_output
+from format_0_2_3 import as_0_2_3
 from presence_fixtures import (
     DENSE_Z_GROUP,
     RAGGED_Z_GROUP,
@@ -57,16 +58,7 @@ from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
 
 import opengwasdb.layouts.dense.complete as dense_complete
-import opengwasdb.store.arrays as arrays_module
-from opengwasdb.encoding import (
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    EafExceptionBuilder,
-    StoreCodec,
-    positions_pairs,
-)
-from opengwasdb.encoding.plan import Z_MISSING
+from opengwasdb.encoding import EafExceptionBuilder, StoreCodec
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
@@ -74,8 +66,12 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.encoding.codec import positions_pairs
+from opengwasdb.store_reader.encoding.plan import Z_MISSING
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.validation.observed_view import check_observed_view
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 ANALYSES = ("trait_a", "trait_b", "trait_c")
 PANEL_POSITIONS = [1000 * (i + 1) for i in range(12)]
@@ -172,8 +168,8 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     # The geometry of `test_check_observed_view._small_chunked_pair`. The Stores carry it
     # once written, so it is patched only while they are built.
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
-        patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
+        patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+        patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "DEFAULT_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "_BAND_ROWS", 6)
         observed = _build_observed(root, chunk_shape=(2, 1))
@@ -189,7 +185,7 @@ def pair(tmp_path: Path, _pair_seed: tuple[Path, Path]) -> tuple[Path, Path]:
 
 
 def _dense_alids(store: Path) -> list[str]:
-    axis = VariantAxis(store / "dense")
+    axis = open_store(store / "dense").variant_axis(aliases=False)
     try:
         return [record.alid for record in axis.all()]
     finally:
@@ -648,6 +644,7 @@ def _rename_a_dense_alid(store: Path, alid: bytes, replacement: bytes) -> None:
     cannot be mapped. The new key sorts between the same neighbours as the old one, so
     the component's index stays searchable and only that one row's identity moves.
     """
+    as_0_2_3(store)  # the fixed-width pair, a 0.2 release's, is the one corrupted
     path = store / "dense" / "variant_alid_bytes.npy"
     alids = np.load(path)
     at = int(np.flatnonzero(alids == alid)[0])

@@ -14,10 +14,12 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.encoding import codec as side
-from opengwasdb.encoding.codec import EAF_BASELINE, StoreCodec, positions_pairs
-from opengwasdb.encoding.plan import StoreEncoding
-from opengwasdb.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.encoding.codec import StoreCodec, write_exact_table
 from opengwasdb.store.arrays import SE_COEFFICIENTS, compressor, write_shard_cells
+from opengwasdb.store_reader.encoding import codec as reader_codec
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, positions_pairs
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
 
 
 def patch(
@@ -46,7 +48,7 @@ def patch(
         if encoding.z.is_fixed_point:
             _replace(
                 group,
-                side.ZOverflowTable.read(group),
+                reader_codec.ZOverflowTable.read(group),
                 z_entries,
                 positions,
                 side.ZOverflowBuilder(),
@@ -61,7 +63,7 @@ def patch(
         )
         write_shard_cells(group["eaf"], rows, cols, codes)
         if encoding.eaf.is_residual:
-            previous = side.EafExceptionTable.read(group)
+            previous = reader_codec.EafExceptionTable.read(group)
             _replace(group, previous, eaf_entries, positions, side.EafExceptionBuilder())
     elif plane is DenseSePlane:
         _patch_se(group, encoding, rows, cols, positions, values)
@@ -91,10 +93,10 @@ def _patch_se(
         # Narrowed here, not encoded: `encode_se` refuses an SE above 65,504 (issue
         # #338), and a test plants exactly that -- the `+inf` a release before format
         # 0.2.3 holds.
-        codes = side.se_float16(np.asarray(values, dtype=np.float32))
+        codes = reader_codec.se_float16(np.asarray(values, dtype=np.float32))
     write_shard_cells(group["se"], rows, cols, codes)
     if encoding.se.is_residual:
-        previous = side.SeExceptionTable.read(group)
+        previous = reader_codec.SeExceptionTable.read(group)
         _replace(
             group,
             previous,
@@ -118,4 +120,4 @@ def _replace(
     kept = ~np.isin(previous.index, positions)
     builder.add(previous.index[kept], previous.value[kept])
     builder.add(added.index, added.value)
-    builder.table().write(group, **write)
+    write_exact_table(builder.table(), group, **write)

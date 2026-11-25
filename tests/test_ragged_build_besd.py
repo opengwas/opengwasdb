@@ -18,11 +18,12 @@ from liftover_fixtures import (
 from sd_scaling import require_not_rescaling, require_rescaling
 from stored_rows import stored_rows
 
-from opengwasdb.associations import Cells, CsrReader
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import UnknownAnalysisError
+from opengwasdb.store_reader.associations import Cells, CsrReader
+from opengwasdb.store_reader.csr import RaggedCSRReader
 
 # ── Synthetic BESD fixture ────────────────────────────────────────────────────
 
@@ -77,7 +78,7 @@ def test_build_creates_store_files(tmp_path):
     # position lives in analyses.tsv's own trait_chr/trait_bp columns now,
     # not a second, independently-shaped tabix-indexed position file.
     assert not (out / "traits.tsv.gz").exists()
-    assert (out / "index.sqlite").exists()
+    assert not (out / "index.sqlite").exists()  # 0.3.0 Observed-Only (ADR 0102, #471)
     assert (out / "data.zarr" / "ragged").exists()
 
     assert result.n_variants == 5
@@ -153,7 +154,7 @@ def test_cli_build_ragged_besd_refuses_to_guess_the_coverage(tmp_path):
 
 
 def test_analyses_tsv_carries_probe_identities(tmp_path):
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
@@ -217,10 +218,12 @@ def test_top_hit_index_schema(tmp_path):
     root = open_store(out).arrays(mode="r")
     for key in root["top_hits"]:
         group = root["top_hits"][key]
-        for name in ("variant_index", "analysis_index", "abs_z", "z", "se", "p_value"):
+        for name in ("variant_index", "analysis_index", "z", "se"):
             assert name in group, f"missing {name} in {key}"
+        for name in ("abs_z", "p_value"):  # dropped from 0.3.0 (ADR 0102, #471)
+            assert name not in group, f"{name} in {key}"
         n = group["variant_index"].shape[0]
-        for name in ("analysis_index", "abs_z", "z", "se", "p_value"):
+        for name in ("analysis_index", "z", "se"):
             assert group[name].shape[0] == n
         assert "threshold" in group.attrs
 
@@ -272,7 +275,9 @@ def test_top_hits_query_selects_one_analysis_from_index(tmp_path):
 
     assert selected["analysis_index"].tolist() == [0]
     assert selected["variant_index"].tolist() == global_result["variant_index"][:1].tolist()
-    assert q.top_hits(analysis_id="unknown", threshold=5e-4)["z"].size == 0
+    # an Analysis the release does not hold is refused, not answered with nothing (#483)
+    with pytest.raises(UnknownAnalysisError, match="GCST-no-such"):
+        q.top_hits(analysis_id="GCST-no-such", threshold=5e-4)
 
 
 def test_validation_rejects_ragged_top_hit_offsets(tmp_path):
@@ -312,9 +317,7 @@ def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
     Metadata; the store's index.sqlite carries no `analyses` table, and the
     molecular/context columns the BESD path already collects (gene, tissue,
     genomic position) are carried into the shared schema."""
-    import sqlite3
-
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
@@ -323,10 +326,8 @@ def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
         association_coverage="cis_and_signals",
     )
 
-    conn = sqlite3.connect(str(out / "index.sqlite"))
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    conn.close()
-    assert "analyses" not in tables
+    # No index.sqlite at all, from 0.3.0 (ADR 0102, #471), so no table in one.
+    assert not (out / "index.sqlite").exists()
 
     table = read_analyses(out / "analyses.tsv")
     rows = {r["analysis_id"]: r for r in table.rows}
@@ -342,7 +343,7 @@ def test_top_hit_counts_in_analyses_tsv_match_top_hit_index(tmp_path):
     """Issue #73: Ragged builds persist per-Analysis Top-Hit Counts in
     analyses.tsv, matching what the store's own top-hit index actually
     contains -- not zero, not stale."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.top_hits import read_top_hit_counts
 
     out = _build_store(tmp_path)
@@ -391,7 +392,7 @@ def test_range_by_analysis_matches_trait_position(tmp_path):
 
     out = _build_store(tmp_path)
 
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     # Independent oracle: compute the expected analysis_index set by hand
     # from the same analyses.tsv rows the query facade reads, rather than
@@ -442,7 +443,7 @@ def test_hg19_source_build_lifts_variant_coordinates(tmp_path):
     1:100000 → hg38 1:100000 identity; hg19 1:1000000 → hg38 1:1064620), so
     the second ESI row proves a real translation happened — a build that
     silently skipped the lift would store it at 1:1000000 and fail here."""
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     fixture = tmp_path / "fixture_hg19"
     fixture.mkdir()
@@ -525,7 +526,7 @@ def test_no_analyses_manifest_build_is_byte_identical(tmp_path):
 
 def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
     """Issue #173: --analyses overlays metadata, sample_size, original_sd, and attribution."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "analyses_overlay.tsv"
@@ -591,8 +592,8 @@ def test_besd_se_is_standardised_by_the_manifests_original_sd(tmp_path):
     The values are the fixture's own, not the new code's arithmetic: probe 1
     holds beta=0.5 and se=0.05, so it stores z=10.0 and se=0.025 (0.05 / 2.0).
     """
-    from opengwasdb.model.analyses import read_analyses
     from opengwasdb.model.enums import OriginalSdMethod
+    from opengwasdb.store_reader.analyses import read_analyses
 
     require_rescaling(OriginalSdMethod.SOURCE_PROVIDED)
     prefix = _make_besd_fixture(tmp_path)
@@ -708,7 +709,7 @@ def test_analyses_overlay_malformed_sample_size_fails_loudly(tmp_path):
 
 def test_analyses_overlay_with_tissue_suffix_joins_correctly(tmp_path):
     """Issue #173: when tissue is supplied, manifest joined by suffixed analysis_id."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "analyses_tissue_suffixed.tsv"
@@ -735,7 +736,7 @@ def test_analyses_overlay_with_tissue_suffix_joins_correctly(tmp_path):
 
 def test_besd_derived_trait_position_stays_authoritative(tmp_path):
     """Issue #173: BESD-derived trait_chr and trait_bp stay authoritative over manifest."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "analyses_pos_conflict.tsv"
@@ -803,7 +804,7 @@ def test_cli_build_ragged_besd_accepts_analyses_option(tmp_path):
     from typer.testing import CliRunner
 
     from opengwasdb.cli.main import app
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     prefix = _make_besd_fixture(tmp_path)
     manifest = tmp_path / "cli_analyses.tsv"
@@ -881,7 +882,8 @@ def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
     canonical A1 is `C`, so the sign flips.
     """
     from opengwasdb.readers.gwas_vcf import load_liftover, oriented_variant
-    from opengwasdb.variants.axis import VariantAxis, iter_variant_records
+    from opengwasdb.variants.axis import VariantAxis
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
     prefix = _write_strand_fixture(tmp_path)

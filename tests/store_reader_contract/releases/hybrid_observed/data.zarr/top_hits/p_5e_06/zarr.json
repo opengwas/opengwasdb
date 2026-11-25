@@ -1,0 +1,8 @@
+{
+  "attributes": {
+    "threshold": 5e-06,
+    "order": "analysis_index,variant_index"
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

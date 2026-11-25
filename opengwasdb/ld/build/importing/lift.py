@@ -19,8 +19,8 @@ from opengwasdb.ld.build.importing.matrix import IntArray
 from opengwasdb.ld.build.importing.parts import optional_module
 from opengwasdb.ld.format import NEAR_BP
 from opengwasdb.ld.store import Variants
+from opengwasdb.store_reader.identity import AUTOSOMES, VariantNormalisationError
 from opengwasdb.variants.axis import alid_sort_key
-from opengwasdb.variants.normalise import AUTOSOMES, VariantNormalisationError
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 # The published Pan-UKB LD band: pairs further apart than this in GRCh37 are not measured.

@@ -17,13 +17,14 @@ from test_resolve_manifest import _write_panel
 
 from opengwasdb.build.resolve_manifest import read_resolve_manifest, resolve_analyses_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses, validate_analyses
+from opengwasdb.model.analyses import validate_analyses
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ImputationScoreKind,
 )
+from opengwasdb.store_reader.analyses import read_analyses
 
 DECLARATION = ImputationScoreDeclaration(
     "quality_metric", ImputationScoreKind.IMPUTATION_INFO, "Provider Table 2 INFO"

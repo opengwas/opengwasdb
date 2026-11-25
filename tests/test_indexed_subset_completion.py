@@ -49,17 +49,19 @@ from test_indexed_subsets import (
 
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.indexed_subsets import (
+from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
+from opengwasdb.model.analyses import write_analyses
+from opengwasdb.query import query_store
+from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
-    build_indexed_subset,
     list_indexed_subsets,
     open_indexed_subset,
 )
-from opengwasdb.model.analyses import read_analyses, write_analyses
-from opengwasdb.query import query_store
-from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import CanonicalVariant, VariantAxis
+from opengwasdb.variants import CanonicalVariant
+from opengwasdb.variants.axis import VariantAxis
 
 #: The imputation target, left out of a1's source rows and held by the panel.
 IMPUTED = 6

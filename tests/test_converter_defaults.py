@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import inspect
 
-from opengwasdb.store.arrays import (
+from opengwasdb.store.convert import convert_dense_release
+from opengwasdb.store_reader.layout import (
     DENSE_CHUNK_SHAPE,
     DENSE_SHARD_SHAPE,
     TOP_HIT_SHARD_CHUNKS,
@@ -21,7 +22,6 @@ from opengwasdb.store.arrays import (
     chunk_layout,
     shard_layout,
 )
-from opengwasdb.store.convert import convert_dense_release
 
 #: OGS-00009's Dense plane -- the release ADR 0058's decision was measured on.
 OGS00009_PLANE = (9_847_701, 2_024)

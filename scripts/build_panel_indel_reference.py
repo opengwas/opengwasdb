@@ -60,7 +60,8 @@ from opengwasdb.completion.ld_panel import (
     list_chromosomes,
     panel_id_parts,
 )
-from opengwasdb.variants.normalise import chromosome_sort_key, identity_allele
+from opengwasdb.store_reader.identity import identity_allele
+from opengwasdb.variants.normalise import chromosome_sort_key
 
 OUTCOMES = (
     "settled_agree",

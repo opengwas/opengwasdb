@@ -26,13 +26,13 @@ from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _make_manifest
 from test_query_metadata_reads import _BUILDERS
 from test_ragged_residual_completion import RaggedResidualScenario
 
-from opengwasdb.associations import Associations, InvalidAssociations
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
-from opengwasdb.top_hits import TopHitTier
+from opengwasdb.store_reader.associations import Associations, InvalidAssociations
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import TopHitTier
 
 
 @pytest.fixture(scope="module")
@@ -101,7 +101,7 @@ def test_every_query_returns_an_association_record(stores, name) -> None:
         alid = next(iter(query.variants_table().values()))["alid"]
         results = {
             "analysis": query.analysis(analysis_id),
-            "unknown": query.analysis("no-such-analysis"),
+            "absent": query.phewas("1:1:A:C"),
             "phewas": query.phewas(alid),
             "range_phewas": query.range_phewas("1", 1, 10**9),
             "lookup": query.lookup([alid], [analysis_id]),
@@ -198,7 +198,7 @@ def hybrid_two_sided(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_hybrid_lookup_is_analysis_major_across_both_components(hybrid_two_sided) -> None:
     with query_store(hybrid_two_sided) as query:
         alids = [row["alid"] for row in query.variants_table().values()]
-        on_panel = query._on_panel_mask(np.arange(len(alids)))
+        on_panel = query._panel_split(np.arange(len(alids)))[0]
         assert on_panel.any() and not on_panel.all()  # both components hold the variants
         for order in (["trait_a", "trait_b"], ["trait_b", "trait_a"]):
             result = query.lookup(alids, order)

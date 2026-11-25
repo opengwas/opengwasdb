@@ -49,27 +49,29 @@ from typer.testing import CliRunner
 
 # Project imports.
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense.indexed_subsets import (
-    INDEXED_SUBSETS_GROUP,
-    IndexedSubsetError,
     IndexedSubsetExistsError,
-    IndexedSubsetLayoutError,
-    IndexedSubsetStaleError,
     OverflowOnlyPolicy,
     build_indexed_subset,
-    indexed_subset_namespace_path,
-    list_indexed_subsets,
-    open_indexed_subset,
     remove_indexed_subset,
     resolve_variant_list,
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.overview import write_overview_html
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.indexed import (
+    INDEXED_SUBSETS_GROUP,
+    IndexedSubsetError,
+    IndexedSubsetLayoutError,
+    IndexedSubsetStaleError,
+    indexed_subset_namespace_path,
+    list_indexed_subsets,
+    open_indexed_subset,
+)
 from opengwasdb.validation import validate_store
 
 #: On-panel ALIDs of the ``_hybrid`` fixture (its reference panel).
@@ -87,7 +89,10 @@ REF_SUBSET = [
     "1:200000:A:G",
 ]
 
-_RESULT_KEYS = {"variant_index", "analysis_index", "z", "se", "eaf", "association_status"}
+#: beta and pval are derived from z and se (ADR 0104).
+_RESULT_KEYS = {
+    "variant_index", "analysis_index", "z", "se", "beta", "pval", "eaf", "association_status"
+}
 
 
 def _write_list(path: Path, alids: list[str]) -> Path:
@@ -526,7 +531,7 @@ def test_hybrid_indexed_query_never_reads_the_primary_planes_or_the_overflow(
     monkeypatch.setattr(DenseZPlane, "column", boom)
     monkeypatch.setattr(DenseSePlane, "column", boom)
     monkeypatch.setattr(DenseEafPlane, "read_column", boom)
-    from opengwasdb.associations import CsrReader
+    from opengwasdb.store_reader.associations import CsrReader
 
     monkeypatch.setattr(CsrReader, "read", boom)
     result = _analyse(indexed_root, "trait_a", indexed_subset="hm3")
@@ -635,10 +640,10 @@ def test_direct_nested_dense_failure_names_the_nested_path(tmp_path: Path) -> No
     assert not message.startswith(f"store {store}: "), message
 
 
-def test_hybrid_unknown_analysis_keeps_the_ordinary_empty_result(indexed_root: Path) -> None:
-    result = _analyse(indexed_root, "does-not-exist", indexed_subset="hm3")
-    assert result.keys() == _RESULT_KEYS
-    assert all(len(values) == 0 for values in result.values())
+def test_hybrid_unknown_analysis_through_a_valid_subset_is_refused(indexed_root: Path) -> None:
+    """As on Dense (#474): the Analysis is refused, never answered empty."""
+    with pytest.raises(UnknownAnalysisError, match="does-not-exist"):
+        _analyse(indexed_root, "does-not-exist", indexed_subset="hm3")
 
 
 # ── Reference-Completed Hybrid fixture ──────────────────────────────────────

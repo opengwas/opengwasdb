@@ -9,11 +9,8 @@ import pytest
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers import GwasSsfReader
-from opengwasdb.variants import (
-    VariantNormalisationError,
-    normalise_chromosome,
-    orient_to_canonical,
-)
+from opengwasdb.store_reader.identity import VariantNormalisationError, normalise_chromosome
+from opengwasdb.variants import orient_to_canonical
 
 
 @pytest.mark.parametrize(

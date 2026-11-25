@@ -9,6 +9,12 @@ every tier cell is one the component holds, agrees with the decoded plane it was
 harvested from, and the tier holds every cell that clears the cutoff. Those folds
 share the scan's one read with every other value rule, so no Top-Hit check reads
 a plane a second time, and none samples.
+
+A tier's own z must clear its threshold (`top_hits.threshold`), judged on the |z|
+recomputed from it. Before format 0.3.0 a tier also stored that |z| (`abs_z`) and
+the p it implies (`p_value`); nothing but this validator read them, so 0.3.0 drops
+both (ADR 0102, #471). On a 0.2 release `top_hits.abs_z` holds the stored pair to
+what `z` implies, recomputed through `opengwasdb.store_reader.stats`.
 """
 
 from __future__ import annotations
@@ -22,7 +28,9 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.top_hits import z_critical
+from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.format import carries_stored_p
+from opengwasdb.store_reader.stats import z_critical
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import VALUES_AFTER, frequencies
 from opengwasdb.validation.rules.release import REQUIRED
@@ -40,7 +48,12 @@ def tier_root(target: Target) -> Any:
 
 
 def has_index(target: Target) -> bool:
-    return bool(top_hits.has_index(tier_root(target)))
+    return bool(reader_top_hits.has_index(tier_root(target)))
+
+
+def _has_stored_p(target: Target) -> bool:
+    """A Top-Hit Index whose tiers store `abs_z` and `p_value`: a 0.2 release's."""
+    return _carries_stored_p(target) and has_index(target)
 
 
 def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
@@ -49,15 +62,15 @@ def _tier_arrays(target: Target, key: str) -> dict[str, Any]:
     What the structure rules learn from them is remembered apart, small, so a rule
     registered after the scan does not load the tier a second time.
     """
-    group = top_hits.index_group(tier_root(target))[key]
+    group = reader_top_hits.index_group(tier_root(target))[key]
     return target.remember(
-        f"top_hits/{key}", lambda: top_hits.load_tier_arrays(group), until=ASSOCIATIONS.name
+        f"top_hits/{key}", lambda: reader_top_hits.tier_arrays(group), until=ASSOCIATIONS.name
     )
 
 
 def _problem(target: Target, key: str) -> str | None:
     """What is structurally wrong with a complete tier, if anything; kept for the run."""
-    group = top_hits.index_group(tier_root(target))[key]
+    group = reader_top_hits.index_group(tier_root(target))[key]
     return target.remember(
         f"top_hits/{key}/problem",
         lambda: top_hits.structural_problem(
@@ -66,25 +79,49 @@ def _problem(target: Target, key: str) -> str | None:
     )
 
 
-def _abs_z_agrees(target: Target, key: str) -> bool:
-    """Whether a sound tier's `abs_z` is its `z`'s magnitude; kept for the run."""
+def _version(target: Target) -> str:
+    return target.store.manifest.format_version
+
+
+def _carries_stored_p(target: Target) -> bool:
+    return carries_stored_p(_version(target))
+
+
+def _stored_p_agrees(target: Target, key: str) -> bool:
+    """Whether a sound 0.2 tier's `abs_z` and `p_value` are what its `z` implies; kept
+    for the run."""
 
     def agrees() -> bool:
         loaded = _tier_arrays(target, key)
-        return bool(
-            np.allclose(loaded["abs_z"], np.abs(loaded["z_values"]), rtol=1e-3, atol=1e-3)
-        )
+        group = reader_top_hits.index_group(tier_root(target))[key]
+        p_value = np.asarray(group["p_value"][:], dtype=np.float64)
+        return top_hits.stored_p_agrees(loaded["abs_z"], p_value, loaded["z_values"])
 
     return target.remember(f"top_hits/{key}/abs_z", agrees)
 
 
+def _below_threshold(target: Target, key: str) -> int:
+    """How many of a sound tier's rows have a z whose |z| does not clear the tier's
+    cutoff (`z_critical` of its threshold), NaN included; kept for the run."""
+
+    def count() -> int:
+        loaded = _tier_arrays(target, key)
+        group = reader_top_hits.index_group(tier_root(target))[key]
+        cutoff = z_critical(reader_top_hits.tier_threshold(key, group))
+        clears = np.abs(loaded["z_values"]) >= cutoff
+        return int(np.count_nonzero(~clears))
+
+    return target.remember(f"top_hits/{key}/below_threshold", count)
+
+
 def _sound_keys(target: Target) -> list[str]:
     """The tiers with every array and a sound structure, in listing order."""
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     return [
         key
         for key in _keys(target)
-        if not top_hits.missing_arrays(index[key]) and _problem(target, key) is None
+        if not top_hits.missing_arrays(index[key], _version(target))
+        and _problem(target, key) is None
     ]
 
 
@@ -96,7 +133,7 @@ def _keys(target: Target) -> list[str]:
     order and promises nothing about it, so a rule that reported the tiers in that
     order named the same failing ones in a different order from run to run.
     """
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     return sorted(index, key=lambda key: _tier_order(key, index[key]))
 
 
@@ -110,7 +147,7 @@ def _tier_order(key: str, group: Any) -> tuple[int, float, str]:
     with it.
     """
     try:
-        threshold = top_hits.tier_threshold(key, group)
+        threshold = reader_top_hits.tier_threshold(key, group)
     except (TypeError, ValueError):
         return (1, 0.0, key)
     if not math.isfinite(threshold):
@@ -119,12 +156,20 @@ def _tier_order(key: str, group: Any) -> tuple[int, float, str]:
 
 
 def arrays(target: Target) -> Iterator[str]:
-    """Every tier carries the arrays a tier is made of."""
-    index = top_hits.index_group(tier_root(target))
+    """Every tier carries the arrays a tier of its format is made of, and none that
+    format dropped (`abs_z` and `p_value` from 0.3.0)."""
+    index = reader_top_hits.index_group(tier_root(target))
+    version = _version(target)
     for key in _keys(target):
-        missing = top_hits.missing_arrays(index[key])
+        missing = top_hits.missing_arrays(index[key], version)
         if missing:
             yield f"top-hit index {key} is missing {', '.join(missing)}"
+        dropped = top_hits.dropped_arrays(index[key], version)
+        if dropped:
+            yield (
+                f"top-hit index {key} carries {', '.join(dropped)}, which format {version} "
+                "does not store: the validator recomputes them from z (ADR 0102)"
+            )
 
 
 def _n_analyses(target: Target) -> int:
@@ -139,9 +184,9 @@ def _expects_imputed(target: Target) -> bool:
 
 def structure(target: Target) -> Iterator[str]:
     """Every complete tier has parallel arrays, sound offsets and ordered slices."""
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     for key in _keys(target):
-        if top_hits.missing_arrays(index[key]):
+        if top_hits.missing_arrays(index[key], _version(target)):
             continue
         problem = _problem(target, key)
         if problem is not None:
@@ -190,7 +235,7 @@ def tier_facts(target: Target) -> list[TierFact]:
     A tier's `variant_index` length is its cell count and its key is its name, so
     a judge reads neither the arrays the pass held nor anything the pass released.
     """
-    index = top_hits.index_group(tier_root(target))
+    index = reader_top_hits.index_group(tier_root(target))
     return [
         TierFact(key, int(index[key]["variant_index"].shape[0]))
         for key in _sound_keys(target)
@@ -201,12 +246,13 @@ def _sound(target: Target) -> list[Tier]:
     """The sound tiers in listing order, built one at a time, the largest first.
 
     One tier's load and sort are in hand at once, before the smaller tiers are held
-    beside them. What the structure rules need is remembered from the same load;
-    then the loaded set, `abs_z` and `offsets` with it, is dropped, and the tier
-    keeps what the planes are checked against.
+    beside them. What the structure, threshold and stored-p rules need is remembered
+    from the same load; then the loaded set, `abs_z` and `offsets` with it, is
+    dropped, and the tier keeps what the planes are checked against.
     """
-    index = top_hits.index_group(tier_root(target))
-    complete = [key for key in _keys(target) if not top_hits.missing_arrays(index[key])]
+    index = reader_top_hits.index_group(tier_root(target))
+    version = _version(target)
+    complete = [key for key in _keys(target) if not top_hits.missing_arrays(index[key], version)]
     built: dict[str, Tier] = {}
     for key in sorted(complete, key=lambda k: -int(index[k]["variant_index"].shape[0])):
         tier = _built(target, key, index[key])
@@ -218,8 +264,10 @@ def _sound(target: Target) -> list[Tier]:
 def _built(target: Target, key: str, group: Any) -> Tier | None:
     """One complete tier, ready for the planes; None when it is unsound."""
     unsound = _problem(target, key) is not None
-    if not unsound and target.kind is Kind.CSR:
-        _abs_z_agrees(target, key)
+    if not unsound:
+        _below_threshold(target, key)
+        if _carries_stored_p(target):
+            _stored_p_agrees(target, key)
     loaded = target.forget(f"top_hits/{key}")
     if unsound:
         return None
@@ -227,7 +275,7 @@ def _built(target: Target, key: str, group: Any) -> Tier | None:
         loaded = _in_row_order(loaded)
     return Tier(
         key=key,
-        z_crit=z_critical(top_hits.tier_threshold(key, group)),
+        z_crit=z_critical(reader_top_hits.tier_threshold(key, group)),
         cells=CellIndex(loaded["rows"], loaded["cols"]),
         z=loaded["z_values"],
         se=loaded["se_values"],
@@ -407,10 +455,19 @@ def _judge_held(target: Target, held: Counter[str]) -> Iterator[str]:
 
 
 def abs_z(target: Target) -> Iterator[str]:
-    """Every tier's `abs_z` is its `z`'s magnitude: a query filters on it unread."""
+    """A 0.2 tier's stored `abs_z` and `p_value` are what its `z` implies, recomputed."""
     for key in _sound_keys(target):
-        if not _abs_z_agrees(target, key):
-            yield f"top-hit index {key} abs_z inconsistent with z"
+        if not _stored_p_agrees(target, key):
+            yield f"top-hit index {key} abs_z or p_value inconsistent with z"
+
+
+def threshold(target: Target) -> Iterator[str]:
+    """Every row of a tier has a z that clears the tier's threshold: the |z| recomputed
+    from it is at least the cutoff the tier was written at (`z_critical`)."""
+    for key in _sound_keys(target):
+        below = _below_threshold(target, key)
+        if below:
+            yield f"top-hit index {key} holds {below} row(s) whose z does not clear its threshold"
 
 
 def _judge_complete(target: Target, passing: Counter[str]) -> Iterator[str]:
@@ -454,7 +511,20 @@ STRUCTURE_RULES: tuple[Rule, ...] = (
         after=(REQUIRED,),
         run=structure,
     ),
-    Check(name="top_hits.abs_z", kinds=Kind.CSR, when=has_index, after=(REQUIRED,), run=abs_z),
+    Check(
+        name="top_hits.threshold",
+        kinds=Kind.GRID | Kind.CSR,
+        when=has_index,
+        after=(REQUIRED,),
+        run=threshold,
+    ),
+    Check(
+        name="top_hits.abs_z",
+        kinds=Kind.GRID | Kind.CSR,
+        when=_has_stored_p,
+        after=(REQUIRED,),
+        run=abs_z,
+    ),
 )
 
 #: The rules holding a tier against the planes, in the order they always reported.

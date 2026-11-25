@@ -37,13 +37,14 @@ from pool_budget import pin_pool_units
 from zarr.storage import LocalStore
 
 import opengwasdb.layouts.dense.complete as complete_module
-import opengwasdb.store.arrays as arrays_module
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
-from opengwasdb.encoding import SeExceptionTable, write_dense_se_side_arrays
+from opengwasdb.encoding import write_dense_se_side_arrays
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store, resume_dense_completion
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import open_group, open_group_for_write
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.variants import CanonicalVariant
 
 N_VARIANTS = 120
@@ -115,8 +116,8 @@ def _ld_panel(root: Path) -> Path:
 
 def _narrow_bands(patch: pytest.MonkeyPatch) -> None:
     """A 20-row Dense shard, so the completion band is 20 rows too."""
-    patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (BAND_ROWS, 2))
-    patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (10, 1))
+    patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (BAND_ROWS, 2))
+    patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (10, 1))
     patch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (10, 1))
     patch.setattr(complete_module, "_BAND_ROWS", BAND_ROWS)
 

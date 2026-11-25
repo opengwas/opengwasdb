@@ -31,8 +31,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from opengwasdb.store.arrays import DENSE_SHARD_SHAPE, TOP_HIT_SHARD_CHUNKS
 from opengwasdb.store.convert import ConversionError, convert_release
+from opengwasdb.store_reader.layout import DENSE_SHARD_SHAPE, TOP_HIT_SHARD_CHUNKS
 
 
 def _parse_shard(text: str) -> tuple[int, int]:

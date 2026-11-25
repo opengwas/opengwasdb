@@ -22,9 +22,9 @@ import pytest
 from swap_interruption import ProcessDeath, die_on_second_move
 from test_eaf_encoding_layouts import make_store_needing_eaf_repair
 
-from opengwasdb.encoding import EAF_BASELINE
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store, swap
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE
 from opengwasdb.validation import validate_store
 
 TEMPORARY = f".{EAF_BASELINE}.rechunking"

@@ -38,10 +38,8 @@ from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orienta
 from opengwasdb.build.liftover import (
     LiftedRow,
     lift_hg19_to_hg38,
-    normalise_build,
     require_lifted_alleles_match_reference,
 )
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
@@ -65,13 +63,7 @@ from opengwasdb.layouts.ragged.trait_positions import (
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafScope,
-    PrimaryStorageLayout,
-    SampleSizeScope,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafScope, SampleSizeScope, coverage_for_layout
 from opengwasdb.model.maf_policy import MafState
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.readers.besd import BESD_CAPABILITY, BesdSource, load_besd_source
@@ -80,22 +72,23 @@ from opengwasdb.readers.orientation import a1_frequencies, swap
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.assembly import normalise_build
+from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.identity import (
+    MalformedIdentity,
+    VariantNormalisationError,
+    normalise_chromosome,
+)
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     Orientation,
-    VariantNormalisationError,
     chromosome_sort_key,
-    normalise_chromosome,
     orient_to_canonical,
     write_variant_axis,
 )
-from opengwasdb.variants.normalise import (
-    MalformedIdentity,
-    allele_fault,
-    chromosome_fault,
-    undeclared_reference,
-)
+from opengwasdb.variants.normalise import allele_fault, chromosome_fault, undeclared_reference
 from opengwasdb.variants.routing import collapse_duplicates
 from opengwasdb.variants.routing.lift import split_off_primary
 
@@ -212,6 +205,16 @@ class _BesdBuildRequest:
             )
 
 
+def _write_axis(store_path: Path, axis: _EsiAxis) -> None:
+    """The Store Variant Table, each row's `source_alid` with it (#449)."""
+    write_variant_axis(
+        store_path,
+        axis.variants,
+        axis.rsid_by_alid,
+        [axis.source_alid_by_alid.get(v.alid) for v in axis.variants],
+    )
+
+
 def _build_besd_release(
     staged: StagedRelease, prefix: Path, request: _BesdBuildRequest
 ) -> tuple[_EsiAxis, RaggedCSRWriter]:
@@ -230,13 +233,12 @@ def _build_besd_release(
     # Checked before anything is written: a build that is going to fail on a
     # flipped `.esi` fails before it spends the ingest (issue #115).
     eaf_report = _verify_eaf(axis, request)
-    write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
+    _write_axis(staged.path, axis)
     # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
     positions, trait_lift = _trait_positions(axis, request)
     analyses, se_divisors = _analysis_records(
         axis.probes, request.tissue, request.analyses_path, positions
     )
-    staged.index_connection().close()
     # Phase 4 — CSR ingestion and the encoding plan it decides.
     sample_sizes = None if request.sample_size_table is None else SampleSizeTable(
         Path(request.sample_size_table), [p.probe_id for p in axis.probes]
@@ -350,6 +352,7 @@ class _CanonicalAxis:
     rsid_by_alid: dict[str, str]
     esi_to_variant: dict[int, tuple[int, bool]]
     collisions: _VariantCollisions
+    source_alid_by_alid: dict[str, str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -378,6 +381,7 @@ class _EsiAxis:
     esi_to_variant: dict[int, tuple[int, bool]]
     collisions: _VariantCollisions
     lift: dict[str, object] | None
+    source_alid_by_alid: dict[str, str | None] = field(default_factory=dict)
     variant_by_esi: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=np.int64))
     flipped_by_esi: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
     eaf_by_esi: np.ndarray | None = None
@@ -430,6 +434,7 @@ def _esi_axis(
         canonical.esi_to_variant,
         canonical.collisions,
         lift_provenance,
+        canonical.source_alid_by_alid,
         variant_by_esi=variant_by_esi,
         flipped_by_esi=flipped_by_esi,
         eaf_by_esi=None if frequencies is None else _axis_frequencies(
@@ -814,7 +819,41 @@ def _canonical_variants(
         rsid_by_alid={entry[2].alid: entry[4] for entry in survivors if entry[4]},
         esi_to_variant={entry[1]: (idx, entry[3]) for idx, entry in enumerate(survivors)},
         collisions=collisions,
+        source_alid_by_alid=_source_alids(snps, survivors, lifted is not None),
     )
+
+
+def _source_alids(
+    snps: list[SnpRecord], survivors: list[_Candidate], lifted: bool
+) -> dict[str, str | None]:
+    """Each surviving variant's `source_alid`: its ESI row's own coordinate, as an ALID.
+
+    A collision group is dropped whole, so a survivor has one entry and one origin; no
+    ambiguity can remain, and none is guessed (the routing's rule, #85). An unlifted
+    build's origin is the variant itself. A survivor whose own coordinate cannot be spelt
+    is refused, never written blank."""
+    by_row = {snp.row_idx: snp for snp in snps}
+    origin: dict[str, str | None] = {}
+    for _key, row, variant, _flipped, _rsid in survivors:
+        if not lifted:
+            origin[variant.alid] = variant.alid
+            continue
+        snp = by_row[row]
+        if snp.a1 is None or snp.a2 is None:
+            raise ValueError(
+                f"ESI row {row} reached the axis as {variant.alid} with no alleles of its own; "
+                "its source_alid cannot be spelt, and a blank would hide that"
+            )
+        try:
+            origin[variant.alid] = orient_to_canonical(
+                snp.chromosome, snp.bp, snp.a1, snp.a2, other_is_reference=False
+            ).variant.alid
+        except VariantNormalisationError as exc:
+            raise ValueError(
+                f"ESI row {row} lifted to {variant.alid} but its own coordinate has no ALID "
+                f"({exc}); its source_alid cannot be spelt, and a blank would hide that"
+            ) from exc
+    return origin
 
 
 def _opt(value: str | None) -> str | None:

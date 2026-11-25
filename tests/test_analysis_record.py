@@ -18,11 +18,11 @@ from opengwasdb.model.analyses import (
     Analysis,
     analyses_table_from_records,
     ancestry_impute_mask,
-    read_analyses,
     read_analysis_records,
     reset_top_hit_counts,
     write_analysis_records,
 )
+from opengwasdb.store_reader.analyses import read_analyses
 
 _RETIRED_COLUMNS = set(RETIRED_ANALYSIS_COLUMNS)
 

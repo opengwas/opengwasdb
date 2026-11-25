@@ -15,15 +15,19 @@ import zarr
 
 from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_rows, decoded_band_bytes
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.encoding.memory import pool_workers
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import check_writable_zarr_layout
-from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE, TOP_HIT_THRESHOLDS
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE
 
 log = logging.getLogger(__name__)
 
@@ -245,7 +249,7 @@ class _ScanPlanes(NamedTuple):
 
 
 def _open_scan_planes(store_path: Path, encoding: StoreEncoding) -> _ScanPlanes:
-    root = store_arrays.open_group(store_path / "data.zarr")
+    root = release_arrays(store_path)
     return _ScanPlanes(
         z=DenseZPlane.open(root, encoding),
         se=DenseSePlane.open(root, encoding),
@@ -294,7 +298,7 @@ def _run_scan(
             planes.eaf,
             n_variants,
             band,
-            top_hits.z_critical(max(thresholds)),
+            reader_stats.z_critical(max(thresholds)),
             n_workers,
         )
     _write_scan_harvest(store_path, parts, thresholds, planes.imputed, planes.eaf, timer)
@@ -399,7 +403,7 @@ def _collect_top_hit_eaf(
     n_workers: int = 1,
 ) -> np.ndarray | None:
     """Collect candidate EAF values in row-chunk order for an inline build."""
-    root = store_arrays.open_group(Path(store_path) / "data.zarr")
+    root = release_arrays(store_path)
     plane = DenseEafPlane.open(root, encoding)
     if not plane.can_report_frequencies:
         return None
@@ -414,7 +418,7 @@ def _collect_top_hit_se(
     n_workers: int = 1,
 ) -> np.ndarray:
     """Collect candidate SE values in row-chunk order, decoded as a query sees them."""
-    root = store_arrays.open_group(Path(store_path) / "data.zarr")
+    root = release_arrays(store_path)
     return _gather_in_row_chunks(
         root, rows, cols, DenseSePlane.open(root, encoding).band, n_workers
     )

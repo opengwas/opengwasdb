@@ -1,8 +1,8 @@
 # Indexed Variant Subsets are optional full-statistic Dense query indexes
 
-> **Widened by [ADR 0102](0102-the-5e-8-tier-is-clumped-at-build-time.md) §10**
+> **Widened by [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10**
 > (issue #417): this ADR adds an Indexed Variant Subset in place *because* it changes no
-> association or Analytical Metadata. ADR 0102 admits one in-place addition that does carry
+> association or Analytical Metadata. ADR 0106 admits one in-place addition that does carry
 > Analytical Metadata: **a derived, rebuildable component and the count columns derived from
 > it, recomputable from the Store and a named LD Store**, which is the Clumps of the 5e-8 tier
 > with `n_loci_5e8` and `n_unclumped_5e8`. The rule for an Indexed Variant Subset is unchanged.
@@ -102,6 +102,16 @@ direct CSR slice, so it gets none. A Hybrid release is served by the index over
 its self-contained Dense Component: issue #271 resolves a Hybrid root to
 ``<root>/dense``, indexes only that component's on-panel variants, and never
 unifies it with the Ragged Overflow (see the amendment below).
+
+> **24 Nov 2026 (#472): a derived release restamps a subset.** `ogdb rewrite-release`
+> derives a 0.3.0 release that changes no Store Variant Index and no stored code, so a
+> subset it carries holds the same cells. Rather than rebuild it, the rewrite's
+> `indexed_subsets` step writes the new `release_id` and `format_version` into its
+> `source_release_id` and `source_format_version` (`restamp_indexed_subsets`) and keeps the
+> rest: `builder_version` and `created_at` still describe the original build. It refuses a
+> subset already stale on the source (identity or encoding), and `subsets.indexed`
+> compares every decoded cell of the result with the primary planes. See
+> [ADR 0105's #472 section](0105-format-0-3-0-variable-length-alid-sidecar.md#24-nov-2026-472-the-hybrid-dense-component-shares-the-variant-sidecars).
 
 ## Amendment: Hybrid roots index their self-contained Dense Component (#271)
 

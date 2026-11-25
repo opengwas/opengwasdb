@@ -23,7 +23,6 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import SeOutOfRange, StoreCodec
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.model import analyses as model
 from opengwasdb.model.analyses import (
@@ -35,6 +34,8 @@ from opengwasdb.model.analyses import (
     write_analysis_records,
 )
 from opengwasdb.store import open as store_open
+from opengwasdb.store_reader import format as store_format
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 #: The largest SE a float16 plane holds, and the smallest float32 above it.
 EDGE = 65504.0
@@ -182,7 +183,7 @@ def _decoded_extremes(seed: int) -> tuple[float, int]:
     which the float64 prediction is the Analysis' typical SE, so their codes are
     ordinary while narrowing moves the prediction by whole units."""
     from opengwasdb.encoding.codec import SeExceptionBuilder
-    from opengwasdb.encoding.plan import SE_RANGE_CANDIDATES
+    from opengwasdb.store_reader.encoding.plan import SE_RANGE_CANDIDATES
 
     rng = np.random.default_rng(seed)
     n, n_analyses = 2000, 4
@@ -263,8 +264,8 @@ def test_the_streamed_dense_rewrite_counts_a_crossing_as_its_encode_does(tmp_pat
     import zarr
 
     from opengwasdb.encoding import se as se_module
-    from opengwasdb.encoding.planes import DenseEafPlane, DenseSePlane
     from opengwasdb.encoding.timing import PhaseTimer
+    from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane
 
     group = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     n = 60
@@ -288,7 +289,8 @@ def test_the_streamed_dense_rewrite_counts_a_crossing_as_its_encode_does(tmp_pat
 def test_the_float16_narrowing_of_a_dense_scratch_plane_refuses_such_an_se(tmp_path) -> None:
     """The one write of an SE plane that does not go through `encode_se`."""
     from opengwasdb.encoding.se import _narrow_dense_se_to_float16
-    from opengwasdb.store.arrays import ArrayRole, create_array, open_group_for_write
+    from opengwasdb.store.arrays import create_array, open_group_for_write
+    from opengwasdb.store_reader.layout import ArrayRole
 
     def scratch(name: str, last: float):
         group = open_group_for_write(tmp_path / name, "w")
@@ -366,28 +368,31 @@ def test_the_schema_types_the_count_as_a_non_negative_integer_or_unknown() -> No
 # ── format_version ───────────────────────────────────────────────────────────
 
 
-def test_a_build_and_a_completion_write_0_2_3() -> None:
-    assert store_open.WRITTEN_FORMAT_VERSIONS == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
-    assert store_open.CURRENT_FORMAT_VERSION == "0.2.3"
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS)[(0, 2)] == (3,)
-    assert store_open.completed_format_version("0.2.2", carries_regions=False) == "0.2.3"
-    assert store_open.completed_format_version("0.2.3", carries_regions=True) == "0.2.3"
+def test_a_build_and_a_completion_count_what_they_leave_out() -> None:
+    """0.2.3 added the count; 0.3.0 (#467) keeps it, and is what a build and a
+    completion write, a 0.2.2 or 0.2.3 source's completion included."""
+    assert store_format.WRITTEN_FORMAT_VERSIONS[:4] == ("0.2.0", "0.2.1", "0.2.2", "0.2.3")
+    assert store_format.CURRENT_FORMAT_VERSION == "0.3.0"
+    assert dict(store_format.SUPPORTED_FORMAT_VERSIONS)[(0, 2)] == (3,)
+    assert store_open.records_se_out_of_range("0.3.0")
+    assert store_open.completed_format_version("0.2.2", carries_regions=False) == "0.3.0"
+    assert store_open.completed_format_version("0.2.3", carries_regions=True) == "0.3.0"
 
 
 def test_0_2_3_is_the_newest_release_read_without_a_warning(caplog) -> None:
     """A 0.2.2 and a 0.2.3 release open quietly and complete; a 0.2.4 one is read with
     the newer-remainder warning, and its stamp is not judged: upgrade, not re-stamp."""
     with caplog.at_level("WARNING"):
-        store_open.check_format_version("0.2.2")
-        store_open.check_format_version("0.2.3")
+        store_format.check_format_version("0.2.2")
+        store_format.check_format_version("0.2.3")
     assert not caplog.text
     assert store_open.check_writable_format_version("0.2.2") == "0.2.2"
     assert store_open.check_format_version_stamp("0.2.2", carries_regions=False) == "0.2.2"
     assert store_open.check_format_version_stamp("0.2.3", carries_regions=True) == "0.2.3"
     with caplog.at_level("WARNING"):
-        store_open.check_format_version("0.2.4")
+        store_format.check_format_version("0.2.4")
     assert "0.2.4" in caplog.text and "not visible here" in caplog.text
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Upgrade opengwasdb"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Upgrade opengwasdb"):
         store_open.check_format_version_stamp("0.2.4", carries_regions=False)
 
 

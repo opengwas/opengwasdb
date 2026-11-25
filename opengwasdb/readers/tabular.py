@@ -47,14 +47,16 @@ from opengwasdb.readers.rows import (
     stream_variants,
 )
 from opengwasdb.stats import MISSING_STATISTICS, Z_975, inverse_normal_denominators, parse_af
+from opengwasdb.store_reader.identity import (
+    VariantNormalisationError,
+    normalise_allele,
+    normalise_chromosome,
+)
 from opengwasdb.variants.normalise import (
     UndeclaredReference,
-    VariantNormalisationError,
     alid_allele_arrays,
     alid_alleles,
     identity_base,
-    normalise_allele,
-    normalise_chromosome,
     undeclared_reference,
 )
 from opengwasdb.variants.rsid import normalise_rsid

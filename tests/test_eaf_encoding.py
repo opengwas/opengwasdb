@@ -12,21 +12,22 @@ import numpy as np
 import pytest
 
 from opengwasdb.encoding import (
+    EafExceptionBuilder,
+    StoreCodec,
+    eaf_baseline_from_grid,
+    eaf_baseline_from_pairs,
+)
+from opengwasdb.store_reader.encoding.codec import EafExceptionTable, logit
+from opengwasdb.store_reader.encoding.plan import (
     EAF_ABSENT,
     EAF_EXCEPTION,
     ENCODING_VERSION,
     EafBaselineError,
     EafEncoding,
-    EafExceptionBuilder,
-    EafExceptionTable,
     EafMeasurements,
     EncodingMeasurements,
-    StoreCodec,
     StoreEncoding,
     UnsupportedEncoding,
-    eaf_baseline_from_grid,
-    eaf_baseline_from_pairs,
-    logit,
 )
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import gzip
+from collections.abc import Iterator
 from pathlib import Path
 from shutil import copytree
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 import pytest
 import shared_releases
@@ -44,6 +45,32 @@ SOURCE_ROWS = [
 ]
 
 
+#: The chains pyliftover's built-in lifts read in the test suite: UCSC's hg19 -> hg38
+#: (`tests/data/liftover/README.md`).
+LIFTOVER_CHAINS = Path(__file__).resolve().parent / "data" / "liftover"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _builtin_liftover_reads_the_committed_chain() -> Iterator[None]:
+    """pyliftover's built-in lift (`LiftOver("hg19", "hg38")`) opens the committed chain,
+    never `~/.pyliftover` and never UCSC: a runner whose download failed failed 347 tests
+    (#474). A build pair with no chain committed finds none and fails loudly. A build given
+    a `chain_file` reads that file, as it does outside the tests."""
+    import pyliftover.liftover
+    from pyliftover.chainfile import open_liftover_chain_file
+
+    def committed(from_db: str, to_db: str, **_where: object) -> IO[bytes] | None:
+        opened: IO[bytes] | None = open_liftover_chain_file(
+            from_db, to_db, search_dir=str(LIFTOVER_CHAINS), cache_dir=None, use_web=False,
+            write_cache=False,
+        )
+        return opened
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pyliftover.liftover, "open_liftover_chain_file", committed)
+        yield
+
+
 #: Test modules whose every GWAS-SSF read is also made as batches and compared
 #: (`batch_fixtures.shadow_gwas_ssf`, #319): the ones that write their own sources.
 _SHADOWED_MODULES = {"test_readers", "test_effect_recovery"}
@@ -70,6 +97,41 @@ def source_path(tmp_path: Path) -> Path:
 def dense_fixture_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """`shared_releases.dense_fixture_store`, built once per session."""
     return shared_releases.dense_fixture_store(tmp_path_factory.mktemp("dense-fixture"))
+
+
+@pytest.fixture(scope="session")
+def digest_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """The six `store_reader_digests` fixture releases -- Dense, Ragged and Hybrid, each
+    Observed-Only and Reference-Completed -- built once per session and shared by every
+    module that asks them questions. Never written to: copy one to change it."""
+    from store_reader_digests import build_releases
+
+    return build_releases(tmp_path_factory.mktemp("digest-releases"))
+
+
+@pytest.fixture(scope="session")
+def range_releases(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """`one_source_releases.LAYOUTS` -- Dense, Ragged and Hybrid 0.3.0 releases over
+    three chromosomes, posing every range question -- built once per session. Never
+    written to: copy one to change it."""
+    from one_source_releases import LAYOUTS
+
+    return {name: build(tmp_path_factory.mktemp(name)) for name, build in LAYOUTS.items()}
+
+
+@pytest.fixture(scope="session")
+def rsid_releases(
+    digest_releases: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, Path]:
+    """`digest_releases`, copied once per session, each row naming an rsID
+    (`rsid_releases.with_rsids`). Never written to: copy one to change it."""
+    from rsid_releases import with_rsids
+
+    root = tmp_path_factory.mktemp("rsid-releases")
+    copies = {name: Path(copytree(path, root / name)) for name, path in digest_releases.items()}
+    for path in copies.values():
+        with_rsids(path)
+    return copies
 
 
 @pytest.fixture
@@ -186,7 +248,7 @@ def completed_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     from residual_stores import dense_completed
     from test_indexed_subsets import _build
 
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
     root = tmp_path_factory.mktemp("one-pass")
     store, _observed, _panel = dense_completed(root)

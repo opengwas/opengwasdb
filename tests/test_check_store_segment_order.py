@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 
 from benchmarks import check_store_segment_order as runner
-from opengwasdb.store.arrays import ArrayRole, create_array, open_group_for_write
+from opengwasdb.store.arrays import create_array, open_group_for_write
+from opengwasdb.store_reader.layout import ArrayRole
 
 
 def _write_group(tmp_path, offsets: np.ndarray, variant_index: np.ndarray):

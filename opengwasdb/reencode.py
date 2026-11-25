@@ -48,17 +48,17 @@ import numcodecs
 import numpy as np
 from zarr.codecs import BloscCodec
 
-from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
 from opengwasdb.store.arrays import (
     blosc_like,
     create_array,
-    inner_chunk_of,
     role_for_array_path,
     sharded_compressor_like,
 )
 from opengwasdb.store.swap import recover_interrupted_swap, swap_staged
+from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path
 
 __all__ = [
     "SeReencodeError",

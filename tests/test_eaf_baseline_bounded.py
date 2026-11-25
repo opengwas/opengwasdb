@@ -16,11 +16,8 @@ import tracemalloc
 import numpy as np
 import pytest
 
-from opengwasdb.encoding.codec import (
-    EafBaselineError,
-    eaf_baseline_from_pairs,
-    eaf_baseline_from_sorted_runs,
-)
+from opengwasdb.encoding.codec import eaf_baseline_from_pairs, eaf_baseline_from_sorted_runs
+from opengwasdb.store_reader.encoding.plan import EafBaselineError
 
 
 def _runs(

@@ -10,14 +10,17 @@ are one length, stay sorted.
 from __future__ import annotations
 
 import pytest
+from format_0_2_3 import follow_stamp
 
 from opengwasdb.admission.rules import LOGGED, Reason
 from opengwasdb.readers.tabular import NO_REFERENCE
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
+from opengwasdb.store_reader.identity import MalformedIdentity, VariantNormalisationError
+from opengwasdb.store_reader.source_alid_sidecar import write_source_alid_sidecar
+from opengwasdb.variants.legacy_table import iter_variant_records
 from opengwasdb.variants.normalise import (
     IdentityFaults,
-    MalformedIdentity,
     UndeclaredReference,
-    VariantNormalisationError,
     canonical_alid,
     identity_fault,
     orient_or_drop,
@@ -359,7 +362,7 @@ DELETION_AT_950000 = "1:950000:GGGGCC:G"
 
 
 def _alids_at_950000(store) -> list[str]:
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     return [
         r.alid for r in iter_variant_records(store / "variants.tsv.gz")
@@ -387,7 +390,7 @@ def test_completion_adds_no_second_spelling_of_an_observed_deletion(tmp_path, ca
 
     from opengwasdb.query import query_store
     from opengwasdb.validation.validate import validate_store
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     with caplog.at_level(logging.WARNING, logger="opengwasdb.completion.ld_panel"):
         observed, completed = _complete_an_observed_deletion(tmp_path, reference=None)
@@ -504,11 +507,20 @@ def _rewrite_table(store, edit) -> None:
                 offsets.append(handle.tell())
                 line = edit(line)
             handle.write(line.encode("utf-8"))
-    np.save(store / "variant_offsets.npy", np.asarray(offsets, dtype=np.uint64))
+    if (store / "variant_offsets.npy").exists():  # a 0.2 release's only (#469)
+        np.save(store / "variant_offsets.npy", np.asarray(offsets, dtype=np.uint64))
     pysam.tabix_index(
         str(path), seq_col=0, start_col=1, end_col=1, meta_char="#", zerobased=False,
         force=True,
     )
+    if AlidSidecar.open(store) is not None:
+        # A 0.3.0 release written so: its ALID and `source_alid` sidecars name the rows
+        # the table does (#467, #470).
+        records = list(iter_variant_records(path))
+        write_alid_sidecar(store, [r.alid for r in records])
+        write_source_alid_sidecar(
+            store, [r.source_alid for r in records], [r.alid for r in records]
+        )
 
 
 def _set_format_version(store, version: str) -> None:
@@ -517,6 +529,7 @@ def _set_format_version(store, version: str) -> None:
     manifest = json.loads((store / "manifest.json").read_text())
     manifest["format_version"] = version
     (store / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    follow_stamp(store)
 
 
 def _sorted_deletion(line: str, *, source_alid: str | None = None) -> str:
@@ -540,7 +553,7 @@ def test_a_build_is_0_2_3_and_passes_the_indel_order_rule(tmp_path, layout: str)
 
     store = _observed_deletion_store(tmp_path, layout)
     assert DELETION_AT_950000 in _alids_at_950000(store), "the fixture must hold the deletion"
-    assert open_store(store).manifest.format_version == "0.2.3"
+    assert open_store(store).manifest.format_version == "0.3.0"
 
     result = validate_store(store, rules={"variant_table.indel_order"})
 

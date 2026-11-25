@@ -21,7 +21,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from opengwasdb.variants.normalise import canonical_alid, identity_allele, identity_alleles
+from opengwasdb.store_reader.identity import identity_allele
+from opengwasdb.variants.normalise import canonical_alid, identity_alleles
 
 #: A source's own variant identity, exactly as a SourceReader streams it.
 SourceKey = tuple[str, int, str, str]
@@ -41,6 +42,18 @@ def source_alid(site: SourceKey) -> str:
     """The source-build ALID ``site`` names: its own coordinate, as an ALID."""
     chrom, pos, ref, alt = site
     return canonical_alid(chrom, pos, ref, alt)
+
+
+def note_origin(origin: dict[str, str | None], alid: str, source: str) -> None:
+    """Fold one site's source ALID into ``origin``, a routed ALID's provenance.
+
+    The first site names it; another that names a different source makes it ambiguous,
+    ``None``, never a guess (issue #85). The one owner of that rule: the routing's
+    `source_alids` and the Ragged SSF harvest both call it."""
+    if alid not in origin:
+        origin[alid] = source
+    elif origin[alid] != source:
+        origin[alid] = None
 
 
 def encode_routing_keys(

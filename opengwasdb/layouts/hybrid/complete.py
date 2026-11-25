@@ -42,12 +42,10 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Cells, CsrReader, DenseGridReader, Status
 from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
 from opengwasdb.completion.schema import completion_quality_rollup
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
-from opengwasdb.encoding import EAF_BASELINE, StoreEncoding
 from opengwasdb.encoding.association_codec import (
     AssociationCodec,
     CellValues,
@@ -58,33 +56,30 @@ from opengwasdb.encoding.association_codec import (
 from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build import write_analyses_tsv
-from opengwasdb.layouts.dense.build_vcf import write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
-from opengwasdb.layouts.hybrid.build import write_variant_table
-from opengwasdb.layouts.hybrid.layout import (
-    DENSE_SUBDIR,
-    dense_component_path,
-    dense_to_shared_path,
-)
+from opengwasdb.layouts.hybrid.build import require_panel_mapped, write_variant_table
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_out_of_range
-from opengwasdb.model.enums import (
-    CompletionState,
-    PrimaryStorageLayout,
-)
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import check_format_version_stamp, completed_format_version
-from opengwasdb.store.arrays import open_group, open_group_for_write
+from opengwasdb.store.arrays import open_group_for_write
 from opengwasdb.store.open import (
+    COMPLETED_DENSE_COMPONENT_COPIES,
     OpenGWASDBStore,
     StagedRelease,
     check_writable_format_version,
     open_store,
 )
-from opengwasdb.variants import VariantAxis, VariantRecord
+from opengwasdb.store_reader.associations import Cells, CsrReader, DenseGridReader, Status
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import DENSE_SUBDIR, dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
+from opengwasdb.store_reader.variant_axis import VariantRecord
 from opengwasdb.variants.axis import sorted_alids
 
 log = logging.getLogger(__name__)
@@ -223,11 +218,11 @@ def complete_hybrid_store(
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
         axis = _remap_shared_axis(dense, overflow, ld, ancestry, n_workers)
-        # Phase 3: shared index/variant table/dense_to_shared map, then the
+        # Phase 3: shared variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
         n_overflow, overflow_left_out = _write_shared_tables_and_overflow(
-            staged, src, src_manifest, dense, axis, overflow, analyses
+            staged, src, src_manifest, dense, axis, overflow
         )
         # Phase 4: manifest, overflow top hits and the shared rollups.
         _finalize_completed_hybrid(
@@ -281,7 +276,8 @@ def _complete_dense_component(
         n_workers=n_workers,
         overwrite=True,
     )
-    dense_axis = VariantAxis(dense_dir)
+    dense = open_store(dense_dir)
+    dense_axis = dense.variant_axis(aliases=False)
     try:
         dense_alids = [r.alid for r in dense_axis.all()]
     finally:
@@ -293,7 +289,7 @@ def _complete_dense_component(
         alid_to_row={alid: i for i, alid in enumerate(dense_alids)},
         # The plan `complete_dense_store` just wrote: the source's z/se plus
         # the `eaf_reference` completion added.
-        encoding=open_store(dense_dir).manifest.encoding,
+        encoding=dense.manifest.encoding,
         n_imputed=dense_result.n_imputed,
     )
 
@@ -334,7 +330,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
     once: the crossover fold and the overflow rebuild share these arrays."""
     offsets, variant_index, z, se, eaf = _read_overflow_columns(src)
 
-    src_shared_axis = VariantAxis(src)
+    src_shared_axis = open_store(src).variant_axis(aliases=False)
     try:
         vi_to_record = src_shared_axis.by_indices(np.unique(variant_index).tolist())
         shared_all = src_shared_axis.all()
@@ -483,6 +479,13 @@ def _root_analyses(
     two partition an Analysis's associations, as ADR 0032's counts do. A source
     before 0.2.3 records neither, so it is unknown and nothing is carried
     (`counted`).
+
+    A 0.3.0 source's Dense Component has no `analyses.tsv` of its own (#472): it
+    reads the root's, and so did its completion, which carried the root's count --
+    both components' -- into the completed Dense Component's. The source Overflow's
+    count is then already there, and this carries nothing more. The completed root
+    counts what it would from the 0.2.3 form of the source, whose Dense Component
+    carried only its own and this added the Overflow's.
     """
     root, dense = open_store(src), open_store(dense_component_path(src))
     carried_root = carried_counts(
@@ -490,7 +493,8 @@ def _root_analyses(
         source=f"source release {src}",
     )
     carried_dense = carried_counts(
-        _read_analyses(dense_component_path(src)), dense.manifest.format_version,
+        sorted(read_analysis_records(dense.analyses_path), key=lambda a: int(a.analysis_index)),
+        dense.manifest.format_version,
         source=f"source Dense Component {dense_component_path(src)}",
     )
     source_overflow = (
@@ -601,9 +605,8 @@ def _write_shared_tables_and_overflow(
     dense: _CompletedDense,
     axis: _SharedAxis,
     overflow: _SourceOverflow,
-    analyses: list[Analysis],
 ) -> tuple[int, np.ndarray]:
-    """Write the shared index, variant table and dense_to_shared map on the
+    """Write the shared variant table and dense_to_shared map on the
     completed axis, then rebuild the overflow CSR on its remapped shared
     indices minus the folded crossovers. Returns the overflow association
     count, and per Analysis the rows the rebuild left out for an SE above
@@ -615,9 +618,6 @@ def _write_shared_tables_and_overflow(
     completed_against; writing it back at the shared root is the one place
     Analysis metadata is written, not a second provenance carry.
     """
-    dense_layout = _dense_component_layout(staged.path)
-    chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
-    write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
@@ -698,8 +698,12 @@ def _shared_se_coefficients(dense_dir: Path, source_encoding: StoreEncoding) -> 
     """
     if not source_encoding.se.is_residual:
         return None
-    root = open_group(dense_dir / "data.zarr")
-    return np.asarray(root["se_coefficients"][:], dtype=np.float32)
+    coefficients = se_coefficients(release_arrays(dense_dir))
+    if coefficients is None:
+        raise HybridCompletionError(
+            f"{dense_dir}: its se plane is residual but it holds no se_coefficients"
+        )
+    return coefficients
 
 
 # ── Phase 4: manifest + finalization ────────────────────────────────────────
@@ -743,6 +747,11 @@ def _finalize_completed_hybrid(
     # Overflow Component's counts on top -- the two partition an Analysis's
     # associations disjointly (ADR 0032).
     write_analyses_tsv(staged.path, top_hits.add_hit_counts(staged.path, analyses))
+    # The completed Dense Component names its rows through the map alone (#472). The
+    # root manifest was written above, so from here `shared_axis_root` reads the
+    # component as one that shares the axis: the copies go next, and nothing between
+    # opens it (the order `shared_axis_root` names).
+    _drop_dense_copies(staged.path, axis)
 
     log.info(
         "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "
@@ -753,6 +762,24 @@ def _finalize_completed_hybrid(
         axis.n_imputed,
         n_overflow,
     )
+
+
+def _drop_dense_copies(staged_path: Path, axis: _SharedAxis) -> None:
+    """Drop what a 0.3.0 Dense Component does not carry (#472): the Variant Table, its
+    `.tbi`, the ALID, position and rsID sidecars, `analyses.tsv` and `overview.html`.
+
+    The unchanged Dense completion wrote them, as it does for a standalone Dense
+    release, and this completion read the completed panel from them. From here the
+    shared table names every row, so the map must reach, for each completed Dense row,
+    the shared row of its own variant; it is read back against the written shared
+    ALID sidecar before anything is dropped.
+    """
+    dense_dir = dense_component_path(staged_path)
+    require_panel_mapped(
+        staged_path, np.load(dense_to_shared_path(staged_path)), axis.dense_alids
+    )
+    for name in sorted(COMPLETED_DENSE_COMPONENT_COPIES):
+        (dense_dir / name).unlink()
 
 
 def _fold_panel_crossovers(
@@ -825,15 +852,6 @@ def _refuse_unjudged_crossovers(left_out: np.ndarray) -> None:
             f"the crossover fold was handed {int(left_out.sum()):,} crossover(s) with an SE "
             "above float16's range, which it must not write"
         )
-
-
-def _chunk_shape(manifest: StoreManifest) -> tuple[int, int]:
-    cs = manifest.provenance.get("hybrid", {}).get("chunk_shape")
-    if cs and len(cs) == 2:
-        return (int(cs[0]), int(cs[1]))
-    from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
-
-    return DEFAULT_CHUNK_SHAPE
 
 
 def _read_analyses(dense_dir: Path) -> list[Analysis]:
@@ -1000,7 +1018,7 @@ def _dense_component_layout(staged_path: Path) -> dict[str, Any]:
     recorded-layout rule (issue #245, #248) rejects that, and a reader sizing
     reads from it would decode the wrong blocks.
     """
-    attrs = dict(open_group(dense_component_path(staged_path) / "data.zarr", "r").attrs)
+    attrs = dict(release_arrays(dense_component_path(staged_path)).attrs)
     return {
         key: attrs[key]
         for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format")
@@ -1019,10 +1037,9 @@ def _remapped_overflow_baseline(
     A variant with no overflow association after the remap keeps a NaN
     baseline: it has no cell to code against one.
     """
-    group = open_group(Path(source_path) / RAGGED_ZARR_PATH)
-    if EAF_BASELINE not in group:
+    src_baseline = eaf_baseline(sequence_arrays(source_path))
+    if src_baseline is None:
         return None
-    src_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
     out = np.full(int(n_shared), np.nan, dtype=np.float32)
     for src_index, record in vi_to_record.items():
         new_index = new_shared_index.get(record.alid)

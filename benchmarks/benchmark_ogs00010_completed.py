@@ -188,17 +188,20 @@ def _instrument_rows(
     """Join clumped exposure hits to their lookup rows by ALID."""
     lid = axis.identity_by_indices(look["variant_index"])
     per_alid: dict[str, dict[str, Any]] = {}
-    for alid, ai, z, se, st in zip(
+    # beta is the Store Reader's (ADR 0104), not z * se again here.
+    for alid, ai, z, se, beta, st in zip(
         lid["alid"],
         look["analysis_index"],
         look["z"],
         look["se"],
+        look["beta"],
         look["association_status"],
         strict=True,
     ):
         d = per_alid.setdefault(str(alid), {})
         tag = "exp" if int(ai) == exp_i else "out"
         d[f"z_{tag}"], d[f"se_{tag}"], d[f"st_{tag}"] = float(z), float(se), str(st)
+        d[f"beta_{tag}"] = float(beta)
     rows: list[dict[str, Any]] = []
     for i in keep_idx:
         d = per_alid.get(str(cols["alid"][i]))
@@ -208,9 +211,9 @@ def _instrument_rows(
             {
                 "chrom": str(cols["chrom"][i]),
                 "pos": int(cols["pos"][i]),
-                "beta_exp": d["z_exp"] * d["se_exp"],
+                "beta_exp": d["beta_exp"],
                 "se_exp": d["se_exp"],
-                "beta_out": d["z_out"] * d["se_out"],
+                "beta_out": d["beta_out"],
                 "se_out": d["se_out"],
                 "status_exp": d["st_exp"],
                 "status_out": d["st_out"],

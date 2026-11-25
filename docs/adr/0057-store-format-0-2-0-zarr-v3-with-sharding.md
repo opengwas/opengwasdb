@@ -129,6 +129,13 @@ is not relaxed.
 
 ### 5. The layout is recorded in three places and validated
 
+> **Amended from format 0.3.0 by [ADR 0102](0102-what-a-store-release-ships.md)
+> (23 Nov 2026, issue [#471](https://github.com/opengwas/opengwasdb/issues/471)).**
+> The `index.sqlite` `dense` blob is dropped: a 0.3.0 release records its layout in
+> `manifest.json` and the `data.zarr` root attributes, and `layout.recorded` and
+> `hybrid.recordings` read those two. A 0.2 release keeps all three, and is judged on
+> all three, as below.
+
 `manifest.json` `provenance.dense` (`chunk_shape`, `shard_shape`, `compressor`,
 `zarr_format`), the `index.sqlite` `dense` blob, and the `data.zarr` root
 attributes all describe the Dense planes' layout. New validation rules require

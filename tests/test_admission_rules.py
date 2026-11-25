@@ -26,7 +26,7 @@ from opengwasdb.readers.interface import (
     StreamTally,
 )
 from opengwasdb.stats import FrequencyTally, parse_af
-from opengwasdb.variants.normalise import InvalidAllele, MissingChromosome
+from opengwasdb.store_reader.identity import InvalidAllele, MissingChromosome
 
 USABLE = ImputationScoreStatus.USABLE
 DECLARATION = ImputationScoreDeclaration(

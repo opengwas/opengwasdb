@@ -28,7 +28,7 @@ import zarr
 
 from benchmarks import _artifact
 from benchmarks.measure_pilot_releases import _csr_cells, main, measure_store
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store_reader.manifest import StoreManifest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,7 +94,7 @@ def test_csr_cells_count_stored_associations_not_grid_cells(tmp_path):
 
 
 def _ragged_manifest():
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
 
     # A minimal Ragged manifest: the driver reads only the encoding block for
     # a CSR component's record, so the rest of the metadata is not exercised

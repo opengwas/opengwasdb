@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import numpy as np
 import pytest
 
-from opengwasdb.encoding import DenseZPlane
-from opengwasdb.index import connect, get_metadata
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.validation import validate_store
 
 
@@ -40,13 +42,16 @@ def test_dense_observed_build_refuses_a_coverage_it_cannot_hold(tmp_path, source
 
 def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
     assert (dense_store_path / "manifest.json").exists()
-    assert (dense_store_path / "index.sqlite").exists()
+    # An Observed-Only 0.3.0 release has no index.sqlite (ADR 0102, #471).
+    assert not (dense_store_path / "index.sqlite").exists()
     assert (dense_store_path / "data.zarr").exists()
     assert (dense_store_path / "variants.tsv.gz").exists()
     assert (dense_store_path / "variants.tsv.gz.tbi").exists()
-    assert (dense_store_path / "variant_offsets.npy").exists()
-    assert (dense_store_path / "variant_alid_bytes.npy").exists()
-    assert (dense_store_path / "variant_alid_rows.npy").exists()
+    assert not (dense_store_path / "variant_offsets.npy").exists()  # 0.2 only (#469)
+    for name in ALID_SIDECAR_FILENAMES:  # format 0.3.0's ALID index (ADR 0105)
+        assert (dense_store_path / name).exists(), name
+    assert not (dense_store_path / "variant_alid_bytes.npy").exists()
+    assert not (dense_store_path / "variant_alid_rows.npy").exists()
 
     result = validate_store(dense_store_path)
     assert result.ok, result.errors
@@ -69,29 +74,20 @@ def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
     assert math.isnan(float(se[2, 0]))
     assert z[2, 1] == 6.0
 
-    with connect(dense_store_path / "index.sqlite") as connection:
-        assert get_metadata(connection, "n_variants") == 3
-        assert get_metadata(connection, "n_analyses") == 2
-        dense_meta = get_metadata(connection, "dense")
-        tables = {
-            row["name"]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        aliases = connection.execute(
-            "SELECT alias, variant_index FROM variant_aliases ORDER BY alias, variant_index"
-        ).fetchall()
-    # The variant axis has no relational copy (issue #128). This assertion used
-    # to read `variant_rows == 0` -- the table was already vestigial on this
-    # build path; now it is not created at all.
-    assert "variants" not in tables, tables
-    assert [(row["alias"], row["variant_index"]) for row in aliases] == [
-        ("rs1", 0),
-        ("rs2", 1),
-        ("rs3", 2),
-    ]
+    # The rsIDs the build's `variant_aliases` used to hold resolve through the rsID
+    # index alone, the one rsID lookup a 0.3.0 release has (ADR 0102, #471).
+    store = open_store(dense_store_path)
+    with closing(store.variant_axis(aliases=False)) as axis:
+        assert [axis.indices_by_alias(rsid).tolist() for rsid in ("rs1", "rs2", "rs3")] == [
+            [0],
+            [1],
+            [2],
+        ]
     # The recorded chunk is the plane's **effective** inner chunk -- clipped to
     # the array's dimensions, as the root attrs and the converter record it --
-    # not the build-wide hint.  #247 made all three recordings one call.
+    # not the build-wide hint.  #247 made the recordings one call; from 0.3.0 the
+    # manifest is the one the `index.sqlite` blob copied.
+    dense_meta = store.manifest.provenance["dense"]
     assert dense_meta["chunk_shape"] == [3, 2]
     assert dense_meta["shard_shape"] == [3, 2]
     assert dense_meta["zarr_format"] == 3
@@ -160,7 +156,9 @@ def test_query_facade_supports_variant_range_analysis_phewas_top_hits_and_metada
     a2_top_hits = query.top_hits(analysis_id="a2", threshold=5e-8, limit=1)
     assert a2_top_hits["variant_index"].tolist() == [0]
     assert a2_top_hits["analysis_index"].tolist() == [1]
-    assert query.top_hits(analysis_id="unknown", threshold=5e-8)["z"].size == 0
+    # an Analysis the release does not hold is refused, not answered with nothing (#483)
+    with pytest.raises(UnknownAnalysisError, match="GCST-no-such"):
+        query.top_hits(analysis_id="GCST-no-such", threshold=5e-8)
 
     # metadata accessors
     variants = query.variants_table()
@@ -193,22 +191,19 @@ def test_query_excludes_missing_dense_cells(dense_store_path):
 
 
 def test_range_indices_matches_range_variant_index(dense_store_path):
-    from opengwasdb.index import connect
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.variants.axis import VariantAxis
 
-    with connect(dense_store_path / "index.sqlite") as conn:
-        va = VariantAxis(dense_store_path, conn)
-        full_records = va.range("1", 1, 500)
-        fast_indices = va.range_indices("1", 1, 500)
-        va.close()
+    va = VariantAxis(dense_store_path)
+    full_records = va.range("1", 1, 500)
+    fast_indices = va.range_indices("1", 1, 500)
+    va.close()
 
     expected = np.array([r.variant_index for r in full_records], dtype="int32")
     assert np.array_equal(fast_indices, expected)
     # empty range returns empty array
-    with connect(dense_store_path / "index.sqlite") as conn:
-        va = VariantAxis(dense_store_path, conn)
-        assert len(va.range_indices("1", 999999, 999999)) == 0
-        va.close()
+    va = VariantAxis(dense_store_path)
+    assert len(va.range_indices("1", 999999, 999999)) == 0
+    va.close()
 
 
 def test_lookup_surgical_read_matches_direct_matrix(dense_store_path):

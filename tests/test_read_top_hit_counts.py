@@ -10,7 +10,8 @@ from __future__ import annotations
 import numpy as np
 import zarr
 
-from opengwasdb.top_hits import read_top_hit_counts, threshold_key
+from opengwasdb.store_reader.top_hits import threshold_key
+from opengwasdb.top_hits import read_top_hit_counts
 
 
 def _write_group(store_path, threshold, analysis_index, *, with_offsets: bool, n_analyses: int):

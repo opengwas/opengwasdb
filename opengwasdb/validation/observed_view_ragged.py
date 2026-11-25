@@ -40,7 +40,6 @@ records the seed, the sample and the counts, so a pass is a measured zero; a ref
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from contextlib import closing
@@ -50,7 +49,6 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.associations import Cells, CsrReader, Inspection, State, Tally
 from opengwasdb.completion.block import panel_positions
 from opengwasdb.completion.ld_panel import (
     LDBlock,
@@ -63,18 +61,19 @@ from opengwasdb.completion.regions import (
     inside,
     region_blocks,
 )
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
+from opengwasdb.index.release_index import QUALITY_BLOCKS, ReleaseIndex, UnreadableIndex
 from opengwasdb.model.analyses import Analysis, read_analysis_records
-from opengwasdb.model.enums import AssociationCoverage, CompletionState
 from opengwasdb.model.regions import Region, RegionTable, RegionTableError, read_store_regions
-from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import OpenGWASDBStore
+from opengwasdb.store_reader.associations import Cells, CsrReader, Inspection, State, Tally
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState
+from opengwasdb.store_reader.stored import sequence_arrays
 from opengwasdb.validation.observed_view import (
     SE_OUT_OF_RANGE_FAILING,
     ObservedViewRefused,
     ObservedViewVerdict,
-    _AlidIndex,
     _AxisMap,
+    _AxisRows,
     _Cells,
     _map_axis,
     _observed,
@@ -86,7 +85,6 @@ from opengwasdb.validation.observed_view import (
     leaves_out,
     se_out_of_range_accounting,
 )
-from opengwasdb.variants import VariantAxis, is_indexable_alid
 
 __all__ = ["FAILING_COUNTERS", "STRATA", "check_ragged"]
 
@@ -200,8 +198,8 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
     if "imputed" not in _open_group(target_path, "target"):
         raise ObservedViewRefused(f"target store {target_path} has no `imputed` mask to check")
     rows = []
-    for path in (source_path, target_path):
-        with closing(VariantAxis(path)) as axis:
+    for path, store in ((source_path, source), (target_path, target)):
+        with closing(store.variant_axis(aliases=False)) as axis:
             rows.append(axis.n_variants)
         if rows[-1] == 0:
             raise ObservedViewRefused(f"store {path} has no variants to check")
@@ -214,7 +212,7 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
 def _open_group(path: Path, role: str) -> Any:
     """The Store's Ragged array group; whatever stops it opening is a refusal."""
     try:
-        return store_arrays.open_group(path / RAGGED_ZARR_PATH)
+        return sequence_arrays(path)
     except Exception as exc:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
@@ -340,38 +338,6 @@ def _choose_analyses(
 # --- retained regions ---------------------------------------------------------
 
 
-class _TargetRows:
-    """Resolves ALIDs to rows of the completed axis, exactly (the index is a fast path)."""
-
-    def __init__(self, target_path: Path, n_rows: int) -> None:
-        self._index = _AlidIndex.load(target_path)
-        loose = self._index.unindexed_rows(n_rows)
-        self._loose: dict[str, int] = {}
-        if loose.size:
-            with closing(VariantAxis(target_path)) as axis:
-                self._loose = {r.alid: row for row, r in axis.by_indices(loose.tolist()).items()}
-
-    def aligned(self, alids: Sequence[str | None]) -> np.ndarray:
-        """Each ALID's completed-axis row, or -1 where the completed axis holds none."""
-        named = [(k, a) for k, a in enumerate(alids) if a is not None]
-        found = np.full(len(alids), -1, dtype=np.int64)
-        for k, a in named:
-            found[k] = self._loose.get(a, -1)
-        indexed = [(k, a) for k, a in named if is_indexable_alid(a)]
-        if indexed and self._index.alids.size:
-            at, rows = self._indexed_rows(indexed)
-            found[at] = rows
-        return found
-
-    def _indexed_rows(self, indexed: list[tuple[int, str]]) -> tuple[np.ndarray, np.ndarray]:
-        """The positions among `indexed` the index holds, and their rows."""
-        keys = np.array([a.encode("utf-8") for _k, a in indexed], dtype=self._index.alids.dtype)
-        slot = np.minimum(np.searchsorted(self._index.alids, keys), self._index.alids.size - 1)
-        hit = self._index.alids[slot] == keys
-        at = np.array([k for k, _a in indexed], dtype=np.int64)[hit]
-        return at, np.asarray(self._index.rows)[slot[hit]]
-
-
 @dataclass(frozen=True)
 class _Retained:
     """The sampled admitted Analyses' regions and the blocks those regions overlap."""
@@ -399,7 +365,7 @@ class _RegionRows:
     """The completed-axis rows of an Analysis's regions: the panel variants of the blocks
     they overlap that lie inside them, each block's rows and positions resolved once."""
 
-    def __init__(self, target_rows: _TargetRows) -> None:
+    def __init__(self, target_rows: _AxisRows) -> None:
         self._target_rows = target_rows
         self._by_block: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
@@ -408,7 +374,7 @@ class _RegionRows:
         for block in blocks:
             if block.block_id not in self._by_block:
                 self._by_block[block.block_id] = (
-                    self._target_rows.aligned(block.alids), panel_positions(block)
+                    self._target_rows.rows_of(block.alids), panel_positions(block)
                 )
             rows, positions = self._by_block[block.block_id]
             parts.append(rows[inside(regions, block.chrom, positions) & (rows >= 0)])
@@ -418,15 +384,15 @@ class _RegionRows:
 def _quality_blocks(target: OpenGWASDBStore) -> dict[int, set[str]]:
     """The blocks `completion_quality` records, per Analysis."""
     blocks: dict[int, set[str]] = {}
-    with closing(target.index_connection()) as db:
+    with ReleaseIndex(target.path) as index:
         try:
-            rows = db.execute("SELECT analysis_index, block_id FROM completion_quality")
-            for analysis_index, block_id in rows:
-                blocks.setdefault(int(analysis_index), set()).add(str(block_id))
-        except sqlite3.OperationalError as exc:
+            rows = index.completion_quality(QUALITY_BLOCKS)
+        except UnreadableIndex as exc:
             raise ObservedViewRefused(
                 f"target store has no completion_quality table: {exc}"
             ) from exc
+    for analysis_index, block_id in rows:
+        blocks.setdefault(int(analysis_index), set()).add(str(block_id))
     return blocks
 
 
@@ -445,8 +411,7 @@ def _admitted(pair: _Pair, panel: _Panel) -> np.ndarray:
 
 
 def _flat_offsets(path: Path) -> np.ndarray:
-    group = store_arrays.open_group(path / RAGGED_ZARR_PATH)
-    return np.asarray(group["offsets"][:], dtype=np.int64)
+    return np.asarray(sequence_arrays(path)["offsets"][:], dtype=np.int64)
 
 
 @dataclass(frozen=True)
@@ -471,7 +436,7 @@ def _sample_and_compare(
     sample = _Sample(
         admitted=admitted,
         retained=_retained(source, sampled, admitted, panel),
-        rows=_RegionRows(_TargetRows(pair.target_path, pair.n_target_rows)),
+        rows=_RegionRows(_AxisRows(pair.target_path, pair.n_target_rows)),
         quality=_quality_blocks(pair.target),
     )
     totals = dict.fromkeys(_TOTAL_KEYS, 0)

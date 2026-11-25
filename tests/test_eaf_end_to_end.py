@@ -22,9 +22,9 @@ import pytest
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.analyses import read_analyses
 from tests.ssf_builds import build_ragged_from_ssf
 
 # Source reports effect allele G at 0.25. G sorts after A, so A is the stored

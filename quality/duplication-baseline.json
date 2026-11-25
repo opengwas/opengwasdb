@@ -9,9 +9,9 @@
    "file": ".",
    "text": "duplicated share of significant lines",
    "line": 0,
-   "percent": 0.76,
-   "duplicated_lines": 1460,
-   "total_lines": 192406
+   "percent": 0.69,
+   "duplicated_lines": 1422,
+   "total_lines": 205419
   }
  ]
 }

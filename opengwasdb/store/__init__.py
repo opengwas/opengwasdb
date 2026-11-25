@@ -1,15 +1,13 @@
 """Store opening, the array-creation seam, and validation.
 
-The names from :mod:`opengwasdb.store.open` are resolved lazily (PEP 562)
-rather than imported eagerly.  The array-creation seam lives in this package,
-and :mod:`opengwasdb.encoding.planes` imports it; ``open`` imports
-:mod:`opengwasdb.model.manifest`, which imports :mod:`opengwasdb.encoding`.
-Importing ``open`` eagerly here would therefore close a cycle that starts at
-``opengwasdb.encoding`` before ``StoreManifest`` exists.  Each name below is
-imported on first access instead, cached in this module's globals (so a
-second access is an ordinary attribute lookup), and ``__dir__`` lists the
-names even before the first access -- the package's introspection surface is
-the same as it was with eager imports.
+The names below are resolved lazily (`opengwasdb.lazy_exports`, PEP 562) rather
+than imported eagerly: the package's introspection surface is what it was with
+eager imports, and importing a submodule -- the array-creation seam,
+:mod:`opengwasdb.store.arrays`, which the encoding imports -- does not drag in
+:mod:`opengwasdb.store.open` and the builders behind it. The format-version
+tables and the read check are the Store Reader's
+(`opengwasdb.store_reader.format`, #464); opening and staging a release is
+:mod:`opengwasdb.store.open`'s.
 
 The seam itself is imported by its users as :mod:`opengwasdb.store.arrays`
 (``create_array``, ``ArrayRole``, ``compressor``, ...); re-exporting it here
@@ -18,49 +16,68 @@ would add nothing but another place to keep in step.
 
 from __future__ import annotations
 
-import importlib
-from typing import Any
+from typing import TYPE_CHECKING
 
-__all__ = [
-    "CURRENT_FORMAT_VERSION",
-    "PRE_RESET_FORMAT_VERSIONS",
-    "SUPPORTED_FORMAT_VERSIONS",
-    "WRITTEN_FORMAT_VERSIONS",
-    "ZARR_FORMAT_BY_SERIES",
-    "DestinationExistsError",
-    "MalformedFormatVersion",
-    "OpenGWASDBStore",
-    "StagedRelease",
-    "UnsupportedFormatVersion",
-    "check_format_version",
-    "check_format_version_stamp",
-    "check_writable_format_version",
-    "check_writable_zarr_layout",
-    "completed_format_version",
-    "destination_lock",
-    "directory_lock",
-    "format_version_for",
-    "open_store",
-    "parse_format_version",
-    "split_format_version",
-    "staged_named_group",
-    "zarr_format_for_version",
-]
+from opengwasdb.lazy_exports import exported_names, lazy_hooks
 
-#: Same names, as a set for the lazy resolver below.  A set membership test,
-#: not a second list: `__all__` above stays the one place the surface is named.
-_OPEN_EXPORTS = frozenset(__all__)
+if TYPE_CHECKING:
+    from opengwasdb.store.open import DestinationExistsError as DestinationExistsError
+    from opengwasdb.store.open import OpenGWASDBStore as OpenGWASDBStore
+    from opengwasdb.store.open import StagedRelease as StagedRelease
+    from opengwasdb.store.open import check_format_version_stamp as check_format_version_stamp
+    from opengwasdb.store.open import check_writable_format_version as check_writable_format_version
+    from opengwasdb.store.open import check_writable_zarr_layout as check_writable_zarr_layout
+    from opengwasdb.store.open import completed_format_version as completed_format_version
+    from opengwasdb.store.open import destination_lock as destination_lock
+    from opengwasdb.store.open import directory_lock as directory_lock
+    from opengwasdb.store.open import open_store as open_store
+    from opengwasdb.store.open import staged_named_group as staged_named_group
+    from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION as CURRENT_FORMAT_VERSION
+    from opengwasdb.store_reader.format import (
+        PRE_RESET_FORMAT_VERSIONS as PRE_RESET_FORMAT_VERSIONS,
+    )
+    from opengwasdb.store_reader.format import (
+        SUPPORTED_FORMAT_VERSIONS as SUPPORTED_FORMAT_VERSIONS,
+    )
+    from opengwasdb.store_reader.format import WRITTEN_FORMAT_VERSIONS as WRITTEN_FORMAT_VERSIONS
+    from opengwasdb.store_reader.format import ZARR_FORMAT_BY_SERIES as ZARR_FORMAT_BY_SERIES
+    from opengwasdb.store_reader.format import MalformedFormatVersion as MalformedFormatVersion
+    from opengwasdb.store_reader.format import UnsupportedFormatVersion as UnsupportedFormatVersion
+    from opengwasdb.store_reader.format import check_format_version as check_format_version
+    from opengwasdb.store_reader.format import format_version_for as format_version_for
+    from opengwasdb.store_reader.format import parse_format_version as parse_format_version
+    from opengwasdb.store_reader.format import split_format_version as split_format_version
+    from opengwasdb.store_reader.format import zarr_format_for_version as zarr_format_for_version
 
+_EXPORTS = {
+    "opengwasdb.store_reader.format": (
+        "CURRENT_FORMAT_VERSION",
+        "PRE_RESET_FORMAT_VERSIONS",
+        "SUPPORTED_FORMAT_VERSIONS",
+        "WRITTEN_FORMAT_VERSIONS",
+        "ZARR_FORMAT_BY_SERIES",
+        "MalformedFormatVersion",
+        "UnsupportedFormatVersion",
+        "check_format_version",
+        "format_version_for",
+        "parse_format_version",
+        "split_format_version",
+        "zarr_format_for_version",
+    ),
+    "opengwasdb.store.open": (
+        "DestinationExistsError",
+        "OpenGWASDBStore",
+        "StagedRelease",
+        "check_format_version_stamp",
+        "check_writable_format_version",
+        "check_writable_zarr_layout",
+        "completed_format_version",
+        "destination_lock",
+        "directory_lock",
+        "open_store",
+        "staged_named_group",
+    ),
+}
 
-def __getattr__(name: str) -> Any:
-    """Resolve an ``open`` re-export on first use (see the module docstring)."""
-    if name in _OPEN_EXPORTS:
-        value = getattr(importlib.import_module("opengwasdb.store.open"), name)
-        globals()[name] = value  # cache: later access is a plain attribute lookup
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    """List the module's names, including the lazy ``open`` re-exports."""
-    return sorted(set(globals()) | _OPEN_EXPORTS)
+__all__ = exported_names(_EXPORTS)
+__getattr__, __dir__ = lazy_hooks(__name__, _EXPORTS)

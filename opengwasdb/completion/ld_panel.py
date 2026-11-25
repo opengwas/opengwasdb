@@ -38,8 +38,12 @@ import numpy as np
 import pysam
 
 from opengwasdb.completion.impute import ld_pca, min_observed_points
-from opengwasdb.variants import CanonicalVariant, VariantNormalisationError, orient_to_canonical
-from opengwasdb.variants.normalise import identity_allele, normalise_chromosome
+from opengwasdb.store_reader.identity import (
+    VariantNormalisationError,
+    identity_allele,
+    normalise_chromosome,
+)
+from opengwasdb.variants import CanonicalVariant, orient_to_canonical
 
 log = logging.getLogger(__name__)
 

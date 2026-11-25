@@ -22,16 +22,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from opengwasdb.encoding import (
-    EAF_EXCEPTION,
-    SE_EXCEPTION,
-    Z_OVERFLOW,
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.encoding.codec import (
     EafExceptionTable,
     SeExceptionTable,
-    StoreCodec,
     ZOverflowTable,
 )
-from opengwasdb.store.arrays import array_length
+from opengwasdb.store_reader.encoding.plan import EAF_EXCEPTION, SE_EXCEPTION, Z_OVERFLOW
 from opengwasdb.validation.rule import (
     Check,
     Finding,
