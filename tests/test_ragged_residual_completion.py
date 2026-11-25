@@ -45,10 +45,11 @@ import pytest
 from logged_warnings import logged_warnings
 from stored_rows import stored_rows
 
-from opengwasdb import StoreManifest, open_store
+from opengwasdb import open_store
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf
@@ -450,7 +451,7 @@ def test_top_hit_index_is_consistent_with_the_decoded_plane_even_when_stale(
     The stale values are the SEs the source rows carry, before the source's
     own quantisation: since issue #301 the source's *decoded* values are what
     the completed plane decodes, so they could not differ from it."""
-    from opengwasdb.top_hits import threshold_key
+    from opengwasdb.store_reader.top_hits import threshold_key
 
     stale_store = tmp_path / "stale.opengwasdb"
     shutil.copytree(scenario.completed, stale_store)

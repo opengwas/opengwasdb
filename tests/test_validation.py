@@ -10,17 +10,22 @@ import numpy as np
 import plane_edits
 import pytest
 from dense_sources import build_dense_from_records
+from format_0_2_3 import as_0_2_3, follow_stamp, write_fixed_width_alid_index
 from residual_fixtures import model_se
 
-from opengwasdb.encoding import DenseSePlane
-from opengwasdb.encoding.codec import SeExceptionTable, se_float16
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses, write_analyses
-from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
+from opengwasdb.model.analyses import write_analyses
+from opengwasdb.store.arrays import compressor, create_array
+from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.alid_sidecar import ALID_SIDECAR_FILENAMES, AlidSidecar
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable, se_float16
+from opengwasdb.store_reader.encoding.planes import DenseSePlane
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import Severity, validate_store
 from opengwasdb.validation.rules.side_tables import (
     FLOAT16_EXACT_MINIMUM,
@@ -39,7 +44,7 @@ def test_a_release_stamped_0_2_1_without_a_region_table_fails_its_stamp(request,
 
     store = request.getfixturevalue(fixture)
     assert validate_store(store).ok, "the fixture must validate before it is restamped"
-    assert open_store(store).manifest.format_version == "0.2.3"
+    assert open_store(store).manifest.format_version == "0.3.0"
     edit_manifest(store, lambda manifest: {**manifest, "format_version": "0.2.1"})
 
     result = validate_store(store)
@@ -161,14 +166,19 @@ def test_validator_rejects_inconsistent_top_hit_index(dense_store_path):
 
     result = validate_store(dense_store_path)
 
-    assert result.failed() == {"top_hits.z"}
-    assert result.errors == ["top-hit index p_5e_08 contains z value inconsistent with z array"]
+    # A tier z of 0 disagrees with the plane, and clears no threshold (#471).
+    assert result.failed() == {"top_hits.z", "top_hits.threshold"}
+    assert sorted(result.errors) == [
+        "top-hit index p_5e_08 contains z value inconsistent with z array",
+        "top-hit index p_5e_08 holds 1 row(s) whose z does not clear its threshold",
+    ]
 
 
 def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_store_path):
     # Issue #55's acceptance case: two independent defects in one release. The
     # Top-Hit Index was checked only when nothing else had failed, so the offset
-    # error hid the tier's.
+    # error hid the tier's. Offsets are the 0.2 series' (#469).
+    as_0_2_3(dense_store_path)
     offsets_path = dense_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     offsets[1] = offsets[0]
@@ -178,7 +188,13 @@ def test_a_bad_variant_offset_and_a_bad_top_hit_tier_are_both_reported(dense_sto
 
     result = validate_store(dense_store_path)
 
-    assert result.failed() == {"variant_table.representatives", "top_hits.z"}
+    # The 0.2.3 form stores the tier's abs_z and p_value (#471), which no longer match z.
+    assert result.failed() == {
+        "variant_table.representatives",
+        "top_hits.z",
+        "top_hits.threshold",
+        "top_hits.abs_z",
+    }
 
 
 def test_validator_rejects_invalid_top_hit_offsets(dense_store_path):
@@ -215,8 +231,8 @@ def test_the_zarr_format_rule_reports_nodes_in_name_order(
 
     assert result.failed() == {"zarr.format"}
     assert result.errors == [
-        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.2.3; a "
-        "0.2.3 release is Zarr v3, and a half-converted release is invalid (issue #245)"
+        f"data.zarr/{node}: Zarr v2 metadata ['.zarray'] under format_version 0.3.0; a "
+        "0.3.0 release is Zarr v3, and a half-converted release is invalid (issue #245)"
         for node in ("se", "z")
     ]
 
@@ -232,6 +248,7 @@ def test_validator_rejects_missing_variant_axis_file(dense_store_path):
 
 @pytest.mark.parametrize("name", ["variant_alid_bytes.npy", "variant_alid_rows.npy"])
 def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, name):
+    as_0_2_3(dense_store_path)  # the fixed-width pair is a 0.2 release's
     (dense_store_path / name).unlink()
 
     result = validate_store(dense_store_path)
@@ -243,7 +260,37 @@ def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, n
     )
 
 
+@pytest.mark.parametrize("fixture", ["dense_store_path", "ragged_store_path", "hybrid_store_path"])
+@pytest.mark.parametrize("name", ALID_SIDECAR_FILENAMES)
+def test_validator_rejects_a_missing_alid_sidecar_file(request, fixture, name):
+    """A 0.3.0 release requires each of the sidecar's four files (ADR 0105)."""
+    store = request.getfixturevalue(fixture)
+    (store / name).unlink()
+
+    result = validate_store(store)
+
+    assert result.failed() == {"envelope.required"}
+    # The required entries are the files `alid_index_kind` names for 0.3.0; a Dense
+    # release's message says to rebuild, as it did for the fixed-width pair.
+    rebuild = f"missing {name} — rebuild the store to generate the ALID search index"
+    assert (rebuild if fixture == "dense_store_path" else f"missing {name}") in result.errors
+
+
+def test_a_0_3_0_release_carrying_the_fixed_width_pair_fails_its_envelope(dense_store_path):
+    """The pair is a 0.2 release's; a 0.3.0 one left carrying it is refused, not ignored."""
+    sidecar = AlidSidecar.open(dense_store_path)
+    assert sidecar is not None
+    alids = sidecar.alids(np.arange(sidecar.n_rows)).tolist()
+    write_fixed_width_alid_index(dense_store_path, alids)
+
+    result = validate_store(dense_store_path)
+
+    assert result.failed() == {"envelope.closed"}
+    assert sum("variant_alid_" in error for error in result.errors) == 2, result.errors
+
+
 def test_validator_rejects_bad_variant_offset(dense_store_path):
+    as_0_2_3(dense_store_path)  # a 0.3.0 release has no offsets (#469)
     offsets_path = dense_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     offsets[1] = offsets[0]
@@ -259,7 +306,9 @@ def test_validator_rejects_leftover_sqlite_analyses_table(dense_store_path):
     # ADR 0030/issue #22: analyses.tsv is the sole source of truth for
     # Analytical Metadata; a store carrying a leftover SQLite `analyses`
     # table (store-format spec §20) is invalid even though nothing else
-    # about it is malformed.
+    # about it is malformed. A 0.2.3 release: an Observed-Only 0.3.0 one has
+    # no index.sqlite to carry it (#471).
+    as_0_2_3(dense_store_path)
     connection = open_store(dense_store_path).index_connection()
     try:
         connection.execute("CREATE TABLE analyses (analysis_index INTEGER PRIMARY KEY)")
@@ -281,7 +330,8 @@ def test_validator_accepts_store_without_sqlite_analyses_table(dense_store_path)
 def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_path):
     # Issue #69/#72: Ragged retired its SQLite `analyses` table onto
     # analyses.tsv too -- the same rule Dense already enforces must catch a
-    # Ragged release that still carries one.
+    # Ragged release that still carries one (a 0.2.3 one, as above).
+    as_0_2_3(ragged_store_path)
     connection = open_store(ragged_store_path).index_connection()
     try:
         connection.execute("CREATE TABLE analyses (analysis_index INTEGER PRIMARY KEY)")
@@ -296,7 +346,9 @@ def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_pa
 
 def test_a_ragged_release_has_its_variant_table_checked(ragged_store_path):
     # Issue #55: the variant-table rules ran on Dense and Hybrid releases only; a
-    # Ragged release's offset sidecar could point at the wrong row unremarked.
+    # Ragged release's offset sidecar could point at the wrong row unremarked. Offsets
+    # are the 0.2 series' (#469).
+    as_0_2_3(ragged_store_path)
     offsets_path = ragged_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)
     assert len(offsets) >= 2, "the fixture must have a second row to misdirect"
@@ -309,6 +361,10 @@ def test_a_ragged_release_has_its_variant_table_checked(ragged_store_path):
 
 
 def test_a_ragged_release_has_no_alias_table_and_is_not_said_to_pass_it(ragged_store_path):
+    # A 0.3.0 release carries no alias table and is not judged on one (#471); a 0.2.3
+    # Ragged release's index.sqlite is empty, and the rule says it judged nothing.
+    assert "sqlite.variant_aliases" not in validate_store(ragged_store_path).skipped
+    as_0_2_3(ragged_store_path)
     result = validate_store(ragged_store_path)
 
     assert result.ok, result.errors
@@ -415,10 +471,10 @@ def _as_written_before_0_2_3(store: Path) -> None:
 def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
     """An SE above float16's range is `+inf` beside a finite Z: a warning, not an error.
 
-    `beta = z * se` reads as infinity although the source value was finite (issue
-    #338), and nothing else in a Store says so. The cell is present under spec §15,
-    so the release stays valid and the warning names the count and the Analysis
-    (issue #337).
+    The source's finite SE is lost and a query reads `beta` and `pval` there as NaN
+    (issue #338, ADR 0104), and nothing else in a Store says so. The cell is present
+    under spec §15, so the release stays valid and the warning names the count and the
+    Analysis (issue #337).
 
     Mutation that makes this fail: count nothing in `associations.se_infinite`'s
     measure, or stop judging its total.
@@ -544,7 +600,7 @@ def test_a_0_2_3_release_holding_an_infinite_se_fails(dense_store_path):
 
     Mutation that makes this fail: keep the old warning for a 0.2.3 release.
     """
-    assert open_store(dense_store_path).manifest.format_version == "0.2.3"  # fixture sanity
+    assert open_store(dense_store_path).manifest.format_version == "0.3.0"  # fixture sanity
     root = open_store(dense_store_path).arrays(mode="a")
     root["se"][0, 0] = float("inf")
 
@@ -602,8 +658,9 @@ def test_validator_accepts_migrated_hybrid_store(hybrid_store_path):
 
 
 def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_path):
-    from opengwasdb.layouts.hybrid.layout import dense_component_path
+    from opengwasdb.store_reader.hybrid import dense_component_path
 
+    as_0_2_3(hybrid_store_path)  # an Observed-Only 0.3.0 Dense Component has no index (#471)
     connection = open_store(dense_component_path(hybrid_store_path)).index_connection()
     try:
         connection.execute("CREATE TABLE analyses (analysis_index INTEGER PRIMARY KEY)")
@@ -618,9 +675,12 @@ def test_validator_rejects_leftover_sqlite_analyses_table_hybrid(hybrid_store_pa
 
 
 def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
-    from opengwasdb.layouts.hybrid.layout import dense_component_path
+    """From 0.3.0 a Hybrid carries one analyses.tsv, its own, which its Dense Component
+    reads (#472): that one is judged, once, at the release's root."""
+    from opengwasdb.store_reader.hybrid import dense_component_path
 
-    analyses_path = dense_component_path(hybrid_store_path) / "analyses.tsv"
+    assert not (dense_component_path(hybrid_store_path) / "analyses.tsv").exists()
+    analyses_path = hybrid_store_path / "analyses.tsv"
     table = read_analyses(analyses_path)
     rows = [{**row, "analysis_id": table.rows[0]["analysis_id"]} for row in table.rows]
     write_analyses(analyses_path, type(table)(fieldnames=table.fieldnames, rows=tuple(rows)))
@@ -628,7 +688,7 @@ def test_validator_rejects_duplicate_analysis_id_hybrid(hybrid_store_path):
     result = validate_store(hybrid_store_path)
 
     assert result.failed() == {"analyses.analysis_id"}
-    assert [f.target for f in result.of("analyses.analysis_id")] == ["dense"]
+    assert [f.target for f in result.of("analyses.analysis_id")] == ["."]
 
 
 def test_validator_rejects_duplicate_analysis_id(dense_store_path):
@@ -684,7 +744,7 @@ def test_validator_rejects_stray_file_at_hybrid_top_level(hybrid_store_path):
 
 
 def test_validator_rejects_stray_file_in_hybrid_dense_component(hybrid_store_path):
-    from opengwasdb.layouts.hybrid.layout import dense_component_path
+    from opengwasdb.store_reader.hybrid import dense_component_path
 
     (dense_component_path(hybrid_store_path) / "stray.txt").write_text("x")
 
@@ -1326,6 +1386,7 @@ def test_a_rounded_se_exception_table_warns_on_an_earlier_release(
     manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
     manifest["format_version"] = "0.2.0"
     (store / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    follow_stamp(store)
     _exception_values(store)
 
     result = validate_store(store)

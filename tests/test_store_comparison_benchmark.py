@@ -38,18 +38,24 @@ from benchmarks.benchmark_store_comparison import (
     footprint,
     result_digests,
 )
-from opengwasdb.store.arrays import ArrayRole, create_array, open_group_for_write
+from opengwasdb.store.arrays import create_array, open_group_for_write
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.stats import association_statistics
 
 
 def _result(
     z: list[float], eaf: list[float] | None = None
 ) -> dict[str, np.ndarray]:
     n = len(z)
+    z_plane, se_plane = np.asarray(z, dtype="float32"), np.full(n, 0.5, dtype="float32")
+    derived = association_statistics(z_plane, se_plane)
     return {
         "variant_index": np.arange(n, dtype="int32"),
         "analysis_index": np.zeros(n, dtype="int32"),
-        "z": np.asarray(z, dtype="float32"),
-        "se": np.full(n, 0.5, dtype="float32"),
+        "z": z_plane,
+        "se": se_plane,
+        "beta": derived.beta,
+        "pval": derived.pval,
         "eaf": np.asarray(eaf if eaf is not None else [0.3] * n, dtype="float32"),
         "association_status": np.array(["observed"] * n, dtype=object),
     }
@@ -67,7 +73,8 @@ def test_changed_value_is_detected():
     reference = result_digests(_result([1.0, 2.0, 3.0]))
     candidate = result_digests(_result([1.0, 2.0, 4.0]))
 
-    assert differing_arrays(reference, candidate) == ["z"]
+    # beta and pval are derived from z (ADR 0104), so they differ with it.
+    assert differing_arrays(reference, candidate) == ["beta", "pval", "z"]
 
 
 def test_moved_nan_is_detected():
@@ -81,7 +88,7 @@ def test_reordered_values_are_detected():
     reference = result_digests(_result([1.0, 2.0, 3.0]))
     candidate = result_digests(_result([1.0, 3.0, 2.0]))
 
-    assert differing_arrays(reference, candidate) == ["z"]
+    assert differing_arrays(reference, candidate) == ["beta", "pval", "z"]
 
 
 def test_differing_shapes_names_the_shape_and_arrays():
@@ -94,7 +101,7 @@ def test_differing_shapes_names_the_shape_and_arrays():
         "phewas": result_digests(_result([5.0])),
     }
 
-    assert differing_shapes(reference, candidate) == {"bulk": ["z"]}
+    assert differing_shapes(reference, candidate) == {"bulk": ["beta", "pval", "z"]}
 
 
 def test_array_present_on_one_side_only_is_detected():

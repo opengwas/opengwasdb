@@ -11,36 +11,46 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.model.enums import COVERAGES_BY_LAYOUT, PrimaryStorageLayout
+from opengwasdb.index.release_index import ReleaseIndex
+from opengwasdb.model.enums import COVERAGES_BY_LAYOUT
 from opengwasdb.store.open import (
-    DENSE_ENVELOPE,
-    HYBRID_DENSE_COMPONENT_ENVELOPE,
-    HYBRID_ENVELOPE,
-    RAGGED_ENVELOPE,
-    WRITTEN_FORMAT_VERSIONS,
-    UnsupportedFormatVersion,
     check_format_version_stamp,
-    indels_reference_first,
+    envelope_at,
     newer_than_written,
     newer_than_written_text,
+    ships_index,
+)
+from opengwasdb.store_reader.alid_index import alid_index_kind
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.format import (
+    WRITTEN_FORMAT_VERSIONS,
+    UnsupportedFormatVersion,
+    carries_index_metadata,
+    carries_position_sidecar,
+    carries_source_alid_sidecar,
+    carries_variant_offsets,
+    indels_reference_first,
     split_format_version,
     zarr_format_for_version,
 )
-from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
-from opengwasdb.variants import (
-    variant_alid_bytes_path,
-    variant_alid_rows_path,
+from opengwasdb.store_reader.hybrid import dense_component_path, dense_to_shared_path
+from opengwasdb.store_reader.position_sidecar import POSITION_SIDECAR_FILENAMES
+from opengwasdb.store_reader.rsid_index import (
+    VARIANT_RSID_BYTES_FILENAME,
+    VARIANT_RSID_ROWS_FILENAME,
+)
+from opengwasdb.store_reader.source_alid_sidecar import SOURCE_ALID_SIDECAR_FILENAMES
+from opengwasdb.store_reader.variant_axis import (
     variant_offsets_path,
     variant_tabix_path,
     variant_table_path,
 )
+from opengwasdb.validation.rule import Check, Finding, Kind, Rule, Severity, Target
 
 #: The rule every rule that opens a release's entries runs after.
 REQUIRED = "envelope.required"
@@ -199,18 +209,113 @@ def _rebuild_alid_index(name: str) -> str:
     return f"missing {name} — rebuild the store to generate the ALID search index"
 
 
+def _alid_index_entries(target: Target, *, rebuild: bool = False) -> list[tuple[str, Path]]:
+    """The files of the ALID index a release of its `format_version` carries
+    (`alid_index_kind`): from 0.3.0 the variable-length sidecar (ADR 0105), before it the
+    fixed-width pair."""
+    kind = alid_index_kind(target.store.manifest.format_version)
+    path = target.store.path
+    return [
+        (_rebuild_alid_index(name) if rebuild else f"missing {name}", path / name)
+        for name in kind.FILENAMES
+    ]
+
+
+def _index_entry(target: Target) -> list[tuple[str, Path]]:
+    """`index.sqlite`, where a release of its layout, version and completion state
+    carries one (`ships_index`): every 0.2 release; from 0.3.0 only one that holds its
+    own `completion_quality` (ADR 0102)."""
+    if not target_ships_index(target):
+        return []
+    return [("missing index.sqlite", target.store.index_path)]
+
+
+def target_ships_index(target: Target) -> bool:
+    """Whether the release carries an `index.sqlite` (`ships_index`)."""
+    manifest = target.store.manifest
+    return ships_index(
+        target.layout,
+        manifest.format_version,
+        manifest.completion_state,
+        dense_component=_is_dense_component(target),
+    )
+
+
+def _position_sidecar_entries(target: Target) -> list[tuple[str, Path]]:
+    """The position sidecar's files, from 0.3.0 (ADR 0105 §6): a 0.3.0 release answers
+    every range from them, and one without them is refused, never read by tabix."""
+    if not carries_position_sidecar(target.store.manifest.format_version):
+        return []
+    path = target.store.path
+    return [
+        (f"missing {name} — rebuild the store to generate the position sidecar", path / name)
+        for name in POSITION_SIDECAR_FILENAMES
+    ]
+
+
+def _source_alid_sidecar_entries(target: Target) -> list[tuple[str, Path]]:
+    """The `source_alid` sidecar's files, from 0.3.0 (#470): a 0.3.0 release names each
+    row's `source_alid` from them, and one without them is refused, never read as none."""
+    if not carries_source_alid_sidecar(target.store.manifest.format_version):
+        return []
+    path = target.store.path
+    return [
+        (f"missing {name} — rebuild the store to generate the source_alid sidecar", path / name)
+        for name in SOURCE_ALID_SIDECAR_FILENAMES
+    ]
+
+
+def _variant_offsets_entries(target: Target) -> list[tuple[str, Path]]:
+    """`variant_offsets.npy`, which a Dense release of the 0.2 and 0.1 series carries and
+    a 0.3.0 release does not (#469)."""
+    if not carries_variant_offsets(target.store.manifest.format_version):
+        return []
+    return [("missing variant_offsets.npy", variant_offsets_path(target.store.path))]
+
+
 def _dense_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
+    if target.shares_variant_axis:
+        # A 0.3.0 Dense Component: its grid, the map the Hybrid's entries name, and the
+        # shared axis it reads its variants from, without which none of its rules can
+        # name a row (#472).
+        return [
+            *_index_entry(target),
+            ("missing data.zarr", store.data_path),
+            *_shared_axis_entries(target),
+        ]
     return [
-        ("missing index.sqlite", store.index_path),
+        *_index_entry(target),
         ("missing data.zarr", store.data_path),
         ("missing analyses.tsv", store.analyses_path),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
-        ("missing variant_offsets.npy", variant_offsets_path(path)),
-        (_rebuild_alid_index("variant_alid_bytes.npy"), path / "variant_alid_bytes.npy"),
-        (_rebuild_alid_index("variant_alid_rows.npy"), path / "variant_alid_rows.npy"),
+        *_variant_offsets_entries(target),
+        *_alid_index_entries(target, rebuild=True),
+        *_position_sidecar_entries(target),
+        *_source_alid_sidecar_entries(target),
+    ]
+
+
+def _shared_axis_entries(target: Target) -> list[tuple[str, Path]]:
+    """The Hybrid release's search indexes and sidecars a 0.3.0 Dense Component reads its
+    variants from: those the Hybrid's own `format_version` carries, as its own axis opens
+    them, the `source_alid` sidecar included (#470)."""
+    root = target.store.shared_root
+    assert root is not None and target.parent is not None, "only a nested Dense Component"
+    version = target.parent.store.manifest.format_version
+    names = (
+        *alid_index_kind(version).FILENAMES,
+        *(POSITION_SIDECAR_FILENAMES if carries_position_sidecar(version) else ()),
+        *(SOURCE_ALID_SIDECAR_FILENAMES if carries_source_alid_sidecar(version) else ()),
+        VARIANT_RSID_BYTES_FILENAME,
+        VARIANT_RSID_ROWS_FILENAME,
+    )
+    return [
+        (f"missing {name} in the Hybrid release, whose variant axis the Dense Component "
+         "reads", root / name)
+        for name in names
     ]
 
 
@@ -218,13 +323,14 @@ def _ragged_entries(target: Target) -> list[tuple[str, Path]]:
     store = target.store
     path = store.path
     return [
-        ("missing index.sqlite", store.index_path),
+        *_index_entry(target),
         ("missing data.zarr", store.data_path),
         ("missing data.zarr/ragged", store.data_path / "ragged"),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
-        ("missing variant_alid_bytes.npy", variant_alid_bytes_path(path)),
-        ("missing variant_alid_rows.npy", variant_alid_rows_path(path)),
+        *_alid_index_entries(target),
+        *_position_sidecar_entries(target),
+        *_source_alid_sidecar_entries(target),
         ("missing analyses.tsv", store.analyses_path),
     ]
 
@@ -236,11 +342,12 @@ def _hybrid_entries(target: Target) -> list[tuple[str, Path]]:
         ("missing dense/ (Dense Component)", dense_dir),
         ("missing dense/manifest.json", dense_dir / "manifest.json"),
         ("missing dense/dense_to_shared.npy", dense_to_shared_path(path)),
-        ("missing index.sqlite", path / "index.sqlite"),
+        *_index_entry(target),
         ("missing variants.tsv.gz", variant_table_path(path)),
         ("missing variants.tsv.gz.tbi", variant_tabix_path(path)),
-        ("missing variant_alid_bytes.npy", variant_alid_bytes_path(path)),
-        ("missing variant_alid_rows.npy", variant_alid_rows_path(path)),
+        *_alid_index_entries(target),
+        *_position_sidecar_entries(target),
+        *_source_alid_sidecar_entries(target),
         ("missing data.zarr/ragged (Ragged Overflow)", path / "data.zarr" / "ragged"),
     ]
 
@@ -263,16 +370,20 @@ def required_entries(target: Target) -> Iterator[str]:
             yield message
 
 
+def _is_dense_component(target: Target) -> bool:
+    """Whether the release is a Hybrid's nested Dense Component, which additionally
+    carries dense_to_shared.npy, as a standalone Dense release never does."""
+    return target.parent is not None
+
+
 def _envelope(target: Target) -> frozenset[str]:
-    if target.parent is not None:
-        # A Hybrid release's Dense Component additionally carries dense_to_shared.npy,
-        # which a standalone Dense release never does.
-        return HYBRID_DENSE_COMPONENT_ENVELOPE
-    return {
-        PrimaryStorageLayout.DENSE: DENSE_ENVELOPE,
-        PrimaryStorageLayout.RAGGED: RAGGED_ENVELOPE,
-        PrimaryStorageLayout.HYBRID: HYBRID_ENVELOPE,
-    }[target.layout]
+    manifest = target.store.manifest
+    return envelope_at(
+        target.layout,
+        manifest.format_version,
+        manifest.completion_state,
+        dense_component=_is_dense_component(target),
+    )
 
 
 def closed_envelope(target: Target) -> list[str]:
@@ -323,22 +434,56 @@ def _require_layout_coverage(manifest: Any, errors: list[str]) -> None:
 
 def stray_analyses_table(target: Target) -> list[str]:
     errors: list[str] = []
-    with target.store.index_connection() as connection:
-        _reject_stray_analyses_table(connection, errors)
+    with ReleaseIndex(target.store.path) as index:
+        _reject_stray_analyses_table(index, errors)
     return errors
 
 
-def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[str]) -> None:
+def _reject_stray_analyses_table(index: ReleaseIndex, errors: list[str]) -> None:
     """Every layout shares this rule (ADR 0034, issue #72): analyses.tsv is
     the sole source of truth for Analytical Metadata, so a leftover SQL
     ``analyses`` table -- Dense/Hybrid retired theirs in issue #68, Ragged in
     issue #69 -- is a validation failure, not a harmless relic."""
-    tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "analyses" in tables:
+    if _ANALYSES_TABLE in index.names(tables_only=True):
         errors.append(
             "index.sqlite still contains an analyses table -- analyses.tsv is the sole "
             "source of truth for Analytical Metadata (ADR 0030, issue #22)"
         )
+
+
+#: The one table a 0.3.0 `index.sqlite` holds (ADR 0102).
+_PROVENANCE_TABLES = frozenset({"completion_quality"})
+
+#: A table `sqlite.analyses_table` reports, on every format, so not reported again.
+_ANALYSES_TABLE = "analyses"
+
+
+def provenance_only_index(target: Target) -> list[str]:
+    """A 0.3.0 `index.sqlite` holds `completion_quality` and nothing else (ADR 0102).
+
+    The `metadata` table and `variant_aliases` a 0.2 release carried are dropped from
+    0.3.0 (#471); one still present is a writer that did not move with the format.
+    """
+    with ReleaseIndex(target.store.path) as index:
+        tables = index.names(tables_only=True)
+    stray = sorted(
+        name
+        for name in tables - _PROVENANCE_TABLES - {_ANALYSES_TABLE}
+        if not name.startswith("sqlite_")
+    )
+    if not stray:
+        return []
+    return [
+        f"index.sqlite holds {', '.join(stray)}, which format "
+        f"{target.store.manifest.format_version} does not carry: from 0.3.0 it holds only "
+        "completion_quality (ADR 0102)"
+    ]
+
+
+def _provenance_only(target: Target) -> bool:
+    """A release whose `index.sqlite` ships and holds provenance alone: 0.3.0 on."""
+    version = target.store.manifest.format_version
+    return target_ships_index(target) and not carries_index_metadata(version)
 
 
 def format_stamp(target: Target) -> list[str]:
@@ -398,7 +543,15 @@ RULES: tuple[Rule, ...] = (
     Check(
         name="sqlite.analyses_table",
         kinds=Kind.RELEASE,
+        when=target_ships_index,
         after=(REQUIRED,),
         run=stray_analyses_table,
+    ),
+    Check(
+        name="sqlite.provenance_only",
+        kinds=Kind.RELEASE,
+        when=_provenance_only,
+        after=(REQUIRED,),
+        run=provenance_only_index,
     ),
 )

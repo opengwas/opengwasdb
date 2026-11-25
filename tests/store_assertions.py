@@ -12,7 +12,8 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.store.arrays import ArrayRole, create_array
+from opengwasdb.store.arrays import create_array
+from opengwasdb.store_reader.layout import ArrayRole
 
 #: The arrays the Dense Component band write owns. A residual `eaf` build also
 #: carries the baseline and exception tables; a `float32` or `absent` one does
@@ -49,10 +50,14 @@ def replace_exception_table(root: Any, index_name: str, value_name: str) -> None
     """
     kept_index = np.asarray(root[index_name][:])[1:]
     kept_value = np.asarray(root[value_name][:])[1:]
-    for name, data, dtype in (
-        (index_name, kept_index, "int64"),
-        (value_name, kept_value, "float32"),
-    ):
+    write_exception_table(root, index_name, value_name, kept_index, kept_value)
+
+
+def write_exception_table(
+    root: Any, index_name: str, value_name: str, index: Any, value: Any
+) -> None:
+    """Replace an exception table's two arrays, uncompressed, through the array seam."""
+    for name, data, dtype in ((index_name, index, "int64"), (value_name, value, "float32")):
         del root[name]
         create_array(
             root,

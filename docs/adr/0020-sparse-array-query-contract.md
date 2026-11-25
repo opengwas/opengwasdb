@@ -4,6 +4,12 @@
 
 Accepted
 
+> **Revised, 23 November 2026 (#466): [ADR 0104](0104-the-store-reader-derives-beta-and-pval.md).**
+> "Callers who need derived fields (`beta`, `p_value`) compute them" no longer
+> holds. The Store Reader derives `beta` and `pval` once, with
+> `association_statistics`, and every association record carries them beside
+> `z` and `se`. The rest of this contract stands.
+
 ## Context
 
 The chr1 × 100-analysis benchmark (see `docs/benchmark-output/opengwasdb_vcf_ukb_chr1_benchmark.json`)

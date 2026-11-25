@@ -54,16 +54,18 @@ from opengwasdb.readers.rows import (
     stream_batches,
 )
 from opengwasdb.stats import FrequencyTally, parse_af
-from opengwasdb.variants.normalise import (
-    IdentityFaults,
-    LiftedOffPrimary,
+from opengwasdb.store_reader.identity import (
     MalformedIdentity,
-    Orientation,
     VariantNormalisationError,
-    allele_fault,
     identity_allele,
     is_primary_contig,
     normalise_chromosome,
+)
+from opengwasdb.variants.normalise import (
+    IdentityFaults,
+    LiftedOffPrimary,
+    Orientation,
+    allele_fault,
     orient_to_canonical,
     oriented_alid,
 )

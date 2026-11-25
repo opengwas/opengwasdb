@@ -27,8 +27,8 @@ import numpy as np
 
 from benchmarks import _hm3
 from benchmarks._rss import sample_query
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
 
 # The random-lookup shapes keep their historical sizes and seed. The committed
 # OGS-00009 and OGS-00016 artifacts were measured with `default_rng(0)` drawing

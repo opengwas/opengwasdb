@@ -24,21 +24,15 @@ from store_assertions import assert_same_band_arrays
 
 import opengwasdb.encoding.memory as memory
 import opengwasdb.layouts.dense.build_vcf as dense_build
-from opengwasdb.encoding import (
-    EafEncoding,
-    EafExceptionTable,
-    SeEncoding,
-    StoreCodec,
-    StoreEncoding,
-    ZEncoding,
-    eaf_exception_table,
-)
+from opengwasdb.encoding import StoreCodec, eaf_exception_table
 from opengwasdb.layouts.dense.build_vcf import (
     _EAF_STAGING,
     _encode_residual_dense_eaf,
     build_dense_from_vcf_manifest,
 )
 from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader.encoding.codec import EafExceptionTable
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 _N_VARIANTS = 600
 _ANALYSES = ("a", "b", "c")

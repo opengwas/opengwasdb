@@ -70,7 +70,8 @@ from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
-from opengwasdb.associations import Associations
+from opengwasdb.store import query_digests
+from opengwasdb.store.query_digests import digest_array as digest_array
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
 # the statin-use exposure Analysis, the chr19 APOE/APOC region, and the seeded
@@ -91,7 +92,7 @@ DEFAULT_OUTPUT = Path("docs/benchmark-output/opengwasdb_store_comparison.json")
 # the query API's own empty result rather than restated here, so the identity
 # check cannot drift from the arrays the queries actually return; hashing all
 # six covers values, order, dtype, length and NaN positions at once.
-RESULT_ARRAY_NAMES: tuple[str, ...] = tuple(Associations.empty())
+RESULT_ARRAY_NAMES: tuple[str, ...] = query_digests.RESULT_ARRAY_NAMES
 
 _ZARR_METADATA_NAMES = frozenset({".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json"})
 
@@ -377,49 +378,14 @@ def _resolve_selection(
         q.close()
 
 
-def digest_array(values: np.ndarray) -> str:
-    """A sha256 over one result array's dtype, shape, order and values.
-
-    NaN is canonicalised as a position: a NaN may carry a different payload in
-    two stores and still mean the same missing cell, so the digest records
-    where the NaNs are and hashes only the non-NaN bytes.
-    """
-    digest = hashlib.sha256()
-    digest.update(str(values.dtype).encode())
-    digest.update(str(values.shape).encode())
-    if values.dtype.kind == "O":
-        unique, inverse = np.unique(values, return_inverse=True)
-        digest.update(np.asarray(inverse, dtype="int64").tobytes())
-        for item in unique.tolist():
-            digest.update(repr(item).encode())
-            digest.update(b"\x1f")
-    elif values.dtype.kind == "f":
-        missing = np.isnan(values)
-        digest.update(b"nan\x1f")
-        digest.update(np.packbits(missing).tobytes())
-        digest.update(b"values\x1f")
-        digest.update(values[~missing].tobytes())
-    else:
-        digest.update(values.tobytes())
-    return digest.hexdigest()
-
-
 def result_digests(result: dict[str, np.ndarray]) -> dict[str, str]:
-    """Digest EVERY array the query returned, not only the expected six.
-
-    Hashing just the known contract would silently discard an array one store
-    returns and another does not, so the comparison would call two different
-    results identical. The expected six must still be present; the digest map's
-    keys are otherwise the result's own keys, so `differing_arrays` reports a
-    one-sided extra array by name.
-    """
-    missing = [name for name in RESULT_ARRAY_NAMES if name not in result]
-    if missing:
-        raise SystemExit(
-            f"query result is missing array(s) {missing}; refusing an identity check "
-            "that cannot see every array it claims to compare"
-        )
-    return {name: digest_array(values) for name, values in result.items()}
+    """`opengwasdb.store.query_digests.result_digests`, which owns the digest (#467),
+    exiting where it refuses: an identity check that cannot see every array it
+    claims to compare ends the benchmark."""
+    try:
+        return query_digests.result_digests(result)
+    except query_digests.IncompleteResultError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def differing_arrays(reference: dict[str, str], candidate: dict[str, str]) -> list[str]:

@@ -1,20 +1,26 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.2.2` (Zarr v3 with sharding, §10a; an indel's ALID spelt reference first, §4; what every builder writes, each release stamped the lowest its features use, §21.3)
-Also readable: `0.2.1` and `0.2.0` (the same layout, indel ALIDs sorted), and `0.1.0` (Zarr v2); nothing else (§21)
+Format version written: `0.3.0`, `0.2.3`'s features with the variable-length ALID sidecar, the position sidecar and the `source_alid` sidecar, and without `variant_offsets.npy` (§4, ADR 0105), what only the validator read (§1.1, ADR 0102, #471) or a Hybrid Dense Component's own copy of the shared variants and Analyses (§16, ADR 0102 §4, #472), which every build and completion writes and `ogdb rewrite-release` derives from a `0.2.3` release (§21.4)  
+Also readable: `0.2.3`, `0.2.2`, `0.2.1` and `0.2.0` (Zarr v3 with sharding, §10a; the fixed-width ALID index; indels spelt reference first from `0.2.2`, sorted before it), and `0.1.0` (Zarr v2); nothing else (§21). Sections below that name no version describe `0.2.2` and every later one.
 
-This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.2.2**, what every builder of this package writes
-since #381: Zarr v3 with the sharding codec (§10a), an indel's ALID spelt reference
-first (§4, ADR 0079), and a Ragged release's optional `regions.tsv` (§1, §17);
+This document defines the contract for valid OpenGWASDB Store Releases. Every
+builder and completion of this package writes `format_version` **0.3.0**: 0.2.3's features with the variable-length ALID sidecar
+in place of the fixed-width ALID index (§4, ADR 0105), and without `index.sqlite`'s
+`metadata` and `variant_aliases` or the Top-Hit tiers' `abs_z` and `p_value`, so an
+Observed-Only release carries no `index.sqlite` (§1, §18; ADR 0102, #471), and with a
+Hybrid's Dense Component reading the shared variants and Analyses (§16, #472). It also describes **0.2.3**, which every builder wrote from #338 to #467
+(0.2.2 and the count of associations left out for an SE above 65,504, §7a); **0.2.2**,
+what every builder wrote from #381 to #338: Zarr v3 with the sharding codec (§10a),
+an indel's ALID spelt reference first (§4, ADR 0079), and a Ragged release's optional
+`regions.tsv` (§1, §17);
 **0.2.1**, which package 0.9.0 stamps a Ragged release carrying `regions.tsv`, its
 indels sorted (issue #430); **0.2.0**, the same layout with neither, which every
 builder wrote from #247 and the converter still writes; and **0.1.0** (Zarr v2),
-which a reader still reads and a builder no longer writes. The three 0.2 releases
-are "the 0.2 series" below wherever the layout is meant. Everything below that is
-not about the physical layout, the indel ALID or the region table holds for all
-four: statistic planes carry a
+which a reader still reads and a builder no longer writes. The four 0.2 releases
+are "the 0.2 series" below wherever the layout is meant; 0.3.0 has the same layout.
+Everything below that is not about the physical layout, the ALID index, the indel
+ALID or the region table holds for all of them: statistic planes carry a
 declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
 is a per-variant baseline plus a per-cell `int8` logit residual rather than a
 `float32` plane, and `se` is either `float16` or — when the build measures the
@@ -46,24 +52,37 @@ A Store Release is a self-contained directory.
 
 ```text
 manifest.json
-index.sqlite
+index.sqlite               (0.2; from 0.3.0 only beside completion_quality, below)
 analyses.tsv
 overview.html
 data.zarr/
 variants.tsv.gz
 variants.tsv.gz.tbi
-variant_offsets.npy
-variant_alid_bytes.npy
-variant_alid_rows.npy
+variant_offsets.npy        (0.2 and 0.1 only)
+variant_alid_utf8.npy      (0.3.0: the ALID sidecar, §4)
+variant_alid_offsets.npy   (0.3.0)
+variant_alid_keys.npy      (0.3.0)
+variant_alid_order.npy     (0.3.0)
+variant_position.npy                     (0.3.0: the position sidecar, §4)
+variant_position_chromosomes.npy         (0.3.0)
+variant_position_chromosome_offsets.npy  (0.3.0)
+variant_source_alid_state.npy            (0.3.0: the source_alid sidecar, §4)
+variant_source_alid_utf8.npy             (0.3.0)
+variant_source_alid_offsets.npy          (0.3.0)
+variant_alid_bytes.npy     (0.2 and 0.1 only)
+variant_alid_rows.npy      (0.2 and 0.1 only)
 variant_rsid_bytes.npy
 variant_rsid_rows.npy
 regions.tsv            (Ragged only, optional)
 ```
 
 `manifest.json` identifies the release and declares how to interpret it.
-`index.sqlite` stores compact relational metadata such as key/value metadata,
-small alias maps, and large fine-grained tables that are not practical as flat
-text (such as Reference Completion Quality — see §12). `analyses.tsv` is the
+`index.sqlite` stores large fine-grained tables that are not practical as flat
+text: Reference Completion Quality (§12). From format 0.3.0 that table is all it
+holds, so it ships only in a Reference-Completed release, a Hybrid's in its Dense
+Component, and the Store Reader never opens it (ADR 0102, #471). A 0.2 release
+carries one in every release, with a `metadata` key/value table and a
+`variant_aliases` alias map beside any `completion_quality`. `analyses.tsv` is the
 sole source of truth for Analytical Metadata (§7a) — one row per Analysis;
 `index.sqlite` MUST NOT also contain an `analyses` table. `overview.html` is a
 generated, store-wide human-browsable rendering of `analyses.tsv`; it MAY be
@@ -71,9 +90,14 @@ regenerated from `analyses.tsv` and MUST NOT be treated as a second source of
 truth — Ragged releases do not carry one (§11). `data.zarr/` stores compressed
 numerical association arrays and layout-specific numerical indexes. Every
 layout stores its high-cardinality variant axis in `variants.tsv.gz`, indexed
-by `variants.tsv.gz.tbi`, with `variant_offsets.npy` mapping Store-local
-Variant Indices to BGZF row offsets, `variant_alid_bytes.npy`/
-`variant_alid_rows.npy` supporting ALID lookup, and
+by `variants.tsv.gz.tbi`, and the sidecars beside it: in the 0.2 and 0.1 series
+`variant_offsets.npy` mapping Store-local Variant Indices to BGZF row offsets,
+which 0.3.0 does not carry (§4, #469); the ALID sidecar (from 0.3.0; §4) or, in
+the 0.2 and 0.1 series, `variant_alid_bytes.npy`/`variant_alid_rows.npy`
+supporting ALID lookup, the position sidecar (from 0.3.0; §4) answering a
+genomic range, which the 0.2 and 0.1 series answer through the tabix index, the
+`source_alid` sidecar (from 0.3.0; §4) naming each row's pre-liftover ALID, which
+the 0.2 and 0.1 series hold in the table's `source_alid` column alone, and
 `variant_rsid_bytes.npy`/`variant_rsid_rows.npy` supporting rsid lookup
 (issue #109). The rsid pair is written by every layout and MAY be empty — a
 source that names no variants indexes none — but a release whose
@@ -87,15 +111,18 @@ duplicated every column of the table it shadowed, was read by nothing, and
 carried a `rsid` column that no builder populated — a fourth copy of the axis
 that disagreed with the other three (issue #128).
 
-Both search indexes are fixed-width arrays, because that is what allows a
-binary search over them without parsing. An identifier too wide for its slot
-MUST be left out of the index and the omission counted — never cast into it.
+The rsid index, and the 0.2 series' ALID index, are fixed-width arrays, because
+that is what allows a binary search over them without parsing. An identifier too
+wide for its slot MUST be left out of the index and the omission counted — never
+cast into it.
 Casting truncates, and two variants whose identifiers agree over the slot width
 then share one key, so a lookup by either returns whichever row sorts first: one
 variant answering to another's name, with nothing to show it (issue #127). An
 ALID omitted this way stays reachable, resolved by exact scan over its position;
 an rsid omitted this way is not resolvable by name, which is why the widths are
-chosen from measured data and the omission is reported at build time.
+chosen from measured data and the omission is reported at build time. From 0.3.0
+the ALID index is the variable-length sidecar (§4), which indexes every ALID,
+however long, and omits none.
 
 A Ragged release MAY carry `regions.tsv`, the region table its build recorded:
 one row per region it kept rows for, of four kinds, of which only `cis` and
@@ -109,13 +136,75 @@ completed without it.
 
 This is the complete envelope for a standalone Dense or Ragged Store Release.
 A Hybrid release additionally nests a `dense/` Dense Component directory
-holding a self-contained Dense Store Release of its own (same envelope as
-above, plus `dense_to_shared.npy` mapping its rows into the Hybrid release's
-shared variant table) — see §16. §20 requires every Store Release's
+holding a Dense Store Release of its own, with `dense_to_shared.npy` mapping its
+rows into the Hybrid release's shared variant table — see §16. From format 0.3.0
+that component carries only `manifest.json`, `data.zarr/`, `dense_to_shared.npy`
+and, when Reference-Completed, `index.sqlite`: no `analyses.tsv`, `overview.html`,
+Variant Table, `.tbi` or variant sidecar, as it reads the Hybrid release's through
+the map (#472). Before 0.3.0 it carried the envelope above as well. §20 requires every Store Release's
 directory to be closed: no file or directory beyond what its `primary_layout`
 legitimately produces per this section and §10/§11/§16/§17.
 
 Build and query commands operate on an explicit Store Release path. Directory naming, multi-store catalogues, default release selection, and remote API deployment are outside the store-format contract.
+
+### 1.1 What each component is for
+
+Every component a Store Release ships is in one of three classes
+([ADR 0102](../adr/0102-what-a-store-release-ships.md)). A component is a file or directory in
+the envelope, a Zarr array, a SQLite table, or an `index.sqlite` metadata key.
+
+- **read**: the Store Reader reads it to answer a query. An *accelerator* is a read component
+  that can be recomputed from the primary data and exists for speed.
+- **provenance**: the Store Reader does not read it. It records how the release was made, and it
+  cannot be recomputed from the release's other components.
+- **convenience**: the Store Reader does not read it, and it can be recomputed. It is there for a
+  person, or for a tool outside OpenGWASDB, to use directly, and no other component that such a
+  tool can use presents the same facts. A convenience that restates shipped data
+  (`variants.tsv.gz`, `variants.tsv.gz.tbi`) is checked against it by the `variant_table.*` rules
+  (§20.0). A rendered report (`overview.html`) is regenerated, never read by any code, and never
+  validated.
+
+A component in none of the three classes is **dropped**: if it can be recomputed, whatever needs it
+recomputes it. What only the validator reads is never, by that alone, a reason to ship it. ADR 0102
+§2 states the rule as the steps a reviewer applies to a new component.
+
+The table gives each component's class from format **0.3.0**, the version that applies these
+decisions (epic #450). The ticket that moved a component to its class is in the last column;
+0.2.x releases keep their envelope.
+
+| Component | Where | Read today by | From 0.3.0 | Ticket |
+|---|---|---|---|---|
+| `manifest.json` | every release | Store Reader | read | — |
+| `analyses.tsv` | every release | Store Reader; validator | read | — |
+| `data.zarr` planes: `z`, `se`, `eaf`, `eaf_baseline`, `se_coefficients`, the exception and overflow tables; group metadata | every release | Store Reader | read | — |
+| `data.zarr` `imputed`, `eaf_reference` | Reference-Completed | Store Reader (the presence mask; reference EAF on imputed cells) | read | — |
+| `data.zarr` `ragged/` cell arrays | Ragged; Hybrid Overflow | Store Reader | read | — |
+| `data.zarr` `ragged/by_variant/` (By-Variant Index) | Ragged; Hybrid Overflow | Store Reader | read (accelerator, ADR 0060) | — |
+| `data.zarr` `top_hits/<tier>/` `variant_index`, `analysis_index`, `analysis_offsets`, `z`, `se`, `eaf`, `imputed` (Top-Hit Index) | every release | Store Reader | read (accelerator) | — |
+| `data.zarr` `indexed_subsets/<name>/` | Dense, optional | Store Reader | read (accelerator, optional; §10b) | — |
+| `data.zarr` `rho/` | Dense, optional; no release carries one | Store Reader | read, optional: ships only once the Store Reader reads it | — |
+| `data.zarr` `on_panel` (Reference Panel Membership) | Dense Reference-Completed | validator only | provenance | — |
+| `data.zarr` `top_hits/<tier>/abs_z`, `p_value` | every 0.2 release; none from 0.3.0 | validator only (0.2: `top_hits.abs_z` holds them to what `z` implies) | dropped: the validator recomputes them from `z` | #471 |
+| `variant_rsid_bytes.npy`, `variant_rsid_rows.npy` | every release | Store Reader (rsID lookup; from 0.3.0, inverted, a row's rsID) | read (and inverted, for the rsID of a row) | #469 |
+| `variant_alid_bytes.npy`, `variant_alid_rows.npy` | every 0.2 release; none from 0.3.0 | Store Reader (0.2.x); validator | dropped: replaced by the variable-length ALID sidecar, which is read | #467 |
+| `variant_alid_utf8.npy`, `variant_alid_offsets.npy`, `variant_alid_keys.npy`, `variant_alid_order.npy` (the variable-length ALID sidecar, §4) | every release from 0.3.0 | Store Reader (`by_alid`, `lookup`, `identity_by_indices`); validator | read | #467 |
+| `variant_position.npy`, `variant_position_chromosomes.npy`, `variant_position_chromosome_offsets.npy` (the position sidecar, §4) | every release from 0.3.0 | Store Reader (`range_phewas`, `range`); validator | read | #468 |
+| `variant_source_alid_state.npy`, `variant_source_alid_utf8.npy`, `variant_source_alid_offsets.npy` (the `source_alid` sidecar, §4) | every release from 0.3.0 | Store Reader (`variants_table()`, the `source_alid` of a resolved row and of a record); completion; the validator's source-fidelity join; validator | read | #470 |
+| `variants.tsv.gz` | every release | Store Reader on 0.2.x (`variants_table()`, the rsID and `source_alid` of a resolved row); from 0.3.0 no query (#469) and no completion (#470); validator | convenience: derived from the sidecars, for tabix, bedtools and R | #465, #469, #470 |
+| `variants.tsv.gz.tbi` | every release | Store Reader (`range_phewas` on 0.2.x, through tabix; 0.3.0 asks the position sidecar); validator | convenience: rebuilt with `tabix -s1 -b2 -e2 -c'#' variants.tsv.gz`, or `Rsamtools::indexTabix()` | #468, #469 |
+| `variant_offsets.npy` | every 0.2 release; none from 0.3.0 | Store Reader on 0.2.x (the variant count; `by_index`); validator | dropped: the ALID sidecar counts the variants, and nothing seeks a row of the table | #469 |
+| `overview.html` | Dense; Hybrid | nothing | convenience: derived from `analyses.tsv` and `manifest.json`, rewritten by `ogdb regenerate-overview` | — |
+| `regions.tsv` | Ragged, optional | completion; validator; `ogdb info` | provenance: the build's region boundaries and leads (§17) | — |
+| `index.sqlite` | every 0.2 release; from 0.3.0 a Reference-Completed one (not a Hybrid's outer release) | nothing from 0.3.0; on 0.2, the Dense and Hybrid query facades (the `variant_aliases` fallback) | provenance: present only to hold `completion_quality`, so only in a Reference-Completed release; the Store Reader never opens it | #465, #471 |
+| `index.sqlite` table `completion_quality` | Reference-Completed | completion (the `analyses.tsv` roll-up); `check-observed-view` | provenance: Reference Completion Quality (§12), which needs the LD Reference Panel to recompute | — |
+| `index.sqlite` table `metadata`: keys `dense`, `n_variants`, `n_analyses`, `schema_version` | Dense; Hybrid; 0.2 only | validator (`dense`, 0.2); nothing (the other three) | dropped: `manifest.json` and the arrays carry the same facts | #471 |
+| `index.sqlite` table `variant_aliases` | Dense; Hybrid; 0.2 only | Store Reader (0.2: fallback after an rsID index miss); validator (0.2) | dropped: empty in every release measured, and the rsID sidecar covers it; from 0.3.0 an rsID the rsID index lacks is a miss | #471 |
+| `dense` (the Dense Component), with its `manifest.json` and `data.zarr` | Hybrid | Store Reader | read | — |
+| `dense_to_shared.npy` (in `dense`) | Hybrid | Store Reader (every variant question about the Dense Component, from 0.3.0); validator | read | #472 |
+| `dense/variants.tsv.gz` and its `.tbi`, `dense/variant_offsets.npy`, `dense/variant_alid_*.npy`, `dense/variant_position*.npy`, `dense/variant_rsid_*.npy` | Hybrid, 0.2 only | nothing from 0.3.0, which does not ship them; on 0.2, the validator, completion and the Indexed Variant Subset builder (the Hybrid query reads the shared axis on every format) | dropped: the shared sidecars through `dense_to_shared.npy` replace them | #472 |
+| `dense/analyses.tsv` | Hybrid, 0.2 only | nothing from 0.3.0; on 0.2, completion (its `n_missing_se_out_of_range`) and the validator | dropped: it repeats the root `analyses.tsv`, undercounts Top-Hit Counts (issue #107), and its one fact the root lacks, the Dense Component's own `n_missing_se_out_of_range`, no reader needs (§16) | #472 |
+| `dense/overview.html` | Hybrid, 0.2 only | nothing | dropped: the root `overview.html` presents the same Analyses | #472 |
+| `dense/index.sqlite` | Hybrid: every 0.2 release; from 0.3.0 a Reference-Completed one | nothing from 0.3.0; on 0.2, the nested query facade | provenance, as `index.sqlite` above (Reference-Completed only) | #471, #472 |
 
 ## 2. Manifest contract
 
@@ -574,9 +663,19 @@ Dense Observed-Only releases use a tabix-backed Store Variant Table:
 ```text
 variants.tsv.gz
 variants.tsv.gz.tbi
-variant_offsets.npy
-variant_alid_bytes.npy
-variant_alid_rows.npy
+variant_offsets.npy         (0.2 and 0.1)
+variant_alid_utf8.npy       (from 0.3.0)
+variant_alid_offsets.npy    (from 0.3.0)
+variant_alid_keys.npy       (from 0.3.0)
+variant_alid_order.npy      (from 0.3.0)
+variant_position.npy                     (from 0.3.0)
+variant_position_chromosomes.npy         (from 0.3.0)
+variant_position_chromosome_offsets.npy  (from 0.3.0)
+variant_source_alid_state.npy            (from 0.3.0)
+variant_source_alid_utf8.npy             (from 0.3.0)
+variant_source_alid_offsets.npy          (from 0.3.0)
+variant_alid_bytes.npy      (0.2 and 0.1)
+variant_alid_rows.npy       (0.2 and 0.1)
 variant_rsid_bytes.npy
 variant_rsid_rows.npy
 ```
@@ -596,9 +695,136 @@ rsid
 ```
 
 `variants.tsv.gz.tbi` MUST index chromosome and position for genomic range and
-single-position lookup. `variant_offsets.npy` MUST contain one fixed-width
-integer offset per variant row so row-index materialisation does not require a
-large SQL variant table.
+single-position lookup. In the 0.2 and 0.1 series `variant_offsets.npy` MUST
+contain one fixed-width integer offset per variant row so row-index
+materialisation does not require a large SQL variant table; a 0.3.0 release MUST
+NOT carry it.
+
+**From 0.3.0 the Variant Table is a convenience** (issue #469, ADR 0102, ADR 0105
+§7). No query reads `variants.tsv.gz` or its `.tbi`, and none loads pysam: a row's
+ALID is the ALID sidecar's, its chromosome, position and alleles are its ALID's,
+its rsID is the rsID index's, its `source_alid` the `source_alid` sidecar's (#470),
+and the variant count is the ALID sidecar's rows.
+`variants_table()` and resolved rows with variant info are answered so, and give
+what the 0.2 series gives from the table, column by column: a row the table gives no
+rsID (`.`) has none (`None` in `variants_table()`, `.` in a resolved row), and a
+cell naming several (`rs1;rs2`) is that cell, as the table spells it, because the
+rsID index holds each row's cell whole. To name a row's rsID the reader inverts the
+rsID index: it scans the index's rows for up to 32 rows asked, and otherwise inverts
+it once, one `int32` per row. Since the reader takes a row's rsID from the index
+alone, the index MUST name every row by the rsID the table gives it and no other,
+which `variant_table.rsid_rows` (§20.0) holds a release to; a writer refuses an rsID
+wider than the index's 24-byte slot (`UnindexableRsidError`) rather than leave it in
+the table and out of every answer. A reader refuses a 0.3.0 release without the
+rsID index (`MissingRsidIndex`), rather than read every row as naming none.
+
+The table and its `.tbi` still ship, written with htslib, for tabix, bedtools and R.
+A lost or stale `.tbi` is rebuilt from the table, with either of:
+
+```text
+tabix -s1 -b2 -e2 -c'#' variants.tsv.gz
+Rsamtools::indexTabix("variants.tsv.gz", seq = 1, start = 2, end = 2, comment = "#")
+```
+
+Both were run on OGS-00007's table (tabix from htslib, Rsamtools 2.28.0). Each index
+decompresses to the bytes of the shipped one, and answers all 170,943 positions alike.
+
+**The ALID sidecar** (format 0.3.0, issue #467, ADR 0105). Four plain `.npy`
+files, each memory-mappable and read with numpy alone, name every row's ALID and
+find every ALID's row:
+
+| file | dtype | length | holds |
+|---|---|---|---|
+| `variant_alid_utf8.npy` | `uint8` | total ALID bytes | every row's ALID, UTF-8, concatenated in row order |
+| `variant_alid_offsets.npy` | `<u8` | rows + 1 | row `i`'s ALID is `utf8[offsets[i]:offsets[i+1]]`; `offsets[0]` is 0, each later one is greater than the one before (no ALID is empty), and the last is the byte array's length |
+| `variant_alid_keys.npy` | `\|S24` | rows | each ALID's first 24 bytes (all of it when shorter), in the order of the full ALID bytes |
+| `variant_alid_order.npy` | `<i4` | rows | the row each key belongs to: a permutation of `0..rows-1` |
+
+A row's ALID is two reads; nothing inverts an index to name a row. An ALID's row is
+a binary search of the keys for its first 24 bytes. An ALID shorter than 24 bytes
+is its key, and the one stored ALID with that key is its match; a longer one is
+compared on its full bytes with each stored ALID that shares the key, which run in
+full-byte order. Every ALID is indexed, however long, and no ALID names two rows.
+`variant_table.alid_sidecar` (§20.0) holds a release to this. The 0.2 series'
+`variant_alid_bytes.npy`/`variant_alid_rows.npy` (`|S32`, sorted, leaving out every
+ALID wider than 32 bytes) are not written from 0.3.0, and a 0.3.0 release that
+carries them fails its closed envelope; a 0.2 release keeps them, and a reader
+reads them there. A reader opens the index a release's `format_version` carries and no
+other, whatever other files lie beside it, and refuses a release missing it (ADR 0105 §5).
+
+**The position sidecar** (format 0.3.0, issue #468, ADR 0105 §6). Three plain
+`.npy` files, each memory-mappable and read with numpy alone, give every row's
+position and each chromosome's rows:
+
+| file | dtype | length | holds |
+|---|---|---|---|
+| `variant_position.npy` | `<u4` | rows | every row's position, in row order; each is at least 1 |
+| `variant_position_chromosomes.npy` | `\|S<n>` | chromosomes | each chromosome the release holds, once, as the table spells it, in the order its rows come |
+| `variant_position_chromosome_offsets.npy` | `<u8` | chromosomes + 1 | chromosome `k`'s rows are `offsets[k]:offsets[k+1]`; `offsets[0]` is 0, each later one is greater than the one before (no chromosome is empty), and the last is the row count |
+
+The rows are the table's, in its order, so the chromosomes run in the canonical
+chromosome order (`1`-`22`, `X`, `Y`, `MT`, then any other label by its text) and
+within one chromosome the positions never fall. A writer refuses rows that are not
+so, and `variant_table.position_sidecar` (§20.0) holds a release to it: the sidecar
+places each row at the chromosome and position the table gives it.
+
+**How a range is answered.** A genomic range is a chromosome and an inclusive
+`[start, end]`, and its answer is every row on that chromosome at a position in
+it, ascending. The chromosome is normalised as an ALID's is (`chr1` is `1`, `23`
+is `X`). From 0.3.0 the reader finds the chromosome's slice of the position sidecar
+and binary-searches it twice: the first position at or after `start`, and the
+first after `end`. The rows between are the answer, read without the Variant Table,
+its tabix index or pysam. A chromosome the release lacks, or an `end` before
+`start`, answers no rows. A 0.2 or 0.1 release answers the same range by a tabix
+fetch of `variants.tsv.gz` (`fetch(chromosome, max(0, start - 1), end)`), and the
+two answer every range identically (ADR 0105 §6). A Hybrid answers from its
+shared axis and its Dense Component's, each by its own sidecar. A reader opens the
+position sidecar when the release's `format_version` carries it, never because the
+files are present, and refuses a 0.3.0 release missing it rather than reading
+the range through tabix. It also refuses a sidecar whose chromosomes cannot slice
+its rows: offsets that do not number the chromosomes plus one, a chromosome named
+twice, or a label that is not UTF-8. A sidecar like that would answer one
+chromosome's ranges from another's rows, or from none.
+
+**The `source_alid` sidecar** (format 0.3.0, issue #470, ADR 0105 §8). A row's
+`source_alid` is the ALID its source spelt it by, on the source's Reference Assembly:
+for a lifted row the pre-liftover ALID, for a row its source already placed on the
+release's assembly its own ALID. A row two source variants collided onto (§4 above,
+#85) has none, and so has a row Reference Completion added from the panel, which no
+source observed. Three plain `.npy` files, memory-mappable and read with numpy
+alone, hold it:
+
+| file | dtype | length | holds |
+|---|---|---|---|
+| `variant_source_alid_state.npy` | `\|u1` | rows | each row's state, in row order: 0, it has no `source_alid`; 1, its `source_alid` is its own ALID, which the ALID sidecar holds; 2, it is another ALID, held below |
+| `variant_source_alid_utf8.npy` | `uint8` | total bytes | each state-2 row's `source_alid`, UTF-8, concatenated in row order |
+| `variant_source_alid_offsets.npy` | `<u8` | state-2 rows + 1 | the `k`-th state-2 row's is `utf8[offsets[k]:offsets[k+1]]`; `offsets[0]` is 0, each later one is greater than the one before (no held value is empty), and the last is the byte array's length |
+
+A row's state is its `source_alid` compared with its ALID, by the writer. A state-2
+row's text is found by its rank among the state-2 rows: the reader gathers their row
+numbers once from the state and binary-searches them. Text is held for state-2 rows
+alone, so a release built on its own assembly, every row of which names its own ALID,
+holds one byte a row and does not repeat the ALID sidecar's text (ADR 0105 §8). A
+value is stored whole, however long (an indel's runs past 100 bytes). It holds no
+tab, newline or NUL and is never `.`, the table's blank: the writer refuses such a
+value, which the table would read otherwise than the sidecar. Nothing searches the
+text, so it has no sort keys; the source-fidelity join (`validate --source`) finds a
+state-1 row through the ALID index and scans the text for the rest; a release whose
+every state is 0 holds nothing to join on, and the join says so, as for a table without
+the column. On a release whose manifest records no lift, `validate --source` then lifts
+the samples itself; on one that records a lift, `variant_table.source_alid` (§20.0)
+fails first and the source-fidelity check is not run. Each row's state
+and text equal the table's `source_alid` column row for row, a blank (`.`) there
+being state 0, which `variant_table.source_alid_sidecar` (§20.0) holds a release
+to. `variants_table()` gives it as `source_alid` (`None` where empty), and a resolved
+row with variant info as `source_alid` (`.` where empty), on every format: a 0.2
+release reads it from its table, and a table written before the column (seven
+fields) gives none. A reader refuses a 0.3.0 release missing the sidecar, rather
+than read every row as naming none. A Hybrid carries it at its root only: a 0.3.0 Dense
+Component's rows give their shared rows' `source_alid` (§16). A reader refuses one
+whose offsets do not start at 0 and end at the byte array's length, and, when it first
+reads a value, one with a state outside 0-2 or whose offsets do not number the state-2
+rows plus one.
 
 Long alleles MAY use deterministic hashed ALIDs as compact identifiers, but the complete normalised alleles MUST be retained once per variant so exact export and validation do not depend on an irreversible hash.
 
@@ -1531,19 +1757,21 @@ stays uncompressed inside its shard. Every shard carries the codec's own
 `crc32c` index codec.
 
 **Where the layout is recorded.** A 0.2 release records the Dense planes'
-inner chunk and shard in three places, all of which MUST agree with the arrays:
+inner chunk and shard in three places, all of which MUST agree with the arrays.
+From 0.3.0 the `index.sqlite` blob is dropped (ADR 0102, #471): `manifest.json`
+is the one copy it held, and a 0.3.0 release records the layout in the other two.
 
 - `manifest.json` `provenance.dense.chunk_shape`, `.shard_shape` and
   `.compressor` (with `.zarr_format`), plus the per-array layout in
   `provenance.zarr_v3_conversion.layouts` for a converted release;
 - the `dense` metadata blob in `index.sqlite`
-  (`chunk_shape`, `shard_shape`, `compressor`, `zarr_format`);
+  (`chunk_shape`, `shard_shape`, `compressor`, `zarr_format`), 0.2 only;
 - the `data.zarr` root attributes (`chunk_shape`, `shard_shape`, `compressor`,
   `zarr_format`).
 
 A **Hybrid** release's nested Dense Component is a Store Release with its own
-manifest, its own `index.sqlite` and its own root attributes, so it records the
-same three places itself: its `provenance.dense` MUST carry `chunk_shape`,
+manifest, its own `index.sqlite` (0.2) and its own root attributes, so it records the
+same places itself: its `provenance.dense` MUST carry `chunk_shape`,
 `shard_shape`, `compressor` and `zarr_format`, and the outer release's
 `provenance.hybrid` MUST agree with them.  Leaving the layout only in the outer
 `provenance.hybrid` leaves the component undescribed — the gap #248 closes.  A
@@ -1716,6 +1944,16 @@ existed records neither and is read as `0` (ADR 0065). On a Hybrid release the
 the nested Dense Component, the self-contained release the index physically
 belongs to and the one the read seam validates it against.
 
+*24 Nov 2026 (#472).* `ogdb rewrite-release` carries a subset to the release it
+derives (§21.4, [ADR 0105](../adr/0105-format-0-3-0-variable-length-alid-sidecar.md)).
+It changes no Store Variant Index and no stored code, so the subset holds the same
+cells; it writes the new release's `release_id` into `source_release_id` and its
+`format_version` into `source_format_version`, and keeps every other attribute. So
+after a rewrite `builder_version` and `created_at` still describe the subset's
+original build, not the rewrite, and `source_release_id` names a release the subset
+was not built from. `subsets.indexed` then compares every decoded cell with the
+release's primary planes, and a subset already stale on the source is refused.
+
 A regenerated `overview.html` lists every published subset: the name, the
 requested/resolved/absent/Overflow-only counts, the input checksum, the
 Reference Assembly and
@@ -1786,7 +2024,8 @@ path, and answering it from the primary matrix would silently return the slow
 path's result while appearing to be indexed. The named subset is resolved and
 structurally validated **before** the Analysis ID is resolved, so a typo'd,
 stale or corrupt selector always fails even when the Analysis ID is also unknown;
-a *valid* subset with an unknown Analysis ID keeps the ordinary empty result.
+a *valid* subset with an unknown Analysis ID raises `UnknownAnalysisError`, as the
+ordinary read does (§19, #474).
 Before decoding any value, independent of whether `validate` has been run, the
 read path re-checks the declared name, schema, profile and `order`, the declared
 Analysis and requested/resolved/absent/Overflow-only counts, the exact array set, every plane's
@@ -2093,13 +2332,37 @@ The imputed mask is not a sparse offsets index like the top-hit significance ind
 
 ## 16. Dense Reference-Completed layout and overflow
 
-A Hybrid Store Release physically nests its Dense Component as a
-self-contained Dense Store Release at `<store>/dense` (§1) — same envelope,
-opened the same way as a standalone Dense release, plus `dense_to_shared.npy`
-mapping each Dense Component row to its index in the Hybrid release's shared
-variant table. Its Ragged Overflow Component lives in the Hybrid release's
-own `data.zarr/ragged`, alongside the shared `variants.tsv.gz`/`index.sqlite`
-covering both components (§4).
+A Hybrid Store Release physically nests its Dense Component as a Dense Store
+Release at `<store>/dense` (§1), opened the same way as a standalone Dense
+release, with `dense_to_shared.npy` mapping each Dense Component row to its
+index in the Hybrid release's shared variant table. Its Ragged Overflow
+Component lives in the Hybrid release's own `data.zarr/ragged`, alongside the
+shared `variants.tsv.gz` and its sidecars covering both components (§4).
+
+**From format 0.3.0 the Dense Component shares the Hybrid release's variants and
+Analyses** (#472, ADR 0102 §4). Its envelope is `manifest.json`, `data.zarr/`,
+`dense_to_shared.npy` and, when Reference-Completed, `index.sqlite` holding its
+`completion_quality`. Its rows are the panel's, `0..n_panel-1`, the rows of its
+grid, and:
+
+- `dense_to_shared.npy` is `int32`, one entry per grid row, strictly ascending, each
+  a row of the shared table. It is the component's whole variant identity: a reader
+  names a Dense row's variant by the shared row the map gives, and a shared row's
+  Dense row by a binary search of the map (a shared row it does not hold is off the
+  panel);
+- an identifier or a range is resolved once, against the shared sidecars, and its
+  Dense rows reached through the map, so there is no second index to disagree with
+  the first (#481, where a completed release's Dense copy had lost rsIDs and every
+  `source_alid` the shared table kept);
+- the Analyses are the root `analyses.tsv`'s. It counts each Analysis's Top-Hit
+  Counts and `n_missing_se_out_of_range` over both components. Before 0.3.0 the
+  Dense Component's own copy counted only its own, so it undercounted the first
+  (issue #107); no reader needs its own count of the second, since a completion of a
+  0.3.0 Hybrid carries the root's count into the completed root, which then counts
+  what a completion of the 0.2.3 form counts.
+
+A 0.2 Hybrid's Dense Component carries the full Dense envelope (§1) as well, a
+copy of the shared table's rows and of the Analyses.
 
 For Dense Reference-Completed releases:
 
@@ -2194,15 +2457,19 @@ Observed off-panel variants inside a Ragged Reference-Completed region have ordi
 
 ## 18. Top-hit query contract
 
-Top-Hit Queries return associations ranked by statistical significance.
+Top-Hit Queries return the associations whose two-sided p clears a threshold (|z| at least `z_critical(threshold)`), in `(analysis_index, variant_index)` order: the order a tier is stored in, not an order of significance. `limit` keeps the first rows of that order, after `observed_only`.
 
-Dense, Ragged, Ragged Overflow, observed, and imputed associations have equal priority. Ranking is by significance, not storage component or Association Status.
+Dense, Ragged, Ragged Overflow, observed, and imputed associations have equal priority: the answer does not depend on storage component or Association Status.
 
 Both Dense and Ragged components SHOULD provide Top-Hit Indexes using the same thresholds and result contract. The physical index encoding MAY differ by layout.
 
-Each threshold tier stores `analysis_offsets`, `variant_index`,
-`analysis_index`, `abs_z`, `z`, `se`, and `p_value` in
-`(analysis_index, variant_index)` order. When the component can
+Each threshold tier stores `variant_index`, `analysis_index`, `z` and `se` in
+`(analysis_index, variant_index)` order, and `analysis_offsets` addressing one
+Analysis's slice; an index that predates `analysis_offsets` is still read (below). A 0.2
+tier also stores `abs_z` (|z|, `float32`) and `p_value` (`erfc(|z| / sqrt 2)`,
+`float64`); nothing but the validator read them, and it recomputes both from `z`,
+so a 0.3.0 tier MUST NOT carry them (ADR 0102, #471). Every row's |z| clears the
+tier's threshold: it is at least `z_critical(threshold)`. When the component can
 report effect allele frequencies, the tier SHOULD also store decoded `eaf` as
 `float32` in that identical order. Readers MUST use it when present and MUST
 fall back to the component frequency plane when reading an older index. An
@@ -2219,6 +2486,14 @@ Default thresholds:
 ```
 
 Top-hit results from Reference-Completed releases include imputed associations by default. Observed-Only Query mode applies to Top-Hit Queries as well as exact and range queries.
+
+**What each layout answers, and when** (#483, the owner, 24 Nov 2026). A Top-Hit Index is an accelerator; the answer at a stored tier is the same on every layout, and the layouts differ only in what they do for a threshold with no stored tier.
+
+- **Dense** answers at a stored tier only and MUST NOT scan the grid: a scan reads every cell of an Analysis and takes hours on a release of OGS-00016's size. A `threshold` that is not a stored tier MUST raise an error naming the threshold and the stored tiers (`UnstoredThresholdError`); it MUST NOT return an empty answer.
+- **Hybrid** answers at a stored tier only, because its Dense Component cannot scan; an unstored threshold raises the same error, so the Overflow never gives part of an answer. At a stored tier its Overflow reads its tier, or scans when the Overflow has no such tier, and `limit` applies to each component and then to the merge.
+- **Ragged** answers an unstored threshold by scanning the CSR a window at a time, never a whole Analysis at once, against the same `z_critical` the index is built with, so a scan and a stored tier agree at the boundary.
+- A stored tier **without `analysis_offsets`** answers one Analysis on every layout from that tier: a reader filters the tier's rows by `analysis_index`, and a Dense reader never scans the grid.
+- An `analysis_id` the release does not hold MUST raise an error naming it (`UnknownAnalysisError`) on every layout; an empty answer is indistinguishable from "no association". Every other query that names an Analysis raises it too (§19).
 
 ### 18.1 Clumps of the 5e-8 tier (optional)
 
@@ -2387,12 +2662,33 @@ the tier; the Store Release Build then runs the step again.
 
 ## 19. Query result contract
 
-A query returns an association record (`opengwasdb.associations.Associations`):
+A query returns an association record (`opengwasdb.store_reader.associations.Associations`):
 parallel arrays read as a mapping, keyed `variant_index`, `analysis_index`, `z`,
-`se`, `eaf`, `n` (below) and `association_status` (ADR 0020, ADR 0070). A
-Dense grid stores no association at a missing cell, so a Dense result omits
-them; a Ragged sequence stores a row for every attempted pair, so a Ragged or
-Ragged Overflow result returns such a row as `missing` (§15).
+`se`, `beta`, `pval`, `eaf`, `n` (below) and `association_status` (ADR 0020,
+ADR 0070, ADR 0104). A Dense grid stores no association at a missing cell, so a
+Dense result omits them; a Ragged sequence stores a row for every attempted
+pair, so a Ragged or Ragged Overflow result returns such a row as `missing` (§15).
+
+`beta` and `pval` are derived, never stored, by one function of the record's
+`z` and `se` (`opengwasdb.store_reader.stats.association_statistics`, ADR 0104),
+on every layout and every query method alike:
+
+| Value | Derivation | dtype |
+|---|---|---|
+| `beta` | `z * se`, on the Stored Effect Scale | `float64` |
+| `pval` | two-sided, `erfc(\|z\| / sqrt(2))` | `float64` |
+| `log10_p` | log10 of `pval`, computed in the log domain | `float64` |
+
+- Where z or SE is NaN -- a missing association -- all three are NaN.
+- Where SE is infinite (a release before format 0.2.3 may hold one; ADR 0068),
+  all three are NaN, never infinite: such an SE is an error, so neither `z * se`
+  nor the p of z alone is a value.
+- `pval` is subnormal from |z| = 37.5 and 0.0 from |z| = 38.5, where p is
+  below float64's range. `log10_p` stays finite and exact there (at |z| = 47.8
+  it is -497.92), so rank and display by `log10_p`.
+
+`log10_p` is not a key of the record. Resolved rows (`resolve_rows`) carry
+`beta`, `pval` and `log10_p`, all three from the same function.
 
 Query results SHOULD expose:
 
@@ -2402,8 +2698,8 @@ Query results SHOULD expose:
 | analysis identity | always |
 | z | always when available |
 | se | always when available |
-| beta | when requested, derived as `z * se` |
-| p-value | when requested, derived from Z |
+| beta | always, derived as `z * se` (above) |
+| p-value | always, as `pval` derived from Z, with `log10_p` on resolved rows (above) |
 | stored_effect_scale | always or through Analysis metadata |
 | association_status | Reference-Completed releases |
 | query_component | multi-component releases |
@@ -2419,8 +2715,11 @@ output prints an `n` column immediately before `association_status` (`.` where
 missing) only for such a release (ADR 0067).
 
 `query --format json` prints that record, one JSON object per association, as
-an array: `variant_index`, `analysis_index`, `z`, `se`, `eaf`,
-`association_status`, and `n` when the release carries it in its integer form.
+an array: `variant_index`, `analysis_index`, `z`, `se`, `beta`, `pval`,
+`log10_p`, `eaf`, `association_status`, and `n` when the release carries it in
+its integer form. `log10_p` rides beside `pval` because `pval` is 0.0 where p
+underflows. The resolved TSV prints `beta` after `se`, and its `p` column is
+`pval` to three significant figures, or `<1e-300` where `log10_p` is below -300.
 The output is RFC 8259 JSON, so it never holds `NaN` or `Infinity` as a bare
 token. A cell that is not there is `null`, and ±inf is the string `"Infinity"`
 or `"-Infinity"`, because an infinite value is a value (§15) and a `null`
@@ -2435,7 +2734,63 @@ release with no association-frequency plane, except an imputed one, whose
 
 Reference-Completed queries include imputed associations by default. Query APIs MUST provide an Observed-Only mode that excludes imputed associations.
 
+**An Analysis the release does not hold is refused** (#474, the owner, 24 Nov 2026). Every
+query that names an `analysis_id` -- `analysis()` (with or without an Indexed Variant
+Subset), `lookup()`, `top_hits(analysis_id=...)`, `rho()`, `rho_row()` and `rho_matrix()`
+-- raises `UnknownAnalysisError` naming it, on every layout, before reading anything; a
+`lookup()` naming one unknown Analysis among known ones raises too. An empty answer would be
+indistinguishable from "no association". `range_by_analysis()` names a region, not an
+Analysis, and answers the Analyses whose Trait position falls in it.
+
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.
+
+### Variant-only reads (issue #484)
+
+A caller that wants variants, not associations, asks the query facade (every layout, every
+readable `format_version`) for them, and does not read `variants_table()`, which builds
+every variant in the release, or a Store file by name:
+
+| Method | Answers |
+|---|---|
+| `variant_count()` | the number of variants in the release, an `int` (the Variant Axis's length) |
+| `variants(identifiers)` | the rows for rsIDs or ALIDs, a `dict` keyed by `variant_index`, ascending |
+| `variants_in_range(chromosome, start, end)` | the rows at a position in `[start, end]` on `chromosome`, keyed the same way: the rows `range_phewas` reads |
+
+A row is a `variants_table()` row, spelt as it spells it (`alid`, `chromosome`,
+`position`, `effect_allele`, `other_allele`, `rsid`); each method equals `variants_table()`
+filtered to the rows asked. They resolve through the Variant Axis `lookup` and
+`range_phewas` use, and add no index. An identifier the release lacks is absent, not an
+error; an rsID naming several rows gives every row, as `lookup` does, and a cell naming
+several rsIDs (`rs1;rs2`) is one name, whole (§4). A range ending before it starts, or on a
+chromosome the release lacks, answers no rows; a chromosome the release cannot spell is
+refused. From 0.3.0 none reads `variants.tsv.gz`, and none loads pysam or sqlite3.
+`opengwasdb.store.query_digests` digests all three (`variant_reads`), so the rewrite's proof
+and the golden contract (#474) compare them.
+
+### The Store Reader contract (issue #474)
+
+`tests/store_reader_contract/` is the contract every reader of format 0.3.0 is held to:
+nine small 0.3.0 Store Releases (Dense, Ragged and Hybrid, each Observed-Only and
+Reference-Completed) and, for each, what it answers -- every question
+`opengwasdb.store.query_digests.questions` asks, rendered as digests and as readable rows
+(`release_answers`). The refusals asked are `top_hits`, `analysis()` and `lookup()` of an
+Analysis the release does not hold (`UnknownAnalysisError`, above), a range on a
+chromosome no ALID can spell (`UnsupportedChromosome`) and, on Dense and Hybrid,
+`top_hits` at a threshold with no stored tier (`UnstoredThresholdError`, §18). A refusal is
+its type and the values it names (`fields`: the `analysis_id`; the `chromosome`; the
+`threshold` and the `stored` thresholds); its message is informative. A reader in another
+language compares the readable rows; the digests are the Python readers'. Every value is
+compared exactly but `pval` and a resolved row's `log10_p`, which are the reader's libm
+(`erfc`, `erf`, `log`, `log1p`) and differ between C libraries in the last ulp: they are kept
+as numbers beside the digests, and compared, there and in the readable rows, to within four
+float64 ulps (relative `4 * 2**-52`), NaN equal to NaN. The rewrite's proof, whose two sides
+one build reads, compares them exactly. Its `VERSION`
+names the bundle's version and the `format_version` its releases are; its README names what
+each release exercises. Two of its states are ones the validator refuses at 0.3.0 and a
+reader still meets, an infinite SE (above) and a tier without `analysis_offsets` (§18).
+The bundle is read through the Store Reader alone, `open_release(path)` with no Variant
+Table reader: a 0.3.0 release needs none, and its table refuses every read (§1.1, ADR 0105
+§7). It loads none of pandas, scipy, pysam or sqlite3.
 
 ## 20. Validation rules
 
@@ -2448,8 +2803,8 @@ Validators MUST check at least:
 - `se >= 0` for all finite SE values, and, in a release before `format_version` 0.2.3, a
   **warning** — not a failure — when it holds an infinite `se`, naming the cell count and up to
   five Analyses holding one: such a release stored an SE above a `float16` plane's range as
-  `+inf` beside a finite Z, so `beta = z × se` reads as infinity although the source value was
-  finite (issue #337). From 0.2.3 a release holding any SE above 65,504 — `+inf` or an exact
+  `+inf` beside a finite Z, so `z × se` is infinite although the source's beta was finite
+  (issue #337); a query reads `beta` and `pval` there as NaN (§19, ADR 0104). From 0.2.3 a release holding any SE above 65,504 — `+inf` or an exact
   exception — **fails**: it stores no such association (§15, issue #338);
 - from `format_version` 0.2.3, `analyses.tsv` (a Hybrid root's included) records
   `n_missing_se_out_of_range` as a non-negative integer on every row; below it the column may
@@ -2468,8 +2823,9 @@ Validators MUST check at least:
 - the Clumps of the 5e-8 tier, when present, are declared, parallel to their tier and say what §18.1 says they say (ADR 0102). Each silent failure has its rule: a row dropped from the arrays (`clumps.structure`); Clumps left beside a rewritten tier, which cannot happen because every tier is written by `top_hits.write_index`, which replaces the tier group whole (`create_group(replace=True)`, `opengwasdb/store/arrays.py`) and deletes `clumps/` with it — on every Dense, Ragged and Hybrid build and completion — while a `clumps` manifest entry or columns left behind without the group fail `clumps.declared`; an absent row made its own lead, or a present one marked absent (`clumps.reclump`); an imputed row clumped, an ambiguous indel looked up, or a marked row given an r (`clumps.markers`); a lead weaker than its member, as raw p's underflow gives, or a member outside the window or under r2 (`clumps.greedy`); an Analysis with no LD Store counted as 0, or one with an LD Store left unclumped (`clumps.ancestry`); counts that disagree with the arrays (`clumps.counts`); the wrong LD Store, threshold or window recorded (`clumps.structure`, `clumps.reclump`); a group the manifest does not declare, as an interrupted step leaves (`clumps.declared`);
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
 - `regions.tsv`, when a Ragged release carries or declares one, is declared by the manifest's `regions` entry exactly when it is present, has the SHA-256 that entry names, parses as a region table and names only Analyses the release holds (§2, §17, issue #430);
-- `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
-- `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
+- `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128); from 0.3.0 it holds `completion_quality` and nothing else, and ships only where that table does (§1, ADR 0102);
+- in the 0.2 series, `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
+- from `format_version` 0.3.0, the ALID sidecar (§4) names every row of the Store Variant Table by that row's ALID, indexes every ALID, however long, and orders its keys by the full ALID bytes: a row it names wrongly answers another variant's lookup, and a row it leaves out answers its own with nothing;
 - from `format_version` 0.2.2, every indel row of the Store Variant Table spells its ALID as the row records its orientation: `A1` is its `effect_allele` and `A2` its `other_allele`, and a lifted variant's `source_alid` spells the same allele first, a lift complementing an allele but never changing its length (§4, ADR 0079). An indel spelt sorted where its reference sorts second reads as the insertion of the same sequence; a 0.2.0 or 0.1.0 release, which sorts every indel, is not judged by this rule;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - an Analysis whose `original_sd_method` carries an SD magnitude records it in `original_sd`, finite and positive (§7a, ADR 0084, issue #366): a blank one is what a Ragged SSF build that stored its source's standard errors undivided wrote, and nothing else in a Store shows it;
@@ -2486,9 +2842,9 @@ Validators MUST check at least:
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0`, `0.2.1` or `0.2.2`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
 - a 0.2 release is stamped the lowest `format_version` its features use, for every release and component, a Hybrid's outer release included: 0.2.2 when its indel ALIDs are spelt reference first (which its stamp declares and `variant_table.indel_order` holds it to), whether or not it carries `regions.tsv`; otherwise 0.2.1 when its manifest declares `regions.tsv`, and 0.2.0 when it does not (§21.3, issues #430, #381);
 - an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is stored `int32` and is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; every array's inner chunk and shard match the format's `ArrayRole` policy (the layout is derived, never an attribute); its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. This is the **standalone** `validate` contract and it is exhaustive. The build's own staged publication gate is narrower and documented: exhaustively it checks only the enumerated structural rules -- self-describing identity and attributes, the exact array set, shapes and dtypes, the inner-chunk/shard layout, the full Variant Index (dtype, non-empty, sorted, unique, in bounds), counts and provenance, and the small side tables' structure and remapping (with the per-variant `eaf_baseline`/`eaf_reference`) -- while the `imputed` mask domain and agreement, Z/SE missingness, and decoded Z/SE/EAF values are compared over a documented deterministic, bounded, input-checksum-seeded sample (the endpoints of both axes, a spread of physical write-unit and inner-chunk boundaries, a spread of Analyses and seeded cells). The build records `validation_mode`, the sample strategy, seed and cell count, and its duration, and an isolated unsampled corruption is caught by the exhaustive standalone audit instead. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0061, issue #264, #266);
-- the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
+- the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob (0.2 only) and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
-- the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
+- the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80). From 0.3.0 that envelope also depends on the Completion State: an Observed-Only release, and a Hybrid's outer release, carries no `index.sqlite` (§1, ADR 0102).
 
 ### 20.0 Validation Rules
 
@@ -2497,6 +2853,14 @@ target:
 - *release*: a Store Release, a Hybrid's outer release, or its nested Dense Component;
 - *grid*: a Dense grid, a Dense Component's included;
 - *sequence*: a Ragged release's association sequence, or a Hybrid's Ragged Overflow.
+
+From format 0.3.0 a Hybrid's Dense Component carries no Variant Table and no
+`analyses.tsv` (§16, #472). The `variant_table.*` rules and `sqlite.variant_aliases` do
+not judge it; the rules that read its variants read the shared axis in its panel rows,
+and its `envelope.required` names the shared search indexes it reads. The
+`analyses.*` table rules judge the Hybrid's own `analyses.tsv`, its one copy of the
+Analyses, as before 0.3.0 they judged the Dense Component's copy; and
+`analyses.se_out_of_range_partition` has no component count to compare.
 
 A rule may run after others. It is skipped, and recorded as skipped with the rules
 that blocked it, when one of those failed or was skipped on its target or a target it
@@ -2541,15 +2905,21 @@ change to this table, which the test suite holds to the registry, in its order.
 | `envelope.closed` | release | check | no entry the layout does not produce is present |
 | `manifest.coverage` | release | check | the declared association coverage is one the layout can carry |
 | `manifest.format_stamp` | release | check | a 0.2 release is stamped the lowest `format_version` its features use: 0.2.2 when its indels are spelt reference first, whether or not it declares `regions.tsv`; otherwise 0.2.1 when it declares `regions.tsv`, 0.2.0 when it does not (§21.3); a release newer than 0.2.2 is not judged, and the rule warns that the package must be upgraded (§21.2) |
-| `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table |
-| `variant_table.rows` | release | fold | the Store Variant Table has as many rows as its offset sidecar |
-| `variant_table.alid_index` | release | fold | the ALID search index covers exactly the indexable ALIDs, collision-free |
+| `sqlite.analyses_table` | release | check | `index.sqlite` holds no `analyses` table; not judged on a release that carries no `index.sqlite` |
+| `sqlite.provenance_only` | release | check | from format 0.3.0, `index.sqlite` holds no table but `completion_quality`: no `metadata`, no `variant_aliases` (ADR 0102) |
+| `variant_table.rows` | release | fold | the Store Variant Table has as many rows as the release counts variants: the rows of the ALID sidecar from format 0.3.0, the entries of `variant_offsets.npy` on an earlier release (#469) |
+| `variant_table.alid_index` | release | fold | the 0.2 series' fixed-width ALID search index covers exactly the indexable ALIDs, collision-free; not judged on a 0.3.0 release, which carries the sidecar instead |
+| `variant_table.alid_sidecar` | release | fold | from format 0.3.0, the ALID sidecar names each row by the ALID the table gives it, its offsets start at 0, rise with every row and end at its byte array's end, its order names every row once, each key is the first 24 bytes of its row's ALID, and the keys run in the strict order of the full ALID bytes (§4, ADR 0105); not judged on an earlier release |
+| `variant_table.position_sidecar` | release | fold | from format 0.3.0, the position sidecar places each row at the chromosome and position the table gives it; each array has its dtype; its chromosome offsets start at 0, rise with every chromosome and end at the row count; each chromosome is named once, in the canonical chromosome order; and every position is at least 1 and never falls within a chromosome (§4, ADR 0105 §6); not judged on an earlier release |
+| `variant_table.source_alid_sidecar` | release | fold | from format 0.3.0, the `source_alid` sidecar gives each row the state the table's `source_alid` and ALID give it (0 for a blank, `.`; 1 for its own ALID; 2 for another), and each state-2 row the table's text; each array is 1-d of its dtype, every state is 0, 1 or 2, the offsets number the state-2 rows plus one and rise with each, so text is held for those rows alone, and it holds one row per row of the table (§4, #470); a missing file fails `envelope.required`; not judged on an earlier release |
 | `variant_table.rsid_index` | release | fold | every rsid in the table resolves through the rsid search index |
+| `variant_table.rsid_rows` | release | fold | from format 0.3.0, the rsID index, inverted, names each row by the rsID the table gives it, and a row the table gives none by none, so `variants_table()` and resolved rows, which read the index, give the table's rsIDs (§4, #469); an rsID wider than the index's 24-byte slot fails it; not judged on an earlier release |
 | `variant_table.sequence` | release | fold | rows are in `variant_index` order, one per canonical variant |
-| `variant_table.representatives` | release | fold | the offset sidecar and the tabix index find the rows the table holds |
+| `variant_table.representatives` | release | fold | the tabix index finds the rows the table holds, and on a release before 0.3.0 so does the offset sidecar; on 0.3.0, where no query reads the table or its tabix index, the tabix index is still checked as the convenience it is (§1.1), and the position sidecar, not offsets, places the rows (#469) |
 | `variant_table.indel_order` | release | fold | from format 0.2.2, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.1, 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
 | `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.2, a warning on an earlier release, 0.9.0's 0.2.1 included, which #367 owns; a row with no `source_alid` is not judged |
-| `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table |
+| `variant_table.source_alid` | release | fold | a release whose manifest records a lift (a `provenance.lift` block with `n_lifted` above 0, or a `provenance.chain_file`, which a build writes as a default label whether or not it lifted) has at least one row with a `source_alid`; one blank row is no fault (a collision, or a row Reference Completion added from the panel), but a table with none holds no row's lift provenance (#449); a release in which every row is ambiguous under #85 (its sites name different origins) also fails, which only a toy fixture can be; an error on every `format_version`, a 0.2 release included -- every hosted release is rebuilt from source at 0.3.0; the rows are counted from the `source_alid` sidecar from 0.3.0, which `variant_table.source_alid_sidecar` holds to the table, and from the table before it; a Hybrid is judged on its shared table alone |
+| `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table; not judged on a 0.3.0 release, which carries none |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
 | `analyses.retired_columns` | release | check | no retired column is present |
 | `analyses.analysis_index` | release | check | one row per `analysis_index`, covering exactly `0..n-1` |
@@ -2560,16 +2930,16 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.sd_scale_standardised` | release | check | an Analysis with `stored_effect_scale=sd` has a rescaling `original_sd_method` or `declared_standardised`, at every `format_version` (§7) |
 | `analyses.top_hit_count_columns` | release | check | the Top-Hit Count columns are present and non-negative integers |
 | `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
-| `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a) |
+| `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a); from 0.3.0 the component counts none of its own, so nothing is compared (§16) |
 | `regions.table` | release | check | `regions.tsv`, when present or declared, is declared by the manifest's `regions` entry, has its SHA-256, parses as a region table and names only Analyses the release holds (§2, §17) |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
 | `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
 | `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |
 | `csr.observed_only` | sequence | check | an Overflow holds no imputed array |
-| `hybrid.dense_to_shared` | release | check | `dense_to_shared` names distinct rows of the shared variant table |
+| `hybrid.dense_to_shared` | release | check | `dense_to_shared` against the shared variant axis: it names only rows of the shared variant table, in strictly ascending order, so no row twice; each fault is reported by itself (§16) |
 | `hybrid.component` | release | check | the Dense Component opens, as a Dense release |
 | `hybrid.plan` | release | check | both components declare one statistic encoding |
-| `hybrid.coverage` | release | check | each Dense Component row's shared row holds its variant |
+| `hybrid.coverage` | release | check | `dense_to_shared` against the Dense side: it names one shared row for each Dense Component row, and each Dense row's shared row holds its variant. From format 0.3.0 the Dense side is only the panel, the rows of its grid, as the component carries no variant of its own (§16, #472); before it, the component's Variant Table, whose representative rows' ALIDs are compared |
 | `encoding.dtypes` | grid, sequence | check | each plane has the dtype its declared encoding stores |
 | `encoding.per_variant_chunks` | grid, sequence | check | no per-variant array is chunked as one block |
 | `encoding.eaf` | grid, sequence | check | the `eaf` plane, baseline, exception table and reference match the plan |
@@ -2609,9 +2979,10 @@ change to this table, which the test suite holds to the registry, in its order.
 | `side_tables.se_exceptions_rounded` | grid, sequence | check | no more than 1% of the `se` exception table is a value a `float16` plane stores, which is what a plane rounded before its plan was chosen holds; an error from `format_version` 0.2.2 and a warning before it, 0.9.0's 0.2.1 included |
 | `sample_size.codes` | sequence | fold | every `n` code is a sample size or the missing code, and some cell holds a size |
 | `sample_size.scope` | sequence | fold | an Analysis holding per-association N declares `variant_level` scope |
-| `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier is made of |
+| `top_hits.arrays` | grid, sequence | check | every tier carries the arrays a tier of its format is made of (`abs_z` and `p_value` too before 0.3.0), and from 0.3.0 neither of those two |
 | `top_hits.structure` | grid, sequence | check | every tier has parallel arrays, sound offsets and ordered slices |
-| `top_hits.abs_z` | sequence | check | every tier's `abs_z` is its `z`'s magnitude |
+| `top_hits.threshold` | grid, sequence | check | every tier row's \|z\|, recomputed from its `z`, clears the tier's threshold (`z_critical`); a NaN z does not |
+| `top_hits.abs_z` | grid, sequence | check | before format 0.3.0, every tier's stored `abs_z` and `p_value` are what its `z` implies, recomputed through `store_reader.stats` (`abs_z` within 1e-3; `p_value` within 1e-3 relative, and absolutely only within float64's smallest normal number, where an `erfc` flushed a subnormal p to 0.0); not judged on 0.3.0, which stores neither |
 | `top_hits.held` | sequence | fold | every tier cell is an association the sequence holds |
 | `top_hits.z` | grid, sequence | fold | every tier cell's Z agrees with the decoded plane and clears the cutoff |
 | `top_hits.se` | grid, sequence | fold | every tier cell's SE equals the decoded plane's |
@@ -3137,7 +3508,18 @@ the manifest's rows in order.
   association with the Store after that standardisation, reads a source as the
   build does (a row the build dropped as malformed is not a failure), and
   reports `fidelity.source` for a bare association TSV, which names no Analysis,
-  or a manifest with no rows.
+  or a manifest with no rows. A source on another assembly has its samples
+  lifted through the build's own lift, whatever the join finds, because only
+  the chain says which of them a reverse-strand block re-oriented: such a
+  sample's z is compared negated, as the build stored it (§5, #284, #486). The
+  chain is the one the release records in `provenance.chain_file` (and
+  `provenance.chain_sha256`, where recorded): a given chain with another label
+  or other bytes is refused, and with none given the recorded one is used if it
+  is pyliftover's built-in hg19→hg38 chain or a file on disk at the recorded
+  path (matching its sha256, where recorded); otherwise the check is refused,
+  naming the recorded chain and asking for one. A sample the release holds by
+  `source_alid` where that chain places it nowhere, or on another row, fails
+  the check, naming the chain.
 
 ## 21. Compatibility
 
@@ -3196,6 +3578,12 @@ The distinction is defined by **what a reader that does not know about the chang
 | the Clumps of the 5e-8 tier, with `n_loci_5e8` and `n_unclumped_5e8` (§18.1, ADR 0102, issue #417) | none: derived and rebuildable, below |
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
+| the fixed-width ALID index replaced by the variable-length ALID sidecar (0.3.0, issue #467, ADR 0105) | **minor** |
+| the position sidecar required (0.3.0, issue #468, ADR 0105 §6) | **minor** |
+| `variant_offsets.npy` removed, and no query reading the Variant Table (0.3.0, issue #469, ADR 0105 §7) | **minor** |
+| the `source_alid` sidecar required (0.3.0, issue #470, ADR 0105 §8) | **minor** |
+| `index.sqlite`'s `metadata` and `variant_aliases`, an Observed-Only release's `index.sqlite`, and the Top-Hit tiers' `abs_z` and `p_value` removed (0.3.0, issue #471, ADR 0102) | **minor** |
+| a Hybrid Dense Component's own Variant Table and `.tbi`, ALID, position and rsID indexes, `analyses.tsv` and `overview.html` removed: it reads the shared ones through `dense_to_shared.npy` (0.3.0, issue #472, ADR 0102 §4) | **minor** |
 
 An **Indexed Variant Subset** (§10b, ADR 0061) is not one of those compatible
 additions: it is a rebuildable, non-authoritative acceleration artifact that can
@@ -3234,9 +3622,11 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). The 0.2 series has four releases, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+This build reads three series, `0.1` (Zarr v2, readable but no longer written), `0.2` (Zarr v3 with sharding, §10a, what every builder wrote from #247 to #467), and `0.3` (what every builder and completion writes since epic #450, #467-#472). The 0.2 series has four releases, `0.2.0`, `0.2.1`, `0.2.2` and `0.2.3` (§21.3), and `0.1.0` is the only 0.1 release; another remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
 `0.2.2` moves the remainder, not the series. A reader that knows only `0.2.0` or `0.2.1` reads a `0.2.2` release's data as written — an ALID is a string it looks up as given, and a statistic is signed for the ALID's `A1` in all three — and warns that the release is newer. What such a reader does not know is how a `0.2.2` builder spells an indel: a completion run by it would spell its panel's indels sorted, beside the release's reference-first deletions. Only a build that knows `0.2.2` completes one. Nor does it know which stamp a `0.2.2` release's features give: package 0.9.0's `validate` fails every `0.2.2` release with one error, `release is stamped 0.2.2, but a release carrying no region table is 0.2.0` (`… carrying regions.tsv is 0.2.1` with the table). The remedy is to upgrade the package, never to re-stamp the release: re-stamped, it passes 0.9.0's `validate`, and 0.9.0 completes it. So this build does not judge the stamp of a release newer than every version it writes: `manifest.format_stamp` warns that the package must be upgraded (§20).
+
+`0.3.0` moves the series. A 0.2 reader looks up an ALID in `variant_alid_bytes.npy`, which a 0.3.0 release does not carry: it would find no ALID index, and answer every ALID lookup from a scan, or not at all, while the release read as one it fully understood. So a package without the 0.3 series refuses a 0.3.0 release by name, as ADR 0041 requires (`… declares format_version='0.3.0', a release series this build does not implement`); a 0.3 reader reads a 0.2 release's fixed-width pair as before.
 
 `0.2.3` moves the remainder too. A reader that knows only `0.2.2` reads a `0.2.3` release's data as written: an association the release left out for an SE above 65,504 is a missing cell or an absent row, as any other is, and `n_missing_se_out_of_range` is a column it does not know, which it ignores (ADR 0034's superset rule). What it does not know is that such a release holds no SE above 65,504 and that its `analyses.tsv` counts the ones it left out; a completion run by it would carry `+inf` through and not count it, so only a build that knows `0.2.3` completes one. It warns that the release is newer.
 
@@ -3254,11 +3644,14 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 | `0.2.0` | Zarr v3 with sharding (§10a, ADR 0057) | a release this build converts from `0.1.0`, which carries no `regions.tsv` and sorts its indels |
 | `0.2.1` | a Ragged release's optional `regions.tsv`, declared by the manifest's `regions` entry (§1, §2, §17; issue #430) | no release this build writes: package 0.9.0's, for a Ragged release carrying one |
 | `0.2.2` | an indel's ALID spelt reference first (§4, ADR 0079; issue #381), `regions.tsv` still optional | no release this build writes: package 0.11's, and earlier builds since #381 |
-| `0.2.3` | `analyses.tsv`'s `n_missing_se_out_of_range` on every row, and no association whose SE is above 65,504 (§7a, §15; ADR 0068, issue #338), on 0.2.2's features | every release this build builds or completes |
+| `0.2.3` | `analyses.tsv`'s `n_missing_se_out_of_range` on every row, and no association whose SE is above 65,504 (§7a, §15; ADR 0068, issue #338), on 0.2.2's features | no release this build writes: every build and completion from #338 to #467 |
+| `0.3.0` | the variable-length ALID sidecar in place of the fixed-width ALID index (§4; ADR 0105, issue #467), the position sidecar a range is answered from (§4; ADR 0105 §6, issue #468), and no `variant_offsets.npy`: no query reads the Variant Table (§4; ADR 0105 §7, issue #469), the `source_alid` sidecar (§4; ADR 0105 §8, issue #470), on 0.2.3's features; `index.sqlite` only beside `completion_quality`, and no `metadata`, `variant_aliases`, or tier `abs_z` and `p_value` (§1, §18; ADR 0102, issue #471); a Hybrid Dense Component without its own copy of the shared variants and Analyses, read through `dense_to_shared.npy` (§16; ADR 0102 §4, issue #472) | every release this build builds, completes or rewrites from `0.2.3` (§21.4) |
 
 A package before 0.2.1 reads a 0.2.1 release, warned that it is newer than it fully understands (§21.2), and ignores the `regions` entry; its `validate` refuses `regions.tsv` as an entry outside the envelope, and its completion refuses the release, whose format it reads but cannot write (§21.4), so it cannot complete one outside its regions or drop its table (`docs/store-format-compatibility.md`). A package before 0.2.2 reads a 0.2.2 release the same way, warned, and its completion refuses it too, so it cannot spell its panel's indels sorted beside the release's reference-first ones. Package 0.9.0's `validate` also fails a 0.2.2 release, on its stamp rule (§21.2): upgrade the package, do not re-stamp the release. A package before 0.2.3 reads a 0.2.3 release, warned, and its completion refuses it. Its `validate` does not judge the newer stamp: packages 0.10.0 to 0.12.0 warn that the package must be upgraded (§21.2), and 0.9.0, whose stamp rule judges every 0.2 release, fails it, as it fails a 0.2.2 one (`docs/store-format-compatibility.md`). The remedy is again to upgrade, not to re-stamp.
 
-**Since #338**, every builder and Reference Completion write `0.2.3` (`CURRENT_FORMAT_VERSION`): 0.2.3 is 0.2.2 with the count, so a release is stamped it exactly when its indels are spelt reference first, and a completion of a `0.2.2` source is stamped `0.2.3` -- it carries every feature its source has, and adds the count, which it records for every Analysis (§12). The converter is unchanged: its copy of a `0.1.0` source sorts its indels, so it is `0.2.0`, whose `analyses.tsv` need not carry the count, and it carries none. It refuses a source holding an SE above 65,504, naming each Analysis and array, because it copies stored codes and cannot leave an association out (§21.4).
+**Since #467**, every builder and Reference Completion write `0.3.0` (`CURRENT_FORMAT_VERSION`): `write_variant_axis`, which every build and completion path calls, writes the ALID sidecar and, since #468 and #470, the position and `source_alid` sidecars, so a completion of a `0.2.2` or `0.2.3` source is `0.3.0` too. 0.3.0 carries every feature of 0.2.3, so a release with the sidecar whose indels are sorted, or whose `analyses.tsv` does not count what it left out, is no version, and `format_version_for` refuses to stamp one. The converter still writes `0.2.0`, and copies its source's fixed-width pair. A release newer than this build writes *in its series* (a `0.2.4` one) is still not judged by its stamp rule (§21.2).
+
+**From #338 to #467**, every builder and Reference Completion wrote `0.2.3`: 0.2.3 is 0.2.2 with the count, so a release is stamped it exactly when its indels are spelt reference first, and a completion of a `0.2.2` source is stamped `0.2.3` -- it carries every feature its source has, and adds the count, which it records for every Analysis (§12). The converter is unchanged: its copy of a `0.1.0` source sorts its indels, so it is `0.2.0`, whose `analyses.tsv` need not carry the count, and it carries none. It refuses a source holding an SE above 65,504, naming each Analysis and array, because it copies stored codes and cannot leave an association out (§21.4).
 
 **From #381 to #338**, every builder and Reference Completion wrote `0.2.2` (`CURRENT_FORMAT_VERSION` for a release without `regions.tsv`). The converter (§21.4) stamps by the same rule from a `SOURCE_FORMAT_VERSION = "0.1.0"` release: it copies the source's stored codes and ALIDs, and a `0.1.0` release carries no `regions.tsv` and sorts an indel's alleles without saying which is the reference, so its copy is honestly `0.2.0`. From #247 to #381 a built and a converted release both declared `0.2.0`, which is what let #249 check their identity; they now differ in their indel ALIDs and in `format_version`, and carry the same layout. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0`, `0.2.0` or `0.2.1` source cannot be Reference-Completed by this build: completing one would add panel ALIDs spelt by §4 beside its own deletions spelt like insertions, and nothing in it says which of its indels are deletions. **The one executable order is to rebuild the release, with its region table where it has one, and complete the rebuilt one.** Completion refuses such a source and says so. A completed release carries every feature its source has, so it keeps its source's version, and adds the count (above).
 
@@ -3284,9 +3677,9 @@ Store Releases are immutable. Reference Completion, re-indexing and migration al
   non-authoritative and carries no Analytical Metadata (§21.1).
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `ogdb rewrite-release SOURCE DESTINATION` (`opengwasdb.store.rewrite`, issue #467) derives a new `0.3.0` release from a `0.2.3` one: it copies the source (by reflink where the filesystem can), runs its named steps on the copy — #467's writes the ALID sidecar from the Variant Table and drops the fixed-width pair; #468's writes the position sidecar from the same table; #471's drop `index.sqlite`'s `metadata` and `variant_aliases` (an Observed-Only release then has no `index.sqlite`; a Reference-Completed one keeps `completion_quality`) and every tier's `abs_z` and `p_value`, which the copy leaves out rather than copying to delete, and refuse, before anything is written, a source whose `index.sqlite` holds a table 0.3.0 neither keeps nor drops, whose `variant_aliases` names an rsID its rsID index lacks, whose `dense` blob disagrees with its manifest, which is Reference-Completed with no `completion_quality`, or which has a tier storing one of `abs_z` and `p_value` without the other, storing values its `z` does not imply, or described by a consolidated-metadata record; #469's leaves `variant_offsets.npy` out of the copy and drops the Dense provenance's `row_offsets` that names it (the `dense` blob that also named it goes with `metadata`), refusing unless the ALID, position and `source_alid` sidecars count the rows the offsets did; #470's writes the `source_alid` sidecar from the table's `source_alid` column, each row's state from comparing it with the row's ALID, state 0 on every row of a table written before that column, and refuses unless the sidecar read back gives every row the table's state and text; on a 0.3.0 Hybrid it writes the root's alone, which the Dense Component's rows are answered from; #472's leaves a Hybrid Dense Component's own Variant Table, `.tbi`, ALID index, rsID index, `variant_offsets.npy`, `analyses.tsv` and `overview.html` out of the copy (the earlier steps write it no sidecar), refusing, before anything is written, unless `dense_to_shared.npy` names one shared row for each of its rows, in range and strictly ascending, holding that row's ALID; it does not compare the two copies' rsID or `source_alid` columns, as the shared table, which every query reads, kept what a completed release's Dense copy lost (#481); the `indexed_subsets` step records the new `release_id` and `format_version` in each Indexed Variant Subset the release carries, as it holds the same cells of the rewritten release (§10b, ADR 0061), and refuses a source whose subset already names another release — and stamps every manifest `0.3.0` with a fresh `release_id` and `created_at`, `store_id` kept, and a `format_rewrite` provenance block naming the source `release_id`, the steps, and the range probes the release could not pose (`range_questions_not_posed`, which the log line also names). Before it publishes, it asks the source and the staged copy the same deterministic set of questions (`opengwasdb.store.query_digests`: each Analysis, PheWAS and lookups of variants spread over the axis, a range, the top hits at five thresholds, Observed-Only and not, the ALID probes: the release's longest ALIDs and one at each of 23, 24, 25, 32 and 33 bytes, and the range probes: ranges at the first and last variant, either side of a chromosome boundary, between two variants, on a chromosome the release lacks, and on a position several variants share, the misses: rsIDs no release names, by PheWAS and inside a lookup, and each Indexed Variant Subset's answer for the spread Analyses) and refuses on any difference in any array of any answer; #467's step also refuses unless every ALID it wrote resolves to its own row, #468's unless the sidecar places every row where the table does, and the table steps unless the table holds the rows the source's offsets count; then it validates the copy and publishes by rename only if it is clean. It never writes its source, refuses a destination that exists or lies inside the source, and refuses every source but `0.2.3`: 0.3.0 keeps 0.2.3's reference-first indels and its count of associations left out for an SE above 65,504, which an earlier release lacks and no rewrite can add, so such a release is rebuilt. Hosted releases are not rewritten: every Store is rebuilt from source at `0.3.0` once #467–#472 are in (the owner, 23 Nov 2026, in the #450 run; opengwas/opengwasdb-stores#498). The rewrite is the proof that each format step changes no answer, sized for the fixture releases and small real ones; on a large Dense release some of its questions cannot run (ADR 0105 §3). `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), a Hybrid without its nested Dense Component, and -- before anything is written -- a source holding an SE above 65,504, naming each Analysis and array that holds one (issue #338): it copies stored codes, and leaving such an association out would mean rewriting z, the exception tables, the Top-Hit Index and a Ragged release's offsets, so the release is rebuilt instead. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.
 
-**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source, but for the count of associations left out for an SE above 65,504, which every completion records and which moves a `0.2.2` source's completion to `0.2.3` (§21.3). A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #381 the refusal fires on a `0.1.0` or a `0.2.0` source, converted or built: both sort an indel's alleles (§4), so it is rebuilt and the rebuilt release completed; the message says so.
+**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source, but for the count of associations left out for an SE above 65,504, which every completion records and which moved a `0.2.2` source's completion to `0.2.3`, and for the ALID sidecar, which every completion writes for its axis since #467, so a `0.2.2`, `0.2.3` or `0.3.0` source completes to `0.3.0` (§21.3). A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #381 the refusal fires on a `0.1.0` or a `0.2.0` source, converted or built: both sort an indel's alleles (§4), so it is rebuilt and the rebuilt release completed; the message says so.

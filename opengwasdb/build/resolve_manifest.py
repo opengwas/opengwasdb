@@ -55,7 +55,6 @@ from opengwasdb.build.effect_consistency import (
     EffectConsistencyPolicy,
     check_sample_bound,
 )
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.phenotype_sd_pipeline import load_af_reference
 from opengwasdb.build.resolve import (
     DEFAULT_EVIDENCE_SAMPLE,
@@ -101,6 +100,7 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, load_liftover
 from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, requires_probe_id, resolve_reader
+from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.variants.reference import iter_reference_alids, refuse_unmarked_artifact
 from opengwasdb.version import installed_version
 

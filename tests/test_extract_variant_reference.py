@@ -29,7 +29,7 @@ from opengwasdb.query import query_store
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import UnmarkedArtifactError, read_variant_reference
 from opengwasdb.variants.routing import extract_variant_reference
@@ -1599,8 +1599,8 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
         right_axis = handle.read()
     assert left_axis == right_axis
     np.testing.assert_array_equal(
-        np.load(reference / "variant_offsets.npy"),
-        np.load(candidate / "variant_offsets.npy"),
+        np.load(reference / "variant_alid_offsets.npy"),
+        np.load(candidate / "variant_alid_offsets.npy"),
     )
 
     left_root = open_store(reference).arrays(mode="r")
@@ -1658,7 +1658,7 @@ def test_two_stage_build_matches_the_one_command_two_pass_store(tmp_path):
     _assert_dense_stores_data_identical(two_pass, single_pass)
 
     # The first-named rsid survives the two-stage pipeline into the axis.
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     records = {r.alid: r.rsid for r in iter_variant_records(single_pass / "variants.tsv.gz")}
     assert records[HG38_ALID_1] == "rs1"

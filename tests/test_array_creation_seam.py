@@ -32,23 +32,26 @@ import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.encoding import StoreEncoding, write_eaf_baseline
+from opengwasdb.encoding import write_eaf_baseline
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
     SHARDED_COMPRESSOR_RECORD,
-    ArrayRole,
-    chunk_layout,
     component_variant_chunk,
     compressor,
     open_group_for_write,
 )
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.layout import ArrayRole, chunk_layout
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "opengwasdb"
 SEAM = PACKAGE_ROOT / "store" / "arrays.py"
+#: The seam's read side (#464): zarr's runtime configuration and the read-only
+#: open of a Store's group, which the Store Reader may not import the creation
+#: seam for. It may open a group read-only and nothing else (see below).
+READ_SEAM = PACKAGE_ROOT / "store_reader" / "arrays.py"
 #: opengwasdb.ld writes LD Stores and Genotype Stores, a different format with its
 #: own writer (`opengwasdb/ld/store/writer.py`, docs/spec/ld-store.md); this seam
 #: is the GWAS Store's, so it does not scan them (#455).
@@ -56,6 +59,10 @@ LD_ENGINE = PACKAGE_ROOT / "ld"
 
 #: The seam's own module path, whose creation helpers other modules import.
 _SEAM_MODULE = "opengwasdb.store.arrays"
+
+#: The read side's module (#464), whose one API name is its read-only `open_group`
+#: (`test_the_read_seam_opens_a_group_it_cannot_write`).
+_READ_SEAM_MODULE = "opengwasdb.store_reader.arrays"
 
 #: The seam's own creation/open API: the only names other modules may use.
 _SEAM_API = frozenset(
@@ -308,6 +315,8 @@ def _call_violation(
         base = _module_of(func.value, modules, names)
         if base == _SEAM_MODULE and attr in _SEAM_API:
             return None  # the seam's own API, e.g. `store_arrays.create_array(...)`
+        if base == _READ_SEAM_MODULE and attr == "open_group":
+            return None  # the read side's read-only open
         if base is not None and (_is_zarr(base) or _is_numcodecs(base)):
             return f"{base}.{attr}("
         if base is not None and _is_numpy(base):
@@ -323,6 +332,8 @@ def _call_violation(
         if canonical is not None:
             module, _, attr = canonical.rpartition(".")
             if module == _SEAM_MODULE and attr in _SEAM_API:
+                return None
+            if module == _READ_SEAM_MODULE and attr == "open_group":
                 return None
             if _is_zarr(module) or _is_numcodecs(module):
                 return f"{module}.{attr}("
@@ -669,7 +680,7 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     scanned = 0
     offenders: list[str] = []
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        if path == SEAM or "__pycache__" in path.parts or LD_ENGINE in path.parents:
+        if path in (SEAM, READ_SEAM) or "__pycache__" in path.parts or LD_ENGINE in path.parents:
             continue
         scanned += 1
         offenders.extend(
@@ -681,6 +692,45 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     assert scanned > 50, f"only {scanned} modules scanned; the glob is wrong"
     assert _violations(SEAM.read_text(encoding="utf-8")), "the scanner missed the seam's own calls"
     assert offenders == [], "direct Zarr/Blosc creation outside the seam:\n" + "\n".join(offenders)
+
+
+def test_the_read_seam_opens_a_group_it_cannot_write(tmp_path: Path) -> None:
+    import inspect
+
+    from opengwasdb.store_reader.arrays import open_group
+
+    assert list(inspect.signature(open_group).parameters) == ["path"]
+    root = open_group_for_write(tmp_path / "data.zarr", "w")
+    root.attrs["kept"] = 1
+    group = open_group(tmp_path / "data.zarr")
+    with pytest.raises(ValueError, match="read-only"):
+        group.attrs["written"] = 2
+    assert dict(open_group(tmp_path / "data.zarr").attrs) == {"kept": 1}
+
+
+def test_the_read_seam_only_opens_a_group_read_only() -> None:
+    """The read side of the seam sets zarr's runtime configuration and opens a group,
+    once, in mode ``r``: it creates nothing, and every other call the scanner
+    forbids stays in `SEAM`."""
+    source = READ_SEAM.read_text(encoding="utf-8")
+    found = _violations(source, "store_reader/arrays.py")
+    assert sorted(entry.rsplit(": ", 1)[1] for entry in found) == [
+        "zarr.config.set(",
+        "zarr.config.set(",
+        "zarr.core.sync.sync(",
+        "zarr.open_group(",
+        "zarr.storage.LocalStore.open(",
+    ], found
+    opens = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "open_group"
+    ]
+    assert len(opens) == 1
+    modes = [keyword.value for keyword in opens[0].keywords if keyword.arg == "mode"]
+    assert [ast.literal_eval(mode) for mode in modes] == ["r"]
 
 
 #: One (shape, component_chunk) per role, for the default-layout coverage test
@@ -807,7 +857,8 @@ def test_legacy_per_variant_chunk_size_still_accepts_a_group(tmp_path: Path) -> 
     Round 2 changed this signature; pre-existing callers pass a group and must
     keep working.  The explicit-chunk helper has a distinct name.
     """
-    from opengwasdb.encoding import component_chunk_size, per_variant_chunk_size
+    from opengwasdb.encoding import per_variant_chunk_size
+    from opengwasdb.store_reader.layout import component_chunk_size
 
     group = zarr.open_group(str(tmp_path / "group.zarr"), mode="w", zarr_format=2)
     group.create_array("z", shape=(10,), chunks=(7,), dtype="int16")

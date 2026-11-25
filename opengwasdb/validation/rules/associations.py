@@ -18,12 +18,12 @@ from typing import TypeVar
 
 import numpy as np
 
-from opengwasdb.associations import State, Tally
-from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.encoding.codec import SE_FLOAT16_MAX, se_above_bound
-from opengwasdb.model.analyses import read_analyses
-from opengwasdb.store.arrays import array_length
 from opengwasdb.store.open import records_se_out_of_range
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.associations import State, Tally
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Severity, Skip, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, OBSERVED_ONLY, prefix
 from opengwasdb.validation.rules.encoding import PLAN, plane_label
@@ -138,7 +138,8 @@ def infinite_se_message(
 
     An SE above a `float16` plane's range is narrowed to `+inf` beside a finite Z
     (issue #338). Spec §15 makes that cell present, so the release is valid -- but
-    `beta = z * se` reads as infinity, and nothing else in a Store says so (#337).
+    the source's finite SE is lost, a query reads `beta` and `pval` there as NaN (ADR
+    0104), and nothing else in a Store says so (#337).
     """
     counts = np.asarray(per_analysis)
     total = int(counts.sum())
@@ -146,8 +147,8 @@ def infinite_se_message(
         return None
     message = (
         f"{total} cell(s) of {label} hold an infinite se: a source standard error above "
-        "the plane's range is stored as +inf, so beta = z * se reads as infinity although "
-        "the source value was finite (issue #338)"
+        "the plane's range is stored as +inf beside a finite z, although the source value "
+        "was finite, so a query reads beta and pval there as NaN (issue #338, ADR 0104)"
     )
     named = _first_holding(counts, analyses_path)
     if named:

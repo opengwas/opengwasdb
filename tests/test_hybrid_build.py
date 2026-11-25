@@ -46,16 +46,17 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     check_hash,
     encode_key,
 )
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.analyses import UnknownAnalysisError, read_analyses
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 HG19_POS_1 = 100_000
@@ -201,9 +202,10 @@ def test_hybrid_build_refuses_a_coverage_it_cannot_hold(hybrid_store, tmp_path):
 
 
 def test_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_label(hybrid_store):
-    """ADR 0034/issue #68: the Hybrid builder writes the unified schema at
-    both the Dense Component and shared/top-level analyses.tsv."""
-    for path in (hybrid_store / "dense" / "analyses.tsv", hybrid_store / "analyses.tsv"):
+    """ADR 0034/issue #68: the Hybrid builder writes the unified schema in its one
+    analyses.tsv, the shared one: from 0.3.0 its Dense Component carries none (#472)."""
+    assert not (hybrid_store / "dense" / "analyses.tsv").exists()
+    for path in (hybrid_store / "analyses.tsv",):
         table = read_analyses(path)
         assert "phenotype_id" not in table.fieldnames
         assert "phenotype_label" not in table.fieldnames
@@ -473,7 +475,9 @@ def test_top_hits_selects_and_merges_one_analysis(hybrid_store):
     for name in ("variant_index", "analysis_index", "z", "se", "association_status"):
         np.testing.assert_array_equal(selected[name], global_result[name][expected])
     assert len(selected["z"]) == 2  # one Dense hit and one overflow hit
-    assert q.top_hits(analysis_id="unknown", threshold=5e-4)["z"].size == 0
+    # an Analysis the release does not hold is refused, not answered with nothing (#483)
+    with pytest.raises(UnknownAnalysisError, match="GCST-no-such"):
+        q.top_hits(analysis_id="GCST-no-such", threshold=5e-4)
 
 
 def test_top_hit_counts_sum_dense_and_overflow_components(hybrid_store):
@@ -735,12 +739,7 @@ def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_pat
     # association behind.
     assert len(rejected["z"]) == 0
 
-    from opengwasdb.variants.axis import iter_variant_records
-
-    dense_alids = [
-        record.alid
-        for record in iter_variant_records(store_path / "dense" / "variants.tsv.gz")
-    ]
+    dense_alids = [record.alid for record in _dense_records(store_path)]
     assert HG38_ALID_3 in dense_alids, "the panel variant keeps its Pass-1 name (#255)"
 
 
@@ -757,7 +756,7 @@ def test_a_single_pass_build_leaves_no_variant_for_a_rejected_row(tmp_path):
     the reference, and a rejected row is not a reason to drop a variant the
     reference names (#255).
     """
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     manifest, panel = _maf_filtered_manifest(tmp_path)
     store_path = tmp_path / "single-pass.opengwasdb"
@@ -876,17 +875,24 @@ def test_analyses_table_reports_shared_not_dense_only_hit_counts(hybrid_store):
     include the Ragged Overflow Component's hits, not the Dense Component's
     panel-local counts (issue #107).
 
-    The two files legitimately differ: `add_hit_counts()` is applied once
-    against the Dense Component's own index and again against the whole
-    store's, so the Dense Component's own `analyses.tsv` counts only on-panel
-    hits. Delegating to it silently undercounts every Analysis with off-panel
-    hits -- on the `gwas-catalog-eur-hybrid` pilot that hides 4,476 real hits,
-    one Analysis by 27%.
+    The two legitimately differ: the Dense Component's own Top-Hit Index counts
+    only on-panel hits. Before 0.3.0 its own `analyses.tsv` held those counts, and
+    delegating to it silently undercounted every Analysis with off-panel hits --
+    on the `gwas-catalog-eur-hybrid` pilot that hid 4,476 real hits, one Analysis
+    by 27%. From 0.3.0 the component carries no `analyses.tsv` (#472); its
+    panel-local counts are read from its own index here, to show they differ.
     """
+    from opengwasdb.model.analyses import read_analysis_records, reset_top_hit_counts
+    from opengwasdb.top_hits import add_hit_counts
+
+    assert not (hybrid_store / "dense" / "analyses.tsv").exists()
     shared = read_analyses(hybrid_store / "analyses.tsv").rows
-    dense_only = read_analyses(hybrid_store / "dense" / "analyses.tsv").rows
+    dense_only = add_hit_counts(
+        hybrid_store / "dense",
+        reset_top_hit_counts(read_analysis_records(hybrid_store / "analyses.tsv")),
+    )
     shared_by_id = {r["analysis_id"]: r for r in shared}
-    dense_by_id = {r["analysis_id"]: r for r in dense_only}
+    dense_by_id = {a.analysis_id: {"n_hits_5e6": a.n_hits_5e6} for a in dense_only}
 
     # trait_a's middle variant is off-panel (routed to the Overflow) with
     # z = -5.0 -> p ~ 5.7e-7, so it clears 5e-6/5e-4 but not 5e-8. That makes
@@ -925,7 +931,7 @@ def test_two_assemblies_colliding_on_one_hg38_alid_record_no_source_origin(tmp_p
     once, both Analyses' associations route to it, and the two component
     variant tables agree.
     """
-    from opengwasdb.variants.axis import iter_variant_records
+    from opengwasdb.variants.legacy_table import iter_variant_records
 
     # trait_vcf (hg19): 1:1000000 lifts onto 1:1064620 (HG38_ALID_2).
     # trait_ssf (hg38): a literal 1:1064620 row, no lift. The raw tuples
@@ -979,7 +985,7 @@ def test_two_assemblies_colliding_on_one_hg38_alid_record_no_source_origin(tmp_p
     # Unambiguous origin survives the build.
     assert shared_rows[HG38_ALID_3].source_alid == "1:1500000:A:G"
 
-    dense_rows = {r.alid: r for r in iter_variant_records(store_path / "dense" / "variants.tsv.gz")}
+    dense_rows = {r.alid: r for r in _dense_records(store_path)}
     assert set(dense_rows) == {HG38_ALID_3}
     assert dense_rows[HG38_ALID_3].source_alid == "1:1500000:A:G"
 
@@ -1042,7 +1048,7 @@ def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_p
     # effect allele C: the store answers the frequency of C, i.e. 1 - 0.2.
     assert off_panel["eaf"][0] == pytest.approx(0.8, rel=5e-3)
 
-    for path in (store_path / "analyses.tsv", store_path / "dense" / "analyses.tsv"):
+    for path in (store_path / "analyses.tsv",):
         row = read_analyses(path).rows[0]
         assert row["analysis_id"] == "trait_a"
         assert row["eaf_scope"] == "association", (
@@ -1199,12 +1205,22 @@ def _write_reference_artifact(
     return path
 
 
+def _dense_records(store: Path) -> list:
+    """The Dense Component's variants, in its rows: from 0.3.0 the shared table's rows
+    `dense_to_shared.npy` names (#472)."""
+    axis = open_store(store / "dense").variant_axis(aliases=False)
+    try:
+        return axis.all()
+    finally:
+        axis.close()
+
+
 def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
     """Every stored data artifact matches: variant tables, dense matrix,
     overflow CSR, top hits and analyses.tsv (manifest timestamps excluded)."""
     assert validate_store(candidate).ok, validate_store(candidate).errors
 
-    for name in ("variants.tsv.gz", "dense/variants.tsv.gz"):
+    for name in ("variants.tsv.gz",):
         with gzip.open(reference / name, "rt", encoding="utf-8") as handle:
             left = handle.read()
         with gzip.open(candidate / name, "rt", encoding="utf-8") as handle:
@@ -1793,7 +1809,7 @@ class TestVariantReference:
         a new shared variant. Its source coordinate disagrees with the one Pass 1
         recorded, so the variant table must write no source_alid (issue #85)
         rather than misattribute one row's association to the other's variant."""
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         # The reference names ALID_1 and ALID_2 directly as hg38 source keys, so
         # Pass 1 knows ALID_2; the panel keeps only ALID_1, which makes ALID_2 an
@@ -1839,7 +1855,7 @@ class TestVariantReference:
         hg19 key that lifts onto an hg38 coordinate and an hg38 key written
         directly. Both must route to the one stored variant, and their disagreeing
         origins must blank its source_alid rather than record either."""
-        from opengwasdb.variants.axis import iter_variant_records
+        from opengwasdb.variants.legacy_table import iter_variant_records
 
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
@@ -2350,6 +2366,14 @@ class TestVariantReferenceRsids:
             HG38_ALID_4: "rsLOWER_OFF",
         }
 
+    @staticmethod
+    def _errors_but_source_alid(store: Path) -> list[str]:
+        result = validate_store(store)
+        return [
+            f.message for f in result.findings
+            if f.severity.name == "ERROR" and f.rule != "variant_table.source_alid"
+        ]
+
     def test_fold_earlier_candidate_beats_a_later_reference_one(self, tmp_path):
         """Issue #255, round 3: the global `(rank, site)` order decides, even
         when the two candidates reach one ALID through different routes. An
@@ -2394,8 +2418,12 @@ class TestVariantReferenceRsids:
 
         assert _hybrid_axis_rsids(two_pass)["1:1064620:C:T"] == "rsEARLY"
         assert _hybrid_axis_rsids(single_pass)["1:1064620:C:T"] == "rsEARLY"
-        assert validate_store(two_pass).ok
-        assert validate_store(single_pass).ok
+        # Apart from `variant_table.source_alid`: every variant here is seen from both
+        # assemblies, so the routing blanks each one's `source_alid` by design (#85,
+        # `routing/route.py` `source_alids`), and the rule fails a table with none. A real
+        # mixed release always has rows that only one assembly saw.
+        assert not self._errors_but_source_alid(two_pass)
+        assert not self._errors_but_source_alid(single_pass)
 
     @pytest.mark.parametrize(
         ("hg38_alleles", "hg19_alleles"),
@@ -2829,3 +2857,19 @@ def test_a_hybrid_spilled_column_whose_arrays_are_not_parallel_is_refused_and_wr
     ):
         hybrid_build._spill_hybrid_column(spill_dir, 0, dense, overflow, off_reference)
     assert list(spill_dir.iterdir()) == []
+
+
+def test_pass_2_hands_back_freed_memory_after_each_analysis(tmp_path, monkeypatch):
+    """Issue #451: a Pass 2 worker lives for the whole pass, and kept the
+    high-water of every Analysis it had routed until it gave back what each
+    freed. A single-pass build, as OGS-00011's is; serial, so the routing runs
+    here and the count is this process's."""
+    calls: list[int] = []
+    monkeypatch.setattr(hybrid_build, "release_freed_heap", lambda: calls.append(1))
+    manifest = _rsid_hybrid_manifest(tmp_path)
+    build_hybrid_from_vcf_manifest(
+        manifest, tmp_path / "store.opengwasdb", variant_reference=_panel_file(tmp_path),
+        store_id="s", release_id="r", n_workers=1,
+    )
+
+    assert len(calls) == 2, "one hand-back for each of the two Analyses routed"

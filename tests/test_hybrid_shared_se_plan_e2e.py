@@ -42,14 +42,13 @@ import pytest
 import residual_fixtures as fixtures
 from query_assertions import decoded_se, indexed_se
 
-from opengwasdb.encoding.plan import SE_EXCEPTION, SE_MISSING, SeEncoding
-from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION, SE_MISSING, SeEncoding
+from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
 
 #: Panel variants (Dense Component rows) are 1:1000 .. 1:400000; the Ragged
 #: Overflow starts at 1:500000 so the two position spans can never collide no
@@ -201,7 +200,7 @@ def _assert_spans_both_components(store: Path, encoding: StoreManifest) -> None:
 
 def _dense_row_by_alid(store: Path) -> dict[str, int]:
     """Panel ALID -> row index on the Dense Component's own variant axis."""
-    axis = VariantAxis(store / "dense")
+    axis = open_store(store / "dense").variant_axis(aliases=False)
     rows = {record.alid: int(record.variant_index) for record in axis.all()}
     axis.close()
     return rows

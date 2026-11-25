@@ -43,19 +43,17 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 
-from opengwasdb.layouts.dense.indexed_subsets import (
+from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX
+from opengwasdb.store_reader.analyses import AnalysesTable, analysis_label
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
+from opengwasdb.store_reader.indexed import (
     IndexedSubsetError,
     indexed_subset_namespace_path,
     open_indexed_subset,
 )
-from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.model.analyses import (
-    ANCESTRY_PROP_PREFIX,
-    AnalysesTable,
-    analysis_label,
-)
-from opengwasdb.store.arrays import open_group
-from opengwasdb.store.open import UnsupportedFormatVersion
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.rho import DenseRhoReader
+from opengwasdb.store_reader.stored import stored_attributes
 
 # scipy publishes no type stubs, so mypy sees nothing of `scipy.cluster.
 # hierarchy` or `scipy.spatial.distance` -- the same reason `layouts/dense/
@@ -219,12 +217,61 @@ _FILE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
         "Plain tab-delimited text.",
     ),
     "overview.html": ("human", "This page."),
-    "index.sqlite": ("internal", "Variant alias lookup index. Read via the query API."),
-    "variants.tsv.gz": ("internal", "Tabix-indexed variant table. Read via the query API."),
-    "variants.tsv.gz.tbi": ("internal", "Tabix index for variants.tsv.gz."),
-    "variant_offsets.npy": ("internal", "Variant axis row-offset index."),
-    "variant_alid_bytes.npy": ("internal", "Variant axis identifier index."),
-    "variant_alid_rows.npy": ("internal", "Variant axis identifier index."),
+    "regions.tsv": (
+        "human",
+        "The region boundaries and leads a Ragged build recorded (provenance). Plain "
+        "tab-delimited text.",
+    ),
+    "index.sqlite": (
+        "internal",
+        "Reference Completion Quality per LD block and Analysis (provenance). From format "
+        "0.3.0 no query reads it; a 0.2 release also keeps its layout and the rsID aliases "
+        "its Dense and Hybrid queries fall back to here.",
+    ),
+    "variants.tsv.gz": (
+        "human",
+        "The Store Variant Table, one row per variant: tab-delimited, bgzipped and "
+        "tabix-indexed, for tabix, bedtools and R. From format 0.3.0 no query reads it: "
+        "queries read the variant sidecars below. A 0.2 release's queries read it.",
+    ),
+    "variants.tsv.gz.tbi": (
+        "internal",
+        "Tabix index for variants.tsv.gz. From format 0.3.0 no query reads it.",
+    ),
+    "variant_offsets.npy": ("internal", "Variant axis row-offset index (format 0.2)."),
+    "variant_alid_bytes.npy": ("internal", "Variant axis identifier index (format 0.2)."),
+    "variant_alid_rows.npy": ("internal", "Variant axis identifier index (format 0.2)."),
+    "variant_alid_utf8.npy": ("internal", "Every variant's ALID, in row order (ALID sidecar)."),
+    "variant_alid_offsets.npy": ("internal", "Where each row's ALID starts (ALID sidecar)."),
+    "variant_alid_keys.npy": ("internal", "Sorted ALID search keys (ALID sidecar)."),
+    "variant_alid_order.npy": ("internal", "The row of each sorted ALID key (ALID sidecar)."),
+    "variant_position.npy": (
+        "internal",
+        "Every variant's position, in row order (position sidecar).",
+    ),
+    "variant_position_chromosomes.npy": (
+        "internal",
+        "The chromosomes the rows are on, in order (position sidecar).",
+    ),
+    "variant_position_chromosome_offsets.npy": (
+        "internal",
+        "Where each chromosome's rows start (position sidecar).",
+    ),
+    "variant_rsid_bytes.npy": ("internal", "Sorted rsID search keys (rsID index)."),
+    "variant_rsid_rows.npy": ("internal", "The row of each sorted rsID key (rsID index)."),
+    "variant_source_alid_state.npy": (
+        "internal",
+        "Whether each row has a pre-liftover ALID, and whether it is the row's own "
+        "(source_alid sidecar).",
+    ),
+    "variant_source_alid_utf8.npy": (
+        "internal",
+        "The pre-liftover ALID of each lifted row (source_alid sidecar).",
+    ),
+    "variant_source_alid_offsets.npy": (
+        "internal",
+        "Where each lifted row's pre-liftover ALID starts (source_alid sidecar).",
+    ),
     "data.zarr": (
         "internal",
         "Association statistics (Z/SE) and top-hit indexes, chunked and compressed. "
@@ -232,8 +279,9 @@ _FILE_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     ),
     "dense": (
         "internal",
-        "Dense Component -- a nested Dense store holding the Hybrid layout's shared "
-        "reference-panel variants (has its own manifest.json/analyses.tsv/overview.html).",
+        "Dense Component -- a nested Dense store holding the Hybrid layout's "
+        "reference-panel grid. From format 0.3.0 it has its own manifest.json but no "
+        "variant table or analyses.tsv: its variants and Analyses are this release's.",
     ),
     "dense_to_shared.npy": ("internal", "Dense Component row -> shared variant table index map."),
 }
@@ -348,16 +396,6 @@ def _manifest_summary(store_path: Path) -> tuple[str, str, str]:
     )
 
 
-def _open_optional_group(path: Path) -> Any | None:
-    """A Zarr group opened read-only, or None when it is absent/unreadable.
-
-    Rho and Indexed Variant Subsets are opt-in derived artifacts; overview.html
-    is regenerable presentation and must degrade gracefully rather than fail to
-    render when one is missing or damaged (issues #23, #267).
-    """
-    return _degrade(lambda: open_group(path), None)
-
-
 def _load_rho_group(store_path: Path) -> Any | None:
     """The optional `data.zarr/rho` group (ADR 0025), or None if absent/unreadable.
 
@@ -365,7 +403,7 @@ def _load_rho_group(store_path: Path) -> Any | None:
     won't have one, and `overview.html` must degrade gracefully rather than
     fail to render (issue #23 AC3 applies here too).
     """
-    root = _open_optional_group(store_path / "data.zarr")
+    root = _degrade(lambda: release_arrays(store_path), None)
     return root["rho"] if root is not None and "rho" in root else None
 
 
@@ -631,9 +669,11 @@ def _read_subset_attrs(path: Path) -> dict[str, Any] | None:
 
     Overview presents the group's own recorded facts and never recomputes a
     value; a damaged group is omitted rather than shown with invented values.
+    Like Rho, a subset is opt-in, so one missing or damaged degrades the page
+    rather than failing it (issues #23, #267).
     """
-    group = _open_optional_group(path)
-    return dict(group.attrs) if group is not None else None
+    attrs: dict[str, Any] | None = _degrade(lambda: stored_attributes(path), None)
+    return attrs
 
 
 def _indexed_subset_value(attrs: dict[str, Any], key: str) -> str:

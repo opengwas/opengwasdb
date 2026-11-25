@@ -17,7 +17,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata
 from opengwasdb.model.enums import SD_RESCALING_METHODS, OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest_columns import (
@@ -37,6 +36,7 @@ from opengwasdb.readers.column_map import (
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.registry import SourceSpec, known_capabilities
+from opengwasdb.store_reader.assembly import normalise_build
 
 __all__ = [
     "ManifestRow",

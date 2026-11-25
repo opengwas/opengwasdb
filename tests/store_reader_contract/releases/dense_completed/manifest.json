@@ -1,0 +1,117 @@
+{
+  "association_coverage": "gwas",
+  "completion_state": "reference_completed",
+  "created_at": "2026-11-24T00:00:00+00:00",
+  "encoding": {
+    "eaf": {
+      "kind": "int8_residual",
+      "reference": true,
+      "residual_range": 0.5
+    },
+    "se": {
+      "kind": "int8_residual",
+      "residual_range": 0.5
+    },
+    "version": 3,
+    "z": {
+      "kind": "int16_fixed",
+      "scale": 1024
+    }
+  },
+  "format_version": "0.3.0",
+  "primary_layout": "dense",
+  "provenance": {
+    "builder": "opengwasdb.v0.1_dense_observed",
+    "completion": {
+      "ancestry": "EUR",
+      "ld_panel_id": "eur-hg38-gpm",
+      "method": "elastic_net_eigenvectors_v2_regioncap",
+      "min_cor": 0.0,
+      "n_imputed": 4,
+      "n_missing_imputation_failed": 0,
+      "n_missing_off_panel": 0,
+      "n_variants_new": 0,
+      "n_variants_total": 200,
+      "panel_indels": {
+        "n_indels": 0,
+        "n_placed": 0,
+        "reference_from": "none",
+        "tables": [],
+        "unplaced": {
+          "effect_allele_not_an_allele": 0,
+          "identity_invalid": 0,
+          "no_effect_allele": 0,
+          "no_reference": 0
+        }
+      },
+      "panel_snvs_unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0
+      },
+      "pca_thresh": 0.9,
+      "se_out_of_range": {
+        "imputed": [
+          0,
+          0
+        ],
+        "observed": [
+          0,
+          0
+        ]
+      }
+    },
+    "dense": {
+      "chunk_shape": [
+        200,
+        2
+      ],
+      "compressor": {
+        "clevel": 3,
+        "cname": "zstd",
+        "format": "zarr_v3_sharding",
+        "library": "zarr.codecs.BloscCodec",
+        "shuffle": "bitshuffle"
+      },
+      "se_dtype": "int8",
+      "shard_shape": [
+        200,
+        2
+      ],
+      "statistic_arrays": [
+        "z",
+        "se"
+      ],
+      "top_hit_thresholds": [
+        5e-08,
+        5e-06,
+        0.0005
+      ],
+      "variant_axis": {
+        "format": "tabix_tsv_v1",
+        "tabix_index": "variants.tsv.gz.tbi",
+        "table": "variants.tsv.gz"
+      },
+      "zarr_format": 3
+    },
+    "eaf_orientation": {
+      "analyses": [
+        {
+          "analysis_id": "a",
+          "note": "general Dense source supplied no orientation reference",
+          "outcome": "unverified"
+        },
+        {
+          "analysis_id": "b",
+          "note": "general Dense source supplied no orientation reference",
+          "outcome": "unverified"
+        }
+      ]
+    },
+    "source_record_count": 396,
+    "source_release_id": "obs"
+  },
+  "reference_assembly": "GRCh38",
+  "release_id": "comp",
+  "store_id": "s"
+}

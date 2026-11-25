@@ -1,0 +1,106 @@
+{
+  "tool": "benchmarks/benchmark_process_start.py",
+  "argv": [
+    "--store",
+    "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+    "--selection",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-450/scratch/465/head-ogs9.json",
+    "--tree",
+    "/data/opengwasdb/work/orchestrate/opengwasdb-450/worktrees/465",
+    "--tree-commit",
+    "a806ded0",
+    "--runs",
+    "7",
+    "--phewas-alid",
+    "19:44908822:C:T",
+    "--output",
+    "docs/benchmark-output/465_process_start_ogs00009_head.json"
+  ],
+  "host_load_start": {
+    "load_1m": 22.41,
+    "load_5m": 27.1,
+    "load_15m": 27.95,
+    "cpus": 224
+  },
+  "worktree_clean": true,
+  "commit": "a806ded0",
+  "measured_at": "2026-11-23T18:05:34.888767+00:00",
+  "opengwasdb_path": "/data/opengwasdb/work/orchestrate/opengwasdb-450/worktrees/465/opengwasdb",
+  "opengwasdb_fingerprint": "ce5ef15717ba6566e70d86134cce036d2186295f008c413386325419dc5a0704",
+  "measured_tree": "/data/opengwasdb/work/orchestrate/opengwasdb-450/worktrees/465/opengwasdb/__init__.py",
+  "measured_tree_commit": "a806ded0",
+  "measured_tree_fingerprint": "ce5ef15717ba6566e70d86134cce036d2186295f008c413386325419dc5a0704",
+  "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+  "runs": 7,
+  "imports": {
+    "median_ms": 49.7,
+    "min_ms": 48.8,
+    "max_ms": 50.7,
+    "runs_ms": [
+      49.7,
+      49.8,
+      50.7,
+      49.0,
+      48.8,
+      49.3,
+      49.7
+    ]
+  },
+  "tabix_open": {
+    "median_ms": 43.4,
+    "min_ms": 25.6,
+    "max_ms": 43.6,
+    "runs_ms": [
+      43.5,
+      43.4,
+      43.6,
+      25.6,
+      43.0,
+      43.0,
+      43.4
+    ]
+  },
+  "index_open": {
+    "median_ms": 0.2,
+    "min_ms": 0.2,
+    "max_ms": 0.2,
+    "runs_ms": [
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2
+    ]
+  },
+  "open_and_lookup": {
+    "median_ms": 2241.5,
+    "min_ms": 2166.4,
+    "max_ms": 2286.3,
+    "runs_ms": [
+      2236.5,
+      2279.9,
+      2166.4,
+      2241.5,
+      2237.8,
+      2286.3,
+      2277.2
+    ]
+  },
+  "phewas": {
+    "median_ms": 88.5,
+    "min_ms": 72.3,
+    "max_ms": 94.3,
+    "runs_ms": [
+      94.3,
+      87.3,
+      90.2,
+      72.3,
+      88.8,
+      84.1,
+      88.5
+    ]
+  },
+  "host_load_end": 18.34
+}

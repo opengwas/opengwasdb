@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from legacy_fixtures import relayout_dense_as_0_1_0
 
 from benchmarks import _query_shapes
@@ -31,15 +32,11 @@ from benchmarks.benchmark_store_comparison import assert_identical, result_diges
 from opengwasdb.query import query_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store.arrays import (
-    TOP_HIT_SHARD_CHUNKS,
-    ArrayRole,
     compressor,
     create_array,
     create_group,
-    inner_chunk_of,
     open_group,
     open_group_for_write,
-    shard_layout,
     sharded_compressor,
 )
 from opengwasdb.store.convert import (
@@ -51,6 +48,9 @@ from opengwasdb.store.convert import (
     convert_release,
     verify_conversion,
 )
+from opengwasdb.store_reader import format as store_format
+from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.layout import TOP_HIT_SHARD_CHUNKS, ArrayRole, shard_layout
 from opengwasdb.validation import validate_store
 
 #: The fixture's geometry: more than 1,000 variants so the Dense variant-axis
@@ -520,8 +520,18 @@ def _fake_release(root: Path, **manifest: object) -> Path:
 
 
 def test_source_and_destination_may_not_be_the_same_path(dense_source: Path):
-    with pytest.raises(ConversionError, match="same path"):
+    with pytest.raises(ConversionError, match="source and --into are the same path"):
         convert_release(dense_source, dense_source)
+
+
+def test_a_destination_inside_the_source_is_refused_before_anything_is_written(
+    dense_source: Path,
+):
+    """A derived release never writes inside its source (spec §21.4, #467)."""
+    before = sorted(p.relative_to(dense_source) for p in dense_source.rglob("*"))
+    with pytest.raises(ConversionError, match="lies inside the source release"):
+        convert_release(dense_source, dense_source / "converted.opengwasdb")
+    assert sorted(p.relative_to(dense_source) for p in dense_source.rglob("*")) == before
 
 
 def test_an_existing_destination_is_refused(
@@ -605,6 +615,7 @@ def _set_format_version(root: Path, version: str) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     data["format_version"] = version
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    follow_stamp(root)
 
 
 def _set_dense_chunk_shape(root: Path, chunk_shape: list[int]) -> None:
@@ -797,7 +808,7 @@ def test_completion_refuses_a_converted_0_2_0_source(converted_dense_store: Path
     ADR 0079): it is rebuilt first."""
     version = store_open.open_store(converted_dense_store).manifest.format_version
     assert version == "0.2.0"
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="Rebuild the release"):
+    with pytest.raises(store_format.UnsupportedFormatVersion, match="Rebuild the release"):
         store_open.check_writable_format_version(version)
 
 

@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.association_tsv import (
     ASSOCIATION_TSV_CAPABILITY,
@@ -20,6 +19,7 @@ from opengwasdb.readers.association_tsv import (
 )
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import resolve_reader
+from opengwasdb.store_reader.analyses import read_analyses
 
 
 def _batches(path: Path):

@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 import pytest
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from legacy_fixtures import relayout_as_0_1_0
 from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS
 from test_dense_completion import _make_ld_panel as _make_dense_ld_panel
@@ -48,18 +49,12 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
-from opengwasdb.store.arrays import (
-    ArrayRole,
-    create_array,
-    create_group,
-    open_group,
-    role_for_array_path,
-    shard_layout,
-)
+from opengwasdb.store.arrays import create_array, create_group, open_group, role_for_array_path
 from opengwasdb.store.convert import ConversionError, convert_release, verify_conversion
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.layout import ArrayRole, shard_layout
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -739,6 +734,7 @@ def _set_format_version(manifest: Path, version: str) -> None:
     data = json.loads(manifest.read_text())
     data["format_version"] = version
     manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    follow_stamp(manifest.parent)
 
 
 def test_a_hybrid_with_an_unconverted_outer_manifest_is_invalid(

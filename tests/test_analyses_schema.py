@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from opengwasdb.model.analyses import (
     REQUIRED_COLUMNS,
-    AnalysesTable,
     ColumnClass,
-    analysis_label,
     classify_column,
-    read_analyses,
     to_json_schema,
     validate_analyses,
     write_analyses,
 )
+from opengwasdb.store_reader.analyses import AnalysesTable, analysis_label, read_analyses
 
 _MINIMAL_ROW = {
     "analysis_id": "ieu-a-7",

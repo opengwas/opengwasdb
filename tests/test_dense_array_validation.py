@@ -24,18 +24,12 @@ import pytest
 import zarr
 from store_reads import element_reads, times_read
 
-from opengwasdb import top_hits
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EAF_REFERENCE,
-    Z_OVERFLOW,
-    SeEncoding,
-    StoreEncoding,
-    ZEncoding,
-)
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits
-from opengwasdb.model.enums import CompletionState
 from opengwasdb.store import open_store
+from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, EAF_REFERENCE
+from opengwasdb.store_reader.encoding.plan import Z_OVERFLOW, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.enums import CompletionState
 from opengwasdb.top_hits import slices_are_ordered
 from opengwasdb.validation import RULES, validate_store
 from opengwasdb.validation.rule import Fold, Kind, Target, ValidationOptions
@@ -88,7 +82,7 @@ def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
     for name, values in arrays.items():
         group.create_array(name, data=values)
 
-    loaded = top_hits.load_tier_arrays(group)
+    loaded = reader_top_hits.tier_arrays(group)
 
     assert loaded["rows"].dtype == np.uint32
     assert loaded["cols"].dtype == np.uint32
@@ -107,7 +101,7 @@ def test_the_tiers_are_enumerated_in_threshold_order_not_store_order() -> None:
         return SimpleNamespace(attrs={"threshold": threshold})
 
     # Held in the store's order, which is neither the threshold's nor the key's.
-    index = {top_hits.threshold_key(t): tier(t) for t in (5e-4, 5e-8, 5e-6)}
+    index = {reader_top_hits.threshold_key(t): tier(t) for t in (5e-4, 5e-8, 5e-6)}
 
     assert top_hit_rules._keys(_grid({"top_hits": index})) == [
         "p_5e_08",
@@ -160,7 +154,7 @@ def test_malformed_tiers_are_diagnosed_and_listed_after_the_well_formed_ones(
 
     result = validate_store(dense_store_path)
 
-    missing = "abs_z, analysis_index, analysis_offsets, p_value, se, variant_index, z"
+    missing = "analysis_index, analysis_offsets, se, variant_index, z"  # 0.3.0's (#471)
     assert result.failed() == {
         "associations.se_negative",
         "associations.markers_paired",
@@ -373,8 +367,8 @@ def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
 ) -> None:
     """The structure rules run after the band scan has released the tiers, from what
     they learned in the same load; the scan holds each tier sorted by row."""
-    tiers = top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
-    arrays = [tiers[key][name] for key in tiers for name in ("variant_index", "z", "abs_z")]
+    tiers = reader_top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
+    arrays = [tiers[key][name] for key in tiers for name in ("variant_index", "z", "se")]
     assert all(array.size for array in arrays), "the fixture's tiers must hold cells"
 
     with element_reads(monkeypatch) as reads:
@@ -389,16 +383,16 @@ def test_a_validation_reads_each_tier_array_once_and_holds_the_tiers_by_row(
 def _top_hit_holdings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Target, str]]:
     """Every `top_hits/…` value a target is asked to hold that is more than a fact.
 
-    The structure rules' small facts (a tier's problem, whether its `abs_z` agrees)
-    are kept for the run; what the association scan reads to check the planes
-    against, the tiers' arrays, is not.
+    The structure rules' small facts (a tier's problem, how many of its rows miss its
+    threshold, whether a 0.2 tier's `abs_z` agrees) are kept for the run; what the
+    association scan reads to check the planes against, the tiers' arrays, is not.
     """
     held: list[tuple[Target, str]] = []
     remember = Target.remember
 
     def recording(self: Target, key: str, read: Any, *, until: str | None = None) -> Any:
         value = remember(self, key, read, until=until)
-        if key.startswith("top_hits/") and not isinstance(value, (bool, str, type(None))):
+        if key.startswith("top_hits/") and not isinstance(value, (bool, int, str, type(None))):
             held.append((self, key))
         return value
 
@@ -414,7 +408,7 @@ def test_the_association_scan_holds_the_top_hit_tiers_only_for_its_pass(
     outlive its pass, whether the pass ends or is interrupted part-way. An
     interruption is no rule's failure: it reaches the caller."""
     store = open_store(dense_store_path)
-    keys = list(top_hits.index_group(store.arrays(mode="r")))
+    keys = list(reader_top_hits.index_group(store.arrays(mode="r")))
     assert keys, "the fixture's grid must carry a Top-Hit Index"
     targets = release_targets(store, ValidationOptions())
     held = _top_hit_holdings(monkeypatch)
@@ -475,7 +469,7 @@ def test_a_tier_flag_is_held_to_a_stored_mask_whatever_the_completion_state(
     store = open_store(dense_store_path)
     assert store.manifest.completion_state is CompletionState.OBSERVED_ONLY
     root = store.arrays(mode="r+")
-    tiers = top_hits.index_group(root)
+    tiers = reader_top_hits.index_group(root)
     keys = list(tiers)
     row, col = int(tiers[keys[0]]["variant_index"][0]), int(tiers[keys[0]]["analysis_index"][0])
     mask = np.zeros(root["z"].shape, dtype=np.uint8)
@@ -507,7 +501,7 @@ def test_a_top_hit_rule_lists_its_tiers_in_threshold_order(
     root = open_store(dense_store_path).arrays(mode="a")
     root["se"][0, 0] = np.float16(-0.1)
     root["se"][0, 1] = np.nan
-    tiers = top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
+    tiers = reader_top_hits.index_group(open_store(dense_store_path).arrays(mode="r"))
     assert sorted(tiers) == ["p_5e_04", "p_5e_06", "p_5e_08"], "three tiers to fail"
 
     result = validate_store(dense_store_path)

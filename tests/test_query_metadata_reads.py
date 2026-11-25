@@ -31,6 +31,7 @@ from zarr.storage import LocalStore
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.facade import _ragged_top_hits
 from tests.ssf_builds import build_ragged_from_ssf
 
 #: Store keys that hold Zarr metadata rather than chunk bytes, v2 and v3.
@@ -147,7 +148,16 @@ def test_a_repeated_query_reads_no_metadata(
         assert empty == [], f"every shape must return rows for this to mean anything: {empty}"
         assert len(warm["top_hits"]["z"]) >= 2, "fixture must have several top hits"
         if layout == "hybrid":
-            overflow = query._overflow_top_hits(_THRESHOLD)
+            overflow = _ragged_top_hits(
+                query._top_hits,
+                query._overflow,
+                query._csr,
+                _THRESHOLD,
+                None,
+                observed_only=False,
+                with_n=False,
+                source="the Overflow",
+            )
             assert len(overflow["z"]) > 0, "hybrid fixture must have overflow hits too"
         with _metadata_reads(monkeypatch) as reads:
             again = {name: call() for name, call in calls.items()}

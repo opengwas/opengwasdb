@@ -31,8 +31,8 @@ from benchmarks.compare_store_releases import compare_values, discover_arrays
 from opengwasdb.encoding.banding import BYTES_PER_CELL
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.manifest import StoreManifest
 
 ANALYSES = tuple(f"t{column}" for column in range(7))
 

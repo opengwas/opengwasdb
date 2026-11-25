@@ -12,11 +12,11 @@ import numpy as np
 import pytest
 from completion_releases import assert_same_release
 from dense_sources import build_dense_fixture, write_dense_manifest
+from format_0_2_3 import follow_stamp
 from ld_blocks import write_ld_block
 
 from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.admission import NotAdmitted
-from opengwasdb.associations import Cells, InvalidAssociations
 from opengwasdb.completion import fill_shards
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
@@ -30,24 +30,24 @@ from opengwasdb.completion.ld_panel import (
     shared_endpoints,
     snp_position,
 )
-from opengwasdb.encoding import (
-    DenseSePlane,
-    DenseZPlane,
-    StoreCodec,
-    StoreEncoding,
-)
-from opengwasdb.encoding.codec import Z_MISSING
+from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
     resume_dense_completion,
 )
-from opengwasdb.model.analyses import read_analyses, write_analyses
+from opengwasdb.model.analyses import write_analyses
 from opengwasdb.query import query_store
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader.alid import parse_canonical_alid
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import Cells, InvalidAssociations
+from opengwasdb.store_reader.encoding.plan import Z_MISSING, StoreEncoding
+from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.validation.validate import validate_store
-from opengwasdb.variants import VariantAxis, parse_canonical_alid
+from opengwasdb.variants.axis import VariantAxis
 
 
 def assert_a_resume_refuses_an_older_checkpoint(dst: Path, resume) -> None:
@@ -303,7 +303,7 @@ class TestCompletionFiles:
         # ADR 0034/issue #68: completion must carry the unified schema
         # forward (no phenotype_id/phenotype_label), refreshing only the
         # completion-rollup and Top-Hit Count columns.
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         table = read_analyses(completed_store / "analyses.tsv")
         assert "phenotype_id" not in table.fieldnames
@@ -313,7 +313,7 @@ class TestCompletionFiles:
         assert rows["a2"]["analysis_label"] == "Disease primary"
 
     def test_analyses_tsv_has_completion_n_missing_total(self, completed_store):
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
 
         rows = {
             r["analysis_id"]: int(r["completion_n_missing_total"])
@@ -328,7 +328,7 @@ class TestCompletionFiles:
         # (ADR 0032) must reflect *this* store's post-completion top-hit
         # index, not be carried forward (or double-counted) from the
         # pre-completion source's counts.
-        from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.store_reader.analyses import read_analyses
         from opengwasdb.top_hits import read_top_hit_counts
 
         rows = sorted(
@@ -526,6 +526,7 @@ class TestValidation:
         manifest_path = completed_store / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest_path.write_text(json.dumps({**manifest, "format_version": "0.2.2"}))
+        follow_stamp(completed_store)
         root = open_store(completed_store).arrays(mode="r+")
         on_panel_rows = np.where(root["on_panel"][:] == 1)[0]
         se = root["se"][:]
@@ -599,7 +600,7 @@ class TestValidation:
         assert any("missing z" in e for e in result.errors), result.errors
 
     def test_corrupt_top_hit_imputed_index_fails(self, completed_store):
-        from opengwasdb.top_hits import threshold_key
+        from opengwasdb.store_reader.top_hits import threshold_key
 
         root = open_store(completed_store).arrays(mode="r+")
         group = root[f"top_hits/{threshold_key(5e-4)}"]
@@ -787,8 +788,10 @@ class TestQuery:
 
     def test_top_hits_observed_only(self, completed_store):
         q = query_store(completed_store)
-        result = q.top_hits(threshold=1.0, observed_only=True)
-        assert "imputed" not in set(result["association_status"].tolist())
+        # the loosest stored tier: a Dense release answers a stored tier only (#483)
+        # (this fixture holds no imputed hit at a stored tier; the golden fixtures do)
+        result = q.top_hits(threshold=5e-4, observed_only=True)
+        assert len(result["z"]) and "imputed" not in set(result["association_status"].tolist())
         q.close()
 
     def test_analysis_top_hits_match_global_subset_and_use_indexed_status(self, completed_store):
@@ -809,7 +812,7 @@ class TestQuery:
         q.close()
 
     def test_top_hit_index_stores_imputed_flags(self, completed_store):
-        from opengwasdb.top_hits import threshold_key
+        from opengwasdb.store_reader.top_hits import threshold_key
 
         root = open_store(completed_store).arrays(mode="r")
         group = root[f"top_hits/{threshold_key(5e-4)}"]
@@ -849,7 +852,7 @@ class TestQuery:
         q.close()
 
     def test_top_hits_does_not_open_frequency_plane(self, completed_store, monkeypatch):
-        from opengwasdb.encoding import DenseEafPlane
+        from opengwasdb.store_reader.encoding.planes import DenseEafPlane
 
         def fail_open(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("top_hits must not open the frequency plane")
@@ -877,7 +880,7 @@ class TestQuery:
         q.close()
 
     def test_top_hits_falls_back_without_indexed_imputed_flags(self, completed_store):
-        from opengwasdb.top_hits import threshold_key
+        from opengwasdb.store_reader.top_hits import threshold_key
 
         q = query_store(completed_store)
         indexed = q.top_hits(threshold=5e-4)
@@ -894,7 +897,7 @@ class TestQuery:
             np.testing.assert_array_equal(indexed[name], fallback[name])
 
     def test_top_hits_falls_back_without_indexed_frequency(self, completed_store):
-        from opengwasdb.top_hits import threshold_key
+        from opengwasdb.store_reader.top_hits import threshold_key
 
         q = query_store(completed_store)
         indexed = q.top_hits(threshold=5e-4)
@@ -1716,21 +1719,16 @@ class TestUnionAxisPhase:
             assert len(axis.tsv_paths) == 2  # one chr1 block + one chr2 block
 
             # The phase has already persisted the axis: variants.tsv.gz and an
-            # index.sqlite seeded with the completion-quality table.
+            # index.sqlite holding the completion-quality table and, from 0.3.0,
+            # nothing else (ADR 0102, #471).
             assert (staged.path / "variants.tsv.gz").exists()
             conn = sqlite3.connect(str(staged.path / "index.sqlite"))
             tables = {
                 r[0]
                 for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
-            metadata = {
-                row[0]: row[1]
-                for row in conn.execute("SELECT key, value FROM metadata")
-            }
             conn.close()
-            assert "completion_quality" in tables
-            assert metadata["n_variants"] == "8"
-            assert metadata["n_analyses"] == "2"
+            assert tables == {"completion_quality"}
 
 
 class TestReaderSeam:

@@ -31,7 +31,6 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Cells, DenseGridReader
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, read_as_planned, run_block
@@ -74,31 +73,23 @@ from opengwasdb.completion.schema import completion_quality_rollup, create_compl
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding import (
-    EAF_BASELINE,
-    EAF_REFERENCE,
-    SE_MISSING,
     AssociationCodec,
     EafExceptionBuilder,
-    EafExceptionTable,
     SeExceptionBuilder,
-    SeExceptionTable,
     StoreCodec,
-    StoreEncoding,
     ZOverflowBuilder,
-    ZOverflowTable,
     write_dense_se_side_arrays,
     write_eaf_baseline,
     write_eaf_reference,
 )
 from opengwasdb.encoding.association_codec import CellValues, Placement, log_se_out_of_range
-from opengwasdb.encoding.codec import SideTables, table_end_to_end
+from opengwasdb.encoding.codec import SideTables, table_end_to_end, write_exact_table
 from opengwasdb.encoding.memory import (
     EXCEPTION_CELLS_PER_RESULT_BYTE,
     FORK_FLOOR_BYTES,
     pool_workers,
 )
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
-from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -109,32 +100,35 @@ from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.analyses import (
     Analysis,
     ancestry_impute_mask,
-    read_analyses,
     read_analysis_records,
     reset_top_hit_counts,
 )
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    CompletionState,
-    PrimaryStorageLayout,
-)
-from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
     check_writable_format_version,
     open_store,
 )
-from opengwasdb.top_hits import add_hit_counts
-from opengwasdb.variants import (
-    CanonicalVariant,
-    VariantAxis,
-    VariantRecord,
-    chromosome_sort_key,
-    parse_canonical_alid,
-    write_variant_axis,
+from opengwasdb.store_reader.alid import parse_canonical_alid
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import Cells, DenseGridReader
+from opengwasdb.store_reader.encoding.codec import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
+    EafExceptionTable,
+    SeExceptionTable,
+    ZOverflowTable,
 )
+from opengwasdb.store_reader.encoding.plan import SE_MISSING, StoreEncoding
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
+from opengwasdb.store_reader.variant_axis import VariantRecord
+from opengwasdb.top_hits import add_hit_counts
+from opengwasdb.variants import CanonicalVariant, chromosome_sort_key, write_variant_axis
+from opengwasdb.variants.axis import carried_source_alids
 
 log = logging.getLogger(__name__)
 
@@ -198,7 +192,7 @@ class _BlockTask:
     ceded: frozenset[str] = frozenset()
 
 
-def _source_row_for(src_axis: VariantAxis, alid: str | None) -> int | None:
+def _source_row_for(src_axis: AnyVariantAxis, alid: str | None) -> int | None:
     """The source row an ALID maps to, or ``None`` for an absent/absent-looking one."""
     parsed = parse_canonical_alid(alid) if alid is not None else None
     rec = src_axis.by_alid(parsed) if parsed is not None else None
@@ -219,7 +213,7 @@ def _match_source_rows(
     stay unmatched: the rows they own keep their NaN fill below, and a source
     position is never fabricated from row 0 or another sentinel.
     """
-    src_axis = VariantAxis(source_path)
+    src_axis = open_store(source_path).variant_axis(aliases=False)
     try:
         src_rows = [_source_row_for(src_axis, alid) for alid in canonical_alids]
         matched_local = [i for i, r in enumerate(src_rows) if r is not None]
@@ -325,7 +319,7 @@ def complete_dense_store(
 
     if impute_analysis_ids is None:
         impute_analysis_ids = derive_impute_analysis_ids(
-            read_analyses(Path(source_path) / "analyses.tsv").rows, ancestry
+            read_analyses(source.analyses_path).rows, ancestry
         )
 
     (checkpoint_dir / "blocks").mkdir(parents=True)
@@ -463,13 +457,16 @@ def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _Sourc
     which is what a source with no ``assigned_ancestry`` column gets; a set
     keeps only the matching Analyses imputed and carries the rest through
     observed-only (ADR 0028)."""
-    src_variant_axis = VariantAxis(src)
+    # A 0.3.0 Hybrid's Dense Component reads both from the Hybrid that nests it, its
+    # variants in its own panel rows (#472): `open_store` says where.
+    source = open_store(src)
+    src_variant_axis = source.variant_axis(aliases=False)
     src_variants = src_variant_axis.all()
     src_variant_axis.close()
     src_alid_to_idx = {v.alid: v.variant_index for v in src_variants}
 
     src_analyses = sorted(
-        read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+        read_analysis_records(source.analyses_path), key=lambda a: int(a.analysis_index)
     )
     n_analyses = len(src_analyses)
     print(f"Source: {len(src_variants):,} variants, {n_analyses:,} analyses")
@@ -572,7 +569,6 @@ def _write_union_axis_tables(
     new_alid_to_idx: dict[str, int],
     panel_alids: set[str],
     n_variants: int,
-    n_analyses: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Persist the union axis: ``variants.tsv.gz`` with the source's rsids
     carried across (issue #109), the ``on_panel`` mask, the inverse
@@ -587,19 +583,21 @@ def _write_union_axis_tables(
 
     rsid_by_alid = {v.alid: v.rsid for v in source_variants if v.rsid}
     print("Writing variants.tsv.gz...")
-    write_variant_axis(staged.path, merged_variants, rsid_by_alid)
+    write_variant_axis(
+        staged.path,
+        merged_variants,
+        rsid_by_alid,
+        carried_source_alids(source_variants, merged_variants),
+    )
 
     out_to_src = np.full(n_variants, -1, dtype=np.int64)
     for v in source_variants:
         out_to_src[new_alid_to_idx[v.alid]] = v.variant_index
 
     print("Writing index.sqlite...")
+    # From 0.3.0 `index.sqlite` holds `completion_quality` and nothing else (ADR 0102).
     with staged.index_connection() as dst_db:
-        initialise_schema(dst_db)
         create_completion_quality_table(dst_db)
-        set_metadata(dst_db, "schema_version", 2)
-        set_metadata(dst_db, "n_variants", n_variants)
-        set_metadata(dst_db, "n_analyses", n_analyses)
         dst_db.commit()
         # analyses.tsv is written after the band write, once
         # n_missing_off_panel is known (issue 044; issue #22).
@@ -629,7 +627,6 @@ def _build_union_axis(
         new_alid_to_idx=new_alid_to_idx,
         panel_alids=panel_alids,
         n_variants=len(merged_variants),
-        n_analyses=source_axis.n_analyses,
     )
     return _UnionAxis(
         merged_variants=merged_variants,
@@ -932,15 +929,12 @@ def _record_effective_dense_chunk_shape(
         return manifest
     # Record the whole layout, not only the inner chunk: a completed release
     # that inherited the source's `shard_shape` or compressor but wrote arrays
-    # with another is the same silent-failure class (issue #245, #247).  The
-    # `index.sqlite` `dense` blob is the third recording 0.2.0 requires (#248),
-    # and completion is the writer that produces it for a completed release.
+    # with another is the same silent-failure class (issue #245, #247). From
+    # 0.3.0 the manifest and the root attrs are the two recordings: the
+    # `index.sqlite` `dense` blob 0.2 carried as a third is dropped (ADR 0102).
     for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format"):
         if key in attrs:
             dense[key] = attrs[key]
-    with staged.index_connection() as connection:
-        set_metadata(connection, "dense", dict(dense))
-        connection.commit()
     return replace(manifest, provenance={**manifest.provenance, "dense": dense})
 
 
@@ -1726,9 +1720,9 @@ def _write_side_arrays(
     table; the carried EAF baseline and its exception table, when the release
     carries one (a baseline-less plane has no residual codes to make exceptions
     for); and a residual SE plane's exception table and model."""
-    table_end_to_end(ZOverflowTable, tables.z_overflow).write(root)
+    write_exact_table(table_end_to_end(ZOverflowTable, tables.z_overflow), root)
     if baseline is not None:
         write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
-        table_end_to_end(EafExceptionTable, tables.eaf_exceptions).write(root)
+        write_exact_table(table_end_to_end(EafExceptionTable, tables.eaf_exceptions), root)
     if coefficients is not None:
         write_dense_se_side_arrays(root, tables.se_exceptions, coefficients)

@@ -28,6 +28,7 @@ import test_dense_completion as tdc
 import test_hybrid_completion as thc
 import test_ragged_completion as trc
 from dense_sources import build_dense_fixture
+from format_0_2_3 import follow_stamp
 from stored_rows import stored_rows
 from test_check_observed_view import HEADER, ROWS
 
@@ -43,12 +44,11 @@ from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import (
     N_MISSING_SE_OUT_OF_RANGE,
-    AnalysesTable,
-    read_analyses,
     read_analysis_records,
     write_analyses,
 )
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.observed_view import check_observed_view
 
@@ -101,6 +101,7 @@ def _stamp_0_2_2(store: Path) -> None:
         manifest_path.write_text(
             json.dumps({**manifest, "format_version": "0.2.2"}), encoding="utf-8"
         )
+        follow_stamp(release)
         table = read_analyses(release / "analyses.tsv")
         fields = tuple(f for f in table.fieldnames if f != N_MISSING_SE_OUT_OF_RANGE)
         rows = tuple({k: v for k, v in row.items() if k in fields} for row in table.rows)
@@ -179,11 +180,10 @@ def dense_pair(tmp_path_factory) -> tuple[Path, Path]:
 
 
 def _dense_cell(store: Path, alid: str, analysis: int) -> tuple[float, float, int]:
-    from opengwasdb.encoding import DenseSePlane, DenseZPlane
-    from opengwasdb.variants import VariantAxis
+    from opengwasdb.store_reader.encoding.planes import DenseSePlane, DenseZPlane
 
     opened = open_store(store)
-    axis = VariantAxis(store)
+    axis = opened.variant_axis(aliases=False)  # a 0.3.0 Component's is the shared one
     try:
         row = axis.by_identifier(alid).variant_index
     finally:
@@ -212,7 +212,7 @@ def test_a_dense_completion_leaves_out_a_source_cell_above_the_bound(dense_pair)
 
     z, se_value, imputed = _dense_cell(completed, *OVER_CELL)
     assert np.isnan(z) and np.isnan(se_value) and imputed == 0
-    assert open_store(completed).manifest.format_version == "0.2.3"
+    assert open_store(completed).manifest.format_version == "0.3.0"
     assert _recorded(completed) == ["1", "0"]
     assert _parts(completed) == {"observed": [1, 0], "imputed": [0, 0]}
     _validates_cleanly(completed)
@@ -299,6 +299,7 @@ def test_a_completion_before_0_2_3_must_leave_nothing_out(tmp_path, dense_pair) 
     edited = shutil.copytree(completed, tmp_path / "edited.opengwasdb")
     manifest = json.loads((edited / "manifest.json").read_text(encoding="utf-8"))
     (edited / "manifest.json").write_text(json.dumps({**manifest, "format_version": "0.2.2"}))
+    follow_stamp(edited)
 
     record = _check(observed, edited)
 
@@ -524,9 +525,9 @@ def test_a_hybrid_completion_counts_what_each_component_left_out(tmp_path, monke
     """trait_a's hg19 2,000,000 is an Overflow row the LD panel makes a crossover, and
     its 1,200,000 one that stays off the panel; a 0.2.2 source holds both with SE
     100,000. Neither is carried: the crossover is not folded, so its Dense cell is
-    Dense completion's, and the Overflow row is dropped. The Dense Component counts
-    the crossover, which would have been its cell; the root counts both (issue #338,
-    ADR 0068 defect 1)."""
+    Dense completion's, and the Overflow row is dropped. The Dense Component's
+    completion records the crossover, which would have been its cell, in its parts;
+    the root counts both (issue #338, ADR 0068 defect 1, #472)."""
     with _as_before_0_2_3(monkeypatch):
         src = thc.build_two_trait_source(
             tmp_path,
@@ -550,7 +551,9 @@ def test_a_hybrid_completion_counts_what_each_component_left_out(tmp_path, monke
         src, dst, thc._make_ld_panel_with_crossover(tmp_path), min_cor=0.0, thresh=0.9
     )
 
-    assert _recorded(dst / "dense") == ["1", "0"]
+    # The completed Dense Component counts the crossover in its completion's parts; at
+    # 0.3.0 it has no analyses.tsv of its own, and the root counts both (#472).
+    assert not (dst / "dense" / "analyses.tsv").exists()
     assert _recorded(dst) == ["2", "0"]
     assert _parts(dst / "dense") == {"observed": [1, 0], "imputed": [0, 0]}
     assert _parts(dst) == {"observed": [2, 0], "imputed": [0, 0]}

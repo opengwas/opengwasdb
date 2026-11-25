@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from format_0_2_3 import with_fixed_width_alid_index
+
+from opengwasdb.store_reader.format import CURRENT_FORMAT_VERSION
 from opengwasdb.variants.axis import VariantAxis, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant
 
@@ -38,7 +41,7 @@ def _axis(tmp_path: Path) -> VariantAxis:
             # variants[3] deliberately has no rsid
         },
     )
-    return VariantAxis(tmp_path)
+    return VariantAxis(tmp_path, format_version=CURRENT_FORMAT_VERSION)
 
 
 def test_rsid_resolves_to_its_variant(tmp_path: Path):
@@ -77,14 +80,17 @@ def test_alid_and_rsid_identifiers_batch_together(tmp_path: Path):
 
 def test_axis_without_an_rsid_index_still_opens(tmp_path: Path):
     """Stores built before this index exists must keep working -- alid lookups
-    unaffected, rsid lookups simply find nothing (the pre-#109 behaviour)."""
+    unaffected, rsid lookups simply find nothing (the pre-#109 behaviour). Such a
+    store is a 0.2 one: a 0.3.0 store without the index is refused, because it names
+    each row's rsID from it (#469, `test_variant_table_off_read_path`)."""
     axis = _axis(tmp_path)
-    from opengwasdb.variants.axis import variant_rsid_bytes_path, variant_rsid_rows_path
+    from opengwasdb.store_reader.variant_axis import variant_rsid_bytes_path, variant_rsid_rows_path
 
     axis.close()
     variant_rsid_bytes_path(tmp_path).unlink()
     variant_rsid_rows_path(tmp_path).unlink()
+    with_fixed_width_alid_index(tmp_path)
 
-    stale = VariantAxis(tmp_path)
+    stale = VariantAxis(tmp_path, format_version="0.2.3")
     assert stale.by_identifier("1:100:A:G") is not None
     assert stale.by_identifier("rs1") is None

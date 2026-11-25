@@ -147,7 +147,7 @@ ruling of 14 November 2026; acceptance does not redefine those targets as met.
 
 The accepted review extraction puts codec recognition, shard-index size and parsing, zstd
 frame validation, owned chunk construction and executor lifecycle in `decoding.py`.
-`location.py` remains the read interface and owns cache accounting, transport wrapping,
+`opengwasdb/ld/store/location.py` remains the read interface and owns cache accounting, transport wrapping,
 shared index I/O, prefetch planning and encoded credits. Its prefetch requests validated
 physical ranges and decode/ownership operations from the backend; it no longer knows the
 index's byte layout or frame headers. The backend imports no location policy. Reject

@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.store.arrays import array_length
+from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.validation.rule import Fold, Kind, Rule, Target
 from opengwasdb.validation.rules.csr import ARRAYS, LENGTHS, is_overflow
 from opengwasdb.validation.rules.hybrid import DENSE_TO_SHARED, dense_to_shared

@@ -36,27 +36,28 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Tally, non_canonical
 from opengwasdb.encoding.banding import BYTES_PER_CELL, band_limits, band_rows, window_cells
-from opengwasdb.encoding.codec import (
+from opengwasdb.encoding.codec import StoreCodec
+from opengwasdb.store.arrays import SE_COEFFICIENTS
+from opengwasdb.store_reader.arrays import array_length, inner_chunk_of
+from opengwasdb.store_reader.associations import Tally, non_canonical
+from opengwasdb.store_reader.encoding.codec import (
     EAF_BASELINE,
     EAF_REFERENCE,
     EafExceptionTable,
     SeExceptionTable,
     SparseExactTable,
-    StoreCodec,
     ZOverflowTable,
     positions_flat,
 )
-from opengwasdb.encoding.plan import EafBaselineError
-from opengwasdb.encoding.planes import (
+from opengwasdb.store_reader.encoding.plan import EafBaselineError
+from opengwasdb.store_reader.encoding.planes import (
     DenseEafPlane,
     DenseSePlane,
     DenseZPlane,
     RaggedEafPlane,
 )
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store.arrays import SE_COEFFICIENTS, array_length, inner_chunk_of
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.validation.rule import Kind, Scan, Split, Target, Unreadable, failed_words
 
 log = logging.getLogger(__name__)

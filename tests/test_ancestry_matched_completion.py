@@ -23,8 +23,8 @@ import numpy as np
 from test_hybrid_completion import build_over_panel
 
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 

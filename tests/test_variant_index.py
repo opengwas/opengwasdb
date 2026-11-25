@@ -40,16 +40,17 @@ from test_ragged_residual_completion import RaggedResidualScenario
 
 from opengwasdb.layouts.ragged import by_variant
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.layouts.ragged.by_variant import (
-    BY_VARIANT_GROUP,
-    ByVariantReader,
-    VariantIndexError,
-    add_variant_index,
-    has_variant_index,
-)
+from opengwasdb.layouts.ragged.by_variant import add_variant_index
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store import open_store
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.by_variant import (
+    BY_VARIANT_GROUP,
+    ByVariantReader,
+    VariantIndexError,
+    has_variant_index,
+)
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.rules import by_variant as by_variant_rules
 from tests.ssf_builds import build_ragged_from_ssf
@@ -120,11 +121,11 @@ def residual(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario
 
 def test_path_mapper_learns_the_index_leaves() -> None:
     assert store_arrays.role_for_array_path("ragged/by_variant/offsets") is (
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT
+        store_layout.ArrayRole.RAGGED_PER_VARIANT
     )
     for leaf in _CORE_LEAVES + ("eaf", "imputed"):
         assert store_arrays.role_for_array_path(f"ragged/by_variant/{leaf}") is (
-            store_arrays.ArrayRole.ASSOCIATION_SEQUENCE
+            store_layout.ArrayRole.ASSOCIATION_SEQUENCE
         )
     for leaf in (
         "z_overflow_index",
@@ -135,7 +136,7 @@ def test_path_mapper_learns_the_index_leaves() -> None:
         "se_exception_value",
     ):
         assert store_arrays.role_for_array_path(f"ragged/by_variant/{leaf}") is (
-            store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE
+            store_layout.ArrayRole.RAGGED_EXCEPTION_TABLE
         )
     assert store_arrays.role_for_array_path("ragged/by_variant/mystery") is None
     assert store_arrays.role_for_array_path("ragged/by_variant/deeper/leaf") is None
@@ -156,11 +157,11 @@ def test_offsets_hint_is_a_path_fact() -> None:
     # The role's default follows the plane (200,000), which is why the path
     # hint is needed: without it a query reading one variant decompresses
     # 200,000 offsets.
-    default = store_arrays.chunk_layout(
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT, (3,), component_chunk=200_000
+    default = store_layout.chunk_layout(
+        store_layout.ArrayRole.RAGGED_PER_VARIANT, (3,), component_chunk=200_000
     )
-    hinted = store_arrays.chunk_layout(
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT,
+    hinted = store_layout.chunk_layout(
+        store_layout.ArrayRole.RAGGED_PER_VARIANT,
         (3,),
         hint=store_arrays.inner_chunk_hint_for_path("ragged/by_variant/offsets"),
     )
@@ -188,11 +189,11 @@ def test_builder_writes_the_decided_layout(observed_ssf: Path) -> None:
     # The decided shards for a full-size array (ADR 0060): 10 M for the offset
     # axis, 50 M for the sequences.  A tiny fixture clips them to its own
     # extent, which is why the roles are checked on a large synthetic shape.
-    assert store_arrays.shard_layout(
-        store_arrays.ArrayRole.RAGGED_PER_VARIANT, (200_000_000,), inner_chunk=(1_000,)
+    assert store_layout.shard_layout(
+        store_layout.ArrayRole.RAGGED_PER_VARIANT, (200_000_000,), inner_chunk=(1_000,)
     ) == (10_000_000,)
-    assert store_arrays.shard_layout(
-        store_arrays.ArrayRole.ASSOCIATION_SEQUENCE,
+    assert store_layout.shard_layout(
+        store_layout.ArrayRole.ASSOCIATION_SEQUENCE,
         (200_000_000,),
         inner_chunk=(200_000,),
     ) == (50_000_000,)
@@ -616,7 +617,7 @@ def _ragged(store: Path) -> Path:
 
 def test_reader_refuses_a_missing_required_array(tmp_path: Path) -> None:
     """A missing `by_variant/z` is a named error, not a bare KeyError later."""
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
 
     store = _build_ssf_store(tmp_path / "missing-array", store_id="idx")
     root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
@@ -627,7 +628,7 @@ def test_reader_refuses_a_missing_required_array(tmp_path: Path) -> None:
 
 def test_reader_refuses_a_stale_index_at_open(tmp_path: Path) -> None:
     """`offsets[-1]` must equal the component's row count, or the index is stale."""
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
 
     store = _build_ssf_store(tmp_path / "stale-at-open", store_id="idx")
     root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
@@ -642,8 +643,8 @@ def test_reader_refuses_a_missing_imputed_mask_on_reference_eaf(
     residual: RaggedResidualScenario, tmp_path: Path
 ) -> None:
     """A reference-EAF release without the index's mask must raise, not read zeros."""
-    from opengwasdb.encoding import EafBaselineError
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
+    from opengwasdb.store_reader.encoding.plan import EafBaselineError
 
     # A copy, so the destructive edit does not damage the module-scoped fixture
     # for the tests that share it (review round 2, finding 6).
@@ -664,7 +665,7 @@ def test_validation_rejects_a_wrong_index_inner_chunk(tmp_path: Path) -> None:
     store_arrays.create_array(
         index,
         "analysis_index",
-        store_arrays.ArrayRole.ASSOCIATION_SEQUENCE,
+        store_layout.ArrayRole.ASSOCIATION_SEQUENCE,
         data=analysis_index,
         dtype=np.int32,
         compressor=store_arrays.compressor(),
@@ -740,7 +741,7 @@ def test_windowed_exception_table_is_bounded_by_scattered_positions() -> None:
     counter = _CellCounter()
     # A small scan window, so the scattered path reads several windows rather
     # than the whole table in one.
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     original_window = WindowedExactTable.scan_window_entries
     WindowedExactTable.scan_window_entries = chunk * 8
@@ -820,18 +821,17 @@ def _windowed_table(
     """A `WindowedExactTable` over a real zarr group, counting cells read."""
     import tempfile
 
-    from opengwasdb.encoding import EafExceptionTable
-    from opengwasdb.encoding.codec import WindowedExactTable
     from opengwasdb.store import arrays as store_arrays
+    from opengwasdb.store_reader.encoding.codec import EafExceptionTable, WindowedExactTable
 
     directory = tempfile.mkdtemp(prefix="windowed-table-")
     root = store_arrays.open_group_for_write(Path(directory) / "t.zarr", "w")
     store_arrays.create_array(
-        root, "eaf_exception_index", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+        root, "eaf_exception_index", store_layout.ArrayRole.RAGGED_EXCEPTION_TABLE,
         data=index, dtype=np.int64, compressor=None, hint=chunk,
     )
     store_arrays.create_array(
-        root, "eaf_exception_value", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+        root, "eaf_exception_value", store_layout.ArrayRole.RAGGED_EXCEPTION_TABLE,
         data=value, dtype=np.float32, compressor=None, hint=chunk,
     )
     group = _CountedGroup(
@@ -881,7 +881,7 @@ def test_windowed_exception_table_bounds_the_number_of_zarr_reads(
     whole table, so the new batched scan needs one window read and the old
     per-chunk scan needs one per position.
     """
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     total = 32768  # 512 inner chunks of 64
     chunk = 64
@@ -947,7 +947,7 @@ def test_windowed_exception_table_scans_a_sparse_scatter_chunk_by_chunk(
     multiple of `positions x chunk x 2`, which the always-batch scan cannot
     meet (it reads a whole window per touched window).
     """
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     total, chunk, window_chunks = 32768, 64, 40  # 512 chunks; production window = 40
     monkeypatch.setattr(WindowedExactTable, "scan_window_entries", chunk * window_chunks)
@@ -983,7 +983,7 @@ def test_windowed_exception_table_scan_terminates_with_an_unaligned_window(
     """
     import signal
 
-    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store_reader.encoding.codec import WindowedExactTable
 
     total, chunk = 32768, 7  # 4,682 chunks; 10 % 7 != 0, so the window is unaligned
     monkeypatch.setattr(WindowedExactTable, "scan_window_entries", 10)

@@ -79,6 +79,13 @@ components:
     stages: [build, query]
     summary: Canonical variant identity, orientation, rsids, the Store Variant Axis and liftover.
     paths: [opengwasdb/variants/, opengwasdb/build/liftover.py]
+  - id: store_reader
+    name: Store Reader
+    container: engine
+    layer: 0
+    stages: [query, validate, complete]
+    summary: The read-only path every reader of a Store Release uses, and the ogquery package to be; imports only numpy, zarr, numcodecs, the standard library and itself.
+    paths: [opengwasdb/store_reader/]
   - id: routing
     name: Variant Routing
     container: engine
@@ -140,22 +147,22 @@ components:
     container: engine
     layer: 4
     stages: [query]
-    summary: The layout-independent query facade, result resolution and association reads.
-    paths: [opengwasdb/query/, opengwasdb/associations/]
+    summary: The query API opengwasdb's callers import; it opens a release with opengwasdb's reader of the 0.2.x Variant Table and hands it to the Store Reader's facade.
+    paths: [opengwasdb/query/]
   - id: model
     name: Store contract model
     container: engine
     layer: 0
     stages: [cross]
     summary: analyses.tsv, manifest and enum contracts; the presence rule and statistic helpers shared by builders, validators and queries.
-    paths: [opengwasdb/model/, opengwasdb/associations/record.py, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/build/ordered_pool.py]
+    paths: [opengwasdb/model/, opengwasdb/stats.py, opengwasdb/version.py, opengwasdb/lazy_exports.py, opengwasdb/build/ordered_pool.py]
   - id: maintenance
     name: Repair and re-encode
     container: engine
     layer: 4
     stages: [cross]
-    summary: Representation-only repairs, the SE re-encode of existing Store Releases, and layout conversion.
-    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py]
+    summary: Representation-only repairs, the SE re-encode of existing Store Releases, layout conversion, and the rewrite to format 0.3.0 with the query digests that prove it.
+    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py, opengwasdb/store/query_digests.py, opengwasdb/store/rewrite.py]
   # opengwasdb.ld, imported from opengwas/ogld whole (#455), is six components
   # on the engine's layers (#459). Its own layering: format at the
   # bottom, then store, genotypes, build and query, cli on top. build and query

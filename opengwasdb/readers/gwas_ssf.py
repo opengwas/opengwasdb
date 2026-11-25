@@ -81,6 +81,7 @@ import pandas as pd
 
 import opengwasdb.readers.columnar as columnar
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.model.imputation_score import GWAS_SSF_CAPABILITY as GWAS_SSF_CAPABILITY
 from opengwasdb.readers.effect_source import (
     EffectSource,
     EffectSourceKind,
@@ -129,19 +130,17 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.stats import FrequencyTally
+from opengwasdb.store_reader.identity import normalise_allele, normalise_chromosome
 from opengwasdb.variants.normalise import (
     HmCodeIndel,
     HmColumnsIndel,
     IdentityFaults,
     Orientation,
     UnharmonisedIndel,
-    normalise_allele,
-    normalise_chromosome,
     orient_or_drop,
 )
 from opengwasdb.variants.rsid import normalise_rsid
 
-GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
 #: Which rows of a GWAS-SSF file declare their `other_allele` the reference, by
 #: the file's layout, read from its header (ADR 0079; owner, 7 Nov 2026):
 #:

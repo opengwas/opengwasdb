@@ -89,14 +89,6 @@ def test_mr_strata_split_by_status_and_a_small_stratum_is_none():
     assert _hybrid_report.ivw(instruments)["n"] == len(instruments)
 
 
-def test_neglog10_p_stays_significant_where_a_naive_tail_would_not():
-    """`1 - ndtr(z)` is already 0 at z = 40; the log-domain p is not."""
-    from scipy.special import ndtr
-
-    assert 1.0 - ndtr(40.0) == 0.0
-    assert _hybrid_report.neglog10_p(40.0) == pytest.approx(350.0, abs=1.0)
-
-
 def test_the_default_estimate_is_the_both_observed_instruments():
     observed = _instruments([0.10, 0.20, 0.30], [0.05, 0.10, 0.15], [0.01, 0.03, 0.02])
     imputed = _instruments([0.10, 0.20], [0.00, 0.01], [0.01, 0.01], "observed", "imputed")

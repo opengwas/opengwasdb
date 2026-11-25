@@ -19,11 +19,8 @@ from typing import Any
 import pytest
 
 from opengwasdb.ld import cli
-from opengwasdb.variants.normalise import (
-    VariantNormalisationError,
-    normalise_chromosome,
-    orient_to_canonical,
-)
+from opengwasdb.store_reader.identity import VariantNormalisationError, normalise_chromosome
+from opengwasdb.variants.normalise import orient_to_canonical
 from opengwasdb.variants.sorted_spelling import (
     DuplicateRecord,
     resolve_sorted_reversed_indels,

@@ -1,0 +1,1393 @@
+{
+ "tool": "benchmarks/rust_spike/run_spike.py",
+ "ticket": 477,
+ "measured_at": "2026-11-23T19:11:57Z",
+ "argv": [
+  "benchmarks/rust_spike/run_spike.py",
+  "--selection",
+  "docs/benchmark-output/rust_spike_selection_2026-10-05_artifact.json",
+  "--output",
+  "docs/benchmark-output/rust_spike_ogs00009_old_selection.json",
+  "--base-store",
+  "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+  "--rust-binary",
+  "/data/opengwasdb/work/orchestrate/opengwasdb-450/scratch/477/target/release/opengwasdb-rust-spike",
+  "--zarrs-python",
+  "/data/opengwasdb/work/orchestrate/opengwasdb-450/scratch/477",
+  "--scratch",
+  "/data/opengwasdb/work/orchestrate/opengwasdb-450/scratch/477",
+  "--rounds",
+  "5",
+  "--warm",
+  "3",
+  "--max-start-load",
+  "25",
+  "--run",
+  "python-fused-1000=python-fused@/data/opengwasdb/stores/OGS-00009/store.opengwasdb"
+ ],
+ "commit": "d348d9493b66fb77424449f37055a5620a6c6ca3",
+ "tree_clean": false,
+ "base_store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+ "selection": {
+  "exposure_analysis_id": "ukb-b-17805",
+  "phewas_alid": "19:44908822:C:T",
+  "region": {
+   "chrom": "19",
+   "start": 44500000,
+   "end": 45500000
+  },
+  "random_lookup_shapes": [
+   {
+    "n_variants": 10,
+    "n_analyses": 100
+   },
+   {
+    "n_variants": 100,
+    "n_analyses": 10
+   }
+  ],
+  "random_alids": [
+   "4:76695022:C:T",
+   "1:65739979:C:T",
+   "5:88619663:G:T",
+   "12:62023811:G:T",
+   "2:31082970:A:G",
+   "8:68064526:A:G",
+   "1:98986502:G:T",
+   "13:71030053:C:T",
+   "14:104693875:C:T",
+   "7:116047321:A:T",
+   "6:42187873:G:T",
+   "20:59542457:C:T",
+   "18:41325803:C:T",
+   "10:106818585:C:T",
+   "1:83724305:A:C",
+   "9:91206063:A:G",
+   "10:132106707:G:T",
+   "12:45263491:C:T",
+   "8:121703088:G:T",
+   "2:134191668:A:G",
+   "8:115201732:C:T",
+   "21:33398052:A:G",
+   "8:84364577:C:T",
+   "11:69328516:A:G",
+   "9:71887767:C:T",
+   "14:83880452:A:T",
+   "4:52749123:C:T",
+   "4:59380843:C:T",
+   "6:8514462:A:G",
+   "3:30948509:G:T",
+   "8:11063114:C:T",
+   "10:49362054:A:G",
+   "6:19214877:C:T",
+   "3:180824816:A:T",
+   "2:6925869:C:T",
+   "19:57530335:C:T",
+   "6:130758283:A:G",
+   "9:133165599:C:T",
+   "16:6572096:C:T",
+   "16:69906458:A:G",
+   "9:14151039:C:T",
+   "16:16990730:C:G",
+   "15:76943950:A:C",
+   "9:2891054:C:T",
+   "11:102384953:C:T",
+   "10:93256155:A:G",
+   "12:92045996:A:G",
+   "5:143598114:C:G",
+   "4:114407453:C:G",
+   "8:25406115:C:T",
+   "22:45460548:C:G",
+   "11:3475368:C:T",
+   "2:166436663:C:G",
+   "16:53920140:A:C",
+   "6:49460205:A:G",
+   "11:62552255:A:T",
+   "7:51981192:G:T",
+   "1:22707709:G:T",
+   "4:174761106:A:G",
+   "5:58263268:A:G",
+   "12:60084093:A:G",
+   "8:13059461:C:G",
+   "1:170046491:A:G",
+   "4:93223661:C:G",
+   "17:54676924:G:T",
+   "13:69145141:G:T",
+   "13:60245088:C:T",
+   "15:97272733:A:G",
+   "7:130750293:A:C",
+   "6:35642037:C:T",
+   "15:27096333:C:T",
+   "17:3082989:C:T",
+   "1:15114998:A:G",
+   "8:68824373:A:T",
+   "1:243769312:C:T",
+   "5:7898878:A:G",
+   "12:91618424:C:T",
+   "6:12938109:C:T",
+   "2:16279633:A:G",
+   "11:61893232:A:G",
+   "5:2551993:A:G",
+   "12:17357276:C:T",
+   "19:16520336:A:G",
+   "11:5565088:C:T",
+   "12:68004338:C:T",
+   "10:68798957:C:T",
+   "6:130165368:A:G",
+   "17:52525302:C:T",
+   "10:22828313:G:T",
+   "6:28886492:A:G",
+   "16:7852026:C:T",
+   "11:110674775:G:T",
+   "1:119571311:C:T",
+   "1:49192650:C:T",
+   "5:37853894:C:T",
+   "1:238139788:C:T",
+   "1:7359867:C:T",
+   "3:32030512:C:T",
+   "19:14077362:A:C",
+   "6:74759504:A:C"
+  ],
+  "random_analyses": [
+   "ukb-b-8379",
+   "ukb-b-527",
+   "ukb-b-8374",
+   "ukb-b-6448",
+   "ukb-b-20386",
+   "ukb-b-15625",
+   "ukb-b-13583",
+   "ukb-b-17965",
+   "ukb-b-3376",
+   "ukb-b-17446",
+   "ukb-b-7748",
+   "ukb-b-7710",
+   "ukb-b-16451",
+   "ukb-b-9019",
+   "ukb-b-847",
+   "ukb-b-19759",
+   "ukb-b-4522",
+   "ukb-b-15228",
+   "ukb-b-5427",
+   "ukb-b-19845",
+   "ukb-b-1997",
+   "ukb-b-9043",
+   "ukb-b-328",
+   "ukb-b-9029",
+   "ukb-b-3957",
+   "ukb-b-13998",
+   "ukb-b-13932",
+   "ukb-b-3229",
+   "ukb-b-20218",
+   "ukb-b-15666",
+   "ukb-b-1666",
+   "ukb-b-14238",
+   "ukb-b-16943",
+   "ukb-b-4514",
+   "ukb-b-15230",
+   "ukb-b-8196",
+   "ukb-b-223",
+   "ukb-b-1668",
+   "ukb-b-16671",
+   "ukb-b-5421",
+   "ukb-b-4150",
+   "ukb-b-19722",
+   "ukb-b-7212",
+   "ukb-b-18541",
+   "ukb-b-7118",
+   "ukb-b-6415",
+   "ukb-b-2769",
+   "ukb-b-7236",
+   "ukb-b-17241",
+   "ukb-b-19921",
+   "ukb-b-4507",
+   "ukb-b-730",
+   "ukb-b-7869",
+   "ukb-b-9930",
+   "ukb-b-3713",
+   "ukb-b-7589",
+   "ukb-b-7217",
+   "ukb-b-9333",
+   "ukb-b-918",
+   "ukb-b-5911",
+   "ukb-b-16868",
+   "ukb-b-2024",
+   "ukb-b-14303",
+   "ukb-b-7587",
+   "ukb-b-4323",
+   "ukb-b-4921",
+   "ukb-b-6230",
+   "ukb-b-16056",
+   "ukb-b-6772",
+   "ukb-b-8024",
+   "ukb-b-6092",
+   "ukb-b-13745",
+   "ukb-b-3969",
+   "ukb-b-14294",
+   "ukb-b-2209",
+   "ukb-b-2416",
+   "ukb-b-19088",
+   "ukb-b-14639",
+   "ukb-b-217",
+   "ukb-b-16698",
+   "ukb-b-8061",
+   "ukb-b-17708",
+   "ukb-b-18137",
+   "ukb-b-14017",
+   "ukb-b-6888",
+   "ukb-b-14518",
+   "ukb-b-16585",
+   "ukb-b-6740",
+   "ukb-b-3923",
+   "ukb-b-8621",
+   "ukb-b-15555",
+   "ukb-b-17681",
+   "ukb-b-13775",
+   "ukb-b-15445",
+   "ukb-b-17277",
+   "ukb-b-17348",
+   "ukb-b-8846",
+   "ukb-b-6666",
+   "ukb-b-19769",
+   "ukb-b-9882"
+  ],
+  "resolved_from": {
+   "label": "zarr3",
+   "path": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "n_variants": 9847701,
+   "n_analyses": 2024
+  }
+ },
+ "rounds": 5,
+ "warm_per_process": 3,
+ "max_start_load": 25.0,
+ "zarrs_crate": "0.23.14",
+ "reference_run": "python-fused-1000",
+ "hardware": {
+  "lscpu": "Architecture:        x86_64\nCPU op-mode(s):      32-bit, 64-bit\nByte Order:          Little Endian\nCPU(s):              224\nOn-line CPU(s) list: 0-223\nThread(s) per core:  2\nCore(s) per socket:  56\nSocket(s):           2\nNUMA node(s):        2\nVendor ID:           GenuineIntel\nCPU family:          6\nModel:               143\nModel name:          Intel(R) Xeon(R) Platinum 8480+\nStepping:            8\nCPU MHz:             2000.000\nBogoMIPS:            4000.00\nVirtualization:      VT-x\nL1d cache:           48K\nL1i cache:           32K\nL2 cache:            2048K\nL3 cache:            107520K\nNUMA node0 CPU(s):   0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,84,86,88,90,92,94,96,98,100,102,104,106,108,110,112,114,116,118,120,122,124,126,128,130,132,134,136,138,140,142,144,146,148,150,152,154,156,158,160,162,164,166,168,170,172,174,176,178,180,182,184,186,188,190,192,194,196,198,200,202,204,206,208,210,212,214,216,218,220,222\nNUMA node1 CPU(s):   1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51,53,55,57,59,61,63,65,67,69,71,73,75,77,79,81,83,85,87,89,91,93,95,97,99,101,103,105,107,109,111,113,115,117,119,121,123,125,127,129,131,133,135,137,139,141,143,145,147,149,151,153,155,157,159,161,163,165,167,169,171,173,175,177,179,181,183,185,187,189,191,193,195,197,199,201,203,205,207,209,211,213,215,217,219,221,223\nFlags:               fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 cat_l2 cdp_l3 invpcid_single cdp_l2 ssbd mba ibrs ibpb stibp ibrs_enhanced tpr_shadow vnmi flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local split_lock_detect avx_vnni avx512_bf16 wbnoinvd dtherm ida arat pln pts avx512vbmi umip pku ospke waitpkg avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg tme avx512_vpopcntdq la57 rdpid bus_lock_detect cldemote movdiri movdir64b enqcmd fsrm md_clear serialize tsxldtrk pconfig arch_lbr amx_bf16 avx512_fp16 amx_tile amx_int8 flush_l1d arch_capabilities",
+  "free_g": "total        used        free      shared  buff/cache   available\nMem:           1006         457           2           0         546         543\nSwap:            31          31           0",
+  "filesystem": "Filesystem              Type   1K-blocks        Used   Available Use% Mounted on\n/dev/mapper/datavg-data xfs  45003053056 28368123320 16634929736  64% /data",
+  "mount": "SOURCE                  FSTYPE OPTIONS\n/dev/mapper/datavg-data xfs    rw,relatime,seclabel,attr2,inode64,logbufs=8,logbsize=256k,sunit=512,swidth=2048,noquota",
+  "kernel": "Linux-4.18.0-553.177.1.el8_10.x86_64-x86_64-with-glibc2.28"
+ },
+ "store_sizes": {
+  "/data/opengwasdb/stores/OGS-00009/store.opengwasdb": {
+   "apparent_bytes": {
+    "eaf": 5756728712,
+    "eaf_baseline": 39360028,
+    "eaf_exception_index": 69944,
+    "eaf_exception_value": 35464,
+    "eaf_reference": 39011402,
+    "imputed": 609497503,
+    "indexed_subsets": 8199794394,
+    "on_panel": 1711581,
+    "se": 5522964166,
+    "se_coefficients": 17249,
+    "se_exception_index": 928609,
+    "se_exception_value": 2921079,
+    "top_hits": 1164569745,
+    "z": 39333251802,
+    "z_overflow_index": 67064,
+    "z_overflow_value": 34024
+   },
+   "total": 60670962766
+  }
+ },
+ "cold_definition": "the first call of a fresh process: arrays just opened, nothing decoded; the OS page cache is warm and cannot be dropped without root, so this is not a first-touch disk read",
+ "columns": [
+  {
+   "run": "python-fused-1000",
+   "kind": "python-fused",
+   "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "shape": "random_lookup_10_variants_100_analyses",
+   "stage": "axis_resolution",
+   "rounds": [
+    {
+     "round": 0,
+     "load_1m_at_start": 21.31,
+     "waited_for_quiet_s": 15.000232496997342,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.21004793234169483,
+     "warm_ms": [
+      0.18210592679679394,
+      0.176943838596344,
+      0.15798816457390785
+     ],
+     "open_ms": 119.74428012035787,
+     "result_count": 10,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "1ecb1095b9b37276aeeba4a782a4e0886cb5190c7930649c6157fe82400d3963",
+      "cols": "34866987e76a4ce21da62af3666d6ad5d40227f10d7d630fad77da80e53dc9c4"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 1,
+     "load_1m_at_start": 21.31,
+     "waited_for_quiet_s": 7.044407539069653e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.385139137506485,
+     "warm_ms": [
+      0.31325710006058216,
+      0.27665216475725174,
+      0.26604882441461086
+     ],
+     "open_ms": 113.19167399778962,
+     "result_count": 10,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "1ecb1095b9b37276aeeba4a782a4e0886cb5190c7930649c6157fe82400d3963",
+      "cols": "34866987e76a4ce21da62af3666d6ad5d40227f10d7d630fad77da80e53dc9c4"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 2,
+     "load_1m_at_start": 20.48,
+     "waited_for_quiet_s": 6.635882891714573e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.37509482353925705,
+     "warm_ms": [
+      0.32591610215604305,
+      0.28358097188174725,
+      0.2745371311903
+     ],
+     "open_ms": 113.53580583818257,
+     "result_count": 10,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "1ecb1095b9b37276aeeba4a782a4e0886cb5190c7930649c6157fe82400d3963",
+      "cols": "34866987e76a4ce21da62af3666d6ad5d40227f10d7d630fad77da80e53dc9c4"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 3,
+     "load_1m_at_start": 20.48,
+     "waited_for_quiet_s": 6.588920950889587e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.1621311530470848,
+     "warm_ms": [
+      0.12746406719088554,
+      0.11160713620483875,
+      0.10103895328938961
+     ],
+     "open_ms": 107.23048401996493,
+     "result_count": 10,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "1ecb1095b9b37276aeeba4a782a4e0886cb5190c7930649c6157fe82400d3963",
+      "cols": "34866987e76a4ce21da62af3666d6ad5d40227f10d7d630fad77da80e53dc9c4"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 4,
+     "load_1m_at_start": 20.48,
+     "waited_for_quiet_s": 6.590993143618107e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.3762650303542614,
+     "warm_ms": [
+      0.32911007292568684,
+      0.27565681375563145,
+      0.26898295618593693
+     ],
+     "open_ms": 108.91316784545779,
+     "result_count": 10,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "1ecb1095b9b37276aeeba4a782a4e0886cb5190c7930649c6157fe82400d3963",
+      "cols": "34866987e76a4ce21da62af3666d6ad5d40227f10d7d630fad77da80e53dc9c4"
+     },
+     "digests_equal_reference": true
+    }
+   ]
+  },
+  {
+   "run": "python-fused-1000",
+   "kind": "python-fused",
+   "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "shape": "random_lookup_10_variants_100_analyses",
+   "stage": "decode",
+   "rounds": [
+    {
+     "round": 0,
+     "load_1m_at_start": 24.41,
+     "waited_for_quiet_s": 825.0146176789422,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 764.9647251237184,
+     "warm_ms": [
+      462.216311134398,
+      501.02725508622825,
+      447.4464259110391
+     ],
+     "open_ms": 175.58998498134315,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 1,
+     "load_1m_at_start": 24.3,
+     "waited_for_quiet_s": 9.129894897341728e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 543.1238100863993,
+     "warm_ms": [
+      468.82458799518645,
+      460.46597394160926,
+      471.8135669827461
+     ],
+     "open_ms": 186.22635398060083,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 2,
+     "load_1m_at_start": 23.96,
+     "waited_for_quiet_s": 9.253900498151779e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 541.6339901275933,
+     "warm_ms": [
+      469.046990852803,
+      506.77688396535814,
+      471.22303606010973
+     ],
+     "open_ms": 172.62380314059556,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 3,
+     "load_1m_at_start": 22.44,
+     "waited_for_quiet_s": 9.316508658230305e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 525.9780329652131,
+     "warm_ms": [
+      461.2868579570204,
+      440.7762249466032,
+      427.2200809791684
+     ],
+     "open_ms": 172.565002925694,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 4,
+     "load_1m_at_start": 22.44,
+     "waited_for_quiet_s": 5.8810925111174583e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 529.1254098992795,
+     "warm_ms": [
+      466.57717786729336,
+      442.51357298344374,
+      472.6184429600835
+     ],
+     "open_ms": 162.075222004205,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    }
+   ]
+  },
+  {
+   "run": "python-fused-1000",
+   "kind": "python-fused",
+   "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "shape": "random_lookup_10_variants_100_analyses",
+   "stage": "end_to_end",
+   "rounds": [
+    {
+     "round": 0,
+     "load_1m_at_start": 21.76,
+     "waited_for_quiet_s": 9.791902266442776e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 521.9684820622206,
+     "warm_ms": [
+      484.11422898061574,
+      474.59855303168297,
+      497.1842118538916
+     ],
+     "open_ms": 163.68624684400856,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 1,
+     "load_1m_at_start": 21.22,
+     "waited_for_quiet_s": 7.515796460211277e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 528.0493451282382,
+     "warm_ms": [
+      477.32948302291334,
+      470.0181051157415,
+      474.0294080693275
+     ],
+     "open_ms": 181.5690090879798,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 2,
+     "load_1m_at_start": 20.72,
+     "waited_for_quiet_s": 8.381111547350883e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 543.0880819913,
+     "warm_ms": [
+      469.49095418676734,
+      469.3312069866806,
+      451.8001968972385
+     ],
+     "open_ms": 163.70976902544498,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 3,
+     "load_1m_at_start": 20.58,
+     "waited_for_quiet_s": 8.927984163165092e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 581.6587139852345,
+     "warm_ms": [
+      473.0974759440869,
+      478.44282118603587,
+      474.84239493496716
+     ],
+     "open_ms": 175.2735150512308,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 4,
+     "load_1m_at_start": 19.98,
+     "waited_for_quiet_s": 8.789007551968098e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 561.2042511347681,
+     "warm_ms": [
+      461.00379596464336,
+      494.9493231251836,
+      493.2673799339682
+     ],
+     "open_ms": 179.46201097220182,
+     "result_count": 999,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "9952f6f14c04e47a9819d9abe6437f65679c85f84d4594a0c5b7d42d2754d044",
+      "analysis_index": "fe677beeee924d731e927a5d0a76e76b5a2e67ac5e742c9c5cc618f160c4a614",
+      "z": "5c2258597a96ca4bfd807b5dc502af354ce9062272491688251ea9fe8810fa44",
+      "se": "1030c922a75717867bcf9eeeba7e57c8393f269ac98188b4f55dfda8d36312b5",
+      "eaf": "6525677cad001e88c14de187b281b52e0401ef7b5c076fa5b3d769c8f4f28464",
+      "association_status": "0b511500a069f51450676b4ba87ac97ae812ab87712d757c9dbb3af6810bad89"
+     },
+     "digests_equal_reference": true
+    }
+   ]
+  },
+  {
+   "run": "python-fused-1000",
+   "kind": "python-fused",
+   "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "shape": "random_lookup_100_variants_10_analyses",
+   "stage": "axis_resolution",
+   "rounds": [
+    {
+     "round": 0,
+     "load_1m_at_start": 19.74,
+     "waited_for_quiet_s": 8.6149200797081e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.7810250390321016,
+     "warm_ms": [
+      0.5333649460226297,
+      0.5009099841117859,
+      0.47641387209296227
+     ],
+     "open_ms": 186.634924961254,
+     "result_count": 100,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "e5ec798e91414d4e2bdfe7aae49c844b565967120f2f627b0eb070f5806eeb9c",
+      "cols": "4e7010f910b77cdc35aeebd0bf5cf377520e7493c254d6ef02caf4f13b5d40df"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 1,
+     "load_1m_at_start": 19.74,
+     "waited_for_quiet_s": 9.094900451600552e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.7847330998629332,
+     "warm_ms": [
+      0.48399181105196476,
+      0.45157806016504765,
+      0.4358328878879547
+     ],
+     "open_ms": 181.95902998559177,
+     "result_count": 100,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "e5ec798e91414d4e2bdfe7aae49c844b565967120f2f627b0eb070f5806eeb9c",
+      "cols": "4e7010f910b77cdc35aeebd0bf5cf377520e7493c254d6ef02caf4f13b5d40df"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 2,
+     "load_1m_at_start": 19.2,
+     "waited_for_quiet_s": 9.140511974692345e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.8661230094730854,
+     "warm_ms": [
+      0.5554270464926958,
+      0.5180321168154478,
+      0.47833495773375034
+     ],
+     "open_ms": 183.94637806341052,
+     "result_count": 100,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "e5ec798e91414d4e2bdfe7aae49c844b565967120f2f627b0eb070f5806eeb9c",
+      "cols": "4e7010f910b77cdc35aeebd0bf5cf377520e7493c254d6ef02caf4f13b5d40df"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 3,
+     "load_1m_at_start": 19.2,
+     "waited_for_quiet_s": 8.830800652503967e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 0.8467889856547117,
+     "warm_ms": [
+      0.5408020224422216,
+      0.49153505824506283,
+      0.6013291422277689
+     ],
+     "open_ms": 152.76247914880514,
+     "result_count": 100,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "e5ec798e91414d4e2bdfe7aae49c844b565967120f2f627b0eb070f5806eeb9c",
+      "cols": "4e7010f910b77cdc35aeebd0bf5cf377520e7493c254d6ef02caf4f13b5d40df"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 4,
+     "load_1m_at_start": 19.02,
+     "waited_for_quiet_s": 9.820796549320221e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1.082118833437562,
+     "warm_ms": [
+      0.48448191955685616,
+      0.449000159278512,
+      0.4238341934978962
+     ],
+     "open_ms": 151.3296258635819,
+     "result_count": 100,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "rows": "e5ec798e91414d4e2bdfe7aae49c844b565967120f2f627b0eb070f5806eeb9c",
+      "cols": "4e7010f910b77cdc35aeebd0bf5cf377520e7493c254d6ef02caf4f13b5d40df"
+     },
+     "digests_equal_reference": true
+    }
+   ]
+  },
+  {
+   "run": "python-fused-1000",
+   "kind": "python-fused",
+   "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "shape": "random_lookup_100_variants_10_analyses",
+   "stage": "decode",
+   "rounds": [
+    {
+     "round": 0,
+     "load_1m_at_start": 19.02,
+     "waited_for_quiet_s": 0.00014547910541296005,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 2433.7190131191164,
+     "warm_ms": [
+      1639.0606060158461,
+      1613.2812418509275,
+      1642.380049917847
+     ],
+     "open_ms": 173.06526005268097,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 1,
+     "load_1m_at_start": 19.07,
+     "waited_for_quiet_s": 0.00010599987581372261,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1669.9186458718032,
+     "warm_ms": [
+      1636.642387136817,
+      1663.3070989046246,
+      1688.216523034498
+     ],
+     "open_ms": 174.7753459494561,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 2,
+     "load_1m_at_start": 18.59,
+     "waited_for_quiet_s": 8.996599353849888e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1733.3878630306572,
+     "warm_ms": [
+      1710.0208699703217,
+      1675.9681599214673,
+      1651.492211036384
+     ],
+     "open_ms": 180.37884589284658,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 3,
+     "load_1m_at_start": 17.67,
+     "waited_for_quiet_s": 9.48889646679163e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1687.9827878437936,
+     "warm_ms": [
+      1603.8484058808535,
+      1653.5248209256679,
+      1692.2239810228348
+     ],
+     "open_ms": 170.20863899961114,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 4,
+     "load_1m_at_start": 17.32,
+     "waited_for_quiet_s": 0.00010410998947918415,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1738.3514139801264,
+     "warm_ms": [
+      1728.2828278839588,
+      1681.32736813277,
+      1760.4628331027925
+     ],
+     "open_ms": 163.5434809140861,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    }
+   ]
+  },
+  {
+   "run": "python-fused-1000",
+   "kind": "python-fused",
+   "store": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
+   "shape": "random_lookup_100_variants_10_analyses",
+   "stage": "end_to_end",
+   "rounds": [
+    {
+     "round": 0,
+     "load_1m_at_start": 16.81,
+     "waited_for_quiet_s": 8.91638919711113e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1795.9005772136152,
+     "warm_ms": [
+      1739.4774758722633,
+      1752.2133660968393,
+      1698.7831089645624
+     ],
+     "open_ms": 172.89665201678872,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 1,
+     "load_1m_at_start": 16.06,
+     "waited_for_quiet_s": 6.277207285165787e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1718.9231431111693,
+     "warm_ms": [
+      1767.526448937133,
+      1687.4775590840727,
+      1642.4215650185943
+     ],
+     "open_ms": 159.6392970532179,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 2,
+     "load_1m_at_start": 16.33,
+     "waited_for_quiet_s": 8.706282824277878e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1746.1226989980787,
+     "warm_ms": [
+      1708.5984190925956,
+      1674.1413769777864,
+      1688.2388500962406
+     ],
+     "open_ms": 186.87312793917954,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 3,
+     "load_1m_at_start": 15.83,
+     "waited_for_quiet_s": 9.405403397977352e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1852.7723168954253,
+     "warm_ms": [
+      1699.7721178922802,
+      1701.8905729055405,
+      1696.0216220468283
+     ],
+     "open_ms": 162.92107407934964,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    },
+    {
+     "round": 4,
+     "load_1m_at_start": 15.55,
+     "waited_for_quiet_s": 7.808790542185307e-05,
+     "quiet_wait_timed_out": false,
+     "cold_ms": 1633.6549040861428,
+     "warm_ms": [
+      1693.8259608577937,
+      1667.7008490078151,
+      1673.179164994508
+     ],
+     "open_ms": 174.53808500431478,
+     "result_count": 917,
+     "effective_config": {
+      "config_path": "zarr.core.codec_pipeline.FusedCodecPipeline",
+      "config_max_workers": 1,
+      "array_pipeline_class": "FusedCodecPipeline",
+      "blosc_use_threads": true,
+      "blosc_nthreads_env": null
+     },
+     "versions": {
+      "zarr": "3.4.2",
+      "numcodecs": "0.17.1",
+      "zarrs_python": null,
+      "threadpool": null
+     },
+     "digests": {
+      "variant_index": "776e6102295276c79c32bc2975835ec89b44cda3d252f013f1bd7a2a6b16c38b",
+      "analysis_index": "efdb21c63a73e7317d62db03b8f0a8a47b9dcfa19ffcc3e71bb3cd3afa79356c",
+      "z": "c7ebfb31d698528d98565c38fc91b50023fb219baadc582c505e0291d4a01230",
+      "se": "f55ac51ea224ec2269ae14237be4daab6f668707a35d5218833036dce541cfad",
+      "eaf": "b5d3a105f9128a8dfd66a3a8b482b2d1e7fc7bd582c76d9d9ed58ab830c57151",
+      "association_status": "3ad447834dc8baee4808f92901e9ebe596264c589b1c4a665e9991c19658d0fb"
+     },
+     "digests_equal_reference": true
+    }
+   ]
+  }
+ ],
+ "agreement": "every digested process (cold and warm, Rust and Python) equals python-fused-1000's first call for the same shape and stage; otherwise the run aborts and writes nothing further"
+}

@@ -54,15 +54,9 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.info_score_filter import declared_score_state
-from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
-from opengwasdb.encoding import (
-    EafMeasurements,
-    EncodingMeasurements,
-    StoreEncoding,
-    combine_eaf_measurements,
-    optimise_dense_se_joint,
-)
+from opengwasdb.encoding import combine_eaf_measurements, optimise_dense_se_joint
 from opengwasdb.encoding.association_codec import (
     CellValues,
     Storable,
@@ -70,6 +64,7 @@ from opengwasdb.encoding.association_codec import (
     storable,
 )
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.encoding.memory import release_freed_heap
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import format_duration, log_phase
 from opengwasdb.layouts.build_manifest import (
@@ -86,7 +81,6 @@ from opengwasdb.layouts.dense.build_vcf import (
     log_progress,
     survey_eaf_spills,
     write_dense_bands,
-    write_index,
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -153,11 +147,6 @@ from opengwasdb.layouts.hybrid.key_table import (
     lookup_matched,
     resolve_keys,
 )
-from opengwasdb.layouts.hybrid.layout import (
-    DENSE_SUBDIR,
-    dense_component_path,
-    dense_to_shared_path,
-)
 from opengwasdb.layouts.hybrid.overflow_spills import assemble_overflow_csr
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
@@ -174,22 +163,32 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    CompletionState,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import coverage_for_layout
 from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
     InfoScoreState,
 )
 from opengwasdb.model.maf_policy import MafPolicy, MafState
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
-from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, format_version_for
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.store_reader.alid_sidecar import AlidSidecar
+from opengwasdb.store_reader.encoding.plan import (
+    EafMeasurements,
+    EncodingMeasurements,
+    StoreEncoding,
+)
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.format import format_version_for
+from opengwasdb.store_reader.hybrid import (
+    DENSE_SUBDIR,
+    check_dense_to_shared,
+    dense_component_path,
+    dense_to_shared_path,
+    misnamed_panel_rows,
+)
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.axis import sorted_alids
@@ -434,6 +433,19 @@ class _Pass2Context:
 
 
 def _route_column(
+    context: _Pass2Context, task: tuple[int, ManifestRow]
+) -> tuple[int, int, int]:
+    """Route and spill one Analysis (`_route_and_spill_column`), then hand what
+    it freed back to the host: a Pass 2 worker lives for the whole pass, and
+    would otherwise keep the high-water of every Analysis it routes (#451)."""
+    routed = _route_and_spill_column(context, task)
+    # The Analysis's columns went out of scope as it returned, so their pages
+    # are among those handed back.
+    release_freed_heap()
+    return routed
+
+
+def _route_and_spill_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
 ) -> tuple[int, int, int]:
     """Route one study and spill it; its Admission part is written beside the
@@ -929,22 +941,12 @@ def _lift_and_partition(
     )
 
 
-def _write_dense_component_skeleton(
-    staged: StagedRelease,
-    axis: _SourceAxis,
-    chunk_shape: tuple[int, int],
-) -> np.ndarray:
-    """Write the Dense Component's valid-store skeleton: index, Store Variant
-    Table and the dense row -> shared variant_index sidecar. ``dense_to_shared``
-    is returned because the EAF survey samples both components on the shared
-    axis through it and the query facade reads it back."""
-    write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
-    write_variant_table(
-        axis.dense_dir,
-        axis.partition.panel_sorted,
-        axis.hg38_to_source,
-        axis.names.rsid_by_alid,
-    )
+def _write_dense_component_skeleton(staged: StagedRelease, axis: _SourceAxis) -> np.ndarray:
+    """Write the dense row -> shared variant_index map, the Dense Component's one
+    record of its variants: from format 0.3.0 it carries no Variant Table, sidecar or
+    `analyses.tsv` of its own, and reads the shared ones through this map (#472).
+    ``dense_to_shared`` is returned because the EAF survey samples both components on
+    the shared axis through it and the query facade reads it back."""
     # Ascending: the panel keeps genomic order, so dense row i is shared row
     # dense_to_shared[i] -- the mapping validation checks against.
     dense_to_shared = (
@@ -1719,11 +1721,9 @@ def _merge_off_reference_rsids(
     if not names.pending:
         _warn_fold_left_rows_blank(prepared, fold)
         return prepared
-    finished = names.finish(_fold_route(fold))
-    if finished.rsid_by_alid == names.rsid_by_alid:
-        return replace(prepared, names=finished)
-    _rewrite_dense_table_if_needed(prepared, finished.rsid_by_alid)
-    return replace(prepared, names=finished)
+    # The shared table, the one that names a row (#472), is written from the
+    # finished names, after this.
+    return replace(prepared, names=names.finish(_fold_route(fold)))
 
 
 def _warn_fold_left_rows_blank(
@@ -1748,28 +1748,6 @@ def _warn_fold_left_rows_blank(
         "the sources are not harvested (issue #255 finding 3)",
         unnamed,
     )
-
-
-def _rewrite_dense_table_if_needed(
-    prepared: _PreparedBuild, merged: Mapping[str, str]
-) -> None:
-    """Rewrite the Dense Component table when the global rekey moved a panel row.
-
-    The skeleton's table was written before Pass 2 from the on-reference map.
-    A fold-routed candidate that sorts earlier can only change a *panel* row if
-    its own resolution lands on a panel ALID, so the rewrite is conditional and
-    normally does not happen; without it the Dense Component would carry one
-    name and the shared table another (issue #255).
-    """
-    panel = prepared.partition.panel_sorted
-    written = prepared.names.rsid_by_alid
-    if all(merged.get(alid, "") == written.get(alid, "") for alid in panel):
-        return
-    log.warning(
-        "Single-pass build: the global rsid rekey moved a Dense Component name; "
-        "rewriting the component's variant table"
-    )
-    write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
 
 
 def _fold_recorded_axis(
@@ -2256,10 +2234,10 @@ def _finish_dense_component(
     evidence: _EafEvidence,
     options: _BuildOptions,
 ) -> dict[str, Any]:
-    """Phase - finish the Dense Component as a valid dense store: top-hit
-    index (after the SE decision -- the index carries the values a query reads
-    back), manifest.json, and its own analyses.tsv counting only on-panel hits
-    (the shared root counts both; issue #107)."""
+    """Phase - finish the Dense Component: top-hit index (after the SE decision --
+    the index carries the values a query reads back) and manifest.json. It writes
+    no `analyses.tsv` of its own (#472): the shared root's, written later, counts
+    both components (issue #107)."""
     write_top_hit_indexes_for_store(
         prepared.dense_dir,
         dense.all_rows,
@@ -2283,7 +2261,6 @@ def _finish_dense_component(
         eaf_orientation=eaf_provenance,
         association_coverage=options.association_coverage,
     )
-    write_analyses_tsv(prepared.dense_dir, add_hit_counts(prepared.dense_dir, analyses))
     return eaf_provenance
 
 
@@ -2402,7 +2379,7 @@ def _write_shared_metadata(
     n_overflow: int,
 ) -> None:
     """Phase - the shared union table and shared metadata: the Hybrid
-    manifest (again before analyses.tsv), then the root variant axis, index
+    manifest (again before analyses.tsv), then the root variant axis
     and analyses.tsv whose Top-Hit Counts are the Dense Component's and Ragged
     Overflow's counts summed (ADR 0032) -- the two partition an Analysis's
     associations disjointly, so neither alone is the whole picture."""
@@ -2430,12 +2407,6 @@ def _write_shared_metadata(
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
-    write_index(
-        prepared.staged,
-        prepared.partition.shared_sorted,
-        components.analyses,
-        options.chunk_shape,
-    )
     write_analyses_tsv(prepared.staged.path, shared_analyses)
     write_variant_table(
         prepared.staged.path,
@@ -2443,14 +2414,16 @@ def _write_shared_metadata(
         prepared.hg38_to_source,
         prepared.names.rsid_by_alid,
     )
-    # The tables just written must be the tables the resolved map describes: a
+    # The table just written must be the table the resolved map describes: a
     # partial harvest loss, an off-reference row dropped from the write, or a
     # table written from a stale map fails here, on the bytes a query reads,
     # rather than being trusted from the map that produced them (issue #255).
-    # Root first, then the Dense Component -- its table was written before
-    # Pass 2 and must carry the same identifiers as the shared table.
     prepared.names.require_written(prepared.staged.path, prepared.partition.shared_sorted)
-    prepared.names.require_written(prepared.dense_dir, prepared.partition.panel_sorted)
+    # The Dense Component names its rows through `dense_to_shared` alone (#472):
+    # each must reach the shared row of its own panel variant.
+    require_panel_mapped(
+        prepared.staged.path, prepared.dense_to_shared, prepared.partition.panel_sorted
+    )
 
 
 def _prepare_build(
@@ -2469,11 +2442,7 @@ def _prepare_build(
     (issue #227), and everything else gets this invocation's private mkdtemp.
     """
     axis = _lift_and_partition(staged, manifest_rows, options)
-    dense_to_shared = _write_dense_component_skeleton(
-        staged,
-        axis,
-        options.chunk_shape,
-    )
+    dense_to_shared = _write_dense_component_skeleton(staged, axis)
     if spill_dir is None:
         spill_dir = Path(
             mkdtemp(
@@ -3526,6 +3495,31 @@ def write_variant_table(
     write_variant_axis(store_path, canonical, rsid_by_alid, source_alids)
 
 
+def require_panel_mapped(
+    store_path: Path, dense_to_shared: np.ndarray, panel_alids: Sequence[str]
+) -> None:
+    """Refuse a Hybrid whose `dense_to_shared` does not name, for each Dense Component
+    row, the written shared row holding that row's variant.
+
+    From format 0.3.0 the map is the Dense Component's only record of its variants
+    (#472), so it is read back against the shared ALID sidecar just written, as the
+    shared table is against its names (issue #255).
+    """
+    sidecar = AlidSidecar.open(store_path)
+    if sidecar is None:
+        raise ValueError(f"{store_path}: the shared ALID sidecar was not written")
+    mapped = np.asarray(dense_to_shared, dtype=np.int64)
+    faults = check_dense_to_shared(mapped, sidecar.n_rows, len(panel_alids))
+    if faults:
+        raise ValueError(f"{store_path}: " + "; ".join(faults))
+    shared = zip(mapped.tolist(), sidecar.alids(mapped).tolist(), strict=True)
+    for row, alid, held in misnamed_panel_rows(mapped, panel_alids, shared):
+        raise ValueError(
+            f"{store_path}: dense_to_shared maps Dense Component row {row} ({alid}) to "
+            f"shared row {int(mapped[row])}, which holds {held or 'no row'}"
+        )
+
+
 def _write_dense_manifest(
     dense_staged: StagedRelease,
     store_id: str,
@@ -3548,7 +3542,7 @@ def _write_dense_manifest(
         reference_assembly="GRCh38",
         provenance={
             "builder": "opengwasdb.v0.1_hybrid_dense_component",
-            "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+            "chain_file": str(chain_file) if chain_file else BUILTIN_CHAIN_LABEL,
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": dense_provenance_block(
@@ -3586,7 +3580,7 @@ def _write_hybrid_manifest(
             if variant_reference is not None
             else "opengwasdb.v0.1_hybrid_vcf"
         ),
-        "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+        "chain_file": str(chain_file) if chain_file else BUILTIN_CHAIN_LABEL,
         "n_variants": n_variants,
         "n_analyses": n_analyses,
         "hybrid": {

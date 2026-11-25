@@ -1,0 +1,268 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>OpenGWASDB Analyses</title>
+<style>
+:root {
+  --paper: #f1f2ef;
+  --surface: #fbfbf9;
+  --ink: #14181c;
+  --ink-soft: #4b5459;
+  --muted: #8b9095;
+  --hairline: #dcdcd6;
+  --hairline-strong: #c3c4be;
+  --accent: #1f5fd1;
+  --accent-soft: #dce6fa;
+  --accent-wash: #eef3fc;
+  --accent-neg: #c2410c;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+header {
+  padding: 28px 32px 20px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+}
+.eyebrow::before {
+  content: ""; width: 7px; height: 7px; background: var(--accent); border-radius: 1px;
+  display: inline-block;
+}
+header h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+header .meta { margin-top: 6px; font-size: 13px; color: var(--ink-soft); font-family: var(--mono); }
+.tabs {
+  display: flex; gap: 4px; padding: 0 32px; background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+}
+.tabs button {
+  font: inherit; font-size: 13px; padding: 10px 14px; border: none; background: none; cursor: pointer;
+  color: var(--ink-soft); border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs button:hover { color: var(--ink); }
+.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+main { padding: 20px 32px 60px; }
+.tab-panel.hidden { display: none; }
+input[type="text"] {
+  font: inherit; padding: 0.5rem 0.75rem; width: 24rem; max-width: 100%; margin-bottom: 0.9rem;
+  border: 1px solid var(--hairline-strong); border-radius: 6px; background: var(--surface); color: var(--ink);
+}
+input[type="text"]:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.table-scroll {
+  overflow-x: auto; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface);
+}
+table { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
+th, td {
+  padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--hairline);
+}
+th {
+  cursor: pointer; background: var(--surface); position: sticky; top: 0; z-index: 2;
+  color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--hairline-strong);
+}
+th.sorted-asc::after { content: " \25B2"; color: var(--accent); }
+th.sorted-desc::after { content: " \25BC"; color: var(--accent); }
+tbody tr:nth-child(even) { background: var(--paper); }
+td.blank { color: var(--muted); }
+th.sticky-col, td.sticky-col {
+  position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--hairline-strong);
+}
+th.sticky-col { z-index: 3; }
+tbody tr:nth-child(even) td.sticky-col { background: var(--paper); }
+.bar-wrap {
+  display: inline-block; width: 60px; height: 0.65em; background: var(--hairline); border-radius: 2px;
+  overflow: hidden; vertical-align: middle; margin-right: 6px;
+}
+.bar-fill { display: block; height: 100%; background: var(--accent); }
+.guide-intro { max-width: 62ch; color: var(--ink-soft); font-size: 13.5px; margin: 0 0 16px; }
+table.guide { border-collapse: collapse; width: 100%; max-width: 760px; font-size: 13px; }
+table.guide td { padding: 8px 4px; border-bottom: 1px solid var(--hairline); white-space: normal; }
+table.guide td.fname { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; padding-right: 24px; }
+table.guide td.fdesc { color: var(--ink-soft); }
+.badge {
+  font-family: var(--mono); font-size: 10px; padding: 1px 7px; border-radius: 999px; margin-left: 8px;
+  letter-spacing: 0.02em;
+}
+.badge.human { background: var(--accent-wash); color: var(--accent); }
+.badge.internal { background: var(--hairline); color: var(--ink-soft); }
+.rho-summary { border-collapse: collapse; width: 100%; max-width: 520px; font-size: 13px; margin-bottom: 20px; }
+.rho-summary td { padding: 6px 4px; border-bottom: 1px solid var(--hairline); }
+.rho-summary td:first-child { color: var(--ink-soft); padding-right: 24px; white-space: nowrap; }
+.rho-section-heading { font-size: 14px; font-weight: 650; margin: 28px 0 8px; }
+.rho-heatmap-wrap { position: relative; display: inline-block; }
+.rho-heatmap { border: 1px solid var(--hairline); border-radius: 4px; cursor: crosshair; }
+.rho-heatmap-tooltip {
+  position: absolute; pointer-events: none; font-size: 12px; font-family: var(--mono);
+  background: var(--ink); color: var(--surface); padding: 6px 9px; border-radius: 6px;
+  white-space: nowrap; transform: translate(-50%, -110%); z-index: 5;
+}
+.rho-heatmap-tooltip.hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">OpenGWASDB Store Release</div>
+  <h1>OpenGWASDB Analyses</h1>
+  <div class="meta">hyb · release v1-completed · reference_completed · 2 Analyses</div>
+</header>
+<nav class="tabs">
+<button data-tab="analyses" class="active">Analyses</button>
+<button data-tab="ancestry">Ancestry</button>
+<button data-tab="guide">Guide</button>
+</nav>
+<main>
+<section id="tab-analyses" class="tab-panel">
+<input id="search-analyses" type="text" placeholder="Filter rows...">
+<div class="table-scroll">
+<table id="analyses" data-searchable="search-analyses">
+<thead><tr><th class="sticky-col">analysis_id</th><th>analysis_index</th><th>analysis_label</th><th>trait_ontology_id</th><th>trait_ontology_label</th><th>tissue</th><th>context</th><th>trait_chr</th><th>trait_bp</th><th>stored_effect_scale</th><th>assigned_ancestry</th><th>ancestry_assignment_method</th><th>sample_size_kind</th><th>sample_size_scope</th><th>sample_size</th><th>n_cases</th><th>n_controls</th><th>eaf_scope</th><th>original_effect_scale</th><th>original_sd</th><th>original_sd_method</th><th>original_sd_dispersion</th><th>license</th><th>publication_doi</th><th>publication_pmid</th><th>consortium</th><th>first_author</th><th>completed_against</th><th>completion_median_pearson_r</th><th>completion_n_imputed_total</th><th>completion_n_missing_total</th><th>n_missing_se_out_of_range</th><th>eaf_orientation</th><th>eaf_orientation_r</th><th>eaf_orientation_n</th><th>n_hits_5e8</th><th>n_hits_5e6</th><th>n_hits_5e4</th></tr></thead>
+<tbody>
+<tr><td class="sticky-col">trait_a</td><td>0</td><td>Trait A</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td>sd</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td>1000</td><td class="blank">—</td><td class="blank">—</td><td>association</td><td class="blank">—</td><td class="blank">—</td><td>declared_standardised</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td>EUR</td><td>0.29718</td><td>0</td><td>0</td><td>0</td><td>unverified</td><td class="blank">—</td><td>0</td><td>7</td><td>7</td><td>7</td></tr>
+<tr><td class="sticky-col">trait_b</td><td>1</td><td>Trait B</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td>sd</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td>1000</td><td class="blank">—</td><td class="blank">—</td><td>association</td><td class="blank">—</td><td class="blank">—</td><td>declared_standardised</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td class="blank">—</td><td>EUR</td><td>0.283722</td><td>4</td><td>0</td><td>0</td><td>unverified</td><td class="blank">—</td><td>0</td><td>4</td><td>4</td><td>4</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="tab-ancestry" class="tab-panel hidden">
+<input id="search-ancestry" type="text" placeholder="Filter analyses...">
+<div class="table-scroll">
+<table id="ancestry" data-searchable="search-ancestry">
+<thead><tr><th class="sticky-col">analysis_id</th><th>assigned_ancestry</th></tr></thead>
+<tbody>
+<tr><td class="sticky-col">trait_a</td><td class="blank">—</td></tr>
+<tr><td class="sticky-col">trait_b</td><td class="blank">—</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="tab-guide" class="tab-panel hidden">
+<p class="guide-intro">Files in this Store Release, generated at build time. "human" files are safe to open directly; "internal" files are read by the query API and should not be edited by hand.</p>
+<table class="guide">
+<tbody>
+<tr><td class="fname">analyses.tsv<span class="badge human">human</span></td><td class="fdesc">Analytical Metadata -- the source of truth for the Analyses tab. Plain tab-delimited text.</td></tr>
+<tr><td class="fname">data.zarr<span class="badge internal">internal</span></td><td class="fdesc">Association statistics (Z/SE) and top-hit indexes, chunked and compressed. Read via the query API.</td></tr>
+<tr><td class="fname">dense<span class="badge internal">internal</span></td><td class="fdesc">Dense Component -- a nested Dense store holding the Hybrid layout&#x27;s reference-panel grid. From format 0.3.0 it has its own manifest.json but no variant table or analyses.tsv: its variants and Analyses are this release&#x27;s.</td></tr>
+<tr><td class="fname">manifest.json<span class="badge human">human</span></td><td class="fdesc">Store identity, format version, and provenance. Plain JSON.</td></tr>
+<tr><td class="fname">overview.html<span class="badge human">human</span></td><td class="fdesc">This page.</td></tr>
+<tr><td class="fname">variant_alid_keys.npy<span class="badge internal">internal</span></td><td class="fdesc">Sorted ALID search keys (ALID sidecar).</td></tr>
+<tr><td class="fname">variant_alid_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Where each row&#x27;s ALID starts (ALID sidecar).</td></tr>
+<tr><td class="fname">variant_alid_order.npy<span class="badge internal">internal</span></td><td class="fdesc">The row of each sorted ALID key (ALID sidecar).</td></tr>
+<tr><td class="fname">variant_alid_utf8.npy<span class="badge internal">internal</span></td><td class="fdesc">Every variant&#x27;s ALID, in row order (ALID sidecar).</td></tr>
+<tr><td class="fname">variant_position.npy<span class="badge internal">internal</span></td><td class="fdesc">Every variant&#x27;s position, in row order (position sidecar).</td></tr>
+<tr><td class="fname">variant_position_chromosome_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Where each chromosome&#x27;s rows start (position sidecar).</td></tr>
+<tr><td class="fname">variant_position_chromosomes.npy<span class="badge internal">internal</span></td><td class="fdesc">The chromosomes the rows are on, in order (position sidecar).</td></tr>
+<tr><td class="fname">variant_rsid_bytes.npy<span class="badge internal">internal</span></td><td class="fdesc">Sorted rsID search keys (rsID index).</td></tr>
+<tr><td class="fname">variant_rsid_rows.npy<span class="badge internal">internal</span></td><td class="fdesc">The row of each sorted rsID key (rsID index).</td></tr>
+<tr><td class="fname">variant_source_alid_offsets.npy<span class="badge internal">internal</span></td><td class="fdesc">Where each lifted row&#x27;s pre-liftover ALID starts (source_alid sidecar).</td></tr>
+<tr><td class="fname">variant_source_alid_state.npy<span class="badge internal">internal</span></td><td class="fdesc">Whether each row has a pre-liftover ALID, and whether it is the row&#x27;s own (source_alid sidecar).</td></tr>
+<tr><td class="fname">variant_source_alid_utf8.npy<span class="badge internal">internal</span></td><td class="fdesc">The pre-liftover ALID of each lifted row (source_alid sidecar).</td></tr>
+<tr><td class="fname">variants.tsv.gz<span class="badge human">human</span></td><td class="fdesc">The Store Variant Table, one row per variant: tab-delimited, bgzipped and tabix-indexed, for tabix, bedtools and R. From format 0.3.0 no query reads it: queries read the variant sidecars below. A 0.2 release&#x27;s queries read it.</td></tr>
+<tr><td class="fname">variants.tsv.gz.tbi<span class="badge internal">internal</span></td><td class="fdesc">Tabix index for variants.tsv.gz. From format 0.3.0 no query reads it.</td></tr>
+</tbody>
+</table>
+</section>
+</main>
+<script>
+function initTable(table) {
+  const search = document.getElementById(table.dataset.searchable);
+  const tbody = table.tBodies[0];
+  const rows = Array.from(tbody.rows);
+
+  search.addEventListener("input", () => {
+    const q = search.value.toLowerCase();
+    for (const row of rows) {
+      row.style.display = row.textContent.toLowerCase().includes(q) ? "" : "none";
+    }
+  });
+
+  table.tHead.querySelectorAll("th").forEach((th, colIndex) => {
+    let ascending = true;
+    th.addEventListener("click", () => {
+      table.tHead.querySelectorAll("th").forEach(
+        (h) => h.classList.remove("sorted-asc", "sorted-desc")
+      );
+      const sorted = rows.slice().sort((a, b) => {
+        const av = a.cells[colIndex].textContent;
+        const bv = b.cells[colIndex].textContent;
+        const an = parseFloat(av), bn = parseFloat(bv);
+        const cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv);
+        return ascending ? cmp : -cmp;
+      });
+      sorted.forEach((row) => tbody.appendChild(row));
+      th.classList.add(ascending ? "sorted-asc" : "sorted-desc");
+      ascending = !ascending;
+    });
+  });
+}
+document.querySelectorAll("table[data-searchable]").forEach(initTable);
+
+document.querySelectorAll(".tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.remove("hidden");
+  });
+});
+
+function rhoColor(v) {
+  if (v === null) return "#dcdcd6";
+  const t = Math.max(-1, Math.min(1, v));
+  const mix = (a, b, f) => Math.round(a + (b - a) * f);
+  // Canvas can't read CSS custom properties -- keep these RGB triples in
+  // sync with --surface / --accent / --accent-neg in _STYLE by hand.
+  const white = [251, 251, 249];
+  const end = t >= 0 ? [31, 95, 209] : [194, 65, 12];
+  const f = Math.abs(t);
+  const [r, g, b] = [mix(white[0], end[0], f), mix(white[1], end[1], f), mix(white[2], end[2], f)];
+  return `rgb(${r},${g},${b})`;
+}
+
+function initRhoHeatmap(wrap) {
+  const canvas = wrap.querySelector("canvas.rho-heatmap");
+  const tooltip = wrap.querySelector(".rho-heatmap-tooltip");
+  const data = JSON.parse(wrap.querySelector(".rho-heatmap-data").textContent);
+  const n = data.k;
+  const cell = canvas.width / n;
+  const ctx = canvas.getContext("2d");
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      ctx.fillStyle = rhoColor(data.rho[i * n + j]);
+      ctx.fillRect(j * cell, i * cell, cell, cell);
+    }
+  }
+  canvas.addEventListener("mousemove", (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const i = Math.floor((event.clientY - rect.top) / cell);
+    const j = Math.floor((event.clientX - rect.left) / cell);
+    if (i < 0 || i >= n || j < 0 || j >= n) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    const rho = data.rho[i * n + j];
+    const rhoText = rho === null ? "NaN" : rho.toFixed(4);
+    const nn = data.n_null[i * n + j];
+    tooltip.textContent = `${data.labels[i]} x ${data.labels[j]}: rho=${rhoText}, n_null=${nn}`;
+    tooltip.style.left = `${event.clientX - rect.left}px`;
+    tooltip.style.top = `${event.clientY - rect.top}px`;
+    tooltip.classList.remove("hidden");
+  });
+  canvas.addEventListener("mouseleave", () => tooltip.classList.add("hidden"));
+}
+document.querySelectorAll(".rho-heatmap-wrap").forEach(initRhoHeatmap);
+</script>
+</body>
+</html>

@@ -23,12 +23,13 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 from opengwasdb.admission.rules import Reason
-from opengwasdb.encoding import StoreEncoding
-from opengwasdb.model.analyses import AnalysesTable, read_analyses
-from opengwasdb.model.enums import PrimaryStorageLayout
-from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore
-from opengwasdb.variants import VariantAxis
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.stored import sequence_arrays
 
 #: What one scan yields: a block of the data it reads.
 B = TypeVar("B")
@@ -162,34 +163,38 @@ class Target:
         return release is not None and release.parent is not None
 
     @property
+    def shares_variant_axis(self) -> bool:
+        """Whether this target's release reads the variants and Analyses of the Hybrid
+        that nests it: a Dense Component from format 0.3.0, which carries no Variant
+        Table, sidecar or `analyses.tsv` of its own (#472). Its `variant_axis` is the
+        shared one in its panel rows, and its `analyses` are the root's."""
+        return self.store.shared_root is not None
+
+    @property
     def group(self) -> Any:
         """The Zarr group this target's arrays are in, opened on first use.
 
-        A grid's is its release's `data.zarr`; a sequence's, `data.zarr/ragged`.
+        A grid's is its release's `data.zarr`; a sequence's, its Association
+        Sequence group (`data.zarr/ragged`). The Store Reader opens either
+        (`opengwasdb.store_reader.stored`): the rules that judge the storage
+        itself read the stored arrays, and read them only through it (#473).
         """
         if self._group is None:
-            path = self.group_path
-            assert path is not None
-            self._group = open_group(path)
+            self._group = self._open_group()
         return self._group
 
     def reopen(self) -> Any:
         """Open `group` again, in this process, and read through the new handle from now
         on: a forked worker's own (issue #315). A group handed in cannot be reopened."""
-        path = self.group_path
-        if path is None:
+        if self._given_group:
             raise RuntimeError(f"target {self.label!r} holds a group no other process can open")
-        self._group = open_group(path)
+        self._group = self._open_group()
         return self._group
 
-    @property
-    def group_path(self) -> Path | None:
-        """Where `group` is opened from, so a forked worker can open its own handle;
-        None for a group handed in, which only this process holds."""
-        if self._given_group:
-            return None
-        path = self.store.data_path
-        return path / "ragged" if self.kind is Kind.CSR else path
+    def _open_group(self) -> Any:
+        if self.kind is Kind.CSR:
+            return sequence_arrays(self.store.path)
+        return release_arrays(self.store.path)
 
     def remember(self, key: str, read: Callable[[], T], *, until: str | None = None) -> T:
         """`read()`, once per target: what two rules read about it is read once.
@@ -223,9 +228,9 @@ class Target:
         return read_analyses(self.store.analyses_path)
 
     @cached_property
-    def variant_axis(self) -> VariantAxis:
-        """The release's Store Variant Table, opened on first use and closed by `close`."""
-        return VariantAxis(self.store.path)
+    def variant_axis(self) -> AnyVariantAxis:
+        """The release's Variant Axis, opened on first use and closed by `close`."""
+        return self.store.variant_axis(aliases=False)
 
     def close(self) -> None:
         """Release what this target opened for its rules."""

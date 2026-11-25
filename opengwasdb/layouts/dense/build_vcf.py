@@ -34,19 +34,15 @@ from opengwasdb.build.eaf_orientation import (
     site_hashes,
     verify_eaf_orientation,
 )
-from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
 from opengwasdb.encoding import (
     EafExceptionBuilder,
-    EafMeasurements,
-    EncodingMeasurements,
     StoreCodec,
-    StoreEncoding,
     ZOverflowBuilder,
     eaf_baseline_from_grid,
     measure_eaf_sample,
     optimise_dense_se,
-    positions_row_band,
     write_eaf_baseline,
 )
 from opengwasdb.encoding.association_codec import (
@@ -55,16 +51,11 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import (
-    EafExceptionTable,
-    eaf_exception_table,
-    require_parallel,
-)
+from opengwasdb.encoding.codec import eaf_exception_table, require_parallel, write_exact_table
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase
 from opengwasdb.encoding.timing import log_progress as log_phase_progress
-from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.build_manifest import (
     ManifestRow,
     column_map_provenance,
@@ -78,25 +69,29 @@ from opengwasdb.layouts.dense.build import (
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
-    dense_index_metadata,
     dense_layout_records,
     dense_provenance_block,
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
-from opengwasdb.model.enums import (
-    AssociationCoverage,
-    EafScope,
-    PrimaryStorageLayout,
-    coverage_for_layout,
-)
+from opengwasdb.model.enums import EafScope, coverage_for_layout
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import SourceSpec, open_source
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, add_hit_counts, z_critical
+from opengwasdb.store_reader.encoding.codec import EafExceptionTable, positions_row_band
+from opengwasdb.store_reader.encoding.plan import (
+    EafMeasurements,
+    EncodingMeasurements,
+    StoreEncoding,
+)
+from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.stats import z_critical
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.routing import (
@@ -221,7 +216,7 @@ def build_dense_from_vcf_manifest(
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
-            staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape,
+            staged, out, manifest_rows, chain_file, liftover_failure_threshold,
             n_workers, variant_reference, rules,
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
@@ -341,20 +336,19 @@ def _axis_metadata(alids: list[str], manifest_rows: Sequence[ManifestRow]) -> _A
     )
 
 
-def _write_axis_and_index(
+def _write_axis(
     staged: StagedRelease,
     routing: VariantRouting,
     axis: _AxisMetadata,
     rsid_by_alid: Mapping[str, str],
-    chunk_shape: tuple[int, int],
 ) -> None:
-    """Write the SQLite index and the tabix variant axis.
+    """Write the tabix variant axis. A 0.3.0 Observed-Only release has no `index.sqlite`
+    (ADR 0102, #471).
 
     The variant axis carries one canonical variant per stored row with its
     rsid (first named wins) and the source-build provenance each row resolved
     from (`VariantRouting.source_alids` -- collisions stay blank, never guessed).
     """
-    write_index(staged, axis.alids, axis.analyses, chunk_shape)
     canonical_variants = [
         CanonicalVariant(
             chromosome=chrom,
@@ -427,12 +421,11 @@ def _prepare_axis(
     manifest_rows: list[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-    chunk_shape: tuple[int, int],
     n_workers: int,
     variant_reference: str | Path | None,
     rules: Mapping[str, AnalysisRules],
 ) -> _PreparedBuild:
-    """Phases 1-4: route, write the axis and index, and build the Pass 2 table.
+    """Phases 1-4: route, write the axis, and build the Pass 2 table.
 
     hg19-declared rows are lifted to GRCh38 once (issue #85), or a precomputed
     ``variant_reference`` supplies the axis directly and Pass 1 only harvests
@@ -457,7 +450,7 @@ def _prepare_axis(
             len(routing.names.rsid_by_alid),
         )
     axis = _axis_metadata(routing.alids, manifest_rows)
-    _write_axis_and_index(staged, routing, axis, routing.names.rsid_by_alid, chunk_shape)
+    _write_axis(staged, routing, axis, routing.names.rsid_by_alid)
     # The table just written must be the table the resolved map describes: a
     # partial harvest loss, an off-reference row dropped from the write, or a
     # table written from a stale map fails here, on the bytes (issue #255).
@@ -852,26 +845,6 @@ def _finalize_store(
     )
 
 
-def write_index(
-    staged: StagedRelease,
-    hg38_alids: list[str],
-    analyses: list[Analysis],
-    chunk_shape: tuple[int, int],
-) -> None:
-    """Write a Dense release's ``index.sqlite``: its schema, counts and Dense layout."""
-    with staged.index_connection() as connection:
-        initialise_schema(connection)
-        set_metadata(connection, "schema_version", 1)
-        set_metadata(connection, "n_variants", len(hg38_alids))
-        set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(
-            connection,
-            "dense",
-            dense_index_metadata((len(hg38_alids), len(analyses)), hint=chunk_shape),
-        )
-        connection.commit()
-
-
 def apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> list[Analysis]:
     """Stamp each Analysis's `eaf_scope` from what the build actually stored.
 
@@ -1092,7 +1065,7 @@ def _encode_residual_dense_eaf(
         bands = _write_eaf_bands(encoded, baseline, context, pass2_start, n_workers)
         write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
         exceptions = eaf_exception_table(bands)
-        exceptions.write(root)
+        write_exact_table(exceptions, root)
     log.info(
         "eaf: int8 residual at +/-%.1f, %d exception cell(s)",
         codec.encoding.eaf.residual_range,
@@ -1729,7 +1702,7 @@ def _write_dense_z_bands(
                 hit_se_parts.append(loaded.hit_se)
             if flush is not None:
                 _flush_band(z_arr, flush, "Band-write z", n_analyses, pass2_start, band_cols)
-    overflow.table().write(root)
+    write_exact_table(overflow.table(), root)
     return hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts, column_has_eaf
 
 
@@ -1860,7 +1833,7 @@ def _write_manifest(
                 if variant_reference is not None
                 else "opengwasdb.v0.1_dense_vcf_two_pass"
             ),
-            "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+            "chain_file": str(chain_file) if chain_file else BUILTIN_CHAIN_LABEL,
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": {

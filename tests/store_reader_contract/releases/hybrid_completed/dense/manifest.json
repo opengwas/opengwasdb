@@ -1,0 +1,122 @@
+{
+  "association_coverage": "gwas",
+  "completion_state": "reference_completed",
+  "created_at": "2026-11-24T00:00:00+00:00",
+  "encoding": {
+    "eaf": {
+      "kind": "float32",
+      "reference": true
+    },
+    "se": {
+      "kind": "int8_residual",
+      "residual_range": 0.5
+    },
+    "version": 3,
+    "z": {
+      "kind": "int16_fixed",
+      "scale": 1024
+    }
+  },
+  "format_version": "0.3.0",
+  "primary_layout": "dense",
+  "provenance": {
+    "builder": "opengwasdb.v0.1_hybrid_dense_component",
+    "chain_file": "pyliftover_builtin_hg19_hg38",
+    "completion": {
+      "ancestry": "EUR",
+      "ld_panel_id": "eur-hg38-gpm",
+      "method": "elastic_net_eigenvectors_v2_regioncap",
+      "min_cor": 0.0,
+      "n_imputed": 4,
+      "n_missing_imputation_failed": 1,
+      "n_missing_off_panel": 0,
+      "n_variants_new": 1,
+      "n_variants_total": 201,
+      "panel_indels": {
+        "n_indels": 0,
+        "n_placed": 0,
+        "reference_from": "none",
+        "tables": [],
+        "unplaced": {
+          "effect_allele_not_an_allele": 0,
+          "identity_invalid": 0,
+          "no_effect_allele": 0,
+          "no_reference": 0
+        }
+      },
+      "panel_snvs_unplaced": {
+        "effect_allele_not_an_allele": 0,
+        "identity_invalid": 0,
+        "no_effect_allele": 0
+      },
+      "pca_thresh": 0.9,
+      "se_out_of_range": {
+        "imputed": [
+          0,
+          0
+        ],
+        "observed": [
+          0,
+          0
+        ]
+      }
+    },
+    "dense": {
+      "chunk_shape": [
+        201,
+        2
+      ],
+      "compressor": {
+        "clevel": 3,
+        "cname": "zstd",
+        "format": "zarr_v3_sharding",
+        "library": "zarr.codecs.BloscCodec",
+        "shuffle": "bitshuffle"
+      },
+      "se_dtype": "int8",
+      "shard_shape": [
+        201,
+        2
+      ],
+      "statistic_arrays": [
+        "z",
+        "se"
+      ],
+      "zarr_format": 3
+    },
+    "eaf_orientation": {
+      "allow_unverified": false,
+      "analyses": [
+        {
+          "analysis_id": "trait_a",
+          "n_overlap": 0,
+          "note": "no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+          "outcome": "unverified",
+          "r": null,
+          "stores_eaf": true
+        },
+        {
+          "analysis_id": "trait_b",
+          "n_overlap": 0,
+          "note": "no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs",
+          "outcome": "unverified",
+          "r": null,
+          "stores_eaf": true
+        }
+      ],
+      "method": "none",
+      "min_overlap": 500,
+      "min_variance": 0.005,
+      "n_reference_variants": 0,
+      "n_sites": 400,
+      "reference_checksum": "",
+      "reference_id": ""
+    },
+    "n_analyses": 2,
+    "n_variants": 200,
+    "source_release_id": "v1"
+  },
+  "reference_assembly": "GRCh38",
+  "release_id": "v1-completed",
+  "store_id": "hyb-dense"
+}

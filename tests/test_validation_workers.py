@@ -47,10 +47,11 @@ from worker_passes import (
 )
 
 from opengwasdb.encoding import banding, memory
-from opengwasdb.encoding.codec import SE_EXCEPTION
 from opengwasdb.layouts.dense import indexed_subsets
-from opengwasdb.store import arrays, open_store
+from opengwasdb.store import open_store
 from opengwasdb.store.arrays import open_group
+from opengwasdb.store_reader import layout as store_layout
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION
 from opengwasdb.validation import run, scans, validate_store
 from opengwasdb.validation.rule import Kind, ValidationOptions
 from opengwasdb.validation.validate import release_targets
@@ -289,13 +290,13 @@ import logging
 import sys
 from pathlib import Path
 
-from opengwasdb.store import arrays
+from opengwasdb.store_reader import layout
 from opengwasdb.encoding import banding, memory
 from opengwasdb.validation import validate_store
 
 # The pool's sizing line goes to stderr, where the test reads how many workers forked.
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
-arrays.DENSE_SHARD_SHAPE = tuple(json.loads(sys.argv[2]))
+layout.DENSE_SHARD_SHAPE = tuple(json.loads(sys.argv[2]))
 banding.DECODED_BAND_BYTES = int(sys.argv[3])
 # A worker's floor at a fixture's size here too, so a small host still forks them all.
 memory.FORK_FLOOR_BYTES = int(sys.argv[5])
@@ -318,7 +319,7 @@ def test_forked_workers_read_bands_of_several_shards_without_hanging(
     spans as many shards as the parent's did. With the pipeline's own thread pool
     (`codec_pipeline.max_workers` above one) that read waits on threads the fork did
     not copy, and never returns; at the seam's one worker it finishes."""
-    monkeypatch.setattr(arrays, "DENSE_SHARD_SHAPE", PROBE_SHARD)
+    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", PROBE_SHARD)
     store = tmp_path / "store.opengwasdb"
     build_dense_from_records(
         table_records(4_000), store, store_id="probe", release_id="probe-v1",

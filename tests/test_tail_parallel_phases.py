@@ -19,7 +19,6 @@ from dense_sources import write_release_manifest
 from opengwasdb.build import ordered_pool
 from opengwasdb.encoding import se as se_module
 from opengwasdb.encoding.banding import BYTES_PER_CELL
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import (
@@ -27,6 +26,7 @@ from opengwasdb.layouts.dense.top_hits import (
     build_top_hit_indexes,
     write_top_hit_indexes_for_store,
 )
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 
 _PLAIN = StoreEncoding(
     z=ZEncoding("float16"), se=SeEncoding("float16"), eaf=EafEncoding("float32")

@@ -23,17 +23,18 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 from store_digest import store_digest
 
 from benchmarks.compare_top_hits import compare_top_hits
-from opengwasdb.associations import InvalidAssociations
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.analyses import read_analyses
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import read_top_hit_counts, threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.associations import InvalidAssociations
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.top_hits import threshold_key
+from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.validation import validate_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants.axis import VariantAxis
 
 PANEL_ALIDS = ["1:100000:A:G", "1:814620:A:G", "1:1064620:A:G", "1:1564620:A:G"]
 OFF_PANEL_ALID = "1:2068561:A:G"
@@ -185,10 +186,10 @@ def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     stamp's other feature, rather than spell the panel's indels beside them."""
     from region_tables import edit_manifest
 
-    from opengwasdb.store.open import UnsupportedFormatVersion
+    from opengwasdb.store_reader.format import UnsupportedFormatVersion
 
     src, _, _ = completed_hybrid
-    assert StoreManifest.load(src).format_version == "0.2.3"
+    assert StoreManifest.load(src).format_version == "0.3.0"
     edit_manifest(src, lambda manifest: {**manifest, "format_version": "0.2.1"})
     dst = tmp_path / "restamped-dst.opengwasdb"
 
@@ -317,11 +318,12 @@ def test_completed_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_la
     completed_hybrid,
 ) -> None:
     """ADR 0034/issue #68: hybrid completion must carry the unified schema
-    forward (no phenotype_id/phenotype_label) at both the completed Dense
-    Component and the shared/top-level analyses.tsv."""
+    forward (no phenotype_id/phenotype_label) to the shared analyses.tsv, the one
+    a 0.3.0 Hybrid carries: its completed Dense Component has none (#472)."""
     _src, dst, _result = completed_hybrid
 
-    for path in (dst / "dense" / "analyses.tsv", dst / "analyses.tsv"):
+    assert not (dst / "dense" / "analyses.tsv").exists()
+    for path in (dst / "analyses.tsv",):
         table = read_analyses(path)
         assert "phenotype_id" not in table.fieldnames
         assert "phenotype_label" not in table.fieldnames
@@ -517,7 +519,7 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
     )
     assert StoreManifest.load(src).encoding.se.is_residual
 
-    dense_axis = VariantAxis(src / "dense")
+    dense_axis = open_store(src / "dense").variant_axis(aliases=False)
     assert crossover_alid not in {row.alid for row in dense_axis.all()}
     dense_axis.close()
     shared = VariantAxis(src)
@@ -579,7 +581,7 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
     dense_top = zarr.open_group(
         str(dst / "dense" / "data.zarr" / "top_hits" / threshold_key(5e-8)), mode="r"
     )
-    dense_axis = VariantAxis(dst / "dense")
+    dense_axis = open_store(dst / "dense").variant_axis(aliases=False)
     dense_alid_by_index = {r.variant_index: r.alid for r in dense_axis.all()}
     dense_axis.close()
     hit_alids = {
@@ -626,7 +628,7 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
 
     # The crossed-over variant is on the Dense Component's own axis now.
     dense_axis = open_store(dst).dense_component()
-    axis = VariantAxis(dense_axis.path)
+    axis = open_store(dense_axis.path).variant_axis(aliases=False)
     dense_alids = {r.alid for r in axis.all()}
     axis.close()
     assert OFF_PANEL_ALID in dense_alids
@@ -647,7 +649,7 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     assert z == pytest.approx(-4.0, rel=5e-3)
 
     # The overflow no longer carries this association for any analysis.
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     ragged = RaggedCSRReader(dst)
     overflow_alids_after = {alid_by_index[int(v)] for v in np.unique(ragged._variant_index[:])}
@@ -739,7 +741,7 @@ def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_bloc
     }
     with query_store(completed) as query:
         assert query.lookup([crossover], ["trait_a"])["association_status"].tolist() == ["observed"]
-    assert read_analyses(completed / "dense" / "analyses.tsv").rows[0][
+    assert read_analyses(completed / "analyses.tsv").rows[0][
         "completion_n_imputed_total"
     ] == "1", "the unaffected block's fill must survive the corrections"
     file_ops.rmtree(panel)
@@ -768,7 +770,7 @@ def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
     shared_records = shared_axis.all()
     shared_axis.close()
     shared_by_alid = {r.alid: r.variant_index for r in shared_records}
-    dense_axis = VariantAxis(dst / "dense")
+    dense_axis = open_store(dst / "dense").variant_axis(aliases=False)
     dense_records = dense_axis.all()
     dense_axis.close()
 
@@ -814,13 +816,10 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     LD blocks), so this exercises `_fold_panel_crossovers`'s count of reclaimed
     imputed cells directly against a synthetic completed-dense zarr array instead of
     routing through a real completion run."""
-    from opengwasdb.encoding import (
-        DenseZPlane,
-        EncodingMeasurements,
-        StoreCodec,
-        StoreEncoding,
-    )
+    from opengwasdb.encoding import StoreCodec
     from opengwasdb.layouts.hybrid.complete import _fold_panel_crossovers
+    from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
+    from opengwasdb.store_reader.encoding.planes import DenseZPlane
 
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
     codec = StoreCodec(encoding)
@@ -871,9 +870,11 @@ def test_rho_delegates_to_dense_component(completed_hybrid) -> None:
     _src, dst, _result = completed_hybrid
 
     q = query_store(dst)
-    assert len(q.rho("trait_a", "trait_b")["rho"]) == 0
-    assert len(q.rho_row("trait_a")["rho"]) == 0
-    assert q.rho_matrix(["trait_a", "trait_b"])["rho"].shape == (0, 0)
+    ids = [row["analysis_id"] for row in q.analyses_table().values()]
+    assert len(ids) >= 2, ids
+    assert len(q.rho(*ids)["rho"]) == 0
+    assert len(q.rho_row(ids[0])["rho"]) == 0
+    assert q.rho_matrix(ids)["rho"].shape == (0, 0)
 
 
 def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path) -> None:
@@ -895,3 +896,28 @@ def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path) -> None:
             src, tmp_path / "dst.opengwasdb", _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9
         )
     assert not (tmp_path / "dst.opengwasdb").exists()
+
+
+def test_a_residual_dense_component_without_se_coefficients_is_refused_by_name(tmp_path):
+    """A residual SE plane's Overflow is coded against the Dense Component's
+    `se_coefficients`; a component holding none is a HybridCompletionError naming it,
+    not a KeyError from inside zarr (#473).
+
+    Mutation that makes this fail: read `se_coefficients` by indexing the group.
+    """
+    from types import SimpleNamespace
+
+    import zarr
+
+    from opengwasdb.layouts.hybrid.complete import HybridCompletionError, _shared_se_coefficients
+
+    dense = tmp_path / "dense"
+    zarr.open_group(str(dense / "data.zarr"), mode="w", zarr_format=3).create_array(
+        "z", shape=(2, 2), dtype="int16"
+    )
+    residual = SimpleNamespace(se=SimpleNamespace(is_residual=True))
+
+    with pytest.raises(HybridCompletionError, match="holds no se_coefficients"):
+        _shared_se_coefficients(dense, residual)
+    plain = SimpleNamespace(se=SimpleNamespace(is_residual=False))
+    assert _shared_se_coefficients(dense, plain) is None

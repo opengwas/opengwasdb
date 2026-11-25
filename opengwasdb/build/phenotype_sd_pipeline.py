@@ -24,13 +24,12 @@ import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 import numpy as np
 
 from opengwasdb.build.ordered_pool import ordered_map
-from opengwasdb.build.phenotype_sd import ESTIMATION_METHODS, estimate_phenotype_sd
+from opengwasdb.build.phenotype_sd import ESTIMATION_METHODS, AfSource, estimate_phenotype_sd
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest_columns import require_columns, resolve_manifest_columns
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
@@ -60,13 +59,6 @@ SD_OUTPUT_COLUMNS: tuple[str, ...] = (
     "original_sd_dispersion",
     "notes",
 )
-
-
-class AfSource(StrEnum):
-    """Where the allele frequency in the ADR-0029 estimator comes from."""
-
-    source = "source"
-    reference = "reference"
 
 
 @dataclass(frozen=True)

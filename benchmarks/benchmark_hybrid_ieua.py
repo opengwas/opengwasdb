@@ -169,15 +169,16 @@ def run_mr(q, by_id: dict[str, int], exposure: str, outcome: str, *, imputed_onl
     alids = [c["alid"] for c in clumped]
     look = q.lookup(alids, [exposure, outcome])
     per: dict[int, dict] = {}
-    for vi, ai, z, se, st in zip(
-        look["variant_index"], look["analysis_index"], look["z"], look["se"],
+    # beta is the Store Reader's (ADR 0104), not z * se again here.
+    for vi, ai, z, se, beta, st in zip(
+        look["variant_index"], look["analysis_index"], look["z"], look["se"], look["beta"],
         look["association_status"], strict=True,
     ):
         d = per.setdefault(int(vi), {})
-        if int(ai) == exp_idx:
-            d["z_exp"], d["se_exp"], d["st_exp"] = float(z), float(se), str(st)
-        elif int(ai) == by_id[outcome]:
-            d["z_out"], d["se_out"], d["st_out"] = float(z), float(se), str(st)
+        side = "exp" if int(ai) == exp_idx else "out" if int(ai) == by_id[outcome] else None
+        if side is not None:
+            d[f"z_{side}"], d[f"se_{side}"], d[f"st_{side}"] = float(z), float(se), str(st)
+            d[f"beta_{side}"] = float(beta)
     instruments = []
     for vi, d in per.items():
         if not {"z_exp", "z_out"} <= d.keys():
@@ -188,8 +189,8 @@ def run_mr(q, by_id: dict[str, int], exposure: str, outcome: str, *, imputed_onl
         instruments.append({
             "alid": rec.alid if rec else str(vi),
             "chrom": rec.chromosome if rec else "", "pos": int(rec.position) if rec else 0,
-            "beta_exp": d["z_exp"] * d["se_exp"], "se_exp": d["se_exp"],
-            "beta_out": d["z_out"] * d["se_out"], "se_out": d["se_out"],
+            "beta_exp": d["beta_exp"], "se_exp": d["se_exp"],
+            "beta_out": d["beta_out"], "se_out": d["se_out"],
         })
     return _ivw(instruments, exposure, outcome, imputed_only, n_raw_all, len(raw))
 
@@ -335,7 +336,7 @@ def main() -> None:
     }
 
     # Storage split.
-    from opengwasdb.model.manifest import StoreManifest
+    from opengwasdb.store_reader.manifest import StoreManifest
     hyb_manifest = StoreManifest.load(stores["hybrid_completed"])
     hyb = hyb_manifest.provenance.get("hybrid", {})
     storage = {
