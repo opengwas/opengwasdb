@@ -183,7 +183,7 @@ decisions (epic #450). The ticket that moved a component to its class is in the 
 | `data.zarr` `top_hits/<tier>/` `variant_index`, `analysis_index`, `analysis_offsets`, `z`, `se`, `eaf`, `imputed` (Top-Hit Index) | every release | Store Reader | read (accelerator) | — |
 | `data.zarr` `indexed_subsets/<name>/` | Dense, optional | Store Reader | read (accelerator, optional; §10b) | — |
 | `data.zarr` `rho/` | Dense, optional; no release carries one | Store Reader | read, optional: ships only once the Store Reader reads it | — |
-| `data.zarr` `top_hits/p_5e_08/clumps/default/` `lead`, `r` (the Clumps, §18.1) | every layout, optional, from 0.3.0; no release carries them yet | nothing yet; the Store Reader from #419 | read (accelerator, optional, with the LD Store it needs recorded; ADR 0106 §11): ships only once the Store Reader reads it | #418, #419, #420 |
+| `data.zarr` `top_hits/p_5e_08/clumps/default/` `lead`, `r` (the Clumps, §18.1) | every layout, optional, from 0.3.0; no release carries them yet | validation, through the Store Reader's `TopHitTier.clumps` (#418); no query yet: the Top-Hit Query from #419 | read (accelerator, optional, with the LD Store it needs recorded; ADR 0106 §11): ships only once a query reads it (#419) | #418, #419, #420 |
 | `data.zarr` `on_panel` (Reference Panel Membership) | Dense Reference-Completed | validator only | provenance | — |
 | `data.zarr` `top_hits/<tier>/abs_z`, `p_value` | every 0.2 release; none from 0.3.0 | validator only (0.2: `top_hits.abs_z` holds them to what `z` implies) | dropped: the validator recomputes them from `z` | #471 |
 | `variant_rsid_bytes.npy`, `variant_rsid_rows.npy` | every release | Store Reader (rsID lookup; from 0.3.0, inverted, a row's rsID) | read (and inverted, for the rsID of a row) | #469 |
@@ -2651,9 +2651,14 @@ itself; LD Stores have no release id (ADR 0106 §4).
 | `rows_ambiguous` | int | rows of this component marked −3 |
 | `indel_rows_by_sorted_spelling` | int | of `rows_clumped`, indel rows looked up by a sorted spelling an insertion and a deletion share |
 
-**Reading.** The Store Reader reads the Clumps (#419), in `opengwasdb/store_reader/` beside
-`TopHitTier.read` (`opengwasdb/store_reader/top_hits.py`), which reads the tier they are
-parallel to. #475 moves the Store Reader into the `ogquery` package; the Clumps follow the
+**Reading.** The Store Reader reads the Clumps, `TopHitTier.clumps` beside `TopHitTier.read`
+(`opengwasdb/store_reader/top_hits.py`), which reads the tier they are parallel to: `lead`, `r`
+and the `clumps` attribute, of the tier or of one Analysis's slice, refusing a group not laid out
+as above by name (`MalformedClumps`). It reads them only where the release declares them:
+`StoreRelease.top_hit_tiers` hands `TopHitTiers` the manifest's `clumps` entry, and a group the
+manifest does not declare, or a declaration with no group, is refused by name, never read and
+never silently ignored. The step's validation rules read through it (#418), and
+#419's Top-Hit Query builds on it. #475 moves the Store Reader into the `ogquery` package; the Clumps follow the
 reader. A reader reads `lead` and `r` only in a release that declares `clumps` (§2). A Clump
 Lead's members are the rows whose `lead` is its offset. A row whose `lead` is negative belongs to
 no clump and is reported as what its marker says, never as a lead of its own: an absent row is
@@ -2668,8 +2673,17 @@ and after any completion, passing its Assigned Ancestry → LD Store mapping
 (opengwas/opengwasdb-stores#454). An existing 0.3.0 release gains it in place (#420, on the
 Stores opengwas/opengwasdb-stores#498 rebuilds at 0.3.0), the one in-place addition that
 carries Analytical Metadata (§21.4, ADR 0106 §10): the group, then `analyses.tsv` and
-`overview.html`, then the manifest's `clumps` entry. Writing it again replaces all four. The
-`release_id` and the `format_version` do not change. A Reference Completion of a release that carries Clumps writes a
+`overview.html`, then the manifest's `clumps` entry. Writing it again replaces all four, and
+first removes the `clumps` entry from every manifest of the release, so a rerun interrupted
+part-way leaves a group no manifest declares, which `clumps.declared` fails, rather than a
+declaration of columns and arrays the new run has not finished writing. The
+`release_id` and the `format_version` do not change. The command prints one JSON object of what it did: `store`, `seconds`,
+`analyses` (in `analyses.tsv`), `clumped` (Analyses clumped), `n_loci_5e8` and `n_unclumped_5e8`
+(totals over the clumped Analyses, `null` when none was clumped, never a 0 that would claim no
+locus), `markers` (rows holding each marker, every component together), `not_clumped` (as the
+attribute records it) and `ld_stores` (each mapped ancestry's entry, without its row counts). It
+refuses, exiting 1 and naming the Store or LD Store and why, everything *Refusals* lists and an
+LD Store that does not open or does not record a value its entry copies. A Reference Completion of a release that carries Clumps writes a
 release without them, without the `clumps` entry and without the two columns, since it rewrites
 the tier; the Store Release Build then runs the step again.
 
@@ -3008,7 +3022,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `clumps.greedy` | release | check | every row with lead L ≥ 0 names a row L of its Analysis's clump slice (across both components of a Hybrid, so a release rule) with `lead[L] = L`, observed, preceding it by \|z\| (from `z`) descending then shared Store Variant Index, on its chromosome and less than 10,000,000 bp away; a lead's `r` is +`r_scale`; a member's (`r` / `r_scale`)² exceeds its entry's `r2`. Catches a lead weaker than its member, which ordering by raw p gives where p underflows, and a member outside the window or under r2 |
 | `clumps.ancestry` | release | check | an Analysis's rows are all −4 exactly when its `assigned_ancestry` is blank or not a key of `ld_stores`, and its `n_loci_5e8` and `n_unclumped_5e8` are blank exactly then; `not_clumped` counts those Analyses by reason. Catches an Analysis with no LD Store counted as 0, and one with an LD Store left unclumped |
 | `clumps.counts` | release | check | for each clumped Analysis, `n_loci_5e8` equals its rows whose `lead` is their own offset and `n_unclumped_5e8` its rows marked −1 or −3, both non-negative integers with `n_loci_5e8 + n_unclumped_5e8 ≤ n_hits_5e8`; a Hybrid's, in its one `analyses.tsv`, count both components' rows; each entry's `rows_absent` and `rows_ambiguous` equal the markers' counts. Catches counts that disagree with the arrays they count, imputed rows counted as unclumped, a Hybrid that counts one component, and more loci than hits |
-| `clumps.reclump` | grid, sequence | check | runs only when `validate` is given the LD Stores (`--ld-store ANCESTRY=PATH`), and is recorded as not run otherwise, which is not a pass. Each given store's recomputed `provenance_sha256` equals its entry's; and for a seeded sample of clumped Analyses, clumped again from that LD Store as §18.1 says, `lead` and `r` agree row for row. The finding names the seed and the sample. Catches the wrong LD Store, an absent row made its own lead, a present row marked absent, and a sign not flipped where a translated indel's A1 swaps |
+| `clumps.reclump` | grid, sequence | check | runs only when `validate` is given the LD Stores (`--ld-store ANCESTRY=PATH`), and is recorded as not run otherwise, which is not a pass. Each given store's recomputed `provenance_sha256` equals its entry's; and for a seeded sample of clumped Analyses (at most 25 of those whose ancestry was given, drawn with the run's fidelity seed, `validate --fidelity-seed`, 0 unless given), clumped again from that LD Store as §18.1 says, `lead` and `r` agree row for row. The finding names the seed and the sample. It re-clumps with the step's own code (`opengwasdb.clumps.compute_clumps`), so it catches arrays changed after they were written, or clumped against another LD Store, not a defect in the step itself, which would write and re-derive the same wrong arrays; `clumps.greedy` and the tests' independent re-clump are the checks of the step. Catches the wrong LD Store, an absent row made its own lead, a present row marked absent, and a sign not flipped where a translated indel's A1 swaps |
 | `by_variant.sample` | sequence | check | sampled index cells hold the codes and exact values the sequence holds |
 | `completion.quality_table` | grid, sequence | check | the `completion_quality` table is complete and names real Analyses |
 | `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_missing_total` |
@@ -3083,6 +3097,9 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
   remain the `message`s of the `error` and `warning` records in that order. Order is
   the one thing that changed: a release that named the same defects in a different
   order on each run names them in one.
+- `ogdb validate <store> --ld-store ANCESTRY=PATH …` gives the LD Stores the Clumps were
+  written against, and runs `clumps.reclump`, which is recorded as not run without them;
+  `--fidelity-seed S` seeds its sample (§20.0, ADR 0106).
 - `ogdb validate <store> --n-workers N` reads each Dense grid's association scan on N
   forked workers, one band a worker at a time, and reports exactly what one process
   reports: the same records, in the same order, text and JSON (§20.0, issue #315).

@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _make_manifest, _make_vcf, _panel
+from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _panel, make_manifest, make_vcf
 from test_ragged_build_ssf import _make_fixture
 from zarr.storage import LocalStore
 
@@ -78,7 +78,7 @@ def _ragged(tmp_path: Path, dense_store_path: Path) -> Path:
 
 
 def _hybrid(tmp_path: Path, dense_store_path: Path) -> Path:
-    vcf1 = _make_vcf(
+    vcf1 = make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -87,7 +87,7 @@ def _hybrid(tmp_path: Path, dense_store_path: Path) -> Path:
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",
         ],
     )
-    vcf2 = _make_vcf(
+    vcf2 = make_vcf(
         tmp_path,
         "trait_b",
         [
@@ -95,7 +95,7 @@ def _hybrid(tmp_path: Path, dense_store_path: Path) -> Path:
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",
         ],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
     )
     store = tmp_path / "hybrid.opengwasdb"

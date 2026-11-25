@@ -82,7 +82,7 @@ def test_a_dense_vcf_build_logs_the_analysis_whose_se_is_out_of_range(tmp_path, 
 
 def test_a_hybrid_build_logs_each_component_s_out_of_range_ses(tmp_path: Path, caplog) -> None:
     """trait_a's SE above the range sits on the panel (Dense) and off it (Overflow)."""
-    vcf_a = hb._make_vcf(
+    vcf_a = hb.make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -91,10 +91,10 @@ def test_a_hybrid_build_logs_each_component_s_out_of_range_ses(tmp_path: Path, c
             f"1\t{hb.HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",
         ],
     )
-    vcf_b = hb._make_vcf(
+    vcf_b = hb.make_vcf(
         tmp_path, "trait_b", [f"1\t{hb.HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n"]
     )
-    manifest = hb._make_manifest(tmp_path, [("trait_a", vcf_a, "A"), ("trait_b", vcf_b, "B")])
+    manifest = hb.make_manifest(tmp_path, [("trait_a", vcf_a, "A"), ("trait_b", vcf_b, "B")])
     with caplog.at_level(logging.WARNING):
         build_hybrid_from_vcf_manifest(
             manifest,

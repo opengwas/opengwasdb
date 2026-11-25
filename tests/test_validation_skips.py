@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 RAISED = {
     ("validation/rules/associations.py", "_judge_eaf_range"): "associations.eaf_range",
     ("validation/rules/by_variant.py", "present"): "by_variant.present",
+    ("validation/rules/clumps.py", "reclump"): "clumps.reclump",
     ("validation/rules/variants.py", "variant_aliases"): "sqlite.variant_aliases",
 }
 

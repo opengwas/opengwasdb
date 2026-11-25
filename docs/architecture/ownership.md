@@ -28,6 +28,7 @@ none is as it should be.
 | Knowledge | Spec | Owner | Copies still to remove |
 |---|---|---|---|
 | ALID, A1 and the sign of r | ld-store §2, ADR 0089 | `opengwasdb.variants.sorted_spelling` (`sorted_identity`, `SortedIdentity`, `sorted_alid_locus`), the sorted spelling LD Stores use until #462 moves them to the engine's reference-first one; it calls the Store Reader's `opengwasdb.store_reader.identity` for upper-casing and the A, C, G, T check (#456; moved there by #464, which `opengwasdb.variants.normalise` builds on) | |
+| A GWAS Store's ALID looked up in a sorted LD Store: its sorted spelling, whether that swaps A1 (so r changes sign), and the reversed indel that shares it | ld-store §2; store-format §18.1; ADR 0106 §6 | `opengwasdb.variants.sorted_spelling.sorted_lookup` (`SortedLookup`), which the Clumps step (`opengwasdb.clumps`) and its validation rules call; the spelling itself is `normalise.sorted_alid_alleles` | |
 | The engine's variant order, and the autosomes | ld-store §2; build-inputs §2 | `opengwasdb.variants.normalise.chromosome_rank` and `opengwasdb.store_reader.identity.AUTOSOMES` (#464), `1`–`22` in that order, which the Variant Set, joining, results and validation call; inside an LD Store the global row is that order, which `clump` orders ties by | |
 
 ## Encoding

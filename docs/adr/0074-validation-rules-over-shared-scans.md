@@ -147,7 +147,7 @@ recorded in these places:
 - `_Pass.unreadable`, behind the fold that reports an undecodable plane as an
   error. That fold is the first reader, or `side_tables.eaf_exceptions`, which
   reports every band it measured that could not be decoded.
-- `_contained`, where a rule raises `Skip` before reporting anything. Three do:
+- `_contained`, where a rule raises `Skip` before reporting anything. Four do:
   - `associations.eaf_range`, "no frequencies": the component has no `eaf`
     plane and no reference panel.
   - `by_variant.present`: a format 0.1.0 Ragged component without the
@@ -155,6 +155,9 @@ recorded in these places:
     rules after it are skipped with it; there is no index for them to judge.
   - `sqlite.variant_aliases`: an `index.sqlite` with no alias table, which
     spec §20 lists as a skip.
+  - `clumps.reclump`, "not run": `validate` was given no LD Store to re-clump
+    against (`--ld-store`), which spec §20.0 records as not run, never a pass
+    (ADR 0106, #418). No rule runs after it.
 
 A `when` that declines a target records no skip: the target is not one the rule
 judges. `fidelity.source` is stopped only by a failure, not by a skip. A

@@ -86,6 +86,7 @@ from opengwasdb.store_reader.layout import (
     require_shard_multiple,
     shard_layout,
 )
+from opengwasdb.store_reader.top_hits import CLUMPS_ARRAYS, CLUMPS_CONFIGURATION, CLUMPS_GROUP
 
 __all__ = [
     "BY_VARIANT_OFFSETS_CHUNK",
@@ -910,12 +911,24 @@ def _grouped_role(head: str, rest: str) -> ArrayRole | None:
     return None
 
 
+#: The Clumps of a tier (spec §18.1, ADR 0106): `clumps/<configuration>/<leaf>` inside
+#: the tier, parallel to it, so each has the tier's role. `default` is the one
+#: configuration a release may hold, so another name has no role.
+_CLUMPS_LEAVES = frozenset(CLUMPS_ARRAYS)
+
+
 def _top_hit_tier_role(rest: str) -> ArrayRole | None:
-    """The role of `top_hits/<tier>/<leaf>`, or `None` for a malformed path."""
+    """The role of `top_hits/<tier>/<leaf>` or of a tier's Clumps,
+    `top_hits/<tier>/clumps/default/<lead|r>`; `None` for any other path."""
     _tier, separator, leaf = rest.partition("/")
-    if not separator or not leaf or "/" in leaf:
+    if not separator or not leaf:
         return None
-    return _TOP_HIT_ROLES_BY_LEAF.get(leaf)
+    if "/" not in leaf:
+        return _TOP_HIT_ROLES_BY_LEAF.get(leaf)
+    parts = leaf.split("/")
+    if parts[:2] == [CLUMPS_GROUP, CLUMPS_CONFIGURATION] and len(parts) == 3:
+        return ArrayRole.TOP_HIT_INDEX if parts[2] in _CLUMPS_LEAVES else None
+    return None
 
 
 def _ragged_group_role(rest: str) -> ArrayRole | None:
@@ -956,7 +969,11 @@ def is_recorded_group_path(path: str) -> bool:
         # exactly one extra segment is recorded and `ragged/by_variant/<x>/<y>`
         # is refused like any other deeper group.
         return True
-    return head == "top_hits" and bool(rest) and "/" not in rest
+    if head != "top_hits" or not rest:
+        return False
+    parts = rest.split("/")
+    # A tier, `top_hits/<tier>`, and its Clumps, `clumps` and `clumps/default` inside it.
+    return len(parts) == 1 or parts[1:] in ([CLUMPS_GROUP], [CLUMPS_GROUP, CLUMPS_CONFIGURATION])
 
 
 # ── creation ─────────────────────────────────────────────────────────────────
