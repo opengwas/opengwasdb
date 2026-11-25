@@ -101,6 +101,10 @@ THRESHOLDS = (5e-8, 5e-6, 5e-4, 1e-2, 0.2)
 #: How many variants the PheWAS and lookup shapes name, spread over the axis.
 N_VARIANTS_ASKED = 7
 
+#: The most variants the range PheWAS spans (`_range_last`): every fixture release has
+#: fewer, so each is asked over the whole span.
+RANGE_ROWS_ASKED = 10_000
+
 #: How many Analyses the per-Analysis shapes name, spread over the release. Every
 #: fixture release has fewer, so each is asked about every one of its Analyses.
 N_ANALYSES_ASKED = 8
@@ -160,9 +164,15 @@ UNSTORED_SHAPES = tuple(f"top_hits/{t}" for t in UNSTORED_THRESHOLDS) + ("top_hi
 def expects_refusal(q: Any, shape: str) -> bool:
     """Whether `shape` is one `q` is expected to refuse: a Dense or Hybrid release asked
     `top_hits` at a threshold it stores no tier for (#483). Any other refusal is a failure."""
-    return type(q).__name__ in ("StoreQuery", "HybridStoreQuery") and shape.startswith(
+    return adapter_name(q) in ("StoreQuery", "HybridStoreQuery") and shape.startswith(
         UNSTORED_SHAPES
     )
+
+
+def adapter_name(q: Any) -> str:
+    """The query facade `q` is: its class's name, or a private subclass's public facade
+    (the legacy conversion asks its source through one, `legacy_expected`, #492)."""
+    return next(cls.__name__ for cls in type(q).__mro__ if not cls.__name__.startswith("_"))
 
 
 def refusal_digest(refused: Exception) -> dict[str, str]:
@@ -250,9 +260,29 @@ def query_shapes(
     identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
     shapes: dict[str, Callable[[], Any]] = {}
     for observed_only, flag in ((False, "all"), (True, "observed_only")):
-        asking = _Asking(q, ids, identifiers, records[0], records[-1], observed_only)
+        asking = _Asking(q, ids, identifiers, records[0], _range_last(records), observed_only)
         shapes.update({f"{name}/{flag}": shape for name, shape in asking.shapes().items()})
     return shapes
+
+
+def _range_last(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Where the range PheWAS ends: the last variant's position, read on the first
+    variant's chromosome, unless the range would then hold more than `RANGE_ROWS_ASKED`
+    variants, when it ends at the last of the first `RANGE_ROWS_ASKED` (#492).
+
+    A range question over a large release's whole first chromosome resolves tens of
+    millions of rows on each side (ADR 0105 §3: 844 M cells on OGS-00016); bounded, it
+    still asks the range path over many rows, and every fixture release asks it unbounded.
+    """
+    first, last = records[0], records[-1]
+    positions = [
+        int(r["position"])
+        for r in records
+        if r["chromosome"] == first["chromosome"] and int(r["position"]) <= int(last["position"])
+    ]
+    if len(positions) <= RANGE_ROWS_ASKED:
+        return last
+    return {**last, "position": positions[RANGE_ROWS_ASKED - 1]}
 
 
 def _identifiers(asked: list[dict[str, Any]]) -> list[str]:
@@ -608,7 +638,7 @@ def release_answers(
         variants = q.variants_table()
         analyses = q.analyses_table()
         digests: dict[str, Any] = {
-            "adapter": type(q).__name__,
+            "adapter": adapter_name(q),
             "variants_table": _table_digests(variants),
             "analyses_table": _table_digests(analyses),
             "resolved": {},

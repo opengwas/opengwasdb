@@ -2059,18 +2059,54 @@ def regenerate_overview_command(store_path: Path) -> None:
     typer.echo(f"wrote {out_path}")
 
 
+_CONVERT_LEGACY_OPTION = typer.Option(
+    False,
+    "--convert-legacy",
+    help=(
+        "Convert a 0.2.0, 0.2.1 or 0.2.2 Dense release (#492): mask and count every SE "
+        "above 65,504, name an unlifted release's own ALIDs as source_alid, and record "
+        "in provenance.converted_from what only a rebuild fixes. Needs --lifted or "
+        "--not-lifted."
+    ),
+)
+_LIFTED_OPTION = typer.Option(
+    None,
+    "--lifted/--not-lifted",
+    help=(
+        "With --convert-legacy: whether the release lifted any variant from another "
+        "assembly, which a Dense manifest does not record (the build's "
+        "--source-assembly says). Recorded in provenance.converted_from."
+    ),
+)
+
+
 @app.command("rewrite-release")
-def rewrite_release_command(source: Path, destination: Path) -> None:
+def rewrite_release_command(
+    source: Path,
+    destination: Path,
+    convert_legacy: bool = _CONVERT_LEGACY_OPTION,
+    lifted: bool | None = _LIFTED_OPTION,
+) -> None:
     """Derive a new 0.3.0 Store Release at DESTINATION from the 0.2.3 one at SOURCE.
 
     The source is never written and DESTINATION must not exist. Before it publishes,
     the rewrite asks both releases the same questions and refuses on any difference,
-    then validates the result (spec §21.4, ADR 0105).
+    then validates the result (spec §21.4, ADR 0105). With --convert-legacy the source
+    is a 0.2.0-0.2.2 Dense release instead, and the questions are compared with the
+    conversion's fixes applied to the source's answers.
     """
+    from opengwasdb.store.legacy_conversion import LegacyConversion
     from opengwasdb.store.rewrite import RewriteError, rewrite_release
 
+    if convert_legacy and lifted is None:
+        typer.echo("error: --convert-legacy needs --lifted or --not-lifted", err=True)
+        raise typer.Exit(2)
+    if lifted is not None and not convert_legacy:
+        typer.echo("error: --lifted/--not-lifted is for --convert-legacy only", err=True)
+        raise typer.Exit(2)
+    legacy = LegacyConversion(lifted=bool(lifted)) if convert_legacy else None
     try:
-        rewrite_release(source, destination)
+        rewrite_release(source, destination, legacy=legacy)
     except RewriteError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc

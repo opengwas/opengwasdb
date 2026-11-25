@@ -42,11 +42,11 @@ def iter_variant_records(table_path: str | Path) -> Iterator[VariantRecord]:
     otherwise pay tens of millions of `VariantRecord` objects to get at them,
     on stores where that is gigabytes.
     """
-    for line in _table_lines(table_path):
+    for line in variant_table_lines(table_path):
         yield parse_variant_line(line)
 
 
-def _table_lines(table_path: str | Path) -> Iterator[str]:
+def variant_table_lines(table_path: str | Path) -> Iterator[str]:
     """A Store Variant Table's rows as text, header lines skipped.
 
     A missing table raises `FileNotFoundError`: pysam's BGZF reader crashes the
@@ -147,7 +147,7 @@ class TabixVariantTable:
 
     def rows(self) -> Iterator[str]:
         self._require_open()
-        return _table_lines(self.table_path)
+        return variant_table_lines(self.table_path)
 
     def alias_index(self, alias: str) -> int | None:
         with self._lock:
