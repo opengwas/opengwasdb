@@ -32,9 +32,9 @@ from test_hybrid_build import (
     HG38_ALID_1,
     HG38_ALID_2,
     HG38_ALID_3,
-    _make_vcf,
     _manifest_with_source_assembly,
     _panel,
+    make_vcf,
 )
 from test_hybrid_completion import (
     _residual_hybrid_crossover_source,
@@ -383,7 +383,7 @@ def test_hybrid_sample_is_the_first_twenty_in_variant_list_order(tmp_path: Path)
     match: the recorded sample must be the first 20 entries of the list.
     """
     positions = [2_000_000 + 1_000 * row for row in range(25)]
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path,
         "trait_many",
         [f"1\t{position}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.2\n" for position in positions],

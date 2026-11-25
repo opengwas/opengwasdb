@@ -256,20 +256,20 @@ def build_ragged(root: Path) -> Path:
 def build_hybrid(root: Path) -> Path:
     """A Hybrid Observed-Only Store of the four Analyses. Its panel is every other SNV of the
     Test Panel, so a locus spans its Dense Component and its Ragged Overflow."""
-    from test_hybrid_build import _make_manifest, _make_vcf
+    from test_hybrid_build import make_manifest, make_vcf
 
     root.mkdir(parents=True, exist_ok=True)
     entries = []
     for analysis_id, rows in sorted(analysis_rows().items()):
         lines = [f"{r.chrom}\t{r.pos}\t.\t{r.ref}\t{r.alt}\t.\tPASS\t.\tES:SE\t{r.z}:1\n"
                  for r in rows]
-        entries.append((analysis_id, _make_vcf(root, analysis_id, lines), analysis_id))
+        entries.append((analysis_id, make_vcf(root, analysis_id, lines), analysis_id))
     snvs = [r for r in panel_rows() if len(r.ref) == len(r.alt) == 1]
     panel = root / "panel.txt"
     panel.write_text("".join(f"{r.alid}\n" for r in snvs[::2]), encoding="utf-8")
     store = root / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
-        _make_manifest(root, entries), store, reference_panel=panel, store_id="clumps",
+        make_manifest(root, entries), store, reference_panel=panel, store_id="clumps",
         release_id="clumps-hyb", source_assembly="GRCh38",
     )
     set_ancestry(store)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from test_hybrid_build import _make_manifest, _make_vcf, _panel
+from test_hybrid_build import _panel, make_manifest, make_vcf
 
 import opengwasdb.layouts.dense.build_vcf as dense_build
 from opengwasdb.build.eaf_orientation import site_hashes
@@ -192,7 +192,7 @@ def test_overflow_spill_removed_only_after_use(tmp_path: Path, monkeypatch) -> N
 def test_hybrid_survey_failure_leaves_no_spill_dir(tmp_path: Path, monkeypatch) -> None:
     """A worker failure in the parallel survey propagates and the build's
     spill-dir lifetime still removes every spill."""
-    vcf1 = _make_vcf(
+    vcf1 = make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -200,12 +200,12 @@ def test_hybrid_survey_failure_leaves_no_spill_dir(tmp_path: Path, monkeypatch) 
             "1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",
         ],
     )
-    vcf2 = _make_vcf(
+    vcf2 = make_vcf(
         tmp_path,
         "trait_b",
         ["1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n"],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
     )
 

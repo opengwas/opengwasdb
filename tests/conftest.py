@@ -341,7 +341,7 @@ def clump_seeds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
 def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Hybrid release of three traits over a 40-variant panel, each with four
     off-panel variants in its Overflow, and a subset of every other panel variant."""
-    from test_hybrid_build import _make_manifest, _make_vcf
+    from test_hybrid_build import make_manifest, make_vcf
 
     from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 
@@ -353,14 +353,14 @@ def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
             f"{0.05 * (i + 1) * (trait + 1):.4f}:{0.1 + 0.01 * trait:.3f}:{0.1 + 0.015 * i:.4f}\n"
             for i in range(PANEL_VARIANTS + (OFF_PANEL if trait else 0) * (trait + 1))
         ]
-        entries.append((f"t{trait}", _make_vcf(root, f"t{trait}", rows), f"Trait {trait}"))
+        entries.append((f"t{trait}", make_vcf(root, f"t{trait}", rows), f"Trait {trait}"))
     panel = root / "panel.txt"
     panel.write_text(
         "".join(f"1:{1_000 * (i + 1)}:A:G\n" for i in range(PANEL_VARIANTS)), encoding="utf-8"
     )
     store = root / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
-        _make_manifest(root, entries),
+        make_manifest(root, entries),
         store,
         reference_panel=panel,
         store_id="h",
