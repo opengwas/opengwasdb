@@ -15,17 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from clump_stores import (
-    ANCESTRY,
-    LD_STORE,
-    OFF_PANEL,
-    REVERSED_INDEL,
-    build_dense,
-    build_dense_completed,
-    build_hybrid,
-    build_ragged,
-    copied,
-)
+from clump_stores import ANCESTRY, LD_STORE, OFF_PANEL, REVERSED_INDEL, copied
 
 from opengwasdb.clumps import (
     ABSENT,
@@ -48,15 +38,9 @@ EUR = {"EUR": LD_STORE}
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """The four fixture Stores, built once and never written to."""
-    root = tmp_path_factory.mktemp("clump-stores")
-    return {
-        "completed": build_dense_completed(root / "completed"),
-        "dense": build_dense(root / "dense" / "dense.opengwasdb"),
-        "ragged": build_ragged(root / "ragged"),
-        "hybrid": build_hybrid(root / "hybrid"),
-    }
+def built(clump_seeds: dict[str, Path]) -> dict[str, Path]:
+    """The four fixture Stores, built once a session and never written to."""
+    return clump_seeds
 
 
 @pytest.fixture(scope="module")

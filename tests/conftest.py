@@ -321,6 +321,22 @@ PANEL_VARIANTS = 40
 OFF_PANEL = 4
 
 
+@pytest.fixture(scope="session")
+def clump_seeds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """`clump_stores`' four Stores on Test Panel positions, built once per session for the
+    Clumps' tests (#418): Dense, Dense Reference-Completed, Ragged and Hybrid. Never
+    written to: copy one to change it."""
+    from clump_stores import build_dense, build_dense_completed, build_hybrid, build_ragged
+
+    root = tmp_path_factory.mktemp("clump-seeds")
+    return {
+        "completed": build_dense_completed(root / "completed"),
+        "dense": build_dense(root / "dense" / "dense.opengwasdb"),
+        "ragged": build_ragged(root / "ragged"),
+        "hybrid": build_hybrid(root / "hybrid"),
+    }
+
+
 @pytest.fixture(scope="module")
 def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Hybrid release of three traits over a 40-variant panel, each with four

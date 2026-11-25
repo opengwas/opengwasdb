@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from clump_stores import LD_STORE, build_dense, build_dense_completed, build_hybrid, copied
+from clump_stores import LD_STORE, copied
 
 from opengwasdb.clumps import clump_store
 from opengwasdb.model.analyses import write_analysis_columns
@@ -30,15 +30,15 @@ CLUMPS = Path("data.zarr/top_hits/p_5e_08/clumps/default")
 
 
 @pytest.fixture(scope="module")
-def clumped(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+def clumped(
+    clump_seeds: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, Path]:
+    """The completed Dense and the Hybrid seed, copied and clumped; the Dense seed unclumped."""
     root = tmp_path_factory.mktemp("clump-rules")
-    stores = {
-        "completed": build_dense_completed(root / "completed"),
-        "hybrid": build_hybrid(root / "hybrid"),
-    }
+    stores = {name: copied(clump_seeds[name], root / name) for name in ("completed", "hybrid")}
     for store in stores.values():
         clump_store(store, EUR)
-    stores["unclumped"] = build_dense(root / "dense" / "dense.opengwasdb")
+    stores["unclumped"] = clump_seeds["dense"]
     return stores
 
 
