@@ -218,7 +218,8 @@ or reads a different version for them, and a clumped and an unclumped release ar
 The step supports only 0.3.0 releases and refuses any other format by name. No 0.2 or 0.1.0
 release carries Clumps, and none is converted to gain them. #420 adds them in place to the
 registered Stores once opengwas/opengwasdb-stores#498 has rebuilt them at 0.3.0 (the owner,
-25 Nov 2026), keeping each `release_id` and `format_version` (spec §21.4).
+25 Nov 2026) and once a query reads the Clumps, #419's Top-Hit Query (spec §1.1, ADR 0106 §11),
+keeping each `release_id` and `format_version` (spec §21.4).
 
 What a package that knows 0.3.0 and nothing of the Clumps, such as the release epic #450 merges as,
 does with a clumped 0.3.0 release was measured on main's fixtures on 25 Nov 2026 (ADR 0106 §9):

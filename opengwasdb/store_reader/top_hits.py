@@ -389,7 +389,18 @@ class TopHitTiers:
 
     def tier(self, threshold: float) -> TopHitTier | None:
         """The tier for `threshold`, or None when the store has no such tier."""
-        key = threshold_key(threshold)
+        return self.by_key(threshold_key(threshold))
+
+    def keys(self) -> list[str]:
+        """Every tier group's key, sorted, whether or not its threshold parses."""
+        try:
+            group = self._root[TOP_HIT_GROUP]
+        except KeyError:
+            return []
+        return sorted(name for name, _ in group.members())
+
+    def by_key(self, key: str) -> TopHitTier | None:
+        """The tier group `key` (`threshold_key`), or None when the store has none."""
         if key not in self._tiers:
             try:
                 self._tiers[key] = TopHitTier(

@@ -30,9 +30,29 @@ Each decision below names its source:
   measurement, which the decision cites: no default LD Store in the engine; several ancestries
   in one Store; r² read from the LD Store; `r` as the LD Store's own code; where the step runs;
   the class under ADR 0102; |z| taken from `z` by the function #471's review named.
-- **This ADR's own**, each with a recommendation the owner may overrule: which LD Store
-  clumped an Analysis, how an LD Store is identified, ties, the markers, and the format
-  version.
+- **This ADR's own**, each awaiting the owner's sign-off (the next section): which LD Store
+  clumped an Analysis, how an LD Store is identified, ties, the markers, the format version,
+  the in-place exception, where the default LD Store lives, and the lost-locus definition.
+
+## Awaiting the owner's sign-off at epic #62's merge
+
+These are this ADR's own decisions, which the owner has not ruled on. Each stands as written
+until the owner rules on it when epic #62's pull request merges.
+
+- **`format_version` stays 0.3.0** (§9), against #417's "a `format_version` bump".
+- **The in-place exception to immutability** (§10), with the banners it puts on ADR 0038 and
+  ADR 0061.
+- **How an LD Store is identified**: by `provenance_sha256`, with `name`, `kind`,
+  `format_version`, `samples_sha256` and `location` beside it (§4).
+- **`ld_stores` keyed by `assigned_ancestry`** in the group's attribute, rather than a
+  per-Analysis column (§3).
+- **Ties by Store Variant Index** (§5), and **the −3 (ambiguous) and −4 (not clumped)
+  markers** (§7).
+- **No default LD Store in the engine** (§2). The owner said "a default ld store for each
+  ancestry"; this ADR places that default in the registry, opengwas/opengwasdb-stores, which
+  passes the mapping (opengwas/opengwasdb-stores#454), and the engine takes it as an input.
+- **The lost-locus definition**, G = 250 kb, a reporting choice for the measurement in
+  *Context* (*Absent*), stored nowhere.
 
 ## Context
 
@@ -64,19 +84,19 @@ The means and medians are over the Analyses in each run's records (`all-*.jsonl`
   for OGS-00009's 5e-8 tier: 6.44 M rows, 1.8 B a row, against a 112 MB tier and a 58 GB Store.
   The prototype stored `r` × 32767; this ADR stores the LD Store's own code (decision 7), so
   #418 re-measured the size (25 Nov 2026), the step's arrays written with the tier's role and
-  chunking: 9.9 MB for OGS-00009's 6.44 M rows (1.54 B a row), 13.9 MB for OGS-00027's 7.83 M
-  (1.77 B), and 0.61 MB for the 384,861 rows of OGS-00006 at 0.3.0 (1.58 B).
+  chunking: 9.9 MB for OGS-00009's 6.44 M rows (1.54 B a row) and 13.9 MB for OGS-00027's
+  7.83 M (1.77 B) (`benchmarks/clumps/records/parity-OGS-0000{9,27}.json`).
 - **Query.** A clumped Top-Hit read took 18 ms median against 16 ms unclumped at 5e-8.
 - **Absent.** 13.3% of OGS-00009's observed 5e-8 rows (732,086 of 5,491,801) and 15.1% of
   OGS-00027's (1,181,968 of 7,831,679) are not in HGDP+1kGP EUR (8.6 M variants, n = 665).
   In 86 of the 1,219 OGS-00009 Analyses clumped, and 117 of OGS-00027's 15,785, every observed
   row is absent: those Analyses have hits and no locus the LD Store can see. #418 measured the
   loci lost entirely inside the other Analyses (25 Nov 2026, the step's compute path on the same
-  tiers; `parity.py` and its records in `/data/opengwasdb/work/orchestrate/opengwasdb-62-r2/scratch/418/`).
+  tiers; `benchmarks/clumps/parity.py` and its records in `benchmarks/clumps/records/`).
   A lost locus there is a run of an Analysis's absent rows, consecutive ones less than G apart,
   with no row the LD Store holds within G of the run. G is a reporting choice for this
-  measurement, not a setting of the Clumps, and nothing in a Store records it; the owner
-  ratifies the definition when epic #62 merges. At G = 250 kb, plink2's default window,
+  measurement, not a setting of the Clumps, and nothing in a Store records it (awaiting the
+  owner's sign-off, above). At G = 250 kb, plink2's default window,
   OGS-00009 loses 4,172 loci in its 1,133 Analyses with a present row, against their 76,821
   Clump Leads (5.4%), and OGS-00027 542 against 111,673 (0.5%); at G = 1 Mb, 2,786 and 154. The
   86 and 117 Analyses with no present row add 294 and 133 runs at 250 kb. The same run gave
@@ -87,6 +107,38 @@ The means and medians are over the Analyses in each run's records (`all-*.jsonl`
   These are measurements of 0.2.0 Stores, taken before format 0.3.0 existed. The Clumps
   themselves are written only on 0.3.0 Stores (decision 10), where every indel is spelt
   reference first and translated (decision 6).
+
+#418 ran the step and its compute path on real Stores (25 Nov 2026, the code this ADR describes;
+the scripts and their records are in `benchmarks/clumps/`, never Store data):
+
+- **The step, on 0.3.0 copies** (`real_store.py`). OGS-00006 (Ragged, Reference-Completed,
+  1,400 EUR Analyses, 384,861 5e-8 rows) against the HGDP+1kGP EUR Genotype Store at k = 10:
+  18.8 s, `n_loci_5e8` 4,420 in all, 66,409 rows absent, 11,725 imputed, none ambiguous;
+  `validate --ld-store` found nothing new and the `clumps.*` rules passed. OGS-00025 (1,038 EAS
+  Analyses) with only EUR mapped: every Analysis not clumped, `no_ld_store` EAS 1,038, both
+  totals `null`, in 0.2 s. Both copies are epic #450's, made before #468 and #470, so the
+  script first wrote the sidecars those add, which validation then checked.
+- **The compute path, on OGS-00009 and OGS-00027** (`parity.py`). The step refuses a Store of
+  any format but 0.3.0 (decision 10), and these two are published at 0.2.0 with no 0.3.0 release
+  until opengwas/opengwasdb-stores#498 rebuilds them. So their published tiers were clumped by
+  `compute_clumps`, the step without its writes and its format refusal, read only. Leads,
+  present and absent rows match the prototype Analysis by Analysis (above), in 105.6 s and
+  99.6 s against the prototype's 135.5 s and 136.8 s.
+- **Its share of the Store build** (`build_share.py`), the build being every step the Store's
+  build records hold (`records/*.json`, `elapsed_seconds`): 18.8 s of OGS-00006's 3,973 s
+  (0.5%), 105.6 s of OGS-00009's 159,976 s (0.07%) and 99.6 s of OGS-00027's 1,466 s (6.8%).
+  The last two are the compute path, which reads and clumps the tier; writing the arrays adds
+  little. OGS-00027's records hold only its build and validation.
+- **Against `plink2 --clump`** (`plink_compare.py`), for #403's 37 EUR Analyses (OGS-00011 27,
+  OGS-00012 7, OGS-00009 3; none from OGS-00008, which the reader cannot open), read only.
+  #403 ran plink2 unadjusted at kb 10,000 and r² 0.01. The step gives 31,550 loci against
+  plink2's 21,510 (1.47× pooled, 1.43× median; more in 35 Analyses, as many in 1, fewer in 1),
+  on 12% fewer rows, since the Genotype Store holds fewer of them than the pgen. The window
+  hardly matters: at kb 3,000, 31,605. The threshold does: at r² 0.01 and kb 3,000, the lowest
+  r² this store answers within its near band, 23,308 (1.08×). So the stored r², this store's
+  t_far 0.0319, accounts for most of the difference, and PC Adjustment, which removes chance LD
+  that joins plink2's clumps, for the remaining 8%. 420 rows of OGS-00011, a 0.2.3 Store whose
+  indels are spelt reference first, are ambiguous reversed indels.
 
 ## Decision
 
@@ -333,8 +385,10 @@ in-place addition because it changes none. `n_loci_5e8` and `n_unclumped_5e8` ar
 Metadata. The exception is exactly this: **a derived, rebuildable component and the count
 columns derived from it, recomputable from the Store and a named LD Store**, may be added to or
 replaced in an existing release in place. They change no existing value, and the `release_id`
-does not change, nor does the `format_version` (decision 9), so nothing in the manifest but
-its `clumps` entry is rewritten. Anything else touching Analytical Metadata still derives a new
+does not change, nor does the `format_version` (decision 9), so no value in the manifest but
+its `clumps` entry changes. The file is rewritten through `OpenGWASDBStore.set_manifest_entry`,
+which, like every in-place manifest write, also writes the coverage in the current vocabulary
+(`normalise_coverage`) and sorts the keys; on a 0.3.0 manifest both leave every value as it was. Anything else touching Analytical Metadata still derives a new
 release. ADRs 0038 and 0061 carry a banner saying so. The step writes the group, then `analyses.tsv` and `overview.html`,
 then the manifest's `clumps` entry last: until that entry is written the Store does not declare
 the component, and `validate` fails a group it does not declare. Running the step again replaces
@@ -358,7 +412,7 @@ it: Dense through `write_top_hit_indexes`, Ragged and a Hybrid's Overflow throug
 `build_ragged_top_hit_indexes`, and a Hybrid's Dense Component through the Dense path. A
 `clumps` entry or columns a completion carried over without the group fail `clumps.declared`.
 
-### 11. Under ADR 0102's rule the Clumps are *read*, and ship once the Store Reader reads them (evidence; amends ADR 0102 §3)
+### 11. Under ADR 0102's rule the Clumps are *read*, and ship once a query reads them (#419) (evidence; adds a row to ADR 0102 §3)
 
 [ADR 0102](0102-what-a-store-release-ships.md) §2's rule is applied to a component at the
 format being written, here 0.3.0. ADR 0102 §1 makes the two arrays, `lead` and `r` under
@@ -398,15 +452,13 @@ recomputable from the release, and they record no part of how the release was ma
 rules the same way for the Rho Matrix: it "ships only once the Store Reader reads it". So #420
 adds the Clumps to published Stores only once #419's query is released.
 
-**This narrows ADR 0102's gate** (#418). Read literally, "the Store Reader reads it" is met by
-`TopHitTier.clumps`, which validation reads through. That read answers no question a reader
-asks, so it would let #420 ship arrays no answer depends on, against the reasoning above. A
-component the Store Reader reads only for validation therefore does not count as read: it ships
-once a query reads it. ADR 0102 carries a banner saying so; the owner confirms it when epic #62
-merges. The count columns are
+**This applies ADR 0102's definition; it changes nothing in it** (#418). ADR 0102 §1 defines
+*read* as what "the Store Reader reads … to answer a query", and its §2 asks the same at step 1.
+`TopHitTier.clumps`, which validation reads through, answers no query, so it does not make the
+Clumps read: they ship once a query reads them, #419's. The count columns are
 not held back, since `analyses_table()` already reads them, but they come from the same step.
 
-**Amends ADR 0102 §3.** Its inventory gains one row. `data.zarr`
+**Adds a row to ADR 0102 §3.** Its inventory gains one row. `data.zarr`
 `top_hits/p_5e_08/clumps/default/` `lead` and `r` are **read**: an optional accelerator with
 the LD Store recorded (this ADR, decision 11), shipped from #420. Spec §1.1 carries the row,
 and ADR 0102 has a banner pointing here.
@@ -444,7 +496,8 @@ and ADR 0102 has a banner pointing here.
   Analysis's ancestry maps to. #475 moves the Store Reader into the `ogquery` package, and the
   Clumps reader moves with it.
 - **#420** runs the step in place on every registered Store once opengwas/opengwasdb-stores#498
-  has rebuilt it at 0.3.0, and once #419's reader is released (decision 11).
+  has rebuilt it at 0.3.0, and once #419's query, the first to read the Clumps, is released
+  (decision 11).
 - **opengwas/opengwasdb-stores#454** passes the mapping and carries the two columns. A change to
   `analyses.tsv` columns is a documentation change there too.
 - **#462** removes the shared-spelling exposure (decision 6). Until then the step counts it.

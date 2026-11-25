@@ -141,7 +141,6 @@ COMPLIANT_ARRAYS_CALLS = frozenset(
         ("opengwasdb/validation/observed_view_hybrid.py", "_open_overflow"),
         ("opengwasdb/validation/observed_view_hybrid.py", "_DenseCodec.of"),
         ("opengwasdb/validation/rules/layout.py", "_validate_hybrid_recordings"),
-        ("opengwasdb/validation/rules/clumps.py", "_tier_groups"),
         ("opengwasdb/validation/rules/top_hits.py", "tier_root"),
         ("opengwasdb/validation/validate.py", "_fidelity_blocks"),
     }

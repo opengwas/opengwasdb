@@ -1,17 +1,13 @@
 # What a Store Release ships, and the rule that decides it
 
-> **§3 amended by [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §11** (issue
-> #417, epic #62): the inventory gains the Clumps of the 5e-8 tier, `lead` and `r` under
-> `data.zarr/top_hits/p_5e_08/clumps/default/`. By this ADR's rule they are **read**: #419's
-> Top-Hit Query reads them. They are an optional accelerator that also needs an LD Store
-> outside the release, which ADR 0106 records by digest. ADR 0106 measures their gain
-> against their size, as §2 asks of a new accelerator.
->
-> **ADR 0106 §11 also narrows this ADR's shipping gate** (issue #418): "ships only once the
-> Store Reader reads it" now means once a *query* reads it. A component the Store Reader reads
-> only for validation, as it reads the Clumps since #418 (`TopHitTier.clumps`), does not count:
-> no answer a reader asks for depends on it. So the Clumps ship once #419's query is released.
-> The classification rule itself is unchanged. The owner confirms this at epic #62's merge.
+> **§3 gains a row in [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §11** (issues
+> #417, #418, epic #62): the Clumps of the 5e-8 tier, `lead` and `r` under
+> `data.zarr/top_hits/p_5e_08/clumps/default/`. By this ADR's rule they are **read** once #419's
+> Top-Hit Query reads them to answer a query; the read validation makes through the Store Reader
+> (`TopHitTier.clumps`, #418) answers none, so until then they do not ship. They are an optional
+> accelerator that also needs an LD Store outside the release, which ADR 0106 records by digest,
+> and ADR 0106 measures their gain against their size, as §2 asks of a new accelerator. This ADR's
+> rule is applied as written, not changed.
 
 Issue [#463](https://github.com/opengwas/opengwasdb/issues/463), part of epic
 [#450](https://github.com/opengwas/opengwasdb/issues/450) (the Store Reader, `ogquery`). Spec §1.1

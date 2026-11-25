@@ -1,0 +1,46 @@
+{
+ "clump": {
+  "analyses": 1038,
+  "clumped": 0,
+  "ld_stores": {
+   "EUR": {
+    "format_version": "0.1.0",
+    "kind": "genotype_store",
+    "name": "hgdp1kgp-v2-EUR",
+    "provenance_sha256": "8edb1c87016a352104e8faddc20271d5e745f04dab602dc052f0f119be0cd2bc",
+    "r_scale": 511,
+    "t_far": 0.03186544342507645
+   }
+  },
+  "markers": {
+   "absent": 0,
+   "ambiguous": 0,
+   "imputed": 0,
+   "not_clumped": 2502
+  },
+  "n_loci_5e8": null,
+  "n_unclumped_5e8": null,
+  "not_clumped": {
+   "no_assigned_ancestry": 0,
+   "no_ld_store": {
+    "EAS": 1038
+   }
+  },
+  "seconds": 0.186,
+  "store": "OGS-00025-0.3.0"
+ },
+ "clump_wall_seconds": 0.2,
+ "sidecars_written": [
+  "position",
+  "source_alid"
+ ],
+ "source": "/data/opengwasdb/work/orchestrate/opengwasdb-450/scratch/467/real/OGS-00025-0.3.0",
+ "validate": {
+  "clumps_findings": [],
+  "errors_after": 1044,
+  "errors_before": 1044,
+  "new_findings": [],
+  "seconds_after": 11.3,
+  "seconds_before": 12.9
+ }
+}

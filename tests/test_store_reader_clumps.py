@@ -146,3 +146,19 @@ def test_set_manifest_entry_sets_replaces_and_removes_one_entry_and_keeps_the_re
     assert removed.manifest.clumps is None
     assert os.stat(path).st_mode & 0o777 == 0o640
     assert not list(store.glob(".manifest.json.writing"))
+
+
+def test_an_in_place_analyses_column_write_keeps_the_table_s_mode(
+    clump_seeds: dict[str, Path], tmp_path: Path
+) -> None:
+    from opengwasdb.model.analyses import write_analysis_columns
+    from opengwasdb.store_reader.analyses import read_analyses
+
+    store = copied(clump_seeds["dense"], tmp_path)
+    table = store / "analyses.tsv"
+    os.chmod(table, 0o640)
+    n = len(read_analyses(table).rows)
+    write_analysis_columns(table, {"n_loci_5e8": [str(i) for i in range(n)]})
+    assert [r["n_loci_5e8"] for r in read_analyses(table).rows] == [str(i) for i in range(n)]
+    assert os.stat(table).st_mode & 0o777 == 0o640
+    assert not list(store.glob(".analyses.tsv.writing"))

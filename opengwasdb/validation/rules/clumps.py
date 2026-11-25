@@ -14,7 +14,6 @@ What the rules read is the step's own reading (`opengwasdb.clumps`: `read_clumps
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,16 +25,14 @@ from opengwasdb.clumps import (
     ABSENT,
     AMBIGUOUS,
     CLUMPS_FORMAT_VERSIONS,
+    CONFIGURATION_ATTRIBUTE,
     IMPUTED,
-    KB,
     MANIFEST_ENTRY,
     MANIFEST_KEY,
-    MARKERS,
     NO_ASSIGNED_ANCESTRY,
     NO_LD_STORE,
     NO_R,
     NOT_CLUMPED,
-    THRESHOLD,
     TIER,
     WINDOW_BP,
     ClumpRefusal,
@@ -50,6 +47,7 @@ from opengwasdb.clumps import (
 )
 from opengwasdb.model.analyses import CLUMP_COUNT_COLUMNS, N_LOCI_5E8, N_UNCLUMPED_5E8
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import (
     CLUMPS_ATTRIBUTE,
     CLUMPS_CONFIGURATION,
@@ -58,9 +56,11 @@ from opengwasdb.store_reader.top_hits import (
     TOP_HIT_GROUP,
     MalformedClumps,
     TierClumps,
+    TopHitTier,
     clumps_array_problems,
     clumps_attribute_problem,
     clumps_configuration_problem,
+    declares_clumps_of,
 )
 from opengwasdb.validation.rule import Check, Kind, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
@@ -72,10 +72,7 @@ STRUCTURE = "clumps.structure"
 #: `fidelity_seed`.
 RECLUMP_ANALYSES = 25
 
-#: The attribute's fixed values: the one stored Clumping Configuration (§18.1).
-FIXED = {"configuration": CLUMPS_CONFIGURATION, "threshold": THRESHOLD, "score": "abs(z)",
-         "ties": "store_variant_index", "kb": KB, "join": "r2_gt_distance_lt",
-         "markers": MARKERS}
+
 
 
 # ── what the rules read ──────────────────────────────────────────────────────
@@ -92,23 +89,23 @@ def _component_label(target: Target) -> str:
     return "data.zarr" if target.kind is Kind.CSR else target.label
 
 
-def _tier_groups(target: Target) -> dict[str, Any]:
-    """Each tier group of the `data.zarr` a target's release holds, by key."""
-    root = target.store.arrays()
-    if TOP_HIT_GROUP not in root:
-        return {}
-    index = root[TOP_HIT_GROUP]
-    return {name: index[name] for name, _ in sorted(index.members())}
+def _tiers(target: Target) -> dict[str, TopHitTier]:
+    """Each Top-Hit tier of the target's release, by key, as the Store Reader opens it, with
+    the release's declaration of its Clumps (`StoreRelease.top_hit_tiers`)."""
+    tiers = target.store.top_hit_tiers()
+    opened = {key: tiers.by_key(key) for key in tiers.keys()}
+    return {key: tier for key, tier in opened.items() if tier is not None}
 
 
 def _has_group(target: Target) -> bool:
     """Whether this grid's or sequence's 5e-8 tier holds a `clumps/` group."""
-    tier = _tier_groups(target).get(TIER)
-    return tier is not None and CLUMPS_GROUP in tier
+    tier = _tiers(target).get(TIER)
+    return tier is not None and tier.has_clumps()
 
 
-def _declares_at(path: Path) -> bool:
-    return MANIFEST_KEY in json.loads(path.read_text(encoding="utf-8"))
+def _declares(manifest: StoreManifest) -> bool:
+    """Whether a release's manifest declares the Clumps of its 5e-8 tier (spec §2)."""
+    return declares_clumps_of(manifest.clumps, TIER)
 
 
 @dataclass(frozen=True)
@@ -194,24 +191,26 @@ def _clumped(view: _View) -> Iterator[tuple[int, str]]:
 
 def declared(target: Target) -> Iterator[str]:
     store = target.store
-    entry = json.loads(store.manifest_path.read_text(encoding="utf-8")).get(MANIFEST_KEY)
+    entry = store.manifest.clumps
     where = "manifest.json" if target.label == "." else f"{target.label}/manifest.json"
-    tiers = _tier_groups(target)
+    tiers = _tiers(target)
     yield from _other_tiers(tiers)
-    names = _configurations(tiers.get(TIER))
-    yield from _declaration(entry, tiers.get(TIER), names, where)
+    tier = tiers.get(TIER)
+    group = tier.group if tier is not None else None
+    names = _configurations(group)
+    yield from _declaration(entry, group, names, where)
     if (entry is not None or names is not None) and \
             store.manifest.format_version not in CLUMPS_FORMAT_VERSIONS:
         yield (f"the Clumps are on a release of format_version {store.manifest.format_version}; "
                f"they are a component of {', '.join(CLUMPS_FORMAT_VERSIONS)} alone")
     if not target.is_component:
-        yield from _hybrid_declared(target, entry is not None)
-        yield from _columns_declared(target, entry is not None)
+        yield from _hybrid_declared(target, _declares(store.manifest))
+        yield from _columns_declared(target, _declares(store.manifest))
 
 
-def _other_tiers(tiers: Mapping[str, Any]) -> Iterator[str]:
+def _other_tiers(tiers: Mapping[str, TopHitTier]) -> Iterator[str]:
     for key, tier in tiers.items():
-        if key != TIER and CLUMPS_GROUP in tier:
+        if key != TIER and tier.has_clumps():
             yield f"{TOP_HIT_GROUP}/{key} holds {CLUMPS_GROUP}/: only the 5e-8 tier is clumped"
 
 
@@ -237,12 +236,13 @@ def _declaration(
 
 def _entry_declares(entry: Any, held: bool, where: str) -> Iterator[str]:
     """The manifest entry is the one §2 names, and is there exactly when the group is."""
-    if entry is not None and entry != MANIFEST_ENTRY:
+    declares = declares_clumps_of(entry, TIER)
+    if entry is not None and not declares:
         yield f"{where}'s {MANIFEST_KEY} entry is {entry!r}, not {MANIFEST_ENTRY!r}"
-    if held and entry is None:
+    if held and not declares:
         yield (f"{_GROUP}/{CLUMPS_CONFIGURATION} is not declared by {where}: a step that never "
                "finished, or Clumps left behind")
-    if entry is not None and not held:
+    if declares and not held:
         yield f"{where} declares {MANIFEST_KEY}, and its 5e-8 tier holds no Clumps"
 
 
@@ -250,7 +250,7 @@ def _hybrid_declared(target: Target, declares: bool) -> Iterator[str]:
     """A Hybrid declares the Clumps in both manifests or in neither (§2)."""
     if target.store.manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
         return
-    if _declares_at(target.store.dense_component().manifest_path) != declares:
+    if _declares(target.store.dense_component().manifest) != declares:
         yield (f"manifest.json {'declares' if declares else 'does not declare'} {MANIFEST_KEY} "
                "and dense/manifest.json does not agree: a Hybrid declares the Clumps in both")
 
@@ -270,7 +270,7 @@ def structure(target: Target) -> Iterator[str]:
     """The configuration laid out as the Store Reader reads it (`clumps_array_problems`,
     `clumps_attribute_problem`), and the attribute's values those checks leave to
     validation: `tier_rows`, the fixed configuration and each `ld_stores` entry."""
-    tier = _tier_groups(target)[TIER]
+    tier = _tiers(target)[TIER].group
     default = tier[CLUMPS_GROUP][CLUMPS_CONFIGURATION]
     n_rows = int(tier["z"].shape[0])
     yield from clumps_array_problems(default, n_rows)
@@ -288,7 +288,7 @@ def _attribute_problems(attribute: dict[str, Any], n_rows: int) -> Iterator[str]
     if attribute.get("tier_rows") != n_rows:
         yield (f"the {CLUMPS_ATTRIBUTE} attribute's tier_rows is {attribute.get('tier_rows')}, "
                f"the tier {n_rows}")
-    for key, value in FIXED.items():
+    for key, value in CONFIGURATION_ATTRIBUTE.items():
         if attribute[key] != value:
             yield f"the {CLUMPS_ATTRIBUTE} attribute's {key} is {attribute[key]!r}, not {value!r}"
 
@@ -585,7 +585,7 @@ def _sample(candidates: list[int], seed: int) -> list[int]:
 
 
 def _release_declares(target: Target) -> bool:
-    return not target.is_component and _declares_at(target.store.manifest_path) \
+    return not target.is_component and _declares(target.store.manifest) \
         and _readable(target)
 
 

@@ -2510,8 +2510,9 @@ they do not move `format_version` (§21.1). Only the 5e-8 tier is stored, in one
 Configuration; any other tier or configuration is clumped when it is queried (#419). They are
 a component of format 0.3.0 and of no earlier format, and they do not move it (§21.1, ADR 0106
 §9). Under ADR 0102's rule they are *read*, an accelerator that also needs an LD Store outside
-the release (§1.1, ADR 0106 §11). This section says what the stored data mean; the Store
-Reader reads them (#419, *Reading* below).
+the release (§1.1, ADR 0106 §11), and they ship once a query reads them (#419). This section
+says what the stored data mean; the Store Reader reads them (`TopHitTier.clumps`, *Reading*
+below), and #419's Top-Hit Query is the first query to.
 
 **Where.** In the 5e-8 tier's group, `p_5e_08` (`threshold_key(5e-8)`,
 `opengwasdb/store_reader/top_hits.py`), of every component holding one:
@@ -2671,7 +2672,8 @@ its unclumped rows as leads.
 builder calls it). The Store Release Build in opengwas/opengwasdb-stores runs it after the build
 and after any completion, passing its Assigned Ancestry → LD Store mapping
 (opengwas/opengwasdb-stores#454). An existing 0.3.0 release gains it in place (#420, on the
-Stores opengwas/opengwasdb-stores#498 rebuilds at 0.3.0), the one in-place addition that
+Stores opengwas/opengwasdb-stores#498 rebuilds at 0.3.0, once a query reads the Clumps, #419;
+§1.1), the one in-place addition that
 carries Analytical Metadata (§21.4, ADR 0106 §10): the group, then `analyses.tsv` and
 `overview.html`, then the manifest's `clumps` entry. Writing it again replaces all four, and
 first removes the `clumps` entry from every manifest of the release, so a rerun interrupted
