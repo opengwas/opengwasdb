@@ -23,15 +23,13 @@ Each decision below names its source:
   registered Store at 0.3.0 first (opengwas/opengwasdb-stores#498) and then add the Clumps to
   those rebuilt Stores in place
   ([#420 comment 7148370637](https://github.com/opengwas/opengwasdb/issues/420#issuecomment-7148370637)).
-  In #471's review the owner named the |z| the score is taken from: `z`, through
-  `top_hits.recomputed_abs_z_and_p`.
 - **#417's**, the decisions its body says this ADR must make explicitly: absent rows marked and
   counted, imputed rows not clumped, blank counts without an ancestry, the provenance, and
   |z| with ties by Store Variant Index.
 - **The evidence**, where a decision follows from the code, the layering rules or a
   measurement, which the decision cites: no default LD Store in the engine; several ancestries
   in one Store; r² read from the LD Store; `r` as the LD Store's own code; where the step runs;
-  the class under ADR 0102.
+  the class under ADR 0102; |z| taken from `z` by the function #471's review named.
 - **This ADR's own**, each with a recommendation the owner may overrule: which LD Store
   clumped an Analysis, how an LD Store is identified, ties, the markers, and the format
   version.
@@ -163,8 +161,8 @@ it cannot add an independent locus.
 
 The score is |z|, never raw p, which underflows to 0 past |z| ≈ 38. A 0.3.0 tier stores `z`
 and neither `abs_z` nor `p_value` (ADR 0102, #471), so the step takes |z| from the tier's `z`
-through `top_hits.recomputed_abs_z_and_p` (`opengwasdb/top_hits.py`, the owner's choice in
-#471's review). That is the |z| the validator recomputes for `top_hits.threshold`, so the
+through `top_hits.recomputed_abs_z_and_p` (`opengwasdb/top_hits.py`, the owner of |z| that
+#471's review named). That is the |z| the validator recomputes for `top_hits.threshold`, so the
 step and its rules rank by one number. Ties
 go to the lower Store Variant Index, the order the Top-Hit Index keeps its rows in (#417).
 `clump` breaks ties by the LD Store's row order instead, which is the Store's order for every
