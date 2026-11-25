@@ -14,108 +14,16 @@ import tracemalloc
 from pathlib import Path
 
 import numpy as np
-import pytest
 import zarr
-from store_copies import TEST_STORE, copy_store
+from store_copies import copy_store
 
 from opengwasdb.ld.store import StoreReader, layout
-from opengwasdb.ld.store.variants import _index_pays
 
 
 def oracle(store: Path) -> dict[str, int]:
     """Each ALID the store holds, by its Variant Set row, from its variant table alone."""
     recorded = np.asarray(zarr.open_group(store, mode="r")["variants/alid"][:]).tolist()
     return {str(alid): row for row, alid in enumerate(recorded)}
-
-
-def test_every_alid_of_the_test_store_is_its_own_row() -> None:
-    rows = oracle(TEST_STORE)
-    found = StoreReader.open(TEST_STORE).rows_of(list(rows))
-    assert found.tolist() == [rows[alid] for alid in rows], "every ALID, in table order"
-
-
-def test_a_list_in_any_order_and_with_repeats_reads_the_same_rows() -> None:
-    rows = oracle(TEST_STORE)
-    some = [*sorted(rows)[::37], "nothing", "22:1:A:G", ""]
-    asked = list(reversed(some)) + some[:3]
-    found = StoreReader.open(TEST_STORE).rows_of(asked)
-    assert found.tolist() == [rows.get(alid, -1) for alid in asked]
-
-
-def test_an_absent_a_malformed_and_a_wider_alid_are_not_this_store_s_rows() -> None:
-    reader = StoreReader.open(TEST_STORE)
-    wide = [
-        alid for alid in oracle(TEST_STORE) if len(alid.encode("utf-8")) > layout.ALID_INDEX_WIDTH
-    ]
-    assert len(wide) == 8, "the Test Store holds ALIDs wider than the slot"
-    absent = "22:16050075:A:T"
-    assert absent not in oracle(TEST_STORE)
-    found = reader.rows_of([absent, "nonsense", "22:100:a:G", *wide])
-    assert found.tolist() == [-1, -1, -1, *[oracle(TEST_STORE)[alid] for alid in wide]]
-    # The store's ALIDs wider than the slot are found, by the exact scan, at their position.
-    assert (found[3:] >= 0).all()
-
-
-def test_an_alid_at_the_slot_s_width_is_found(tmp_path: Path) -> None:
-    # A slot-width ALID is indexed like any other: `alid_index.keys` refuses an index whose key is
-    # not its row's full ALID, so a truncating build is a store validation fails, not one the
-    # reader second-guesses (ADR 0096).
-    store = copy_store(tmp_path / "store")
-    rows = oracle(store)
-    alid = next(a for a in rows if len(a.encode("utf-8")) == layout.ALID_INDEX_WIDTH)
-    assert StoreReader.open(store).rows_of([alid]).tolist() == [rows[alid]]
-
-
-def test_an_index_missing_an_entry_falls_back_to_the_scan(tmp_path: Path) -> None:
-    # Its key replaced by one no ALID has, so the entry answers nothing: the ALID it named is
-    # found by the exact scan at its position, as it was before the index.
-    store = copy_store(tmp_path / "store")
-    rows = oracle(store)
-    root = zarr.open_group(store, mode="r+")
-    keys = np.asarray(root[f"{layout.ALID_INDEX}/alid"][:]).reshape(-1, layout.ALID_INDEX_WIDTH)
-    entries = np.asarray(root[f"{layout.ALID_INDEX}/row"][:])
-    gone = sorted(rows)[40]
-    assert len(gone.encode("utf-8")) < layout.ALID_INDEX_WIDTH, "a slot-width ALID is indexed too"
-    lost = np.flatnonzero(entries == rows[gone])
-    assert len(lost) == 1
-    keys[lost] = np.frombuffer(b"22:99999999:A:C".ljust(32, b"\0"), dtype=np.uint8)
-    root[f"{layout.ALID_INDEX}/alid"][:] = keys.ravel()
-    found = StoreReader.open(store).rows_of(sorted(rows)[:60])
-    assert found.tolist() == [rows[alid] for alid in sorted(rows)[:60]]
-
-
-def test_an_unsorted_index_answers_the_same_rows(tmp_path: Path) -> None:
-    store = copy_store(tmp_path / "store")
-    rows = oracle(store)
-    root = zarr.open_group(store, mode="r+")
-    keys = np.asarray(root[f"{layout.ALID_INDEX}/alid"][:]).reshape(-1, layout.ALID_INDEX_WIDTH)
-    entries = np.asarray(root[f"{layout.ALID_INDEX}/row"][:])
-    order = np.random.default_rng(7).permutation(len(entries))
-    root[f"{layout.ALID_INDEX}/alid"][:] = keys[order].ravel()
-    root[f"{layout.ALID_INDEX}/row"][:] = entries[order]
-    asked = [*sorted(rows)[:100], "22:16050075:A:T"]
-    assert StoreReader.open(store).rows_of(asked).tolist() == [rows.get(a, -1) for a in asked]
-
-
-def test_a_truncated_index_answers_the_same_rows(tmp_path: Path) -> None:
-    store = copy_store(tmp_path / "store")
-    rows = oracle(store)
-    root = zarr.open_group(store, mode="r+")
-    alids = sorted(rows)
-    keys = np.array(alids, dtype=f"|S{layout.ALID_INDEX_WIDTH}")
-    root[f"{layout.ALID_INDEX}/alid"][:] = keys.view(np.uint8).ravel()
-    root[f"{layout.ALID_INDEX}/row"][:] = np.array([rows[a] for a in alids], dtype=np.int32)
-    asked = [*alids[:100], "22:16050075:A:T"]
-    assert StoreReader.open(store).rows_of(asked).tolist() == [rows.get(a, -1) for a in asked]
-
-
-@pytest.mark.parametrize("alids", [[], ["nonsense"]])
-def test_a_list_with_nothing_to_look_up_reads_no_index(tmp_path: Path, alids: list[str]) -> None:
-    store = copy_store(tmp_path / "store")
-    for chunk in (store / layout.ALID_INDEX / "alid").rglob("c/*"):
-        chunk.unlink()
-    reader = StoreReader.open(store)
-    assert reader.rows_of(alids).tolist() == [-1] * len(alids)
 
 
 # ------------------------------------------------------------------ what a lookup holds
@@ -192,15 +100,3 @@ def test_a_long_lookup_holds_one_shard_of_keys_and_not_the_index(tmp_path: Path)
     # The index is 16 MB larger; what the lookup holds grew by less than a quarter of that, where
     # holding the table itself would have grown by all of it, twice.
     assert long - short < size // 4, (short, long)
-
-
-def test_the_index_is_read_only_for_a_list_that_pays_for_it() -> None:
-    # The crossover is a list naming a `_INDEX_SHARE`th of the Variant Set's entries or more, and
-    # never fewer than one; the edge is a literal, not the constant that derives it (ogld#42's
-    # review: 4,000 of EUR's 8.59 M is where the measurement puts it).
-    assert not _index_pays(1, 4_300), "one ALID is one fewer than the threshold of 4,300 entries"
-    assert _index_pays(2, 4_300), "two ALIDs are the threshold of 4,300 entries"
-    # A store small enough that one ALID is a share of it asks for the index at one.
-    assert _index_pays(1, 1_000)
-    assert _index_pays(3_975, 8_546_809), "EUR's own threshold"
-    assert not _index_pays(3_974, 8_546_809)

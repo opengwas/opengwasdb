@@ -53,31 +53,6 @@ def _alleles(row: dict[str, str]) -> tuple[str, str]:
     return row["ref"].strip().upper(), row["alt"].strip().upper()
 
 
-def test_the_fixture_is_meaningful() -> None:
-    # Asserted before anything is asserted about it: both outcomes, both signs, long ALIDs, and
-    # indels on both sides of the line between the spellings.
-    refused = [r for r in ORIENT if r["error"]]
-    kept = [r for r in ORIENT if not r["error"]]
-    assert (len(kept), len(refused)) == (49, 44)
-    assert {r["a1_is_alt"] for r in kept} == {"true", "false"}
-    assert any(len(r["alid"]) > 32 for r in kept)
-    assert any(r["ref"] != r["ref"].upper() for r in kept)
-    longer_ref = [_alleles(r) for r in kept if len(r["ref"].strip()) > len(r["alt"].strip())]
-    assert sum(ref > alt for ref, alt in longer_ref) == 10
-    assert sum(ref < alt for ref, alt in longer_ref) == 2  # 22:403 GAT>GT, 22:404 AGT>AT
-    assert {r["reason"] for r in ORIENT} == {"", "allele_invalid", "chromosome_missing"}
-    # Rows with two faults, whose message names the one judged first.
-    messages = {(r["chrom"], r["position"], r["ref"], r["alt"]): r["error"] for r in refused}
-    assert messages[("22", "0", "N", "G")] == "unsupported allele 'N'"
-    assert messages[("22", "100", "N", "X")] == "unsupported allele 'X'"
-    assert messages[("27", "100", "N", "G")] == "unsupported chromosome '27'"
-    assert {r["canonical"] for r in CHROMOSOMES if "+22" in r["label"] or "-1" in r["label"]}
-    assert sum(1 for r in CHROMOSOMES if r["error"]) > 10
-    assert {r["canonical"] for r in CHROMOSOMES} >= {"1", "22", "X", "Y", "MT", ""}
-    assert len(REVERSED) == 8
-    assert {r["kept"] for r in REVERSED} == {"true", "false"}
-
-
 @pytest.mark.parametrize(
     "row", ORIENT, ids=lambda r: f"{r['chrom']}:{r['position']}:{r['ref']}>{r['alt']}"
 )
@@ -100,18 +75,6 @@ def test_the_sorted_identity_is_the_committed_one(row: dict[str, str]) -> None:
     assert sorted_alid_locus(o.alid) == ((o.chrom, o.position) if named else None)
 
 
-@pytest.mark.parametrize("row", CHROMOSOMES, ids=lambda r: repr(r["label"]))
-def test_the_engine_s_chromosome_label_is_the_committed_one(row: dict[str, str]) -> None:
-    if row["error"]:
-        with pytest.raises(
-            VariantNormalisationError, match=rf"\A{re.escape(row['error'])}\Z"
-        ) as fault:
-            normalise_chromosome(row["label"])
-        assert getattr(fault.value, "reason", "") == row["reason"]
-    else:
-        assert normalise_chromosome(row["label"]) == row["canonical"]
-
-
 def test_the_reference_first_rule_differs_only_where_the_spellings_do() -> None:
     # The engine's rule today (ADR 0079) against the sorted answers: the 10 rows where REF is
     # longer and sorts after ALT, and no other. A longer REF that sorts first (`GAT>GT`) is spelt
@@ -131,71 +94,6 @@ def test_the_reference_first_rule_differs_only_where_the_spellings_do() -> None:
             expected.append(row["alid"])
     assert len(differing) == 10
     assert differing == expected
-
-
-@pytest.mark.parametrize(
-    "alid",
-    [
-        "22:16050075:A",
-        "22:16050075:A:G:T",
-        "chr22:100:A:G",
-        "27:100:A:G",
-        "22:0:A:G",
-        "22:-1:A:G",
-        "22:0100:A:G",
-        "22:١٠٠:A:G",
-        "22:100:A:",
-        "22:100::G",
-        "22:100:a:G",
-        "22:100:G:A",
-        "22:100:A:A",
-        "foo:100:A:G",
-        "22:2147483648:A:G",
-        "22:" + "9" * 5000 + ":A:G",
-        "22:" + "1" * 4301 + ":A:G",
-        "22:100:A:N",
-        ":100:A:G",
-        "22: 100:A:G",
-        "1:827587:GGGGCC:G",
-    ],
-)
-def test_a_malformed_alid_has_no_locus(alid: str) -> None:
-    assert sorted_alid_locus(alid) is None
-
-
-@pytest.mark.parametrize(
-    ("alid", "locus"),
-    [("22:2147483647:A:G", ("22", 2147483647)), ("MT:1:C:T", ("MT", 1)), ("X:5:A:AC", ("X", 5))],
-)
-def test_an_alid_at_the_bounds_names_its_locus(alid: str, locus: tuple[str, int]) -> None:
-    assert sorted_alid_locus(alid) == locus
-
-
-def test_an_alid_over_32_bytes_names_its_locus() -> None:
-    long = [r for r in ORIENT if r["alid"] and len(r["alid"]) > 32]
-    assert long
-    for row in long:
-        chrom, pos = row["alid"].split(":")[:2]
-        assert sorted_alid_locus(row["alid"]) == (chrom, int(pos))
-
-
-@pytest.mark.parametrize(
-    ("alid", "reference_first"),
-    [
-        ("1:827587:GGGGCC:G", True),
-        ("22:400:CAA:CA", True),
-        ("22:5:T:AT", True),  # an unanchored insertion whose REF sorts last
-        ("1:827587:G:GGGGCC", False),
-        ("22:403:GAT:GT", False),  # spelt alike by both
-        ("22:100:G:A", False),  # an unsorted SNV: malformed in both, so Absent
-        ("27:5:CAA:CA", False),  # no chromosome of the format: Absent
-        ("22:5:CAA", False),
-    ],
-)
-def test_only_an_indel_alid_no_sorted_spelling_forms_is_reference_first(
-    alid: str, reference_first: bool
-) -> None:
-    assert spells_indel_reference_first(alid) is reference_first
 
 
 def _records(group: str) -> list[dict[str, str]]:

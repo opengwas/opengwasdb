@@ -969,14 +969,15 @@ or allele frequencies it never returns.
 
 `clump` reads one Partner Rows row per lead — 3,869 for GCST90476460's whole input — and `proxies`
 one per present query variant; neither reads a Near Band element, and neither
-resolves a square among the hits (§9). `tests/ld/test_partner_reads.py` holds the one row a lead, and
+resolves a square among the hits (§9). ogquery's `tests/ld/test_partner_reads.py` holds the one row a lead, and
 `proxies` reading no string column but the ALIDs it returns. Neither query reads any array under
 `near/`: their positions and ALIDs come from `variants/`, their LD from
 `partners/<chrom>/`, and the chromosome ranges from the store's record (opengwas/ogld#71). `matrix`, `region`
 and `pair_r` still read a chromosome's `near/<c>/indptr`, and its Far Pairs' `indptr` when their
 pairs reach beyond `near_bp`, as below.
 
-What the reads hold, measured with tracemalloc and held by `tests/ld/test_partner_reads.py`:
+What the reads hold, measured with tracemalloc and held by ogquery's `tests/ld/test_partner_reads.py`
+(the LD read path is ogquery's since opengwas/ogquery#2):
 
 - `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
   that step's Far Pairs rows. One row against many is never copied out to a full list.

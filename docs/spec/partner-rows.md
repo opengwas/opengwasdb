@@ -135,7 +135,8 @@ rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is n
 component of a Zarr hierarchy.` The single-chunk form below removes that warning. The committed
 Test Store is that check since opengwas/ogld#67: `partners/` is a node of its hierarchy, `members()` lists it
 with no warning (`tests/ld/test_partner_rows.py`), and the reader and the ten rules resolve each
-chunk file from the array's own metadata (`tests/ld/test_partner_row_reads.py`).
+chunk file from the array's own metadata (ogquery's `tests/ld/test_partner_row_reads.py`, since
+opengwas/ogquery#2).
 
 Both arrays have **one chunk each**, of the whole array, and no shard index. The `frames` array's
 codec chain is `bytes` alone, with **no compressor**, because the bytes it holds are already zstd

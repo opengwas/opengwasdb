@@ -19,11 +19,9 @@ holds the
 from __future__ import annotations
 
 import ast
-from functools import partial
 from pathlib import Path
 
 import numpy as np
-import pytest
 import zarr
 from store_copies import (
     FLOOR,
@@ -31,12 +29,11 @@ from store_copies import (
     TEST_STORE,
     copy_store,
     snv_variants,
-    store_reads,
     writer_for_test_store,
 )
 
 import opengwasdb.ld
-from opengwasdb.ld.format import VALIDATION_RULES, InputError, Refusal, REncoding
+from opengwasdb.ld.format import VALIDATION_RULES, REncoding
 from opengwasdb.ld.store import StoreReader, layout
 from opengwasdb.ld.store.validation import validate_group
 
@@ -190,49 +187,6 @@ def answers(store: Path) -> dict[str, np.ndarray]:
     return found
 
 
-def test_a_leftover_index_answers_exactly_as_a_store_without_one(tmp_path: Path) -> None:
-    copy = copy_store(tmp_path / "store")
-    write_a_leftover_index(copy)
-    held = "index/21/r" in keys_of(copy)
-    assert held, "the copy must hold the component for this to mean anything"
-    plain, leftover = answers(TEST_STORE), answers(copy)
-    assert leftover["matrix"].shape == (1056, 1056), "a matrix of every variant"
-    for name, answer in plain.items():
-        np.testing.assert_array_equal(leftover[name], answer, err_msg=name)
-
-
-def every_query(store_path: Path) -> None:
-    """Every read the package makes of a store: one of each query family, and the pair reads
-    behind them. A read under `index/` anywhere here is a read of the component."""
-    store = opengwasdb.ld.open(store_path)
-    reader = StoreReader.open(store_path)
-    rows = np.arange(reader.provenance["n_variants"])
-    names = list(reader.variants(rows).alid)
-    small = names[:40]
-    store.matrix(small)
-    store.region("22", 30_000_000, 4_000_000)
-    reader.region_r(468, 1056)
-    reader.pair_r(rows[::7])
-    reader.r_of_pairs(rows[::13], np.minimum(rows[::13] + 1, len(rows) - 1))
-    scores = np.linspace(5.0, 1.0, len(small))
-    store.clump(small, scores, r2=0.01, kb=3000)
-    store.proxies(small, r2=0.5, kb=3000)
-
-
-def test_no_query_reads_a_key_of_a_leftover_index(tmp_path: Path) -> None:
-    # The real isolation check (opengwas/ogld#71's method): on a 0.2.0 copy that still holds the
-    # component, a read of any array of it — or of its own `zarr.json` — would be a store key here.
-    copy = copy_store(tmp_path / "store")
-    write_a_leftover_index(copy)
-    held = [str(path) for path in copy.rglob("index/*/*/zarr.json")]
-    assert held, "the copy must hold the component's metadata for this to mean anything"
-    with store_reads() as keys:
-        every_query(copy)
-    offending = sorted({key for key in keys if key.startswith("index/")})
-    assert offending == [], f"a query read the component: {offending}"
-    assert [key for key in keys if key.endswith("zarr.json")], "metadata reads are recorded"
-
-
 def test_validation_ignores_a_leftover_index(tmp_path: Path) -> None:
     copy = copy_store(tmp_path / "store")
     write_a_leftover_index(copy)
@@ -240,17 +194,6 @@ def test_validation_ignores_a_leftover_index(tmp_path: Path) -> None:
     found = validate_group(root, root.attrs["ld_store"])
     assert {rule: value for rule, value in found.items() if value} == {}, "every rule passes"
     assert set(found) == set(VALIDATION_RULES)
-
-
-def test_a_leftover_index_whose_entries_are_lost_is_still_not_read(tmp_path: Path) -> None:
-    # A read of any of its arrays would refuse them (ld-store §6): a matrix and a region answer on.
-    copy = copy_store(tmp_path / "store")
-    write_a_leftover_index(copy)
-    for chunk in sorted(copy.glob("index/*/*/c/*")):
-        chunk.unlink()
-    plain, lost = answers(TEST_STORE), answers(copy)
-    for name, answer in plain.items():
-        np.testing.assert_array_equal(lost[name], answer, err_msg=name)
 
 
 def a_0_1_0_store(to: Path) -> Path:
@@ -274,20 +217,6 @@ def a_0_1_0_store(to: Path) -> Path:
     return copy
 
 
-def _clump_or_proxies(query: str, store: Path, names: list[str], scores: np.ndarray) -> None:
-    if query == "clump":
-        opengwasdb.ld.open(store).clump(names, scores, r2=0.01, kb=3000)
-    else:
-        opengwasdb.ld.open(store).proxies(names, r2=0.5, kb=3000)
-
-
-def test_a_0_1_0_store_opens_and_answers_matrix_and_region(tmp_path: Path) -> None:
-    copy = a_0_1_0_store(tmp_path / "store")
-    plain, older = answers(TEST_STORE), answers(copy)
-    for name, answer in plain.items():
-        np.testing.assert_array_equal(older[name], answer, err_msg=name)
-
-
 def test_a_0_1_0_store_with_every_index_chunk_lost_still_validates_and_answers(
     tmp_path: Path,
 ) -> None:
@@ -306,15 +235,3 @@ def test_a_0_1_0_store_with_every_index_chunk_lost_still_validates_and_answers(
     plain, older = answers(TEST_STORE), answers(copy)
     for name, answer in plain.items():
         np.testing.assert_array_equal(older[name], answer, err_msg=name)
-
-
-@pytest.mark.parametrize("query", ["clump", "proxies"])
-def test_a_0_1_0_store_is_refused_for_clump_and_proxies_naming_the_partner_rows(
-    query: str, tmp_path: Path
-) -> None:
-    copy = a_0_1_0_store(tmp_path / "store")
-    names = list(StoreReader.open(copy).variants(np.arange(20)).alid)
-    scores = np.linspace(5.0, 1.0, len(names))
-    ask = partial(_clump_or_proxies, query, copy, names, scores)
-    with pytest.raises((InputError, Refusal), match="Partner Rows"):
-        ask()
