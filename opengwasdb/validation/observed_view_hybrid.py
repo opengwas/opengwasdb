@@ -12,7 +12,11 @@ Store's observed view across both, by ALID:
 
 * **Axes, exhaustively.** The Dense Components' axes and the shared axes are
   mapped as the Dense check maps one (`_map_axis`), and every completed Dense
-  row must be on the completed shared axis.
+  row must be on the completed shared axis. Every source Dense row must be
+  mapped. A source shared row need not be: completion may leave out a row that
+  no Analysis observes (stores#478). Such a row is **dropped**, the verdict
+  lists it (`dropped_alids`), and an association on one fails the check
+  (`associations_on_dropped_rows`).
 * **Every crossover.** `complete-hybrid` records none, so they are derived from
   the axes: a source Overflow association whose ALID is a Dense row of the
   completed Store. Each must be an observed, unflagged Dense cell holding what
@@ -65,6 +69,7 @@ from opengwasdb.validation.observed_view import (
     ObservedViewVerdict,
     _analyses_record,
     _AxisMap,
+    _AxisRows,
     _Cells,
     _header_record,
     _map_axis,
@@ -102,7 +107,15 @@ _OVERFLOW_INFORMATIONAL = (
     "infinite_cells",
     "se_out_of_range_left_out",
 )
-_EVERY_ANALYSIS_FAILING = ("observed_in_both", "imputed_cells", "analyses_count_mismatch")
+_EVERY_ANALYSIS_FAILING = (
+    "observed_in_both",
+    "imputed_cells",
+    "analyses_count_mismatch",
+    # A source association on a shared row the completed axis left out (stores#478).
+    "associations_on_dropped_rows",
+)
+# How many dropped shared rows a verdict names; it always counts them all.
+_DROPPED_LISTED = 1000
 CROSSOVER_FAILING = (
     "z_mismatch",
     "se_mismatch",
@@ -268,10 +281,11 @@ class _HybridAxes:
     """The three exact ALID maps the comparison stands on.
 
     `dense`: source Dense rows into completed Dense rows. `shared`: source shared
-    rows into completed shared rows. `dense_in_shared`: completed Dense rows into
-    the completed shared axis, from which `dense_row_of_shared` (each completed
-    shared row's Dense row, or -1) and `inserted` (completed Dense rows no source
-    Dense row maps to) follow.
+    rows into completed shared rows, -1 for a dropped row. `dense_in_shared`:
+    completed Dense rows into the completed shared axis, from which
+    `dense_row_of_shared` (each completed shared row's Dense row, or -1) and
+    `inserted` (completed Dense rows no source Dense row maps to) follow.
+    `dropped_alids` names the first `_DROPPED_LISTED` dropped shared rows.
     """
 
     dense: _AxisMap
@@ -279,6 +293,7 @@ class _HybridAxes:
     dense_in_shared: _AxisMap
     dense_row_of_shared: np.ndarray
     inserted: np.ndarray
+    dropped_alids: list[str]
 
     @classmethod
     def map(cls, pair: _HybridPair) -> _HybridAxes:
@@ -294,11 +309,23 @@ class _HybridAxes:
         dense_row_of_shared[dense_in_shared.source_to_target[on_shared]] = np.flatnonzero(on_shared)
         inserted = np.ones(n_child, dtype=bool)
         inserted[dense.source_to_target[dense.source_to_target >= 0]] = False
-        return cls(dense, shared, dense_in_shared, dense_row_of_shared, inserted)
+        return cls(dense, shared, dense_in_shared, dense_row_of_shared, inserted,
+                   _dropped_alids(source, shared))
 
     @property
     def ok(self) -> bool:
-        return self.dense.ok and self.shared.ok and self.dense_in_shared.ok
+        """Whether the parts can be compared: a dropped shared row does not stop them."""
+        return self.dense.ok and self.shared.order_preserved and self.dense_in_shared.ok
+
+    def completed_rows(self, source_shared: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Each source shared row's completed shared row and completed Dense row.
+
+        Both are -1 for a dropped row, and the Dense row is -1 for a row off the
+        completed Dense axis.
+        """
+        shared = self.shared.source_to_target[source_shared]
+        dense = np.where(shared >= 0, self.dense_row_of_shared[shared], -1)
+        return shared, dense
 
     def overflow_record(self) -> dict[str, Any]:
         record = self.shared.record(
@@ -306,7 +333,17 @@ class _HybridAxes:
         )
         record["child_dense_rows_unshared"] = self.dense_in_shared.unmapped
         record["child_dense_order_preserved"] = self.dense_in_shared.order_preserved
+        record["dropped_alids"] = self.dropped_alids
         return record
+
+
+def _dropped_alids(source_path: Path, shared: _AxisMap) -> list[str]:
+    """The ALIDs of the first `_DROPPED_LISTED` source shared rows the completed axis lacks,
+    read as the axis map reads them: from the ALID index, else the Variant Table."""
+    rows = np.flatnonzero(shared.source_to_target < 0)[:_DROPPED_LISTED]
+    if not rows.size:
+        return []
+    return [str(alid) for alid in _AxisRows(source_path, len(shared.source_to_target)).alids(rows)]
 
 
 # --- the comparison ---------------------------------------------------------
@@ -407,9 +444,10 @@ def _failures(record: Mapping[str, Any], axes: _HybridAxes) -> list[str]:
 
 def _axis_failures(axes: _HybridAxes) -> list[str]:
     failures = []
+    if axes.dense.unmapped:
+        failures.append("dense.parent_rows_unmapped")
+    # A dropped shared row is not a failure; an association on one is (`_scan_overflows`).
     for name, axis in (("dense", axes.dense), ("overflow", axes.shared)):
-        if axis.unmapped:
-            failures.append(f"{name}.parent_rows_unmapped")
         if not axis.order_preserved:
             failures.append(f"{name}.order_not_preserved")
     if not axes.dense_in_shared.ok:
@@ -448,9 +486,8 @@ def _scan_overflows(
     left_out = np.zeros(n_analyses, dtype=np.int64)
     read_ses = leaves_out(pair.dense.source, pair.dense.target)
     for analysis in range(n_analyses):
-        dense_rows = axes.dense_row_of_shared[
-            axes.shared.source_to_target[parent.variant_indices(analysis, "source")]
-        ]
+        shared_rows, dense_rows = axes.completed_rows(parent.variant_indices(analysis, "source"))
+        counts["associations_on_dropped_rows"] += int((shared_rows < 0).sum())
         crossing = np.flatnonzero(dense_rows >= 0)
         if crossing.size:
             found.append((dense_rows[crossing], np.full(crossing.size, analysis),
@@ -724,9 +761,11 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
     """
     parent = _segment(pair.parent_overflow, analysis)
     child = _segment(pair.child_overflow, analysis)
-    keys = axes.shared.source_to_target[parent.variant_index]
-    crossing = axes.dense_row_of_shared[keys] >= 0
-    kept = np.flatnonzero(~crossing)
+    keys, dense_rows = axes.completed_rows(parent.variant_index)
+    crossing = dense_rows >= 0
+    # An association on a dropped row is counted over every Analysis
+    # (`associations_on_dropped_rows`), so it is not counted again here.
+    kept = np.flatnonzero(~crossing & (keys >= 0))
     off_dense = np.flatnonzero(axes.dense_row_of_shared[child.variant_index] < 0)
     p, c = _match(keys[kept], child.variant_index[off_dense])
     p, c = kept[p], off_dense[c]

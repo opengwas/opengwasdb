@@ -3109,7 +3109,12 @@ replaces its Store under the same id, so this check gates the swap.
   Overflow on the completed shared axis without it (a **crossover**, issue #99). So the check
   compares the observed view across both components, by ALID:
   - *Axes, exhaustively.* The Dense Components' axes and the shared axes are each mapped as
-    above, and every `TARGET` Dense row must be on `TARGET`'s shared axis.
+    above, and every `TARGET` Dense row must be on `TARGET`'s shared axis. Every `SOURCE` Dense
+    row must be mapped, but a `SOURCE` shared row need not be. Completion may leave out a shared
+    row that no Analysis observes (stores#478), and such a row is **dropped**: it is counted
+    (`parent_rows_unmapped`), and the first 1,000 are named (`dropped_alids`). Every Analysis
+    is then read, and an association on a dropped row fails the check
+    (`all_analyses.associations_on_dropped_rows`).
   - *Every crossover.* `complete-hybrid` records none, so they are derived from the axes: a
     `SOURCE` Overflow association whose ALID is a `TARGET` Dense row. Each must be an observed
     Dense cell, not marked imputed, whose decoded Z, SE and EAF equal the `SOURCE` value encoded
@@ -3136,7 +3141,7 @@ replaces its Store under the same id, so this check gates the swap.
   | key | meaning |
   |---|---|
   | `components.dense` | the Dense verdict's `axis`, `geometry`, `bands_checked`, `bands_by_stratum`, `bands`, `bands_with_mismatch`, `totals` and `max_abs_diff`, over the Dense Components; `totals.crossover_cells` (informational) counts the crossover cells set aside in the sampled spans |
-  | `components.overflow` | `axis` (the shared-axis map, with `child_dense_rows_unshared` and `child_dense_order_preserved`), `n_parent_associations`, `n_child_associations`, `analyses_checked`, `analyses`, `analyses_with_mismatch`, `totals`, `max_abs_diff`, `all_analyses` |
+  | `components.overflow` | `axis` (the shared-axis map, with `child_dense_rows_unshared`, `child_dense_order_preserved` and `dropped_alids`), `n_parent_associations`, `n_child_associations`, `analyses_checked`, `analyses`, `analyses_with_mismatch`, `totals`, `max_abs_diff`, `all_analyses` |
   | `crossovers` | `n` associations on `rows` Dense rows (null when the comparison was skipped), `totals`, `max_abs_diff` (`TARGET` against the round trip) and `reencoding_max_abs_diff` (the round trip against `SOURCE`; informational) |
 
   `components.overflow.totals` sums over the sampled Analyses, each side's cells counted as
@@ -3147,9 +3152,11 @@ replaces its Store under the same id, so this check gates the swap.
   `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
   `missing_became_observed` (a `TARGET` association that `SOURCE` lacks),
   `z_se_missingness_mismatch` and `non_canonical_marker` fail. `components.overflow.all_analyses`
-  covers every Analysis and all fail: `observed_in_both`, `imputed_cells`, and
-  `analyses_count_mismatch` (Analyses whose count is not `SOURCE`'s less its crossovers and
-  the rows completion left out, which a `SOURCE` before format 0.2.3 is read in full to find).
+  covers every Analysis and all fail: `observed_in_both`, `imputed_cells`,
+  `associations_on_dropped_rows` (`SOURCE` associations on a dropped shared row, which the
+  sampled counters do not count again), and `analyses_count_mismatch` (Analyses whose count
+  is not `SOURCE`'s less its crossovers and the rows completion left out, which a `SOURCE`
+  before format 0.2.3 is read in full to find).
   `crossovers.totals` counts `infinite_cells` and `se_out_of_range_left_out` (crossovers whose
   SE is above 65,504, which completion did not fold) as informational, and the rest all fail,
   `left_out_but_observed` (such a crossover whose Dense cell is observed and unflagged) among
@@ -3166,7 +3173,7 @@ replaces its Store under the same id, so this check gates the swap.
   named `root.` in `failures`).
   `failures` names each nonzero failing counter with the part that counted it
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
-  `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
+  `dense.parent_rows_unmapped`, `dense.order_not_preserved`, `overflow.order_not_preserved` (the
   shared axes), `overflow.child_dense_rows_not_on_shared_axis` and `analyses_mismatch`; after
   any of these last the comparison is skipped and every tally in all three parts — each
   `totals`, `all_analyses`, `max_abs_diff`, `reencoding_max_abs_diff` and `bands_by_stratum` —
