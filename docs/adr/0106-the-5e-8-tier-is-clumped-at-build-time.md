@@ -231,7 +231,7 @@ go to the lower Store Variant Index, the order the Top-Hit Index keeps its rows 
 `clump` breaks ties by the LD Store's row order instead, which is the Store's order for every
 variant except a reference-first indel translated to its sorted spelling (decision 6). `clump`
 leads with the **largest** score (`np.lexsort((rows, -score))` in `_component`,
-`opengwasdb/ld/query/clumping.py`), so the step passes a score that is larger for a stronger
+`ogquery.ld.query.clumping`), so the step passes a score that is larger for a stronger
 row and has no ties: n − rank, where rank 0 is the largest |z| and ties go by Store Variant
 Index ascending. The score enters only that ordering, so for distinct |z| the leads are those of
 plink2's greedy on |z| (strongest first, r̂² > r2, d < W). A score of the rank itself would lead
@@ -503,3 +503,7 @@ and ADR 0102 has a banner pointing here.
 - **#462** removes the shared-spelling exposure (decision 6). Until then the step counts it.
 - `validate` gains the `clumps.*` rules (spec §20.0). The re-clump rule needs the LD Stores, so
   it runs only when they are given and is recorded as not run otherwise; a skip is not a pass.
+
+> **Note (opengwas/ogquery#2, 25 November 2026).** The LD read path this ADR names moved to
+> ogquery 0.3.0 (ogquery ADR 0002); its module paths here now name ogquery's modules. The
+> decision is unchanged.

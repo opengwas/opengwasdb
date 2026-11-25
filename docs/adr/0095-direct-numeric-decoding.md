@@ -27,7 +27,7 @@ owns chunk planning, the cache budget, concurrent runs and kept shard indexes.
 
 ## Decision
 
-`opengwasdb/ld/store/location.py` calls the numeric backend in `opengwasdb/ld/store/decoding.py`, which
+`ogquery.ld.store.location` calls the numeric backend in `ogquery.ld.store.decoding`, which
 recognises a one-dimensional numeric array only when its declared
 codec chain is exactly sharding_indexed, with bytes then zstd internally and bytes then
 CRC32C in an end-located index. Both bytes codecs' declared endianness is honoured. A one-byte
@@ -146,8 +146,8 @@ ALID search index and opengwas/ogld#41's symmetric Near Band prototype, under th
 ruling of 14 November 2026; acceptance does not redefine those targets as met.
 
 The accepted review extraction puts codec recognition, shard-index size and parsing, zstd
-frame validation, owned chunk construction and executor lifecycle in `opengwasdb/ld/store/decoding.py`.
-`opengwasdb/ld/store/location.py` remains the read interface and owns cache accounting, transport wrapping,
+frame validation, owned chunk construction and executor lifecycle in `ogquery.ld.store.decoding`.
+`ogquery.ld.store.location` remains the read interface and owns cache accounting, transport wrapping,
 shared index I/O, prefetch planning and encoded credits. Its prefetch requests validated
 physical ranges and decode/ownership operations from the backend; it no longer knows the
 index's byte layout or frame headers. The backend imports no location policy. Reject
@@ -159,3 +159,7 @@ The compressed-credit regression also drives real sparse ranges from three actua
 shards through the wrapped store and zstd. Weak references count the compressed numpy
 buffers held during decoding and verify their release before returning credits. Removing
 admission control fails that test, unlike merely asserting synthetic credit counters.
+
+> **Note (opengwas/ogquery#2, 25 November 2026).** The LD read path this ADR names moved to
+> ogquery 0.3.0 (ogquery ADR 0002); its module paths here now name ogquery's modules. The
+> decision is unchanged.

@@ -17,7 +17,6 @@ from collections import Counter
 from typing import Any
 
 import latency
-
 from ogquery.ld.store.location import ChunkCache
 
 CHUNKS: Counter[tuple[str, int]] = Counter()

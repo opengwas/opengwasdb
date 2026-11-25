@@ -58,6 +58,17 @@ class REncoding(ReadEncoding):
     (ld-store §3; ADR 0090). It adds no field, so it equals another of its class at the same scale.
     """
 
+    @classmethod
+    def of(cls, record: object) -> REncoding:
+        """The encoding a store's `encoding` record names, as this class, so a build or
+        validation step quantises and computes floors with it; refused as ogquery's `of` refuses
+        an encoding it does not implement (ld-store §3, §13)."""
+        encoding = super().of(record)
+        # ogquery's `of` constructs `cls`; were it to construct its own class, this class's
+        # members would be missing, and a build would fail later and further from the cause.
+        assert isinstance(encoding, REncoding), type(encoding)
+        return encoding
+
     def record(self) -> Encoding:
         """The store's `encoding` provenance record of this encoding (ld-store §7)."""
         return {

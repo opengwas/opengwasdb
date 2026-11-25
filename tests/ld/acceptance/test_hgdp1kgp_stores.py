@@ -21,12 +21,12 @@ from pathlib import Path
 import build_hgdp1kgp as recipe
 import numpy as np
 import pytest
+from ogquery.ld.store.layout import chromosomes_listed
+from ogquery.ld.store.location import ChunkCache, open_group
 
 import opengwasdb.ld
 from opengwasdb.ld import env
 from opengwasdb.ld.format import VALIDATION_RULES
-from ogquery.ld.store.layout import chromosomes_listed
-from ogquery.ld.store.location import ChunkCache, open_group
 from opengwasdb.ld.store.validation import validate_at
 
 #: ADR 0088, decision 11: each panel's unrelated samples (`scripts/ld/make_keeps.py`).

@@ -7,9 +7,14 @@ import numpy as np
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-
-from opengwasdb.ld.format.geometry import chromosome_ranges, chromosome_ranges_from_counts, near_pair_of, spans_at
 from ogquery.ld.format.geometry import near_address, spans
+
+from opengwasdb.ld.format.geometry import (
+    chromosome_ranges,
+    chromosome_ranges_from_counts,
+    near_pair_of,
+    spans_at,
+)
 
 
 def test_closed_chromosome_counts_form_joined_row_ranges() -> None:

@@ -15,9 +15,9 @@ from pathlib import Path
 
 import numpy as np
 import zarr
+from ogquery.ld.store import StoreReader
 from store_copies import copy_store
 
-from ogquery.ld.store import StoreReader
 from opengwasdb.ld.store import layout
 
 

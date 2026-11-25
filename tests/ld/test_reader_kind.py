@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import testdata
 from contract.support import TEST_STORE
-
-import opengwasdb.ld
-from opengwasdb.ld.genotypes.reader import GenotypeReader
 from ogquery.ld.store import StoreReader
 from ogquery.ld.store import location as open_module
 from ogquery.ld.store.variants import VariantTable
+
+import opengwasdb.ld
+from opengwasdb.ld.genotypes.reader import GenotypeReader
 
 
 def count_root_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ogquery.ld.store.layout import chromosomes_listed
+
 from opengwasdb.ld.store.layout import chromosomes_record
 
 

@@ -25,7 +25,6 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
-
 from ogquery.ld.format import InputError
 
 #: Records a build reads at a time: bounds the genotype block a pass holds.

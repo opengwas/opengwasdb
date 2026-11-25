@@ -413,7 +413,6 @@ def test_the_fast_reader_tables_are_its_records_rendered(
 def test_the_count_before_ogld_32_is_the_cache_s_rule_one_string_at_a_time() -> None:
     # Both count an ASCII string's bytes exactly, so they agree on ALIDs short and long.
     from numpy.dtypes import StringDType
-
     from ogquery.ld.store import location
 
     alids = [f"22:{i}:A:" + "C" * (i % 40) for i in range(2000)]

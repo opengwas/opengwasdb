@@ -22,11 +22,11 @@ import numpy as np
 import pytest
 import zarr
 from ld_script_modules import load_script
+from ogquery.ld.format import RefusalReason
 from store_copies import R_SCALE, TEST_STORE, copy_store
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from ogquery.ld.format import RefusalReason
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store import layout
 

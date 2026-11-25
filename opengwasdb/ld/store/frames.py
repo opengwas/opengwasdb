@@ -22,53 +22,72 @@ This module owns both directions of that codec and the group around it:
 A frame is never read short: a checksum that fails, a payload that is not exactly
 4 + 4k + 6E bytes, or a k that is not the rows the frame is due raises `ValueError` naming the
 chromosome and the frame (§5.4). A caller that got rows from a frame got all of them.
+
+Reading frames -- `Frame`, `FramePayload`, `FrameCache`, `PartnerFrames` and the payload parsers --
+is ogquery's (`ogquery.ld.store.frames`; opengwas/ogquery#2), re-exported here by name. The codec
+constants and private helpers that `encode_frame` and `decode_frame` share are imported from there.
+This module keeps the write side: `encode_frame`, `decode_frame` (which validation and the tests
+decode whole frames with), `FramesGroup` and `zstd_version`.
 """
 
 from __future__ import annotations
+
 import hashlib
-import importlib
 import os
 import shutil
 import struct
 import tempfile
-import threading
-from collections import OrderedDict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
+
 import numpy as np
 import numpy.typing as npt
 import zarr
-from zarr.abc.store import RangeByteRequest
-from zarr.core.buffer import default_buffer_prototype
-from zarr.core.sync import sync
-from zarr.storage import LocalStore
-from ogquery.ld.format import Codes, InputError
-from opengwasdb.ld.format import REncoding
-from ogquery.ld.format.geometry import indptr_of, owners
-from opengwasdb.ld.store import layout
-from ogquery.ld.store.location import FrameSource, frame_source
+from ogquery.ld.format import Codes
+from ogquery.ld.format.geometry import owners
+from ogquery.ld.store.frames import (
+    _LITTLE_CODES,
+    _LITTLE_DELTA,
+    _LITTLE_ROW,
+    _NUMCODECS,
+    _ZSTD,
+    _where,
+)
+from ogquery.ld.store.frames import (
+    FRAME_CACHE_BYTES as FRAME_CACHE_BYTES,
+)
+from ogquery.ld.store.frames import (
+    ZSTD_LEVEL as ZSTD_LEVEL,
+)
+from ogquery.ld.store.frames import (
+    ZSTD_MAGIC as ZSTD_MAGIC,
+)
 
 # The read side of this module is ogquery's (opengwas/ogquery#2): re-exported by name.
 from ogquery.ld.store.frames import (
     Frame as Frame,
-    FRAME_CACHE_BYTES as FRAME_CACHE_BYTES,
-    FrameCache as FrameCache,
-    FramePayload as FramePayload,
-    open_partner_frames as open_partner_frames,
-    PartnerFrames as PartnerFrames,
-    ZSTD_LEVEL as ZSTD_LEVEL,
-    ZSTD_MAGIC as ZSTD_MAGIC,
 )
-from ogquery.ld.store.frames import _LITTLE_CODES
-from ogquery.ld.store.frames import _LITTLE_DELTA
-from ogquery.ld.store.frames import _LITTLE_ROW
-from ogquery.ld.store.frames import _NUMCODECS
-from ogquery.ld.store.frames import _ZSTD
-from ogquery.ld.store.frames import _where
+from ogquery.ld.store.frames import (
+    FrameCache as FrameCache,
+)
+from ogquery.ld.store.frames import (
+    FramePayload as FramePayload,
+)
+from ogquery.ld.store.frames import (
+    PartnerFrames as PartnerFrames,
+)
+from ogquery.ld.store.frames import (
+    open_partner_frames as open_partner_frames,
+)
+from zarr.abc.store import RangeByteRequest
+from zarr.core.buffer import default_buffer_prototype
+from zarr.core.sync import sync
+from zarr.storage import LocalStore
 
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.store import layout
 
 #: Rows a frame holds (partner-rows §1, §5.2: G = 16, the smallest G of those equally fast). A
 #: reader takes it from the group's `rows_per_frame` attribute, never from here.
@@ -429,7 +448,7 @@ class FramesGroup:
                 "entries": self._entries,
                 "frames_bytes": self._bytes,
                 "frames_sha256": self._sha.hexdigest(),
-                "frames_idx_sha256": _digest(layout.chunk_file(index)),
+                "frames_idx_sha256": layout.file_sha256(layout.chunk_file(index)),
                 "zstd_level": ZSTD_LEVEL,
             }
         )
@@ -522,7 +541,7 @@ class FramesGroup:
     def _file_is_the_frames(self, array: zarr.Array[Any], offsets: npt.NDArray[np.uint64]) -> Path:
         """The file the array's metadata resolves, which holds the frames appended, whole."""
         path = layout.chunk_file(array)
-        if path.stat().st_size != self._bytes or _digest(path) != self._sha.hexdigest():
+        if path.stat().st_size != self._bytes or layout.file_sha256(path) != self._sha.hexdigest():
             raise ValueError(
                 f"{path} is not the frames appended to chromosome {self._chrom}'s Partner Rows: "
                 "a store assembly fault"
@@ -575,9 +594,3 @@ def _ranged(array: zarr.Array[Any], span: slice) -> bytes:
     if fetched is None:
         raise ValueError(f"{key} is not there: a frames chunk file a store lost")
     return bytes(fetched.to_bytes())
-
-
-def _digest(path: Path) -> str:
-    """A file's SHA-256, read in blocks so a chromosome's frames are never held whole."""
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()

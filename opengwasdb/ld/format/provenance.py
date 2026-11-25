@@ -4,33 +4,77 @@ The types mirror the JSON object in the root group's `ld_store` attribute key fo
 mypy holds the builder (ogld#5), the writer (ogld#4) and validation to one shape.
 `REQUIRED_KEYS` and `VALIDATION_RULES` are the spec's two tables as data; a test holds
 each to its table, so neither can drift from the spec silently.
+
+The provenance types a reader reads are ogquery's (`ogquery.ld.format.provenance`;
+opengwas/ogquery#2), re-exported here by name. This module keeps what only a producer and
+validation need: `Sourced`, `REQUIRED_KEYS` and `VALIDATION_RULES`.
 """
 
 from __future__ import annotations
-from typing import Final, Literal, TypedDict
+
+from typing import Final, TypedDict
+
+from ogquery.ld.format.provenance import (
+    FORMAT_VERSION as FORMAT_VERSION,
+)
+from ogquery.ld.format.provenance import (
+    PARTNER_ROWS_SINCE as PARTNER_ROWS_SINCE,
+)
+from ogquery.ld.format.provenance import (
+    READABLE_FORMATS as READABLE_FORMATS,
+)
 
 # The read side of this module is ogquery's (opengwas/ogquery#2): re-exported by name.
 from ogquery.ld.format.provenance import (
     Adjustment as Adjustment,
+)
+from ogquery.ld.format.provenance import (
     Build as Build,
-    claims_partner_rows as claims_partner_rows,
+)
+from ogquery.ld.format.provenance import (
     Counts as Counts,
+)
+from ogquery.ld.format.provenance import (
     Encoding as Encoding,
-    FORMAT_VERSION as FORMAT_VERSION,
+)
+from ogquery.ld.format.provenance import (
     Panel as Panel,
-    PARTNER_ROWS_SINCE as PARTNER_ROWS_SINCE,
+)
+from ogquery.ld.format.provenance import (
     PcCheck as PcCheck,
+)
+from ogquery.ld.format.provenance import (
     PcDiagnostic as PcDiagnostic,
+)
+from ogquery.ld.format.provenance import (
     PcDiagnosticPairs as PcDiagnosticPairs,
+)
+from ogquery.ld.format.provenance import (
     PcFile as PcFile,
+)
+from ogquery.ld.format.provenance import (
     PcNull as PcNull,
+)
+from ogquery.ld.format.provenance import (
     PcScan as PcScan,
+)
+from ogquery.ld.format.provenance import (
     Provenance as Provenance,
-    READABLE_FORMATS as READABLE_FORMATS,
-    release_of as release_of,
+)
+from ogquery.ld.format.provenance import (
     Source as Source,
+)
+from ogquery.ld.format.provenance import (
     SourceKind as SourceKind,
+)
+from ogquery.ld.format.provenance import (
     VariantFilters as VariantFilters,
+)
+from ogquery.ld.format.provenance import (
+    claims_partner_rows as claims_partner_rows,
+)
+from ogquery.ld.format.provenance import (
+    release_of as release_of,
 )
 
 

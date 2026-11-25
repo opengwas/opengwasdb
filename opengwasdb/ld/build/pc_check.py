@@ -37,7 +37,6 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
-
 from ogquery.ld.format import InputError, PcCheck, PcNull, PcScan
 
 #: Dosages (variants × samples), whatever their dtype: the scan casts them (`common`, `_basis`).

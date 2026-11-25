@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import zarr
+from ogquery.ld.store import StoreReader
 from store_copies import (
     FLOOR,
     R_SCALE,
@@ -34,7 +35,6 @@ from store_copies import (
 
 import opengwasdb.ld
 from opengwasdb.ld.format import VALIDATION_RULES, REncoding
-from ogquery.ld.store import StoreReader
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.validation import validate_group
 

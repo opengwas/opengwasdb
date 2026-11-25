@@ -10,28 +10,61 @@ off-by-one, and an off-by-one here is a wrong r that looks like a right one.
 Positions are one chromosome's, ascending, in row order (ld-store §2). A row's *stop* is the
 index just past its last variant within a distance, so it counts the row itself and any
 variant at the same position, and a variant exactly `distance` bp away is inside.
+
+What a reader computes is ogquery's (`ogquery.ld.format.geometry`; opengwas/ogquery#2), re-exported
+here by name. This module keeps only what a build or validation computes: the chromosome ranges of
+a Variant Set (`chromosome_ranges`, `chromosome_ranges_from_counts`), and the inverses of `spans`
+and `near_address` (`spans_at`, `near_pair_of`).
 """
 
 from __future__ import annotations
-from collections.abc import Iterable, Iterator
+
+from collections.abc import Iterable
+
 import numpy as np
 import numpy.typing as npt
 
 # The read side of this module is ogquery's (opengwas/ogquery#2): re-exported by name.
 from ogquery.ld.format.geometry import (
     blocks as blocks,
+)
+from ogquery.ld.format.geometry import (
     chromosome_index as chromosome_index,
+)
+from ogquery.ld.format.geometry import (
     global_rows as global_rows,
+)
+from ogquery.ld.format.geometry import (
     indptr_of as indptr_of,
+)
+from ogquery.ld.format.geometry import (
     local_rows as local_rows,
+)
+from ogquery.ld.format.geometry import (
     near_address as near_address,
+)
+from ogquery.ld.format.geometry import (
     near_row_lengths as near_row_lengths,
+)
+from ogquery.ld.format.geometry import (
     owners as owners,
+)
+from ogquery.ld.format.geometry import (
     position_rows as position_rows,
+)
+from ogquery.ld.format.geometry import (
     row_pairs as row_pairs,
+)
+from ogquery.ld.format.geometry import (
     spans as spans,
+)
+from ogquery.ld.format.geometry import (
     stop_within as stop_within,
+)
+from ogquery.ld.format.geometry import (
     windows as windows,
+)
+from ogquery.ld.format.geometry import (
     within as within,
 )
 

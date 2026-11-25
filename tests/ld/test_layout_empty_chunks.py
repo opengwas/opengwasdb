@@ -58,7 +58,9 @@ def test_layout_is_the_one_place_an_array_is_created() -> None:
     """A `create_array` anywhere else would take the process-wide setting back."""
     package = Path(layout.__file__).resolve().parents[1]
     sources = sorted(package.rglob("*.py"))
-    assert len(sources) > 40, f"only {len(sources)} sources under {package}; the glob is wrong"
+    # 40 since the read side moved to ogquery (opengwas/ogquery#2); the glob finds far fewer if
+    # it is wrong.
+    assert len(sources) >= 35, f"only {len(sources)} sources under {package}; the glob is wrong"
     calls = [
         str(path.relative_to(package))
         for path in sources

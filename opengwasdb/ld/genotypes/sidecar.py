@@ -9,8 +9,9 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import zarr
-
 from ogquery.ld.format import InputError, Provenance
+from ogquery.ld.store.tables import Variants
+
 from opengwasdb.ld.format import REncoding, Sourced
 from opengwasdb.ld.format.geometry import chromosome_ranges
 from opengwasdb.ld.genotypes.adjust import Block, Covariates
@@ -24,7 +25,6 @@ from opengwasdb.ld.store.assembly import (
     derive_variant_companion,
     provenance,
 )
-from ogquery.ld.store.tables import Variants
 from opengwasdb.ld.store.validation import ValidationFailed
 from opengwasdb.ld.store.writer import write_variant_table
 

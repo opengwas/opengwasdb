@@ -4,20 +4,30 @@ Tables are frozen dataclasses of equal-length one-dimensional numpy arrays, one 
 column, so they need no dependency beyond numpy, type-check under mypy --strict, and
 convert to a data frame in one call (`pandas.DataFrame(table.columns())`). A string
 column is a numpy unicode array (`np.str_`), one string per row.
+
+`Variants` and the column helpers are ogquery's (`ogquery.ld.store.tables`; opengwas/ogquery#2),
+re-exported here by name; `Partners`, which only a writer and validation build, stays.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING
+
+from dataclasses import dataclass
+
 import numpy as np
 import numpy.typing as npt
+from ogquery.ld.store.tables import (
+    DataclassInstance as DataclassInstance,
+)
+from ogquery.ld.store.tables import (
+    Variants as Variants,
+)
 
 # The read side of this module is ogquery's (opengwas/ogquery#2): re-exported by name.
 from ogquery.ld.store.tables import (
     check_columns as check_columns,
+)
+from ogquery.ld.store.tables import (
     columns_of as columns_of,
-    DataclassInstance as DataclassInstance,
-    Variants as Variants,
 )
 
 

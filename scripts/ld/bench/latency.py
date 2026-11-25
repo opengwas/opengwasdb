@@ -242,12 +242,11 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     """Bound zarr's threads and count what each timing reads. The counting wraps the store's
     reads from outside ogld: the benchmark measures the reader, it does not change it."""
     import zarr
-    from zarr.storage import FsspecStore, LocalStore
-
     from ogquery.ld.query import clumping
     from ogquery.ld.store import location
     from ogquery.ld.store.location import ChunkCache
     from ogquery.ld.store.reader import StoreReader
+    from zarr.storage import FsspecStore, LocalStore
 
     if zarr_threads is not None:
         zarr.config.set({"threading.max_workers": zarr_threads})

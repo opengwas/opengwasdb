@@ -6,70 +6,150 @@ addresses one frame's byte range (partner-rows §5.1; ADR 0097). The chunk and s
 codec chain and the fill value of each kind of array are the spec's table, kept here as data so the
 writer cannot create an array the table does not describe, and the reader's tests can name the fill
 values it promises.
+
+What a reader needs of the layout -- the fill-value rules, the chromosome record's reader, the
+ALID index's and companion's paths and checks -- is ogquery's (`ogquery.ld.store.layout`;
+opengwas/ogquery#2), re-exported here by name. This module keeps every array creator and the
+constants only a writer uses.
 """
 
 from __future__ import annotations
-import hashlib
-import json
-import re
-from collections.abc import Iterator
-from dataclasses import dataclass
-from os import stat_result
+
 from pathlib import Path
 from typing import Any, Final
+
 import numpy as np
 import numpy.typing as npt
 import zarr
-from zarr.codecs import ZstdCodec
-from zarr.storage import LocalStore, StorePath, WrapperStore
-from ogquery.ld.format import InputError
-from opengwasdb.ld.format import REncoding
+from ogquery.ld.store.layout import (
+    ALID_INDEX as ALID_INDEX,
+)
+from ogquery.ld.store.layout import (
+    ALID_INDEX_ALID as ALID_INDEX_ALID,
+)
+from ogquery.ld.store.layout import (
+    ALID_INDEX_ROW as ALID_INDEX_ROW,
+)
+from ogquery.ld.store.layout import (
+    ALID_INDEX_WIDTH as ALID_INDEX_WIDTH,
+)
+from ogquery.ld.store.layout import (
+    ALID_KEY_DTYPE as ALID_KEY_DTYPE,
+)
+from ogquery.ld.store.layout import (
+    ALID_KEY_FILL as ALID_KEY_FILL,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP as ALID_MMAP,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_ATTR as ALID_MMAP_ATTR,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_KEYS as ALID_MMAP_KEYS,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_MANIFEST as ALID_MMAP_MANIFEST,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_PAYLOADS as ALID_MMAP_PAYLOADS,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_ROW_DTYPE as ALID_MMAP_ROW_DTYPE,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_ROWS as ALID_MMAP_ROWS,
+)
+from ogquery.ld.store.layout import (
+    ALID_MMAP_SCHEMA as ALID_MMAP_SCHEMA,
+)
+from ogquery.ld.store.layout import (
+    CHROMOSOME_KEYS as CHROMOSOME_KEYS,
+)
+from ogquery.ld.store.layout import (
+    FRAMES as FRAMES,
+)
+from ogquery.ld.store.layout import (
+    FRAMES_INDEX as FRAMES_INDEX,
+)
+from ogquery.ld.store.layout import (
+    PARTNERS as PARTNERS,
+)
+from ogquery.ld.store.layout import (
+    AlidCompanion as AlidCompanion,
+)
+from ogquery.ld.store.layout import (
+    AlidPayload as AlidPayload,
+)
 
 # The read side of this module is ogquery's (opengwas/ogquery#2): re-exported by name.
 from ogquery.ld.store.layout import (
     alid_companion as alid_companion,
+)
+from ogquery.ld.store.layout import (
     alid_fits as alid_fits,
-    ALID_INDEX as ALID_INDEX,
-    ALID_INDEX_ALID as ALID_INDEX_ALID,
-    ALID_INDEX_ROW as ALID_INDEX_ROW,
-    ALID_INDEX_WIDTH as ALID_INDEX_WIDTH,
-    ALID_KEY_DTYPE as ALID_KEY_DTYPE,
-    ALID_KEY_FILL as ALID_KEY_FILL,
+)
+from ogquery.ld.store.layout import (
     alid_keys as alid_keys,
-    ALID_MMAP as ALID_MMAP,
-    ALID_MMAP_ATTR as ALID_MMAP_ATTR,
+)
+from ogquery.ld.store.layout import (
     alid_mmap_error as alid_mmap_error,
+)
+from ogquery.ld.store.layout import (
     alid_mmap_generation as alid_mmap_generation,
-    ALID_MMAP_KEYS as ALID_MMAP_KEYS,
-    ALID_MMAP_MANIFEST as ALID_MMAP_MANIFEST,
+)
+from ogquery.ld.store.layout import (
     alid_mmap_manifest as alid_mmap_manifest,
-    ALID_MMAP_PAYLOADS as ALID_MMAP_PAYLOADS,
+)
+from ogquery.ld.store.layout import (
     alid_mmap_pointer as alid_mmap_pointer,
-    ALID_MMAP_ROW_DTYPE as ALID_MMAP_ROW_DTYPE,
-    ALID_MMAP_ROWS as ALID_MMAP_ROWS,
-    ALID_MMAP_SCHEMA as ALID_MMAP_SCHEMA,
+)
+from ogquery.ld.store.layout import (
     alid_mmap_source_change as alid_mmap_source_change,
+)
+from ogquery.ld.store.layout import (
     alid_mmap_sources as alid_mmap_sources,
-    AlidCompanion as AlidCompanion,
-    AlidPayload as AlidPayload,
-    CHROMOSOME_KEYS as CHROMOSOME_KEYS,
+)
+from ogquery.ld.store.layout import (
     chromosomes_listed as chromosomes_listed,
+)
+from ogquery.ld.store.layout import (
     chunk_file as chunk_file,
+)
+from ogquery.ld.store.layout import (
     chunk_key as chunk_key,
+)
+from ogquery.ld.store.layout import (
     file_identity as file_identity,
+)
+from ogquery.ld.store.layout import (
     file_sha256 as file_sha256,
-    FRAMES as FRAMES,
-    FRAMES_INDEX as FRAMES_INDEX,
+)
+from ogquery.ld.store.layout import (
     json_bytes as json_bytes,
+)
+from ogquery.ld.store.layout import (
     local_path as local_path,
+)
+from ogquery.ld.store.layout import (
     local_root as local_root,
+)
+from ogquery.ld.store.layout import (
     never_data as never_data,
-    PARTNERS as PARTNERS,
+)
+from ogquery.ld.store.layout import (
     partners_path as partners_path,
+)
+from ogquery.ld.store.layout import (
     refused_if_lost as refused_if_lost,
+)
+from ogquery.ld.store.layout import (
     shown_fill as shown_fill,
 )
+from zarr.codecs import ZstdCodec
+from zarr.storage import StorePath
 
+from opengwasdb.ld.format import REncoding
 
 #: (inner chunk, shard) in elements, for every array but the Near Band's `r`.
 SIDE: Final = (16_384, 1_048_576)

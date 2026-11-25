@@ -18,9 +18,8 @@ import numpy as np
 import support
 import zarr
 from ld_script_modules import load_script
-from support import alids, reference
-
 from ogquery.ld.store import StoreReader
+from support import alids, reference
 
 
 def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:

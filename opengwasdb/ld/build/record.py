@@ -19,9 +19,17 @@ from typing import Final
 
 import numpy as np
 import zarr
+from ogquery.ld.format import (
+    Adjustment,
+    Build,
+    Panel,
+    PcCheck,
+    PcDiagnostic,
+    Source,
+    VariantFilters,
+)
 
 from opengwasdb.ld.build.variant_set import PASSING_FILTERS
-from ogquery.ld.format import Adjustment, Build, Panel, PcCheck, PcDiagnostic, Source, VariantFilters
 from opengwasdb.ld.format import Sourced
 from opengwasdb.version import __version__
 

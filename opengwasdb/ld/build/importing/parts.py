@@ -14,7 +14,6 @@ from typing import Any, BinaryIO, cast
 
 import numpy as np
 import numpy.typing as npt
-
 from ogquery.ld.format import InputError
 
 

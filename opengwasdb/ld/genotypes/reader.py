@@ -1,9 +1,9 @@
 """On-demand LD from pinned pgens, composing the canonical VariantTable (ADR 0100).
 
-`GenotypeReader` satisfies `opengwasdb.ld.query.reader.Reader` structurally, as `StoreReader` does:
-it
-composes the same `OpenedStore` and `VariantTable` and holds its own computed-LD half, rather
-than inheriting the LD Store reader's.
+`GenotypeReader` satisfies ogquery's public `ogquery.ld.Reader` protocol structurally, as
+ogquery's `StoreReader` does: it composes the same `OpenedStore` and `VariantTable` (ogquery's,
+opengwas/ogquery#2) and holds its own computed-LD half, rather than inheriting the LD Store
+reader's. It stays in opengwasdb because it needs pgenlib and threadpoolctl (ogquery ADR 0002).
 No decoded calls survive a request. Adjustment arrays are read-only mmaps, shared by worker
 processes through the page cache.
 """
@@ -20,18 +20,18 @@ from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
-from threadpoolctl import threadpool_limits
-
 from ogquery.ld.format import Codes, InputError, Provenance
-from opengwasdb.ld.format import REncoding
 from ogquery.ld.format.geometry import global_rows, local_rows, position_rows
-from opengwasdb.ld.genotypes.adjust import Block, r
-from opengwasdb.ld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
-from opengwasdb.ld.genotypes.pgen import Genotypes, import_pgenlib
 from ogquery.ld.store.location import ChunkCache, OpenedStore, open_group
 from ogquery.ld.store.tables import Variants
 from ogquery.ld.store.variants import VariantTable
 from ogquery.ld.store.workers import ComponentWorkers
+from threadpoolctl import threadpool_limits
+
+from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.genotypes.adjust import Block, r
+from opengwasdb.ld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
+from opengwasdb.ld.genotypes.pgen import Genotypes, import_pgenlib
 
 _READ_ROWS = 8192
 _BLAS_LOCK = threading.Lock()
@@ -218,7 +218,7 @@ class GenotypeReader(ComponentWorkers):
 
     # ------------------------------------------------------- the variant table's reads
     #
-    # As in `StoreReader`, their one owner is `opengwasdb.ld.store.VariantTable` (#94): both readers
+    # As in `StoreReader`, their one owner is `ogquery.ld.store.VariantTable` (#94): both readers
     # answer through the table they compose, so neither drifts on an ALID, a region or a locus.
 
     def rows_of(self, alids: Sequence[str]) -> npt.NDArray[np.int64]:
@@ -226,6 +226,14 @@ class GenotypeReader(ComponentWorkers):
 
     def rows_in(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
         return self._variant_table.rows_in(chrom, start, stop)
+
+    def region_rows(self, chrom: str, start: int, stop: int) -> npt.NDArray[np.int64]:
+        """`rows_in`'s rows, for `region` (ogquery's `Reader.region_rows`; ogquery ADR 0002).
+
+        An LD Store's reader opens its chromosome's Near Band here, before deciding a region holds
+        no variant. A Genotype Store has no Near Band: it computes a region's r from the pgens, so
+        its region's rows are the variant table's, as `rows_in` reads them."""
+        return self.rows_in(chrom, start, stop)
 
     def chromosome_range(self, chrom: str) -> tuple[int, int]:
         return self._variant_table.chromosome_range(chrom)

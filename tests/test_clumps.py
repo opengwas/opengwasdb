@@ -25,6 +25,7 @@ from clump_stores import (
     copied,
     require_meaningful,
 )
+from ogquery.ld.query.ldstore import LDStore
 
 from opengwasdb.clumps import (
     ABSENT,
@@ -40,7 +41,6 @@ from opengwasdb.clumps import (
     read_clumps,
 )
 from opengwasdb.ld.format import REncoding
-from ogquery.ld.query.ldstore import LDStore
 from opengwasdb.ld.query.ldstore import open as open_ld_store
 from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store import open_store

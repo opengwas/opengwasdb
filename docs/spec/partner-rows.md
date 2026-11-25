@@ -135,7 +135,7 @@ rules are clean, but `members()` emits `ZarrUserWarning: Object at partners is n
 component of a Zarr hierarchy.` The single-chunk form below removes that warning. The committed
 Test Store is that check since opengwas/ogld#67: `partners/` is a node of its hierarchy, `members()` lists it
 with no warning (`tests/ld/test_partner_rows.py`), and the reader and the ten rules resolve each
-chunk file from the array's own metadata (ogquery's `tests/ld/test_partner_row_reads.py`, since
+chunk file from the array's own metadata (ogquery's [tests/ld/test_partner_row_reads.py](https://github.com/opengwas/ogquery/blob/v0.3.0/tests/ld/test_partner_row_reads.py), since
 opengwas/ogquery#2).
 
 Both arrays have **one chunk each**, of the whole array, and no shard index. The `frames` array's
@@ -486,7 +486,7 @@ whole sets of components. The options, from simplest:
 
 **Recommendation.** A was built and measured first, then B, whose pool **is the reader's own and
 capped at four component workers** for opengwas/ogld#71 (fixed on opengwas/ogld#65's evidence; §1). There is no caller-facing
-setting: `opengwasdb.ld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
+setting: `ogquery.ld.store.reader.COMPONENT_WORKERS_MAX` is both the default and the cap, the reader holds
 it, and a test reaches it through a private seam. Four was where G = 8 and G = 16 were fastest,
 1.051 and 1.067 s cold; at eight, cold LD regresses to 5.753 s (G = 8), 5.109 s (G = 16) and
 1.913 s (G = 4), because the per-lead Python work holds the GIL. opengwas/ogld#71 measured the same answer at 1,

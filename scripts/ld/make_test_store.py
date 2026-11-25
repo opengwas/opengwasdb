@@ -20,6 +20,7 @@ precomputed r" in miniature. It is deterministic: the same inputs write the same
 reference for, at any scale the format admits: the committed Test Store is × 511, and tests write
 × 32767 stores beside it. The scale and the Partner Threshold are always given, as a build's are:
 neither has a default.
+
 """
 
 from __future__ import annotations
@@ -41,18 +42,18 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import zarr
+from ogquery.ld.format import Adjustment, PcCheck
+from ogquery.ld.format.geometry import local_rows
+from ogquery.ld.store import Variants
 
 import opengwasdb.ld
 from opengwasdb.ld.build import diagnostic, record, tiles
 from opengwasdb.ld.build.inputs import fileset, read_keep
 from opengwasdb.ld.build.pc_check import K_MIN
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
-from ogquery.ld.format import Adjustment, PcCheck
 from opengwasdb.ld.format.geometry import chromosome_ranges
-from ogquery.ld.format.geometry import local_rows
 from opengwasdb.ld.genotypes import Genotypes
 from opengwasdb.ld.store import StoreWriter
-from ogquery.ld.store import Variants
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.sorted_spelling import (
     SortedIdentity,

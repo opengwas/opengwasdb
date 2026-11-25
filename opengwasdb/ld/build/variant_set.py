@@ -28,10 +28,10 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
+from ogquery.ld.format import InputError
 
 from opengwasdb.ld.build import pc_check
 from opengwasdb.ld.build.inputs import Fileset, Records, records
-from ogquery.ld.format import InputError
 from opengwasdb.ld.genotypes import Genotypes
 from opengwasdb.store_reader.identity import (
     AUTOSOMES,
