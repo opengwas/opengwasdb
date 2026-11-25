@@ -1,5 +1,16 @@
 # Store format versioning, reader obligations, and migration expectations
 
+> **§4–§5 narrowed by [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10**
+> (issue #417; the owner's plan of 23 Nov 2026 on #62): a release is still immutable, and a
+> change to association data or Analytical Metadata still derives a new release, with one
+> exception. **A derived, rebuildable component and the count columns derived from it,
+> recomputable from the Store and a named LD Store** may be added to or replaced in an
+> existing release in place, keeping its `release_id`: the Clumps of the 5e-8 tier, with
+> `n_loci_5e8` and `n_unclumped_5e8`. They change no existing value, are declared by the
+> manifest's `clumps` entry written last, and do not move `format_version` (spec §18.1,
+> §21.1, §21.4). This exception is pending the owner's sign-off at epic #62's merge (ADR 0106,
+> *Awaiting the owner's sign-off*).
+>
 > **§3 amended by the owner's decision of 2026-11-11 (issue #430, spec §21.3):**
 > a build stamps each release **the lowest `format_version` whose features it
 > uses**, rather than one version for everything it writes. `0.2.1` is `0.2.0`

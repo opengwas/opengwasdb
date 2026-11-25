@@ -224,11 +224,11 @@ def test_a_hybrid_variant_seen_from_two_assemblies_has_no_source_alid(tmp_path: 
 
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
-    early = thb._make_vcf(
+    early = thb.make_vcf(
         tmp_path, "early_hg19",
         ["1\t1000000\trsEARLY\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
     )
-    late = thb._make_vcf(
+    late = thb.make_vcf(
         tmp_path, "late_hg38",
         ["1\t1064620\trsLATE\tC\tT\t.\tPASS\t.\tES:SE\t1.2:0.3\n"],
     )

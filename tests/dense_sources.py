@@ -15,7 +15,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -127,14 +127,20 @@ def build_dense_fixture(
 
 
 def build_dense_from_records(
-    records: Sequence[NormalisedAssociation], output_path: Path, **options: Any
+    records: Sequence[Any],
+    output_path: Path,
+    *,
+    batch: Callable[[Sequence[Any]], ReaderBatch] | None = None,
+    **options: Any,
 ) -> DenseBuildResult:
     """A Dense Store of associations a test holds in memory, one column per Analysis.
 
     The columns are in `analysis_id` order. Each Analysis declares nothing beyond
-    its id and the SD effect scale, and each record is already on its canonical A1.
+    its id and the SD effect scale. Each record is a `NormalisedAssociation`, already
+    on its canonical A1, unless `batch` reads another kind of record (any with an
+    `analysis_id`) into the reader batch an Analysis's records become.
     """
-    by_analysis: dict[str, list[NormalisedAssociation]] = {}
+    by_analysis: dict[str, list[Any]] = {}
     for record in records:
         by_analysis.setdefault(record.analysis_id, []).append(record)
     sources = [
@@ -146,7 +152,7 @@ def build_dense_from_records(
             ),
             rules=AnalysisRules(analysis_id),
             se_divisor=1.0,
-            batches=[_batch(rows)],
+            batches=[(batch or _batch)(rows)],
             tally=StreamTally(),
         )
         for analysis_id, rows in sorted(by_analysis.items())

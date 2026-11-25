@@ -89,16 +89,16 @@ def build_completed_dense(tmp_path: Path) -> Path:
 
 
 def build_hybrid(tmp_path: Path) -> Path:
-    vcf1 = hb._make_vcf(tmp_path, "trait_a", [
+    vcf1 = hb.make_vcf(tmp_path, "trait_a", [
         f"1\t{hb.HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",
         f"1\t{hb.HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",
         f"1\t{hb.HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",
     ])
-    vcf2 = hb._make_vcf(tmp_path, "trait_b", [
+    vcf2 = hb.make_vcf(tmp_path, "trait_b", [
         f"1\t{hb.HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n",
         f"1\t{hb.HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",
     ])
-    manifest = hb._make_manifest(
+    manifest = hb.make_manifest(
         tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
     )
     out = tmp_path / "hybrid.opengwasdb"

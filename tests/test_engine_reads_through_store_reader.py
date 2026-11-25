@@ -134,6 +134,7 @@ WRITER_FUNCTIONS = {
 #: design (ruling 2), listed so a new one is seen.
 COMPLIANT_ARRAYS_CALLS = frozenset(
     {
+        ("opengwasdb/clumps.py", "_tier_component"),
         ("opengwasdb/layouts/dense/complete.py", "_make_reader.make_reader"),
         ("opengwasdb/layouts/dense/complete.py", "_record_effective_dense_chunk_shape"),
         ("opengwasdb/layouts/dense/complete.py", "_run_completion"),

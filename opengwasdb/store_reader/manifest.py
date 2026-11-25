@@ -105,6 +105,12 @@ class StoreManifest:
     #: The region table the release carries (`RegionsEntry`); `None` when it carries
     #: none, and then omitted from the manifest entirely, as an absent `encoding.n` is.
     regions: RegionsEntry | None = None
+    #: The `clumps` entry (spec §2): which tier's Clumps the release declares, None when it
+    #: declares none. Read, never written: `to_dict` leaves it out, so a manifest written
+    #: from this object -- a completion's, which rewrites the tier the Clumps were parallel
+    #: to -- never declares Clumps it does not carry (ADR 0106 §10). Only the step that
+    #: writes them declares them, in place (`OpenGWASDBStore.set_manifest_entry`).
+    clumps: Any = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> StoreManifest:
@@ -122,6 +128,7 @@ class StoreManifest:
             regions=(
                 RegionsEntry.from_manifest(data["regions"]) if "regions" in data else None
             ),
+            clumps=data.get("clumps"),
         )
 
     @classmethod

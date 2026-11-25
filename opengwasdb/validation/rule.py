@@ -104,6 +104,9 @@ class ValidationOptions:
     #: The forked workers a scan that can be read apart spreads its pass across
     #: (issue #315); one reads every pass in this process.
     n_workers: int = 1
+    #: The Assigned Ancestry -> LD Store mapping `clumps.reclump` re-clumps a sample
+    #: against (ADR 0106, spec §20.0); without it that rule is recorded as not run.
+    ld_stores: Mapping[str, str | Path] | None = None
 
 
 class Target:

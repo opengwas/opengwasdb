@@ -251,7 +251,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     for n_workers in (1, 2):
         d = root / f"hybrid-n{n_workers}"
         d.mkdir()
-        vcf1 = thb._make_vcf(
+        vcf1 = thb.make_vcf(
             d,
             "trait_a",
             [
@@ -260,7 +260,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
                 f"1\t{thb.HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",
             ],
         )
-        vcf2 = thb._make_vcf(
+        vcf2 = thb.make_vcf(
             d,
             "trait_b",
             [
@@ -268,7 +268,7 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
                 f"1\t{thb.HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",
             ],
         )
-        manifest = thb._make_manifest(
+        manifest = thb.make_manifest(
             d, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
         )
         store = d / "store.opengwasdb"

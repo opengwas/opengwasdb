@@ -30,6 +30,7 @@ from opengwasdb.store_reader.identity import (
     CANONICAL_CHROMOSOMES,
     VALID_BASES,
     VariantNormalisationError,
+    identity_allele,
     normalise_allele,
 )
 from opengwasdb.variants.normalise import orient_to_canonical, sorted_alid_alleles
@@ -136,6 +137,43 @@ def spells_indel_reference_first(alid: str) -> bool:
     if len(a1) == len(a2) or not a1 > a2:
         return False
     return sorted_alid_locus(f"{chrom}:{pos}:{a2}:{a1}") is not None
+
+
+@dataclass(frozen=True)
+class SortedLookup:
+    """How a GWAS Store's ALID is looked up in a Store spelt sorted (ADR 0106 §6).
+
+    `alid` is the sorted spelling to look up. `swapped` says it puts the other allele first, so
+    an r the sorted Store gives for this variant is signed to the GWAS Store's A2 and is negated
+    to sign it to its A1. `reversed_indel` is, for an indel, the other indel of the same sequence
+    at the same position, spelt as the GWAS Store spells it, reference first: the two share
+    `alid`, and a sorted Store keeps one record for both (`resolve_sorted_reversed_indels`). It
+    is None for alleles of one length, whose sorted spelling no other variant shares.
+    """
+
+    alid: str
+    swapped: bool
+    reversed_indel: str | None
+
+
+def sorted_lookup(alid: str) -> SortedLookup:
+    """The sorted spelling of a GWAS Store's ALID (`alid`), for a lookup in a sorted Store.
+
+    A Store from format 0.2.2 spells an indel reference first (ADR 0079), and an LD Store sorts
+    both alleles (`sorted_alid_alleles`); every other pair is spelt the same by both. A deletion
+    whose reference sorts after its alternate is spelt with its alleles swapped (`swapped`). An
+    ALID that is not four fields is its own spelling: a sorted Store holds no such ALID, and the
+    lookup finds it Absent.
+    """
+    parts = alid.split(":")
+    if len(parts) != 4:
+        return SortedLookup(alid, False, None)
+    chrom, pos, a1, a2 = parts
+    first, second = sorted_alid_alleles(a1, a2)
+    spelt = f"{chrom}:{pos}:{first}:{second}"
+    swapped = first != identity_allele(a1)
+    reversed_indel = f"{chrom}:{pos}:{a2}:{a1}" if len(a1) != len(a2) else None
+    return SortedLookup(spelt, swapped, reversed_indel)
 
 
 def refuse_reference_first_indel(alid: str, where: str) -> None:

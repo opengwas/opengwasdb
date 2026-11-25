@@ -36,9 +36,9 @@ from test_hybrid_build import (
     HG19_POS_1,
     HG19_POS_2,
     HG19_POS_3,
-    _make_manifest,
-    _make_vcf,
     _panel,
+    make_manifest,
+    make_vcf,
 )
 from test_ragged_build_ssf import _make_fixture as _make_ragged_ssf_fixture
 from test_ragged_completion import _make_besd_fixture
@@ -146,7 +146,7 @@ def small_dense_observed(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(scope="session")
 def hybrid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("hybrid")
-    vcf1 = _make_vcf(
+    vcf1 = make_vcf(
         root,
         "trait_a",
         [
@@ -155,7 +155,7 @@ def hybrid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",
         ],
     )
-    vcf2 = _make_vcf(
+    vcf2 = make_vcf(
         root,
         "trait_b",
         [
@@ -163,7 +163,7 @@ def hybrid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",
         ],
     )
-    manifest = _make_manifest(root, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")])
+    manifest = make_manifest(root, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")])
     store = root / "hybrid-built.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest,

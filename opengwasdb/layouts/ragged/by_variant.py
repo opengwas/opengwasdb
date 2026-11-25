@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.encoding.codec import require_parallel
+from opengwasdb.model.files import replace_durably
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store_reader import layout as store_layout
@@ -742,7 +743,8 @@ def _roll_back_build(ragged: Path, *, installed: bool) -> None:
 
 
 def _record_index_in_manifest(store_path: str | Path, result: VariantIndexResult) -> None:
-    """Rewrite `manifest.json`'s provenance atomically (temp file, then rename)."""
+    """Rewrite `manifest.json`'s provenance in place, atomically and durably
+    (`model.files.replace_durably`)."""
     path = Path(store_path) / "manifest.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     provenance = dict(data.get("provenance", {}))
@@ -753,9 +755,7 @@ def _record_index_in_manifest(store_path: str | Path, result: VariantIndexResult
     # In-place, so the release keeps whatever it declared -- written in the
     # vocabulary this build writes, never the retired `full` (#298).
     normalise_coverage(data)
-    temporary = path.with_name(f"{path.name}.variant-index.tmp")
-    temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    replace_durably(path, json.dumps(data, indent=2) + "\n")
 
 
 def _suspend_consolidated_metadata(data_path: Path) -> list[tuple[str, str]]:

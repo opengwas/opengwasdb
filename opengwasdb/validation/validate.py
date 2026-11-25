@@ -8,7 +8,7 @@ through `_load_manifest`), and source fidelity, whose read is one function (#56)
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import closing
 from pathlib import Path
 from typing import NamedTuple
@@ -42,6 +42,7 @@ from opengwasdb.validation.rule import (
 from opengwasdb.validation.rules import analyses as analyses_rules
 from opengwasdb.validation.rules import associations as association_rules
 from opengwasdb.validation.rules import by_variant as by_variant_rules
+from opengwasdb.validation.rules import clumps as clump_rules
 from opengwasdb.validation.rules import completion as completion_rules
 from opengwasdb.validation.rules import csr as csr_rules
 from opengwasdb.validation.rules import encoding as encoding_rules
@@ -70,6 +71,7 @@ def validate_store(
     chain_file: str | Path | None = None,
     rules: Collection[str] | None = None,
     n_workers: int = 1,
+    ld_stores: Mapping[str, str | Path] | None = None,
 ) -> ValidationResult:
     """Validate a Store Release directory by running every Validation Rule that applies.
 
@@ -84,6 +86,9 @@ def validate_store(
     ``rules`` runs only the named rules and the rules they run after; a name no
     rule has is refused before anything is read.
 
+    ``ld_stores`` maps an Assigned Ancestry to the LD Store its Analyses were clumped
+    against; given, `clumps.reclump` re-clumps a seeded sample of them (ADR 0106).
+
     ``n_workers`` spreads the bands of each Dense grid's association scan across
     that many forked workers (issue #315); the report is the one a single process
     makes. Every other check, and an association sequence's scan, runs here.
@@ -93,7 +98,8 @@ def validate_store(
     if n_workers < 1:
         raise ValueError(f"n_workers must be at least 1, got {n_workers}")
     options = ValidationOptions(
-        source, fidelity_samples, fidelity_seed, source_assembly, chain_file, n_workers
+        source, fidelity_samples, fidelity_seed, source_assembly, chain_file, n_workers,
+        ld_stores,
     )
     errors: list[str] = []
     store = _load_manifest(Path(path), errors)
@@ -212,6 +218,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *sample_size_rules.RULES,
     *top_hit_rules.STRUCTURE_RULES,
     *top_hit_rules.VALUE_RULES,
+    *clump_rules.RULES,
     by_variant_rules.SAMPLE,
     *completion_rules.METADATA_RULES,
     *rho_rules.RULES,

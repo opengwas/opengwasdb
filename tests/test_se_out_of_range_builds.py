@@ -253,14 +253,14 @@ def test_the_hybrid_builder_stores_it_as_missing_in_both_components(tmp_path: Pa
     assert over == {"trait_a": [True, False], "trait_b": [False]}, "fixture: where each sits"
     alleles = {hb.HG19_POS_1: ("A", "G"), hb.HG19_POS_2: ("C", "T"), hb.HG19_POS_3: ("G", "A")}
     vcfs = {
-        trait: hb._make_vcf(tmp_path, trait, [
+        trait: hb.make_vcf(tmp_path, trait, [
             f"1\t{pos}\t.\t{alleles[pos][0]}\t{alleles[pos][1]}\t.\tPASS\t.\tES:SE:AF\t"
             f"{2.0 * se}:{se}:0.3\n"
             for pos, se in per_pos.items()
         ])
         for trait, per_pos in ses.items()
     }
-    manifest = hb._make_manifest(tmp_path, [(t, vcf, t[-1].upper()) for t, vcf in vcfs.items()])
+    manifest = hb.make_manifest(tmp_path, [(t, vcf, t[-1].upper()) for t, vcf in vcfs.items()])
     store = tmp_path / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest, store, reference_panel=hb._panel(tmp_path), store_id="s", release_id="r",

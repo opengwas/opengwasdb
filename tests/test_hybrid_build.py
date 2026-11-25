@@ -80,13 +80,13 @@ def _vcf_header(study_type: str = "Continuous") -> str:
     )
 
 
-def _make_vcf(tmp_path: Path, name: str, rows: list[str], study_type: str = "Continuous") -> Path:
+def make_vcf(tmp_path: Path, name: str, rows: list[str], study_type: str = "Continuous") -> Path:
     path = tmp_path / f"{name}.vcf"
     path.write_text(_vcf_header(study_type) + "".join(rows), encoding="utf-8")
     return path
 
 
-def _make_manifest(
+def make_manifest(
     tmp_path: Path,
     entries: list[tuple[str, Path, str]],
     scales: dict[str, str] | None = None,
@@ -126,7 +126,7 @@ def _hybrid_store_seed(
     tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
 ) -> Path:
     seed_path = tmp_path_factory.mktemp(f"hybrid-store-{request.param}")
-    vcf1 = _make_vcf(
+    vcf1 = make_vcf(
         seed_path,
         "trait_a",
         [
@@ -135,7 +135,7 @@ def _hybrid_store_seed(
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # z  3.0 dense
         ],
     )
-    vcf2 = _make_vcf(
+    vcf2 = make_vcf(
         seed_path,
         "trait_b",
         [
@@ -143,7 +143,7 @@ def _hybrid_store_seed(
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",  # z   4.0 dense
         ],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         seed_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
     )
     store_path = seed_path / f"store_{request.param}.opengwasdb"
@@ -182,10 +182,10 @@ def test_hybrid_build_refuses_a_coverage_it_cannot_hold(hybrid_store, tmp_path):
 
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n"]
     )
-    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    manifest = make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
     out = tmp_path / "refused.opengwasdb"
 
     with pytest.raises(ValueError, match="cannot carry association_coverage=signals_only"):
@@ -218,13 +218,13 @@ def test_stored_effect_scale_comes_from_manifest_not_header(tmp_path):
     """The ieu-a-7 fix (issue #17), hybrid path: a VCF header says
     ``StudyType=Continuous`` but the manifest declares ``log_or`` -- the
     built store must record the manifest's value."""
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path,
         "trait_a",
         [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
         study_type="Continuous",
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path, [("trait_a", vcf, "Trait A")], scales={"trait_a": "log_or"}
     )
     store_path = tmp_path / "store.opengwasdb"
@@ -243,7 +243,7 @@ def test_missing_required_manifest_field_fails_the_build_loudly(tmp_path):
     clear error before any I/O, not fall back to VCF-header inference or a
     silent default (issue #17)."""
     rows = [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
-    vcf = _make_vcf(tmp_path, "trait_a", rows)
+    vcf = make_vcf(tmp_path, "trait_a", rows)
     manifest_path = tmp_path / "manifest.tsv"
     manifest_path.write_text(
         "trait_id\tfile_path\ttrait_name\tn\n"
@@ -263,7 +263,7 @@ def test_continuous_trait_rescaled_by_manifest_original_sd(tmp_path):
     manifest-supplied original_sd != 1 has its se divided by that SD, for
     both the on-panel (Dense Component) and off-panel (overflow) associations
     of the same study."""
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -271,7 +271,7 @@ def test_continuous_trait_rescaled_by_manifest_original_sd(tmp_path):
             f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.4\n",  # off-panel, se=0.4
         ],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path,
         [("trait_a", vcf, "Trait A")],
         sd_methods={"trait_a": "source_provided"},
@@ -292,7 +292,7 @@ def test_continuous_trait_rescaled_by_manifest_original_sd(tmp_path):
 def test_binary_trait_never_rescaled(tmp_path):
     """issue #18 AC2, hybrid path: original_sd_method=binary_trait is never
     rescaled, for either the on-panel or off-panel associations of the study."""
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path,
         "trait_b",
         [
@@ -300,7 +300,7 @@ def test_binary_trait_never_rescaled(tmp_path):
             f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.4\n",  # off-panel, se=0.4
         ],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path,
         [("trait_b", vcf, "Trait B")],
         scales={"trait_b": "log_or"},
@@ -322,8 +322,8 @@ def test_original_sd_method_unavailable_fails_the_build_loudly(tmp_path):
     """issue #18 AC3, hybrid path: original_sd_method=unavailable fails the
     build rather than assuming sd=1."""
     rows = [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
-    vcf = _make_vcf(tmp_path, "trait_a", rows)
-    manifest = _make_manifest(
+    vcf = make_vcf(tmp_path, "trait_a", rows)
+    manifest = make_manifest(
         tmp_path, [("trait_a", vcf, "Trait A")], sd_methods={"trait_a": "unavailable"}
     )
 
@@ -599,7 +599,7 @@ def test_gwas_ssf_capability_builds_a_hybrid_store_alongside_gwas_vcf(tmp_path):
             },
         ],
     )
-    vcf_b = _make_vcf(
+    vcf_b = make_vcf(
         tmp_path,
         "trait_b",
         [
@@ -789,7 +789,7 @@ def test_a_single_pass_build_leaves_no_variant_for_a_rejected_row(tmp_path):
 def _manifest_with_source_assembly(
     tmp_path: Path, entries: list[tuple[str, Path, str, str]]
 ) -> Path:
-    """Like `_make_manifest`, plus a `source_assembly` column per entry."""
+    """Like `make_manifest`, plus a `source_assembly` column per entry."""
     manifest = tmp_path / "manifest.tsv"
     lines = [
         "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
@@ -813,7 +813,7 @@ def test_hg38_source_assembly_is_not_lifted_in_hybrid_build(tmp_path):
     1,000,000. This is the exact bug the real GWAS-Catalog-SSF reproduction
     in issue #85 found: an already-hg38 harmonised source silently re-lifted.
     """
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path, "trait_ssf",
         [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],  # z=5.0, flip->-5.0
     )
@@ -841,11 +841,11 @@ def test_mixed_hg19_and_hg38_manifest_builds_hybrid_store(tmp_path):
     explicitly-hg38 row lifts only the hg19 row -- the scenario the bug
     report specifically named (a GWAS-VCF row alongside a harmonised
     GWAS-SSF row in one build)."""
-    vcf_hg19 = _make_vcf(
+    vcf_hg19 = make_vcf(
         tmp_path, "trait_vcf",
         [f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n"],  # lifted -> 1564620
     )
-    vcf_hg38 = _make_vcf(
+    vcf_hg38 = make_vcf(
         tmp_path, "trait_ssf",
         [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],  # not lifted; stays 1000000
     )
@@ -939,17 +939,17 @@ def test_two_assemblies_colliding_on_one_hg38_alid_record_no_source_origin(tmp_p
     # collision -- NOT the cross-assembly ambiguous-tuple case _lift_manifest_
     # variants drops outright, which is tested in the dense suite.
     assert HG19_POS_2 != 1_064_620
-    vcf_hg19 = _make_vcf(
+    vcf_hg19 = make_vcf(
         tmp_path, "trait_vcf",
         [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
     )
-    vcf_hg38 = _make_vcf(
+    vcf_hg38 = make_vcf(
         tmp_path, "trait_ssf",
         ["1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"],
     )
     # trait_clean (hg19) lifts to a *different* ALID (HG38_ALID_3), so the
     # build also records a positive provenance row to compare the None against.
-    vcf_clean = _make_vcf(
+    vcf_clean = make_vcf(
         tmp_path, "trait_clean",
         [f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n"],
     )
@@ -1016,7 +1016,7 @@ def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_p
     stamped either component's files from its own answer alone would silently
     downgrade this Analysis to ``absent``.
     """
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path, "trait_a",
         [
             # On-panel (dense) association, source reports no frequency.
@@ -1025,7 +1025,7 @@ def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_p
             f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.2\n",
         ],
     )
-    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    manifest = make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
     store_path = tmp_path / "store.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest, store_path, reference_panel=_panel(tmp_path),
@@ -1058,7 +1058,7 @@ def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_p
 
 def test_cli_default_source_assembly_applies_to_hybrid_build(tmp_path):
     """Issue #174: source_assembly CLI default applies to rows that omit the column."""
-    vcf = _make_vcf(
+    vcf = make_vcf(
         tmp_path, "trait_hybrid_ass",
         [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
     )
@@ -1082,11 +1082,11 @@ def test_cli_default_source_assembly_applies_to_hybrid_build(tmp_path):
 
 def test_cli_default_source_assembly_per_row_override_hybrid(tmp_path):
     """Issue #174: per-row source_assembly overrides CLI default option in Hybrid builds."""
-    vcf_hg38 = _make_vcf(
+    vcf_hg38 = make_vcf(
         tmp_path, "hybrid_row_38",
         [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
     )
-    vcf_hg19 = _make_vcf(
+    vcf_hg19 = make_vcf(
         tmp_path, "hybrid_row_19",
         [f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n"],
     )
@@ -1148,7 +1148,7 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
 
 def _hybrid_manifest(tmp_path: Path) -> Path:
     """The same two-trait, three-variant manifest the `hybrid_store` fixture uses."""
-    vcf1 = _make_vcf(
+    vcf1 = make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -1157,7 +1157,7 @@ def _hybrid_manifest(tmp_path: Path) -> Path:
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # dense
         ],
     )
-    vcf2 = _make_vcf(
+    vcf2 = make_vcf(
         tmp_path,
         "trait_b",
         [
@@ -1165,7 +1165,7 @@ def _hybrid_manifest(tmp_path: Path) -> Path:
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",  # dense
         ],
     )
-    return _make_manifest(
+    return make_manifest(
         tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
     )
 
@@ -1270,7 +1270,7 @@ def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
     forced hash collision between them is invisible to the per-column encoder."""
     from opengwasdb.variants.reference import write_variant_reference
 
-    vcf_a = _make_vcf(
+    vcf_a = make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -1278,7 +1278,7 @@ def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
             "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",  # off-ref, A only
         ],
     )
-    vcf_b = _make_vcf(
+    vcf_b = make_vcf(
         tmp_path,
         "trait_b",
         [
@@ -1286,7 +1286,7 @@ def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
             "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",  # off-ref, B only
         ],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path, [("trait_a", vcf_a, "Trait A"), ("trait_b", vcf_b, "Trait B")]
     )
     reference = tmp_path / "panel-only.variant-ref.tsv.gz"
@@ -1484,7 +1484,7 @@ class TestVariantReference:
         The off-reference variant sorts *between* two known off-panel variants,
         so every later index moves -- the shift that exposes the stale index.
         """
-        vcf_a = _make_vcf(
+        vcf_a = make_vcf(
             tmp_path,
             "trait_a",
             [
@@ -1495,7 +1495,7 @@ class TestVariantReference:
         )
         # hg38, position 500000: sorts between HG38_ALID_1 (100000) and
         # HG38_ALID_2 (1064620), so it inserts at shared index 1.
-        vcf_d = _make_vcf(
+        vcf_d = make_vcf(
             tmp_path,
             "trait_d",
             ["1\t500000\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t0.8:0.4:0.25\n"],
@@ -1611,7 +1611,7 @@ class TestVariantReference:
         not crash the spill merge while its sibling lifts successfully."""
         from opengwasdb.variants.reference import write_variant_reference
 
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path, "trait_mixed",
             [
                 f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",  # on-panel
@@ -1619,7 +1619,7 @@ class TestVariantReference:
                 "1\t200000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n",           # off-ref, fails
             ],
         )
-        manifest = _make_manifest(tmp_path, [("trait_mixed", vcf, "Trait mixed")])
+        manifest = make_manifest(tmp_path, [("trait_mixed", vcf, "Trait mixed")])
         reference = tmp_path / "panel-only.variant-ref.tsv.gz"
         write_variant_reference(
             reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1},
@@ -1646,7 +1646,7 @@ class TestVariantReference:
         import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
         from opengwasdb.variants.reference import write_variant_reference
 
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "trait_collide",
             [
@@ -1655,7 +1655,7 @@ class TestVariantReference:
                 "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",  # off-ref indel
             ],
         )
-        manifest = _make_manifest(tmp_path, [("trait_collide", vcf, "Trait collide")])
+        manifest = make_manifest(tmp_path, [("trait_collide", vcf, "Trait collide")])
         reference = tmp_path / "panel-only.variant-ref.tsv.gz"
         write_variant_reference(
             reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1},
@@ -1722,7 +1722,7 @@ class TestVariantReference:
         import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
         from opengwasdb.variants.reference import write_variant_reference
 
-        vcf_a = _make_vcf(
+        vcf_a = make_vcf(
             tmp_path,
             "trait_a",
             [
@@ -1732,7 +1732,7 @@ class TestVariantReference:
                 "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",
             ],
         )
-        vcf_b = _make_vcf(
+        vcf_b = make_vcf(
             tmp_path,
             "trait_b",
             [
@@ -1778,10 +1778,10 @@ class TestVariantReference:
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
         )
-        vcf_hg19 = _make_vcf(
+        vcf_hg19 = make_vcf(
             tmp_path, "two_asm_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
-        vcf_hg38 = _make_vcf(
+        vcf_hg38 = make_vcf(
             tmp_path, "two_asm_hg38", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"]
         )
         manifest = _manifest_with_source_assembly(
@@ -1814,7 +1814,7 @@ class TestVariantReference:
         # The reference names ALID_1 and ALID_2 directly as hg38 source keys, so
         # Pass 1 knows ALID_2; the panel keeps only ALID_1, which makes ALID_2 an
         # on-reference off-panel variant rather than an off-reference discovery.
-        vcf_ref = _make_vcf(
+        vcf_ref = make_vcf(
             tmp_path,
             "join_ref_hg38",
             [
@@ -1826,7 +1826,7 @@ class TestVariantReference:
             tmp_path, [("join_ref", vcf_ref, "Ref", "hg38")]
         )
         reference = _write_reference_artifact(tmp_path, ref_manifest)
-        vcf_join = _make_vcf(
+        vcf_join = make_vcf(
             tmp_path, "join_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
         manifest = _manifest_with_source_assembly(
@@ -1860,10 +1860,10 @@ class TestVariantReference:
         reference = _write_reference_artifact(
             tmp_path, _hybrid_manifest(tmp_path), panel_only=True
         )
-        vcf_hg19 = _make_vcf(
+        vcf_hg19 = make_vcf(
             tmp_path, "same_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
-        vcf_hg38 = _make_vcf(
+        vcf_hg38 = make_vcf(
             tmp_path, "same_hg38", ["1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"]
         )
         manifest = _manifest_with_source_assembly(
@@ -1899,7 +1899,7 @@ class TestVariantReference:
         )
         # In a single study, row 1 is 1:500000:A:G (ES 1.0 -> z -2.0) and
         # row 2 is 1:500000:G:A (ES 2.0 -> z -4.0).
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "trait_same",
             [
@@ -1944,7 +1944,7 @@ class TestVariantReference:
             "1\t827587\t.\tG\tGGGGCC\t.\tPASS\t.\tES:SE\t-0.00115727:0.0135908\n",
             "1\t827587\t.\tGGGGCC\tG\t.\tPASS\t.\tES:SE\t0.0226233:0.05058\n",
         ]
-        vcf = _make_vcf(tmp_path, "bmi_irn", rows[::-1] if deletion_first else rows)
+        vcf = make_vcf(tmp_path, "bmi_irn", rows[::-1] if deletion_first else rows)
         manifest = _manifest_with_source_assembly(
             tmp_path, [("bmi_irn", vcf, "BMI_IRN", "hg38")]
         )
@@ -1987,7 +1987,7 @@ def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
     across ``--n-workers``; a Hybrid Store Release (and its nested Dense
     Component) must be identical to the serial build's. A one-column chunk over
     two Analyses puts the overflow cell and the top hit in different bands."""
-    vcf_a = _make_vcf(
+    vcf_a = make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -1995,7 +1995,7 @@ def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
             f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # z  3.0
         ],
     )
-    vcf_b = _make_vcf(
+    vcf_b = make_vcf(
         tmp_path,
         "trait_b",
         [
@@ -2003,7 +2003,7 @@ def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
             f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t68.5:0.5:0.25\n",
         ],
     )
-    manifest = _make_manifest(
+    manifest = make_manifest(
         tmp_path, [("trait_a", vcf_a, "Trait A"), ("trait_b", vcf_b, "Trait B")]
     )
     serial = tmp_path / "serial.opengwasdb"
@@ -2186,7 +2186,7 @@ HG38_ALID_4 = "1:2000000:C:T"
 def _rsid_hybrid_manifest(tmp_path: Path, *, maf_threshold: str | None = None) -> Path:
     """Two hg38 sources naming rsids, disagreeing on one variant, leaving one
     blank, with two off-panel (Overflow) variants between them."""
-    first = _make_vcf(
+    first = make_vcf(
         tmp_path,
         "rsid_first",
         [
@@ -2195,7 +2195,7 @@ def _rsid_hybrid_manifest(tmp_path: Path, *, maf_threshold: str | None = None) -
             "1\t1564620\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",     # ALID_3 blank
         ],
     )
-    second = _make_vcf(
+    second = make_vcf(
         tmp_path,
         "rsid_second",
         [
@@ -2285,7 +2285,7 @@ class TestVariantReferenceRsids:
         off-reference variant's ALID is discovered from the associations the
         build stores). The variant is absent, never present under a wrong name,
         and every query both axes can answer alike is answered alike."""
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "unusable_off",
             [
@@ -2315,7 +2315,7 @@ class TestVariantReferenceRsids:
         there too -- the candidates are keyed with the same case-folded key
         the association routing keys with, so the rekey and the oracle see the
         keys the association uses."""
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "lower_on",
             ["1\t100000\trsLOWER\ta\tg\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
@@ -2341,7 +2341,7 @@ class TestVariantReferenceRsids:
         """The off-reference half of the same case-fold: the fold encodes an
         unknown key upper-cased (`routing_key`), so a lowercase source row
         becomes an Overflow variant whose name must be stored with it."""
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "lower_off",
             [
@@ -2381,12 +2381,12 @@ class TestVariantReferenceRsids:
         later hg38 row reaches the same ALID through the (blank-rsid) reference;
         the two-pass build writes the earlier name, so the single-pass build
         must too -- one combined routing, one rekey, one oracle."""
-        early = _make_vcf(
+        early = make_vcf(
             tmp_path,
             "early_hg19",
             ["1\t1000000\trsEARLY\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
         )
-        late = _make_vcf(
+        late = make_vcf(
             tmp_path,
             "late_hg38",
             ["1\t1064620\trsLATE\tC\tT\t.\tPASS\t.\tES:SE\t1.2:0.3\n"],
@@ -2440,7 +2440,7 @@ class TestVariantReferenceRsids:
         identity (issue #360), so a pair whose case differs is that identity
         too, and is dropped alike rather than refused."""
         (ref38, alt38), (ref19, alt19) = hg38_alleles, hg19_alleles
-        hg38 = _make_vcf(
+        hg38 = make_vcf(
             tmp_path,
             "hg38_named",
             [
@@ -2449,7 +2449,7 @@ class TestVariantReferenceRsids:
                 f"1\t1000000\trsHG38_LOCUS\t{ref38}\t{alt38}\t.\tPASS\t.\tES:SE\t1.0:0\n",
             ],
         )
-        hg19 = _make_vcf(
+        hg19 = make_vcf(
             tmp_path,
             "hg19_unnamed",
             # The same identity, lifted to a different locus and unnamed.
@@ -2486,10 +2486,10 @@ class TestVariantReferenceRsids:
         alike, rather than silently keep one (issue #255, round 4). Under
         `drop` the two-pass build stores both associations on the variant and
         names it nothing."""
-        first = _make_vcf(
+        first = make_vcf(
             tmp_path, "first", ["1\t1000000\trsUPPER\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
         )
-        second = _make_vcf(
+        second = make_vcf(
             tmp_path, "second", ["1\t1000000\trslower\tc\tt\t.\tPASS\t.\tES:SE\t0.9:0.3\n"]
         )
         manifest = _manifest_with_source_assembly(
@@ -2522,7 +2522,7 @@ class TestVariantReferenceRsids:
         counts on both; the two-pass build names them."""
         import logging
 
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "named",
             [
@@ -2634,7 +2634,7 @@ class TestVariantReferenceRsids:
 
         from opengwasdb.variants.reference import write_variant_reference
 
-        first = _make_vcf(
+        first = make_vcf(
             tmp_path, "named",
             ["1\t100000\trsSOURCE\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
         )
@@ -2661,7 +2661,7 @@ class TestVariantReferenceRsids:
     def test_sources_with_no_rsids_still_build(self, tmp_path):
         """The rule cannot fire falsely: a source that names no rsids builds a
         valid store whose table has none."""
-        vcf = _make_vcf(
+        vcf = make_vcf(
             tmp_path,
             "unnamed",
             ["1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
@@ -2733,7 +2733,7 @@ def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(
     from residual_fixtures import write_gwas_vcf_with_eaf
 
     vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
-    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    manifest = make_manifest(tmp_path, [("trait", vcf, "Trait")])
     panel = tmp_path / "panel.txt"
     panel.write_text("".join(f"{alid}\n" for alid in panel_alids), encoding="utf-8")
     store_path = tmp_path / f"store-{case}.opengwasdb"
@@ -2768,7 +2768,7 @@ def test_single_pass_build_from_an_extracted_artifact_reorients_as_two_pass(tmp_
 
     chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
     vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
-    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    manifest = make_manifest(tmp_path, [("trait", vcf, "Trait")])
     artifact = tmp_path / "strand.variant-ref.tsv.gz"
     extract_from_manifest(manifest, artifact, chain_file=chain)
     store_path = tmp_path / "store.opengwasdb"
@@ -2796,7 +2796,7 @@ def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(t
     from opengwasdb.layouts.hybrid.key_table import UnorientedOffReferenceLiftError
 
     vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
-    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    manifest = make_manifest(tmp_path, [("trait", vcf, "Trait")])
     reference = tmp_path / "axis.alid.txt"
     reference.write_text("3:1000:A:G\n", encoding="utf-8")
     store_path = tmp_path / "store.opengwasdb"

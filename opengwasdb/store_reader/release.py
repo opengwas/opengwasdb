@@ -36,6 +36,7 @@ from opengwasdb.store_reader.format import carries_variant_offsets, check_format
 from opengwasdb.store_reader.hybrid import DENSE_TO_SHARED_FILENAME, shared_axis_root
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.panel_axis import AnyVariantAxis, PanelVariantAxis
+from opengwasdb.store_reader.top_hits import TopHitTiers
 from opengwasdb.store_reader.variant_axis import (
     LegacyTableOpener,
     LegacyVariantTable,
@@ -158,6 +159,12 @@ class StoreRelease(ReleasePaths):
     def arrays(self) -> Any:
         """Open this release's ``data.zarr`` group read-only (`release_arrays`)."""
         return release_arrays(self.path)
+
+    def top_hit_tiers(self, root: Any = None) -> TopHitTiers:
+        """This release's Top-Hit tiers, read from `root` (its `data.zarr`, opened here if
+        None), knowing which tier's Clumps its manifest declares (spec §2, §18.1)."""
+        return TopHitTiers(self.arrays() if root is None else root,
+                           clumps=self.manifest.clumps)
 
     def variant_axis(self, *, aliases: bool) -> AnyVariantAxis:
         """This release's Variant Axis; `aliases` also consults `variant_aliases`. For a
