@@ -1022,6 +1022,20 @@ Consequences.
   (`legacy_quality`).
 - The masking writes rewrite the shards they touch; a release with no SE above the bound
   writes no array.
+- **OGS-00015, read only, into scratch (25 Nov 2026):**
+  - The read found 0 SEs above 65,504. It found 2,314,706 rows with no observed cell, equal
+    to `n_variants_new`.
+  - The proof matched on all 140 questions, 9 ALID probes, 22 range probes, 16 subset
+    questions and 3 misses.
+  - The whole run took 41 min at a peak RSS of 25.9 GB, and wrote 0.87 GB; the remaining
+    7.5 GB was reflinked.
+  - **Validation refused it, so nothing was published.** `side_tables.se_exceptions_rounded`
+    found that 3,046,179 of its 3,074,915 SE exceptions (99.07%) are float16 values: the
+    plane was rounded before its plan was chosen (#355). That rule warns before 0.2.2 and
+    fails from it.
+  - All seven priority Stores hold such exceptions (99.07% to 100%). The rounding cannot be
+    undone, and it is not in the owner's 25 Nov list of recorded deviations, so whether to
+    record it is the owner's decision (#492).
 
 ## Alternatives considered
 
