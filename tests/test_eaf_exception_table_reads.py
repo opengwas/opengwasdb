@@ -33,6 +33,7 @@ from eaf_tables import (
     rewrite_primary_table,
 )
 from pytest import MonkeyPatch, TempPathFactory, approx, fixture, mark, param
+from reader_constants import set_reader_constant
 from store_reads import _SELECTIONS, largest_read
 from test_indexed_subsets import (
     _build,
@@ -93,7 +94,7 @@ def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
     for the run that judges it: a table in a single chunk cannot tell a rule's read
     from zarr's own granularity, and this file is about which reads a rule makes.
     """
-    monkeypatch.setattr(store_layout, "EXCEPTION_TABLE_CHUNK", 64)
+    set_reader_constant(monkeypatch, store_layout, "EXCEPTION_TABLE_CHUNK", 64)
     monkeypatch.setattr(codec_module, "EXACT_TABLE_CHUNK", 64)
     store = build_table_store(tmp_path / "store.opengwasdb", SMALL_VARIANTS, "eaf-chunked")
     listing = tmp_path / "hm3.alid.txt"

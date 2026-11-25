@@ -30,6 +30,7 @@ import pytest
 import zarr
 from dense_sources import build_dense_from_records
 from legacy_fixtures import relayout_as_0_1_0
+from reader_constants import set_reader_constant
 from typer.testing import CliRunner, Result
 
 from opengwasdb.cli.main import app
@@ -812,8 +813,8 @@ def test_index_plane_splits_into_multiple_shards(
     tmp_path: Path, big_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # One inner chunk per shard, so the 65,600-variant row needs two shards.
-    monkeypatch.setattr(
-        store_layout, "INDEXED_SUBSET_SHARD", store_layout.INDEXED_SUBSET_CHUNK
+    set_reader_constant(
+        monkeypatch, store_layout, "INDEXED_SUBSET_SHARD", store_layout.INDEXED_SUBSET_CHUNK
     )
     store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
     _build(store, "big", _big_variant_list(tmp_path))
@@ -1405,8 +1406,8 @@ def test_validation_refuses_corruption_outside_a_small_sample(
     rows, or Analyses -- could pass while the last variant carries a wrong
     statistic; the exhaustive publication gate must refuse it.
     """
-    monkeypatch.setattr(
-        store_layout, "INDEXED_SUBSET_SHARD", store_layout.INDEXED_SUBSET_CHUNK
+    set_reader_constant(
+        monkeypatch, store_layout, "INDEXED_SUBSET_SHARD", store_layout.INDEXED_SUBSET_CHUNK
     )
     store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
     _build(store, "big", _big_variant_list(tmp_path))

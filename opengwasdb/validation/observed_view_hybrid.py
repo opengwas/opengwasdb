@@ -343,7 +343,8 @@ def _dropped_alids(source_path: Path, shared: _AxisMap) -> list[str]:
     rows = np.flatnonzero(shared.source_to_target < 0)[:_DROPPED_LISTED]
     if not rows.size:
         return []
-    return [str(alid) for alid in _AxisRows(source_path, len(shared.source_to_target)).alids(rows)]
+    with _AxisRows(source_path, len(shared.source_to_target)) as axis:
+        return [str(alid) for alid in axis.alids(rows)]
 
 
 # --- the comparison ---------------------------------------------------------

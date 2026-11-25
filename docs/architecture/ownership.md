@@ -27,9 +27,9 @@ none is as it should be.
 
 | Knowledge | Spec | Owner | Copies still to remove |
 |---|---|---|---|
-| ALID, A1 and the sign of r | ld-store §2, ADR 0089 | `opengwasdb.variants.sorted_spelling` (`sorted_identity`, `SortedIdentity`, `sorted_alid_locus`), the sorted spelling LD Stores use until #462 moves them to the engine's reference-first one; it calls the Store Reader's `opengwasdb.store_reader.identity` for upper-casing and the A, C, G, T check (#456; moved there by #464, which `opengwasdb.variants.normalise` builds on) | |
+| ALID, A1 and the sign of r | ld-store §2, ADR 0089 | `opengwasdb.variants.sorted_spelling` (`sorted_identity`, `SortedIdentity`, `sorted_alid_locus`), the sorted spelling LD Stores use until #462 moves them to the engine's reference-first one; it calls the Store Reader's `ogquery.identity` (`opengwasdb.store_reader.identity` re-exports it) for upper-casing and the A, C, G, T check (#456; moved there by #464, which `opengwasdb.variants.normalise` builds on) | |
 | A GWAS Store's ALID looked up in a sorted LD Store: its sorted spelling, whether that swaps A1 (so r changes sign), and the reversed indel that shares it | ld-store §2; store-format §18.1; ADR 0106 §6 | `opengwasdb.variants.sorted_spelling.sorted_lookup` (`SortedLookup`), which the Clumps step (`opengwasdb.clumps`) and its validation rules call; the spelling itself is `normalise.sorted_alid_alleles` | |
-| The engine's variant order, and the autosomes | ld-store §2; build-inputs §2 | `opengwasdb.variants.normalise.chromosome_rank` and `opengwasdb.store_reader.identity.AUTOSOMES` (#464), `1`–`22` in that order, which the Variant Set, joining, results and validation call; inside an LD Store the global row is that order, which `clump` orders ties by | |
+| The engine's variant order, and the autosomes | ld-store §2; build-inputs §2 | `opengwasdb.variants.normalise.chromosome_rank` and `ogquery.identity.AUTOSOMES` (#464; `opengwasdb.store_reader.identity` re-exports it), `1`–`22` in that order, which the Variant Set, joining, results and validation call; inside an LD Store the global row is that order, which `clump` orders ties by | |
 
 ## Encoding
 
@@ -120,7 +120,7 @@ below may import it.
 | The import's complete-radius target (8 Mb, above the Near Band and at most `FAR_BP`) and displaced-segment cap (10,000), as defaults | build-inputs (`opengwasdb ld import`); ADR 0101 | `opengwasdb.ld.build.importing.policy` (`FAR_TARGET_BP`, `DISPLACED_CAP`), which the importer and the CLI call, neither holding a literal (owner, opengwas/ogld#99) | |
 | Chromosome import planning, checkpoint identity, source provenance and restart/deletion order | ADR 0101; build-inputs §12 | `opengwasdb.ld.build.importing.run`, calling StoreWriter for all store assembly | |
 | Public Pan-UKB HTTPS inventory, download byte counts and SHA-256 receipts | ADR 0101; build-inputs §12 | `opengwasdb.ld.build.importing.download`; hashing calls `opengwasdb.ld.build.record.sha256` | |
-| Import liftover, allele-check loss classes and complete target radius | ADR 0101; build-inputs §12 | `opengwasdb.ld.build.importing.lift`, calling `opengwasdb.variants.sorted_spelling` for ALIDs and A1, and `opengwasdb.store_reader.identity` for the autosomes | |
+| Import liftover, allele-check loss classes and complete target radius | ADR 0101; build-inputs §12 | `opengwasdb.ld.build.importing.lift`, calling `opengwasdb.variants.sorted_spelling` for ALIDs and A1, and `ogquery.identity` for the autosomes | |
 | Residual covariance normalisation and invalid-diagonal loss counts | ADR 0101; build-inputs §12 | `opengwasdb.ld.build.importing.matrix` | |
 | Native Hail BlockMatrix part decoding | ADR 0101; build-inputs §12 | `opengwasdb.ld.build.importing.parts` | |
 | Sample order, the Variant Set's filters, the PC Check, tile scheduling and thread policy | build-inputs | `opengwasdb.ld.build` (ogld#5); threading policy is `bounded` | |

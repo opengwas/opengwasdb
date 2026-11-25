@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components, write_variant_offsets
+from reader_constants import set_reader_constant
 from rsid_releases import RELEASE_NAMES
 from variant_info_answers import answers
 
@@ -102,7 +103,8 @@ def test_the_codec_round_trips_every_value_whole(tmp_path: Path):
 def test_the_scan_finds_the_first_row_of_each_value_however_long(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(codec, "WINDOW_ROWS", 2)  # several windows, a value in a later one
+    # several windows, a value in a later one
+    set_reader_constant(monkeypatch, codec, "WINDOW_ROWS", 2)
     long = "2:9:" + "T" * 120 + ":G"
     alids = [f"1:{i}:A:G" for i in range(1, 10)]
     sources = ["0:1:A:G", None, "0:2:A:G", long, "1:5:A:G", "0:2:A:G", None, "0:4:A:GG", long]

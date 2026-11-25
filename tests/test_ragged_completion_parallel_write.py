@@ -27,6 +27,7 @@ import zarr
 from completion_releases import CompletionInputs, assert_same_release
 from fork_order import CompletionOrder, CrashAfterTwo
 from pool_budget import pin_pool_units
+from reader_constants import set_reader_constant
 from test_ragged_residual_completion import (
     _FREQS,
     _TRAIT_BP,
@@ -231,8 +232,8 @@ SHARD_CELLS = 500
 def _narrow_shards(patch: pytest.MonkeyPatch) -> None:
     """500-cell shards, each its own region: a region is otherwise at least
     `DEFAULT_FLUSH_REGION_CELLS`, which holds the whole fixture."""
-    patch.setattr(store_layout, "RAGGED_SEQUENCE_SHARD_ELEMENTS", SHARD_CELLS)
-    patch.setattr(store_layout, "ASSOCIATION_SEQUENCE_CHUNK", 100)
+    set_reader_constant(patch, store_layout, "RAGGED_SEQUENCE_SHARD_ELEMENTS", SHARD_CELLS)
+    set_reader_constant(patch, store_layout, "ASSOCIATION_SEQUENCE_CHUNK", 100)
     patch.setattr(zarr_csr, "sequence_region_step", lambda _total, _cells: SHARD_CELLS)
 
 

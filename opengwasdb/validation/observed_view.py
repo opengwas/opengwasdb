@@ -439,14 +439,28 @@ class _AxisRows:
     def __init__(self, path: Path, n_rows: int) -> None:
         self._path = path
         store = open_store(path)
+        # The axis stays open as long as this object reads its index: closing it
+        # releases the index's memory maps, and a read after that raises (ogquery 0.2).
+        self._axis: Any = None
         if store.shared_root is not None:
             # A 0.3.0 Dense Component: the shared index, in its panel rows (#472).
-            with closing(store.variant_axis(aliases=False)) as axis:
-                self._index: AlidIndex = axis.alid_index
+            self._axis = store.variant_axis(aliases=False)
+            self._index: AlidIndex = self._axis.alid_index
         else:
             self._index = open_alid_index(path, store.manifest.format_version)
         self.unindexed = self._index.unindexed_rows(n_rows)
         self._scanned: dict[int, str] | None = None
+
+    def close(self) -> None:
+        """Release the axis the index reads through, where it holds one."""
+        if self._axis is not None:
+            self._axis.close()
+
+    def __enter__(self) -> _AxisRows:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def alids(self, rows: np.ndarray) -> np.ndarray:
         """Each row's ALID: from the index, or from the table where the index has none."""
@@ -489,22 +503,23 @@ class _AxisRows:
 
 def _map_axis(source_path: Path, target_path: Path, n_source: int, n_target: int) -> _AxisMap:
     """Map every source row to its row in the completed axis, exactly (`_AxisRows`)."""
-    source, target = _AxisRows(source_path, n_source), _AxisRows(target_path, n_target)
     mapped = np.full(n_source, -1, dtype="int64")
     chromosome = np.zeros(n_source, dtype=f"S{_CHROMOSOME_WIDTH}")
-    for start in range(0, n_source, _MAP_WINDOW):
-        rows = np.arange(start, min(start + _MAP_WINDOW, n_source), dtype=np.int64)
-        alids = source.alids(rows)
-        mapped[rows] = target.rows_of(alids.tolist())
-        chromosome[rows] = [_chromosome_bytes(alid.partition(":")[0]) for alid in alids]
+    with _AxisRows(source_path, n_source) as source, _AxisRows(target_path, n_target) as target:
+        for start in range(0, n_source, _MAP_WINDOW):
+            rows = np.arange(start, min(start + _MAP_WINDOW, n_source), dtype=np.int64)
+            alids = source.alids(rows)
+            mapped[rows] = target.rows_of(alids.tolist())
+            chromosome[rows] = [_chromosome_bytes(alid.partition(":")[0]) for alid in alids]
+        source_unindexed, target_unindexed = int(source.unindexed.size), int(target.unindexed.size)
     found = mapped >= 0
     return _AxisMap(
         source_to_target=mapped,
         chromosome=chromosome,
         unmapped=int((~found).sum()),
         order_preserved=bool(np.all(np.diff(mapped[found]) > 0)),
-        source_unindexed=int(source.unindexed.size),
-        target_unindexed=int(target.unindexed.size),
+        source_unindexed=source_unindexed,
+        target_unindexed=target_unindexed,
     )
 
 

@@ -21,6 +21,7 @@ from cli_output import normalize_cli_output
 from dense_sources import build_dense_fixture
 from format_0_2_3 import component_as_0_2_3
 from presence_fixtures import float_plane_z, plant_payload_nan
+from reader_constants import set_reader_constant
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -596,8 +597,8 @@ def _small_chunked_pair(
     import opengwasdb.layouts.dense.complete as complete_module
     import opengwasdb.store_reader.layout as layout_module
 
-    monkeypatch.setattr(layout_module, "DENSE_SHARD_SHAPE", (4, 2))
-    monkeypatch.setattr(layout_module, "DENSE_CHUNK_SHAPE", (2, 1))
+    set_reader_constant(monkeypatch, layout_module, "DENSE_SHARD_SHAPE", (4, 2))
+    set_reader_constant(monkeypatch, layout_module, "DENSE_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
     rows = [

@@ -27,6 +27,7 @@ import zarr
 from dense_sources import build_dense_from_records
 from eaf_tables import table_records
 from pool_budget import FIXTURE_UNIT_BYTES
+from reader_constants import set_reader_constant
 from worker_passes import (
     COMPLETED,
     MIN_BANDS,
@@ -319,7 +320,7 @@ def test_forked_workers_read_bands_of_several_shards_without_hanging(
     spans as many shards as the parent's did. With the pipeline's own thread pool
     (`codec_pipeline.max_workers` above one) that read waits on threads the fork did
     not copy, and never returns; at the seam's one worker it finishes."""
-    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", PROBE_SHARD)
+    set_reader_constant(monkeypatch, store_layout, "DENSE_SHARD_SHAPE", PROBE_SHARD)
     store = tmp_path / "store.opengwasdb"
     build_dense_from_records(
         table_records(4_000), store, store_id="probe", release_id="probe-v1",

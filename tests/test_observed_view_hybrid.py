@@ -52,6 +52,7 @@ from presence_fixtures import (
     float_plane_z,
     plant_payload_nan,
 )
+from reader_constants import set_reader_constant
 from residual_fixtures import write_gwas_vcf_with_eaf
 from stored_rows import stored_rows
 from test_check_observed_view import _assert_refused, _run, _verdict
@@ -168,8 +169,8 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     # The geometry of `test_check_observed_view._small_chunked_pair`. The Stores carry it
     # once written, so it is patched only while they are built.
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
-        patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
+        set_reader_constant(patch, store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+        set_reader_constant(patch, store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "DEFAULT_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "_BAND_ROWS", 6)
         observed = _build_observed(root, chunk_shape=(2, 1))

@@ -16,17 +16,16 @@ properties make that true, and a third makes the copy's deletion hold:
 that is ported to ogquery and released. They are named in `STAYS_IN_TREE` so the
 exception is one line to remove.
 
-Phase 1 of #475 pins ogquery 0.1.0, which lacks the Clumps reads and the narrowed
-proof range `main` gained since, so the shims cannot yet be written. Both tests are
-`xfail(strict=True)`: they must fail now, and the commit that writes the shims
-turns them on by deleting the marker.
 """
 
 from __future__ import annotations
+import __future__
 
 import ast
 import importlib
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -35,7 +34,6 @@ PACKAGE = Path(__file__).resolve().parent.parent / "opengwasdb" / "store_reader"
 #: ogquery and released; the owner's ruling of 25 Nov 2026.
 STAYS_IN_TREE = frozenset({"facade", "rho"})
 
-phase_2 = pytest.mark.xfail(strict=True, reason="phase 2: ogquery 0.2.0")
 
 
 def _modules() -> list[str]:
@@ -52,7 +50,14 @@ def _exported(module: object) -> dict[str, object]:
     names = getattr(module, "__all__", None)
     if names is None:
         names = [name for name in vars(module) if not name.startswith("_")]
-    return {name: getattr(module, name) for name in names}
+    values = {name: getattr(module, name) for name in names}
+    # A submodule is its own shim here, and `annotations`/`Any` are the module's own imports.
+    return {
+        name: value
+        for name, value in values.items()
+        if not isinstance(value, types.ModuleType) and value is not Any
+        and not isinstance(value, __future__._Feature)
+    }
 
 
 def test_the_package_holds_modules() -> None:
@@ -60,19 +65,18 @@ def test_the_package_holds_modules() -> None:
     assert len(_modules()) > 30
 
 
-@phase_2
 @pytest.mark.parametrize("name", [m for m in _modules() if m not in STAYS_IN_TREE])
 def test_a_store_reader_module_re_exports_the_ogquery_module(name: str) -> None:
     shim = importlib.import_module(f"opengwasdb.store_reader.{name}".rstrip("."))
     reader = importlib.import_module(f"ogquery.{name}".rstrip("."))
     theirs = _exported(reader)
     ours = _exported(shim)
-    assert theirs, f"ogquery.{name} exports nothing: the comparison would be empty"
+    # A package that only holds submodules has nothing to compare; a module must.
+    assert theirs or hasattr(reader, "__path__"), f"ogquery.{name} exports nothing"
     assert sorted(set(theirs) - set(ours)) == [], "names the shim does not re-export"
     assert [n for n in theirs if ours[n] is not theirs[n]] == [], "names that are copies"
 
 
-@phase_2
 def test_no_store_reader_module_defines_a_function_or_class() -> None:
     defining = {}
     for path in sorted(PACKAGE.rglob("*.py")):
@@ -87,3 +91,29 @@ def test_no_store_reader_module_defines_a_function_or_class() -> None:
         if found:
             defining[str(path.relative_to(PACKAGE))] = found[:3]
     assert defining == {}
+
+
+def test_the_in_tree_remainder_reads_through_one_class_of_each() -> None:
+    """`facade.py` and `rho.py` stay in opengwasdb for now and import the Store Reader
+    through the shims: they must see ogquery's classes, not a second copy."""
+    import ogquery.manifest
+    import ogquery.release
+
+    from opengwasdb.store_reader import facade, rho
+
+    assert facade.StoreRelease is ogquery.release.StoreRelease
+    assert rho.DenseRhoReader.__module__ == "opengwasdb.store_reader.rho"
+    import opengwasdb.store_reader.manifest as shim_manifest
+
+    assert shim_manifest.StoreManifest is ogquery.manifest.StoreManifest
+
+
+def test_the_digests_default_to_query_store_and_nothing_else_knows_it() -> None:
+    from ogquery import digests as theirs
+
+    from opengwasdb.store import query_digests as ours
+
+    assert ours.release_digests is not theirs.release_digests
+    assert ours.differences is theirs.differences  # everything else is ogquery's own
+    assert ours.RANGE_ROWS_ASKED == theirs.RANGE_ROWS_ASKED
+    assert ours.adapter_name is theirs.adapter_name

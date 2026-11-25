@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 from format_0_2_0 import a_top_hit, as_0_2_0, plant_se, round_se_exceptions, sorted_indel
 from format_0_2_3 import as_0_2_3, write_variant_offsets
+from reader_constants import set_reader_constant
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -428,7 +429,7 @@ def test_a_plane_the_mask_cannot_rewrite_is_refused_by_the_cli_before_any_read(
 def test_the_range_question_is_bounded_by_variants_and_by_cells():
     """A large release's range PheWAS is cut to `RANGE_ROWS_ASKED` variants and to
     `RANGE_CELLS_ASKED` cells; a small one is asked over its whole span (#492)."""
-    from opengwasdb.store import query_digests
+    from ogquery import digests as query_digests  # the owner of the private `_range_last` (#475)
 
     records = [{"chromosome": "1", "position": p} for p in range(1, 30_001)]
     records.append({"chromosome": "2", "position": 25_000})
@@ -558,7 +559,7 @@ def test_a_narrowed_range_question_is_recorded(sources, tmp_path, monkeypatch):
     logs and records the range it asked; elsewhere it records None."""
     from opengwasdb.store import query_digests
 
-    monkeypatch.setattr(query_digests, "RANGE_ROWS_ASKED", 50)
+    set_reader_constant(monkeypatch, query_digests, "RANGE_ROWS_ASKED", 50)
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
         destination = rewrite_release(sources["dense_observed"], tmp_path / "rewritten")

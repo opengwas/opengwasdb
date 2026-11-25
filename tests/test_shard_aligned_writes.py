@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from reader_constants import set_reader_constant
 
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import _row_block_of
@@ -208,7 +209,7 @@ def test_a_dense_vcf_build_writes_whole_shards(
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 
-    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (8, 4))
+    set_reader_constant(monkeypatch, store_layout, "DENSE_SHARD_SHAPE", (8, 4))
 
     entries = []
     for a in range(4):
@@ -253,8 +254,8 @@ def test_a_dense_completion_writes_whole_shards(
     import opengwasdb.layouts.dense.complete as complete_module
     from opengwasdb.layouts.dense.complete import complete_dense_store
 
-    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
-    monkeypatch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
+    set_reader_constant(monkeypatch, store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+    set_reader_constant(monkeypatch, store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (2, 1))
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
 
@@ -351,8 +352,8 @@ def test_builder_and_converter_agree_on_a_tail_shard(
     import opengwasdb.store.convert as convert_module
     from opengwasdb.store.convert import convert_release
 
-    monkeypatch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
-    monkeypatch.setattr(store_layout, "DENSE_SHARD_SHAPE", (4, 2))
+    set_reader_constant(monkeypatch, store_layout, "DENSE_CHUNK_SHAPE", (2, 1))
+    set_reader_constant(monkeypatch, store_layout, "DENSE_SHARD_SHAPE", (4, 2))
     monkeypatch.setattr(convert_module, "DENSE_CHUNK_SHAPE", (2, 1))
 
     header = (
@@ -576,8 +577,7 @@ def test_a_ragged_sequence_shard_is_written_exactly_once(
     from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
     from opengwasdb.store_reader.encoding.plan import EncodingMeasurements, StoreEncoding
 
-    monkeypatch.setattr(
-        store_layout,
+    set_reader_constant(monkeypatch, store_layout,
         "RAGGED_SEQUENCE_SHARD_ELEMENTS",
         4 * store_layout.ASSOCIATION_SEQUENCE_CHUNK,
     )
