@@ -18,7 +18,7 @@ from __future__ import annotations
 import functools
 import json
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -161,6 +161,39 @@ _DisplacedCap = Annotated[
 ]
 
 
+_Ledger = Annotated[Path | None, typer.Option(help="supplied part listing/SHA-256 ledger")]
+_Parts = Annotated[Path | None, typer.Option(help="read-only directory of existing parts")]
+_DeleteParts = Annotated[
+    bool | None, typer.Option("--delete-parts", help="delete owned downloads after close")
+]
+_DownloadWorkers = Annotated[
+    int | None, typer.Option(help="parts of a chromosome downloaded at once", **_THREADS)
+]
+_PlanOnly = Annotated[
+    bool,
+    typer.Option(
+        "--plan-only",
+        help="write WORK/plan.json and the lifted tables, then exit: no listing, no "
+        "download, OUT not created; the same command without it resumes from the plan",
+    ),
+]
+
+
+def _import_result(inputs: Any, out: Path, plan_only: bool) -> Mapping[str, object]:
+    """Run the import, or only its plan, and return what the command prints."""
+    # Optional dependencies are loaded only on this path, never when opening an LD Store.
+    from opengwasdb.ld.build.importing.run import _plan_path, import_panukb, plan_panukb
+
+    if not plan_only:
+        return import_panukb(inputs, out)
+    plan = plan_panukb(inputs, out)
+    return {
+        "plan": str(_plan_path(inputs)),
+        "far_bp": plan["far_bp"],
+        "chromosomes": list(plan["chromosomes"]),
+    }
+
+
 @ld_app.command("import")
 @_exits("import")
 def import_command(
@@ -171,25 +204,17 @@ def import_command(
     chain: Annotated[Path, typer.Option()],
     fasta: Annotated[Path, typer.Option()],
     work: Annotated[Path, typer.Option()],
-    ledger: Annotated[
-        Path | None, typer.Option(help="supplied part listing/SHA-256 ledger")
-    ] = None,
-    parts: Annotated[
-        Path | None, typer.Option(help="read-only directory of existing parts")
-    ] = None,
-    delete_parts: Annotated[
-        bool | None, typer.Option("--delete-parts", help="delete owned downloads after close")
-    ] = None,
+    ledger: _Ledger = None,
+    parts: _Parts = None,
+    delete_parts: _DeleteParts = None,
     threads: Annotated[int | None, typer.Option(**_THREADS)] = None,
-    download_workers: Annotated[
-        int | None, typer.Option(help="parts of a chromosome downloaded at once", **_THREADS)
-    ] = None,
+    download_workers: _DownloadWorkers = None,
     far_target_bp: _FarTarget = None,
     displaced_cap: _DisplacedCap = None,
+    plan_only: _PlanOnly = False,
 ) -> int:
     """Import Pan-UKB published LD (ADR 0101)."""
-    # Optional dependencies are loaded only on this path, never when opening an LD Store.
-    from opengwasdb.ld.build.importing.run import ImportInputs, import_panukb
+    from opengwasdb.ld.build.importing.run import ImportInputs
 
     inputs = ImportInputs(
         metadata=metadata,
@@ -208,7 +233,7 @@ def import_command(
         ),
     )
     try:
-        made = import_panukb(inputs, out)
+        made = _import_result(inputs, out, plan_only)
     except (ValueError, OSError) as problem:
         raise InputError(str(problem)) from problem
     print(json.dumps(made, indent=1))

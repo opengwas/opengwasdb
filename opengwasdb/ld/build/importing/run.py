@@ -9,7 +9,8 @@ import resource
 import shutil
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, cast
@@ -297,6 +298,24 @@ def _closed(path: Path) -> Provenance | None:
     return cast(Provenance | None, root.attrs.get("ld_store"))
 
 
+@contextmanager
+def _owned_work(inputs: ImportInputs, out: Path) -> Iterator[None]:
+    """Refuse bad counts and an existing `out`, then hold `work`'s lock: every run's prelude."""
+    if inputs.threads < 1:
+        raise ValueError("import threads must be positive")
+    if inputs.download_workers < 1:
+        raise ValueError("import download workers must be positive")
+    if out.exists():
+        raise FileExistsError(f"{out} exists: a store is never written over another")
+    inputs.work.mkdir(parents=True, exist_ok=True)
+    with (inputs.work / "lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as busy:
+            raise ValueError(f"{inputs.work}: another import owns this work directory") from busy
+        yield
+
+
 def import_panukb(
     inputs: ImportInputs,
     out: Path,
@@ -310,19 +329,20 @@ def import_panukb(
     be deleted: a supplied `parts` directory and ledger are always read-only. The
     completion callback runs after close and optional deletion, making interruption observable.
     """
-    if inputs.threads < 1:
-        raise ValueError("import threads must be positive")
-    if inputs.download_workers < 1:
-        raise ValueError("import download workers must be positive")
-    if out.exists():
-        raise FileExistsError(f"{out} exists: a store is never written over another")
-    inputs.work.mkdir(parents=True, exist_ok=True)
-    with (inputs.work / "lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as busy:
-            raise ValueError(f"{inputs.work}: another import owns this work directory") from busy
+    with _owned_work(inputs, out):
         return _import(inputs, out, fetch or PinnedHttps(), on_chromosome)
+
+
+def plan_panukb(inputs: ImportInputs, out: Path) -> dict[str, Any]:
+    """The import's plan alone: `work/plan.json` and each `<chr>.lifted.npz`.
+
+    The same prelude, identity and `_plan` as `import_panukb`, which stops here: no bucket
+    listing, no download, and `out` is never created. A saved plan with the same identity is
+    reused, so a later full import of the same command resumes from this one
+    (opengwas/opengwasdb-stores#542).
+    """
+    with _owned_work(inputs, out):
+        return _plan(inputs, out, json.loads(inputs.metadata.read_text()))
 
 
 def _closed_chromosome(
