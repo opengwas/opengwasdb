@@ -27,33 +27,29 @@ import zarr
 from region_tables import write_region_table
 from store_assertions import replace_exception_table
 
-from opengwasdb.encoding import (
-    EAF_ABSENT,
-    EAF_BASELINE,
-    EAF_EXCEPTION_INDEX,
-    EAF_EXCEPTION_VALUE,
-    EAF_REFERENCE,
-    UnsupportedEncoding,
-    write_eaf_reference,
-)
+from opengwasdb.encoding import write_eaf_reference
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.model.analyses import (
-    read_analyses,
-    read_analysis_records,
-    write_analyses,
-    write_analysis_records,
-)
+from opengwasdb.model.analyses import read_analysis_records, write_analyses, write_analysis_records
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
 from opengwasdb.repair import repair_eaf_chunks
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import open_store
-from opengwasdb.top_hits import threshold_key
+from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.encoding.codec import (
+    EAF_BASELINE,
+    EAF_EXCEPTION_INDEX,
+    EAF_EXCEPTION_VALUE,
+    EAF_REFERENCE,
+)
+from opengwasdb.store_reader.encoding.plan import EAF_ABSENT, UnsupportedEncoding
+from opengwasdb.store_reader.hybrid import dense_component_path
+from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -261,7 +257,7 @@ def test_a_build_with_frequencies_declares_the_residual_coding(
     manifest = json.loads((store / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["kind"] == "int8_residual"
     assert manifest["encoding"]["eaf"]["residual_range"] in (0.5, 1.0, 2.0)
-    assert manifest["format_version"] == "0.2.3"
+    assert manifest["format_version"] == "0.3.0"
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
@@ -967,7 +963,7 @@ def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
     # The pair-resolving read shape too (top hits go through it), which has its
     # own short circuit on "this component stores no eaf array" -- true here,
     # and not the same question as "this component has a frequency to report".
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     reader = RaggedCSRReader(out)
     pairs = [

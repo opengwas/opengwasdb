@@ -29,6 +29,7 @@ from benchmarks.profile_reference_completion import (
 from opengwasdb.completion.fill_shards import resolve_unit_bytes
 from opengwasdb.encoding.memory import worker_bytes
 from opengwasdb.layouts.dense.build import NormalisedAssociation
+from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.variants import CanonicalVariant
 
 
@@ -230,10 +231,9 @@ def _narrow_bands(patch: pytest.MonkeyPatch) -> None:
     """Two-row Dense shards and bands, so the fixture's 7 rows are 4 bands, the
     last two on chromosome 2; and pool units a fixture's size (`pool_budget`)."""
     import opengwasdb.layouts.dense.complete as complete_module
-    import opengwasdb.store.arrays as arrays_module
 
-    patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (2, 2))
-    patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (1, 1))
+    patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (2, 2))
+    patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (1, 1))
     patch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (1, 1))
     patch.setattr(complete_module, "_BAND_ROWS", 2)
     pin_pool_units(patch)

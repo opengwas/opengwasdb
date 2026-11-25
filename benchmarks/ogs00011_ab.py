@@ -330,7 +330,7 @@ def _open_eager_tables() -> None:
     windowed arm can be compared against it directly (review round 4,
     finding 5).
     """
-    from opengwasdb.encoding import SparseExactTable
+    from opengwasdb.store_reader.encoding.codec import SparseExactTable
 
     SparseExactTable.open = classmethod(lambda cls, group: cls.read(group))
 

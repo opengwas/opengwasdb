@@ -29,7 +29,8 @@ from opengwasdb.build.liftover import (
     statistics_swap,
 )
 from opengwasdb.encoding.timing import format_duration
-from opengwasdb.variants.normalise import canonical_alid, is_primary_contig
+from opengwasdb.store_reader.identity import is_primary_contig
+from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.routing.keys import SourceKey, routing_key
 
 log = logging.getLogger(__name__)

@@ -16,10 +16,10 @@ from sd_scaling import require_rescaling
 from stored_rows import stored_rows
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf as real_build_ragged_from_ssf
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf, declare_scale
@@ -240,7 +240,7 @@ def test_build_creates_store_files(tmp_path):
     assert (out / "manifest.json").exists()
     assert (out / "variants.tsv.gz").exists()
     assert (out / "analyses.tsv").exists()
-    assert (out / "index.sqlite").exists()
+    assert not (out / "index.sqlite").exists()  # 0.3.0 Observed-Only (ADR 0102, #471)
     assert (out / "data.zarr" / "ragged").exists()
 
     assert result.n_variants == 3  # 1:100000, 1:200000, 2:500000
@@ -311,8 +311,8 @@ def test_ssf_se_is_standardised_by_the_manifests_original_sd(tmp_path):
     The values are the fixture's own: the one source association holds
     beta=1.0 and se=0.5, so it stores z=2.0 and se=0.25 (0.5 / 2.0).
     """
-    from opengwasdb.model.analyses import read_analyses
     from opengwasdb.model.enums import OriginalSdMethod
+    from opengwasdb.store_reader.analyses import read_analyses
 
     require_rescaling(OriginalSdMethod.SOURCE_PROVIDED)
     filtered_dir = tmp_path / "filtered"
@@ -409,7 +409,7 @@ def test_ragged_build_writes_the_coverage_it_is_given(tmp_path, coverage):
 def test_stored_effect_scale_populated_per_analysis(tmp_path):
     """Issue #69: stored_effect_scale is a real per-Analysis analyses.tsv
     column, not only a store-wide value threaded through provenance."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
@@ -429,8 +429,8 @@ def test_analyses_tsv_carries_trait_positions(tmp_path):
     # traits.tsv.gz (issue 034) is retired (issue #69): trait_chr/trait_bp
     # live only in analyses.tsv now, and range_by_analysis() reads them
     # directly rather than through a second, independently-shaped file.
-    from opengwasdb.model.analyses import read_analyses
     from opengwasdb.query import query_store
+    from opengwasdb.store_reader.analyses import read_analyses
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
@@ -597,7 +597,7 @@ def test_an_sd_row_with_no_standardising_method_is_refused_by_name(tmp_path, met
 def test_a_log_or_row_with_no_method_builds_and_records_the_blank(tmp_path):
     """Only `sd` claims SD Units, so a `log_or` row needs no method; the Store records
     what the manifest said, a blank, and invents none (issue #366)."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     out = _build_with_scale_column(tmp_path, "log_or", "")
 
@@ -641,7 +641,7 @@ def test_provenance_records_the_distinct_scales_comma_joined(tmp_path):
 
 def test_an_sd_row_declaring_standardised_builds_and_is_recorded(tmp_path):
     out = _build_with_scale_column(tmp_path, "sd", "declared_standardised")
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     rows = read_analyses(out / "analyses.tsv").rows
     assert {r["stored_effect_scale"] for r in rows} == {"sd"}
@@ -910,7 +910,7 @@ def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
     rows all resolve to conflicting duplicates, none survives -- but it must
     still occupy its CSR slot and analyses.tsv row. Skipping it would shift
     every later analysis's associations onto the wrong analysis, silently."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.validation import validate_store
 
     filtered_dir = tmp_path / "filtered"
@@ -1011,7 +1011,7 @@ def test_canonical_analyses_tsv_columns_build_identical_to_legacy(tmp_path):
 
 def test_canonical_sample_size_wins_over_legacy_n(tmp_path):
     """Issue #172: when both sample_size and n are present, canonical sample_size wins."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()

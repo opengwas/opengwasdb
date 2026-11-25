@@ -15,8 +15,9 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from format_0_2_3 import follow_stamp
 
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 _SCRIPT_PATH = (
@@ -38,6 +39,7 @@ def _stamp_before_0_2_3(store_path: Path) -> None:
     manifest_path = store_path / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_path.write_text(json.dumps({**manifest, "format_version": "0.2.2"}), encoding="utf-8")
+    follow_stamp(store_path)
 
 
 def _revert_to_old_layout(store_path: Path, ancestry: dict[str, str] | None = None) -> None:

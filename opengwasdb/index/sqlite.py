@@ -1,4 +1,11 @@
-"""SQLite schema and lookup helpers for Store Releases."""
+"""SQLite schema and lookup helpers for Store Releases.
+
+`initialise_schema` is the 0.2 series' `index.sqlite` schema: the `metadata` table and
+`variant_aliases`. Format 0.3.0 carries neither (ADR 0102, #471), and no builder or
+completion of this package writes them; a 0.3.0 `index.sqlite` holds only
+`completion_quality` (`opengwasdb.completion.schema`). The schema stays for reading a
+0.2 release and for the tests that make one; #476 retires it with the 0.2 series.
+"""
 
 from __future__ import annotations
 

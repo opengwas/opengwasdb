@@ -9,13 +9,14 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.encoding import StoreEncoding
 from opengwasdb.encoding.timing import log_phase
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.arrays import (
     open_group_for_write,
 )
-from opengwasdb.top_hits import TOP_HIT_THRESHOLDS
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.csr import RaggedCSRReader
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
+from opengwasdb.store_reader.top_hits import TOP_HIT_THRESHOLDS
 
 log = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ def _collect_ragged_candidates(
     total = csr.sequence_length
     offsets = csr.offsets
     n_analyses = len(offsets) - 1
-    loosest = top_hits.z_critical(max(thresholds))
+    loosest = reader_stats.z_critical(max(thresholds))
     has_imputed = csr.has_imputed
     has_eaf = csr.can_report_frequencies
 

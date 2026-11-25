@@ -1,0 +1,3 @@
+# Every file of the bundle is bytes: no line-ending conversion on any checkout (Windows
+# included), so a release and its expected answers are read exactly as committed.
+* -text

@@ -665,8 +665,8 @@ def read_cells(q: Any, rows: np.ndarray, cols: np.ndarray) -> Cells:
     cell is observed exactly as the query facade labels it: present (neither
     marker set) with imputed flag 0 (ADR 0070).
     """
-    from opengwasdb.associations import Cells as Region
-    from opengwasdb.associations import DenseGridReader, State
+    from opengwasdb.store_reader.associations import Cells as Region
+    from opengwasdb.store_reader.associations import DenseGridReader, State
 
     rows = np.asarray(rows, dtype=np.int64)
     grid = DenseGridReader.open(q.store.arrays(mode="r"), q.store.manifest.encoding)

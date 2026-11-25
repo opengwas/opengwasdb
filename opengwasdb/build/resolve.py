@@ -65,6 +65,7 @@ from opengwasdb.build.effect_consistency import (
 from opengwasdb.build.hash_sample import HashSample
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.phenotype_sd import (
+    DEFAULT_EVIDENCE_SAMPLE,
     ESTIMATION_METHODS,
     PhenotypeSdEstimate,
     estimate_phenotype_sd,
@@ -103,14 +104,6 @@ __all__ = [
 #: resolver does exactly that). Bump it whenever what `ScanLimit` means changes.
 SCAN_LIMIT_VERSION = 2
 
-#: How many qualifying evidence rows one Analysis's phenotype-SD estimate is
-#: drawn from. A robust median-implied-SD estimate needs nowhere near this many
-#: sites (ADR 0029's estimator is a median over per-variant values, not a fit),
-#: so the bound costs the estimate nothing measurable while capping what a
-#: 40M-row file costs in memory. It matches
-#: `opengwasdb.build.eaf_orientation.DEFAULT_SAMPLE_SITES`'s scale deliberately:
-#: both are "an Analysis's own variants, bounded".
-DEFAULT_EVIDENCE_SAMPLE = 20_000
 
 
 class ScanStop(StrEnum):

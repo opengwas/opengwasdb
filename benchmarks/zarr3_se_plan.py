@@ -54,10 +54,11 @@ def stored_shards(array_path: Path) -> list[Path]:
 
 def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, int]:
     """Write the slice's decoded `se` and `eaf` as float32 planes; returns (group, finite SE)."""
-    from opengwasdb.associations import Cells, DenseGridReader
     from opengwasdb.store import arrays
-    from opengwasdb.store.arrays import ArrayRole
     from opengwasdb.store.open import open_store
+    from opengwasdb.store_reader import layout as store_layout
+    from opengwasdb.store_reader.associations import Cells, DenseGridReader
+    from opengwasdb.store_reader.layout import ArrayRole
 
     release = open_store(store)
     grid = DenseGridReader.open(release.arrays(mode="r"), release.manifest.encoding)
@@ -77,7 +78,7 @@ def stage(store: Path, scratch: Path, start: int, n_rows: int) -> tuple[Path, in
             # The seam decides the Dense grid's inner chunk, and the shard policy
             # beside it derives the format's shard from that chunk; a chunk this
             # file picked itself would not tile that shard.
-            hint=arrays.DENSE_CHUNK_SHAPE,
+            hint=store_layout.DENSE_CHUNK_SHAPE,
             fill_value=np.nan,
         )
     return scratch, finite
@@ -97,8 +98,9 @@ def main() -> None:
     import numcodecs.blosc
 
     from opengwasdb.encoding import optimise_dense_se
-    from opengwasdb.encoding.plan import StoreEncoding
     from opengwasdb.store import arrays
+    from opengwasdb.store_reader import arrays as reader_arrays
+    from opengwasdb.store_reader.encoding.plan import StoreEncoding
 
     if args.label != "asis":
         numcodecs.blosc.use_threads = args.label == "on"
@@ -124,7 +126,7 @@ def main() -> None:
         "use_threads": numcodecs.blosc.use_threads,
         "finite_se_cells": finite,
         "plan": selected.to_manifest(),
-        "chunk_shape": list(arrays.inner_chunk_of(stored_plane)),
+        "chunk_shape": list(reader_arrays.inner_chunk_of(stored_plane)),
         "shard_shape": [int(size) for size in stored_plane.shards],
         "stored_dtype": str(stored.dtype),
         "stored_sha": hashlib.sha256(stored.tobytes()).hexdigest()[:16],

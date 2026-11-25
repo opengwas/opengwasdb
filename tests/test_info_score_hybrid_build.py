@@ -29,13 +29,13 @@ from test_resolve_manifest import _write_panel
 
 from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.query import query_store
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.interface import ImputationScoreDeclaration, ImputationScoreKind
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.variants.routing import AssociationBatch
 from opengwasdb.variants.routing import table as route_table
 

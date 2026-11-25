@@ -49,14 +49,14 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from opengwasdb.associations import Cells, CsrReader, State
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.layouts.dense.complete import completion_band_rows
-from opengwasdb.layouts.hybrid.layout import dense_component_path
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
-from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.associations import Cells, CsrReader, State
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import dense_component_path
 from opengwasdb.validation.observed_view import (
     _DIFF_PLANES,
     FAILING_COUNTERS,
@@ -82,7 +82,6 @@ from opengwasdb.validation.observed_view import (
     leaves_out,
     se_out_of_range_accounting,
 )
-from opengwasdb.variants import VariantAxis
 
 __all__ = ["CROSSOVER_FAILING", "OVERFLOW_FAILING", "check_hybrid"]
 
@@ -254,7 +253,7 @@ def _open_overflow(store: OpenGWASDBStore, role: str) -> _Overflow:
         raise ObservedViewRefused(
             f"cannot open the Overflow of {role} store {store.path}: {exc}"
         ) from exc
-    with closing(VariantAxis(store.path)) as axis:
+    with closing(store.variant_axis(aliases=False)) as axis:
         n_shared = axis.n_variants
     offsets = np.asarray(group["offsets"][:], dtype=np.int64)
     imputed = group["imputed"] if "imputed" in group else None

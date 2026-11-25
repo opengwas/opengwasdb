@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import opengwasdb.associations as oa
+import opengwasdb.store_reader.associations as oa
 
 NAN = np.nan
 INF = np.inf
@@ -85,6 +85,8 @@ def test_record_reads_as_the_query_result_mapping() -> None:
         "analysis_index",
         "z",
         "se",
+        "beta",
+        "pval",
         "eaf",
         "n",
         "association_status",

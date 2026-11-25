@@ -19,7 +19,7 @@ import pytest
 import zarr
 from zarr.storage import LocalStore
 
-from opengwasdb.top_hits import TopHitTier
+from opengwasdb.store_reader.top_hits import TopHitTier
 
 #: Zarr keys that hold metadata, not chunk bytes; a metadata read is not a read
 #: of the array's data.

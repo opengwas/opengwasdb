@@ -17,17 +17,17 @@ from functools import cached_property
 from pathlib import Path
 
 from opengwasdb.readers.registry import SourceSpec, open_source
-from opengwasdb.variants.axis import sorted_alids
-from opengwasdb.variants.normalise import (
+from opengwasdb.store_reader.identity import (
     VariantNormalisationError,
     is_primary_contig,
     normalise_chromosome,
 )
+from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import (
     VariantReference,
     warn_reference_left_rows_blank,
 )
-from opengwasdb.variants.routing.keys import SourceKey, routing_key, source_alid
+from opengwasdb.variants.routing.keys import SourceKey, note_origin, routing_key, source_alid
 from opengwasdb.variants.routing.lift import place_union
 from opengwasdb.variants.routing.names import (
     HARVEST_LABEL,
@@ -128,11 +128,7 @@ class VariantRouting:
         """
         by_alid: dict[str, str | None] = {}
         for site, alid in self._sites().items():
-            source = source_alid(site)
-            if alid not in by_alid:
-                by_alid[alid] = source
-            elif by_alid[alid] != source:
-                by_alid[alid] = None
+            note_origin(by_alid, alid, source_alid(site))
         return by_alid
 
     def table(

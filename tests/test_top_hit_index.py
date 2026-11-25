@@ -13,6 +13,9 @@ from top_hit_fixtures import build_ragged
 
 from opengwasdb import top_hits
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader import top_hits as reader_top_hits
+from opengwasdb.store_reader.stats import z_critical
 
 
 def _columns(*, imputed: bool = False, eaf: bool = False) -> dict[str, np.ndarray]:
@@ -43,7 +46,7 @@ def _write(tmp_path, columns, thresholds=(5e-8, 5e-6, 5e-4)):
 @pytest.mark.parametrize("with_optional", [False, True], ids=["required-only", "imputed-and-eaf"])
 def test_an_index_reads_back_the_rows_it_was_written_from(tmp_path, with_optional):
     columns = _columns(imputed=with_optional, eaf=with_optional)
-    tiers = top_hits.TopHitTiers(_write(tmp_path, columns))
+    tiers = reader_top_hits.TopHitTiers(_write(tmp_path, columns))
 
     rows = tiers.tier(5e-6).read()
     # ordered by (analysis_index, variant_index)
@@ -104,7 +107,9 @@ def test_an_index_whose_columns_are_not_parallel_is_refused_and_writes_nothing(
     root = store_arrays.open_group_for_write(tmp_path / "data.zarr", "a")
     before = _files(tmp_path / "data.zarr")
     assert set(before) == {"zarr.json"}, "fixture must be an empty store, not a missing one"
-    assert not top_hits.has_index(root), "fixture already has an index, so a rewrite would show"
+    assert not reader_top_hits.has_index(root), (
+        "fixture already has an index, so a rewrite would show"
+    )
     with pytest.raises(ValueError, match=f"write_index: {refusal} must be parallel"):
         top_hits.write_index(root, columns, (5e-8, 5e-6, 5e-4), n_analyses=3)
     assert _files(tmp_path / "data.zarr") == before
@@ -116,7 +121,7 @@ def _files(path) -> dict[str, bytes]:
 
 
 def test_an_analysis_addressed_read_is_that_analysis_slice(tmp_path):
-    tiers = top_hits.TopHitTiers(_write(tmp_path, _columns()))
+    tiers = reader_top_hits.TopHitTiers(_write(tmp_path, _columns()))
     tier = tiers.tier(5e-4)
     assert tier.read(2).variant_index.tolist() == [7, 30, 40]
     assert tier.read(0).variant_index.tolist() == [10, 20]
@@ -127,21 +132,21 @@ def test_an_analysis_addressed_read_is_that_analysis_slice(tmp_path):
 
 
 def test_a_threshold_with_no_tier_is_none(tmp_path):
-    tiers = top_hits.TopHitTiers(_write(tmp_path, _columns()))
+    tiers = reader_top_hits.TopHitTiers(_write(tmp_path, _columns()))
     assert tiers.tier(1e-9) is None
 
 
 def test_tier_keys_and_attributes_are_the_existing_format(tmp_path):
     root = _write(tmp_path, _columns())
-    assert top_hits.threshold_key(5e-8) == "p_5e_08"
-    assert top_hits.threshold_key(5e-4) == "p_5e_04"
+    assert reader_top_hits.threshold_key(5e-8) == "p_5e_08"
+    assert reader_top_hits.threshold_key(5e-4) == "p_5e_04"
     assert list(root["top_hits"].attrs["thresholds"]) == [5e-8, 5e-6, 5e-4]
     group = root["top_hits/p_5e_08"]
     assert group.attrs["order"] == "analysis_index,variant_index"
     assert group.attrs["threshold"] == 5e-8
     assert sorted(group.keys()) == sorted(top_hits.TOP_HIT_TIER_ARRAYS)
+    assert not top_hits.STORED_P_ARRAYS & set(group.keys())  # dropped from 0.3.0 (#471)
     assert group["variant_index"].dtype == np.dtype("uint32")
-    assert group["p_value"].dtype == np.dtype("float64")
 
 
 def test_the_module_addresses_its_own_group_and_logs_each_tier(tmp_path, caplog):
@@ -171,22 +176,23 @@ def test_a_tiers_threshold_is_its_attribute_else_its_name(tmp_path):
     _write(tmp_path, _columns())
     writable = store_arrays.open_group_for_write(tmp_path / "data.zarr", "a")
     group = writable["top_hits/p_5e_06"]
-    assert top_hits.tier_threshold("p_5e_06", group) == 5e-6
+    assert reader_top_hits.tier_threshold("p_5e_06", group) == 5e-6
     del group.attrs["threshold"]
-    assert top_hits.tier_threshold("p_5e_06", group) == 5e-6  # parsed from the key
-    assert top_hits.tier_threshold("p_5e_06", group, missing=0.0) == 0.0  # caller's own
-    for threshold in top_hits.TOP_HIT_THRESHOLDS:
-        key = top_hits.threshold_key(threshold)
+    assert reader_top_hits.tier_threshold("p_5e_06", group) == 5e-6  # parsed from the key
+    assert reader_top_hits.tier_threshold("p_5e_06", group, missing=0.0) == 0.0  # caller's own
+    for threshold in reader_top_hits.TOP_HIT_THRESHOLDS:
+        key = reader_top_hits.threshold_key(threshold)
         no_attribute = SimpleNamespace(attrs={})
-        assert top_hits.tier_threshold(key, no_attribute) == threshold  # inverse of the key
+        assert reader_top_hits.tier_threshold(key, no_attribute) == threshold  # inverse of the key
 
 
 def test_the_index_group_is_found_by_the_module(tmp_path):
     root = _write(tmp_path, _columns())
-    assert top_hits.has_index(root)
-    assert sorted(top_hits.index_group(root).group_keys()) == ["p_5e_04", "p_5e_06", "p_5e_08"]
+    assert reader_top_hits.has_index(root)
+    keys = sorted(reader_top_hits.index_group(root).group_keys())
+    assert keys == ["p_5e_04", "p_5e_06", "p_5e_08"]
     empty = store_arrays.open_group_for_write(tmp_path / "other.zarr", "a")
-    assert not top_hits.has_index(empty)
+    assert not reader_top_hits.has_index(empty)
 
 
 def test_counts_are_the_per_analysis_slice_lengths(tmp_path):
@@ -198,7 +204,7 @@ def test_counts_are_the_per_analysis_slice_lengths(tmp_path):
 def test_the_structural_rules_name_what_is_wrong(tmp_path):
     root = _write(tmp_path, _columns(imputed=True))
     group = root["top_hits/p_5e_04"]
-    arrays = top_hits.load_tier_arrays(group)
+    arrays = reader_top_hits.tier_arrays(group)
     assert top_hits.structural_problem(arrays, group, 3, expects_imputed=True) is None
 
     swapped = dict(arrays, rows=arrays["rows"][::-1].copy())
@@ -224,7 +230,7 @@ def test_a_ragged_builds_analyses_carry_per_analysis_hit_counts(tmp_path):
 
 
 def test_the_index_and_the_scan_fallback_cut_at_one_function(tmp_path, monkeypatch):
-    """Both paths threshold through `top_hits.z_critical`, so they cannot drift.
+    """Both paths threshold through `store_reader.stats.z_critical`, so they cannot drift.
 
     No threshold separates an inline bisection from `erfcinv` by a whole float32
     z, so this does not look for one: it moves the one function and requires the
@@ -237,7 +243,7 @@ def test_the_index_and_the_scan_fallback_cut_at_one_function(tmp_path, monkeypat
     scanned = query_store(store).top_hits(threshold=1e-9)  # no tier: scans the CSR
     assert len(indexed["z"]) == 4 and len(scanned["z"]) == 3
 
-    monkeypatch.setattr(top_hits, "z_critical", lambda threshold: 100.0)
+    monkeypatch.setattr(reader_stats, "z_critical", lambda threshold: 100.0)
     assert len(query_store(store).top_hits(threshold=1e-9)["z"]) == 0
     from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 
@@ -246,5 +252,5 @@ def test_the_index_and_the_scan_fallback_cut_at_one_function(tmp_path, monkeypat
 
 
 def test_z_critical_is_the_two_sided_normal_cutoff():
-    assert top_hits.z_critical(5e-8) == pytest.approx(5.4513, abs=1e-4)
-    assert math.erfc(top_hits.z_critical(5e-6) / math.sqrt(2)) == pytest.approx(5e-6)
+    assert z_critical(5e-8) == pytest.approx(5.4513, abs=1e-4)
+    assert math.erfc(z_critical(5e-6) / math.sqrt(2)) == pytest.approx(5e-6)

@@ -14,9 +14,9 @@ import pytest
 import zarr
 
 from opengwasdb.encoding import se as se_module
-from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
-from opengwasdb.encoding.planes import DenseSePlane
 from opengwasdb.encoding.se import optimise_dense_se_joint
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.encoding.planes import DenseSePlane
 
 
 def _preliminary() -> StoreEncoding:

@@ -171,6 +171,9 @@ def _rewrite_manifest(manifest_path: Path, z_chunk: tuple[int, ...] | None) -> N
             provenance[key] = _downgrade_recording(block, z_chunk)
     data["provenance"] = provenance
     manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    from format_0_2_3 import follow_stamp
+
+    follow_stamp(manifest_path.parent)
 
 
 def _rewrite_index(index_path: Path, z_chunk: tuple[int, ...] | None) -> None:
@@ -204,6 +207,13 @@ def relayout_as_0_1_0(source: str | Path, destination: str | Path) -> Path:
     if destination.exists():
         raise FileExistsError(f"{destination} already exists")
     shutil.copytree(source, destination)
+    from format_0_2_3 import with_0_2_derived_components, with_own_copies
+
+    # A 0.1.0 release carries what 0.3.0 drops (#471, #472): given back before the
+    # arrays are re-laid out, so its tiers' `abs_z` and `p_value` are v2 arrays as well.
+    for manifest in sorted(destination.rglob("manifest.json")):
+        with_own_copies(manifest.parent)
+        with_0_2_derived_components(manifest.parent)
     for data_zarr in sorted(destination.rglob("data.zarr")):
         root = open_group(data_zarr, "r")
         plan, groups, root_attrs = _read_plan(root)

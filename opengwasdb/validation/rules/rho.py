@@ -11,7 +11,8 @@ from collections.abc import Callable, Iterable, Iterator
 
 import numpy as np
 
-from opengwasdb.store.arrays import array_length
+from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.rho import packed_rho
 from opengwasdb.validation.rule import Check, Kind, Rule, Target
 from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.release import REQUIRED
@@ -80,8 +81,7 @@ def lengths(target: Target) -> Iterator[str]:
 def values(target: Target) -> Iterator[str]:
     """A pair has a finite rho exactly when it has the null support, and rho is in [-1, 1]."""
     group = target.group["rho"]
-    rho = np.asarray(group["rho"][:], dtype=np.float32)
-    n_null = np.asarray(group["n_null"][:], dtype=np.int64)
+    rho, n_null = packed_rho(group)
     min_nulls = int(group.attrs["min_nulls"])
     finite = np.isfinite(rho)
     if not np.array_equal(finite, n_null >= min_nulls):

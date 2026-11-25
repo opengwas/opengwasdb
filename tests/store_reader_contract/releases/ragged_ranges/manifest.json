@@ -1,0 +1,70 @@
+{
+  "association_coverage": "signals_only",
+  "completion_state": "observed_only",
+  "created_at": "2026-11-24T00:00:00+00:00",
+  "encoding": {
+    "eaf": {
+      "kind": "float32"
+    },
+    "se": {
+      "kind": "int8_residual",
+      "residual_range": 0.5
+    },
+    "version": 3,
+    "z": {
+      "kind": "int16_fixed",
+      "scale": 1024
+    }
+  },
+  "format_version": "0.3.0",
+  "primary_layout": "ragged",
+  "provenance": {
+    "builder": "opengwasdb.v0.1_ragged_observed_ssf",
+    "eaf_orientation": {
+      "allow_unverified": false,
+      "analyses": [
+        {
+          "analysis_id": "trait_a",
+          "n_overlap": 0,
+          "note": "no EAF reference supplied, and 1 analyses carry EAF -- fewer than the 3 a consensus needs",
+          "outcome": "unverified",
+          "r": null,
+          "stores_eaf": true
+        }
+      ],
+      "method": "none",
+      "min_overlap": 500,
+      "min_variance": 0.005,
+      "n_reference_variants": 0,
+      "n_sites": 8,
+      "reference_checksum": "",
+      "reference_id": ""
+    },
+    "mhc_analyses": [],
+    "n_analyses": 1,
+    "n_associations": 8,
+    "n_variants": 8,
+    "ragged": {
+      "by_variant": {
+        "group": "by_variant",
+        "n_axis": 8,
+        "n_rows": 8
+      },
+      "se_dtype": "int8",
+      "statistic_arrays": [
+        "z",
+        "se"
+      ],
+      "variant_axis": {
+        "format": "tabix_tsv_v1",
+        "tabix_index": "variants.tsv.gz.tbi",
+        "table": "variants.tsv.gz"
+      }
+    },
+    "source_manifest": "/store-reader-contract/build/ranges/ragged/manifest.tsv",
+    "stored_effect_scale": "sd"
+  },
+  "reference_assembly": "GRCh38",
+  "release_id": "r",
+  "store_id": "s"
+}

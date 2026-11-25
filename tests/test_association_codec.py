@@ -20,13 +20,12 @@ from opengwasdb.encoding.association_codec import (
     log_se_out_of_range,
     storable,
 )
-from opengwasdb.encoding.codec import (
-    EafExceptionBuilder,
-    SeExceptionBuilder,
-    StoreCodec,
-    se_from_log,
-)
-from opengwasdb.encoding.plan import (
+from opengwasdb.encoding.codec import EafExceptionBuilder, SeExceptionBuilder, StoreCodec
+from opengwasdb.encoding.planes import write_dense_cells, write_encoded_planes
+from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.store.arrays import compressor
+from opengwasdb.store_reader.encoding.codec import se_from_log
+from opengwasdb.store_reader.encoding.plan import (
     EAF_EXCEPTION,
     SE_EXCEPTION,
     EafEncoding,
@@ -34,15 +33,8 @@ from opengwasdb.encoding.plan import (
     StoreEncoding,
     ZEncoding,
 )
-from opengwasdb.encoding.planes import (
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    write_dense_cells,
-    write_encoded_planes,
-)
-from opengwasdb.encoding.sd_units import PhenotypeSd
-from opengwasdb.store.arrays import ArrayRole, compressor
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.store_reader.layout import ArrayRole
 
 NAN = np.float32(np.nan)
 
@@ -101,7 +93,7 @@ def test_a_missing_marker_other_than_the_canonical_nan_is_refused(plane, bits, d
     """Spec §15: a float plane's missing marker is `np.nan`'s NaN, and a builder
     rejects any other. A decoded `float16` plane carries a payload into
     `float32`, and a `float16` plane would store it again as itself."""
-    from opengwasdb.associations import non_canonical
+    from opengwasdb.store_reader.associations import non_canonical
 
     z = np.array([1.0, np.nan], dtype=dtype)
     se = np.array([0.1, np.nan], dtype=dtype)

@@ -9,7 +9,6 @@ from dense_sources import build_dense_fixture, build_dense_from_records
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
-from opengwasdb.encoding import DenseZPlane
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
@@ -17,9 +16,11 @@ from opengwasdb.layouts.dense.rho import (
     select_thinned_variants,
     write_rho_group,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import UnknownAnalysisError
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 
@@ -300,8 +301,14 @@ def test_rho_query_handles_unknown_ids_and_missing_group(dense_store_path, rho_s
 
     build_dense_rho(rho_store_path, window_bp=50, z_thresh=1.0, min_nulls=5, n_workers=1)
     query = query_store(rho_store_path)
-    assert len(query.rho("a0", "unknown-analysis")["rho"]) == 0
-    assert len(query.rho_row("unknown-analysis")["rho"]) == 0
+    # An unknown Analysis is refused, with or without a Rho Matrix (#474).
+    for q, known in ((query, "a0"), (no_rho_query, "a1")):
+        with pytest.raises(UnknownAnalysisError, match="unknown-analysis"):
+            q.rho(known, "unknown-analysis")
+        with pytest.raises(UnknownAnalysisError, match="unknown-analysis"):
+            q.rho_row("unknown-analysis")
+        with pytest.raises(UnknownAnalysisError, match="unknown-analysis"):
+            q.rho_matrix([known, "unknown-analysis"])
 
 
 # ── Parallel/serial parity (issue 050) ───────────────────────────────────────

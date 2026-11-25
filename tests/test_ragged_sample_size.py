@@ -17,9 +17,15 @@ import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi, write_sample_size_table
 
-from opengwasdb.encoding import N_MISSING, EncodingMeasurements, SeMeasurements, StoreEncoding
-from opengwasdb.encoding.plan import NEncoding, UnsupportedEncoding
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
+from opengwasdb.store_reader.encoding.plan import (
+    N_MISSING,
+    EncodingMeasurements,
+    NEncoding,
+    SeMeasurements,
+    StoreEncoding,
+    UnsupportedEncoding,
+)
 
 P1 = "ENSG00000000001"
 P2 = "ENSG00000000002"
@@ -169,7 +175,7 @@ def test_the_table_identity_and_its_match_counts_are_recorded(
 
 
 def test_an_analysis_given_n_declares_variant_level_scope(sampled: Path) -> None:
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
 
     rows = read_analyses(sampled / "analyses.tsv").rows
     assert {r["analysis_id"]: r["sample_size_scope"] for r in rows} == {
@@ -253,7 +259,7 @@ def _n_by_pair(result: dict[str, np.ndarray]) -> dict[tuple[int, int], float]:
 
 
 def _csr_n_by_pair(store: Path) -> dict[tuple[int, int], float]:
-    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+    from opengwasdb.store_reader.csr import RaggedCSRReader
 
     csr = RaggedCSRReader(store)
     offsets = np.asarray(csr._offsets[:], dtype=np.int64)
@@ -300,12 +306,13 @@ def test_an_empty_result_from_a_sampled_release_still_names_n(sampled: Path) -> 
     from opengwasdb.query import query_store
 
     query = query_store(sampled)
-    assert len(query.analysis("not-an-analysis")["n"]) == 0
+    # An unknown Analysis is refused (#474), so the empty answers are of known ones.
+    assert len(query.phewas("1:1:A:C")["n"]) == 0
     assert len(query.lookup(["rs4"], [P1])["n"]) == 0
 
 
 def test_the_by_variant_copy_holds_the_csr_codes(sampled: Path) -> None:
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+    from opengwasdb.store_reader.by_variant import ByVariantReader
 
     reader = ByVariantReader(sampled)
     first, last = reader.rows_for_variant_range(0, 3)
@@ -333,7 +340,7 @@ def _errors(store: Path) -> list[str]:
 def _rewrite(store: Path, name: str, values: np.ndarray) -> None:
     """Replace one `ragged/` (or `ragged/by_variant/`) array whole, keeping its layout."""
     from opengwasdb.store import arrays as store_arrays
-    from opengwasdb.store.arrays import ArrayRole
+    from opengwasdb.store_reader.layout import ArrayRole
 
     group, _, leaf = f"data.zarr/ragged/{name}".rpartition("/")
     root = store_arrays.open_group_for_write(store / group, "a")
@@ -567,7 +574,7 @@ def test_the_esi_frequency_is_stored_and_a_flipped_allele_stores_one_minus_f(
 
 
 def test_stored_esi_frequencies_with_reference_evidence_pass_validate(frequencies: Path) -> None:
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.validation import validate_store
 
     result = validate_store(frequencies)
@@ -588,7 +595,7 @@ def test_without_a_reference_the_probes_are_unverified_not_a_consensus(tmp_path:
     """Three probes would meet the consensus rule, but they share one `.esi`
     frequency per variant and so agree by construction; they must not certify
     each other."""
-    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
     from opengwasdb.validation import validate_store
 
     store = _build_frequencies(tmp_path)
@@ -774,7 +781,7 @@ def test_the_validation_rule_names_residual_se_beside_an_n_plan() -> None:
     """The rule itself, for a plan that reached validation without the loader."""
     from dataclasses import replace
 
-    from opengwasdb.encoding import SeEncoding
+    from opengwasdb.store_reader.encoding.plan import SeEncoding
     from opengwasdb.validation.rule import Kind, Target
     from opengwasdb.validation.rules import encoding
     from opengwasdb.validation.run import evaluate

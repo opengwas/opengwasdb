@@ -41,11 +41,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.special import log_ndtr
 
 from benchmarks._artifact import provenance, write_artifact
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.stats import association_statistics
 
 PREFIX = "finngen-r13-"
 CHROMOSOMES = {**{str(n): n for n in range(1, 23)}, "X": 23, "Y": 24, "MT": 25, "23": 23}
@@ -191,7 +191,8 @@ def compare_analysis(task: dict[str, Any]) -> dict[str, Any]:
     z_abs = np.abs(z_src[clean])
     overflow = z_abs > gates["z_overflow"]
     large = overflow & (np.abs(z - z_src)[clean] <= 1e-4 * z_abs)
-    logp_store = -(log_ndtr(-np.abs(z)) + math.log(2.0)) / math.log(10.0)
+    # The Store Reader's p (ADR 0104): NaN where the stored SE is infinite.
+    logp_store = -association_statistics(z, se).log10_p
     with np.errstate(divide="ignore"):
         logp_src = -np.log10(pval)
     p_ok = clean & np.isfinite(logp_src) & (logp_src > 2)

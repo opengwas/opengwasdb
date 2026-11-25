@@ -1545,7 +1545,7 @@ ADR 0097).
 ## 14. Optional local ALID companion (ADR 0098)
 
 The canonical Zarr index of §2 remains authoritative. Local Stores may additionally publish
-`variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and `manifest.json`. Keys copy the
+`variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and a manifest.json. Keys copy the
 canonical bytes without another sort; rows copy its rows as signed little-endian int32.
 The exact deterministic manifest schema and source/content pins are defined in ADR 0098
 and owned by `opengwasdb.ld.store.layout`. Schema 2 pins normalized root metadata and every canonical

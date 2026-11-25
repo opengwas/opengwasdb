@@ -33,21 +33,23 @@ from numcodecs import Blosc
 from opengwasdb.index import create_lookup_indexes, initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE, DEFAULT_COMPRESSOR
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
-from opengwasdb.validation import validate_store
-from opengwasdb.variants import (
-    VARIANT_AXIS_FORMAT,
+from opengwasdb.store_reader.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.variant_axis import (
     VARIANT_OFFSETS_FILENAME,
     VARIANT_TABIX_FILENAME,
     VARIANT_TABLE_FILENAME,
+)
+from opengwasdb.validation import validate_store
+from opengwasdb.variants import (
+    VARIANT_AXIS_FORMAT,
     CanonicalVariant,
-    VariantAxis,
     chromosome_sort_key,
     orient_to_canonical,
     write_variant_axis,
 )
+from opengwasdb.variants.axis import VariantAxis
 
 DEFAULT_SOURCE_DIR = Path("/Users/gh13047/repo/besdq/data/ebi_input")
 DEFAULT_OUTPUT_DIR = Path("/Users/gh13047/repo/opengwasdb/docs/benchmark-output")

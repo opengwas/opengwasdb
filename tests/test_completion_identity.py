@@ -34,6 +34,35 @@ to the pin it had.
 Since #366 the five Ragged SSF pins' `analyses.tsv` also records `declared_standardised`:
 an SSF manifest row states its scale and method, and the fixtures' sources are already
 in SD Units (`tests/ssf_builds.py`). Re-derived with every other pinned entry unchanged.
+
+Since #467 every pin's `format_version` is 0.3.0 and the release carries the ALID
+sidecar's four files where it carried `variant_alid_bytes.npy`/`variant_alid_rows.npy`
+(ADR 0105); the Dense pin's `overview.html` lists them. Re-derived after checking that
+each completed release, turned back into its 0.2.3 form (`format_0_2_3.as_0_2_3`),
+matched the previous pin in every entry but that `overview.html`.
+
+Since #468 every pin also holds the position sidecar's three files (ADR 0105 §6), and
+the Dense pin's `overview.html` lists them. Re-derived after checking that every other
+entry, and every total, equalled the previous pin.
+
+Since #471 no pin holds a tier's `abs_z` or `p_value`, and the Dense pin's
+`index.sqlite` holds `completion_quality` alone, without the `metadata` table or
+`variant_aliases` (ADR 0102); its `overview.html` words `index.sqlite`'s entry anew.
+Re-derived after checking that every other entry matched the previous pin, that the
+Dense `index.sqlite`, with the metadata the code before #471 wrote added back, hashed
+to the previous pin, and that its `overview.html`, re-rendered with the previous
+wording, did too. The Dense `overview.html` was re-derived once more at #471's review,
+which re-worded `index.sqlite`'s entry; with the earlier wording it hashes to that pin.
+
+Since #449 each Ragged pin's `variants.tsv.gz` and its `.tbi` are re-derived: a Ragged
+build now writes each row's `source_alid` (the ALID itself for an unlifted source), and
+completion keeps it, where both wrote `.`. Re-derived after checking that every other
+entry of every pin, and every Dense entry, was unchanged.
+
+Since epic #450's final review the Dense pin's `overview.html` is re-derived once more:
+its file guide describes `variants.tsv.gz` as a file no 0.3.0 query reads, and names
+the position, `source_alid` and rsID sidecars. Fresh pins of every fixture differed from
+the previous ones in that entry alone, and the previous one held at the integration tip.
 """
 
 from __future__ import annotations

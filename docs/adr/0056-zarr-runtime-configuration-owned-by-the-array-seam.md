@@ -1,5 +1,17 @@
 # zarr's process-wide runtime configuration is owned by the array seam
 
+> **Clarification, 23 November 2026 (#464).** The array seam now has two halves,
+> and the configuration lives in the read half. `opengwasdb/store_reader/arrays.py`
+> -- the Store Reader's array module, which may import nothing from the rest of
+> opengwasdb -- sets the four settings below on import and owns the read-only
+> `open_group`. `opengwasdb/store/arrays.py` keeps array and group creation, every
+> other open mode and the consolidated-metadata guard of §4, and imports the read
+> half, so every array the package creates or opens still gets the settings and
+> none can be opened without them. Nothing in this decision changes: the values,
+> the reasons, the `max_workers = 1` constraint and the tests that enforce them are
+> as below. Where the text below says `opengwasdb/store/arrays.py` sets the
+> configuration, read `opengwasdb/store_reader/arrays.py`.
+
 zarr-python 3 keeps several behaviours that decide what a built Store Release contains, how
 fast it reads, and whether a forked build worker can finish, in **process-wide runtime
 configuration** rather than in array metadata. `opengwasdb/store/arrays.py`, the seam every

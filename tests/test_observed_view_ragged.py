@@ -44,8 +44,8 @@ from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.analyses import read_analysis_records
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf
 

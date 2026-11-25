@@ -8,11 +8,14 @@ import numpy as np
 import pytest
 from cli_output import normalize_cli_output
 from dense_sources import write_dense_manifest
+from format_0_2_3 import follow_stamp
 from residual_fixtures import write_gwas_vcf_with_eaf
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import _format_p, app
+from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.stats import association_statistics
 
 
 def _build_dense(source_path, store_path, *options: str):
@@ -38,11 +41,11 @@ def _fixture_store(tmp_path, source_path):
 
 def test_format_p_underflow_and_nan():
     # Ordinary p, e.g. p=0.05 -> log10(p) ~= -1.301.
-    assert _format_p(math.log10(0.05)) == "0.05"
+    assert _format_p(0.05, math.log10(0.05)) == "0.05"
     # Past float64's own representable range (issue #104: FADS1/FADS2 reaches
     # |z|=47.8), an explicit sentinel replaces a silent 0.
-    assert _format_p(-320.0) == "<1e-300"
-    assert _format_p(math.nan) == "NA"
+    assert _format_p(0.0, -320.0) == "<1e-300"
+    assert _format_p(math.nan, math.nan) == "NA"
 
 
 def test_cli_build_validate_info_and_query_workflow(tmp_path, source_path):
@@ -66,7 +69,8 @@ def test_cli_build_validate_info_and_query_workflow(tmp_path, source_path):
     # json is the record keyed by index -- no resolved/human-readable fields,
     # and `eaf`/`association_status` with them (issue #394).
     assert set(phewas_rows[0]) == {
-        "variant_index", "analysis_index", "z", "se", "eaf", "association_status",
+        "variant_index", "analysis_index", "z", "se", "beta", "pval", "log10_p", "eaf",
+        "association_status",
     }
 
     range_query = runner.invoke(app, ["query-range-phewas", str(store_path), "1", "150", "350",
@@ -100,7 +104,7 @@ def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     # #136).
     assert header == [
         "analysis_id", "analysis_label", "chromosome", "position", "alid",
-        "effect_allele", "other_allele", "z", "se", "p", "eaf", "association_status",
+        "effect_allele", "other_allele", "z", "se", "beta", "p", "eaf", "association_status",
     ]
     assert len(rows) == 2
     by_analysis = {row[0]: row for row in rows}
@@ -110,11 +114,11 @@ def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     assert a1_row[2] == "1"  # chromosome
     assert a1_row[3] == "100"  # position
     assert a1_row[7] == "2"  # z
-    assert a1_row[11] == "observed"  # association_status
-    assert float(a1_row[9]) < 0.05  # p, parseable and plausible
+    assert a1_row[12] == "observed"  # association_status
+    assert float(a1_row[10]) < 0.05  # p, parseable and plausible
     # This fixture's source carries no allele frequency, so eaf is the store's
     # own missing marker (ADR 0036), shown as "." rather than fabricated.
-    assert a1_row[10] == "."
+    assert a1_row[11] == "."
 
     # An explicit --format tsv is equivalent to the default.
     explicit = runner.invoke(app, ["query-phewas", str(store_path), "rs1", "--format", "tsv"])
@@ -123,7 +127,40 @@ def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     range_query = runner.invoke(app, ["query-range-phewas", str(store_path), "1", "1", "500"])
     assert range_query.exit_code == 0, range_query.output
     range_lines = range_query.output.strip("\n").split("\n")
-    assert all(len(line.split("\t")) == 12 for line in range_lines)
+    assert all(len(line.split("\t")) == 13 for line in range_lines)
+
+
+def test_cli_query_prints_the_store_reader_s_beta_and_p(tmp_path, source_path):
+    """Both formats print `association_statistics`' values, not a second derivation (ADR 0104)."""
+    runner = CliRunner()
+    store_path, _ = _fixture_store(tmp_path, source_path)
+    with query_store(store_path) as q:
+        record = q.range_phewas("1", 1, 500)
+        resolved = {(row["analysis_id"], row["alid"]): row for row in q.resolve(record)}
+    assert record.count >= 2
+    derived = association_statistics(record["z"], record["se"])
+
+    as_json = runner.invoke(app, ["query-range-phewas", str(store_path), "1", "1", "500",
+                                  "--format", "json"])
+    assert as_json.exit_code == 0, as_json.output
+    rows = json.loads(as_json.output)
+    assert len(rows) == record.count
+    for i, row in enumerate(rows):
+        assert (row["variant_index"], row["analysis_index"]) == (
+            int(record["variant_index"][i]), int(record["analysis_index"][i])
+        )
+        assert row["beta"] == float(derived.beta[i]) == float(record["beta"][i])
+        assert row["pval"] == float(derived.pval[i]) == float(record["pval"][i])
+        assert row["log10_p"] == float(derived.log10_p[i])
+
+    as_tsv = runner.invoke(app, ["query-range-phewas", str(store_path), "1", "1", "500"])
+    assert as_tsv.exit_code == 0, as_tsv.output
+    header, *lines = [line.split("\t") for line in as_tsv.output.strip("\n").split("\n")]
+    assert len(lines) == record.count
+    for line in lines:
+        want = resolved[(line[header.index("analysis_id")], line[header.index("alid")])]
+        assert line[header.index("beta")] == f"{want['beta']:.6g}"
+        assert line[header.index("p")] == f"{want['pval']:.3g}"
 
 
 def test_cli_default_tsv_shows_materialised_eaf(tmp_path):
@@ -178,13 +215,13 @@ def test_cli_query_variant_info_adds_only_rsid(tmp_path, source_path):
     header, *rows = [line.split("\t") for line in with_it.output.strip("\n").split("\n")]
     assert header == [
         "analysis_id", "analysis_label", "rsid", "chromosome", "position", "alid",
-        "effect_allele", "other_allele", "z", "se", "p", "eaf", "association_status",
+        "effect_allele", "other_allele", "z", "se", "beta", "p", "eaf", "association_status",
     ]
     assert all(row[2] == "rs1" for row in rows)
     # This fixture's source has no allele frequency, so eaf is the store's own
     # missing marker rather than a fabricated value (ADR 0036). --variant-info
     # adds rsid; it does not change whether eaf is returned (issue #136).
-    assert all(row[11] == "." for row in rows)
+    assert all(row[12] == "." for row in rows)
     default_rows = [
         line.split("\t") for line in without_it.output.strip("\n").split("\n")[1:]
     ]
@@ -196,7 +233,9 @@ def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, sou
     runner = CliRunner()
     store_path, _ = _fixture_store(tmp_path, source_path)
 
-    index_sqlite_before = (store_path / "index.sqlite").read_bytes()
+    # A 0.3.0 Observed-Only release has no index.sqlite (#471); the command must not
+    # make one.
+    assert not (store_path / "index.sqlite").exists()
     analyses_tsv_before = (store_path / "analyses.tsv").read_text(encoding="utf-8")
 
     # Simulate a stale/corrupted overview.html the command must overwrite.
@@ -211,7 +250,7 @@ def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, sou
     assert "stale" not in content
 
     # No rebuild -- analyses.tsv and index.sqlite are untouched (issue #23 AC3).
-    assert (store_path / "index.sqlite").read_bytes() == index_sqlite_before
+    assert not (store_path / "index.sqlite").exists()
     assert (store_path / "analyses.tsv").read_text(encoding="utf-8") == analyses_tsv_before
 
 
@@ -326,7 +365,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     }
     assert info_data["store_id"] == "cf"
     assert info_data["release_id"] == "ov1"
-    assert info_data["format_version"] == "0.2.3"
+    assert info_data["format_version"] == "0.3.0"
     assert info_data["primary_layout"] == "dense"
     assert info_data["association_coverage"] == "gwas"
     assert info_data["completion_state"] == "observed_only"
@@ -397,11 +436,14 @@ NO_FREQUENCY_SKIP = {
     "message": "no frequencies",
 }
 
-#: What `00e91b1` printed in `warnings` for `dense_store_path` with one `+inf` se.
+#: What `00e91b1` printed in `warnings` for `dense_store_path` with one `+inf` se, its
+#: consequence restated when ADR 0104 made a query read `beta` and `pval` there as NaN
+#: (#473): the keys and the shape of the payload are `00e91b1`'s.
 INFINITE_SE_WARNING = (
     "1 cell(s) of data.zarr/se hold an infinite se: a source standard error above the "
-    "plane's range is stored as +inf, so beta = z * se reads as infinity although the "
-    "source value was finite (issue #338). The first Analyses holding one: 'a1'"
+    "plane's range is stored as +inf beside a finite z, although the source value was "
+    "finite, so a query reads beta and pval there as NaN (issue #338, ADR 0104). The "
+    "first Analyses holding one: 'a1'"
 )
 
 
@@ -466,6 +508,7 @@ def test_validate_format_json_reports_ok_errors_and_warnings_as_before(
     (warning / "manifest.json").write_text(
         json.dumps({**manifest, "format_version": "0.2.2"}), encoding="utf-8"
     )
+    follow_stamp(warning)
     open_store(warning).arrays(mode="a")["se"][0, 0] = float("inf")
 
     def before_378(store_path) -> dict:

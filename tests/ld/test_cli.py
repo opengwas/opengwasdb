@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
 from opengwasdb.ld import cli, env
-from opengwasdb.variants.normalise import VariantNormalisationError
+from opengwasdb.store_reader.identity import VariantNormalisationError
 
 STORE = store_copies.TEST_STORE
 

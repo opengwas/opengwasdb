@@ -33,13 +33,13 @@ from opengwasdb.ld.build import pc_check
 from opengwasdb.ld.build.inputs import Fileset, Records, records
 from opengwasdb.ld.format import InputError
 from opengwasdb.ld.genotypes import Genotypes
-from opengwasdb.variants.axis import alid_sort_key
-from opengwasdb.variants.normalise import (
+from opengwasdb.store_reader.identity import (
     AUTOSOMES,
     VariantNormalisationError,
-    chromosome_rank,
     normalise_chromosome,
 )
+from opengwasdb.variants.axis import alid_sort_key
+from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.variants.sorted_spelling import (
     SortedIdentity,
     resolve_sorted_reversed_indels,

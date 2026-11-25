@@ -21,11 +21,8 @@ import pytest
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.gwas_vcf import GwasVcfReader, _record_rows
 from opengwasdb.readers.interface import StreamTally
-from opengwasdb.variants.normalise import (
-    VariantNormalisationError,
-    orient_to_canonical,
-    oriented_alid,
-)
+from opengwasdb.store_reader.identity import VariantNormalisationError
+from opengwasdb.variants.normalise import orient_to_canonical, oriented_alid
 
 #: The FORMAT meta-lines a GWAS-VCF declares when it carries both spellings of
 #: an effect. `_write_vcf` takes them as a parameter so a test can write a file

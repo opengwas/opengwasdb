@@ -40,10 +40,10 @@ from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import _OffReferenceSpill, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged import build_ssf
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.variants.routing import Unmatched
 
 #: The source SE every route's association carries, and the SD it is divided by.

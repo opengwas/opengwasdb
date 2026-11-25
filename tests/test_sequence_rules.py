@@ -19,9 +19,11 @@ import zarr
 from store_reads import element_reads, times_read
 from test_ragged_residual_completion import RaggedResidualScenario, build_residual_ssf_source
 
-from opengwasdb.encoding import SE_EXCEPTION, Z_MISSING, SeExceptionTable
-from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
+from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION, Z_MISSING
 from opengwasdb.validation import validate_store
 from opengwasdb.validation.scans import analyses_of
 
@@ -306,7 +308,8 @@ def test_a_component_defect_does_not_hide_an_overflow_defect(
     result = validate_store(store)
 
     assert {f.target for f in result.of("top_hits.z")} == {"dense/data.zarr", "data.zarr/ragged"}
-    assert result.failed() == {"top_hits.z", "top_hits.abs_z"}, result.errors
+    # 0.3.0 tiers store no abs_z (#471); a z of 0 clears no threshold.
+    assert result.failed() == {"top_hits.z", "top_hits.threshold"}, result.errors
 
 
 def test_an_undecodable_se_does_not_hide_the_table_that_explains_it(fresh_ragged: Path) -> None:

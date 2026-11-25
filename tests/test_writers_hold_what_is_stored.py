@@ -23,16 +23,7 @@ from dense_sources import build_dense_fixture
 from stored_rows import stored_rows
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
-from opengwasdb.encoding import (
-    DenseEafPlane,
-    DenseSePlane,
-    DenseZPlane,
-    EafEncoding,
-    SeEncoding,
-    StoreEncoding,
-    ZEncoding,
-    association_codec,
-)
+from opengwasdb.encoding import association_codec
 from opengwasdb.encoding.association_codec import CellValues, Storable
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense import build_vcf
@@ -42,9 +33,12 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged import zarr_csr
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.store.open import open_store
-from opengwasdb.variants import VariantAxis
+from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH
+from opengwasdb.store_reader.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+from opengwasdb.store_reader.encoding.planes import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.variants.axis import VariantAxis
 
 #: The SE of the association the injected gate refuses, in fixtures that use it.
 REFUSED_SE = 0.4375
@@ -119,7 +113,7 @@ def _judged_at(judged: list[tuple[str, CellValues]], where: str, se: float) -> l
 def _dense_cell(opened, alid: str, analysis: int) -> tuple[float, float, float, int]:
     """`(z, se, eaf, imputed)` of one cell of a Dense grid (a Store or a Component)."""
     root, encoding = opened.arrays(mode="r"), opened.manifest.encoding
-    axis = VariantAxis(opened.path)
+    axis = opened.variant_axis(aliases=False)  # a 0.3.0 Component's is the shared one (#472)
     try:
         record = axis.by_identifier(alid)
     finally:

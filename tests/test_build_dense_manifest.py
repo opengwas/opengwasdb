@@ -9,9 +9,10 @@ import pytest
 from opengwasdb.admission.rules import AnalysisRules
 from opengwasdb.build.observed import build_dense_observed_from_manifest
 from opengwasdb.layouts.dense import AnalysisSource, build_dense_observed_store
-from opengwasdb.model.analyses import Analysis, read_analyses
+from opengwasdb.model.analyses import Analysis
 from opengwasdb.query import query_store
 from opengwasdb.readers.interface import StreamTally
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.validation import validate_store
 
 _HEADER = "chromosome\tposition\teffect_allele\tother_allele\tz\tse\n"

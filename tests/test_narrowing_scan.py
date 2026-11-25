@@ -17,8 +17,12 @@ from pathlib import Path
 import opengwasdb
 
 _PACKAGE = Path(opengwasdb.__file__).parent
-_CODEC = _PACKAGE / "encoding" / "codec.py"
-_ENCODING = _PACKAGE / "encoding"
+#: The codec: its decoder is the Store Reader's (#464), its encoders the encoding's.
+_CODECS = {
+    _PACKAGE / "encoding" / "codec.py",
+    _PACKAGE / "store_reader" / "encoding" / "codec.py",
+}
+_ENCODINGS = {_PACKAGE / "encoding", _PACKAGE / "store_reader" / "encoding"}
 #: Files that narrow something other than an association statistic.
 _OTHER_STATISTICS = {
     # The Rho Matrix is stored as float16; it is not an association plane.
@@ -91,9 +95,9 @@ def _narrowing_sites() -> list[str]:
     sites = []
     for path in sorted(_PACKAGE.rglob("*.py")):
         label = path.relative_to(_PACKAGE.parent)
-        if path not in _OTHER_STATISTICS and path != _CODEC:
+        if path not in _OTHER_STATISTICS and path not in _CODECS:
             sites.extend(f"{label}:{line}" for line in _cast_lines(path))
-        if _ENCODING not in path.parents:
+        if not _ENCODINGS.intersection(path.parents):
             sites.extend(f"{label}:{line}" for line in _se_helper_lines(path))
     return sites
 

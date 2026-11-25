@@ -1,0 +1,11 @@
+{
+  "attributes": {
+    "thresholds": [
+      5e-08,
+      5e-06,
+      0.0005
+    ]
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

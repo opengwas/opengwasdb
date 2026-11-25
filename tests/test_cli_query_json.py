@@ -17,11 +17,31 @@ from test_ragged_residual_completion import RaggedResidualScenario
 from typer.testing import CliRunner
 
 import opengwasdb.cli.main as cli
-from opengwasdb.associations import Associations
 from opengwasdb.cli.main import _emit_json, app
+from opengwasdb.store_reader.associations import Associations
+from opengwasdb.store_reader.stats import association_statistics
 
-#: A row is the record's mapping, key by key (spec §19).
-JSON_KEYS = {"variant_index", "analysis_index", "z", "se", "eaf", "association_status"}
+#: A row is the record's mapping, key by key (spec §19), with `log10_p` beside
+#: `pval` because `pval` underflows to 0.0 (ADR 0104).
+JSON_KEYS = {
+    "variant_index", "analysis_index", "z", "se", "beta", "pval", "log10_p", "eaf",
+    "association_status",
+}
+
+#: The keys the Store Reader derives rather than reads (ADR 0104).
+DERIVED = ("beta", "pval", "log10_p")
+
+
+def _derived(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Each row's derived values, checked against `association_statistics`, then
+    the row without them."""
+    z = np.array([row["z"] for row in rows], dtype=np.float64)
+    se = np.array([row["se"] for row in rows], dtype=np.float64)
+    stats = association_statistics(z, se)
+    for i, row in enumerate(rows):
+        for key in DERIVED:
+            assert row[key] == float(getattr(stats, key)[i]), (i, key)
+    return [{k: v for k, v in row.items() if k not in DERIVED} for row in rows]
 
 
 def _strict(output: str) -> list[dict[str, object]]:
@@ -70,7 +90,7 @@ def test_the_rows_keep_the_values_they_printed_before(dense_store: Path) -> None
 
     This Store's cells are all present and finite and it has no frequency plane,
     so the rows are the old ones exactly, with `"eaf": null` on each."""
-    assert _rows("query-phewas", dense_store, "rs1") == [
+    assert _derived(_rows("query-phewas", dense_store, "rs1")) == [
         {
             "variant_index": 0,
             "analysis_index": 0,
@@ -142,6 +162,9 @@ def test_an_infinite_se_keeps_its_value_and_its_sign(
     )
     rows = _strict(capsys.readouterr().out)
     assert [row["se"] for row in rows] == ["Infinity", "-Infinity", None]
+    # The SE is a value; what would be derived from it is not (ADR 0068, 0104).
+    for key in DERIVED:
+        assert [row[key] for row in rows] == [None, None, None], key
     assert [row["z"] for row in rows] == [2.0, 3.0, None]
     assert [row["association_status"] for row in rows] == ["observed", "imputed", "missing"]
     assert rows[0]["eaf"] == 0.25
@@ -161,7 +184,7 @@ def test_n_keeps_its_integer_form(capsys: pytest.CaptureFixture[str]) -> None:
             "association_status": np.array(["observed", "observed"], dtype=object),
         }
     )
-    rows = _strict(capsys.readouterr().out)
+    rows = _derived(_strict(capsys.readouterr().out))
     assert rows[0] == {
         "variant_index": 0,
         "analysis_index": 0,

@@ -1,0 +1,4498 @@
+{
+ "bundle_version": "1",
+ "digests": {
+  "adapter": "RaggedStoreQuery",
+  "alid_probes": {
+   "lookup": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "2f3fb4a34fb85c3322af5074c9e0d68817d7a801d0e8763883e503f61f9da034",
+    "eaf": "2b954304527557bb54d8112f36a17b440bb084c0eb71cdcf783e4f5805cb0c2e",
+    "se": "92cf42e5fa0bd690071e15878ca394529f8f6fe7eb007543b8a5c4a6bebeb3ec",
+    "variant_index": "e75927918d87398eee2f20247c472ef522ec9d58b491007fdfd25d541acce702",
+    "z": "95b7ac150cadc9fc9e0ca936a01d9dbe7f5eb0f0a742399eb43ede5f32c5f80d"
+   },
+   "phewas/1:1000:A:G": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:5000:A:C": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/1:5000:C:G": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "619100333d85165c9b131543a19c263ca78bd4658318c87e18e12c41e1f6000f",
+    "eaf": "6fca2d941a83211f6e2e07448b60dcd0291b72923dd75dbabf4a4bb3e11eae3d",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "1566054b40459a8d1305849225ccac06f4d90b7e1617fc35f97c81b82c899249",
+    "z": "047bcb618e5ee01a8796e00208997e0d45fab34c162cfdab76c848ac6d3a9d82"
+   }
+  },
+  "analyses_table": {
+   "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+   "analysis_id": "9796161cc0513ba586c8df9c572fde3565ac636bf63327dd6c292d8a0ba2aaa9",
+   "analysis_index": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
+   "analysis_label": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "ancestry_assignment_method": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "assigned_ancestry": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completed_against": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completion_median_pearson_r": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completion_n_imputed_total": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "completion_n_missing_total": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "consortium": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "context": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "eaf_orientation": "3cee78dd9fb7f2ea1a1c95c43733e1dc553b3d337f87be44e89dc2347ba88e79",
+   "eaf_orientation_n": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
+   "eaf_orientation_r": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "eaf_scope": "ecb8eebf1a3cb1da5b8b2faa6cbcf16391ed48ed7f8162d9923804522c616bb3",
+   "first_author": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "license": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "n_cases": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "n_controls": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "n_hits_5e4": "66ac83fc6289026e388ab521b9d53b3d222744f962b70e0b59a6fa74aff14d45",
+   "n_hits_5e6": "66ac83fc6289026e388ab521b9d53b3d222744f962b70e0b59a6fa74aff14d45",
+   "n_hits_5e8": "66ac83fc6289026e388ab521b9d53b3d222744f962b70e0b59a6fa74aff14d45",
+   "n_missing_se_out_of_range": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
+   "original_effect_scale": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "original_sd": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "original_sd_dispersion": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "original_sd_method": "821519c189ad7734b3cfe0a6f421177fc25ac9f41a226d767a5c03e7a60c18b1",
+   "publication_doi": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "publication_pmid": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "sample_size": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "sample_size_kind": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "sample_size_scope": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "stored_effect_scale": "06c951fceeb97e374eb585a4c88c0560026d6f8dc1233689a0d0f9590c243788",
+   "tissue": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_bp": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_chr": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_ontology_id": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "trait_ontology_label": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164"
+  },
+  "indexed_subsets": {},
+  "log10_p": {
+   "lookup/all": [
+    -8.704834331812725,
+    -11.591823641811507,
+    -14.905112555353176,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176
+   ],
+   "lookup/observed_only": [
+    -8.704834331812725,
+    -11.591823641811507,
+    -14.905112555353176,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176
+   ],
+   "range_phewas/all": [
+    -8.704834331812725
+   ],
+   "range_phewas/observed_only": [
+    -8.704834331812725
+   ],
+   "top_hits/0.2/all": [
+    -8.704834331812725,
+    -11.591823641811507,
+    -14.905112555353176,
+    -18.64643441990841,
+    -8.704834331812725,
+    -11.591823641811507,
+    -11.591823641811507,
+    -14.905112555353176
+   ]
+  },
+  "misses": {
+   "lookup": {
+    "analysis_index": "3b10740cd76db10f32280e75c4f1ae3a771643e1dfd080f225ea9944cf88e9a8",
+    "association_status": "d5f8fabb404f17ad8775dbeb56f726b1645bd014428d971774da4be88a785422",
+    "beta": "d6995006252be454fcb8c97e03d6c5bee0c825fb6ae6f7be298f3014eb7b2aa1",
+    "eaf": "f0590c71ac8ea47624e3d034b39b6fb67d7d732f0cbd458fcb4abe88db530ff8",
+    "se": "8f50aff36807a36eb5e08cc21273741a39833ad3155f2dee2f5d2c2677282020",
+    "variant_index": "60c31095b757736175d8427fa51e714d92c60ee64eeb33c8b770a54b36f3e2fb",
+    "z": "833b6d43c5234f449190b2fef2dc5cc71d74d9946a4803a692a745a384672860"
+   },
+   "phewas/rs0": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/rs999999999": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   }
+  },
+  "pval": {
+   "alid_probes/lookup": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "alid_probes/phewas/1:1000:A:G": [
+    1.9731752900754024e-09
+   ],
+   "alid_probes/phewas/1:5000:A:C": [
+    2.55962508777167e-12
+   ],
+   "alid_probes/phewas/1:5000:C:G": [
+    1.2441921148543639e-15
+   ],
+   "misses/lookup": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "misses/phewas/rs0": [],
+   "misses/phewas/rs999999999": [],
+   "range_probes/range_phewas/boundary/after/all": [
+    2.55962508777167e-12
+   ],
+   "range_probes/range_phewas/boundary/after/observed_only": [
+    2.55962508777167e-12
+   ],
+   "range_probes/range_phewas/boundary/before/all": [
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/boundary/before/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/empty/between/all": [],
+   "range_probes/range_phewas/empty/between/observed_only": [],
+   "range_probes/range_phewas/empty/chromosome/all": [],
+   "range_probes/range_phewas/empty/chromosome/observed_only": [],
+   "range_probes/range_phewas/first/all": [
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/first/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/from_last/all": [
+    1.2441921148543639e-15
+   ],
+   "range_probes/range_phewas/from_last/observed_only": [
+    1.2441921148543639e-15
+   ],
+   "range_probes/range_phewas/last/all": [
+    1.2441921148543639e-15
+   ],
+   "range_probes/range_phewas/last/observed_only": [
+    1.2441921148543639e-15
+   ],
+   "range_probes/range_phewas/shared/all": [
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19
+   ],
+   "range_probes/range_phewas/shared/from_before/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19
+   ],
+   "range_probes/range_phewas/shared/from_before/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19
+   ],
+   "range_probes/range_phewas/shared/observed_only": [
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19
+   ],
+   "range_probes/range_phewas/shared/to_after/all": [
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/shared/to_after/observed_only": [
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/to_first/all": [
+    1.9731752900754024e-09
+   ],
+   "range_probes/range_phewas/to_first/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "resolved/lookup/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "resolved/lookup/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "resolved/range_phewas/all": [
+    1.9731752900754024e-09
+   ],
+   "resolved/range_phewas/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "resolved/top_hits/0.2/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/analysis/trait_a/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/analysis/trait_a/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/lookup/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/lookup/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/1:1000:A:G/all": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/1:1000:A:G/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/1:1:A:C/all": [],
+   "shapes/phewas/1:1:A:C/observed_only": [],
+   "shapes/phewas/1:5000:A:C/all": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/1:5000:A:C/observed_only": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/1:5000:C:G/all": [
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/1:5000:C:G/observed_only": [
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/1:9000:A:G/all": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/1:9000:A:G/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/2:300:C:T/all": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/2:300:C:T/observed_only": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/2:7000:A:C/all": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/2:7000:A:C/observed_only": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/X:2500:G:T/all": [
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/X:2500:G:T/observed_only": [
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/rs0/all": [],
+   "shapes/phewas/rs0/observed_only": [],
+   "shapes/phewas/rs1000/all": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/rs1000/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/rs1004/all": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/rs1004/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "shapes/phewas/rs1005/all": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/rs1005/observed_only": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/rs1006/all": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/rs1006/observed_only": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/rs1007/all": [
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/rs1007/observed_only": [
+    1.2441921148543639e-15
+   ],
+   "shapes/phewas/rs5000/all": [
+    2.55962508777167e-12
+   ],
+   "shapes/phewas/rs5000/observed_only": [
+    2.55962508777167e-12
+   ],
+   "shapes/range_by_analysis/all": [],
+   "shapes/range_by_analysis/observed_only": [],
+   "shapes/range_phewas/all": [
+    1.9731752900754024e-09
+   ],
+   "shapes/range_phewas/observed_only": [
+    1.9731752900754024e-09
+   ],
+   "shapes/top_hits/0.0005/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.0005/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.0005/trait_a/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.0005/trait_a/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.01/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.01/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.01/trait_a/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.01/trait_a/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.2/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.2/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.2/trait_a/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/0.2/trait_a/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-06/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-06/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-06/trait_a/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-06/trait_a/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-08/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-08/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-08/trait_a/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/5e-08/trait_a/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15,
+    2.2571768119076845e-19,
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/limit/all": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ],
+   "shapes/top_hits/limit/observed_only": [
+    1.9731752900754024e-09,
+    2.55962508777167e-12,
+    1.2441921148543639e-15
+   ]
+  },
+  "range_probes": {
+   "range_phewas/boundary/after/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "range_phewas/boundary/after/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "range_phewas/boundary/before/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/boundary/before/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/empty/between/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/empty/between/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/empty/chromosome/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/empty/chromosome/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/first/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/first/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/from_last/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/from_last/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/last/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/last/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "range_phewas/shared/all": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "9da1580b7310062601403d95c212d77b1971feff686f6748acf0c6b5357666fc",
+    "eaf": "ef2953875379fda759a7601f16f883d39620dace991ac6946f536fef005ba1f1",
+    "se": "92cf42e5fa0bd690071e15878ca394529f8f6fe7eb007543b8a5c4a6bebeb3ec",
+    "variant_index": "1ecafe988be36831566299f5d2556243c18ee74bf8f14f0e3cf2bdd349e8367c",
+    "z": "1fc8ab08be90a4a69e8665f68c80130b9eeb73273f747034ac569d5bceec07a3"
+   },
+   "range_phewas/shared/from_before/all": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "73be442426d68f10fdc314420729f42f538a74e21d8cbf0b29b7e0911008bab1",
+    "eaf": "f1b9ca2f34d88ed279c14ac24b8c001adf56c3e1ce675962ccdd94f142c8f2f6",
+    "se": "6228a034fd6ad097163a5ba3cb8e56d429c3121160c6153562e715ee13b0d579",
+    "variant_index": "ad87fa9776cb959c97cb8384d5c5b69df5f3616508ac2b494309a85f3dc19df6",
+    "z": "b497432cbac365d05d268b08b51d0a625ba6958f88ad834979c236bed46525ab"
+   },
+   "range_phewas/shared/from_before/observed_only": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "73be442426d68f10fdc314420729f42f538a74e21d8cbf0b29b7e0911008bab1",
+    "eaf": "f1b9ca2f34d88ed279c14ac24b8c001adf56c3e1ce675962ccdd94f142c8f2f6",
+    "se": "6228a034fd6ad097163a5ba3cb8e56d429c3121160c6153562e715ee13b0d579",
+    "variant_index": "ad87fa9776cb959c97cb8384d5c5b69df5f3616508ac2b494309a85f3dc19df6",
+    "z": "b497432cbac365d05d268b08b51d0a625ba6958f88ad834979c236bed46525ab"
+   },
+   "range_phewas/shared/observed_only": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "9da1580b7310062601403d95c212d77b1971feff686f6748acf0c6b5357666fc",
+    "eaf": "ef2953875379fda759a7601f16f883d39620dace991ac6946f536fef005ba1f1",
+    "se": "92cf42e5fa0bd690071e15878ca394529f8f6fe7eb007543b8a5c4a6bebeb3ec",
+    "variant_index": "1ecafe988be36831566299f5d2556243c18ee74bf8f14f0e3cf2bdd349e8367c",
+    "z": "1fc8ab08be90a4a69e8665f68c80130b9eeb73273f747034ac569d5bceec07a3"
+   },
+   "range_phewas/shared/to_after/all": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "faab0591ce57a3c32da1d5e631d41224f6b454e50cebea29ed275de6a937bf56",
+    "eaf": "c720725940d9a9c4d4954544ef97bcd59bbaa6dac2e8d55fa8e468ebe04abc40",
+    "se": "6228a034fd6ad097163a5ba3cb8e56d429c3121160c6153562e715ee13b0d579",
+    "variant_index": "b6fd155c01056a134db72d36d3386d8836799aac5f341b5fac335fe65cf521f8",
+    "z": "988271e0b1e63966bbac94af80753eac6e04bd249d6b369dcfd9cd5f539e9852"
+   },
+   "range_phewas/shared/to_after/observed_only": {
+    "analysis_index": "63dee1cd5eb04de0cea022c399898d9b250d34727095a08473e1317edf7cd460",
+    "association_status": "815f46e0fad075e810f95a313aa14a780e54678909659a1f5ae52d42232d4164",
+    "beta": "faab0591ce57a3c32da1d5e631d41224f6b454e50cebea29ed275de6a937bf56",
+    "eaf": "c720725940d9a9c4d4954544ef97bcd59bbaa6dac2e8d55fa8e468ebe04abc40",
+    "se": "6228a034fd6ad097163a5ba3cb8e56d429c3121160c6153562e715ee13b0d579",
+    "variant_index": "b6fd155c01056a134db72d36d3386d8836799aac5f341b5fac335fe65cf521f8",
+    "z": "988271e0b1e63966bbac94af80753eac6e04bd249d6b369dcfd9cd5f539e9852"
+   },
+   "range_phewas/to_first/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/to_first/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   }
+  },
+  "refusals": {
+   "analysis/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   },
+   "lookup/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   },
+   "range_phewas/unsupported_chromosome": {
+    "error": "60fd1618dc4c0e5aabb68871ed094fe64fd5d4cde1300dcc65e72de31d62c796"
+   },
+   "top_hits/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
+   },
+   "variants_in_range/unsupported_chromosome": {
+    "error": "60fd1618dc4c0e5aabb68871ed094fe64fd5d4cde1300dcc65e72de31d62c796"
+   }
+  },
+  "resolved": {
+   "lookup/all": {
+    "alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094",
+    "analysis_id": "06b25b9137f3d7ae93e2984e1ff0fbe6c0b4c5857c1014b824d4379fd16ba14f",
+    "analysis_label": "7e21688c0ed273f7fe53d9dc62c6d06d1a2242b3d3a04e9d89b48242b16c36c0",
+    "association_status": "93c6fbc945b9d80cb2151232529dd2c2e5ce99851529710d0d2e9ddbb4777d8a",
+    "beta": "651283bbba6dced2a17c651a8a139220b109dfa5e63f9ad9dc0eee88af6fcbd4",
+    "chromosome": "45c841e68762de64d703368bb2d38e3c48ac32883d7922a16f46755ba3f163fc",
+    "eaf": "d9fdc62300fc2f1d6087080cc17cf7d20e63b250bb6eb75d66a9a8e24573cd6b",
+    "effect_allele": "f1f52596389b31f94c0a935fe614f15f1079db9e7ea0b6d961d986bcf3a308bd",
+    "other_allele": "e9e573814b42636c74a9d81cf4bb69c8158b37f37cd046696a7a66ebb029add8",
+    "position": "1908b115044ff47eb603b80d45de6e9356e54370d4ecd99a2e2082236a11c4e3",
+    "rsid": "95108844315c007a57828a3576e4286fb5283e14592ee486a5929785ca663b7e",
+    "se": "ae8a3a58fc8562a93d38b1dc6208c1fd5749559e6617dbb3d2000e65c3d3a512",
+    "source_alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094",
+    "z": "fc954d3f99878451b5f124c8e72f7f8ebf56c1c69dcee170f80a82ed96fa0ae1"
+   },
+   "lookup/observed_only": {
+    "alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094",
+    "analysis_id": "06b25b9137f3d7ae93e2984e1ff0fbe6c0b4c5857c1014b824d4379fd16ba14f",
+    "analysis_label": "7e21688c0ed273f7fe53d9dc62c6d06d1a2242b3d3a04e9d89b48242b16c36c0",
+    "association_status": "93c6fbc945b9d80cb2151232529dd2c2e5ce99851529710d0d2e9ddbb4777d8a",
+    "beta": "651283bbba6dced2a17c651a8a139220b109dfa5e63f9ad9dc0eee88af6fcbd4",
+    "chromosome": "45c841e68762de64d703368bb2d38e3c48ac32883d7922a16f46755ba3f163fc",
+    "eaf": "d9fdc62300fc2f1d6087080cc17cf7d20e63b250bb6eb75d66a9a8e24573cd6b",
+    "effect_allele": "f1f52596389b31f94c0a935fe614f15f1079db9e7ea0b6d961d986bcf3a308bd",
+    "other_allele": "e9e573814b42636c74a9d81cf4bb69c8158b37f37cd046696a7a66ebb029add8",
+    "position": "1908b115044ff47eb603b80d45de6e9356e54370d4ecd99a2e2082236a11c4e3",
+    "rsid": "95108844315c007a57828a3576e4286fb5283e14592ee486a5929785ca663b7e",
+    "se": "ae8a3a58fc8562a93d38b1dc6208c1fd5749559e6617dbb3d2000e65c3d3a512",
+    "source_alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094",
+    "z": "fc954d3f99878451b5f124c8e72f7f8ebf56c1c69dcee170f80a82ed96fa0ae1"
+   },
+   "range_phewas/all": {
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "analysis_id": "9796161cc0513ba586c8df9c572fde3565ac636bf63327dd6c292d8a0ba2aaa9",
+    "analysis_label": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+    "association_status": "91ce7a0e8df5d294b838a6c6cb2b438bbd4742140aaf04f6a335a0cc2a150c1d",
+    "beta": "570210f987a8748ffcaa48225ed969597eb89183efc0092e3ec00ad66d32c46b",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "eaf": "a0eeaee0d6dec973c03c826a36af4f3fd5faaf9d2aba20fd3ac3d8a366b80540",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "se": "dc3953fdec5645c6dedeba9c44d9d3c2e8a8ffe47130f389de7c7f9f6428270a",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "z": "e92441883d9f5b757c382896e20acc17b501ebb1bc9247203d5ef86f052e785d"
+   },
+   "range_phewas/observed_only": {
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "analysis_id": "9796161cc0513ba586c8df9c572fde3565ac636bf63327dd6c292d8a0ba2aaa9",
+    "analysis_label": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+    "association_status": "91ce7a0e8df5d294b838a6c6cb2b438bbd4742140aaf04f6a335a0cc2a150c1d",
+    "beta": "570210f987a8748ffcaa48225ed969597eb89183efc0092e3ec00ad66d32c46b",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "eaf": "a0eeaee0d6dec973c03c826a36af4f3fd5faaf9d2aba20fd3ac3d8a366b80540",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "se": "dc3953fdec5645c6dedeba9c44d9d3c2e8a8ffe47130f389de7c7f9f6428270a",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "z": "e92441883d9f5b757c382896e20acc17b501ebb1bc9247203d5ef86f052e785d"
+   },
+   "top_hits/0.2/all": {
+    "alid": "282c8d8eebdf683767ac82fdf1a6d3f6b1b6bac207b6dfe097046090995077c6",
+    "analysis_id": "de5e522518341ae5c1aae431736a4b35e0c00d37c03278686e48535011ee1eeb",
+    "analysis_label": "909978f3da1cf43edfe95a0d5757097de2b5b70ac218c60f9ca8b4e4cedd284c",
+    "association_status": "ee9347639e01ab54d88f85745244e8a67bcc9a19fa457eb152964779bfb0f672",
+    "beta": "32a1e1dbf3ceae2ddc870a6f62dd9a123254b3af984ccc29a14b182679cd4acf",
+    "chromosome": "a917b43b9e1bb08be9e9ed7ca8ebd64c32b895c99c49520fbc4b7be9e985471b",
+    "eaf": "e4cb5e7de2585c68d515be7e004a564bcaeab43bf777d246f91229c31aa020b7",
+    "effect_allele": "e0f3a45aeff73c1223b691a0c30aa93d499b2da6d1c5b4cb3fd164e85b4ebf54",
+    "other_allele": "54d2c8aa3374a7adf7adc7ed50661bb4ce0ca506d27ea133a4bbcfe149314491",
+    "position": "df846e7a916ba5236cbbe3719e302c63135a2c9ea62de6b3b3d9d319cf312d1d",
+    "rsid": "7da8709cd1c327ce71061ebddbf88f9d10e9d01cc8aea49540d6882cc865d8db",
+    "se": "cb947993ac25cdfe421cacc0e75022864b45d6615aed385f72c5384e52498078",
+    "source_alid": "282c8d8eebdf683767ac82fdf1a6d3f6b1b6bac207b6dfe097046090995077c6",
+    "z": "e033b0f3915380c928370ace57d7af5861b80f772d83f23b4bb9cd650a87d69e"
+   }
+  },
+  "shapes": {
+   "analysis/trait_a/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "analysis/trait_a/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "lookup/all": {
+    "analysis_index": "3b10740cd76db10f32280e75c4f1ae3a771643e1dfd080f225ea9944cf88e9a8",
+    "association_status": "d5f8fabb404f17ad8775dbeb56f726b1645bd014428d971774da4be88a785422",
+    "beta": "d6995006252be454fcb8c97e03d6c5bee0c825fb6ae6f7be298f3014eb7b2aa1",
+    "eaf": "f0590c71ac8ea47624e3d034b39b6fb67d7d732f0cbd458fcb4abe88db530ff8",
+    "se": "8f50aff36807a36eb5e08cc21273741a39833ad3155f2dee2f5d2c2677282020",
+    "variant_index": "60c31095b757736175d8427fa51e714d92c60ee64eeb33c8b770a54b36f3e2fb",
+    "z": "833b6d43c5234f449190b2fef2dc5cc71d74d9946a4803a692a745a384672860"
+   },
+   "lookup/observed_only": {
+    "analysis_index": "3b10740cd76db10f32280e75c4f1ae3a771643e1dfd080f225ea9944cf88e9a8",
+    "association_status": "d5f8fabb404f17ad8775dbeb56f726b1645bd014428d971774da4be88a785422",
+    "beta": "d6995006252be454fcb8c97e03d6c5bee0c825fb6ae6f7be298f3014eb7b2aa1",
+    "eaf": "f0590c71ac8ea47624e3d034b39b6fb67d7d732f0cbd458fcb4abe88db530ff8",
+    "se": "8f50aff36807a36eb5e08cc21273741a39833ad3155f2dee2f5d2c2677282020",
+    "variant_index": "60c31095b757736175d8427fa51e714d92c60ee64eeb33c8b770a54b36f3e2fb",
+    "z": "833b6d43c5234f449190b2fef2dc5cc71d74d9946a4803a692a745a384672860"
+   },
+   "phewas/1:1000:A:G/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:1000:A:G/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:1:A:C/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/1:1:A:C/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/1:5000:A:C/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/1:5000:A:C/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/1:5000:C:G/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "619100333d85165c9b131543a19c263ca78bd4658318c87e18e12c41e1f6000f",
+    "eaf": "6fca2d941a83211f6e2e07448b60dcd0291b72923dd75dbabf4a4bb3e11eae3d",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "1566054b40459a8d1305849225ccac06f4d90b7e1617fc35f97c81b82c899249",
+    "z": "047bcb618e5ee01a8796e00208997e0d45fab34c162cfdab76c848ac6d3a9d82"
+   },
+   "phewas/1:5000:C:G/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "619100333d85165c9b131543a19c263ca78bd4658318c87e18e12c41e1f6000f",
+    "eaf": "6fca2d941a83211f6e2e07448b60dcd0291b72923dd75dbabf4a4bb3e11eae3d",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "1566054b40459a8d1305849225ccac06f4d90b7e1617fc35f97c81b82c899249",
+    "z": "047bcb618e5ee01a8796e00208997e0d45fab34c162cfdab76c848ac6d3a9d82"
+   },
+   "phewas/1:9000:A:G/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/1:9000:A:G/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/2:300:C:T/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/2:300:C:T/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/2:7000:A:C/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/2:7000:A:C/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/X:2500:G:T/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/X:2500:G:T/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/rs0/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/rs0/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "phewas/rs1000/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1000/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1004/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1004/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "eeed0aa15ab8b77b82d965a0f1c4099600e5a5802f8cb22e117a89b2385e50f3",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "4ffb9a5bc67bfde226bc10d63dc89576b6127866dd8a5e69330bb3279981b4a9",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "phewas/rs1005/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1005/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "e103a10f2f49ed187fbad382710a8bfacecfde4a685df47f04487261cae08ebc",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "9fbb40bc5c8433b1b2c8332392a3047a6ace2a27c34e70b81c11777c533c767c",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1006/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1006/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "d7eacc81db35817c4b880932d0ed0b7df04d54921dbcc67176743729a47d1ba6",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "d97fb2c782776c3797be36aeb095c18b6e930b8b67666fabbe05715650d7cfcb",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs1007/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/rs1007/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "75fb324585513731560c1c49ab44807307014368c83495d300158215ee469531",
+    "eaf": "d4fd333a23ceb27541b87560df62cede82fd611266347789016225163747a0bf",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "bb4123d415744711909aef5e90285894f191fa25f4e6f814e91a920b14771325",
+    "z": "48252cc416eda3f7b070621f52865a788806ec4db49ebac9017157799436ac68"
+   },
+   "phewas/rs5000/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "phewas/rs5000/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "981e2f64314f6732cd29a35806c9a002479e41936480e9c5354c753e99353e35",
+    "eaf": "998f744d5826890de8a73330183f6cb335abdbe245c8ac67e8465489a0562832",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "15c68b8d78c21cb9105454d40932f82276321d0442d024a1a5fc5397841b142d",
+    "z": "1d0583c6c355df4538126594556b05dc378f3ccdb1ef62c54037a662dd5325ec"
+   },
+   "range_by_analysis/all": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_by_analysis/observed_only": {
+    "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "beta": "06445000d700a6216b8dbd35a4f27340aae300a0b28775fb1120ed851b43c2e7",
+    "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+    "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+    "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "range_phewas/all": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "range_phewas/observed_only": {
+    "analysis_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "association_status": "45f638cd89f53c259c7f3950e0bbe6d47fbd269d308e2a4ca1f3dccfd27b3f91",
+    "beta": "10bb851e7c873eef4d103a73532c572be1267f00133ebb078675373e76896376",
+    "eaf": "3c52707967c7ed9a44d92ced9e14acdb47002e277218d8e92ea8455fbdd8b85c",
+    "se": "4dbcb3c4fa04122e3a148ab9caea2ea949b7c4df141685c4173f73e8a64888e2",
+    "variant_index": "349ec629660863770dc6779694fe071f6bede69def7ff9d375c2c6fcbdf6405e",
+    "z": "bc1be2ff102364daed0a4806654a3919a0feb840739915b23b991df425b82541"
+   },
+   "top_hits/0.0005/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.0005/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.0005/trait_a/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.0005/trait_a/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.01/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.01/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.01/trait_a/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.01/trait_a/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.2/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.2/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.2/trait_a/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/0.2/trait_a/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/trait_a/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-06/trait_a/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/trait_a/all": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/5e-08/trait_a/observed_only": {
+    "analysis_index": "84f319b82c73b2dee8b6de2e94237e89a46ec829e16944b1062ba831fd418be3",
+    "association_status": "fd65f9424560024c1bae0fcf17c385bfe1cc0220dff2500d5a2ea96ece8cd9dd",
+    "beta": "13d57a10022898cef1674940578466dbcbde1a0f28f447440ba4fff7060ce11b",
+    "eaf": "ef154374a8ece9feee461472cae81d6a3bcb67548b69879c91fa5b2979a966db",
+    "se": "e6ce15e33c08673943b4b62d00f1f289525b0c29d293b73d1fa474a35dc56be8",
+    "variant_index": "1ed423902a7c8841cacf66012b1e7404ee9f16b2770e6581aa413cb798f3e1d4",
+    "z": "d6628bfac5b6837fe4ef34583f00890c68160be3e88f009607f3fcfd9a6bad1e"
+   },
+   "top_hits/limit/all": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "2f3fb4a34fb85c3322af5074c9e0d68817d7a801d0e8763883e503f61f9da034",
+    "eaf": "2b954304527557bb54d8112f36a17b440bb084c0eb71cdcf783e4f5805cb0c2e",
+    "se": "92cf42e5fa0bd690071e15878ca394529f8f6fe7eb007543b8a5c4a6bebeb3ec",
+    "variant_index": "e75927918d87398eee2f20247c472ef522ec9d58b491007fdfd25d541acce702",
+    "z": "95b7ac150cadc9fc9e0ca936a01d9dbe7f5eb0f0a742399eb43ede5f32c5f80d"
+   },
+   "top_hits/limit/observed_only": {
+    "analysis_index": "bbd9fc71c6870841631432fbda36d67d16d25972bc5fe31016fc0335ea88b7bd",
+    "association_status": "0e3f648ff586a42b041b6c35b7c3463fe43a0f0745b51e4e74fc7db4ad7d8e2d",
+    "beta": "2f3fb4a34fb85c3322af5074c9e0d68817d7a801d0e8763883e503f61f9da034",
+    "eaf": "2b954304527557bb54d8112f36a17b440bb084c0eb71cdcf783e4f5805cb0c2e",
+    "se": "92cf42e5fa0bd690071e15878ca394529f8f6fe7eb007543b8a5c4a6bebeb3ec",
+    "variant_index": "e75927918d87398eee2f20247c472ef522ec9d58b491007fdfd25d541acce702",
+    "z": "95b7ac150cadc9fc9e0ca936a01d9dbe7f5eb0f0a742399eb43ede5f32c5f80d"
+   }
+  },
+  "unposed_range_questions": [],
+  "variant_reads": {
+   "variant_count": {
+    "count": "392e10e92d4623d9ef444182d9a833dc62a37436cc4607588ee677720cd4d408"
+   },
+   "variants": {
+    "__keys__": "8437cc4e37b91c6bc39a2c929f7117ef88364ad1628505accb24591e20cbb102",
+    "alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094",
+    "chromosome": "45c841e68762de64d703368bb2d38e3c48ac32883d7922a16f46755ba3f163fc",
+    "effect_allele": "f1f52596389b31f94c0a935fe614f15f1079db9e7ea0b6d961d986bcf3a308bd",
+    "other_allele": "e9e573814b42636c74a9d81cf4bb69c8158b37f37cd046696a7a66ebb029add8",
+    "position": "1908b115044ff47eb603b80d45de6e9356e54370d4ecd99a2e2082236a11c4e3",
+    "rsid": "95108844315c007a57828a3576e4286fb5283e14592ee486a5929785ca663b7e",
+    "source_alid": "ace683acba2bcfe508926eba3ce21ee8e18b12fd0cadab105029bcb2e2a00094"
+   },
+   "variants_in_range/boundary/after": {
+    "__keys__": "e6a4d52e2165d1c4ecb5eab95a3844677d5606792fdeb7b26cc13137e4ec2727",
+    "alid": "16c6dcbd8e40e8f19ef1ba9dfd04acd7216f4fcac39bb0353d3ba5b13d8a46b3",
+    "chromosome": "13f17d98e5f7a9d1a921c774303703afd7c111c9205248110d45d4a85ff00f72",
+    "effect_allele": "05e997d5882aa98847e311f671255bbe1fe62f9acdba394faa802dd22af48df0",
+    "other_allele": "8580568a7d9c2a48a9ff81dcb13540992e829cf76a8e80ee5e006b715d3b416d",
+    "position": "eabe6ba6db023e35434883010e8685554a4880dcf20fc442931745204d61d026",
+    "rsid": "b4fdc8fe76e115a66c8a892aad8e945b6fa64faa26e7c12485bd4b0abbd3c0bf",
+    "source_alid": "16c6dcbd8e40e8f19ef1ba9dfd04acd7216f4fcac39bb0353d3ba5b13d8a46b3"
+   },
+   "variants_in_range/boundary/before": {
+    "__keys__": "d66faad2e4ac21159d0ed798581fba4b4312f51bd516808cf416e04b1d205e6f",
+    "alid": "e0c933d099ec9fcec7660a50bdbf9af88ce1fe7b22a349618fa9ec5d643bd34f",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "7efe5c1d1b3fcd4df91ed2bf67cc55f417560cbc62baa32211f7745ad666b12b",
+    "rsid": "7650e8d9cab21deca6d18382419f96193ad5943aa2ae16411c5828d0c61d245c",
+    "source_alid": "e0c933d099ec9fcec7660a50bdbf9af88ce1fe7b22a349618fa9ec5d643bd34f"
+   },
+   "variants_in_range/empty/between": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/empty/chromosome": {
+    "__keys__": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca"
+   },
+   "variants_in_range/first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
+   },
+   "variants_in_range/from_last": {
+    "__keys__": "834847e0615fada841de7f4be844061d8d44e3ba6c97efb2471963a6c1f0d9ac",
+    "alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32",
+    "chromosome": "aa7fdfc3c13389d628411617df39a27f11e3ab6dafa1d3e33d69bf60cc4a0506",
+    "effect_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "other_allele": "8580568a7d9c2a48a9ff81dcb13540992e829cf76a8e80ee5e006b715d3b416d",
+    "position": "2c93f89cadd0c88052bd00294738ac530e13764da3fbc651a053c75e5bc664cc",
+    "rsid": "19762b4511ff1c2a5bd9110a688ca4186d704713ad8a52f50152d8f25f26be22",
+    "source_alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32"
+   },
+   "variants_in_range/last": {
+    "__keys__": "834847e0615fada841de7f4be844061d8d44e3ba6c97efb2471963a6c1f0d9ac",
+    "alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32",
+    "chromosome": "aa7fdfc3c13389d628411617df39a27f11e3ab6dafa1d3e33d69bf60cc4a0506",
+    "effect_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "other_allele": "8580568a7d9c2a48a9ff81dcb13540992e829cf76a8e80ee5e006b715d3b416d",
+    "position": "2c93f89cadd0c88052bd00294738ac530e13764da3fbc651a053c75e5bc664cc",
+    "rsid": "19762b4511ff1c2a5bd9110a688ca4186d704713ad8a52f50152d8f25f26be22",
+    "source_alid": "50cae8aabdd3d29b70dc947f047ecc0ac2d5508f40b7f0e9de331d19bfb28e32"
+   },
+   "variants_in_range/shared": {
+    "__keys__": "a3e1e1e381ff97f34ef4d10f80efecd5ff7f32bf50c0c803ed4e2dd8481c19ed",
+    "alid": "f7a511de74584ecb370c4446dee0e7bb8f5d5dea401a540d98991e3d5c5d4d1f",
+    "chromosome": "6f2346baa1a0103cc5dd1bd74c2143834d6f7e2c860302bc608a819a246d97b9",
+    "effect_allele": "70c9f3fe7bd0e82f942422a74c71f3032bdbe3cdf9cc51580674ebc4b09225e7",
+    "other_allele": "e6fb8363bdaf98b12a1855ba8493ce84f3d16416b6c8c581e4c1fe38afda7d0f",
+    "position": "42543dd6c6b1b1e69de2455bcd5317c2a3913e2d25cff564239931b012340600",
+    "rsid": "5eec463cb8d50f7180b10313b269bec6757df56105e9de8f6ddf4a863dbd7ea1",
+    "source_alid": "f7a511de74584ecb370c4446dee0e7bb8f5d5dea401a540d98991e3d5c5d4d1f"
+   },
+   "variants_in_range/shared/from_before": {
+    "__keys__": "4a871df19664c6cb970ed978739dfbc6f1233832666e80bd6ae49678b7a24f23",
+    "alid": "22b028502009358cebd82b3ec028ea29458675618e9b9a3b132ebd2f6f8eafdc",
+    "chromosome": "01725bbaa27f107c91a821d3530fc404c6dd3c4e55bc7f6d249c7eeee36891e2",
+    "effect_allele": "233d60722a5f60f0966151d62d5a97a9f72894c8b3435aed9dd18cc6683b62e8",
+    "other_allele": "123269cf0cd8818eed7b68aa3512ddd33b36abda927fbfdb282f531d4d9ed47d",
+    "position": "b5955f79bfdab6ecf645d75eb15a0284364479e39379b64a1e5498a560d103c5",
+    "rsid": "e42ab152b829bd1236a1e4c901f253aea34c97d333cfdb6f783faf14066e57a7",
+    "source_alid": "22b028502009358cebd82b3ec028ea29458675618e9b9a3b132ebd2f6f8eafdc"
+   },
+   "variants_in_range/shared/to_after": {
+    "__keys__": "744b21d19f6cbcba0c1f3f05392a68dd75dab96c49a7e9195fb2888091fa790f",
+    "alid": "d0ea89fa301e378ca4148c13e12bef4e1279522810f4a83c85ee7d4f4abd2ad1",
+    "chromosome": "01725bbaa27f107c91a821d3530fc404c6dd3c4e55bc7f6d249c7eeee36891e2",
+    "effect_allele": "e99b1a5314137613bba5a6d172bd7bd10c23f9393f5c77df7604d04916298cc0",
+    "other_allele": "cabdaac64c86d77c52ab817477059166ffc3f39821685ba39a6b61ee5d3c7aa5",
+    "position": "b639c036497cc745c0880a75850706238cbb6f662648513189d298164383c582",
+    "rsid": "fe82495dc768de4bb7a8e0c9faf1f21f750435e3531d032443c0153ce8631ad3",
+    "source_alid": "d0ea89fa301e378ca4148c13e12bef4e1279522810f4a83c85ee7d4f4abd2ad1"
+   },
+   "variants_in_range/to_first": {
+    "__keys__": "45adabbfed6d5c15e65388c91d304b353a63747b2e17a7860a030a4b2b26246b",
+    "alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
+    "chromosome": "97e43b3babffbd8c8eb41ace53d34d9ab115a62a375f04d288b75df46a94ed9b",
+    "effect_allele": "2185e69818fd3c5c272a2e57c0b0c2806d7905a214070a66bec9cc64b7b86248",
+    "other_allele": "7e41199c1f2e26824dfe06839b56c02b7aea94e7f15edaa440e0aad7bb18010f",
+    "position": "455407923739206a315086f807ec6d6c4918081d051d82c55b820d251520f247",
+    "rsid": "63cd7aeb9da145eda8549324d29209f49b28dcd899f52ab83b786e80cee12c1a",
+    "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a"
+   }
+  },
+  "variants_table": {
+   "__keys__": "af9b4706917b2f413d1349d61c7d59a6c9dabfcdbb2c41d0f753c19a8f807dd0",
+   "alid": "282c8d8eebdf683767ac82fdf1a6d3f6b1b6bac207b6dfe097046090995077c6",
+   "chromosome": "a917b43b9e1bb08be9e9ed7ca8ebd64c32b895c99c49520fbc4b7be9e985471b",
+   "effect_allele": "e0f3a45aeff73c1223b691a0c30aa93d499b2da6d1c5b4cb3fd164e85b4ebf54",
+   "other_allele": "54d2c8aa3374a7adf7adc7ed50661bb4ce0ca506d27ea133a4bbcfe149314491",
+   "position": "df846e7a916ba5236cbbe3719e302c63135a2c9ea62de6b3b3d9d319cf312d1d",
+   "rsid": "5538146df75cc8a545ec190df7057c03a3a2f698d983af909b00d56edb1e4825",
+   "source_alid": "282c8d8eebdf683767ac82fdf1a6d3f6b1b6bac207b6dfe097046090995077c6"
+  }
+ },
+ "format_version": "0.3.0",
+ "readable": {
+  "alid_probes": {
+   "lookup": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 3
+   },
+   "phewas/1:1000:A:G": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:A:C": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:C:G": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 1
+   }
+  },
+  "analyses_table": {
+   "head": [
+    {
+     "analysis_id": "trait_a",
+     "analysis_index": "0",
+     "analysis_label": "",
+     "ancestry_assignment_method": "",
+     "assigned_ancestry": "",
+     "completed_against": "",
+     "completion_median_pearson_r": "",
+     "completion_n_imputed_total": "",
+     "completion_n_missing_total": "",
+     "consortium": "",
+     "context": "",
+     "eaf_orientation": "unverified",
+     "eaf_orientation_n": "0",
+     "eaf_orientation_r": "",
+     "eaf_scope": "association",
+     "first_author": "",
+     "license": "",
+     "n_cases": "",
+     "n_controls": "",
+     "n_hits_5e4": "8",
+     "n_hits_5e6": "8",
+     "n_hits_5e8": "8",
+     "n_missing_se_out_of_range": "0",
+     "original_effect_scale": "",
+     "original_sd": "",
+     "original_sd_dispersion": "",
+     "original_sd_method": "declared_standardised",
+     "publication_doi": "",
+     "publication_pmid": "",
+     "sample_size": "",
+     "sample_size_kind": "",
+     "sample_size_scope": "",
+     "stored_effect_scale": "sd",
+     "tissue": "",
+     "trait_bp": "",
+     "trait_chr": "",
+     "trait_ontology_id": "",
+     "trait_ontology_label": ""
+    }
+   ],
+   "rows": 1
+  },
+  "indexed_subsets": {},
+  "misses": {
+   "lookup": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 7
+   },
+   "phewas/rs0": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "phewas/rs999999999": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   }
+  },
+  "range_probes": {
+   "range_phewas/boundary/after/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/boundary/after/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/boundary/before/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/boundary/before/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/empty/between/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/between/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/chromosome/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/empty/chromosome/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/first/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/first/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/from_last/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/from_last/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/last/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/last/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/shared/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 3
+   },
+   "range_phewas/shared/from_before/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/shared/from_before/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/shared/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 3
+   },
+   "range_phewas/shared/to_after/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/shared/to_after/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 4
+   },
+   "range_phewas/to_first/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/to_first/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   }
+  },
+  "refusals": {
+   "analysis/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
+   "lookup/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
+   "range_phewas/unsupported_chromosome": {
+    "error": "UnsupportedChromosome",
+    "fields": {
+     "chromosome": "27"
+    },
+    "message": "unsupported chromosome '27'"
+   },
+   "top_hits/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
+   },
+   "variants_in_range/unsupported_chromosome": {
+    "error": "UnsupportedChromosome",
+    "fields": {
+     "chromosome": "27"
+    },
+    "message": "unsupported chromosome '27'"
+   }
+  },
+  "shapes": {
+   "analysis/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "analysis/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "lookup/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 7
+   },
+   "lookup/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 7
+   },
+   "phewas/1:1000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:1000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:1:A:C/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "phewas/1:1:A:C/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "phewas/1:5000:A:C/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:A:C/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:C:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:5000:C:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.07999999821186066,
+      "eaf": 0.75,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 2,
+      "z": 8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:9000:A:G/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/1:9000:A:G/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:300:C:T/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:300:C:T/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:7000:A:C/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/2:7000:A:C/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/X:2500:G:T/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/X:2500:G:T/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs0/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "phewas/rs0/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "phewas/rs1000/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1000/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1004/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1004/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.4000000059604645,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 4,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1005/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1005/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.20000000298023224,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 5,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1006/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1006/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.699999988079071,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 6,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1007/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs1007/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.07999999821186066,
+      "eaf": 0.550000011920929,
+      "pval": 1.2441921148543639e-15,
+      "se": 0.009999999776482582,
+      "variant_index": 7,
+      "z": -8.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs5000/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "phewas/rs5000/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_by_analysis/all": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_by_analysis/observed_only": {
+    "by_status": {},
+    "head": [],
+    "rows": 0
+   },
+   "range_phewas/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "range_phewas/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    ],
+    "rows": 1
+   },
+   "top_hits/0.0005/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.0005/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.0005/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.0005/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.01/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.01/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.01/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.01/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.2/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.2/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.2/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/0.2/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-06/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/trait_a/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/5e-08/trait_a/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 8
+   },
+   "top_hits/limit/all": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 3
+   },
+   "top_hits/limit/observed_only": {
+    "by_status": {
+     "observed": {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "at": 0,
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     }
+    },
+    "head": [
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": -0.05999999865889549,
+      "eaf": 0.800000011920929,
+      "pval": 1.9731752900754024e-09,
+      "se": 0.009999999776482582,
+      "variant_index": 0,
+      "z": -6.0
+     },
+     {
+      "analysis_index": 0,
+      "association_status": "observed",
+      "beta": 0.06999999843537807,
+      "eaf": 0.30000001192092896,
+      "pval": 2.55962508777167e-12,
+      "se": 0.009999999776482582,
+      "variant_index": 1,
+      "z": 7.0
+     }
+    ],
+    "rows": 3
+   }
+  },
+  "variant_reads": {
+   "variant_count": {
+    "count": 8
+   },
+   "variants": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     },
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     }
+    ],
+    "rows": 7
+   },
+   "variants_in_range/boundary/after": {
+    "head": [
+     {
+      "alid": "2:300:C:T",
+      "chromosome": "2",
+      "effect_allele": "C",
+      "other_allele": "T",
+      "position": 300,
+      "rsid": "rs1005",
+      "source_alid": "2:300:C:T",
+      "variant_index": 5
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/boundary/before": {
+    "head": [
+     {
+      "alid": "1:9000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 9000,
+      "rsid": "rs1004",
+      "source_alid": "1:9000:A:G",
+      "variant_index": 4
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/empty/between": {
+    "head": [],
+    "rows": 0
+   },
+   "variants_in_range/empty/chromosome": {
+    "head": [],
+    "rows": 0
+   },
+   "variants_in_range/first": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/from_last": {
+    "head": [
+     {
+      "alid": "X:2500:G:T",
+      "chromosome": "X",
+      "effect_allele": "G",
+      "other_allele": "T",
+      "position": 2500,
+      "rsid": "rs1007",
+      "source_alid": "X:2500:G:T",
+      "variant_index": 7
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/last": {
+    "head": [
+     {
+      "alid": "X:2500:G:T",
+      "chromosome": "X",
+      "effect_allele": "G",
+      "other_allele": "T",
+      "position": 2500,
+      "rsid": "rs1007",
+      "source_alid": "X:2500:G:T",
+      "variant_index": 7
+     }
+    ],
+    "rows": 1
+   },
+   "variants_in_range/shared": {
+    "head": [
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     },
+     {
+      "alid": "1:5000:C:G",
+      "chromosome": "1",
+      "effect_allele": "C",
+      "other_allele": "G",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:C:G",
+      "variant_index": 2
+     }
+    ],
+    "rows": 3
+   },
+   "variants_in_range/shared/from_before": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     },
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     }
+    ],
+    "rows": 4
+   },
+   "variants_in_range/shared/to_after": {
+    "head": [
+     {
+      "alid": "1:5000:A:C",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "C",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:A:C",
+      "variant_index": 1
+     },
+     {
+      "alid": "1:5000:C:G",
+      "chromosome": "1",
+      "effect_allele": "C",
+      "other_allele": "G",
+      "position": 5000,
+      "rsid": "rs5000",
+      "source_alid": "1:5000:C:G",
+      "variant_index": 2
+     }
+    ],
+    "rows": 4
+   },
+   "variants_in_range/to_first": {
+    "head": [
+     {
+      "alid": "1:1000:A:G",
+      "chromosome": "1",
+      "effect_allele": "A",
+      "other_allele": "G",
+      "position": 1000,
+      "rsid": "rs1000",
+      "source_alid": "1:1000:A:G",
+      "variant_index": 0
+     }
+    ],
+    "rows": 1
+   }
+  },
+  "variants_table": {
+   "head": [
+    {
+     "alid": "1:1000:A:G",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "G",
+     "position": 1000,
+     "rsid": "rs1000",
+     "source_alid": "1:1000:A:G",
+     "variant_index": 0
+    },
+    {
+     "alid": "1:5000:A:C",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "C",
+     "position": 5000,
+     "rsid": "rs5000",
+     "source_alid": "1:5000:A:C",
+     "variant_index": 1
+    }
+   ],
+   "probed": [
+    {
+     "alid": "1:1000:A:G",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "G",
+     "position": 1000,
+     "rsid": "rs1000",
+     "source_alid": "1:1000:A:G",
+     "variant_index": 0
+    },
+    {
+     "alid": "1:5000:A:C",
+     "chromosome": "1",
+     "effect_allele": "A",
+     "other_allele": "C",
+     "position": 5000,
+     "rsid": "rs5000",
+     "source_alid": "1:5000:A:C",
+     "variant_index": 1
+    },
+    {
+     "alid": "1:5000:C:G",
+     "chromosome": "1",
+     "effect_allele": "C",
+     "other_allele": "G",
+     "position": 5000,
+     "rsid": "rs5000",
+     "source_alid": "1:5000:C:G",
+     "variant_index": 2
+    }
+   ],
+   "rows": 8
+  }
+ },
+ "release": "ragged_ranges"
+}

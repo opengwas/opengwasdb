@@ -45,7 +45,7 @@ SPENT: defaultdict[str, float] = defaultdict(float)
 
 def instrument() -> None:
     """Wrap `DenseEafPlane.points` and `.band` to charge their time to their caller."""
-    from opengwasdb.encoding import planes
+    from opengwasdb.store_reader.encoding import planes
 
     for name in ("points", "band"):
         original = getattr(planes.DenseEafPlane, name)

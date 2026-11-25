@@ -21,6 +21,7 @@ what a user reads back -- not what the builder believed it was writing.
 from __future__ import annotations
 
 import logging
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,11 +37,10 @@ from opengwasdb.build.eaf_orientation import (
     select_rows,
     site_hash,
 )
-from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import EafOrientationOutcome, EafScope
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
-from opengwasdb.variants import iter_variant_records, variant_table_path
+from opengwasdb.store_reader.analyses import read_analyses
 
 log = logging.getLogger(__name__)
 
@@ -74,11 +74,10 @@ def _axis_hashes(store_path: Path) -> np.ndarray:
     run on has twenty million variants, and only the sampled ones are ever
     needed as strings.
     """
-    table_path = variant_table_path(store_path)
-    hashes: dict[int, int] = {
-        record.variant_index: site_hash(record.alid)
-        for record in iter_variant_records(table_path)
-    }
+    with closing(open_store(store_path).variant_axis(aliases=False)) as axis:
+        hashes: dict[int, int] = {
+            record.variant_index: site_hash(record.alid) for record in axis.records()
+        }
     out = np.zeros(max(hashes) + 1 if hashes else 0, dtype=np.uint64)
     for index, value in hashes.items():
         out[index] = value
@@ -87,11 +86,12 @@ def _axis_hashes(store_path: Path) -> np.ndarray:
 
 def _alids_at(store_path: Path, rows: set[int]) -> dict[int, str]:
     """`{variant_index: alid}` for the rows the per-Analysis samples chose."""
-    return {
-        record.variant_index: record.alid
-        for record in iter_variant_records(variant_table_path(store_path))
-        if record.variant_index in rows
-    }
+    with closing(open_store(store_path).variant_axis(aliases=False)) as axis:
+        return {
+            record.variant_index: record.alid
+            for record in axis.records()
+            if record.variant_index in rows
+        }
 
 
 def audit_eaf_orientation(

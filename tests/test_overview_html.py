@@ -21,7 +21,6 @@ from dense_sources import build_dense_fixture
 from opengwasdb import overview as overview_module
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 from opengwasdb.layouts.dense.rho import build_dense_rho, write_rho_group
-from opengwasdb.model.analyses import AnalysesTable, read_analyses
 from opengwasdb.overview import (
     FileGuideEntry,
     RhoHeatmap,
@@ -34,6 +33,7 @@ from opengwasdb.overview import (
     render_overview_html,
     write_overview_html,
 )
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
 
 
 def _table() -> AnalysesTable:
@@ -354,7 +354,8 @@ def test_render_overview_html_renders_a_hand_built_value_without_reading_a_store
     monkeypatch.setattr(Path, "read_text", forbidden)
     monkeypatch.setattr(Path, "open", forbidden)
     monkeypatch.setattr(builtins, "open", forbidden)
-    monkeypatch.setattr(overview_module, "open_group", forbidden)
+    monkeypatch.setattr(overview_module, "release_arrays", forbidden)
+    monkeypatch.setattr(overview_module, "stored_attributes", forbidden)
     monkeypatch.setattr(overview_module.json, "loads", forbidden)
 
     content = render_overview_html(_hand_built_overview(rho=_hand_built_rho()))
@@ -491,7 +492,7 @@ def test_gather_store_overview_lets_an_unexpected_failure_propagate(
     def explode(*_args: object, **_kwargs: object) -> NoReturn:
         raise RuntimeError("the zarr stack is broken")
 
-    monkeypatch.setattr(overview_module, "open_group", explode)
+    monkeypatch.setattr(overview_module, "release_arrays", explode)
 
     with pytest.raises(RuntimeError, match="the zarr stack is broken"):
         gather_store_overview(tmp_path, _table())
@@ -966,3 +967,25 @@ def test_indexed_subsets_total_counts_each_traversal_once(
         real(path) for path in overview_module._published_subset_paths(store)
     )
     assert len(subsets.rows) == 2
+
+
+@pytest.mark.parametrize("format_version", ["0.2.3", "0.3.0"])
+def test_guide_describes_every_file_a_release_carries(format_version: str) -> None:
+    # The fallback keeps an unknown file visible, but a file this package
+    # writes must say what it is: 0.3.0's sidecars once read "Internal store
+    # file." and `variants.tsv.gz` "Read via the query API", which 0.3.0's
+    # queries never do (ADR 0102).
+    from opengwasdb.store.open import envelope_at
+    from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+
+    names: set[str] = set()
+    for layout in PrimaryStorageLayout:
+        for state in CompletionState:
+            for component in (False, True) if layout is PrimaryStorageLayout.HYBRID else (False,):
+                names |= envelope_at(layout, format_version, state, dense_component=component)
+    assert {"variants.tsv.gz", "manifest.json"} <= names
+    undescribed = sorted(names - overview_module._FILE_DESCRIPTIONS.keys())
+    assert undescribed == []
+    if format_version == "0.3.0":
+        description = overview_module._FILE_DESCRIPTIONS["variants.tsv.gz"][1]
+        assert "no query reads it" in description

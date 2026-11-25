@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from opengwasdb.variants.normalise import identity_allele
+from opengwasdb.store_reader.identity import identity_allele
 
 __all__ = ["a1_frequencies", "is_palindromic", "swap", "swap_one"]
 

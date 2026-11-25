@@ -12,8 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from opengwasdb.build.liftover import normalise_build
 from opengwasdb.readers.registry import lifting_capabilities
+from opengwasdb.store_reader.assembly import normalise_build
 
 
 class UnsupportedAssemblyConfiguration(ValueError):

@@ -17,14 +17,14 @@ from functools import partial
 
 import numpy as np
 
-from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
 from opengwasdb.layouts.dense.indexed_subsets import (
-    INDEXED_SUBSETS_GROUP,
     SeenRows,
     SubsetRide,
     subset_rides,
     validate_indexed_subsets,
 )
+from opengwasdb.store_reader.encoding.codec import EAF_BASELINE, EAF_REFERENCE
+from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
 from opengwasdb.validation.rule import Check, Kind, Ride, Rider, Rule, Target
 from opengwasdb.validation.rules.associations import grid_counts
 from opengwasdb.validation.rules.release import REQUIRED

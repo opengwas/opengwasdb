@@ -3,7 +3,7 @@
 A Store keeps two statistics per association: z (= beta / se) and SE
 ([spec §6](spec/store-format.md#6-stored-statistics)). It never keeps the
 source's p-value. **The p a query returns is the two-sided normal p of the stored
-z** (`opengwasdb/query/resolve.py`, `log10_p_two_sided`). That is exact for a
+z** (`opengwasdb/store_reader/resolve.py`, with `log10_p_two_sided` from `opengwasdb/store_reader/stats.py`). That is exact for a
 Wald test, which is what most sources report. Wherever a source's p is *not* the
 Wald p of its own beta/se, the Store answers with a p the source never published.
 

@@ -32,7 +32,7 @@ from opengwasdb.ld.query import open as open_store
 from opengwasdb.ld.query.validation import validate_at
 from opengwasdb.ld.store import Finding
 from opengwasdb.ld.store.assembly import derive_partners
-from opengwasdb.variants.normalise import VariantNormalisationError
+from opengwasdb.store_reader.identity import VariantNormalisationError
 
 ld_app = typer.Typer(
     name="ld",

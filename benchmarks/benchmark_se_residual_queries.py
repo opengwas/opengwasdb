@@ -18,8 +18,8 @@ from pathlib import Path
 import numpy as np
 
 from benchmarks._artifact import provenance, write_artifact
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store_reader.manifest import StoreManifest
 
 
 def _bytes(path: Path) -> int:

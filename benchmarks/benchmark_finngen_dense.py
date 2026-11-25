@@ -191,20 +191,22 @@ def run_mr(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict[s
     clumped = _clump(raw, CLUMP_KB)
     look = q.lookup([c["alid"] for c in clumped], [exposure, outcome])
     per: dict[int, dict[str, float]] = {}
-    for vi, ai, z, se in zip(
-        look["variant_index"], look["analysis_index"], look["z"], look["se"], strict=True
+    # beta is the Store Reader's (ADR 0104), not z * se again here.
+    for vi, ai, z, se, beta in zip(
+        look["variant_index"], look["analysis_index"], look["z"], look["se"], look["beta"],
+        strict=True,
     ):
         d = per.setdefault(int(vi), {})
         side = "exp" if int(ai) == by_id[exposure] else "out"
-        d[f"z_{side}"], d[f"se_{side}"] = float(z), float(se)
+        d[f"z_{side}"], d[f"se_{side}"], d[f"beta_{side}"] = float(z), float(se), float(beta)
     instruments = []
     for vi, d in per.items():
         if {"z_exp", "z_out"} <= d.keys():
             rec = q._variant_axis.by_index(vi)
             instruments.append({
                 "alid": rec.alid, "chrom": rec.chromosome, "pos": int(rec.position),
-                "beta_exp": d["z_exp"] * d["se_exp"], "se_exp": d["se_exp"],
-                "beta_out": d["z_out"] * d["se_out"], "se_out": d["se_out"],
+                "beta_exp": d["beta_exp"], "se_exp": d["se_exp"],
+                "beta_out": d["beta_out"], "se_out": d["se_out"],
             })
     if not instruments:
         raise SystemExit(f"{exposure} -> {outcome}: no instruments; refusing an empty MR")

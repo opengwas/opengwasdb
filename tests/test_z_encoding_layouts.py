@@ -23,26 +23,23 @@ import zarr
 from dense_sources import build_dense_fixture
 from store_assertions import replace_exception_table
 
-from opengwasdb.associations import Cells, CsrReader
-from opengwasdb.encoding import (
+from opengwasdb.encoding import StoreCodec
+from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.query import query_store
+from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.associations import Cells, CsrReader
+from opengwasdb.store_reader.encoding.codec import Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE
+from opengwasdb.store_reader.encoding.plan import (
     Z_OVERFLOW,
-    Z_OVERFLOW_INDEX,
-    Z_OVERFLOW_VALUE,
-    DenseZPlane,
     EafEncoding,
     SeEncoding,
-    StoreCodec,
     StoreEncoding,
     UnsupportedEncoding,
     ZEncoding,
 )
-from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.query import query_store
-from opengwasdb.stats import log10_p_two_sided
-from opengwasdb.store.open import (
-    UnsupportedFormatVersion,
-    open_store,
-)
+from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
+from opengwasdb.store_reader.stats import log10_p_two_sided
 from opengwasdb.validation import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -136,8 +133,9 @@ def test_dense_declares_its_encoding_and_validates_against_it(dense_store):
     manifest = json.loads((dense_store / "manifest.json").read_text())
     # Every build spells an indel reference first, which 0.2.2 adds, and counts what it
     # left out for an SE above 65,504, which 0.2.3 adds; a Dense Store carries no region
-    # table (spec §21.3).
-    assert manifest["format_version"] == "0.2.3"
+    # table (spec §21.3), and carries the variable-length ALID sidecar, which 0.3.0
+    # adds (ADR 0105).
+    assert manifest["format_version"] == "0.3.0"
     assert manifest["encoding"]["z"] == {"kind": "int16_fixed", "scale": 1024}
     assert manifest["encoding"]["se"] == {"kind": "float16"}
     assert validate_store(dense_store).ok

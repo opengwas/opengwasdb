@@ -43,7 +43,6 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.associations import Associations, Cells, CsrReader
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.completion import checkpoint, fill_shards
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
@@ -72,19 +71,12 @@ from opengwasdb.completion.regions import analysis_regions, inside, region_block
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
-from opengwasdb.encoding import (
-    EAF_BASELINE,
-    SE_EXCEPTION_BUDGET,
-    StoreEncoding,
-)
 from opengwasdb.encoding.association_codec import log_se_out_of_range
 from opengwasdb.encoding.memory import pool_workers, resident_bytes
-from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
-    RAGGED_ZARR_PATH,
     RaggedCSRWriter,
     ReferenceCompletion,
     SeExceptionCounts,
@@ -96,9 +88,7 @@ from opengwasdb.model.analyses import (
     reset_top_hit_counts,
     write_analysis_records,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.regions import REGIONS_FILE, Region, RegionTable, read_store_regions
-from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -106,11 +96,12 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
-from opengwasdb.variants.axis import (
-    VariantAxis,
-    VariantRecord,
-    write_variant_axis,
-)
+from opengwasdb.store_reader.associations import Associations, Cells, CsrReader
+from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
+from opengwasdb.store_reader.manifest import StoreManifest
+from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
+from opengwasdb.store_reader.variant_axis import VariantRecord
+from opengwasdb.variants.axis import carried_source_alids, write_variant_axis
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
@@ -256,7 +247,7 @@ def _make_reader(task: _BlockTask):
 
     def make_reader(block, canonical_alids: list[str | None]):
         source = _open_source_sequence(task.source_path)
-        src_variant_axis = VariantAxis(task.source_path)
+        src_variant_axis = open_store(task.source_path).variant_axis(aliases=False)
         try:
             src_alids = [v.alid for v in src_variant_axis.all()]
         finally:
@@ -690,7 +681,7 @@ def _read_source_state(
 ) -> _SourceState:
     """Phase 1 read: the source's variant axis and Analytical Metadata (ADR
     0034), and the per-Analysis ancestry-match impute mask derived from it."""
-    src_variant_axis = VariantAxis(src)
+    src_variant_axis = open_store(src).variant_axis(aliases=False)
     src_variants = src_variant_axis.all()
     src_variant_axis.close()
     src_alids = [v.alid for v in src_variants]
@@ -916,7 +907,14 @@ def _write_variant_axis(store_path: Path, state: _SourceState, axis: _MergedAxis
     # no rsid -- they are positions the reference panel supplies, which the
     # source never named.
     rsid_by_alid = {v.alid: v.rsid for v in state.src_variants if v.rsid}
-    write_variant_axis(store_path, axis.variants, rsid_by_alid)
+    # Observed rows keep the ALID the build lifted them from; panel-added rows stay "."
+    # and a blank source row stays blank (#449).
+    write_variant_axis(
+        store_path,
+        axis.variants,
+        rsid_by_alid,
+        carried_source_alids(state.src_variants, axis.variants),
+    )
 
 
 def _run_pending_blocks(
@@ -1715,10 +1713,7 @@ def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:
     baseline, so a completed release would be less accurate than its source for
     no reason (ADR 0037 §2).
     """
-    group = store_arrays.open_group(Path(source_path) / RAGGED_ZARR_PATH)
-    if EAF_BASELINE not in group:
-        return None
-    return np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+    return eaf_baseline(sequence_arrays(source_path))
 
 
 def _source_se_coefficients(source_path: Path, n_analyses: int) -> np.ndarray:
@@ -1730,12 +1725,11 @@ def _source_se_coefficients(source_path: Path, n_analyses: int) -> np.ndarray:
     held. A residual source without a finite `(n_analyses, 2)` model cannot be
     completed in its own encoding (ADR 0038 §4), so it is refused here.
     """
-    group = store_arrays.open_group(Path(source_path) / RAGGED_ZARR_PATH)
-    if SE_COEFFICIENTS not in group:
+    coefficients = se_coefficients(sequence_arrays(source_path))
+    if coefficients is None:
         raise ValueError(
             f"{source_path}: its se plane is int8_residual but it holds no se_coefficients"
         )
-    coefficients = np.asarray(group[SE_COEFFICIENTS][:], dtype=np.float32)
     if coefficients.shape != (n_analyses, 2) or not np.all(np.isfinite(coefficients)):
         raise ValueError(
             f"{source_path}: se_coefficients must be finite with shape ({n_analyses}, 2), "

@@ -16,8 +16,8 @@ import ast
 import pathlib
 from pathlib import Path
 
-import numpy as np
 import pytest
+from format_0_2_3 import as_0_2_3, count_one_row_fewer
 
 from opengwasdb.validation import RULES, Finding, Severity, validate_store
 
@@ -112,19 +112,21 @@ def test_a_skip_stops_only_the_rules_that_have_nothing_left_to_judge() -> None:
     assert stopped == STOPPED
 
 
+@pytest.mark.parametrize("version", ["0.3.0", "0.2.3"])
 @pytest.mark.parametrize(
     "rules", [None, ("variant_table.representatives",)], ids=["every rule", "selected"]
 )
 def test_a_row_count_mismatch_fails_the_rows_rule_the_representatives_stand_on(
-    dense_store_path: pathlib.Path, rules: tuple[str, ...] | None
+    dense_store_path: pathlib.Path, rules: tuple[str, ...] | None, version: str
 ) -> None:
-    """The representatives are chosen from the offsets, so they stand on the row
-    count, `variant_table.rows`, an earlier fold on the same read. Selected alone, they
-    bring it with them: the mismatch is reported, not left behind a skip."""
-    offsets_path = dense_store_path / "variant_offsets.npy"
-    offsets = np.load(offsets_path)
-    assert len(offsets) >= 2, "the fixture must have a row to drop"
-    np.save(offsets_path, offsets[:-1])
+    """The representatives are chosen from the variant count -- `variant_offsets.npy`'s
+    on 0.2.3, the ALID sidecar's on 0.3.0 (#469) -- so they stand on the row count,
+    `variant_table.rows`, an earlier fold on the same read. Selected alone, they bring
+    it with them: the mismatch is reported, not left behind a skip."""
+    if version == "0.2.3":
+        as_0_2_3(dense_store_path)
+    count_one_row_fewer(dense_store_path)
+    counted_by = "variant_offsets.npy" if version == "0.2.3" else "the ALID sidecar"
 
     result = validate_store(dense_store_path, rules=rules)
 
@@ -133,7 +135,7 @@ def test_a_row_count_mismatch_fails_the_rows_rule_the_representatives_stand_on(
     if rules is not None:
         assert result.failed() == {"variant_table.rows"}
     assert any(
-        error.startswith("variant_offsets.npy has ") and "but variants.tsv.gz has" in error
+        error.startswith(f"{counted_by} has ") and "but variants.tsv.gz has" in error
         for error in result.errors
     ), result.errors
     assert result.skipped["variant_table.representatives"] == ("variant_table.rows",)

@@ -12,6 +12,7 @@ package release may move neither, one, or both numbers.
 | the release #430 merges as (0.9.0, from 0.8.0 and a `breaking` fragment) | each release the lowest version its features use: 0.2.1 for a Ragged release carrying `regions.tsv`, 0.2.0 for every other, the converter's output included | 0.1.0, 0.2.0, 0.2.1 |
 | the release #307's integration branch merges as (0.10.0), to 0.12.0 | 0.2.2 from every builder and from completion, with or without `regions.tsv`, since every build spells an indel reference first (#381); 0.2.0 from the converter | 0.1.0, 0.2.0, 0.2.1, 0.2.2 |
 | the release epic #347's second run merges as (after 0.12.0, a `changed` fragment) | 0.2.3 from every builder and from completion, a 0.2.2 source's completion included, since each records `n_missing_se_out_of_range` (#338, ADR 0068); 0.2.0 from the converter, which refuses a source holding an SE above 65,504 | 0.1.0, 0.2.0, 0.2.1, 0.2.2, 0.2.3 |
+| the release epic #450 merges as (after 0.16.1, `breaking` fragments) | 0.3.0 from every builder and from completion, a 0.2.2 or 0.2.3 source's completion included, and from `ogdb rewrite-release` of a 0.2.3 release (#467-#472, ADR 0105, ADR 0102); 0.2.0 from the converter | 0.1.0, 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.3.0 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -147,6 +148,65 @@ fails a 0.2.2 one, and 0.10.0 to 0.12.0 warn that the package must be upgraded: 
 fix is again to upgrade, not to re-stamp. This package's `validate` keeps #337's
 warning for a Store before 0.2.3 holding `+inf` -- OGS-00011 holds 8 such cells
 until opengwasdb-stores#403 -- and fails a 0.2.3 Store holding any SE above 65,504.
+
+**#467 starts format 0.3.0, a new series (ADR 0105, ADR 0041).** #467-#472 ship in
+one package release, so 0.3.0 is one format version with one backfill. A 0.3.0 release indexes its ALIDs with a
+variable-length sidecar, `variant_alid_utf8.npy`, `variant_alid_offsets.npy`,
+`variant_alid_keys.npy` and `variant_alid_order.npy` (spec §4), which holds every
+ALID however long, where the 0.2 series' fixed-width `variant_alid_bytes.npy` /
+`variant_alid_rows.npy` left out each ALID over 32 bytes (115,043 on OGS-00010) and
+a reader found those by scanning the Variant Table. 0.3.0 keeps every 0.2.3 feature.
+Every build and completion writes it. A package without the 0.3 series refuses a
+0.3.0 release by name (`… declares format_version='0.3.0', a release series this
+build does not implement; readable series: ['0.1', '0.2']`), because it would find no
+ALID index it knows; this package reads 0.2 releases' fixed-width pair as before. An
+existing 0.2.3 release reaches 0.3.0 by `ogdb rewrite-release SOURCE DESTINATION`,
+which derives a new release and proves before publishing that it answers every
+question of a fixed set exactly as its source did (spec §21.4). A release before
+0.2.3 is not rewritten: it lacks 0.2.3's features, which no rewrite can add, so it is
+rebuilt. No hosted Store is rewritten either: every Store is
+rebuilt from source at 0.3.0 (the owner, 23 Nov 2026; opengwas/opengwasdb-stores#498),
+and the rewrite is the proof, on fixture and small releases, that each format step
+changes no answer. A 0.2.4 Store is still newer than this package writes in its series, and
+its stamp is not judged.
+
+**#468 adds the position sidecar to 0.3.0 (ADR 0105 §6)**: `variant_position.npy`, `variant_position_chromosomes.npy` and
+`variant_position_chromosome_offsets.npy` (spec §4). A 0.3.0 release answers
+`range_phewas` from them by binary search, without tabix or pysam; a 0.2 release
+answers by tabix as before. A 0.3.0 release without them is refused by name.
+
+**#469 takes the Variant Table off 0.3.0's read path (ADR 0105 §7).** A 0.3.0 release no longer carries `variant_offsets.npy`, and its
+queries never read `variants.tsv.gz`: the sidecars answer `variants_table()` and a
+resolved row's rsID. A 0.3.0 release carrying the offsets fails `envelope.closed`. A 0.2
+release is read as before.
+
+**#470 adds the `source_alid` sidecar to 0.3.0 (ADR 0105 §8)**: `variant_source_alid_state.npy`, `variant_source_alid_utf8.npy` and
+`variant_source_alid_offsets.npy` (spec §4): each row's state (none, its own ALID, or
+another), and the pre-liftover ALID of each lifted row. A 0.3.0 release's `variants_table()`, resolved
+rows with variant info and record methods give `source_alid` from them; a 0.2 release
+gives it from its table, as `variants_table()` and resolved rows now do on every format.
+A 0.3.0 release without them is refused by name (`MissingSourceAlidSidecar`).
+
+**#471 drops from 0.3.0 what nothing read, or only the validator read and recomputes
+(ADR 0102).** `index.sqlite` holds only `completion_quality`, so an Observed-Only 0.3.0
+release, and a Hybrid's outer release, carries none; its `metadata` table and
+`variant_aliases` are gone, and the Top-Hit tiers store `z` but not `abs_z` or `p_value`.
+This package's Store Reader never opens a 0.3.0 release's `index.sqlite`, and an rsID its
+rsID index lacks is a miss. A 0.2 release keeps all of them and is read as before, its
+`variant_aliases` fallback included; rebuilding its Top-Hit Index keeps its tiers' `abs_z`
+and `p_value`. `ogdb rewrite-release` drops them from a 0.2.3 source. A 0.3.0 release
+carrying them fails `validate` (`envelope.closed`, `top_hits.arrays`).
+
+**#472 drops a 0.3.0 Hybrid Dense Component's copy of the shared variants and Analyses
+(ADR 0102 §4).** `dense/` holds `manifest.json`, `data.zarr/`, `dense_to_shared.npy` and,
+Reference-Completed, `index.sqlite`; its Variant Table and `.tbi`, ALID, position and
+rsID indexes, `analyses.tsv` and `overview.html` are gone, and a 0.3.0 Dense Component
+carrying any of them fails `envelope.closed`. Every query, on every format, reads the
+Dense Component's variants through the shared Variant Axis and `dense_to_shared.npy`,
+and its Analyses from the Hybrid's `analyses.tsv` (spec §16). `VariantAxis(<hybrid>/dense)`
+on a 0.3.0 release raises `DenseComponentSharesAxis`. A 0.2 Hybrid keeps its copy, which
+the validator and completion still read. `ogdb rewrite-release` drops the copy from a 0.2.3
+source and refuses one whose `dense_to_shared.npy` does not name each Dense row's shared row.
 
 ## Keeping this page true
 

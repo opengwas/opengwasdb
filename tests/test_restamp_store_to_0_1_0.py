@@ -28,8 +28,10 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from format_0_2_3 import follow_stamp
 
-from opengwasdb.store.open import UnsupportedFormatVersion, open_store
+from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.validation import validate_store
 
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "restamp_store_to_0_1_0.py"
@@ -48,6 +50,7 @@ def _stamp(store: Path, version: str, *, encoding_version: int | None = None) ->
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    follow_stamp(store)
 
 
 @pytest.fixture
