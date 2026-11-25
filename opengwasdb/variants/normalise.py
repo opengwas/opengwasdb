@@ -8,11 +8,16 @@ from typing import Protocol
 
 import numpy as np
 
+# The variant order -- a chromosome's rank and sort key -- is the Store Reader's and the LD Store
+# reader's, and its one owner is ogquery (opengwas/ogquery#2): re-exported here for the builders
+# and callers (ogdb-api imports `chromosome_sort_key` from opengwasdb.variants) that order by it.
+from ogquery.identity import chromosome_rank as chromosome_rank
+from ogquery.identity import chromosome_sort_key as chromosome_sort_key
+
 # The read-side rules of identity are the Store Reader's (#464); this module builds
 # a source row's canonical identity on them. Re-exported where a caller outside
 # this repository imports them from here (opengwasdb-stores).
 from opengwasdb.store_reader.identity import (
-    CANONICAL_CHROMOSOMES,
     VALID_BASES,
     InvalidAllele,
     MalformedIdentity,
@@ -394,31 +399,4 @@ def orient_or_drop(
 def _named(fault: MalformedIdentity, undeclared: type[UndeclaredReference]) -> MalformedIdentity:
     """``fault``, an undeclared reference recorded under ``undeclared``'s reason."""
     return undeclared(str(fault)) if isinstance(fault, UndeclaredReference) else fault
-
-
-def chromosome_sort_key(chromosome: str) -> tuple[int, str]:
-    """Sort chromosomes in natural human order where possible."""
-
-    chrom = normalise_chromosome(chromosome)
-    if chrom.isdigit():
-        return (int(chrom), chrom)
-    special = {"X": 23, "Y": 24, "MT": 25}
-    return (special.get(chrom.upper(), 1000), chrom)
-
-
-def chromosome_rank(chromosome: str) -> int:
-    """A chromosome's place in the variant order: `1`-`22`, then `X` 23, `Y` 24, `MT` 25.
-
-    The first field of `chromosome_sort_key`, for a caller that orders chromosomes, or ranges
-    of one, by it alone. A label passes through `normalise_chromosome`, so `chr1` ranks as
-    `1`. Unlike `chromosome_sort_key`, which sorts any other label last, a label off that list
-    -- a contig such as `HLA-A` -- has no rank and raises `VariantNormalisationError`.
-    """
-    rank, label = chromosome_sort_key(chromosome)
-    if label not in CANONICAL_CHROMOSOMES:
-        raise VariantNormalisationError(
-            f"chromosome {chromosome!r} ({label!r}) has no place in the variant order: "
-            "only 1-22, X, Y and MT are ranked"
-        )
-    return rank
 
