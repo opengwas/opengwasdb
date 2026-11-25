@@ -271,7 +271,7 @@ def test_this_repositorys_model_claims_every_engine_source_file() -> None:
     assert check_model(load_model(MODEL_PATH), tracked) == []
 
 
-def test_the_model_holds_the_engines_twenty_four_components() -> None:
+def test_the_model_holds_the_engines_twenty_five_components() -> None:
     model = load_model(MODEL_PATH)
 
     assert [(entry["layer"], entry["name"]) for entry in model["layers"]] == [
@@ -300,6 +300,7 @@ def test_the_model_holds_the_engines_twenty_four_components() -> None:
         "query",
         "model",
         "maintenance",
+        "clumps",  # the Clumps of the 5e-8 tier, `opengwasdb clump` (ADR 0106, #418)
         "ld-format",  # opengwasdb.ld, imported from ogld (#455), split by package (#459)
         "ld-store",
         "ld-genotypes",

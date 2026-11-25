@@ -548,16 +548,63 @@ _VALIDATE_WORKERS_OPTION = typer.Option(
 )
 
 
+# ADR 0106 §2: the Assigned Ancestry -> LD Store mapping the Clumps are written and
+# re-checked with. An input, never a default the engine holds.
+_LD_STORE_HELP = (
+    "ANCESTRY=PATH: the LD Store the Analyses whose assigned_ancestry is ANCESTRY are "
+    "clumped against; repeat it for each ancestry (ADR 0106 §2)."
+)
+_VALIDATE_LD_STORE_OPTION = typer.Option(
+    None,
+    "--ld-store",
+    help=_LD_STORE_HELP + " Given, the clumps.reclump rule re-clumps a seeded sample.",
+)
+_CLUMP_LD_STORE_OPTION = typer.Option(..., "--ld-store", help=_LD_STORE_HELP)
+
+
+def _ld_store_mapping(values: list[str] | None) -> dict[str, str]:
+    """`--ld-store ANCESTRY=PATH` values as a mapping; a malformed or repeated one is refused."""
+    mapping: dict[str, str] = {}
+    for value in values or []:
+        ancestry, separator, location = value.partition("=")
+        if not separator or not ancestry.strip() or not location.strip():
+            raise typer.BadParameter(f"--ld-store {value!r} is not ANCESTRY=PATH")
+        if ancestry in mapping:
+            raise typer.BadParameter(f"--ld-store names {ancestry!r} twice")
+        mapping[ancestry] = location
+    return mapping
+
+
+@app.command("clump")
+def clump_command(
+    store_path: Path,
+    ld_store: list[str] = _CLUMP_LD_STORE_OPTION,
+) -> None:
+    """Clump a 0.3.0 Store Release's 5e-8 tier in place: the Clumps, n_loci_5e8 and
+    n_unclumped_5e8 (spec §18.1, ADR 0106). Prints what it did as JSON."""
+    from opengwasdb.clumps import ClumpRefusal, clump_store
+
+    try:
+        run = clump_store(store_path, _ld_store_mapping(ld_store))
+    except ClumpRefusal as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(run.as_dict(), sort_keys=True))
+
+
 @app.command("validate")
 def validate_command(
     store_path: Path,
     output_format: ReportFormat = _REPORT_FORMAT_OPTION,
     n_workers: int = _VALIDATE_WORKERS_OPTION,
+    ld_store: list[str] | None = _VALIDATE_LD_STORE_OPTION,
 ) -> None:
     """Validate a local Store Release."""
 
     from opengwasdb.validation import validate_store
-    result = validate_store(store_path, n_workers=n_workers)
+    result = validate_store(
+        store_path, n_workers=n_workers, ld_stores=_ld_store_mapping(ld_store) or None
+    )
     if output_format is ReportFormat.json:
         # `findings` names the rule behind each record, and the skips beside the
         # failures and warnings: a rule that had nothing to judge is not a pass, and
