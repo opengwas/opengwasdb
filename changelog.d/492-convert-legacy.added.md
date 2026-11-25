@@ -6,5 +6,5 @@
   missing `source_alid`, is recorded by validator rule name in
   `provenance.converted_from.deviations`, and `validate` reports exactly those rules as
   warnings naming the conversion. The proof compares every deliberate change cell for cell.
-  The rewrite's range question now spans at most 10,000 variants, so a large release can be
-  proved; every fixture's range is unchanged.
+  The rewrite's range question now spans at most 10,000 variants and 2,500,000 cells, so a
+  large release can be proved; every fixture's range is unchanged.

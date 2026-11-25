@@ -101,9 +101,11 @@ THRESHOLDS = (5e-8, 5e-6, 5e-4, 1e-2, 0.2)
 #: How many variants the PheWAS and lookup shapes name, spread over the axis.
 N_VARIANTS_ASKED = 7
 
-#: The most variants the range PheWAS spans (`_range_last`): every fixture release has
-#: fewer, so each is asked over the whole span.
+#: The most variants the range PheWAS spans, and the most cells (variants by Analyses)
+#: it resolves (`_range_last`): every fixture release has fewer, so each is asked over
+#: the whole span, and so is OGS-00015 (241 Analyses) over 10,000 variants.
 RANGE_ROWS_ASKED = 10_000
+RANGE_CELLS_ASKED = 2_500_000
 
 #: How many Analyses the per-Analysis shapes name, spread over the release. Every
 #: fixture release has fewer, so each is asked about every one of its Analyses.
@@ -260,29 +262,32 @@ def query_shapes(
     identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
     shapes: dict[str, Callable[[], Any]] = {}
     for observed_only, flag in ((False, "all"), (True, "observed_only")):
-        asking = _Asking(q, ids, identifiers, records[0], _range_last(records), observed_only)
+        last = _range_last(records, len(analyses))
+        asking = _Asking(q, ids, identifiers, records[0], last, observed_only)
         shapes.update({f"{name}/{flag}": shape for name, shape in asking.shapes().items()})
     return shapes
 
 
-def _range_last(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _range_last(records: list[dict[str, Any]], n_analyses: int) -> dict[str, Any]:
     """Where the range PheWAS ends: the last variant's position, read on the first
-    variant's chromosome, unless the range would then hold more than `RANGE_ROWS_ASKED`
-    variants, when it ends at the last of the first `RANGE_ROWS_ASKED` (#492).
+    variant's chromosome, unless the range would then hold more variants than
+    `RANGE_ROWS_ASKED`, or than `RANGE_CELLS_ASKED` over the release's Analyses, when it
+    ends at the last variant within both bounds (#492).
 
     A range question over a large release's whole first chromosome resolves tens of
     millions of rows on each side (ADR 0105 §3: 844 M cells on OGS-00016); bounded, it
     still asks the range path over many rows, and every fixture release asks it unbounded.
     """
+    limit = max(1, min(RANGE_ROWS_ASKED, RANGE_CELLS_ASKED // max(n_analyses, 1)))
     first, last = records[0], records[-1]
     positions = [
         int(r["position"])
         for r in records
         if r["chromosome"] == first["chromosome"] and int(r["position"]) <= int(last["position"])
     ]
-    if len(positions) <= RANGE_ROWS_ASKED:
+    if len(positions) <= limit:
         return last
-    return {**last, "position": positions[RANGE_ROWS_ASKED - 1]}
+    return {**last, "position": positions[limit - 1]}
 
 
 def _identifiers(asked: list[dict[str, Any]]) -> list[str]:

@@ -990,10 +990,12 @@ cell too few, or names another `source_alid` on one row, is refused
 (`test_the_proof_refuses_*`). Without the view, the fixtures differ on 268 to 274 questions.
 `query_digests.adapter_name` reads a private subclass as its public facade.
 
-**The range question is bounded** (`query_digests.RANGE_ROWS_ASKED`, 10,000 variants). §3
-measured the range PheWAS over OGS-00016's chromosome 1 at 844 M cells, which is infeasible.
-Bounded, it still crosses many rows. Every fixture release, and so the Store Reader contract
-bundle (#474), is asked the same range as before.
+**The range question is bounded**: at most 10,000 variants and 2,500,000 cells, variants
+by Analyses (`query_digests.RANGE_ROWS_ASKED`, `RANGE_CELLS_ASKED`). §3 measured the range
+PheWAS over OGS-00016's chromosome 1 at 844 M cells, which is infeasible. Bounded, it still
+crosses many rows: 10,000 on OGS-00015 (241 Analyses), 994 on OGS-00009 (2,514). Every
+fixture release, and so the Store Reader contract bundle (#474), is asked the same range as
+before.
 
 **Evidence.** On the fixtures, `tests/test_convert_legacy.py` covers:
 - Dense Observed-Only and Reference-Completed, in the 0.2.0 shape of the hosted Stores

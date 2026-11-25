@@ -396,3 +396,16 @@ def test_the_cli_needs_a_lift_answer_and_converts_with_one(sources, tmp_path):
     converted = runner.invoke(app, [*args, "--not-lifted", "--n-workers", "2"])
     assert converted.exit_code == 0, converted.output
     assert "Published" in converted.output
+
+
+def test_the_range_question_is_bounded_by_variants_and_by_cells():
+    """A large release's range PheWAS is cut to `RANGE_ROWS_ASKED` variants and to
+    `RANGE_CELLS_ASKED` cells; a small one is asked over its whole span (#492)."""
+    from opengwasdb.store import query_digests
+
+    records = [{"chromosome": "1", "position": p} for p in range(1, 30_001)]
+    records.append({"chromosome": "2", "position": 25_000})
+    assert query_digests._range_last(records[:500] + records[-1:], 2)["position"] == 25_000
+    assert query_digests._range_last(records, 2)["position"] == 10_000
+    assert query_digests._range_last(records, 2_514)["position"] == 2_500_000 // 2_514
+    assert query_digests._range_last(records, 241)["position"] == 10_000, "OGS-00015's"
