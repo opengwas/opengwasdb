@@ -386,3 +386,29 @@ def test_a_hybrid_declares_the_clumps_in_both_manifests(clumped: dict[str, Path]
     group = zarr.open_group(str(store / "dense" / "data.zarr" / "top_hits" / "p_5e_08"), mode="r")
     assert group["clumps/default/lead"].dtype == np.int32
     assert group["clumps/default/r"].dtype == np.int16
+
+
+# ── the CLI ──────────────────────────────────────────────────────────────────
+
+
+def test_the_clump_command_prints_what_it_did_and_refuses_by_name(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    store = copied(built["dense"], tmp_path)
+    done = CliRunner().invoke(app, ["clump", str(store), "--ld-store", f"EUR={LD_STORE}"])
+    assert done.exit_code == 0, done.output
+    run = json.loads(done.stdout)
+    assert (run["analyses"], run["clumped"]) == (4, 2)
+    assert run["not_clumped"] == {"no_assigned_ancestry": 1, "no_ld_store": {"AFR": 1}}
+    assert run["n_loci_5e8"] > 0 and run["ld_stores"]["EUR"]["kind"] == "ld_store"
+    other = tmp_path / "other"
+    other.mkdir()
+    refused = CliRunner().invoke(
+        app, ["clump", str(copied(built["completed"], other)), "--ld-store",
+              f"EUR={_ld_store_copy(tmp_path, reference_assembly='GRCh37')}"])
+    assert refused.exit_code == 1
+    assert "GRCh37" in refused.output and "error:" in refused.output
