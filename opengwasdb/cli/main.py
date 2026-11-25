@@ -560,6 +560,14 @@ _VALIDATE_LD_STORE_OPTION = typer.Option(
     help=_LD_STORE_HELP + " Given, the clumps.reclump rule re-clumps a seeded sample.",
 )
 _CLUMP_LD_STORE_OPTION = typer.Option(..., "--ld-store", help=_LD_STORE_HELP)
+_VALIDATE_SEED_OPTION = typer.Option(
+    0,
+    "--fidelity-seed",
+    help=(
+        "Seed of validate's sampled checks: the source-fidelity sample and the Analyses "
+        "clumps.reclump re-clumps (spec §20.0)."
+    ),
+)
 
 
 def _ld_store_mapping(values: list[str] | None) -> dict[str, str]:
@@ -598,12 +606,14 @@ def validate_command(
     output_format: ReportFormat = _REPORT_FORMAT_OPTION,
     n_workers: int = _VALIDATE_WORKERS_OPTION,
     ld_store: list[str] | None = _VALIDATE_LD_STORE_OPTION,
+    fidelity_seed: int = _VALIDATE_SEED_OPTION,
 ) -> None:
     """Validate a local Store Release."""
 
     from opengwasdb.validation import validate_store
     result = validate_store(
-        store_path, n_workers=n_workers, ld_stores=_ld_store_mapping(ld_store) or None
+        store_path, n_workers=n_workers, ld_stores=_ld_store_mapping(ld_store) or None,
+        fidelity_seed=fidelity_seed,
     )
     if output_format is ReportFormat.json:
         # `findings` names the rule behind each record, and the skips beside the

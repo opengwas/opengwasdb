@@ -17,8 +17,8 @@ Reference-Completed one whose tier has no `imputed` array (§18.1, *Refusals*).
 
 `compute_clumps` is the compute path without the writes and without the format refusal, so the
 same code measures a published 0.2 Store (#418's parity run). `read_clumps` reads what was
-written, for the validation rules (`opengwasdb.validation.rules.clumps`) and the tests; the
-Store Reader's read of the Clumps is #419's.
+written, through the Store Reader (`TopHitTier.clumps`), for the validation rules
+(`opengwasdb.validation.rules.clumps`) and the tests; #419's query builds on the same read.
 """
 
 from __future__ import annotations
@@ -28,37 +28,40 @@ import json
 import logging
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 import numpy as np
-import zarr
 
-from opengwasdb.ld.format import Refusal, REncoding
+from opengwasdb.ld.format import InputError, Refusal, REncoding
 from opengwasdb.ld.query.kind import open_kind
 from opengwasdb.ld.query.ldstore import LDStore
 from opengwasdb.ld.query.ldstore import open as open_ld_store
 from opengwasdb.model.analyses import N_LOCI_5E8, N_UNCLUMPED_5E8, write_analysis_columns
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store.arrays import (
-    CLUMPS_CONFIGURATION,
-    CLUMPS_GROUP,
     create_array,
     create_group,
     open_group_for_write,
     refuse_under_consolidated_metadata,
 )
-from opengwasdb.store.open import open_store, staged_named_group
+from opengwasdb.store.open import OpenGWASDBStore, open_store, staged_named_group
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.store_reader.hybrid import dense_to_shared_path
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.top_hits import (
+    CLUMPS_ATTRIBUTE,
+    CLUMPS_CONFIGURATION,
+    CLUMPS_GROUP,
     TOP_HIT_GROUP,
+    TierClumps,
     TierRows,
+    TopHitTier,
     TopHitTiers,
     analysis_hit_counts,
     threshold_key,
@@ -91,8 +94,8 @@ NO_R: Final = REncoding.reserved_code
 #: The manifest's `clumps` entry (§2).
 MANIFEST_KEY: Final = "clumps"
 MANIFEST_ENTRY: Final = {"tier": TIER, "configuration": CLUMPS_CONFIGURATION}
-#: The group attribute holding the provenance (§18.1).
-ATTRIBUTE: Final = "clumps"
+#: The group attribute holding the provenance (§18.1); the Store Reader's name for it.
+ATTRIBUTE: Final = CLUMPS_ATTRIBUTE
 
 #: An Analysis's rows are not clumped for one of these reasons (§18.1, `not_clumped`).
 NO_ASSIGNED_ANCESTRY: Final = "no_assigned_ancestry"
@@ -114,13 +117,14 @@ class TierComponent:
     Hybrid's Dense Component). `offsets` addresses each Analysis's rows; `shared` is each row's
     shared Store Variant Index, a Dense Component's panel row mapped through
     `dense_to_shared.npy` (ADR 0106 §5). `overflow` is a Hybrid's Ragged Overflow, which is
-    observed by construction and carries no `imputed`. `imputed` is each row's imputed flag,
-    False throughout a tier that stores none.
+    observed by construction and carries no `imputed`. `imputed` is each row's imputed flag:
+    False throughout an Observed-Only tier and an Overflow's, and refused missing elsewhere
+    (`tier_components`).
     """
 
     label: str
     release: StoreRelease
-    tier: zarr.Group
+    tier: TopHitTier
     rows: TierRows
     offsets: np.ndarray
     shared: np.ndarray
@@ -136,17 +140,37 @@ class TierComponent:
         return int(len(self.rows.z))
 
 
-def tier_components(release: StoreRelease, n_analyses: int) -> list[TierComponent]:
-    """The release's 5e-8 tiers, in clump-slice order: a Hybrid's Dense Component's, then its
-    Ragged Overflow's; every other layout's one. A component without the tier is refused."""
+def component_releases(release: StoreRelease) -> list[tuple[str, StoreRelease]]:
+    """The releases a Store Release's Clumps live in, in clump-slice order, with the label
+    validation gives each component: a Hybrid's Dense Component, then the Hybrid's root, which
+    holds the Ragged Overflow; every other layout's one release."""
     if release.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
-        dense_to_shared = np.load(dense_to_shared_path(release.path)).astype(np.int64)
-        return [
-            _tier_component(release.dense_component(), "dense/data.zarr", n_analyses,
-                            dense_to_shared, overflow=False),
-            _tier_component(release, "data.zarr", n_analyses, None, overflow=True),
-        ]
-    return [_tier_component(release, "data.zarr", n_analyses, None, overflow=False)]
+        return [("dense/data.zarr", release.dense_component()), ("data.zarr", release)]
+    return [("data.zarr", release)]
+
+
+def tier_components(release: StoreRelease, n_analyses: int) -> list[TierComponent]:
+    """The release's 5e-8 tiers, in clump-slice order. Refused, naming the component (§18.1,
+    *Refusals*): a component without the tier, and a Reference-Completed one whose tier has no
+    `imputed` array, which is what says which of its rows are observed. Every path that clumps
+    or judges Clumps reads the tiers here, so none reads such a tier as all observed."""
+    completed = release.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
+    to_shared = None
+    if release.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        to_shared = np.load(dense_to_shared_path(release.path)).astype(np.int64)
+    components = []
+    for label, each in component_releases(release):
+        overflow = to_shared is not None and each is release
+        component = _tier_component(each, label, n_analyses,
+                                    None if each is release else to_shared, overflow=overflow)
+        if completed and not overflow and component.rows.imputed is None:
+            raise ClumpRefusal(
+                f"{component.tier_path} is the 5e-8 tier of a Reference-Completed release and "
+                "carries no `imputed` array, so its observed rows cannot be told from its "
+                "imputed ones (§18.1); rebuild its Top-Hit Index"
+            )
+        components.append(component)
+    return components
 
 
 def _tier_component(
@@ -172,37 +196,19 @@ def _tier_component(
     shared = vi if to_shared is None else to_shared[vi]
     imputed = (np.zeros(len(vi), dtype=bool) if rows.imputed is None
                else np.asarray(rows.imputed, dtype=bool))
-    return TierComponent(label, release, tier.group, rows, offsets, shared, overflow, imputed)
+    return TierComponent(label, release, tier, rows, offsets, shared, overflow, imputed)
 
 
 def refuse_format(release: StoreRelease) -> None:
     """Refuse a release of any format but 0.3.0, its Hybrid Dense Component's included,
     naming its `format_version` (§18.1, *Refusals*; ADR 0106 §10)."""
-    releases = [release]
-    if release.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
-        releases.append(release.dense_component())
-    for each in releases:
+    for _label, each in component_releases(release):
         version = each.manifest.format_version
         if version not in CLUMPS_FORMAT_VERSIONS:
             raise ClumpRefusal(
                 f"{each.path} is format_version {version}; the Clumps are a component of "
                 f"format {', '.join(CLUMPS_FORMAT_VERSIONS)} alone (ADR 0106 §10). Rebuild "
                 "the Store at 0.3.0, then clump it"
-            )
-
-
-def refuse_without_imputed(release: StoreRelease, components: Sequence[TierComponent]) -> None:
-    """Refuse a Reference-Completed release whose 5e-8 tier has no `imputed` array, which says
-    which of its rows are observed (§18.1, *Refusals*). A Hybrid's Ragged Overflow is observed
-    by construction and carries none."""
-    if release.manifest.completion_state is not CompletionState.REFERENCE_COMPLETED:
-        return
-    for component in components:
-        if not component.overflow and component.rows.imputed is None:
-            raise ClumpRefusal(
-                f"{component.tier_path} is the 5e-8 tier of a Reference-Completed release and "
-                "carries no `imputed` array, so its observed rows cannot be told from its "
-                "imputed ones (§18.1); rebuild its Top-Hit Index"
             )
 
 
@@ -235,8 +241,9 @@ def open_ld_stores(
     locations: Mapping[str, str | Path], *, reference_assembly: str
 ) -> dict[str, MappedLDStore]:
     """Open each mapped LD Store and judge it before anything is clumped: its reference
-    assembly must be the release's, and it must answer r2 = its t_far at kb 10,000 (ADR 0106
-    §2). A refusal names the store and the ancestry that maps to it."""
+    assembly must be the release's, it must record every value §18.1's entry copies, and it
+    must answer r2 = its t_far at kb 10,000 (ADR 0106 §2). A refusal names the store and the
+    ancestry that maps to it."""
     opened: dict[str, MappedLDStore] = {}
     try:
         for ancestry, location in locations.items():
@@ -248,51 +255,81 @@ def open_ld_stores(
 
 
 def _open_mapped(ancestry: str, location: str, reference_assembly: str) -> MappedLDStore:
+    where = f"LD Store {location} (for {ancestry})"
     if not ancestry.strip():
         raise ClumpRefusal(f"LD Store {location} is mapped to a blank ancestry; an ancestry is an "
                            "assigned_ancestry value, and a blank one is Unassigned")
-    store = open_ld_store(location)
     try:
-        record: dict[str, Any] = dict(store.provenance)
-        assembly = str(record.get("reference_assembly"))
-        if assembly != reference_assembly:
-            raise ClumpRefusal(
-                f"LD Store {location} (for {ancestry}) is reference assembly {assembly}, and the "
-                f"Store is {reference_assembly}; a Store is clumped only against an LD Store of "
-                "its own assembly (ADR 0106 §2)"
-            )
-        t_far = float(record["t_far"])
-        try:
-            # The request itself, with no hits: `clump` judges the configuration first.
-            store.clump([], np.empty(0), r2=t_far, kb=KB)
-        except Refusal as refusal:
-            raise ClumpRefusal(
-                f"LD Store {location} (for {ancestry}) refuses the Clumping Configuration, r2 = "
-                f"its t_far {t_far} at kb {KB}: {refusal}"
-            ) from refusal
-        encoding = REncoding.of(record["encoding"])
-        panel = record["panel"]
-        identity = {
-            "name": str(panel["id"]),
-            "kind": open_kind(location).kind,
-            "format_version": str(record["format_version"]),
-            "samples_sha256": panel.get("samples_sha256"),
-            "provenance_sha256": provenance_sha256(record),
-            "location": location,
-            "reference_assembly": assembly,
-            "n": int(panel["n"]),
-            "k": int(record["adjustment"]["k"]),
-            "t_far": t_far,
-            "t_partner": float(record["t_partner"]),
-            "near_bp": int(record["near_bp"]),
-            "far_bp": int(record["far_bp"]),
-            "r_scale": int(encoding.scale),
-            "r2": t_far,
-        }
+        store = open_ld_store(location)
+    except (InputError, Refusal, OSError, KeyError) as exc:
+        raise ClumpRefusal(f"{where} does not open: {exc}") from exc
+    try:
+        encoding, identity = _judged(store, location, ancestry, reference_assembly)
+        mapped = MappedLDStore(ancestry, location, store, encoding, identity)
     except BaseException:
         store.close()
         raise
-    return MappedLDStore(ancestry, location, store, encoding, identity)
+    return mapped
+
+
+def _judged(
+    store: LDStore, location: str, ancestry: str, reference_assembly: str
+) -> tuple[REncoding, dict[str, Any]]:
+    """The store's encoding and its `ld_stores` entry's identity and settings (§18.1), once
+    its assembly and the configuration are judged. A value it does not record is refused by
+    name, never read as a default; `samples_sha256` may be null, but must be recorded."""
+    where = f"LD Store {location} (for {ancestry})"
+    record: dict[str, Any] = dict(store.provenance)
+    assembly = _recorded(record, where, "reference_assembly")
+    if assembly != reference_assembly:
+        raise ClumpRefusal(
+            f"{where} is reference assembly {assembly}, and the Store is {reference_assembly}; "
+            "a Store is clumped only against an LD Store of its own assembly (ADR 0106 §2)"
+        )
+    try:
+        t_far, near_bp, far_bp = float(store.t_far), int(store.near_bp), int(store.far_bp)
+        encoding = REncoding.of(record["encoding"])
+    except (KeyError, InputError) as exc:
+        raise ClumpRefusal(f"{where} records no usable {exc} (ld-store §7)") from exc
+    try:
+        # The request itself, with no hits: `clump` judges the configuration first.
+        store.clump([], np.empty(0), r2=t_far, kb=KB)
+    except Refusal as refusal:
+        raise ClumpRefusal(
+            f"{where} refuses the Clumping Configuration, r2 = its t_far {t_far} at kb {KB}: "
+            f"{refusal}"
+        ) from refusal
+    identity = {
+        "name": str(_recorded(record, where, "panel", "id")),
+        "kind": open_kind(location).kind,
+        "format_version": str(_recorded(record, where, "format_version")),
+        "samples_sha256": _recorded(record, where, "panel", "samples_sha256", nullable=True),
+        "provenance_sha256": provenance_sha256(record),
+        "location": location,
+        "reference_assembly": assembly,
+        "n": int(_recorded(record, where, "panel", "n")),
+        "k": int(_recorded(record, where, "adjustment", "k")),
+        "t_far": t_far,
+        "t_partner": float(_recorded(record, where, "t_partner")),
+        "near_bp": near_bp,
+        "far_bp": far_bp,
+        "r_scale": int(encoding.scale),
+        "r2": t_far,
+    }
+    return encoding, identity
+
+
+def _recorded(record: Mapping[str, Any], where: str, *path: str, nullable: bool = False) -> Any:
+    """The value at `path` in an LD Store's provenance record; refused, naming the store and
+    the key, when it is not recorded, or recorded null where null is not allowed."""
+    value: Any = record
+    for key in path:
+        if not isinstance(value, Mapping) or key not in value:
+            raise ClumpRefusal(f"{where} records no {'.'.join(path)} (ld-store §7)")
+        value = value[key]
+    if value is None and not nullable:
+        raise ClumpRefusal(f"{where} records {'.'.join(path)} as null (ld-store §7)")
+    return value
 
 
 def close_ld_stores(stores: Mapping[str, MappedLDStore]) -> None:
@@ -336,8 +373,6 @@ class ClumpResult:
     n_loci: list[int | None]
     n_unclumped: list[int | None]
     not_clumped: dict[str, Any]
-    seconds: float = 0.0
-    lookups: int = field(default=0)
 
     def markers(self) -> dict[str, int]:
         """How many rows hold each marker, every component together."""
@@ -410,12 +445,13 @@ class Slice:
 @dataclass(frozen=True)
 class Tiers:
     """A release's 5e-8 tiers, in clump-slice order, with what clumping reads of their rows:
-    each row's |z| from its `z`, and the identity of every variant they hold."""
+    each row's |z| from its `z`, and the identity of every variant they hold. `identity_rows`
+    is, per component, each tier row's index into the `Identity` arrays."""
 
     components: list[TierComponent]
     identity: Identity
     abs_z: list[np.ndarray]
-    backs: list[np.ndarray]
+    identity_rows: list[np.ndarray]
 
     @classmethod
     def read(cls, release: StoreRelease, components: Sequence[TierComponent]) -> Tiers:
@@ -427,7 +463,7 @@ class Tiers:
             components=comps,
             identity=identities(release, distinct),
             abs_z=[recomputed_abs_z_and_p(c.rows.z)[0] for c in comps],
-            backs=[back[starts[i]:starts[i + 1]] for i in range(len(comps))],
+            identity_rows=[back[starts[i]:starts[i + 1]] for i in range(len(comps))],
         )
 
     def bounds(self, index: int) -> list[tuple[int, int, int]]:
@@ -443,16 +479,22 @@ class Tiers:
             shared=np.concatenate([comps[i].shared[a:b] for i, a, b in parts]),
             abs_z=np.concatenate([self.abs_z[i][a:b] for i, a, b in parts]),
             imputed=np.concatenate([comps[i].imputed[a:b] for i, a, b in parts]),
-            identity=np.concatenate([self.backs[i][a:b] for i, a, b in parts]),
+            identity=np.concatenate([self.identity_rows[i][a:b] for i, a, b in parts]),
         )
 
 
 def ancestries(release: StoreRelease) -> list[str]:
     """Each Analysis's `assigned_ancestry`, by `analysis_index`, from the release's own
-    `analyses.tsv` (a Hybrid's root's)."""
+    `analyses.tsv` (a Hybrid's root's). A blank value is an Unassigned Analysis; a table
+    without the column is refused rather than read as every Analysis Unassigned."""
     table = read_analyses(release.analyses_path)
-    by_index = {int(row["analysis_index"]): row.get("assigned_ancestry", "") or ""
-                for row in table.rows}
+    if "assigned_ancestry" not in table.fieldnames:
+        raise ClumpRefusal(
+            f"{release.analyses_path} has no assigned_ancestry column, so no Analysis can be "
+            "mapped to an LD Store; a blank value is Unassigned, a missing column is not "
+            "(spec §7a, §18.1)"
+        )
+    by_index = {int(row["analysis_index"]): row["assigned_ancestry"] for row in table.rows}
     if sorted(by_index) != list(range(len(by_index))):
         raise ClumpRefusal(f"{release.analyses_path}: analysis_index is not 0..n-1")
     return [by_index[i].strip() for i in range(len(by_index))]
@@ -471,7 +513,6 @@ def compute_clumps(
     `analyses` restricts the work to those Analyses (validation's seeded re-clump); every
     other Analysis's rows are left −4 and its counts None, and are not counted. The format is
     not judged here (`refuse_format`), so a 0.2 Store's tier can be measured too."""
-    started = time.perf_counter()
     assigned = ancestries(release)
     if tiers is None:
         tiers = Tiers.read(release, tier_components(release, len(assigned)))
@@ -487,7 +528,6 @@ def compute_clumps(
         _clump_analysis(result, tiers, ld_stores, assigned[index], index)
         if (done + 1) % 500 == 0:
             log.info("clumped %d of %d Analyses", done + 1, len(wanted))
-    result.seconds = time.perf_counter() - started
     return result
 
 
@@ -501,8 +541,7 @@ def _clump_analysis(
         _count_not_clumped(result.not_clumped, ancestry)
         return
     part = tiers.slice(index)
-    lead, r, given = _clump_slice(part, tiers.identity, mapped)
-    result.lookups += given
+    lead, r = _clump_slice(part, tiers.identity, mapped)
     result.n_loci[index] = int((lead == np.arange(len(part))).sum())
     result.n_unclumped[index] = int(np.isin(lead, (ABSENT, AMBIGUOUS)).sum())
     _scatter(part, lead, r, tiers.identity, result.clumps, ancestry)
@@ -527,7 +566,7 @@ def clump_order(abs_z: np.ndarray, shared: np.ndarray) -> np.ndarray:
 
 def _clump_slice(
     part: Slice, identity: Identity, mapped: MappedLDStore
-) -> tuple[np.ndarray, np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray]:
     """One clumped Analysis's `lead` and `r`, by offset in its clump slice."""
     n = len(part)
     lead = np.full(n, ABSENT, dtype=np.int32)
@@ -537,7 +576,7 @@ def _clump_slice(
     lead[ambiguous] = AMBIGUOUS
     given = np.flatnonzero(~part.imputed & ~ambiguous)
     if len(given) == 0:
-        return lead, r, 0
+        return lead, r
     names = identity.sorted_alid[part.identity[given]]
     if len(set(names)) != len(names):
         raise ValueError(
@@ -555,7 +594,7 @@ def _clump_slice(
     codes = mapped.encoding.quantise(found.r).astype(np.int64) * sign
     lead[present] = leads
     r[present] = codes.astype(np.int16)
-    return lead, r, len(given)
+    return lead, r
 
 
 def _scatter(
@@ -621,26 +660,16 @@ def _write_group(
         group.attrs[ATTRIBUTE] = attribute
 
 
-def _set_manifest_entry(manifest_path: Path, entry: Mapping[str, str] | None) -> None:
-    """Write or remove the manifest's `clumps` entry, leaving every other key as it is."""
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if entry is None:
-        if MANIFEST_KEY not in data:
-            return
-        del data[MANIFEST_KEY]
-    else:
-        data[MANIFEST_KEY] = dict(entry)
-    staged = manifest_path.with_name(f".{manifest_path.name}.writing")
-    staged.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    staged.replace(manifest_path)
-
-
-def _manifests(release: StoreRelease) -> list[Path]:
-    """The release's manifests, its root's first: a Hybrid declares the Clumps in both (§2)."""
-    paths = [release.manifest_path]
-    if release.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
-        paths.append(release.dense_component().manifest_path)
-    return paths
+def _manifest_holders(release: OpenGWASDBStore) -> list[OpenGWASDBStore]:
+    """The releases whose manifests declare the Clumps (§2), in clump-slice order: a Hybrid's
+    Dense Component, then its root, last; every other layout's one."""
+    holders = []
+    for _label, each in component_releases(release):
+        if not isinstance(each, OpenGWASDBStore):
+            raise TypeError(f"{each.path} was opened read-only; the Clumps are written to a "
+                            "release opened with opengwasdb.store.open_store")
+        holders.append(each)
+    return holders
 
 
 def _count_column(counts: Sequence[int | None]) -> list[str]:
@@ -649,14 +678,15 @@ def _count_column(counts: Sequence[int | None]) -> list[str]:
 
 
 def write_clumps(
-    release: StoreRelease, result: ClumpResult, ld_stores: Mapping[str, MappedLDStore]
+    release: OpenGWASDBStore, result: ClumpResult, ld_stores: Mapping[str, MappedLDStore]
 ) -> None:
-    """Write `result` into `release` in place, in §18.1's order. The manifests stop declaring
-    any earlier Clumps first, so a step interrupted anywhere leaves a group no manifest
-    declares, which `validate` fails (`clumps.declared`), never a declaration of half."""
-    manifests = _manifests(release)
-    for path in manifests:
-        _set_manifest_entry(path, None)
+    """Write `result` into `release` in place, in §18.1's order. Every manifest stops
+    declaring any earlier Clumps first, so a step interrupted anywhere leaves a group no
+    manifest declares, which `validate` fails (`clumps.declared`), never a declaration of
+    stale columns or half a group."""
+    holders = _manifest_holders(release)
+    for holder in holders:
+        holder.set_manifest_entry(MANIFEST_KEY, None)
     created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     for component, clumps in zip(result.components, result.clumps, strict=True):
         _write_group(component, clumps,
@@ -667,20 +697,24 @@ def write_clumps(
     })
     if (release.path / "overview.html").exists():
         write_overview_html(release.path, read_analyses(release.analyses_path))
-    for path in reversed(manifests):
-        _set_manifest_entry(path, MANIFEST_ENTRY)
+    for holder in holders:
+        holder.set_manifest_entry(MANIFEST_KEY, dict(MANIFEST_ENTRY))
 
 
 @dataclass(frozen=True)
 class ClumpRun:
-    """What one run of the step did, for the CLI and a build record."""
+    """What one run of the step did, for the CLI and a build record (§18.1, *Written last*).
+
+    `n_loci_5e8` and `n_unclumped_5e8` are the totals over the clumped Analyses, and None
+    when no Analysis was clumped: a 0 would claim the Store has no locus. `not_clumped`
+    gives the Analyses not clumped by reason, as the group's attribute does."""
 
     store: str
     seconds: float
     analyses: int
     clumped: int
-    n_loci_5e8: int
-    n_unclumped_5e8: int
+    n_loci_5e8: int | None
+    n_unclumped_5e8: int | None
     markers: dict[str, int]
     not_clumped: dict[str, Any]
     ld_stores: dict[str, dict[str, Any]]
@@ -701,23 +735,24 @@ def clump_store(store_path: str | Path, ld_stores: Mapping[str, str | Path]) -> 
     Every refusal comes before anything is written. Running the step again replaces the
     Clumps, the two columns, `overview.html` and the manifest entry whole."""
     started = time.perf_counter()
-    release = open_store(store_path)
+    try:
+        release = open_store(store_path)
+    except UnsupportedFormatVersion as exc:
+        raise ClumpRefusal(str(exc)) from exc
     refuse_format(release)
     n_analyses = len(ancestries(release))
     components = tier_components(release, n_analyses)
-    refuse_without_imputed(release, components)
     opened = open_ld_stores(ld_stores, reference_assembly=release.manifest.reference_assembly)
     try:
         result = compute_clumps(release, opened, tiers=Tiers.read(release, components))
         write_clumps(release, result, opened)
-        clumped = [n for n in result.n_loci if n is not None]
         return ClumpRun(
             store=str(release.path),
             seconds=time.perf_counter() - started,
             analyses=n_analyses,
-            clumped=len(clumped),
-            n_loci_5e8=int(sum(clumped)),
-            n_unclumped_5e8=int(sum(n for n in result.n_unclumped if n is not None)),
+            clumped=sum(n is not None for n in result.n_loci),
+            n_loci_5e8=_total(result.n_loci),
+            n_unclumped_5e8=_total(result.n_unclumped),
             markers=result.markers(),
             not_clumped=result.not_clumped,
             ld_stores={a: m.identity for a, m in opened.items()},
@@ -726,47 +761,27 @@ def clump_store(store_path: str | Path, ld_stores: Mapping[str, str | Path]) -> 
         close_ld_stores(opened)
 
 
+def _total(counts: Sequence[int | None]) -> int | None:
+    """The sum over the clumped Analyses; None when none was clumped, never a false 0."""
+    clumped = [n for n in counts if n is not None]
+    return int(sum(clumped)) if clumped else None
+
+
 # ── reading ──────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class StoredComponent:
-    """One component's tier and the Clumps stored beside it, as written.
-
-    `configurations` names every member of its `clumps/` group (None when it has none);
-    `lead`, `r` and `attribute` are `default/`'s, None where absent."""
+    """One component's tier and the Clumps stored beside it, read by the Store Reader
+    (`TopHitTier.clumps`): None where the tier holds no `clumps/` group."""
 
     tier: TierComponent
-    configurations: tuple[str, ...] | None
-    lead: np.ndarray | None
-    r: np.ndarray | None
-    attribute: dict[str, Any] | None
-
-
-def stored_component(component: TierComponent) -> StoredComponent:
-    """What `component`'s tier group holds under `clumps/`."""
-    try:
-        group = component.tier[CLUMPS_GROUP]
-    except KeyError:
-        return StoredComponent(component, None, None, None, None)
-    names = tuple(sorted(name for name, _ in group.members()))
-    try:
-        default = group[CLUMPS_CONFIGURATION]
-    except KeyError:
-        return StoredComponent(component, names, None, None, None)
-    lead = np.asarray(default["lead"][:]) if "lead" in default else None
-    r = np.asarray(default["r"][:]) if "r" in default else None
-    attribute = default.attrs.get(ATTRIBUTE)
-    return StoredComponent(component, names, lead, r,
-                           dict(attribute) if isinstance(attribute, Mapping) else None)
+    clumps: TierClumps | None
 
 
 def read_clumps(release: StoreRelease) -> list[StoredComponent]:
-    """Each component's tier and stored Clumps, in clump-slice order."""
+    """Each component's tier and stored Clumps, in clump-slice order. A group the Store
+    Reader cannot read as §18.1 lays it out is refused (`MalformedClumps`)."""
     n_analyses = len(ancestries(release))
-    return [stored_component(c) for c in tier_components(release, n_analyses)]
+    return [StoredComponent(c, c.tier.clumps()) for c in tier_components(release, n_analyses)]
 
-
-def declares_clumps(manifest_path: Path) -> bool:
-    """Whether the manifest at `manifest_path` has a `clumps` entry."""
-    return MANIFEST_KEY in json.loads(manifest_path.read_text(encoding="utf-8"))

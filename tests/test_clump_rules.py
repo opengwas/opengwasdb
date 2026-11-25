@@ -16,7 +16,6 @@ import pytest
 import zarr
 from clump_stores import LD_STORE, copied
 
-from opengwasdb.clumps import clump_store
 from opengwasdb.model.analyses import write_analysis_columns
 from opengwasdb.store.arrays import create_array, open_group
 from opengwasdb.store_reader.analyses import read_analyses
@@ -29,17 +28,17 @@ CLUMP_RULES = [rule.name for rule in RULES]
 CLUMPS = Path("data.zarr/top_hits/p_5e_08/clumps/default")
 
 
+#: The rules a clumps/ group inside a tier could upset besides its own: the closed envelope,
+#: the Zarr format of every node, and a tier's arrays and structure.
+NEIGHBOURS = ["zarr.format", "envelope.closed", "top_hits.arrays", "top_hits.structure"]
+
+
 @pytest.fixture(scope="module")
-def clumped(
-    clump_seeds: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
-) -> dict[str, Path]:
-    """The completed Dense and the Hybrid seed, copied and clumped; the Dense seed unclumped."""
-    root = tmp_path_factory.mktemp("clump-rules")
-    stores = {name: copied(clump_seeds[name], root / name) for name in ("completed", "hybrid")}
-    for store in stores.values():
-        clump_store(store, EUR)
-    stores["unclumped"] = clump_seeds["dense"]
-    return stores
+def clumped(clump_seeds: dict[str, Path], clumped_seeds: dict[str, Path]) -> dict[str, Path]:
+    """The clumped completed Dense and Hybrid seeds, shared with `test_clumps`, and the Dense
+    seed unclumped. Never written to: a test copies the one it corrupts."""
+    return {"completed": clumped_seeds["completed"], "hybrid": clumped_seeds["hybrid"],
+            "unclumped": clump_seeds["dense"]}
 
 
 def _failed(store: Path, ld_stores: Mapping[str, Path] | None = None) -> set[str]:
@@ -79,7 +78,7 @@ def _set_counts(store: Path, analysis_id: str, n_loci: str) -> None:
 def test_a_clumped_store_is_valid_and_its_reclump_agrees(
     clumped: dict[str, Path], name: str
 ) -> None:
-    result = validate_store(clumped[name], ld_stores=EUR)
+    result = validate_store(clumped[name], rules=[*CLUMP_RULES, *NEIGHBOURS], ld_stores=EUR)
     assert result.ok, result.errors
     ran = {f.rule for f in result.findings if f.severity == "skip"}
     assert not ran & set(CLUMP_RULES), [f for f in result.findings if f.rule in CLUMP_RULES]
@@ -122,7 +121,7 @@ def test_a_hybrid_declaring_the_clumps_in_one_manifest_fails_declared(
     manifest = json.loads(dense.read_text())
     del manifest["clumps"]
     dense.write_text(json.dumps(manifest))
-    assert "clumps.declared" in _failed(store)
+    assert _failed(store) == {"clumps.declared"}
 
 
 # ── clumps.structure ─────────────────────────────────────────────────────────
@@ -143,15 +142,28 @@ def test_arrays_of_another_length_than_the_tier_fail_structure(
 
 
 def test_an_imputed_row_clumped_fails_markers(clumped: dict[str, Path], tmp_path: Path) -> None:
+    """The imputed row is made a member of a stronger lead on its chromosome, within the
+    window and above r2, so only the marker rule can see that it was clumped at all."""
+    from opengwasdb.store import open_store
+
     store = copied(clumped["completed"], tmp_path)
     a, b = _slice(store, "b")
-    imputed = np.asarray(zarr.open_group(str(store / "data.zarr/top_hits/p_5e_08"),
-                                         mode="r")["imputed"][a:b]).astype(bool)
-    k = int(np.flatnonzero(imputed)[0])
+    tier = zarr.open_group(str(store / "data.zarr/top_hits/p_5e_08"), mode="r")
+    imputed = np.asarray(tier["imputed"][a:b]).astype(bool)
+    abs_z = np.abs(np.asarray(tier["z"][a:b], dtype=np.float64))
+    axis = open_store(store).variant_axis(aliases=False)
+    found = axis.identity_by_indices(np.asarray(tier["variant_index"][a:b], dtype=np.int64))
+    axis.close()
     arrays = _arrays(store)
-    arrays["lead"][a + k] = k
-    arrays["r"][a + k] = 511
-    assert "clumps.markers" in _failed(store)
+    lead = np.asarray(arrays["lead"][a:b])
+    k = int(np.flatnonzero(imputed)[0])
+    reach = ((lead == np.arange(len(lead))) & (found["chromosome"] == found["chromosome"][k])
+             & (np.abs(found["position"] - found["position"][k]) < 10_000_000)
+             & (abs_z > abs_z[k]))
+    assert reach.any(), "the fixture must have a stronger lead near its imputed row"
+    arrays["lead"][a + k] = int(np.flatnonzero(reach)[0])
+    arrays["r"][a + k] = 400
+    assert _failed(store) == {"clumps.markers"}
 
 
 # ── clumps.greedy ────────────────────────────────────────────────────────────

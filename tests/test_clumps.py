@@ -15,7 +15,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from clump_stores import ANCESTRY, LD_STORE, OFF_PANEL, REVERSED_INDEL, copied
+from clump_stores import (
+    ANCESTRY,
+    LD_STORE,
+    OFF_PANEL,
+    REVERSED_INDEL,
+    completion_panel,
+    copied,
+    require_meaningful,
+)
 
 from opengwasdb.clumps import (
     ABSENT,
@@ -25,13 +33,18 @@ from opengwasdb.clumps import (
     NO_R,
     NOT_CLUMPED,
     ClumpRefusal,
+    StoredComponent,
     clump_store,
+    compute_clumps,
+    open_ld_stores,
     read_clumps,
 )
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.query.ldstore import open as open_ld_store
+from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store import open_store
-from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
+from opengwasdb.store_reader.top_hits import TierClumps
 from opengwasdb.top_hits import recomputed_abs_z_and_p
 
 EUR = {"EUR": LD_STORE}
@@ -44,14 +57,10 @@ def built(clump_seeds: dict[str, Path]) -> dict[str, Path]:
 
 
 @pytest.fixture(scope="module")
-def clumped(built: dict[str, Path], tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """Each fixture Store, copied and clumped against the EUR LD Store once."""
-    root = tmp_path_factory.mktemp("clumped")
-    out = {}
-    for name, store in built.items():
-        out[name] = copied(store, root / name)
-        clump_store(out[name], EUR)
-    return out
+def clumped(clumped_seeds: dict[str, Path]) -> dict[str, Path]:
+    """Each fixture Store, clumped against the EUR LD Store once a session; the completed
+    one already held to the fixture's meaning (`require_meaningful`)."""
+    return clumped_seeds
 
 
 # ── reading what was written, and what an independent re-clump says ──────────
@@ -79,11 +88,16 @@ def _slices(store: Path) -> dict[str, dict[str, np.ndarray]]:
             "alid": np.array([str(a) for a in axis.identity_by_indices(shared)["alid"]]),
             "z": np.concatenate([c.tier.rows.z[a:b] for c, a, b in parts]),
             "imputed": np.concatenate([c.tier.imputed[a:b] for c, a, b in parts]),
-            "lead": np.concatenate([c.lead[a:b] for c, a, b in parts]),
-            "r": np.concatenate([c.r[a:b] for c, a, b in parts]),
+            "lead": np.concatenate([_held(c).lead[a:b] for c, a, b in parts]),
+            "r": np.concatenate([_held(c).r[a:b] for c, a, b in parts]),
         }
     axis.close()
     return out
+
+
+def _held(component: StoredComponent) -> TierClumps:
+    assert component.clumps is not None, f"{component.tier.label} holds no Clumps"
+    return component.clumps
 
 
 def _sorted(alid: str) -> tuple[str, bool]:
@@ -130,13 +144,8 @@ def _ambiguous() -> set[str]:
 
 
 def test_the_fixture_store_is_meaningful(clumped: dict[str, Path]) -> None:
+    require_meaningful(clumped["completed"])
     slices = _slices(clumped["completed"])
-    a, b = slices["a"], slices["b"]
-    own = a["lead"] == np.arange(len(a["lead"]))
-    members = (a["lead"] >= 0) & ~own
-    assert members.any(), "the fixture must have a clump of more than one row"
-    assert (a["lead"] == ABSENT).any(), "the fixture must have an absent row"
-    assert b["imputed"].any(), "the fixture must have an imputed row in the 5e-8 tier"
     assert len(slices) == 4 and {ANCESTRY[k] for k in slices} == {"EUR", "", "AFR"}
 
 
@@ -207,8 +216,7 @@ def test_an_analysis_with_no_mapped_ld_store_is_not_clumped(
     row = next(r for r in read_analyses(clumped["completed"] / "analyses.tsv").rows
                if r["analysis_id"] == analysis_id)
     assert (row["n_loci_5e8"], row["n_unclumped_5e8"]) == ("", "")
-    attribute = read_clumps(open_store(clumped["completed"]))[0].attribute
-    assert attribute is not None
+    attribute = _held(read_clumps(open_store(clumped["completed"]))[0]).attribute
     assert attribute["not_clumped"] == {"no_assigned_ancestry": 1, "no_ld_store": {"AFR": 1}}
     assert reason in attribute["not_clumped"]
 
@@ -258,12 +266,51 @@ def test_a_store_older_than_0_3_0_is_refused_by_name(
     _unchanged(store, before)
 
 
-def _ld_store_copy(tmp_path: Path, **changes: object) -> Path:
+def _ld_store_copy(tmp_path: Path, *, without: tuple[str, ...] = (), **changes: object) -> Path:
+    """A copy of the Test Panel's LD Store whose provenance has `changes`, and lacks the key
+    `without` names, a path into the record (`("panel", "samples_sha256")`)."""
     copy = Path(shutil.copytree(LD_STORE, tmp_path / "ld.store"))
     meta = json.loads((copy / "zarr.json").read_text())
-    meta["attributes"]["ld_store"].update(changes)
+    record = meta["attributes"]["ld_store"]
+    record.update(changes)
+    if without:
+        holder = record
+        for key in without[:-1]:
+            holder = holder[key]
+        del holder[without[-1]]
     (copy / "zarr.json").write_text(json.dumps(meta))
     return copy
+
+
+@pytest.mark.parametrize(("without", "named"), [
+    (("t_far",), "t_far"),
+    (("panel", "samples_sha256"), "panel.samples_sha256"),
+])
+def test_an_ld_store_missing_a_recorded_value_is_refused_naming_it(
+    built: dict[str, Path], tmp_path: Path, without: tuple[str, ...], named: str
+) -> None:
+    store = copied(built["dense"], tmp_path)
+    before = (store / "manifest.json").read_text()
+    lacking = _ld_store_copy(tmp_path, without=without)
+    with pytest.raises(ClumpRefusal, match=rf"{lacking}.*{named}"):
+        clump_store(store, {"EUR": lacking})
+    _unchanged(store, before)
+
+
+def test_an_analyses_table_without_assigned_ancestry_is_refused(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    store = copied(built["dense"], tmp_path)
+    table = read_analyses(store / "analyses.tsv")
+    write_analyses(store / "analyses.tsv", AnalysesTable(
+        fieldnames=tuple(c for c in table.fieldnames if c != "assigned_ancestry"),
+        rows=tuple({k: v for k, v in row.items() if k != "assigned_ancestry"}
+                   for row in table.rows),
+    ))
+    before = (store / "manifest.json").read_text()
+    with pytest.raises(ClumpRefusal, match=r"analyses.tsv has no assigned_ancestry column"):
+        clump_store(store, EUR)
+    _unchanged(store, before)
 
 
 def test_an_ld_store_of_another_assembly_is_refused(built: dict[str, Path], tmp_path: Path) -> None:
@@ -304,25 +351,51 @@ def test_a_completed_store_whose_tier_has_no_imputed_is_refused(
     with pytest.raises(ClumpRefusal, match=r"p_5e_08.*no `imputed` array"):
         clump_store(store, EUR)
     _unchanged(store, before)
+    # The compute path, which the re-clump rule and a measurement call, refuses it too.
+    opened = open_ld_stores(EUR, reference_assembly="GRCh38")
+    try:
+        with pytest.raises(ClumpRefusal, match=r"p_5e_08.*no `imputed` array"):
+            compute_clumps(open_store(store), opened)
+    finally:
+        for mapped in opened.values():
+            mapped.store.close()
 
 
 # ── seam 5: completion of a clumped Store carries none of it ─────────────────
 
 
-def test_completing_a_clumped_store_leaves_no_clumps(
-    clumped: dict[str, Path], tmp_path: Path
-) -> None:
-    from clump_stores import _completion_panel
-
+def _complete(layout: str, source: Path, completed: Path, panel: Path) -> None:
     from opengwasdb.layouts.dense.complete import complete_dense_store
+    from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+    from opengwasdb.layouts.ragged.complete import complete_ragged_store
 
-    source = clumped["dense"]
-    assert json.loads((source / "manifest.json").read_text())["clumps"]
-    assert (source / "data.zarr" / "top_hits" / "p_5e_08" / "clumps" / "default").is_dir()
+    complete = {"dense": complete_dense_store, "ragged": complete_ragged_store,
+                "hybrid": complete_hybrid_store}[layout]
+    complete(source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="again")
+
+
+@pytest.mark.parametrize("layout", ["dense", "ragged", "hybrid"])
+def test_completing_a_clumped_store_leaves_no_clumps(
+    built: dict[str, Path], tmp_path: Path, layout: str
+) -> None:
+    """Every completion rewrites its tiers through `write_index`, whose tier group replaces
+    the Clumps' (ADR 0106 §10): Dense, Ragged and a Hybrid's two components."""
+    from region_tables import every_analysis, with_regions
+
+    source = copied(built[layout], tmp_path / "source")
+    if layout == "ragged":
+        with_regions(source, every_analysis(source, "significant_trans", "21", 42_000_000,
+                                            43_000_000))
+    clump_store(source, EUR)
+    manifests = sorted(source.rglob("manifest.json"))
+    assert manifests and all(json.loads(m.read_text())["clumps"] for m in manifests)
+    groups = list(source.rglob("clumps"))
+    assert len(groups) == len(manifests), "every component holding the tier is clumped"
     completed = tmp_path / "completed.opengwasdb"
-    complete_dense_store(source, completed, _completion_panel(tmp_path / "panel"),
-                         ancestry="EUR", min_cor=0.0, release_id="again")
-    assert "clumps" not in json.loads((completed / "manifest.json").read_text())
+    _complete(layout, source, completed, completion_panel(tmp_path / "panel"))
+    completed_manifests = sorted(completed.rglob("manifest.json"))
+    assert len(completed_manifests) == len(manifests)
+    assert all("clumps" not in json.loads(m.read_text()) for m in completed_manifests)
     assert not list(completed.rglob("clumps"))
     header = (completed / "analyses.tsv").read_text().splitlines()[0].split("\t")
     assert "n_loci_5e8" not in header and "n_unclumped_5e8" not in header
@@ -389,10 +462,55 @@ def test_the_clump_command_prints_what_it_did_and_refuses_by_name(
     assert (run["analyses"], run["clumped"]) == (4, 2)
     assert run["not_clumped"] == {"no_assigned_ancestry": 1, "no_ld_store": {"AFR": 1}}
     assert run["n_loci_5e8"] > 0 and run["ld_stores"]["EUR"]["kind"] == "ld_store"
-    other = tmp_path / "other"
-    other.mkdir()
-    refused = CliRunner().invoke(
-        app, ["clump", str(copied(built["completed"], other)), "--ld-store",
-              f"EUR={_ld_store_copy(tmp_path, reference_assembly='GRCh37')}"])
-    assert refused.exit_code == 1
-    assert "GRCh37" in refused.output and "error:" in refused.output
+
+
+def test_the_clump_command_prints_no_total_when_nothing_was_clumped(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    store = copied(built["dense"], tmp_path)
+    done = CliRunner().invoke(app, ["clump", str(store), "--ld-store", f"AMR={LD_STORE}"])
+    assert done.exit_code == 0, done.output
+    run = json.loads(done.stdout)
+    assert (run["clumped"], run["n_loci_5e8"], run["n_unclumped_5e8"]) == (0, None, None)
+    assert run["not_clumped"] == {"no_assigned_ancestry": 1,
+                                  "no_ld_store": {"EUR": 2, "AFR": 1}}
+
+
+def _older(store: Path) -> None:
+    manifest = json.loads((store / "manifest.json").read_text())
+    manifest["format_version"] = "0.2.3"
+    (store / "manifest.json").write_text(json.dumps(manifest))
+
+
+@pytest.mark.parametrize(("case", "named"), [
+    ("assembly", "GRCh37"),
+    ("missing value", "t_far"),
+    ("no such store", "does not open"),
+    ("older store", "format_version 0.2.3"),
+    ("no 5e-8 tier", "no 5e-8 Top-Hit tier"),
+])
+def test_the_clump_command_exits_1_naming_each_refusal(
+    built: dict[str, Path], tmp_path: Path, case: str, named: str
+) -> None:
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    store = copied(built["dense"], tmp_path / "store")
+    ld = {
+        "assembly": lambda: _ld_store_copy(tmp_path, reference_assembly="GRCh37"),
+        "missing value": lambda: _ld_store_copy(tmp_path, without=("t_far",)),
+        "no such store": lambda: tmp_path / "nowhere.store",
+    }.get(case, lambda: LD_STORE)()
+    if case == "older store":
+        _older(store)
+    if case == "no 5e-8 tier":
+        shutil.rmtree(store / "data.zarr" / "top_hits" / "p_5e_08")
+    refused = CliRunner().invoke(app, ["clump", str(store), "--ld-store", f"EUR={ld}"])
+    assert refused.exit_code == 1, refused.output
+    assert "error:" in refused.output and named in refused.output
+    assert refused.exception is None or isinstance(refused.exception, SystemExit)

@@ -337,6 +337,26 @@ def clump_seeds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     }
 
 
+@pytest.fixture(scope="session")
+def clumped_seeds(
+    clump_seeds: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, Path]:
+    """`clump_seeds`, each copied once a session and clumped against the Test Panel's LD
+    Store for EUR (#418). The completed one is first held to what the Clumps' tests assert
+    of it (`require_meaningful`). Never written to: copy one to change it."""
+    from clump_stores import LD_STORE, copied, require_meaningful
+
+    from opengwasdb.clumps import clump_store
+
+    root = tmp_path_factory.mktemp("clumped-seeds")
+    out = {}
+    for name, store in clump_seeds.items():
+        out[name] = copied(store, root / name)
+        clump_store(out[name], {"EUR": LD_STORE})
+    require_meaningful(out["completed"])
+    return out
+
+
 @pytest.fixture(scope="module")
 def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Hybrid release of three traits over a 40-variant panel, each with four

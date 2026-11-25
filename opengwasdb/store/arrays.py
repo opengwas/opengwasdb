@@ -86,6 +86,7 @@ from opengwasdb.store_reader.layout import (
     require_shard_multiple,
     shard_layout,
 )
+from opengwasdb.store_reader.top_hits import CLUMPS_ARRAYS, CLUMPS_CONFIGURATION, CLUMPS_GROUP
 
 __all__ = [
     "BY_VARIANT_OFFSETS_CHUNK",
@@ -913,9 +914,7 @@ def _grouped_role(head: str, rest: str) -> ArrayRole | None:
 #: The Clumps of a tier (spec §18.1, ADR 0106): `clumps/<configuration>/<leaf>` inside
 #: the tier, parallel to it, so each has the tier's role. `default` is the one
 #: configuration a release may hold, so another name has no role.
-CLUMPS_GROUP = "clumps"
-CLUMPS_CONFIGURATION = "default"
-_CLUMPS_LEAVES = frozenset({"lead", "r"})
+_CLUMPS_LEAVES = frozenset(CLUMPS_ARRAYS)
 
 
 def _top_hit_tier_role(rest: str) -> ArrayRole | None:

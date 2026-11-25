@@ -74,7 +74,9 @@ The means and medians are over the Analyses in each run's records (`all-*.jsonl`
   loci lost entirely inside the other Analyses (25 Nov 2026, the step's compute path on the same
   tiers; `parity.py` and its records in `/data/opengwasdb/work/orchestrate/opengwasdb-62-r2/scratch/418/`).
   A lost locus there is a run of an Analysis's absent rows, consecutive ones less than G apart,
-  with no row the LD Store holds within G of the run. At G = 250 kb, plink2's default window,
+  with no row the LD Store holds within G of the run. G is a reporting choice for this
+  measurement, not a setting of the Clumps, and nothing in a Store records it; the owner
+  ratifies the definition when epic #62 merges. At G = 250 kb, plink2's default window,
   OGS-00009 loses 4,172 loci in its 1,133 Analyses with a present row, against their 76,821
   Clump Leads (5.4%), and OGS-00027 542 against 111,673 (0.5%); at G = 1 Mb, 2,786 and 154. The
   86 and 117 Analyses with no present row add 294 and 133 runs at 250 kb. The same run gave
@@ -336,7 +338,9 @@ its `clumps` entry is rewritten. Anything else touching Analytical Metadata stil
 release. ADRs 0038 and 0061 carry a banner saying so. The step writes the group, then `analyses.tsv` and `overview.html`,
 then the manifest's `clumps` entry last: until that entry is written the Store does not declare
 the component, and `validate` fails a group it does not declare. Running the step again replaces
-all four.
+all four, and first removes the `clumps` entry from every manifest of the release (#418): a
+rerun interrupted part-way then leaves an undeclared group, which `clumps.declared` fails,
+rather than a declaration of columns and arrays the new run has not finished writing.
 
 **Clumping needs a 0.3.0 Store** (#418). The step refuses a Store of any other format,
 naming its `format_version` and the one it supports. A 0.2 Store's tier stores `abs_z`, and its
@@ -387,7 +391,9 @@ tier's rows for the stored configuration (decision 1), in `opengwasdb/store_read
     every one of its 1,219 Analyses took 126 s in all, which `n_loci_5e8` needs for each
     Analysis. A stored read also needs no LD Store at query time.
 
-**Until #419 lands the Store Reader reads nothing of them.** Under step 2 they are then not
+**Until #419 lands no query reads them.** #418 gave the Store Reader their read,
+`TopHitTier.clumps`, which validation uses and #419's query builds on; no answer a reader asks
+for reads it yet. Under step 2 they are then not
 recomputable from the release, and they record no part of how the release was made. ADR 0102
 rules the same way for the Rho Matrix: it "ships only once the Store Reader reads it". So #420
 adds the Clumps to published Stores only once #419's reader is released. The count columns are

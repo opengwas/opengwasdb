@@ -192,7 +192,7 @@ def _b_block_z() -> dict[str, float]:
     return {alid: float(CAUSAL_Z * r * s) for alid, r, s in zip(alids, column, sign, strict=True)}
 
 
-def _completion_panel(root: Path) -> Path:
+def completion_panel(root: Path) -> Path:
     """An LD reference panel of one block over `COMPLETION_BLOCK` (`_block_ld`)."""
     v = testdata.variants()
     alids, ld, _sign = _block_ld()
@@ -216,7 +216,7 @@ def build_dense_completed(root: Path) -> Path:
     source = build_dense(root / "obs.opengwasdb")
     completed = root / "completed.opengwasdb"
     complete_dense_store(
-        source, completed, _completion_panel(root / "ld_panel"), ancestry="EUR", min_cor=0.0,
+        source, completed, completion_panel(root / "ld_panel"), ancestry="EUR", min_cor=0.0,
         release_id="clumps-comp",
     )
     return completed
@@ -274,6 +274,34 @@ def build_hybrid(root: Path) -> Path:
     )
     set_ancestry(store)
     return store
+
+
+def require_meaningful(completed: Path) -> None:
+    """Refuse a clumped completed fixture that cannot show what the Clumps' tests assert of
+    it: `a` must have a clump of more than one row and an absent row, and `b` an imputed row
+    in its 5e-8 tier. A fixture that lost any of them would let those tests pass vacuously."""
+    from opengwasdb.clumps import ABSENT, read_clumps
+    from opengwasdb.store import open_store
+
+    (component,) = read_clumps(open_store(completed))
+    assert component.clumps is not None, "the completed fixture must be clumped"
+    ids = [row["analysis_id"]
+           for row in sorted(read_analyses(completed / "analyses.tsv").rows,
+                             key=lambda row: int(row["analysis_index"]))]
+    offsets = component.tier.offsets
+
+    def lead(analysis_id: str) -> np.ndarray:
+        index = ids.index(analysis_id)
+        return component.clumps.lead[offsets[index]:offsets[index + 1]]
+
+    a = lead("a")
+    members = (a >= 0) & (a != np.arange(len(a)))
+    assert members.any(), "the fixture must have a clump of more than one row"
+    assert (a == ABSENT).any(), "the fixture must have an absent row"
+    index = ids.index("b")
+    assert component.tier.imputed[offsets[index]:offsets[index + 1]].any(), (
+        "the fixture must have an imputed row in the 5e-8 tier"
+    )
 
 
 def copied(store: Path, directory: Path) -> Path:

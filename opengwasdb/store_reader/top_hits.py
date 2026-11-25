@@ -10,7 +10,7 @@ Index"). Writing and checking a tier are `opengwasdb.top_hits`'s; the
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -144,6 +144,46 @@ class TierRows(NamedTuple):
     imputed: np.ndarray | None
 
 
+#: The Clumps of the 5e-8 tier (spec §18.1, ADR 0106): a `clumps/` group inside the tier,
+#: holding the one stored Clumping Configuration, `default/`, with `lead` and `r` parallel
+#: to the tier and the provenance in its `clumps` attribute.
+CLUMPS_GROUP = "clumps"
+CLUMPS_CONFIGURATION = "default"
+CLUMPS_ATTRIBUTE = "clumps"
+#: Each array of the configuration, with the dtype §18.1 gives it.
+CLUMPS_ARRAYS: Mapping[str, np.dtype[Any]] = {
+    "lead": np.dtype(np.int32), "r": np.dtype(np.int16),
+}
+#: Every key the `clumps` attribute holds (§18.1), and every key of an `ld_stores` entry.
+CLUMPS_ATTRIBUTE_KEYS = frozenset({
+    "configuration", "threshold", "tier_rows", "score", "ties", "kb", "join", "markers",
+    "ld_stores", "not_clumped", "opengwasdb", "created_at",
+})
+CLUMPS_ENTRY_KEYS = frozenset({
+    "name", "kind", "format_version", "samples_sha256", "provenance_sha256", "location",
+    "reference_assembly", "n", "k", "t_far", "t_partner", "near_bp", "far_bp", "r_scale", "r2",
+    "analyses", "rows_clumped", "rows_absent", "rows_ambiguous", "indel_rows_by_sorted_spelling",
+})
+
+
+class MalformedClumps(ValueError):
+    """A tier's `clumps/` group that is not laid out as spec §18.1 says, named with why."""
+
+
+class TierClumps(NamedTuple):
+    """The Clumps of a tier (or of one Analysis's slice of it), as stored (spec §18.1).
+
+    `lead` is each row's Clump Lead as an offset in its Analysis's clump slice, or a
+    negative marker; `r` the LD Store's own code of its signed r with that lead; `attribute`
+    the configuration's `clumps` attribute, which names the LD Store each ancestry was
+    clumped against and its `r_scale`.
+    """
+
+    lead: np.ndarray
+    r: np.ndarray
+    attribute: dict[str, Any]
+
+
 class TopHitTier:
     """Address one threshold tier without exposing its physical arrays.
 
@@ -200,6 +240,58 @@ class TopHitTier:
     def _read_if_present(self, name: str, bounds: tuple[int, int], dtype: str) -> np.ndarray | None:
         return self._read(name, bounds, dtype) if self.has(name) else None
 
+    def has_clumps(self) -> bool:
+        """Whether the tier holds a `clumps/` group, well formed or not."""
+        return CLUMPS_GROUP in self.group
+
+    def clumps(self, analysis_index: int | None = None) -> TierClumps | None:
+        """The tier's stored Clumps, or one Analysis's slice of them; None where the tier
+        holds no `clumps/` group (spec §18.1).
+
+        A group that is not laid out as §18.1 says is refused, `MalformedClumps`, naming
+        what is wrong: a member besides `default/`, a missing array or attribute, an array of
+        another dtype or length than the tier's, or an attribute missing a key. Whether the
+        release declares the Clumps is its manifest's to say (`clumps`, §2), not the tier's.
+        """
+        if not self.has_clumps():
+            return None
+        default = self._clumps_configuration()
+        n_rows = int(self._required("z").shape[0])
+        arrays = {name: self._clumps_array(default, name, dtype, n_rows)
+                  for name, dtype in CLUMPS_ARRAYS.items()}
+        attribute = _clumps_attribute(self.group.path, default)
+        start, stop = self._bounds(analysis_index)
+        return TierClumps(
+            lead=np.asarray(arrays["lead"][start:stop], dtype=np.int32),
+            r=np.asarray(arrays["r"][start:stop], dtype=np.int16),
+            attribute=attribute,
+        )
+
+    def _clumps_configuration(self) -> zarr.Group:
+        group = self.group[CLUMPS_GROUP]
+        names = sorted(name for name, _ in group.members())
+        if names != [CLUMPS_CONFIGURATION]:
+            raise MalformedClumps(
+                f"{self.group.path}/{CLUMPS_GROUP} holds {names}; {CLUMPS_CONFIGURATION!r} is "
+                "the one Clumping Configuration a release holds (spec §18.1)"
+            )
+        configuration: zarr.Group = group[CLUMPS_CONFIGURATION]
+        return configuration
+
+    def _clumps_array(
+        self, default: zarr.Group, name: str, dtype: np.dtype[Any], n_rows: int
+    ) -> zarr.Array:
+        where = f"{self.group.path}/{CLUMPS_GROUP}/{CLUMPS_CONFIGURATION}/{name}"
+        if name not in default:
+            raise MalformedClumps(f"{where} is missing (spec §18.1)")
+        array: zarr.Array = default[name]
+        if array.dtype != dtype or array.shape != (n_rows,):
+            raise MalformedClumps(
+                f"{where} is {array.dtype} of shape {array.shape}; the tier's Clumps are "
+                f"{dtype}, one per its {n_rows} rows (spec §18.1)"
+            )
+        return array
+
     def read(
         self, analysis_index: int | None = None, *, require: Iterable[str] = ()
     ) -> TierRows:
@@ -233,6 +325,23 @@ class TopHitTier:
             eaf=self._read_if_present("eaf", bounds, "float32"),
             imputed=self._read_if_present("imputed", bounds, "uint8"),
         )
+
+
+def _clumps_attribute(where: str, default: zarr.Group) -> dict[str, Any]:
+    """The configuration's `clumps` attribute, every key §18.1 requires present."""
+    attribute = default.attrs.get(CLUMPS_ATTRIBUTE)
+    if not isinstance(attribute, Mapping):
+        raise MalformedClumps(
+            f"{where}/{CLUMPS_GROUP}/{CLUMPS_CONFIGURATION} has no {CLUMPS_ATTRIBUTE!r} "
+            "attribute (spec §18.1)"
+        )
+    missing = sorted(CLUMPS_ATTRIBUTE_KEYS - set(attribute))
+    if missing:
+        raise MalformedClumps(
+            f"{where}/{CLUMPS_GROUP}/{CLUMPS_CONFIGURATION}'s {CLUMPS_ATTRIBUTE!r} attribute "
+            f"lacks {missing} (spec §18.1)"
+        )
+    return dict(attribute)
 
 
 class TopHitTiers:

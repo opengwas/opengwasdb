@@ -25,7 +25,6 @@ import numpy as np
 from opengwasdb.clumps import (
     ABSENT,
     AMBIGUOUS,
-    ATTRIBUTE,
     CLUMPS_FORMAT_VERSIONS,
     IMPUTED,
     KB,
@@ -42,7 +41,6 @@ from opengwasdb.clumps import (
     ClumpRefusal,
     ClumpResult,
     MappedLDStore,
-    StoredComponent,
     Tiers,
     ancestries,
     close_ld_stores,
@@ -51,9 +49,17 @@ from opengwasdb.clumps import (
     read_clumps,
 )
 from opengwasdb.model.analyses import CLUMP_COUNT_COLUMNS, N_LOCI_5E8, N_UNCLUMPED_5E8
-from opengwasdb.store.arrays import CLUMPS_CONFIGURATION, CLUMPS_GROUP
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.store_reader.top_hits import TOP_HIT_GROUP
+from opengwasdb.store_reader.top_hits import (
+    CLUMPS_ATTRIBUTE,
+    CLUMPS_ATTRIBUTE_KEYS,
+    CLUMPS_CONFIGURATION,
+    CLUMPS_ENTRY_KEYS,
+    CLUMPS_GROUP,
+    TOP_HIT_GROUP,
+    MalformedClumps,
+    TierClumps,
+)
 from opengwasdb.validation.rule import Check, Kind, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
 
@@ -64,16 +70,7 @@ STRUCTURE = "clumps.structure"
 #: `fidelity_seed`.
 RECLUMP_ANALYSES = 25
 
-#: Every key the group's `clumps` attribute and each `ld_stores` entry must hold (§18.1).
-ATTRIBUTE_KEYS = frozenset({
-    "configuration", "threshold", "tier_rows", "score", "ties", "kb", "join", "markers",
-    "ld_stores", "not_clumped", "opengwasdb", "created_at",
-})
-ENTRY_KEYS = frozenset({
-    "name", "kind", "format_version", "samples_sha256", "provenance_sha256", "location",
-    "reference_assembly", "n", "k", "t_far", "t_partner", "near_bp", "far_bp", "r_scale", "r2",
-    "analyses", "rows_clumped", "rows_absent", "rows_ambiguous", "indel_rows_by_sorted_spelling",
-})
+ATTRIBUTE = CLUMPS_ATTRIBUTE
 #: The attribute's fixed values: the one stored Clumping Configuration (§18.1).
 FIXED = {"configuration": CLUMPS_CONFIGURATION, "threshold": THRESHOLD, "score": "abs(z)",
          "ties": "store_variant_index", "kb": KB, "join": "r2_gt_distance_lt",
@@ -113,48 +110,40 @@ def _declares_at(path: Path) -> bool:
     return MANIFEST_KEY in json.loads(path.read_text(encoding="utf-8"))
 
 
-def _parallel(component: StoredComponent) -> tuple[np.ndarray, np.ndarray] | None:
-    """A component's `lead` and `r` when both are present and parallel to its tier."""
-    rows = component.tier.n_rows
-    lead, r = component.lead, component.r
-    if lead is None or r is None or lead.shape != (rows,) or r.shape != (rows,):
-        return None
-    return lead, r
-
-
 @dataclass(frozen=True)
 class _View:
-    """A release's tiers and their Clumps, its ancestries and its `ld_stores` entries."""
+    """A release's tiers and their Clumps as the Store Reader reads them, one per component,
+    its ancestries and its `ld_stores` entries."""
 
     tiers: Tiers
-    stored: list[StoredComponent]
-    arrays: list[tuple[np.ndarray, np.ndarray]]
+    clumps: list[TierClumps]
     ancestry: list[str]
     entries: dict[str, Any]
 
     def component(self, label: str) -> int:
-        labels = [component.tier.label for component in self.stored]
-        return labels.index(label)
+        return [component.label for component in self.tiers.components].index(label)
+
+    def labelled(self) -> Iterator[tuple[str, TierClumps]]:
+        for component, clumps in zip(self.tiers.components, self.clumps, strict=True):
+            yield component.label, clumps
 
     def piece(self, i: int, index: int) -> tuple[np.ndarray, np.ndarray]:
         """Component `i`'s `lead` and `r` for Analysis `index`."""
         _, a, b = self.tiers.bounds(index)[i]
-        lead, r = self.arrays[i]
-        return lead[a:b], r[a:b]
+        return self.clumps[i].lead[a:b], self.clumps[i].r[a:b]
 
     def lead_of(self, index: int) -> np.ndarray:
         """Analysis `index`'s `lead` over its clump slice."""
-        return np.concatenate([self.piece(i, index)[0] for i in range(len(self.stored))])
+        return np.concatenate([self.piece(i, index)[0] for i in range(len(self.clumps))])
 
     def r_of(self, index: int) -> np.ndarray:
-        return np.concatenate([self.piece(i, index)[1] for i in range(len(self.stored))])
+        return np.concatenate([self.piece(i, index)[1] for i in range(len(self.clumps))])
 
 
 def _readable(target: Target) -> bool:
-    """Whether the release's Clumps can be read as §18.1 lays them out: every component's
-    tier present with `lead` and `r` parallel to it, and a `clumps` attribute. Where not,
-    `clumps.declared` or `clumps.structure` reports why, and the rules that read the values
-    have no values to judge."""
+    """Whether the Store Reader reads the release's Clumps in every component holding a 5e-8
+    tier (`TopHitTier.clumps`). Where not, `clumps.declared` or `clumps.structure` reports
+    why, and the rules that judge the values have no values to judge."""
     return _view_or_none(target) is not None
 
 
@@ -174,30 +163,17 @@ def _view(target: Target) -> _View:
 def _read_view(root: Target) -> _View | None:
     try:
         stored = read_clumps(root.store)
-    except ClumpRefusal:
+    except (ClumpRefusal, MalformedClumps):
         return None
-    arrays = _all_parallel(stored)
-    attribute = next((c.attribute for c in stored if c.attribute is not None), None)
-    if attribute is None or arrays is None:
+    clumps = [c.clumps for c in stored if c.clumps is not None]
+    if not stored or len(clumps) != len(stored):
         return None
     return _View(
         tiers=Tiers.read(root.store, [c.tier for c in stored]),
-        stored=stored,
-        arrays=arrays,
+        clumps=clumps,
         ancestry=ancestries(root.store),
-        entries=dict(attribute.get("ld_stores", {})),
+        entries=dict(clumps[0].attribute.get("ld_stores", {})),
     )
-
-
-def _all_parallel(stored: list[StoredComponent]) -> list[tuple[np.ndarray, np.ndarray]] | None:
-    """Every component's `lead` and `r`, or None when one is missing or not parallel."""
-    arrays = []
-    for component in stored:
-        pair = _parallel(component)
-        if pair is None:
-            return None
-        arrays.append(pair)
-    return arrays
 
 
 def _analysis_ids(target: Target) -> list[str]:
@@ -314,7 +290,7 @@ def _array_problems(group: Any, name: str, dtype: np.dtype[Any], n_rows: int) ->
 
 
 def _attribute_problems(attribute: dict[str, Any], n_rows: int) -> Iterator[str]:
-    missing = sorted(ATTRIBUTE_KEYS - set(attribute))
+    missing = sorted(CLUMPS_ATTRIBUTE_KEYS - set(attribute))
     if missing:
         yield f"the {ATTRIBUTE} attribute lacks {missing}"
     if attribute.get("tier_rows") != n_rows:
@@ -326,7 +302,7 @@ def _attribute_problems(attribute: dict[str, Any], n_rows: int) -> Iterator[str]
 
 
 def _entry_problems(ancestry: str, entry: dict[str, Any], assembly: str) -> Iterator[str]:
-    lacking = sorted(ENTRY_KEYS - set(entry))
+    lacking = sorted(CLUMPS_ENTRY_KEYS - set(entry))
     if lacking:
         yield f"ld_stores[{ancestry!r}] lacks {lacking}"
     if entry.get("r2") != entry.get("t_far"):
@@ -345,7 +321,7 @@ def markers(target: Target) -> Iterator[str]:
     i = view.component(_component_label(target))
     tiers = view.tiers
     imputed = tiers.components[i].imputed
-    ambiguous = tiers.identity.ambiguous[tiers.backs[i]] & ~imputed
+    ambiguous = tiers.identity.ambiguous[tiers.identity_rows[i]] & ~imputed
     ids = _analysis_ids(target)
     for index, assigned in _clumped(view):
         _, a, b = tiers.bounds(index)[i]
@@ -445,14 +421,13 @@ def ancestry(target: Target) -> Iterator[str]:
 def _recorded_ancestries(view: _View) -> Iterator[str]:
     """Every component records the same `ld_stores` keys, and the Analyses not clumped."""
     expected = _not_clumped(view)
-    for component in view.stored:
-        attribute = component.attribute or {}
+    for label, clumps in view.labelled():
+        attribute = clumps.attribute
         recorded = set(dict(attribute.get("ld_stores", {})))
         if recorded != set(view.entries):
-            yield (f"{component.tier.label} records ld_stores {sorted(recorded)}, "
-                   f"another {sorted(view.entries)}")
+            yield f"{label} records ld_stores {sorted(recorded)}, another {sorted(view.entries)}"
         if attribute.get("not_clumped") != expected:
-            yield (f"{component.tier.label} records not_clumped {attribute.get('not_clumped')}, "
+            yield (f"{label} records not_clumped {attribute.get('not_clumped')}, "
                    f"the Analyses {expected}")
 
 
@@ -491,20 +466,20 @@ def counts(target: Target) -> Iterator[str]:
         problem = _count_problem(view.lead_of(index), rows[index])
         if problem:
             yield f"{rows[index]['analysis_id']}: {problem}"
-    for i, component in enumerate(view.stored):
-        yield from _tally_problems(component, _tallies(view, i))
+    for i, (label, clumps) in enumerate(view.labelled()):
+        yield from _tally_problems(label, clumps, _tallies(view, i))
 
 
 def _tally_problems(
-    component: StoredComponent, tallies: Mapping[str, Mapping[str, int]]
+    label: str, clumps: TierClumps, tallies: Mapping[str, Mapping[str, int]]
 ) -> Iterator[str]:
     """Each `ld_stores` entry's row counts are its rows' markers' counts."""
-    recorded = dict((component.attribute or {}).get("ld_stores", {}))
+    recorded = dict(clumps.attribute.get("ld_stores", {}))
     for assigned, tally in tallies.items():
         for key, value in tally.items():
             found = recorded.get(assigned, {}).get(key)
             if found != value:
-                yield (f"{component.tier.label}: ld_stores[{assigned!r}].{key} is {found}, "
+                yield (f"{label}: ld_stores[{assigned!r}].{key} is {found}, "
                        f"its rows {value}")
 
 
