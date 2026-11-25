@@ -211,15 +211,43 @@ def test_a_count_that_disagrees_with_the_arrays_fails_counts(
 # ── clumps.reclump ───────────────────────────────────────────────────────────
 
 
-def test_a_sign_not_flipped_fails_reclump(clumped: dict[str, Path], tmp_path: Path) -> None:
-    store = copied(clumped["completed"], tmp_path)
+def _sign_flipped(clumped: Path, tmp_path: Path) -> Path:
+    """A copy of `clumped` with one member's r negated: a sign not flipped, or flipped twice,
+    which only a re-clump can see."""
+    store = copied(clumped, tmp_path)
     a, b = _slice(store, "a")
     arrays = _arrays(store)
     lead = np.asarray(arrays["lead"][a:b])
     member = int(np.flatnonzero((lead >= 0) & (lead != np.arange(len(lead))))[0])
     arrays["r"][a + member] = -int(arrays["r"][a + member])
+    return store
+
+
+def test_a_sign_not_flipped_fails_reclump(clumped: dict[str, Path], tmp_path: Path) -> None:
+    store = _sign_flipped(clumped["completed"], tmp_path)
     assert _failed(store) == set(), "only a re-clump sees a sign"
     assert _failed(store, ld_stores=EUR) == {"clumps.reclump"}
+
+
+def test_the_cli_fidelity_seed_seeds_the_reclump_sample(
+    clumped: dict[str, Path], tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    store = _sign_flipped(clumped["completed"], tmp_path)
+    seeds = {}
+    for seed in ("7", None):
+        argv = ["validate", str(store), "--format", "json", "--ld-store", f"EUR={LD_STORE}"]
+        ran = CliRunner().invoke(app, argv + (["--fidelity-seed", seed] if seed else []))
+        assert ran.exit_code == 1, ran.output
+        found = [f["message"] for f in json.loads(ran.stdout)["findings"]
+                 if f["rule"] == "clumps.reclump"]
+        assert len(found) == 1, found
+        seeds[seed] = found[0]
+    assert "(seed 7, sample" in seeds["7"]
+    assert "(seed 0, sample" in seeds[None]
 
 
 def test_another_ld_store_than_the_one_recorded_fails_reclump(

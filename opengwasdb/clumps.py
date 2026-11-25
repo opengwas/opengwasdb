@@ -62,7 +62,6 @@ from opengwasdb.store_reader.top_hits import (
     TierClumps,
     TierRows,
     TopHitTier,
-    TopHitTiers,
     analysis_hit_counts,
     threshold_key,
 )
@@ -94,8 +93,6 @@ NO_R: Final = REncoding.reserved_code
 #: The manifest's `clumps` entry (§2).
 MANIFEST_KEY: Final = "clumps"
 MANIFEST_ENTRY: Final = {"tier": TIER, "configuration": CLUMPS_CONFIGURATION}
-#: The group attribute holding the provenance (§18.1); the Store Reader's name for it.
-ATTRIBUTE: Final = CLUMPS_ATTRIBUTE
 
 #: An Analysis's rows are not clumped for one of these reasons (§18.1, `not_clumped`).
 NO_ASSIGNED_ANCESTRY: Final = "no_assigned_ancestry"
@@ -178,7 +175,7 @@ def _tier_component(
     *, overflow: bool,
 ) -> TierComponent:
     root = release.arrays()
-    tier = TopHitTiers(root).tier(THRESHOLD)
+    tier = release.top_hit_tiers(root).tier(THRESHOLD)
     if tier is None:
         raise ClumpRefusal(
             f"{release.path} has no 5e-8 Top-Hit tier ({TOP_HIT_GROUP}/{TIER}) to clump "
@@ -286,11 +283,16 @@ def _judged(
             f"{where} is reference assembly {assembly}, and the Store is {reference_assembly}; "
             "a Store is clumped only against an LD Store of its own assembly (ADR 0106 §2)"
         )
+    for key in ("t_far", "near_bp", "far_bp", "encoding"):
+        _recorded(record, where, key)  # recorded, and not null, or refused by name
     try:
         t_far, near_bp, far_bp = float(store.t_far), int(store.near_bp), int(store.far_bp)
         encoding = REncoding.of(record["encoding"])
-    except (KeyError, InputError) as exc:
-        raise ClumpRefusal(f"{where} records no usable {exc} (ld-store §7)") from exc
+    except (TypeError, ValueError) as exc:  # InputError is a ValueError
+        raise ClumpRefusal(
+            f"{where} records a t_far, near_bp, far_bp or encoding this package cannot read: "
+            f"{exc} (ld-store §3, §7)"
+        ) from exc
     try:
         # The request itself, with no hits: `clump` judges the configuration first.
         store.clump([], np.empty(0), r2=t_far, kb=KB)
@@ -657,7 +659,7 @@ def _write_group(
         for name, values, dtype in (("lead", clumps.lead, "int32"), ("r", clumps.r, "int16")):
             create_array(group, name, ArrayRole.TOP_HIT_INDEX, data=values, dtype=dtype,
                          hint=TOP_HIT_CHUNK_SIZE)
-        group.attrs[ATTRIBUTE] = attribute
+        group.attrs[CLUMPS_ATTRIBUTE] = attribute
 
 
 def _manifest_holders(release: OpenGWASDBStore) -> list[OpenGWASDBStore]:

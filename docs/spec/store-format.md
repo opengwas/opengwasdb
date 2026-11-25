@@ -2654,7 +2654,10 @@ itself; LD Stores have no release id (ADR 0106 §4).
 **Reading.** The Store Reader reads the Clumps, `TopHitTier.clumps` beside `TopHitTier.read`
 (`opengwasdb/store_reader/top_hits.py`), which reads the tier they are parallel to: `lead`, `r`
 and the `clumps` attribute, of the tier or of one Analysis's slice, refusing a group not laid out
-as above by name (`MalformedClumps`). The step's validation rules read through it (#418), and
+as above by name (`MalformedClumps`). It reads them only where the release declares them:
+`StoreRelease.top_hit_tiers` hands `TopHitTiers` the manifest's `clumps` entry, and a group the
+manifest does not declare, or a declaration with no group, is refused by name, never read and
+never silently ignored. The step's validation rules read through it (#418), and
 #419's Top-Hit Query builds on it. #475 moves the Store Reader into the `ogquery` package; the Clumps follow the
 reader. A reader reads `lead` and `r` only in a release that declares `clumps` (§2). A Clump
 Lead's members are the rows whose `lead` is its offset. A row whose `lead` is negative belongs to

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -716,8 +717,15 @@ class OpenGWASDBStore(StoreRelease):
         return self._rewrite_manifest(put)
 
     def _rewrite_manifest(self, change: Callable[[dict[str, Any]], None]) -> OpenGWASDBStore:
-        """The one in-place write of ``manifest.json``: read it, `change` it, write it beside
-        itself and rename it over itself, so a reader sees the old manifest or the new one.
+        """The in-place write of ``manifest.json`` behind `amend_provenance` and
+        `set_manifest_entry`: read it, `change` it, write it beside itself and rename it over
+        itself, so a reader sees the old manifest or the new one. (The Ragged variant-index
+        build records its index with a rename of its own,
+        `layouts.ragged.by_variant._record_index_in_manifest`.)
+
+        The new file takes the old one's mode, and its group where the process may set it,
+        since a rename puts a new inode in its place; it is flushed to disk before the
+        rename, and the directory after it, so a crash leaves one whole manifest.
 
         The rewrite also leaves the coverage in the written vocabulary: editing a
         published release's metadata to it is the one in-place edit the pre-release
@@ -727,9 +735,9 @@ class OpenGWASDBStore(StoreRelease):
         data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         change(data)
         normalise_coverage(data)
-        staged = self.manifest_path.with_name(f".{self.manifest_path.name}.writing")
-        staged.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        staged.replace(self.manifest_path)
+        _replace_durably(
+            self.manifest_path, json.dumps(data, indent=2, sort_keys=True) + "\n"
+        )
         return OpenGWASDBStore(
             path=self.path, manifest=StoreManifest.from_dict(data), legacy=self.legacy
         )
@@ -841,6 +849,29 @@ class StagedRelease(ReleasePaths):
         self.manifest_path.write_text(
             json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+
+
+def _replace_durably(path: Path, text: str) -> None:
+    """Replace the file at `path` with `text` atomically and durably, keeping its mode and,
+    where the process may set it, its group: written beside it, flushed, renamed over it,
+    and the directory flushed after the rename."""
+    old = path.stat()
+    staged = path.with_name(f".{path.name}.writing")
+    with open(staged, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(staged, stat.S_IMODE(old.st_mode))
+    if old.st_gid != os.stat(staged).st_gid and (
+        os.geteuid() == 0 or old.st_gid in os.getgroups()
+    ):
+        os.chown(staged, -1, old.st_gid)
+    os.replace(staged, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def open_store(path: str | Path) -> OpenGWASDBStore:

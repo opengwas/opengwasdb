@@ -52,13 +52,15 @@ from opengwasdb.model.analyses import CLUMP_COUNT_COLUMNS, N_LOCI_5E8, N_UNCLUMP
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.top_hits import (
     CLUMPS_ATTRIBUTE,
-    CLUMPS_ATTRIBUTE_KEYS,
     CLUMPS_CONFIGURATION,
     CLUMPS_ENTRY_KEYS,
     CLUMPS_GROUP,
     TOP_HIT_GROUP,
     MalformedClumps,
     TierClumps,
+    clumps_array_problems,
+    clumps_attribute_problem,
+    clumps_configuration_problem,
 )
 from opengwasdb.validation.rule import Check, Kind, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
@@ -70,7 +72,6 @@ STRUCTURE = "clumps.structure"
 #: `fidelity_seed`.
 RECLUMP_ANALYSES = 25
 
-ATTRIBUTE = CLUMPS_ATTRIBUTE
 #: The attribute's fixed values: the one stored Clumping Configuration (§18.1).
 FIXED = {"configuration": CLUMPS_CONFIGURATION, "threshold": THRESHOLD, "score": "abs(z)",
          "ties": "store_variant_index", "kb": KB, "join": "r2_gt_distance_lt",
@@ -198,7 +199,7 @@ def declared(target: Target) -> Iterator[str]:
     tiers = _tier_groups(target)
     yield from _other_tiers(tiers)
     names = _configurations(tiers.get(TIER))
-    yield from _declaration(entry, names, where)
+    yield from _declaration(entry, tiers.get(TIER), names, where)
     if (entry is not None or names is not None) and \
             store.manifest.format_version not in CLUMPS_FORMAT_VERSIONS:
         yield (f"the Clumps are on a release of format_version {store.manifest.format_version}; "
@@ -224,10 +225,13 @@ def _configurations(tier: Any) -> list[str] | None:
 _GROUP = f"{TOP_HIT_GROUP}/{TIER}/{CLUMPS_GROUP}"
 
 
-def _declaration(entry: Any, names: list[str] | None, where: str) -> Iterator[str]:
-    if names is not None and names != [CLUMPS_CONFIGURATION]:
-        yield (f"{_GROUP} holds {names}; {CLUMPS_CONFIGURATION!r} is the one Clumping "
-               "Configuration a release may hold")
+def _declaration(
+    entry: Any, tier: Any, names: list[str] | None, where: str
+) -> Iterator[str]:
+    if names is not None:
+        problem = clumps_configuration_problem(tier[CLUMPS_GROUP])
+        if problem is not None:
+            yield f"{TOP_HIT_GROUP}/{TIER}/{problem}"
     yield from _entry_declares(entry, names is not None and CLUMPS_CONFIGURATION in names, where)
 
 
@@ -263,42 +267,30 @@ def _columns_declared(target: Target, declares: bool) -> Iterator[str]:
 
 
 def structure(target: Target) -> Iterator[str]:
+    """The configuration laid out as the Store Reader reads it (`clumps_array_problems`,
+    `clumps_attribute_problem`), and the attribute's values those checks leave to
+    validation: `tier_rows`, the fixed configuration and each `ld_stores` entry."""
     tier = _tier_groups(target)[TIER]
     default = tier[CLUMPS_GROUP][CLUMPS_CONFIGURATION]
     n_rows = int(tier["z"].shape[0])
-    for name, dtype in (("lead", np.int32), ("r", np.int16)):
-        yield from _array_problems(default, name, np.dtype(dtype), n_rows)
-    attribute = default.attrs.get(ATTRIBUTE)
-    if not isinstance(attribute, dict):
-        yield f"{CLUMPS_GROUP}/{CLUMPS_CONFIGURATION} has no {ATTRIBUTE!r} attribute"
+    yield from clumps_array_problems(default, n_rows)
+    problem = clumps_attribute_problem(default)
+    if problem is not None:
+        yield problem
         return
+    attribute = dict(default.attrs[CLUMPS_ATTRIBUTE])
     yield from _attribute_problems(attribute, n_rows)
     for ancestry, entry in sorted(dict(attribute.get("ld_stores", {})).items()):
         yield from _entry_problems(ancestry, entry, target.store.manifest.reference_assembly)
 
 
-def _array_problems(group: Any, name: str, dtype: np.dtype[Any], n_rows: int) -> Iterator[str]:
-    where = f"{CLUMPS_GROUP}/{CLUMPS_CONFIGURATION}/{name}"
-    if name not in group:
-        yield f"{where} is missing"
-        return
-    array = group[name]
-    if array.dtype != dtype:
-        yield f"{where} is {array.dtype}, not {dtype}"
-    if array.shape != (n_rows,):
-        yield f"{where} holds {array.shape[0]} entries and the 5e-8 tier {n_rows} rows"
-
-
 def _attribute_problems(attribute: dict[str, Any], n_rows: int) -> Iterator[str]:
-    missing = sorted(CLUMPS_ATTRIBUTE_KEYS - set(attribute))
-    if missing:
-        yield f"the {ATTRIBUTE} attribute lacks {missing}"
     if attribute.get("tier_rows") != n_rows:
-        yield (f"the {ATTRIBUTE} attribute's tier_rows is {attribute.get('tier_rows')}, "
+        yield (f"the {CLUMPS_ATTRIBUTE} attribute's tier_rows is {attribute.get('tier_rows')}, "
                f"the tier {n_rows}")
     for key, value in FIXED.items():
-        if key in attribute and attribute[key] != value:
-            yield f"the {ATTRIBUTE} attribute's {key} is {attribute[key]!r}, not {value!r}"
+        if attribute[key] != value:
+            yield f"the {CLUMPS_ATTRIBUTE} attribute's {key} is {attribute[key]!r}, not {value!r}"
 
 
 def _entry_problems(ancestry: str, entry: dict[str, Any], assembly: str) -> Iterator[str]:

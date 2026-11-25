@@ -564,8 +564,8 @@ _VALIDATE_SEED_OPTION = typer.Option(
     0,
     "--fidelity-seed",
     help=(
-        "Seed of validate's sampled checks: the source-fidelity sample and the Analyses "
-        "clumps.reclump re-clumps (spec §20.0)."
+        "Seed of the sample of Analyses clumps.reclump re-clumps, given --ld-store "
+        "(spec §20.0); 0 unless given."
     ),
 )
 

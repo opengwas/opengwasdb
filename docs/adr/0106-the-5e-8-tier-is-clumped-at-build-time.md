@@ -396,7 +396,14 @@ tier's rows for the stored configuration (decision 1), in `opengwasdb/store_read
 for reads it yet. Under step 2 they are then not
 recomputable from the release, and they record no part of how the release was made. ADR 0102
 rules the same way for the Rho Matrix: it "ships only once the Store Reader reads it". So #420
-adds the Clumps to published Stores only once #419's reader is released. The count columns are
+adds the Clumps to published Stores only once #419's query is released.
+
+**This narrows ADR 0102's gate** (#418). Read literally, "the Store Reader reads it" is met by
+`TopHitTier.clumps`, which validation reads through. That read answers no question a reader
+asks, so it would let #420 ship arrays no answer depends on, against the reasoning above. A
+component the Store Reader reads only for validation therefore does not count as read: it ships
+once a query reads it. ADR 0102 carries a banner saying so; the owner confirms it when epic #62
+merges. The count columns are
 not held back, since `analyses_table()` already reads them, but they come from the same step.
 
 **Amends ADR 0102 §3.** Its inventory gains one row. `data.zarr`

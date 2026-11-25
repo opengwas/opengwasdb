@@ -297,6 +297,17 @@ def test_an_ld_store_missing_a_recorded_value_is_refused_naming_it(
     _unchanged(store, before)
 
 
+def test_an_ld_store_recording_null_is_refused_naming_the_value(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    store = copied(built["dense"], tmp_path)
+    before = (store / "manifest.json").read_text()
+    null = _ld_store_copy(tmp_path, t_far=None)
+    with pytest.raises(ClumpRefusal, match=rf"{null}.*records t_far as null"):
+        clump_store(store, {"EUR": null})
+    _unchanged(store, before)
+
+
 def test_an_analyses_table_without_assigned_ancestry_is_refused(
     built: dict[str, Path], tmp_path: Path
 ) -> None:
@@ -489,6 +500,7 @@ def _older(store: Path) -> None:
 @pytest.mark.parametrize(("case", "named"), [
     ("assembly", "GRCh37"),
     ("missing value", "t_far"),
+    ("null value", "records t_far as null"),
     ("no such store", "does not open"),
     ("older store", "format_version 0.2.3"),
     ("no 5e-8 tier", "no 5e-8 Top-Hit tier"),
@@ -504,6 +516,7 @@ def test_the_clump_command_exits_1_naming_each_refusal(
     ld = {
         "assembly": lambda: _ld_store_copy(tmp_path, reference_assembly="GRCh37"),
         "missing value": lambda: _ld_store_copy(tmp_path, without=("t_far",)),
+        "null value": lambda: _ld_store_copy(tmp_path, t_far=None),
         "no such store": lambda: tmp_path / "nowhere.store",
     }.get(case, lambda: LD_STORE)()
     if case == "older store":
