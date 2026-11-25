@@ -196,6 +196,7 @@ def test_a_rewrite_answers_every_question_as_its_source_and_leaves_it_untouched(
         assert {"provenance_index", "tier_stored_p"} <= set(record["steps"])
         assert record["steps"][-1] == "variant_offsets", "it checks the sidecars the others wrote"
         assert record["range_questions_not_posed"] == NOT_POSED[name]
+        assert record["range_question_narrowed"] is None, "every fixture's whole range is asked"
         release_ids.add(manifest["release_id"])
     assert len(release_ids) == 1, "a Hybrid's two manifests name one release"
     result = validate_store(destination)

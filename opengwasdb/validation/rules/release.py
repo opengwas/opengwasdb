@@ -522,6 +522,21 @@ class _FormatStamp(Check):
         yield from super().findings(target)
 
 
+def converted_from(target: Target) -> list[str]:
+    """Every deviation `provenance.converted_from` records is one a conversion records,
+    for the reason the record gives (`legacy_conversion.judge_converted_from`, #492):
+    `validate` lowers only those, so any other would silence a rule."""
+    from opengwasdb.store.legacy_conversion import judge_converted_from
+
+    _accepted, faults = judge_converted_from(target.store.manifest.provenance["converted_from"])
+    return faults
+
+
+def _converted(target: Target) -> bool:
+    provenance = target.store.manifest.provenance
+    return isinstance(provenance, dict) and "converted_from" in provenance
+
+
 def _written_series(target: Target) -> bool:
     """A release of the series this build writes; a 0.1.0 one predates the stamp rule."""
     series = {split_format_version(version)[0] for version in WRITTEN_FORMAT_VERSIONS}
@@ -540,6 +555,7 @@ RULES: tuple[Rule, ...] = (
     _FormatStamp(
         name="manifest.format_stamp", kinds=Kind.RELEASE, when=_written_series, run=format_stamp
     ),
+    Check(name="manifest.converted_from", kinds=Kind.RELEASE, when=_converted, run=converted_from),
     Check(
         name="sqlite.analyses_table",
         kinds=Kind.RELEASE,

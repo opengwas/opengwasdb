@@ -1,0 +1,14 @@
+- **`ogdb rewrite-release --convert-legacy --lifted|--not-lifted` converts a 0.2.0, 0.2.1
+  or 0.2.2 Dense release to 0.3.0 (issue #492).** It fixes what can be fixed exactly: every
+  SE above 65,504 is masked (grid, Indexed Variant Subsets, Top-Hit tiers) and counted in
+  `n_missing_se_out_of_range`, and an unlifted release's rows name their own ALID as
+  `source_alid`. What only a rebuild fixes -- a source's sorted indels, a lifted release's
+  missing `source_alid`, and an SE exception table rounded to `float16` (#355, recorded
+  only where the source holds one, with its counts) -- is recorded by validator rule name in
+  `provenance.converted_from.deviations`, and `validate` reports exactly those rules as
+  warnings naming the conversion. The proof compares every deliberate change cell for cell.
+  Any other rule listed there fails the new `manifest.converted_from`, and is not lowered.
+  The rewrite's range question now spans at most 10,000 variants and 2,500,000 cells, so a
+  large release can be proved; where that narrows it, `format_rewrite.range_question_narrowed`
+  records the range asked (every fixture's range is unchanged). `rewrite-release
+  --n-workers N` sizes the final validation as `validate --n-workers` does.

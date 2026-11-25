@@ -28,6 +28,10 @@ What this ADR changes in other documents:
   [ADR 0057](0057-store-format-0-2-0-zarr-v3-with-sharding.md) §5.
 - From #472 (the dated section below): spec §1, §1.1, §16, §20.0 and §21.4 for the Hybrid
   Dense Component that shares the variant sidecars, and `CONTEXT.md`'s **Dense Component**.
+- From #492 (the dated section "25 Nov 2026 (#492)" below): spec §20.0 and §21.4 for
+  `--convert-legacy`, `provenance.converted_from` and the rules a converted release reports
+  as warnings. It amends §3's "Only 0.2.3 is a source" and "Hosted releases are not
+  rewritten", and the Consequences' "Nothing hosted is rewritten".
 - [ADR 0038](0038-store-format-versioning-and-migration-policy.md) and
   [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md) stand: this applies them.
 
@@ -168,6 +172,16 @@ variants, not in rows, and on a large Dense release some cannot run. Measured on
 
 No bounded variant of the proof is built: under the owner's decision no large release is
 rewritten.
+
+*Note, 25 Nov 2026 (#492):* superseded. The owner's decision that day converts the large
+priority Stores, so the proof is bounded: its range PheWAS spans at most 10,000 variants and
+2,500,000 cells (`RANGE_ROWS_ASKED`, `RANGE_CELLS_ASKED`), for every source, 0.2.3 included.
+Where the bound narrows it, `release_answers` names the narrowed range
+(`narrowed_range_question`), the log says so, and `format_rewrite.range_question_narrowed`
+records it beside `range_questions_not_posed`; it is None where the whole span was asked, as
+on every fixture release. The other questions are bounded in Analyses and variants already;
+`variants_table()` is read whole (26 GB peak on OGS-00015's 11.65 M rows). See the dated
+section "25 Nov 2026 (#492)".
 
 ### 4. Validation
 
@@ -921,6 +935,146 @@ Format 0.3.0 is what ogquery, opengwaspy, opengwasr and any other port read, so 
 - **It replaces `tests/golden/store_reader_digests.json`.** Those pins asked the same
   questions of the six digest releases unplanted; two pin sets of one function would each
   need regenerating on every change to an answer.
+
+## 25 Nov 2026 (#492): converting a 0.2.0-0.2.2 Dense release, with recorded deviations
+
+Issue [#492](https://github.com/opengwas/opengwasdb/issues/492). **The owner's decision (25 Nov
+2026):** the priority Stores (OGS-00009, OGS-00012 to 00017, all 0.2.0 Dense) are converted to
+0.3.0 first, accepting known, recorded deviations, and rebuilt from source later. Rebuilding
+them takes from about 15 h (OGS-00015) to 156 h (OGS-00016) each. This amends §3's "Only 0.2.3
+is a source" for a Dense release behind an explicit flag; a 0.2.3 source is rewritten as before.
+
+**The command.** `ogdb rewrite-release SOURCE DESTINATION --convert-legacy --lifted|--not-lifted`
+(`opengwasdb.store.legacy_conversion`). Without the flag a 0.2.0-0.2.2 source is refused as
+before, and the refusal now names the flag. With it, a 0.2.3 source is refused (it needs no
+conversion), and so are Ragged and Hybrid sources: none of the priority Stores needs them.
+`--n-workers`, which the rewrite takes too, sizes the final validation as it sizes `validate`'s. The conversion uses the rewrite's frame and adds three steps to `STEPS`:
+
+| Gap from 0.2.3 | What the conversion does |
+|---|---|
+| An SE above 65,504 stored (ADR 0068) | **Fixed.** Step `se_out_of_range`: each cell whose SE decodes above `SE_FLOAT16_MAX` (`se_above_bound`, the bound's one comparison), `+inf` included, gets the missing codes `storable` would have left: z, SE and frequency missing and imputed flag 0. Its exact-value side-table entries are removed. This is done in the grid and in each Indexed Variant Subset (`legacy_masking`), and the cell's row leaves every Top-Hit tier. `n_missing_se_out_of_range` counts the cells per Analysis, and `n_hits_*` is recounted from the tiers. Step `completion_quality_missing`, after `provenance_index`, counts each masked cell on a panel row of a completed release as missing in its block's `completion_quality` row. |
+| A sample-size plane or a Rho Matrix, in the grid or a subset | **Refused** before a cell is read: what a build holds there for a left-out association is not the mask's to decide. No priority Store carries one. |
+| A Reference-Completed release with no `on_panel` | **Refused** where a cell is masked: no array then says which masked cells `completion_quality` counts. |
+| A completion's fill above the bound | **Refused.** It would also move a block's `n_imputed`, which no record attributes. No priority Store holds one that has been measured (OGS-00015 holds none). |
+| `source_alid` of an unlifted release (#470) | **Fixed.** Step `own_source_alid` rewrites the table's column through its one writer (`variants.axis.rewrite_source_alid_column`), then `source_alid_sidecar` writes the sidecar from it. A row that any cell is observed in gets its own ALID (state 1). A row completion added from the panel gets none, as completion leaves it (`carried_source_alids`). Those panel rows are the rows with no observed cell, and the conversion refuses unless they number the completion's `n_variants_new`. |
+| An indel's ALID before 0.2.2 (ADR 0079) | **Recorded** as the deviation `variant_table.indel_order`. The reference allele of a sorted indel is not in the release, so the ALIDs are carried byte for byte. |
+| `source_alid` of a lifted release | **Recorded** as the deviation `variant_table.source_alid`, with state 0 carried. A release built before #449 did not keep the pre-liftover ALID. |
+| An SE exception table rounded to `float16` before the plan was chosen (#355) | **Recorded** as the deviation `side_tables.se_exceptions_rounded`, only where the source holds one: the conversion asks the rule's own measurement (`side_tables.rounded_se_exceptions`) of the table it will keep, the source's less the exceptions above 65,504 it masks, and records `se_exceptions_rounded` and `se_exceptions`, the counts. The exact SEs are not in the release; the rounded ones are what it serves today, within 2⁻¹¹ relative. Added by the owner's ruling on #492 (25 Nov 2026), after OGS-00015's first conversion was refused for it. |
+
+**Lifted or not is the operator's to say, and is recorded.** No Dense manifest records its
+Analyses' source assembly, and every Dense VCF build records a chain label, whether it lifted
+anything or not (`variant_table._judges_source_alid`). The release cannot tell, so
+`--lifted` or `--not-lifted` is required, and `converted_from.lifted_decided_by` names it. The
+evidence is outside the release, in each Store's `records/build.json`: its `--source-assembly`
+(`hg19` for OGS-00009 only; `GRCh38`/`hg38` for OGS-00012 to 00017) and its log line "N
+variants already GRCh38 -- no liftover needed". `--not-lifted` on a table that already names
+another ALID as a row's `source_alid` is refused, because the release then lifted it.
+
+**Provenance.** Every converted manifest is stamped `0.3.0` and records
+`provenance.converted_from`: `source_format_version`, `source_release_id`, `engine`, the
+commit, `deviations` (validator rule names), `lifted`, `lifted_decided_by`, the masked count
+and a note. `format_rewrite` names the conversion's steps among the rest, with the source's
+own `from_format_version`. A completed release also records the count's parts in
+`provenance.completion.se_out_of_range`: all of them `observed`, since a fill is refused. A
+rebuild from source writes no `converted_from`, which clears it.
+
+**Validation: exactly the recorded rules are downgraded, in one place.** `Rule.finding` lowers
+a judgement's error to a warning when the release's `converted_from.deviations` names the
+rule, and only for the three rules a conversion records (`legacy_conversion.DEVIATION_RULES`),
+each for its reason: `variant_table.source_alid` where `lifted` is true,
+`variant_table.indel_order` from a source before 0.2.2, `side_tables.se_exceptions_rounded`
+with its counts (`judge_converted_from`). Any other entry is not lowered and fails the new
+rule `manifest.converted_from` (fix round 2 of #492: a hand-edited list blanking
+`n_missing_se_out_of_range` and naming `analyses.se_out_of_range_count` validated with two
+warnings). The message then states that the conversion recorded it and that a rebuild fixes it. Every
+other rule is unchanged. A rule that could not read what it judges still fails, and nothing is
+skipped. Drop a rule from `deviations` and the release fails it again
+(`test_without_the_recorded_deviation_the_same_release_fails`). A sorted indel spelt sorted
+throughout cannot trip `variant_table.indel_order`: the table agrees with itself, and an
+unlifted row's `source_alid` is now its own ALID. The rule therefore fires only where a row
+contradicts itself, which no converted priority Store is known to hold. The deviation is
+recorded either way. `side_tables.se_exceptions_rounded` sets its severity by format (an
+error from 0.2.2, a warning before it); on a release whose format owes the error it now
+judges through `Rule.finding` like every rule, so the same record lowers it, with no case of
+its own. Unlisted, it fails a converted release
+(`test_a_converted_release_not_listing_the_rounding_fails_it`).
+
+The three deviations a conversion can record, by rule:
+
+| Rule | Recorded when |
+|---|---|
+| `variant_table.indel_order` | the source is before 0.2.2 |
+| `variant_table.source_alid` | `--lifted` |
+| `side_tables.se_exceptions_rounded` | the source's SE exception table is rounded (#355) |
+
+**The proof compares each change; it does not skip it.** The source is asked the rewrite's
+questions through a view of its 0.2 reader that makes exactly the conversion's changes
+(`legacy_expected`):
+- a masked cell decodes as missing at the grid reader, so every question treats it as a cell
+  that was always missing (left out of a region, `missing` in a read of named cells);
+- the cell leaves the tiers, and `n_hits_*` drops by the masked cells each tier held;
+- `n_missing_se_out_of_range` holds the plan's count;
+- an unlifted row names the expected `source_alid` in `variants_table()` and resolved rows.
+
+The staged release must then answer every question identically. A conversion that masks one
+cell too few, or names another `source_alid` on one row, is refused
+(`test_the_proof_refuses_*`). Without the view, the fixtures differ on 268 to 274 questions.
+`query_digests.adapter_name` reads a private subclass as its public facade.
+
+**The range question is bounded**: at most 10,000 variants and 2,500,000 cells, variants
+by Analyses (`query_digests.RANGE_ROWS_ASKED`, `RANGE_CELLS_ASKED`). §3 measured the range
+PheWAS over OGS-00016's chromosome 1 at 844 M cells, which is infeasible. Bounded, it still
+crosses many rows: 10,000 on OGS-00015 (241 Analyses), 994 on OGS-00009 (2,514). Every
+fixture release, and so the Store Reader contract bundle (#474), is asked the same range as
+before.
+
+**Evidence.** On the fixtures, `tests/test_convert_legacy.py` covers:
+- Dense Observed-Only and Reference-Completed, in the 0.2.0 shape of the hosted Stores
+  (`tests/format_0_2_0.py`), with two SEs above 65,504, one of them a top hit;
+- a lifted conversion;
+- an Indexed Variant Subset holding a masked cell;
+- a sorted indel;
+- each refusal.
+
+The real-data conversion of OGS-00015 is in the #492 report and in this section's
+Consequences.
+
+**Consequences.**
+- The 0.3.0 releases converted this way are not those a rebuild writes. They keep the sorted
+  indels of a source before 0.2.2, and a lifted one names no pre-liftover ALID. The validator
+  says so on every run. Where a cell was masked, EAF at that variant can differ from a
+  rebuild's by up to about 5e-5, because a rebuild's per-variant median baseline would leave
+  the cell out (ADR 0068, Consequences). The conversion keeps the baseline, so every other
+  cell decodes exactly as before.
+- A masked panel cell of a completed release is counted in its block's `completion_quality`
+  row only where the block is unambiguous: the Analysis's one row, or the one block whose
+  `<chromosome>/<start>-<end>` holds the row's position, the block that starts there at a
+  shared boundary (the owner's ruling of 5 Nov 2026). Any other cell is refused
+  (`legacy_quality`).
+- The masking writes rewrite the shards they touch; a release with no SE above the bound
+  writes no array.
+- **OGS-00015, read only, into scratch (25 Nov 2026):**
+  - The read found 0 SEs above 65,504. It found 2,314,706 rows with no observed cell, equal
+    to `n_variants_new`.
+  - The proof matched on all 140 questions, 9 ALID probes, 22 range probes, 16 subset
+    questions and 3 misses.
+  - The whole run took 41 min at a peak RSS of 25.9 GB, and wrote 0.87 GB; the remaining
+    7.5 GB was reflinked.
+  - **Validation refused it, so nothing was published.** `side_tables.se_exceptions_rounded`
+    found that 3,046,179 of its 3,074,915 SE exceptions (99.07%) are float16 values: the
+    plane was rounded before its plan was chosen (#355). That rule warns before 0.2.2 and
+    fails from it.
+  - All seven priority Stores hold such exceptions (99.07% to 100%). The rounding cannot be
+    undone. The owner ruled that it is recorded, as the third deviation (above).
+- **OGS-00015 again, after that ruling (`cacbe380`, read only, into scratch):**
+  - The proof matched every answer again.
+  - The conversion published, recording `indel_order` and `se_exceptions_rounded` with
+    3,046,179 of 3,074,915.
+  - It took 36 min 11 s at `--n-workers 8`: read 341 s, the source's answers 593 s, the
+    staged release's 713 s, validation 371 s. Peak RSS was 26.0 GB.
+  - The full validator reports no error, no skip, and one warning: the recorded
+    `side_tables.se_exceptions_rounded`. `variant_table.indel_order` does not fire, for the
+    reason above.
 
 ## Alternatives considered
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -29,7 +30,12 @@ from opengwasdb.store_reader.encoding.codec import (
     SeExceptionTable,
     ZOverflowTable,
 )
-from opengwasdb.store_reader.encoding.plan import EAF_EXCEPTION, SE_EXCEPTION, Z_OVERFLOW
+from opengwasdb.store_reader.encoding.plan import (
+    EAF_EXCEPTION,
+    SE_EXCEPTION,
+    Z_OVERFLOW,
+    StoreEncoding,
+)
 from opengwasdb.validation.rule import (
     Check,
     Finding,
@@ -286,8 +292,27 @@ def _se_exceptions_judged(target: Target) -> bool:
     return array_length(target.group[name]) >= FLOAT16_EXACT_MINIMUM
 
 
-def _rounded_se_exceptions(target: Target) -> Iterator[str]:
-    """How much of the SE exception table is exactly what a `float16` plane stores.
+@dataclass(frozen=True)
+class RoundedSeExceptions:
+    """How many of a residual plane's SE exceptions are exactly what a `float16` plane
+    stores, of how many (`rounded_se_exceptions`)."""
+
+    n_exact: int
+    n_total: int
+
+    @property
+    def share(self) -> float:
+        return self.n_exact / self.n_total if self.n_total else 0.0
+
+    @property
+    def rounded(self) -> bool:
+        """Whether the table is judged, and was rounded: what fails the rule."""
+        return self.n_total >= FLOAT16_EXACT_MINIMUM and self.share > FLOAT16_EXACT_SHARE
+
+
+def rounded_se_exceptions(group: Any, encoding: StoreEncoding) -> RoundedSeExceptions | None:
+    """The SE exception table of the grid in `group` as `side_tables.se_exceptions_rounded`
+    measures it; None where the plan is not residual or there is no table.
 
     Spec §6a has a residual plan hold an exception at the source's own `float32`.
     A build that rounded every SE to `float16` before the plan was chosen wrote
@@ -304,15 +329,23 @@ def _rounded_se_exceptions(target: Target) -> Iterator[str]:
     of exact values is 0.12, which makes the ten a 1% share needs a 1-in-5.5e15
     run rather than a real table (Poisson tail, probability 1.8e-16). A source
     that itself stores `float16`-exact SEs would fail it; nothing in the corpus
-    does.
+    does. The legacy conversion asks the same question of its source, to record the
+    rule as a deviation exactly when it holds (#492).
     """
-    values = np.asarray(target.group[SeExceptionTable.value_name][:], dtype=np.float32)
+    name = SeExceptionTable.value_name
+    if not encoding.se.is_residual or name not in group:
+        return None
+    values = np.asarray(group[name][:], dtype=np.float32)
     exact = np.isfinite(values) & (
-        StoreCodec(target.encoding).float16_se(values).astype(np.float32) == values
+        StoreCodec(encoding).float16_se(values).astype(np.float32) == values
     )
-    n_exact = int(np.count_nonzero(exact))
-    share = n_exact / len(values)
-    if share <= FLOAT16_EXACT_SHARE:
+    return RoundedSeExceptions(int(np.count_nonzero(exact)), len(values))
+
+
+def _rounded_se_exceptions(target: Target) -> Iterator[str]:
+    """The SE exception table was rounded to `float16` (`rounded_se_exceptions`)."""
+    found = rounded_se_exceptions(target.group, target.encoding)
+    if found is None or not found.rounded:
         return
     owed = (
         "rebuild the release"
@@ -320,8 +353,8 @@ def _rounded_se_exceptions(target: Target) -> Iterator[str]:
         else "the release predates the fix, which #367 owns"
     )
     yield (
-        f"{plane_label(target, 'se')}: {n_exact} of {len(values)} se exceptions "
-        f"({share:.2%}) are exactly what a float16 plane stores, against "
+        f"{plane_label(target, 'se')}: {found.n_exact} of {found.n_total} se exceptions "
+        f"({found.share:.2%}) are exactly what a float16 plane stores, against "
         f"{2**-13:.2%} by chance: the plane was rounded to float16 before its encoding "
         f"plan was chosen (issue #355); {owed}"
     )
@@ -340,9 +373,11 @@ class _SeverityByFormat(Check):
     """
 
     def findings(self, target: Target) -> Iterator[Finding]:
-        severity = severity_owed(target, self.severity)
+        owed = severity_owed(target, self.severity)
         for message in self.run(target):
-            yield self.finding(target, message, severity)
+            # A release whose format owes the rule's own severity is judged as any rule
+            # is, so a deviation its conversion recorded is lowered there (#492).
+            yield self.finding(target, message, None if owed is self.severity else owed)
 
 
 RULES: tuple[Rule, ...] = (

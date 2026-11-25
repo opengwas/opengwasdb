@@ -225,6 +225,15 @@ class Target:
         for key in self._until.pop(scan, set()):
             self._read.pop(key, None)
 
+    def converted_deviations(self) -> dict[str, str]:
+        """The rules the release this target belongs to records as deviations of a
+        `--convert-legacy` conversion (`provenance.converted_from.deviations`, #492), each
+        with the words its downgraded finding carries; none for any other release."""
+        release = self
+        while release.parent is not None:
+            release = release.parent
+        return release.remember("converted_deviations", lambda: _converted_deviations(release))
+
     @cached_property
     def analyses(self) -> AnalysesTable:
         """The release's `analyses.tsv`, read on first use."""
@@ -243,6 +252,26 @@ class Target:
 
     def __repr__(self) -> str:
         return f"Target({self.kind.name}, {self.label!r})"
+
+
+def _converted_deviations(release: Target) -> dict[str, str]:
+    """The deviations the release's `converted_from` records that a conversion may record
+    (`legacy_conversion.judge_converted_from`); `manifest.converted_from` fails the rest."""
+    if release._store is None:
+        return {}
+    record = release.store.manifest.provenance.get("converted_from")
+    if record is None:
+        return {}
+    # On use: the conversion's module imports the rewrite, which imports the validator.
+    from opengwasdb.store.legacy_conversion import judge_converted_from
+
+    accepted, _faults = judge_converted_from(record)
+    note = (
+        "a deviation recorded by ogdb rewrite-release --convert-legacy, which converted "
+        f"this release from format_version {record.get('source_format_version')} "
+        f"(release {record.get('source_release_id')}); a rebuild from source fixes it"
+    )
+    return {rule: note for rule in accepted}
 
 
 def _always(_target: Target) -> bool:
@@ -291,6 +320,17 @@ class Rule:
         raise NotImplementedError
 
     def finding(self, target: Target, message: str, severity: Severity | None = None) -> Finding:
+        """What this rule says about `target`. A judgement that fails a release converted
+        by `--convert-legacy` is a warning naming the conversion when the release records
+        this rule among its deviations (#492): the one place a rule's severity is lowered,
+        and only by what the release itself records. A rule that could not read what it
+        judges (`severity` given) fails as before."""
+        if severity is None and self.severity is Severity.ERROR:
+            recorded = target.converted_deviations()
+            if self.name in recorded:
+                return Finding(
+                    self.name, Severity.WARNING, f"{message} [{recorded[self.name]}]", target.label
+                )
         return Finding(self.name, severity or self.severity, message, target.label)
 
 

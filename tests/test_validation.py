@@ -1367,6 +1367,7 @@ def test_the_rounded_se_rule_fails_only_a_release_its_builders_make(format_versi
     target = SimpleNamespace(
         store=SimpleNamespace(manifest=SimpleNamespace(format_version=format_version)),
         label=".",
+        converted_deviations=dict,  # not a converted release (#492)
     )
     (finding,) = rule.findings(target)
     assert finding.severity.value == severity

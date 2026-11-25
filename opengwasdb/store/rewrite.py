@@ -25,10 +25,13 @@ Any failure discards the staging directory; nothing is published and the source 
 untouched. The staging, the destination refusals and the validation gate are the
 0.2.0 converter's (`opengwasdb.store.convert`).
 
-Only a 0.2.3 source is rewritten. 0.3.0 keeps every feature 0.2.3 added on the 0.2
-series: an indel's ALID spelt reference first (0.2.2, ADR 0079) and the count of
-associations left out for an SE above 65,504 (0.2.3, ADR 0068). An earlier release
-lacks one or both and no mechanical step can supply them, so it is rebuilt.
+Only a 0.2.3 source is rewritten as it is. 0.3.0 keeps every feature 0.2.3 added on
+the 0.2 series: an indel's ALID spelt reference first (0.2.2, ADR 0079) and the count
+of associations left out for an SE above 65,504 (0.2.3, ADR 0068). An earlier Dense
+release lacks one or both. Behind `--convert-legacy` (`legacy`, #492) it is converted:
+what can be fixed exactly is, before the steps run, and what cannot is recorded in
+`provenance.converted_from` (`opengwasdb.store.legacy_conversion`). Without the flag it
+is refused, and rebuilt.
 """
 
 from __future__ import annotations
@@ -41,8 +44,9 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -104,6 +108,9 @@ from opengwasdb.store_reader.variant_axis import (
 from opengwasdb.top_hits import STORED_P_ARRAYS, stored_p_agrees
 from opengwasdb.variants.legacy_table import iter_variant_records
 from opengwasdb.variants.normalise import chromosome_sort_key
+
+if TYPE_CHECKING:
+    from opengwasdb.store.legacy_conversion import LegacyConversion, LegacyPlan
 
 #: The one `format_version` this rewrite reads: every other is refused (module docstring).
 SOURCE_FORMAT_VERSION = LAST_0_2_FORMAT_VERSION
@@ -777,26 +784,22 @@ def rewrite_release(
     destination: str | Path,
     *,
     steps: tuple[RewriteStep, ...] = STEPS,
+    legacy: LegacyConversion | None = None,
+    n_workers: int = 1,
 ) -> Path:
-    """Derive a 0.3.0 release at `destination` from the 0.2.3 one at `source`."""
+    """Derive a 0.3.0 release at `destination` from the 0.2.3 one at `source`, or, with
+    `legacy` (`--convert-legacy`), from a 0.2.0-0.2.2 Dense one (#492). `n_workers` is
+    the validation's (`validate --n-workers`)."""
     source = Path(source).resolve()
     destination = Path(destination).resolve()
     refuse_destination(source, destination, error=RewriteError, named="DESTINATION")
-    components = _refuse_unrewritable(source)
+    components = _refuse_unrewritable(source, legacy=legacy is not None)
     for step in steps:
         for component in components:
             step.refuse(component)
-    started = time.perf_counter()
-    reference = release_digests(source)
-    _log_phase(
-        f"asked the source {len(reference['shapes'])} questions, "
-        f"{len(reference['alid_probes'])} ALID probes, "
-        f"{len(reference['range_probes'])} range probes, "
-        f"{len(reference['indexed_subsets'])} Indexed Variant Subset questions and "
-        f"{len(reference['misses'])} rsID misses; "
-        + _unposed_said(reference["unposed_range_questions"]),
-        started,
-    )
+    plan = None if legacy is None else _plan_legacy(components[0], legacy)
+    steps = steps if plan is None else _with_legacy_steps(steps, plan)
+    reference = _reference_digests(source, plan)
     with OpenGWASDBStore.staging(destination) as staged:
         release_id = str(uuid.uuid4())
         context = RewriteContext(
@@ -816,6 +819,8 @@ def rewrite_release(
             steps,
             now=datetime.now(UTC).isoformat(),
             unposed=reference["unposed_range_questions"],
+            narrowed=reference.get("narrowed_range_question"),
+            plan=plan,
         )
         _refresh_overviews(context)
         started = time.perf_counter()
@@ -823,18 +828,89 @@ def rewrite_release(
         _log_phase("asked the staged release the same questions: every answer matches", started)
         started = time.perf_counter()
         require_valid_staged_release(
-            staged.path, destination, error=RewriteError, what="rewritten"
+            staged.path, destination, error=RewriteError, what="rewritten", n_workers=n_workers
         )
         _log_phase("validated the staged release", started)
     print(f"Published {destination} as {TARGET_FORMAT_VERSION}", flush=True)
     return destination
 
 
-def _refuse_unrewritable(source: Path) -> tuple[Component, ...]:
+def _plan_legacy(root: Component, legacy: LegacyConversion) -> LegacyPlan:
+    """Refuse a legacy source the conversion does not take, and read what it fixes."""
+    from opengwasdb.store.legacy_conversion import plan_conversion, refuse_unconvertible
+
+    version = root.store.manifest.format_version
+    refuse_unconvertible(root.store, version)
+    return plan_conversion(root.store, version, legacy)
+
+
+def _with_legacy_steps(
+    steps: tuple[RewriteStep, ...], plan: LegacyPlan
+) -> tuple[RewriteStep, ...]:
+    """The conversion's steps around the rewrite's (#492): two before, which fix what a
+    0.2.0-0.2.2 source lacks so the sidecars are written from the fixed table, and one
+    after, which counts the masked panel cells in the `completion_quality` that
+    `provenance_index` wrote."""
+    from opengwasdb.store.legacy_conversion import (
+        count_in_quality,
+        mask_out_of_range,
+        name_own_source_alids,
+    )
+
+    counted = RewriteStep(
+        "completion_quality_missing",
+        "count each masked cell on a panel row as missing in its block's completion_quality "
+        "row (ADR 0068, #492)",
+        partial(count_in_quality, plan=plan),
+    )
+    return (
+        RewriteStep(
+            "se_out_of_range",
+            "mask every cell whose SE is above 65,504 in the grid, its Indexed Variant "
+            "Subsets and its Top-Hit tiers, and count them per Analysis in "
+            "n_missing_se_out_of_range (ADR 0068, #492)",
+            partial(mask_out_of_range, plan=plan),
+        ),
+        RewriteStep(
+            "own_source_alid",
+            "give each row of an unlifted release its own ALID as source_alid, and a row "
+            "completion added from the panel none (#470, #492); a lifted one's is carried",
+            partial(name_own_source_alids, plan=plan),
+        ),
+        *steps,
+        counted,
+    )
+
+
+def _reference_digests(source: Path, plan: LegacyPlan | None) -> dict[str, Any]:
+    """The source's answers, logged: as it gives them, or, converted, as the converted
+    release must give them (`legacy_conversion.expected_query`)."""
+    started = time.perf_counter()
+    if plan is None:
+        reference = release_digests(source)
+    else:
+        from opengwasdb.store.legacy_conversion import expected_query
+
+        reference = release_digests(source, query=expected_query(plan))
+    _log_phase(
+        f"asked the source {len(reference['shapes'])} questions, "
+        f"{len(reference['alid_probes'])} ALID probes, "
+        f"{len(reference['range_probes'])} range probes, "
+        f"{len(reference['indexed_subsets'])} Indexed Variant Subset questions and "
+        f"{len(reference['misses'])} rsID misses; "
+        + _unposed_said(reference["unposed_range_questions"])
+        + _narrowed_said(reference.get("narrowed_range_question")),
+        started,
+    )
+    return reference
+
+
+def _refuse_unrewritable(source: Path, *, legacy: bool = False) -> tuple[Component, ...]:
     """The release's components, after refusing a source this rewrite does not take.
 
     Read from the manifests alone, before anything is staged. A Hybrid is two Store
-    Releases, and both must be 0.2.3: a half-rewritten one is not a source.
+    Releases, and both must be 0.2.3: a half-rewritten one is not a source. With
+    `legacy` (`--convert-legacy`) the source is a 0.2.0-0.2.2 one instead.
     """
     if not (source / "manifest.json").is_file():
         raise RewriteError(f"{source}: no manifest.json; this is not a Store Release")
@@ -845,7 +921,8 @@ def _refuse_unrewritable(source: Path) -> tuple[Component, ...]:
             "manifest at dense/manifest.json (spec §16)"
         )
     for path in manifest_paths(source):
-        _refuse_version(path, str(json.loads(path.read_text(encoding="utf-8"))["format_version"]))
+        version = str(json.loads(path.read_text(encoding="utf-8"))["format_version"])
+        _refuse_version(path, version, legacy=legacy)
     root = open_store(source)
     if root.manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
         return (Component(".", root, dense_component=False),)
@@ -857,7 +934,7 @@ def _refuse_unrewritable(source: Path) -> tuple[Component, ...]:
     )
 
 
-def _refuse_version(manifest: Path, version: str) -> None:
+def _refuse_version(manifest: Path, version: str, *, legacy: bool = False) -> None:
     try:
         check_format_version(version, source=str(manifest))
     except UnsupportedFormatVersion as exc:
@@ -866,14 +943,20 @@ def _refuse_version(manifest: Path, version: str) -> None:
         raise RewriteError(
             f"{manifest}: format_version is already {version}; there is nothing to rewrite"
         )
-    if version != SOURCE_FORMAT_VERSION:
+    if legacy and version == SOURCE_FORMAT_VERSION:
+        raise RewriteError(
+            f"{manifest}: format_version is {version}, which is rewritten without "
+            "--convert-legacy: it has every feature 0.3.0 keeps, so nothing is converted"
+        )
+    if version != SOURCE_FORMAT_VERSION and not legacy:
         raise RewriteError(
             f"{manifest}: format_version is {version}, and only a {SOURCE_FORMAT_VERSION} "
             f"release is rewritten to {TARGET_FORMAT_VERSION}. {TARGET_FORMAT_VERSION} keeps "
             "0.2.3's features: an indel's ALID spelt reference first (0.2.2, ADR 0079) and "
             "the count of associations left out for an SE above 65,504 (0.2.3, ADR 0068). "
             f"A {version} release lacks at least one, and no rewrite can add it: rebuild it "
-            "from source (spec §21.4)."
+            "from source (spec §21.4), or convert a Dense one with --convert-legacy, which "
+            "records what it cannot fix (#492)."
         )
 
 
@@ -913,6 +996,17 @@ def _copy_release(source: Path, staged: Path, left_out: frozenset[Path] = frozen
             copy_path(entry, staged / entry.name)
 
 
+def _narrowed_said(narrowed: dict[str, Any] | None) -> str:
+    """The log's account of a range PheWAS the proof narrowed (`narrowed_range_question`)."""
+    if narrowed is None:
+        return ""
+    return (
+        f"; the range PheWAS is narrowed to {narrowed['variants']:,} of "
+        f"{narrowed['unbounded_variants']:,} variants (chromosome {narrowed['chromosome']}, "
+        f"{narrowed['start']:,}-{narrowed['end']:,})"
+    )
+
+
 def _unposed_said(unposed: list[str]) -> str:
     """The log's account of the range questions the release cannot pose."""
     if not unposed:
@@ -926,41 +1020,63 @@ def _stamp(
     *,
     now: str,
     unposed: list[str],
+    narrowed: dict[str, Any] | None = None,
+    plan: LegacyPlan | None = None,
 ) -> None:
     """Stamp every manifest as one new 0.3.0 release, recording what the rewrite did.
 
     Every manifest gets the same fresh `release_id`, so a Hybrid's nested Dense
     Component still names the release that nests it, as the 0.2.0 converter does.
     `unposed` names the range questions the proof could not ask of the release's rows
-    (`query_digests.unposed_range_questions`): there the proof is weaker, and says so.
+    (`query_digests.unposed_range_questions`), and `narrowed` the range PheWAS it asked
+    over fewer variants than the whole span (`query_digests.narrowed_range_question`,
+    None where it asked all): there the proof is weaker, and says so. A conversion
+    (`plan`) also records `provenance.converted_from`, its deviations by
+    validator rule name (`legacy_conversion.stamped`).
     """
     commit = installed_commit()
     for path in manifest_paths(context.staged):
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         source_release_id = str(data["release_id"])
+        source_version = str(data["format_version"])
         data["release_id"] = context.release_id
         data["created_at"] = now
         data["format_version"] = _stamped_format_version(data)
+        if plan is not None:
+            from opengwasdb.store.legacy_conversion import stamped
+
+            data["provenance"] = stamped(
+                data, plan, plan.record(source_release_id, commit, now)
+            )
         data["provenance"] = {
             **data.get("provenance", {}),
             "format_rewrite": {
                 "source_release_id": source_release_id,
-                "from_format_version": SOURCE_FORMAT_VERSION,
+                "from_format_version": source_version,
                 "to_format_version": data["format_version"],
                 "steps": [step.name for step in steps],
                 "range_questions_not_posed": list(unposed),
+                "range_question_narrowed": narrowed,
                 "tool": "ogdb rewrite-release",
                 "at": now,
                 "opengwasdb_git_hash": commit,
-                "note": (
-                    "Derived by ogdb rewrite-release: each step rewrote how the source "
-                    "stores what it answers, and the source and this release answered "
-                    "the same questions identically before it was published. The "
-                    "source release was not modified."
-                ),
+                "note": _REWRITE_NOTE if plan is None else _CONVERSION_NOTE,
             },
         }
         path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+_REWRITE_NOTE = (
+    "Derived by ogdb rewrite-release: each step rewrote how the source stores what it "
+    "answers, and the source and this release answered the same questions identically "
+    "before it was published. The source release was not modified."
+)
+_CONVERSION_NOTE = (
+    "Converted by ogdb rewrite-release --convert-legacy: the first steps fixed what the "
+    "source lacked (converted_from), the rest rewrote how it stores what it answers, and "
+    "this release answered every question as the source does with exactly those fixes "
+    "applied before it was published. The source release was not modified."
+)
 
 
 def _refresh_overviews(context: RewriteContext) -> None:

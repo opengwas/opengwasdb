@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,7 +39,7 @@ from opengwasdb.store_reader.variant_axis import (
     variant_rsid_rows_path,
 )
 from opengwasdb.store_reader.variant_axis import variant_table_path as variant_table_path
-from opengwasdb.variants.legacy_table import TabixVariantTable
+from opengwasdb.variants.legacy_table import TabixVariantTable, variant_table_lines
 from opengwasdb.variants.normalise import CanonicalVariant, chromosome_sort_key
 
 if TYPE_CHECKING:
@@ -215,6 +215,13 @@ def _write_table(
                 f"{source_alid}\n"
             )
             handle.write(line.encode("utf-8"))
+    _index_table(table_path)
+
+
+def _index_table(table_path: Path) -> None:
+    """(Re)write the tabix index of the Variant Table at `table_path`."""
+    import pysam  # on use, as in `_write_table`
+
     pysam.tabix_index(
         str(table_path),
         seq_col=0,
@@ -224,6 +231,37 @@ def _write_table(
         zerobased=False,
         force=True,
     )
+
+
+def rewrite_source_alid_column(
+    store_path: str | Path, source_alid: Callable[[int, str, str | None], str | None]
+) -> int:
+    """Rewrite the Variant Table's `source_alid` column in place, row by row, and its
+    tabix index; return the rows written.
+
+    `source_alid(variant_index, alid, held)` names each row's value from the one the
+    table holds (None for the blank, ``.``, in either); every other column is copied as
+    the table holds it. A seven-column table, written before the column, gains it. The
+    legacy conversion's one write of the table (#492): it gives an unlifted 0.2.0
+    release's rows their own ALID, which the `source_alid` sidecar is then written from,
+    as from any table.
+    """
+    import pysam
+
+    table_path = variant_table_path(Path(store_path))
+    staged = table_path.with_name(table_path.name + ".rewriting")
+    n_rows = 0
+    with pysam.BGZFile(str(staged), "w", None) as handle:
+        handle.write(VARIANT_HEADER.encode("utf-8"))
+        for line in variant_table_lines(table_path):
+            fields = line.rstrip("\n").split("\t")
+            held = fields[7] if len(fields) > 7 and fields[7] != "." else None
+            value = source_alid(int(fields[2]), fields[5], held) or "."
+            handle.write(("\t".join([*fields[:7], value]) + "\n").encode("utf-8"))
+            n_rows += 1
+    staged.replace(table_path)
+    _index_table(table_path)
+    return n_rows
 
 
 class UnindexableRsidError(ValueError):
