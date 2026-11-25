@@ -61,7 +61,6 @@ from opengwasdb.store_reader.top_hits import (
     clumps_attribute_problem,
     clumps_configuration_problem,
     declares_clumps_of,
-    threshold_key,
 )
 from opengwasdb.validation.rule import Check, Kind, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED
@@ -94,7 +93,7 @@ def _tiers(target: Target) -> dict[str, TopHitTier]:
     """Each Top-Hit tier of the target's release, by key, as the Store Reader opens it, with
     the release's declaration of its Clumps (`StoreRelease.top_hit_tiers`)."""
     tiers = target.store.top_hit_tiers()
-    opened = {threshold_key(t): tiers.tier(t) for t in tiers.stored_thresholds()}
+    opened = {key: tiers.by_key(key) for key in tiers.keys()}
     return {key: tier for key, tier in opened.items() if tier is not None}
 
 
