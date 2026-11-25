@@ -60,8 +60,9 @@ supplied no label says so, rather than having one invented for it; a *display*
 label is `opengwasdb.store_reader.analyses.analysis_label()`'s job, the one
 implementation of that fallback (issue #57). `rho()`/`rho_row()`/
 `rho_matrix()` (ADR-0025, a Dense storage artifact) are exposed
-on `StoreQuery` and on `HybridStoreQuery` (delegated to its Dense Component);
-`RaggedStoreQuery` has no Rho Matrix format. `range_by_analysis()` (query by
+on `StoreQuery` and on `HybridStoreQuery` (its Dense Component's matrix, refusing an
+Overflow-only Analysis by name, #496); `RaggedStoreQuery` has no Rho
+Matrix format. `range_by_analysis()` (query by
 probe/TSS position) is Ragged-only: it scans `AnalysesIndex`'s already
 store-open-time-loaded rows for `trait_chr`/`trait_bp`, which only
 Ragged/molecular-QTL releases populate.
@@ -69,7 +70,7 @@ Ragged/molecular-QTL releases populate.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, NoReturn, Self
 
@@ -96,7 +97,7 @@ from opengwasdb.store_reader.indexed import (
 from opengwasdb.store_reader.panel_axis import AnyVariantAxis, PanelVariantAxis
 from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.resolve import resolve_rows
-from opengwasdb.store_reader.rho import DenseRhoReader
+from opengwasdb.store_reader.rho import DenseRhoReader, OverflowOnlyAnalysisError
 from opengwasdb.store_reader.top_hits import TierRows, TopHitTier, TopHitTiers
 
 
@@ -198,6 +199,62 @@ def _rho_pairs(reader: DenseRhoReader, resolved: list[tuple[str, int]]) -> dict[
         "analysis_id_b": np.array(out_b, dtype=object),
         "rho": np.array(out_rho, dtype="float32"),
         "n_null": np.array(out_n, dtype="int64"),
+    }
+
+
+def _rho_ids(ids: tuple[Any, ...]) -> tuple[str, ...]:
+    """`rho()`'s Analysis IDs, given positionally or as one iterable of them."""
+    if len(ids) == 1 and not isinstance(ids[0], str):
+        return tuple(ids[0])
+    return tuple(ids)
+
+
+def _rho_answer(
+    reader: DenseRhoReader | None, resolved: list[tuple[str, int]]
+) -> dict[str, np.ndarray]:
+    """`rho()`'s answer for Analyses already resolved: empty without a matrix."""
+    return _empty_rho_result() if reader is None else _rho_pairs(reader, resolved)
+
+
+def _rho_row_answer(
+    reader: DenseRhoReader | None,
+    idx: int,
+    id_by_index: Mapping[int, Mapping[str, Any]],
+    leave_out: frozenset[int] = frozenset(),
+) -> dict[str, np.ndarray]:
+    """`rho_row()`'s answer for the Analysis at `idx`, against every other but `leave_out`."""
+    if reader is None:
+        return _empty_rho_row_result()
+    rho_vals, n_vals = reader.row(idx)
+    others = [i for i in range(reader.n_analyses) if i != idx and i not in leave_out]
+    return {
+        "analysis_id": np.array([id_by_index[i]["analysis_id"] for i in others], dtype=object),
+        "rho": rho_vals[others].astype("float32"),
+        "n_null": n_vals[others].astype("int64"),
+    }
+
+
+def _rho_matrix_answer(
+    reader: DenseRhoReader | None,
+    resolved: list[tuple[str, int]] | None,
+    id_by_index: Mapping[int, Mapping[str, Any]],
+    leave_out: frozenset[int] = frozenset(),
+) -> dict[str, np.ndarray]:
+    """`rho_matrix()`'s answer: the Analyses `resolved`, in that order, or with None every
+    Analysis but `leave_out`, in `analysis_index` order."""
+    if reader is None:
+        return _empty_rho_matrix_result()
+    if resolved is None:
+        resolved = [
+            (id_by_index[i]["analysis_id"], i)
+            for i in range(reader.n_analyses)
+            if i not in leave_out
+        ]
+    rho_mat, n_mat = reader.matrix([idx for _, idx in resolved])
+    return {
+        "analysis_id": np.array([aid for aid, _ in resolved], dtype=object),
+        "rho": rho_mat.astype("float32"),
+        "n_null": n_mat.astype("int64"),
     }
 
 
@@ -324,6 +381,21 @@ class _StoreQueryBase:
         `UnknownAnalysisError` (spec §19), never an empty answer."""
         return self._analyses.require_index(analysis_id)
 
+    def _rho_resolved(self, ids: Iterable[str]) -> list[tuple[str, int]]:
+        """Each of `ids` with its `analysis_index`, resolved once: an unknown one raises
+        `UnknownAnalysisError` first, then one the Rho Matrix holds no Rho for raises
+        `OverflowOnlyAnalysisError` (`_rho_leave_out`)."""
+        resolved = [(aid, self._analysis_index(aid)) for aid in ids]
+        leave_out = self._rho_leave_out()
+        for aid, index in resolved:
+            if index in leave_out:
+                raise OverflowOnlyAnalysisError(aid)
+        return resolved
+
+    def _rho_leave_out(self) -> frozenset[int]:
+        """The Analyses this release's Rho Matrix holds no Rho for: none, but on a Hybrid."""
+        return frozenset()
+
     def _optional_analysis_index(self, analysis_id: str | None) -> int | None:
         """`_analysis_index`, or None for no Analysis (every Analysis's top hits)."""
         return None if analysis_id is None else self._analysis_index(analysis_id)
@@ -386,6 +458,12 @@ class StoreQuery(_StoreQueryBase):
     def close(self) -> None:
         if self._owns_axis:
             self._variant_axis.close()
+
+    def rho_reader(self) -> DenseRhoReader | None:
+        """The Rho Matrix this grid carries (ADR 0025), as opened with the query, or None
+        without one: a Hybrid's query answers from its Dense Component's rather than
+        loading the packed arrays a second time (#496)."""
+        return self._rho_reader
 
     def analysis(
         self,
@@ -529,47 +607,18 @@ class StoreQuery(_StoreQueryBase):
         """Long-format pairwise Rho for a set of Analysis IDs (positional, or a
         single iterable of IDs); self-pairs excluded. Empty when the store has
         no Rho Matrix (opt-in, ADR 0025); an unknown ID raises `UnknownAnalysisError`."""
-        if len(ids) == 1 and not isinstance(ids[0], str):
-            ids = tuple(ids[0])
-        resolved = [(aid, self._analysis_index(aid)) for aid in ids]
-        if self._rho_reader is None:
-            return _empty_rho_result()
-        return _rho_pairs(self._rho_reader, resolved)
+        return _rho_answer(self._rho_reader, self._rho_resolved(_rho_ids(ids)))
 
     def rho_row(self, analysis_id: str) -> dict[str, np.ndarray]:
         """One Analysis's Rho and support against every other Analysis."""
-        idx = self._analysis_index(analysis_id)
-        if self._rho_reader is None:
-            return _empty_rho_row_result()
-        rho_vals, n_vals = self._rho_reader.row(idx)
-        id_by_index = self._analyses.all()
-        others = [i for i in range(self._rho_reader.n_analyses) if i != idx]
-        return {
-            "analysis_id": np.array([id_by_index[i]["analysis_id"] for i in others], dtype=object),
-            "rho": rho_vals[others].astype("float32"),
-            "n_null": n_vals[others].astype("int64"),
-        }
+        ((_, idx),) = self._rho_resolved([analysis_id])
+        return _rho_row_answer(self._rho_reader, idx, self._analyses.all())
 
     def rho_matrix(self, ids: list[str] | None = None) -> dict[str, np.ndarray]:
         """Wide-format Rho: the full symmetric matrix (diagonal 1.0), or the
         dense submatrix for a given vector of Analysis IDs, in that order."""
-        resolved = None if ids is None else [(aid, self._analysis_index(aid)) for aid in ids]
-        if self._rho_reader is None:
-            return _empty_rho_matrix_result()
-        if resolved is None:
-            id_by_index = self._analyses.all()
-            ordered_ids = [
-                id_by_index[i]["analysis_id"] for i in range(self._rho_reader.n_analyses)
-            ]
-            rho_mat, n_mat = self._rho_reader.matrix(None)
-        else:
-            ordered_ids = [aid for aid, _ in resolved]
-            rho_mat, n_mat = self._rho_reader.matrix([idx for _, idx in resolved])
-        return {
-            "analysis_id": np.array(ordered_ids, dtype=object),
-            "rho": rho_mat.astype("float32"),
-            "n_null": n_mat.astype("int64"),
-        }
+        resolved = None if ids is None else self._rho_resolved(ids)
+        return _rho_matrix_answer(self._rho_reader, resolved, self._analyses.all())
 
 
 def _analysis_major(found: Associations, requested: list[int]) -> Associations:
@@ -779,6 +828,8 @@ class HybridStoreQuery(_StoreQueryBase):
         )
         self._overflow.open_variant_index(self._variant_axis.n_variants)
         self._top_hits = store.top_hit_tiers()  # overflow's own tiers
+        # The Dense Component's Rho Matrix, as its query opened it: read once (#496).
+        self._rho_reader = self._dense.rho_reader()
 
     def close(self) -> None:
         self._dense.close()
@@ -794,19 +845,32 @@ class HybridStoreQuery(_StoreQueryBase):
     # (#481). From 0.3.0 neither copy ships (#472). Results resolve against the
     # shared variant table, the `variant_index` space they are remapped into.
 
-    # ── Rho Matrix (ADR 0025, Dense-only artifact) ───────────────────────────
-    # Delegated to the Dense Component: Rho is opt-in, built over a Dense grid's
-    # Analyses, and reads no variant. If Rho was built against the component these
-    # just work; otherwise they return the same empty result StoreQuery returns
-    # for a Dense store with no Rho Matrix.
+    # ── Rho Matrix (ADR 0025; a Hybrid's is its Dense Component's, #496) ──────
+    # Read from the Dense Component, whose grid the matrix is estimated over; it reads
+    # no variant. An Analysis with no observed association there -- an Overflow-only
+    # Analysis, which the matrix records -- has no Rho: naming one is refused
+    # (`OverflowOnlyAnalysisError`), and a row or the whole matrix holds the other
+    # Analyses only, so no answer carries its NaN. Without a Rho Matrix these return the
+    # same empty result StoreQuery returns for a Dense store with none.
+    def _rho_leave_out(self) -> frozenset[int]:
+        if self._rho_reader is None:
+            return frozenset()
+        return self._rho_reader.overflow_only(source=f"Rho Matrix of {self._dense_store.path}")
+
     def rho(self, *ids: str) -> dict[str, np.ndarray]:
-        return self._dense.rho(*ids)
+        return _rho_answer(self._rho_reader, self._rho_resolved(_rho_ids(ids)))
 
     def rho_row(self, analysis_id: str) -> dict[str, np.ndarray]:
-        return self._dense.rho_row(analysis_id)
+        ((_, idx),) = self._rho_resolved([analysis_id])
+        return _rho_row_answer(
+            self._rho_reader, idx, self._analyses.all(), self._rho_leave_out()
+        )
 
     def rho_matrix(self, ids: list[str] | None = None) -> dict[str, np.ndarray]:
-        return self._dense.rho_matrix(ids)
+        resolved = None if ids is None else self._rho_resolved(ids)
+        return _rho_matrix_answer(
+            self._rho_reader, resolved, self._analyses.all(), self._rho_leave_out()
+        )
 
     # ── dispatch helpers ─────────────────────────────────────────────────────
     def _remap_dense(self, result: Associations) -> Associations:

@@ -74,6 +74,10 @@ The dense matrix part of a Hybrid Layout store, over a shared reference variant 
 **Ragged Overflow Component**:
 The ragged part of a Hybrid Layout store, holding each Analysis's observed associations for variants that are off the Dense Component's reference axis. Overflow associations are always observed (never imputed), because off-axis variants lack the reference LD structure needed for completion.
 
+**Overflow-only Analysis**:
+An Analysis of a Hybrid release with no observed association in its Dense Component: every association it has is in the Ragged Overflow Component. It has no Rho, since the Rho Matrix is estimated over the Dense Component's grid; the matrix records which Analyses these are, and a Rho query naming one is refused by name rather than answered NaN (#496).
+_Avoid_: using it for a variant — an off-panel ALID asked of an Indexed Variant Subset is an overflow-only *request* (spec §10b), a different thing.
+
 **Query Component**:
 The part of a Store Release from which a returned association was read. For Dense stores there is a single query component (the dense matrix). For Ragged stores, observed, imputed, and missing associations for a completed region are ordinary rows in the same Analysis association sequence. For Hybrid stores there are two components — the Dense Component and the Ragged Overflow Component — unified behind one query result.
 
