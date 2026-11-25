@@ -119,6 +119,10 @@ WRITER_FUNCTIONS = {
     ("opengwasdb/variants/reference.py", "require_written_rsids_match"): (
         "reads back the Variant Table it just wrote, before the release exists"
     ),
+    ("opengwasdb/store/legacy_quality.py", "count_missing"): (
+        "adds the masked cells to the converted release's completion_quality, which the "
+        "rewrite's provenance_index step wrote (#492)"
+    ),
     ("opengwasdb/store/rewrite.py", "_records_in_row_order"): (
         "streams the staged copy's Variant Table, before it is a release: its steps are "
         "replacing the search indexes a Variant Axis would open (#468)"
@@ -136,6 +140,9 @@ COMPLIANT_ARRAYS_CALLS = frozenset(
         ("opengwasdb/layouts/dense/complete.py", "_dense_shard_rows"),
         ("opengwasdb/layouts/dense/rho.py", "build_dense_rho"),
         ("opengwasdb/layouts/hybrid/complete.py", "_crossover_cells"),
+        ("opengwasdb/store/legacy_conversion.py", "_grid"),
+        ("opengwasdb/store/legacy_expected.py", "_ExpectedStoreQuery.__init__"),
+        ("opengwasdb/store/legacy_quality.py", "attribute"),
         ("opengwasdb/validation/observed_view.py", "_Planes.__init__"),
         ("opengwasdb/validation/observed_view_hybrid.py", "_open_overflow"),
         ("opengwasdb/validation/observed_view_hybrid.py", "_DenseCodec.of"),

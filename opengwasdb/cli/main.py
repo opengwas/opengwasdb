@@ -2086,6 +2086,7 @@ def rewrite_release_command(
     destination: Path,
     convert_legacy: bool = _CONVERT_LEGACY_OPTION,
     lifted: bool | None = _LIFTED_OPTION,
+    n_workers: int = _VALIDATE_WORKERS_OPTION,
 ) -> None:
     """Derive a new 0.3.0 Store Release at DESTINATION from the 0.2.3 one at SOURCE.
 
@@ -2106,7 +2107,7 @@ def rewrite_release_command(
         raise typer.Exit(2)
     legacy = LegacyConversion(lifted=bool(lifted)) if convert_legacy else None
     try:
-        rewrite_release(source, destination, legacy=legacy)
+        rewrite_release(source, destination, legacy=legacy, n_workers=n_workers)
     except RewriteError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc

@@ -1164,13 +1164,15 @@ def require_valid_staged_release(
     *,
     error: type[Exception] = ConversionError,
     what: str = "converted",
+    n_workers: int = 1,
 ) -> None:
     """Publish only a staged copy that validates with no errors (issue #164).
 
     Shared with the rewrite to 0.3.0 (`opengwasdb.store.rewrite`), which raises its
-    own `error` and names itself as `what`.
+    own `error` and names itself as `what`. `n_workers` is `validate --n-workers`: the
+    report is the same at any size.
     """
-    result = validate_store(staged_path)
+    result = validate_store(staged_path, n_workers=n_workers)
     if not result.ok:
         for message in result.errors:
             print(f"  ERROR {message}")

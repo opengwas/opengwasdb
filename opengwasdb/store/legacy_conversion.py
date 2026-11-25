@@ -96,7 +96,8 @@ class LegacyPlan:
     #: Per Analysis, how many cells are masked: the `n_missing_se_out_of_range` written.
     out_of_range: np.ndarray
     #: The rows no cell is observed in, ascending: on a Reference-Completed release the
-    #: rows completion added from the panel. Empty on an Observed-Only one.
+    #: rows completion added from the panel. Empty on an Observed-Only one, and on a
+    #: lifted one, whose rows' `source_alid` is carried and not named from them.
     unobserved_rows: np.ndarray
     #: On a Reference-Completed release, how many masked cells each
     #: `(analysis_index, block_id)` row of `completion_quality` gains in `n_missing`
@@ -190,7 +191,7 @@ def plan_conversion(
         n_analyses=m,
         masked=positions,
         out_of_range=np.bincount(positions % m, minlength=m).astype(np.int64),
-        unobserved_rows=_panel_rows(store, unobserved),
+        unobserved_rows=_NONE if conversion.lifted else _panel_rows(store, unobserved),
         quality_missing=_quality_missing(store, positions, m),
     )
     print(

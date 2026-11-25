@@ -785,9 +785,11 @@ def rewrite_release(
     *,
     steps: tuple[RewriteStep, ...] = STEPS,
     legacy: LegacyConversion | None = None,
+    n_workers: int = 1,
 ) -> Path:
     """Derive a 0.3.0 release at `destination` from the 0.2.3 one at `source`, or, with
-    `legacy` (`--convert-legacy`), from a 0.2.0-0.2.2 Dense one (#492)."""
+    `legacy` (`--convert-legacy`), from a 0.2.0-0.2.2 Dense one (#492). `n_workers` is
+    the validation's (`validate --n-workers`)."""
     source = Path(source).resolve()
     destination = Path(destination).resolve()
     refuse_destination(source, destination, error=RewriteError, named="DESTINATION")
@@ -825,7 +827,7 @@ def rewrite_release(
         _log_phase("asked the staged release the same questions: every answer matches", started)
         started = time.perf_counter()
         require_valid_staged_release(
-            staged.path, destination, error=RewriteError, what="rewritten"
+            staged.path, destination, error=RewriteError, what="rewritten", n_workers=n_workers
         )
         _log_phase("validated the staged release", started)
     print(f"Published {destination} as {TARGET_FORMAT_VERSION}", flush=True)

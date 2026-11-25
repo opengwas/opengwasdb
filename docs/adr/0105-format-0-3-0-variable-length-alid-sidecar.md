@@ -938,7 +938,7 @@ is a source" for a Dense release behind an explicit flag; a 0.2.3 source is rewr
 (`opengwasdb.store.legacy_conversion`). Without the flag a 0.2.0-0.2.2 source is refused as
 before, and the refusal now names the flag. With it, a 0.2.3 source is refused (it needs no
 conversion), and so are Ragged and Hybrid sources: none of the priority Stores needs them.
-The conversion uses the rewrite's frame and adds three steps to `STEPS`:
+`--n-workers`, which the rewrite takes too, sizes the final validation as it sizes `validate`'s. The conversion uses the rewrite's frame and adds three steps to `STEPS`:
 
 | Gap from 0.2.3 | What the conversion does |
 |---|---|

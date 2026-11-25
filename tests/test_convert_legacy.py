@@ -392,6 +392,6 @@ def test_the_cli_needs_a_lift_answer_and_converts_with_one(sources, tmp_path):
 
     asked = runner.invoke(app, args)
     assert asked.exit_code == 2 and "--lifted or --not-lifted" in asked.output
-    converted = runner.invoke(app, [*args, "--not-lifted"])
+    converted = runner.invoke(app, [*args, "--not-lifted", "--n-workers", "2"])
     assert converted.exit_code == 0, converted.output
     assert "Published" in converted.output
