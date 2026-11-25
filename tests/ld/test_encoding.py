@@ -326,6 +326,8 @@ NAMED_ON_PURPOSE = {
         "the committed Test Store is × 511, and tests write",
         "× 32767 stores beside it.",
         "511 for the committed Test Store, HGDP+1kGP EUR's",
+        # The k = 0 Test Store's recipe, which ogquery's copy records (opengwas/ogquery#2).
+        "--r-scale=511 --t-partner=0.01 --k 0",
     ),
 }
 SCALE_LITERAL = re.compile(r"\b(?:511|2047|32767)\b")

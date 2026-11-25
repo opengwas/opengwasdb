@@ -1,0 +1,14 @@
+{
+  "attributes": {
+    "rows": 468,
+    "rows_per_frame": 16,
+    "frames": 30,
+    "entries": 26576,
+    "frames_bytes": 26884,
+    "frames_sha256": "44d8a2b6c6f1a788b23d06282506180f84ec156af97c3407704f35d6e795e8c7",
+    "frames_idx_sha256": "85b887036c73b4764f67c20075bb50baabb2085e961dd20ffcb0d3c5037ca8ee",
+    "zstd_level": 3
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

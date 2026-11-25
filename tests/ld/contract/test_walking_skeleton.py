@@ -38,6 +38,18 @@ def test_the_test_store_can_be_written_again_at_k0(tmp_path: Path) -> None:
     assert reader.provenance["adjustment"]["k"] == 0
     got, expected = near_pair_r(reader, 0)
     assert abs(got - expected) <= support.HALF_STEP + support.SLACK
+    # The committed k = 0 Test Store, which ogquery's tests copy, is this run's arrays
+    # (scripts/ld/make_test_store.py; opengwas/ogquery#2).
+    committed = arrays(zarr.open_group(TEST_STORE_K0, mode="r"))
+    again = arrays(zarr.open_group(out, mode="r"))
+    assert len(committed) > 20, "the committed k = 0 store must hold its arrays"
+    assert committed.keys() == again.keys()
+    for path, array in committed.items():
+        np.testing.assert_array_equal(again[path], array, err_msg=path)
+
+
+#: The k = 0 Test Store, committed beside the Test Store (opengwas/ogquery#2).
+TEST_STORE_K0 = support.TEST_STORE.parent / "store-k0"
 
 
 def arrays(group: zarr.Group, prefix: str = "") -> dict[str, np.ndarray]:
