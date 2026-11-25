@@ -1,0 +1,52 @@
+[
+ {
+  "store": "OGS-00006",
+  "build_seconds": 3972.7,
+  "build_steps": {
+   "build": 1194.4,
+   "complete": 2371.2,
+   "completion-observed-view-check": 290.2,
+   "completion-register": 0.0,
+   "completion-validate": 54.7,
+   "register": 0.0,
+   "top-hits": 10.2,
+   "validate": 52.0
+  },
+  "clump_seconds": 18.8,
+  "clump_measured_as": "opengwasdb clump (the step)",
+  "share_of_build": 0.0047
+ },
+ {
+  "store": "OGS-00009",
+  "build_seconds": 159976.4,
+  "build_steps": {
+   "build": 70019.8,
+   "complete": 50682.3,
+   "completion-indexed-subset-hm3": 521.2,
+   "completion-observed-view-check": 913.4,
+   "completion-overview": 2.1,
+   "completion-register": 0.0,
+   "completion-validate": 16832.6,
+   "indexed-subset-hm3": 791.7,
+   "overview": 4.4,
+   "register": 0.0,
+   "top-hits": 4852.3,
+   "validate": 15356.6
+  },
+  "clump_seconds": 105.6,
+  "clump_measured_as": "compute_clumps (the compute path)",
+  "share_of_build": 0.0007
+ },
+ {
+  "store": "OGS-00027",
+  "build_seconds": 1465.5,
+  "build_steps": {
+   "build": 1390.6,
+   "register": 0.0,
+   "validate": 74.9
+  },
+  "clump_seconds": 99.6,
+  "clump_measured_as": "compute_clumps (the compute path)",
+  "share_of_build": 0.068
+ }
+]
