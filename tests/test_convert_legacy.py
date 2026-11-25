@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from format_0_2_0 import a_top_hit, as_0_2_0, plant_se, sorted_indel
+from format_0_2_0 import a_top_hit, as_0_2_0, plant_se, round_se_exceptions, sorted_indel
 from format_0_2_3 import as_0_2_3, write_variant_offsets
 from typer.testing import CliRunner
 
@@ -142,6 +142,7 @@ def test_an_unlifted_0_2_0_release_is_masked_counted_and_named(sources, tmp_path
     record = manifest["provenance"]["converted_from"]
     assert record["source_format_version"] == "0.2.0"
     assert record["deviations"] == ["variant_table.indel_order"]
+    assert "se_exceptions_rounded" not in record, "its exceptions hold their own values"
     assert (record["lifted"], record["se_out_of_range_masked"]) == (False, 2)
     assert manifest["provenance"]["format_rewrite"]["steps"][:2] == [
         "se_out_of_range", "own_source_alid",
@@ -409,3 +410,51 @@ def test_the_range_question_is_bounded_by_variants_and_by_cells():
     assert query_digests._range_last(records, 2)["position"] == 10_000
     assert query_digests._range_last(records, 2_514)["position"] == 2_500_000 // 2_514
     assert query_digests._range_last(records, 241)["position"] == 10_000, "OGS-00015's"
+
+
+ROUNDED = "side_tables.se_exceptions_rounded"
+
+
+@pytest.fixture(scope="module")
+def rounded(sources: dict[str, Path], tmp_path_factory: pytest.TempPathFactory):
+    """`dense_observed` as a 0.2.0 release whose every SE is an exception rounded to
+    `float16` (#355), two of them above 65,504, converted `--not-lifted` once. Never
+    written to: copy it to change it."""
+    root = tmp_path_factory.mktemp("rounded")
+    source = as_0_2_0(Path(shutil.copytree(sources["dense_observed"], root / "source")))
+    n_exceptions = round_se_exceptions(source)
+    hit = a_top_hit(source)
+    plant_se(source, *hit, 1.0e5)
+    plant_se(source, *_quiet_cell(source, hit), 70_000.0)
+    return source, n_exceptions, rewrite_release(source, root / "converted", legacy=UNLIFTED)
+
+
+def test_a_rounded_se_exception_table_is_recorded_and_warns(rounded):
+    source, n_exceptions, destination = rounded
+    assert n_exceptions >= 1_000, "the rule judges a table of 1,000 exceptions or more"
+    assert validate_store(source).warnings, "the 0.2.0 source is warned"
+    assert any(ROUNDED in w or "rounded to float16" in w for w in validate_store(source).warnings)
+
+    record = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))[
+        "provenance"]["converted_from"]
+    assert record["deviations"] == ["variant_table.indel_order", ROUNDED]
+    assert (record["se_exceptions_rounded"], record["se_exceptions"]) == (
+        n_exceptions - 2, n_exceptions - 2,
+    ), "every exception but the two masked is a float16 value"
+    result = validate_store(destination)
+    assert result.ok, result.errors
+    warned = {f.rule for f in result.findings if f.severity is Severity.WARNING}
+    assert warned == {ROUNDED, "eaf_orientation.unverified"}, warned
+    (finding,) = [f for f in result.findings if f.rule == ROUNDED]
+    assert "--convert-legacy" in finding.message and "rebuild the release" in finding.message
+
+
+def test_a_converted_release_not_listing_the_rounding_fails_it(rounded, tmp_path):
+    _source, _n, converted = rounded
+    destination = Path(shutil.copytree(converted, tmp_path / "converted"))
+    path = destination / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["provenance"]["converted_from"]["deviations"] = ["variant_table.indel_order"]
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert validate_store(destination).failed() == {ROUNDED}

@@ -52,6 +52,7 @@ from opengwasdb.encoding.codec import SE_FLOAT16_MAX, se_above_bound
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store.rewrite import RewriteContext, RewriteError
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State
+from opengwasdb.store_reader.encoding.codec import SeExceptionTable
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.store_reader.format import indels_reference_first
 
@@ -61,6 +62,7 @@ LEGACY_SOURCE_VERSIONS = ("0.2.0", "0.2.1", "0.2.2")
 #: The validator rules a conversion can record as deviations (module docstring).
 INDEL_ORDER_RULE = "variant_table.indel_order"
 SOURCE_ALID_RULE = "variant_table.source_alid"
+ROUNDED_SE_RULE = "side_tables.se_exceptions_rounded"
 
 #: The provenance key a converted release records, and a rebuild never writes.
 CONVERTED_FROM = "converted_from"
@@ -103,6 +105,9 @@ class LegacyPlan:
     #: `(analysis_index, block_id)` row of `completion_quality` gains in `n_missing`
     #: (`legacy_quality.attribute`).
     quality_missing: tuple[tuple[tuple[int, str], int], ...] = ()
+    #: Of the source's SE exceptions, how many are `float16` values and of how many,
+    #: where the table was rounded (#355): recorded as a deviation; None where it was not.
+    rounded_se: tuple[int, int] | None = None
 
     @property
     def deviations(self) -> tuple[str, ...]:
@@ -112,6 +117,8 @@ class LegacyPlan:
             found.append(INDEL_ORDER_RULE)
         if self.lifted:
             found.append(SOURCE_ALID_RULE)
+        if self.rounded_se is not None:
+            found.append(ROUNDED_SE_RULE)
         return tuple(found)
 
     @property
@@ -143,6 +150,7 @@ class LegacyPlan:
             "lifted": self.lifted,
             "lifted_decided_by": "operator flag " + ("--lifted" if self.lifted else "--not-lifted"),
             "se_out_of_range_masked": int(self.masked.size),
+            **_rounded_record(self),
             "note": (
                 "Converted by ogdb rewrite-release --convert-legacy (#492): every SE above "
                 f"{SE_FLOAT16_MAX:,.0f} was masked and counted, and an unlifted release's "
@@ -151,6 +159,13 @@ class LegacyPlan:
                 "warnings. A rebuild writes no converted_from."
             ),
         }
+
+
+def _rounded_record(plan: LegacyPlan) -> dict[str, int]:
+    if plan.rounded_se is None:
+        return {}
+    exact, total = plan.rounded_se
+    return {"se_exceptions_rounded": exact, "se_exceptions": total}
 
 
 def _refused(message: str) -> LegacyConversionError:
@@ -193,6 +208,7 @@ def plan_conversion(
         out_of_range=np.bincount(positions % m, minlength=m).astype(np.int64),
         unobserved_rows=_NONE if conversion.lifted else _panel_rows(store, unobserved),
         quality_missing=_quality_missing(store, positions, m),
+        rounded_se=_rounded_se(store),
     )
     print(
         f"  read {n:,} rows x {m:,} Analyses: {positions.size:,} cell(s) with an SE above "
@@ -253,6 +269,26 @@ def _refuse_masked_fills(store: OpenGWASDBStore, fills: np.ndarray, n_analyses: 
             "row counting a missing cell as imputed, and the release records no "
             "block-to-cell membership to correct it by: rebuild it from source"
         )
+
+
+def _rounded_se(store: OpenGWASDBStore) -> tuple[int, int] | None:
+    """The converted release's SE exceptions as `side_tables.se_exceptions_rounded`
+    measures them, where that rule would fail it (#355): it is then a deviation, the
+    rounding being what the source serves, within 2**-11 relative. They are the
+    source's, less the entries above 65,504 the mask removes, none of them a `float16`
+    value; None where the rule would pass."""
+    from opengwasdb.validation.rules.side_tables import (
+        RoundedSeExceptions,
+        rounded_se_exceptions,
+    )
+
+    group = store.arrays()
+    found = rounded_se_exceptions(group, store.manifest.encoding)
+    if found is None:
+        return None
+    above = int(np.count_nonzero(se_above_bound(group[SeExceptionTable.value_name][:])))
+    kept = RoundedSeExceptions(found.n_exact, found.n_total - above)
+    return (kept.n_exact, kept.n_total) if kept.rounded else None
 
 
 def _quality_missing(

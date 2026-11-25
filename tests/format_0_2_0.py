@@ -17,6 +17,9 @@ of today would have written (`format_0_2_3.as_0_2_3`) in what `as_0_2_0` gives o
 
 `plant_se` stores an SE above 65,504 at a cell as a writer before 0.2.3 did -- an exact
 exception in a residual plane -- and in every Top-Hit tier that holds the cell.
+`round_se_exceptions` makes every present SE an exception holding its `float16`
+rounding, as the hosted Stores' builds did before #355 (99.07% to 100% of their
+exceptions are `float16` values).
 """
 
 from __future__ import annotations
@@ -132,3 +135,40 @@ def a_top_hit(release: Path, *, imputed: bool = False) -> tuple[int, int]:
     assert slots.size, "the fixture's tier must hold such a cell"
     slot = int(slots[0])
     return int(tier["variant_index"][slot]), int(tier["analysis_index"][slot])
+
+
+def round_se_exceptions(release: Path) -> int:
+    """Hold every present SE of the residual plane as an exact exception rounded to
+    `float16`, as a build before #355 wrote it; return how many exceptions there are."""
+    from opengwasdb.store.open import open_store
+    from opengwasdb.store_reader.associations import Cells, DenseGridReader
+
+    store = open_store(release)
+    completed = store.manifest.completion_state.value == "reference_completed"
+    grid = DenseGridReader.open(store.arrays(), store.manifest.encoding, requires_mask=completed)
+    cells = grid.inspect(Cells.variants(np.arange(grid.n_variants)))
+    present = np.isfinite(cells.se)
+    positions = (
+        cells.variant_index[present].astype(np.int64) * grid.n_analyses
+        + cells.analysis_index[present]
+    )
+    order = np.argsort(positions)
+    values = cells.se[present].astype(np.float16).astype(np.float32)[order]
+    root = store_arrays.open_group_for_write(release / "data.zarr", "a")
+    store_arrays.write_shard_cells(
+        root["se"], positions // grid.n_analyses, positions % grid.n_analyses,
+        np.full(positions.size, SE_EXCEPTION, np.int8),
+    )
+    write_exact_table(
+        SeExceptionTable(index=positions[order], value=values), root,
+        compressor=store_arrays.compressor(),
+    )
+    tiers = root["top_hits"] if "top_hits" in root else {}
+    for key in list(tiers):  # harvested from the rounded plane, as the build's were
+        tier = tiers[key]
+        se = np.asarray(tier["se"][:], dtype=np.float32).astype(np.float16).astype(np.float32)
+        store_arrays.create_array(
+            tier, "se", ArrayRole.TOP_HIT_INDEX, data=se, dtype="float32",
+            compressor=store_arrays.compressor(), overwrite=True,
+        )
+    return int(positions.size)

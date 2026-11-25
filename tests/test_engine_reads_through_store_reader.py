@@ -141,6 +141,7 @@ COMPLIANT_ARRAYS_CALLS = frozenset(
         ("opengwasdb/layouts/dense/rho.py", "build_dense_rho"),
         ("opengwasdb/layouts/hybrid/complete.py", "_crossover_cells"),
         ("opengwasdb/store/legacy_conversion.py", "_grid"),
+        ("opengwasdb/store/legacy_conversion.py", "_rounded_se"),
         ("opengwasdb/store/legacy_expected.py", "_ExpectedStoreQuery.__init__"),
         ("opengwasdb/store/legacy_quality.py", "attribute"),
         ("opengwasdb/validation/observed_view.py", "_Planes.__init__"),
