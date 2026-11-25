@@ -208,22 +208,28 @@ on a 0.3.0 release raises `DenseComponentSharesAxis`. A 0.2 Hybrid keeps its cop
 the validator and completion still read. `ogdb rewrite-release` drops the copy from a 0.2.3
 source and refuses one whose `dense_to_shared.npy` does not name each Dense row's shared row.
 
-**#417 adds the Clumps of the 5e-8 tier without moving `format_version` (ADR 0106 §9,
-spec §21.1).** A release clumped by #418's step carries `top_hits/p_5e_08/clumps/default/`
-in each component with a 5e-8 tier, declares it in `manifest.json` as `"clumps": {"tier":
-"p_5e_08", "configuration": "default"}`, and has two more `analyses.tsv` columns,
-`n_loci_5e8` and `n_unclumped_5e8` (§2, §7a, §18.1). The table above is unchanged: no
-package writes or reads a different version for them. They are derived and rebuildable from the
-release and a named LD Store, and are added in place to the published releases, which are 0.2.0
-to 0.2.3 (#420; spec §21.4 lists this in-place case), so a version move would mis-stamp them: 0.2
-versions are cumulative, so a 0.2.0 release stamped past 0.2.3 would declare reference-first
-indels and an SE count it does not hold. A 0.1.0
-release is converted before it is clumped. A package that predates them reads a clumped release's
-associations and every column it knew as before, and ignores the two columns; its `validate`
-fails the arrays it does not register, which is how it also treats #302's `n` plane. What its completion does with a
-clumped source, whose tier it rewrites, is #418's to measure and record here; this package's
-completion rewrites every tier through `top_hits.write_index`, which replaces the tier group and
-`clumps/` with it, and drops the columns, and the Store Release Build clumps the release again.
+**#417 adds the Clumps of the 5e-8 tier to format 0.3.0 without moving it (ADR 0106 §9,
+spec §21.1).** A release clumped by #418's step carries `top_hits/p_5e_08/clumps/default/` in
+each component with a 5e-8 tier. It declares them in `manifest.json` as `"clumps": {"tier":
+"p_5e_08", "configuration": "default"}` and has two more `analyses.tsv` columns, `n_loci_5e8`
+and `n_unclumped_5e8` (spec §2, §7a, §18.1). The table above is unchanged: no package writes
+or reads a different version for them, and a clumped and an unclumped release are both 0.3.0.
+
+The step supports only 0.3.0 releases and refuses any other format by name. No 0.2 or 0.1.0
+release carries Clumps, and none is converted to gain them. #420 adds them in place to the
+registered Stores once opengwas/opengwasdb-stores#498 has rebuilt them at 0.3.0 (the owner,
+25 Nov 2026), keeping each `release_id` and `format_version` (spec §21.4).
+
+What a package that knows 0.3.0 and nothing of the Clumps, such as the release epic #450 merges as,
+does with a clumped 0.3.0 release was measured on main's fixtures on 25 Nov 2026 (ADR 0106 §9):
+- it reads every association and column it knew, identically, and ignores the entry and the
+  two columns;
+- its `validate` fails no rule it did not fail without them, because the closed envelope judges
+  only top-level entries and the Top-Hit rules only the tier arrays they name;
+- its completion writes a 0.3.0 release without the group, the entry or the columns, which
+  validates clean, and the Store Release Build clumps it again.
+
+Nothing is misread or half-carried. That is why this is not a patch move, unlike #430's 0.2.1.
 
 ## Keeping this page true
 

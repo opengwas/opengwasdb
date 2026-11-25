@@ -183,6 +183,7 @@ decisions (epic #450). The ticket that moved a component to its class is in the 
 | `data.zarr` `top_hits/<tier>/` `variant_index`, `analysis_index`, `analysis_offsets`, `z`, `se`, `eaf`, `imputed` (Top-Hit Index) | every release | Store Reader | read (accelerator) | — |
 | `data.zarr` `indexed_subsets/<name>/` | Dense, optional | Store Reader | read (accelerator, optional; §10b) | — |
 | `data.zarr` `rho/` | Dense, optional; no release carries one | Store Reader | read, optional: ships only once the Store Reader reads it | — |
+| `data.zarr` `top_hits/p_5e_08/clumps/default/` `lead`, `r` (the Clumps, §18.1) | every layout, optional, from 0.3.0; no release carries them yet | nothing yet; the Store Reader from #419 | read (accelerator, optional, with the LD Store it needs recorded; ADR 0106 §11): ships only once the Store Reader reads it | #418, #419, #420 |
 | `data.zarr` `on_panel` (Reference Panel Membership) | Dense Reference-Completed | validator only | provenance | — |
 | `data.zarr` `top_hits/<tier>/abs_z`, `p_value` | every 0.2 release; none from 0.3.0 | validator only (0.2: `top_hits.abs_z` holds them to what `z` implies) | dropped: the validator recomputes them from `z` | #471 |
 | `variant_rsid_bytes.npy`, `variant_rsid_rows.npy` | every release | Store Reader (rsID lookup; from 0.3.0, inverted, a row's rsID) | read (and inverted, for the rsID of a row) | #469 |
@@ -232,9 +233,10 @@ release that carries none MUST NOT have the field:
 |---|---|
 | `regions` | The region table: `{"path": "regions.tsv", "sha256": <hex SHA-256 of the file's bytes>}`. A Reference-Completed release declares its source's entry unchanged, since it carries the file byte for byte |
 
-A 0.2 release that carries the Clumps of its 5e-8 tier (§18.1, ADR 0106) MUST also
-declare them, and a release that carries none MUST NOT have the field. A Hybrid release
-declares them in both manifests, its root's and its Dense Component's:
+A 0.3.0 release that carries the Clumps of its 5e-8 tier (§18.1, ADR 0106) MUST also
+declare them, and a release that carries none MUST NOT have the field. No earlier format
+carries them. A Hybrid release declares them in both manifests, its root's and its Dense
+Component's:
 
 | Field | Meaning |
 |---|---|
@@ -1434,10 +1436,10 @@ n_hits_5e8`. For an Analysis that was not clumped (−4: a blank `assigned_ances
 or one with no LD Store in the group's `ld_stores`) both are **blank, never 0**: a
 0 would claim the Analysis has no locus. The two columns are present exactly when
 the release declares `clumps` (§2): a release that does not is not clumped, and a
-reader does not read its absent columns as blank. A Hybrid root counts both
-components and its Dense Component counts its own rows, as for `n_hits_*`; a
-Dense Component's `n_loci_5e8` is therefore the leads among its rows of the whole
-Hybrid's clumping, and the two components' counts sum to the root's. Like
+reader does not read its absent columns as blank. A Hybrid has one
+`analyses.tsv`, at its root (§16, #472), and its two columns count both
+components' rows, as `n_hits_*` does; each component's own row counts are in its
+group's `clumps` attribute (§18.1). Like
 `n_hits_*`, both are computed when the component is written and never at render
 time.
 
@@ -1788,8 +1790,8 @@ array. In zarr-python 3 `Array.chunks` is the inner chunk and `Array.shards` the
 outer shard; every read-unit rule MUST use `chunks`.
 
 The optional Clumps of the 5e-8 tier (§18.1) live inside that tier's group, in the
-tier arrays' own role and chunking, in every 0.2 release; a 0.1.0 release carries
-none.
+tier arrays' own role and chunking, in a 0.3.0 release; no earlier format carries
+them.
 
 ## 10b. Indexed Variant Subsets (optional, Dense)
 
@@ -2505,11 +2507,14 @@ component persists, its `lead` as an offset and its `r` as a code, one row per t
 are optional, derived and rebuildable: deleting them, with their manifest entry (§2) and
 their two `analyses.tsv` columns (§7a), changes no other answer the release gives, and
 they do not move `format_version` (§21.1). Only the 5e-8 tier is stored, in one Clumping
-Configuration; any other tier or configuration is clumped when it is queried (#419). This
-section says what the stored data mean; the query that reads them is #419's.
+Configuration; any other tier or configuration is clumped when it is queried (#419). They are
+a component of format 0.3.0 and of no earlier format, and they do not move it (§21.1, ADR 0106
+§9). Under ADR 0102's rule they are *read*, an accelerator that also needs an LD Store outside
+the release (§1.1, ADR 0106 §11). This section says what the stored data mean; the Store
+Reader reads them (#419, *Reading* below).
 
 **Where.** In the 5e-8 tier's group, `p_5e_08` (`threshold_key(5e-8)`,
-`opengwasdb/top_hits.py`), of every component holding one:
+`opengwasdb/store_reader/top_hits.py`), of every component holding one:
 
 ```text
 data.zarr/top_hits/p_5e_08/
@@ -2526,8 +2531,8 @@ component with a 5e-8 tier, `<root>/data.zarr/…` for its Ragged Overflow and
 `<root>/dense/data.zarr/…` for its Dense Component. Both arrays have the tier arrays' role and
 chunking (`ArrayRole.TOP_HIT_INDEX`, `TOP_HIT_CHUNK_SIZE`), so one Analysis's entries are read
 from the tier's own `analysis_offsets`. The tier writer replaces the whole tier group
-(`write_index`), so a rewritten tier never keeps the Clumps of an earlier one. A 0.1.0 release
-carries none; it is converted first (§21.4).
+(`write_index`), so a rewritten tier never keeps the Clumps of an earlier one. A release of a
+format before 0.3.0 carries none.
 
 **The clump slice.** An Analysis's clump slice is its rows of the 5e-8 tier in tier order; in a
 Hybrid release, its Dense Component rows followed by its Ragged Overflow rows. An offset is a
@@ -2541,37 +2546,41 @@ to `LDStore.clump` (`opengwasdb/ld/query/ldstore.py`, ld-store §9) against its 
 Store, at r2 equal to that store's recorded `t_far` and kb 10,000 (W = 10,000,000 bp): a row
 joins a lead at r̂² > r2 and d < W, plink2's edges.
 
-- **Order.** |z| (the tier's `abs_z`) descending, ties by Store Variant Index ascending; never
-  raw p, which underflows to 0 past |z| ≈ 38. `clump` leads with the largest score and breaks
+- **Order.** |z| descending, ties by Store Variant Index ascending; never raw p, which
+  underflows to 0 past |z| ≈ 38. A 0.3.0 tier stores `z` and no `abs_z` (§18), so |z| is taken
+  from `z` through `top_hits.recomputed_abs_z_and_p` (`opengwasdb/top_hits.py`), the |z|
+  `top_hits.threshold` recomputes. `clump` leads with the largest score and breaks
   ties by the LD Store's row order (`_component`, `opengwasdb/ld/query/clumping.py`), which
   differs from the Store's at a translated indel. So the step passes a score that is larger for
   a stronger row and has no ties: **n − rank**, where n is the rows given and rank 0 is the
   largest |z|, ties by Store Variant Index ascending. The score enters only that ordering, so
   for distinct |z| the leads are those of plink2's greedy on |z|. A score of the rank itself
   would lead with the weakest row.
-- **Hybrid.** The Dense Component's tier `variant_index` is a row of its dense axis, and the
-  Ragged Overflow's a row of the shared Store Variant Table. Order and identity use the shared
-  index: a Dense Component row is mapped through `dense_to_shared.npy` (`dense_to_shared_path`,
-  `opengwasdb/layouts/hybrid/layout.py`) first. "Store Variant Index" below always means the
-  shared one.
-- **Identity.** A row's ALID is its Store Variant Table ALID (`VariantAxis.identity_by_indices`,
-  `opengwasdb/variants/axis.py`). In a release at 0.2.2 or later (`indels_reference_first`,
-  `opengwasdb/store/open.py`) an indel's ALID spells its reference first (ADR 0079), and LD
-  Stores spell indels sorted, so it is translated to its sorted spelling through
-  `opengwasdb.variants` (`normalise.sorted_alid_alleles`) before the lookup, and the sign of r
-  flips for each of the row and its lead whose A1 the translation swaps. A release at 0.2.0 or
-  0.2.1 spells indels sorted already, and its ALIDs are looked up as they are.
+- **Hybrid.** The Dense Component's tier `variant_index` is a panel row of its grid, and the
+  Ragged Overflow's a row of the shared Variant Axis. The Dense Component carries no Variant
+  Axis of its own (§16, #472), and the Store Reader resolves its rows through the shared axis
+  and `dense_to_shared.npy` (`PanelVariantAxis`, `opengwasdb/store_reader/panel_axis.py`). Order
+  and identity use the shared index, so a Dense Component row is mapped through
+  `dense_to_shared.npy` (`dense_to_shared_path`, `opengwasdb/store_reader/hybrid.py`) first.
+  "Store Variant Index" below always means the shared one.
+- **Identity.** A row's ALID is its shared Variant Axis ALID, read from the ALID sidecar (§4;
+  `VariantAxis.identity_by_indices`, `opengwasdb/store_reader/variant_axis.py`). A 0.3.0
+  release spells an indel's ALID reference first (ADR 0079, ADR 0105), and LD Stores spell
+  indels sorted, so it is translated to its sorted spelling through `opengwasdb.variants`
+  (`normalise.sorted_alid_alleles`) before the lookup, and the sign of r flips for each of the
+  row and its lead whose A1 the translation swaps.
 - **Ambiguous identity.** An insertion and a deletion of one sequence at one position share a
-  sorted spelling (`T:TA` is both `T>TA` and `TA>T`). In a release at 0.2.2 or later, a row
-  whose variant's sorted spelling is also another Store Variant Table variant's is ambiguous: it
+  sorted spelling (`T:TA` is both `T>TA` and `TA>T`). A row whose variant's sorted spelling is
+  also another shared Variant Axis variant's is ambiguous: it
   is never looked up, and is marked −3. What a sorted LD Store holds under a shared spelling it
   holds for one of the two, and it does not record which (`resolve_sorted_reversed_indels`), so
   every indel looked up by such a spelling is counted in its entry's
   `indel_rows_by_sorted_spelling` (ADR 0106 §6; #462 removes the exposure).
 - **Refusals.** An LD Store that refuses the configuration (ld-store §9: a recorded `far_bp`
   under 10,000,000, say), or whose `reference_assembly` is not the release's, fails the step,
-  naming the store; its Analyses are never silently left unclumped. So does a 0.1.0 release, one
-  with no 5e-8 tier, and a Reference-Completed one whose 5e-8 tier has no `imputed` array.
+  naming the store; its Analyses are never silently left unclumped. So does a release of any
+  format but 0.3.0, named by its `format_version`; one with no 5e-8 tier; and a
+  Reference-Completed one whose 5e-8 tier has no `imputed` array.
 
 **`lead`.** Per tier row:
 
@@ -2606,7 +2615,7 @@ Hybrid's two components each record their own rows' counts.
 | `configuration` | string | `"default"` |
 | `threshold` | float | `5e-08` |
 | `tier_rows` | int | the rows of the tier the arrays are parallel to |
-| `score` | string | `"abs_z"` |
+| `score` | string | `"abs(z)"`: \|z\| taken from the tier's `z` (*Order*, above) |
 | `ties` | string | `"store_variant_index"` |
 | `kb` | int | `10000` |
 | `join` | string | `"r2_gt_distance_lt"`: r̂² > r2 and d < W (ld-store §9) |
@@ -2642,7 +2651,10 @@ itself; LD Stores have no release id (ADR 0106 §4).
 | `rows_ambiguous` | int | rows of this component marked −3 |
 | `indel_rows_by_sorted_spelling` | int | of `rows_clumped`, indel rows looked up by a sorted spelling an insertion and a deletion share |
 
-**Reading.** A reader reads `lead` and `r` only in a release that declares `clumps` (§2). A Clump
+**Reading.** The Store Reader reads the Clumps (#419), in `opengwasdb/store_reader/` beside
+`TopHitTier.read` (`opengwasdb/store_reader/top_hits.py`), which reads the tier they are
+parallel to. #475 moves the Store Reader into the `ogquery` package; the Clumps follow the
+reader. A reader reads `lead` and `r` only in a release that declares `clumps` (§2). A Clump
 Lead's members are the rows whose `lead` is its offset. A row whose `lead` is negative belongs to
 no clump and is reported as what its marker says, never as a lead of its own: an absent row is
 not a locus the LD Store saw, and an Analysis marked −4 has no stored clumping at all, which a
@@ -2653,10 +2665,11 @@ its unclumped rows as leads.
 `opengwasdb clump` (component `clumps`, layer 4, since it imports `opengwasdb.ld.query`; no
 builder calls it). The Store Release Build in opengwas/opengwasdb-stores runs it after the build
 and after any completion, passing its Assigned Ancestry → LD Store mapping
-(opengwas/opengwasdb-stores#454), and an existing 0.2 release gains it in place, the one
-in-place addition that carries Analytical Metadata (§21.4, ADR 0106 §10): the group, then `analyses.tsv` and
+(opengwas/opengwasdb-stores#454). An existing 0.3.0 release gains it in place (#420, on the
+Stores opengwas/opengwasdb-stores#498 rebuilds at 0.3.0), the one in-place addition that
+carries Analytical Metadata (§21.4, ADR 0106 §10): the group, then `analyses.tsv` and
 `overview.html`, then the manifest's `clumps` entry. Writing it again replaces all four. The
-`release_id` does not change. A Reference Completion of a release that carries Clumps writes a
+`release_id` and the `format_version` do not change. A Reference Completion of a release that carries Clumps writes a
 release without them, without the `clumps` entry and without the two columns, since it rewrites
 the tier; the Store Release Build then runs the step again.
 
@@ -2820,7 +2833,7 @@ Validators MUST check at least:
 - imputed mask is consistent with Z and SE;
 - Ragged Reference-Completed regions include all Reference Variant Set variants within completed boundaries;
 - top-hit indexes, when present, are consistent with the **decoded** `z`, `se` and `eaf` planes — decoded, because an index built from raw codes and one built from values a query returns are indistinguishable until they are compared against the plane the query reads;
-- the Clumps of the 5e-8 tier, when present, are declared, parallel to their tier and say what §18.1 says they say (ADR 0106). Each silent failure has its rule: a row dropped from the arrays (`clumps.structure`); Clumps left beside a rewritten tier, which cannot happen because every tier is written by `top_hits.write_index`, which replaces the tier group whole (`create_group(replace=True)`, `opengwasdb/store/arrays.py`) and deletes `clumps/` with it — on every Dense, Ragged and Hybrid build and completion — while a `clumps` manifest entry or columns left behind without the group fail `clumps.declared`; an absent row made its own lead, or a present one marked absent (`clumps.reclump`); an imputed row clumped, an ambiguous indel looked up, or a marked row given an r (`clumps.markers`); a lead weaker than its member, as raw p's underflow gives, or a member outside the window or under r2 (`clumps.greedy`); an Analysis with no LD Store counted as 0, or one with an LD Store left unclumped (`clumps.ancestry`); counts that disagree with the arrays (`clumps.counts`); the wrong LD Store, threshold or window recorded (`clumps.structure`, `clumps.reclump`); a group the manifest does not declare, as an interrupted step leaves (`clumps.declared`);
+- the Clumps of the 5e-8 tier, when present, are declared, parallel to their tier and say what §18.1 says they say (ADR 0106). Each silent failure has its rule: a row dropped from the arrays (`clumps.structure`); Clumps left beside a rewritten tier, which cannot happen because every tier is written by `top_hits.write_index`, which replaces the tier group whole (`create_group(replace=True)`, `opengwasdb/store/arrays.py`) and deletes `clumps/` with it — on every Dense, Ragged and Hybrid build and completion — while a `clumps` manifest entry or columns left behind without the group fail `clumps.declared`; an absent row made its own lead, or a present one marked absent (`clumps.reclump`); an imputed row clumped, an ambiguous indel looked up, or a marked row given an r (`clumps.markers`); a lead weaker than its member, as raw p's underflow gives, or a member outside the window or under r2 (`clumps.greedy`); an Analysis with no LD Store counted as 0, or one with an LD Store left unclumped (`clumps.ancestry`); counts that disagree with the arrays (`clumps.counts`); the wrong LD Store, threshold or window recorded (`clumps.structure`, `clumps.reclump`); a group the manifest does not declare, as an interrupted step leaves, or Clumps on a release of a format before 0.3.0 (`clumps.declared`);
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
 - `regions.tsv`, when a Ragged release carries or declares one, is declared by the manifest's `regions` entry exactly when it is present, has the SHA-256 that entry names, parses as a region table and names only Analyses the release holds (§2, §17, issue #430);
 - `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128); from 0.3.0 it holds `completion_quality` and nothing else, and ships only where that table does (§1, ADR 0102);
@@ -2989,12 +3002,12 @@ change to this table, which the test suite holds to the registry, in its order.
 | `top_hits.imputed` | grid, sequence | fold | every tier cell's imputed flag equals the mask's |
 | `top_hits.eaf` | grid, sequence | fold | every tier cell's EAF equals the decoded plane's |
 | `top_hits.complete` | grid, sequence | fold | a tier holds every cell whose \|z\| clears its cutoff |
-| `clumps.declared` | release | check | the manifest declares `clumps` exactly when a 5e-8 tier holds `clumps/default/`, in each component of a Hybrid alike; `default` is the only configuration; the release is 0.2; `analyses.tsv` has `n_loci_5e8` and `n_unclumped_5e8` exactly when it declares `clumps`. Catches the group an interrupted step leaves undeclared, and columns without the arrays they count |
+| `clumps.declared` | release | check | the manifest declares `clumps` exactly when a 5e-8 tier holds `clumps/default/`, in each component of a Hybrid alike; `default` is the only configuration; the release is 0.3.0; `analyses.tsv` has `n_loci_5e8` and `n_unclumped_5e8` exactly when it declares `clumps`. Catches the group an interrupted step leaves undeclared, columns without the arrays they count, and Clumps on a release of a format no clumping step writes |
 | `clumps.structure` | grid, sequence | check | `lead` is `int32` and `r` `int16`, each as long as the tier and its attribute's `tier_rows` (a rewritten tier takes `clumps/` with it, `write_index`; this rule catches arrays copied in beside a tier of another length); the `clumps` attribute holds every key §18.1 requires, `kb` 10000, the markers §18.1 lists, and each `ld_stores` entry's `r2` equal to its `t_far` and its `reference_assembly` equal to the release's. Catches a dropped row, a tier rewritten under old arrays, and a threshold, window or assembly other than the configuration's |
-| `clumps.markers` | grid, sequence | check | within each clumped Analysis, −2 exactly on the tier's imputed rows; −3 exactly on the rows whose variant, in a release at 0.2.2 or later, is an indel sharing its sorted spelling with another Store Variant Table variant, and on no row below 0.2.2; `r` is −32768 exactly where `lead` is negative, and within ±`r_scale` elsewhere. Catches an imputed row clumped, an ambiguous indel looked up, and a marked row given an r |
-| `clumps.greedy` | release | check | every row with lead L ≥ 0 names a row L of its Analysis's clump slice (across both components of a Hybrid, so a release rule) with `lead[L] = L`, observed, preceding it by \|z\| descending then shared Store Variant Index, on its chromosome and less than 10,000,000 bp away; a lead's `r` is +`r_scale`; a member's (`r` / `r_scale`)² exceeds its entry's `r2`. Catches a lead weaker than its member, which ordering by raw p gives where p underflows, and a member outside the window or under r2 |
+| `clumps.markers` | grid, sequence | check | within each clumped Analysis, −2 exactly on the tier's imputed rows; −3 exactly on the rows whose variant is an indel sharing its sorted spelling with another variant of the shared Variant Axis; `r` is −32768 exactly where `lead` is negative, and within ±`r_scale` elsewhere. Catches an imputed row clumped, an ambiguous indel looked up, and a marked row given an r |
+| `clumps.greedy` | release | check | every row with lead L ≥ 0 names a row L of its Analysis's clump slice (across both components of a Hybrid, so a release rule) with `lead[L] = L`, observed, preceding it by \|z\| (from `z`) descending then shared Store Variant Index, on its chromosome and less than 10,000,000 bp away; a lead's `r` is +`r_scale`; a member's (`r` / `r_scale`)² exceeds its entry's `r2`. Catches a lead weaker than its member, which ordering by raw p gives where p underflows, and a member outside the window or under r2 |
 | `clumps.ancestry` | release | check | an Analysis's rows are all −4 exactly when its `assigned_ancestry` is blank or not a key of `ld_stores`, and its `n_loci_5e8` and `n_unclumped_5e8` are blank exactly then; `not_clumped` counts those Analyses by reason. Catches an Analysis with no LD Store counted as 0, and one with an LD Store left unclumped |
-| `clumps.counts` | release | check | for each clumped Analysis, `n_loci_5e8` equals its rows whose `lead` is their own offset and `n_unclumped_5e8` its rows marked −1 or −3, both non-negative integers with `n_loci_5e8 + n_unclumped_5e8 ≤ n_hits_5e8`; a Hybrid root's equal the sum of its components', and its Dense Component's its own rows'; each entry's `rows_absent` and `rows_ambiguous` equal the markers' counts. Catches counts that disagree with the arrays they count, imputed rows counted as unclumped, a Hybrid root that counts one component, and more loci than hits |
+| `clumps.counts` | release | check | for each clumped Analysis, `n_loci_5e8` equals its rows whose `lead` is their own offset and `n_unclumped_5e8` its rows marked −1 or −3, both non-negative integers with `n_loci_5e8 + n_unclumped_5e8 ≤ n_hits_5e8`; a Hybrid's, in its one `analyses.tsv`, count both components' rows; each entry's `rows_absent` and `rows_ambiguous` equal the markers' counts. Catches counts that disagree with the arrays they count, imputed rows counted as unclumped, a Hybrid that counts one component, and more loci than hits |
 | `clumps.reclump` | grid, sequence | check | runs only when `validate` is given the LD Stores (`--ld-store ANCESTRY=PATH`), and is recorded as not run otherwise, which is not a pass. Each given store's recomputed `provenance_sha256` equals its entry's; and for a seeded sample of clumped Analyses, clumped again from that LD Store as §18.1 says, `lead` and `r` agree row for row. The finding names the seed and the sample. Catches the wrong LD Store, an absent row made its own lead, a present row marked absent, and a sign not flipped where a translated indel's A1 swaps |
 | `by_variant.sample` | sequence | check | sampled index cells hold the codes and exact values the sequence holds |
 | `completion.quality_table` | grid, sequence | check | the `completion_quality` table is complete and names real Analyses |
@@ -3597,16 +3610,16 @@ release's own tier clumped by a named LD Store, which a query reproduces row for
 row by clumping on the fly, so deleting them with their manifest entry and their
 two `analyses.tsv` columns changes no other answer. They differ from a subset in
 needing that LD Store to rebuild, which is why its identity is recorded, and in
-carrying Analytical Metadata, which §21.4 admits in place. They are discovered by the
-manifest's `clumps` entry (§2), may be added in place to any 0.2 release, and do
-not move `format_version`. A move could not be honest: a build stamps the lowest
-version whose features it uses (§21.3), the 0.2 versions are cumulative, and
-Clumps are added in place to the published releases, which are 0.2.0 to 0.2.3. A 0.2.0 release
-stamped 0.2.4 would declare reference-first indels it does not hold, and
-`indels_reference_first` would believe it. A package that predates them reads
-every association and column it knew, correctly, and ignores the two columns
-(ADR 0034's superset rule); its `validate` fails the arrays it does not register,
-the one way its handling matches that of ADR 0067's `n` plane
+carrying Analytical Metadata, which §21.4 admits in place. They are an optional
+component of 0.3.0, discovered by the manifest's `clumps` entry (§2), added in place
+to a 0.3.0 release, and they do not move `format_version`: a clumped and an
+unclumped 0.3.0 release are both 0.3.0. No earlier format carries them. A package
+that knows 0.3.0 and nothing of them reads every association and column it knew,
+correctly, and ignores the entry and the two columns (ADR 0034's superset rule). Its
+`validate` passes them unjudged, since the closed envelope (§1) judges only a
+release's top-level entries and the Top-Hit rules only the tier arrays they name. Its
+completion writes a release without them (§18.1), which the Store Release Build
+clumps again. ADR 0106 §9 gives the evidence, and the cost of a 0.3.1 instead
 (`docs/store-format-compatibility.md`).
 
 ### 21.2 Reader obligations
@@ -3670,9 +3683,10 @@ Store Releases are immutable. Reference Completion, re-indexing and migration al
   recomputable from the Store and a named LD Store** (ADR 0106 §10, on the
   owner's plan of 23 Nov 2026 on #62, narrowing ADR 0038 §4–§5 and widening ADR
   0061). That is the Clumps of the 5e-8 tier (§18.1), with `n_loci_5e8` and
-  `n_unclumped_5e8`, which are Analytical Metadata. They are added beside every
-  existing value and change none, are written by one step with the manifest's
-  `clumps` entry last, and are replaced whole when the step runs again. An
+  `n_unclumped_5e8`, which are Analytical Metadata. They are added to a 0.3.0
+  release beside every existing value and change none, its `format_version`
+  included (§21.1). They are written by one step with the manifest's `clumps` entry
+  last, and are replaced whole when the step runs again. An
   Indexed Variant Subset (§10b, ADR 0061) is added in place too; it is
   non-authoritative and carries no Analytical Metadata (§21.1).
 
