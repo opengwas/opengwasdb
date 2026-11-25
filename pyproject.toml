@@ -35,7 +35,12 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-  "numpy>=1.26,<2.5",
+  # The Store Reader: opengwasdb reads Store Releases through it, and
+  # opengwasdb.store_reader re-exports it (#475). ogquery needs numpy>=2.0.
+  # <0.2 until ogquery 0.2.0 carries the Clumps reads and the narrowed range
+  # proof main has gained since 0.1.0 (opengwas/ogquery#4).
+  "ogquery>=0.1,<0.2",
+  "numpy>=2.0,<2.5",
   "zarr>=3.4,<4",
   # 0.17 is the first numcodecs that locks Blosc's global context on decompress
   # as well as compress; the seam's threaded decoding relies on it (#244).
@@ -255,12 +260,15 @@ platforms = ["linux-64"]
 # pip. Declaring it via conda too installs the same compiled extension twice
 # into one environment (see opengwasdb-stores' pixi.toml for the same note).
 opengwasdb = { path = ".", editable = true }
+# ogquery is on PyPI only; the editable install above would pull it in, but
+# naming it keeps the pin visible beside the conda dependencies (#475).
+ogquery = ">=0.1,<0.2"
 
 [tool.pixi.dependencies]
-# zarr 3.4 requires python >=3.12 and numpy >=2; the numpy range below already
-# admits numpy 2, so it is unchanged (#244).
+# zarr 3.4 requires python >=3.12 and numpy >=2 (#244); ogquery, the Store
+# Reader, needs numpy >=2.0 too (#475).
 python = "3.12.*"
-numpy = ">=1.26,<2.5"
+numpy = ">=2.0,<2.5"
 zarr = ">=3.4,<4"
 numcodecs = ">=0.17"  # threaded Blosc needs its decompress lock; see [project] (#244)
 typer = ">=0.12"

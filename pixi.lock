@@ -103,6 +103,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/2a/67/0a54a299d8d9abb33f0ffbe0480aeb9d0bef0aa81add219473292d0acb52/ogquery-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   dev:
     channels:
@@ -223,6 +224,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/2a/67/0a54a299d8d9abb33f0ffbe0480aeb9d0bef0aa81add219473292d0acb52/ogquery-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   report:
@@ -461,6 +463,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.8.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/2a/67/0a54a299d8d9abb33f0ffbe0480aeb9d0bef0aa81add219473292d0acb52/ogquery-0.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 packages:
 - conda: https://conda.anaconda.org/bioconda/linux-64/bcftools-1.24-h118bc1c_2.conda
@@ -4342,7 +4345,8 @@ packages:
   - aiohttp>=3.10
   - fsspec>=2024.12
   - numcodecs>=0.17
-  - numpy>=1.26,<2.5
+  - numpy>=2.0,<2.5
+  - ogquery>=0.1,<0.2
   - pandas>=2.0
   - pyliftover>=0.4
   - pysam>=0.22
@@ -4363,6 +4367,21 @@ packages:
   - ruff>=0.6 ; extra == 'dev'
   - pgenlib>=0.90 ; extra == 'ld-build'
   - lz4>=4 ; extra == 'ld-import'
+  requires_python: '>=3.12'
+- pypi: https://files.pythonhosted.org/packages/2a/67/0a54a299d8d9abb33f0ffbe0480aeb9d0bef0aa81add219473292d0acb52/ogquery-0.1.0-py3-none-any.whl
+  name: ogquery
+  version: 0.1.0
+  sha256: cd549767549f0f302c5965d4ec3f9c51ff409522c5ce18ea7391627e1d01c014
+  requires_dist:
+  - numcodecs>=0.17
+  - numpy>=2.0,<2.5
+  - zarr>=3.4,<4
+  - mypy>=1.10 ; extra == 'dev'
+  - pytest>=8 ; extra == 'dev'
+  - ruff>=0.6 ; extra == 'dev'
+  - scipy>=1.11 ; extra == 'dev'
+  - pytest>=8 ; extra == 'test'
+  - scipy>=1.11 ; extra == 'test'
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: pysam
