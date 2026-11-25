@@ -947,6 +947,7 @@ conversion), and so are Ragged and Hybrid sources: none of the priority Stores n
 | `source_alid` of an unlifted release (#470) | **Fixed.** Step `own_source_alid` rewrites the table's column through its one writer (`variants.axis.rewrite_source_alid_column`), then `source_alid_sidecar` writes the sidecar from it. A row that any cell is observed in gets its own ALID (state 1). A row completion added from the panel gets none, as completion leaves it (`carried_source_alids`). Those panel rows are the rows with no observed cell, and the conversion refuses unless they number the completion's `n_variants_new`. |
 | An indel's ALID before 0.2.2 (ADR 0079) | **Recorded** as the deviation `variant_table.indel_order`. The reference allele of a sorted indel is not in the release, so the ALIDs are carried byte for byte. |
 | `source_alid` of a lifted release | **Recorded** as the deviation `variant_table.source_alid`, with state 0 carried. A release built before #449 did not keep the pre-liftover ALID. |
+| An SE exception table rounded to `float16` before the plan was chosen (#355) | **Recorded** as the deviation `side_tables.se_exceptions_rounded`, only where the source holds one: the conversion asks the rule's own measurement (`side_tables.rounded_se_exceptions`) of the table it will keep, the source's less the exceptions above 65,504 it masks, and records `se_exceptions_rounded` and `se_exceptions`, the counts. The exact SEs are not in the release; the rounded ones are what it serves today, within 2⁻¹¹ relative. Added by the owner's ruling on #492 (25 Nov 2026), after OGS-00015's first conversion was refused for it. |
 
 **Lifted or not is the operator's to say, and is recorded.** No Dense manifest records its
 Analyses' source assembly, and every Dense VCF build records a chain label, whether it lifted
@@ -974,7 +975,19 @@ skipped. Drop a rule from `deviations` and the release fails it again
 throughout cannot trip `variant_table.indel_order`: the table agrees with itself, and an
 unlifted row's `source_alid` is now its own ALID. The rule therefore fires only where a row
 contradicts itself, which no converted priority Store is known to hold. The deviation is
-recorded either way.
+recorded either way. `side_tables.se_exceptions_rounded` sets its severity by format (an
+error from 0.2.2, a warning before it); on a release whose format owes the error it now
+judges through `Rule.finding` like every rule, so the same record lowers it, with no case of
+its own. Unlisted, it fails a converted release
+(`test_a_converted_release_not_listing_the_rounding_fails_it`).
+
+The three deviations a conversion can record, by rule:
+
+| Rule | Recorded when |
+|---|---|
+| `variant_table.indel_order` | the source is before 0.2.2 |
+| `variant_table.source_alid` | `--lifted` |
+| `side_tables.se_exceptions_rounded` | the source's SE exception table is rounded (#355) |
 
 **The proof compares each change; it does not skip it.** The source is asked the rewrite's
 questions through a view of its 0.2 reader that makes exactly the conversion's changes
@@ -1034,8 +1047,16 @@ Consequences.
     plane was rounded before its plan was chosen (#355). That rule warns before 0.2.2 and
     fails from it.
   - All seven priority Stores hold such exceptions (99.07% to 100%). The rounding cannot be
-    undone, and it is not in the owner's 25 Nov list of recorded deviations, so whether to
-    record it is the owner's decision (#492).
+    undone. The owner ruled that it is recorded, as the third deviation (above).
+- **OGS-00015 again, after that ruling (`cacbe380`, read only, into scratch):**
+  - The proof matched every answer again.
+  - The conversion published, recording `indel_order` and `se_exceptions_rounded` with
+    3,046,179 of 3,074,915.
+  - It took 36 min 11 s at `--n-workers 8`: read 341 s, the source's answers 593 s, the
+    staged release's 713 s, validation 371 s. Peak RSS was 26.0 GB.
+  - The full validator reports no error, no skip, and one warning: the recorded
+    `side_tables.se_exceptions_rounded`. `variant_table.indel_order` does not fire, for the
+    reason above.
 
 ## Alternatives considered
 
