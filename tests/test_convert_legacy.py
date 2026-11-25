@@ -167,31 +167,33 @@ def test_an_unlifted_0_2_0_release_is_masked_counted_and_named(sources, tmp_path
     assert result.ok, result.errors
 
 
-def test_a_lifted_release_keeps_state_0_and_the_rule_warns_naming_the_conversion(
-    sources, tmp_path
-):
-    source, _cells = _legacy(sources, tmp_path, "dense_observed")
+@pytest.fixture(scope="module")
+def lifted(sources: dict[str, Path], tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`dense_observed` as a 0.2.0 release, converted `--lifted` once for the module.
+    Never written to: copy it to change it."""
+    root = tmp_path_factory.mktemp("lifted")
+    source, _cells = _legacy(sources, root, "dense_observed")
+    return rewrite_release(source, root / "converted", legacy=LIFTED)
 
-    destination = rewrite_release(source, tmp_path / "converted", legacy=LIFTED)
 
-    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+def test_a_lifted_release_keeps_state_0_and_the_rule_warns_naming_the_conversion(lifted):
+    manifest = json.loads((lifted / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["provenance"]["converted_from"]["deviations"] == [
         "variant_table.indel_order", "variant_table.source_alid",
     ]
-    sidecar = SourceAlidSidecar.open(destination)
+    sidecar = SourceAlidSidecar.open(lifted)
     assert sidecar is not None and set(np.asarray(sidecar.state).tolist()) == {0}
-    result = validate_store(destination)
+    result = validate_store(lifted)
     assert result.ok, result.errors
     (finding,) = [f for f in result.findings if f.rule == "variant_table.source_alid"]
     assert finding.severity is Severity.WARNING
     assert "converted this release from format_version 0.2.0" in finding.message
 
 
-def test_without_the_recorded_deviation_the_same_release_fails(sources, tmp_path):
+def test_without_the_recorded_deviation_the_same_release_fails(lifted, tmp_path):
     """The warning is the record's, not the conversion's: drop the rule from
     `deviations` and the lifted release fails it again."""
-    source, _cells = _legacy(sources, tmp_path, "dense_observed")
-    destination = rewrite_release(source, tmp_path / "converted", legacy=LIFTED)
+    destination = Path(shutil.copytree(lifted, tmp_path / "converted"))
     path = destination / "manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest["provenance"]["converted_from"]["deviations"] = ["variant_table.indel_order"]
@@ -200,9 +202,8 @@ def test_without_the_recorded_deviation_the_same_release_fails(sources, tmp_path
     assert validate_store(destination).failed() == {"variant_table.source_alid"}
 
 
-def test_a_converted_release_fails_every_other_rule_as_before(sources, tmp_path):
-    source, _cells = _legacy(sources, tmp_path, "dense_observed")
-    destination = rewrite_release(source, tmp_path / "converted", legacy=LIFTED)
+def test_a_converted_release_fails_every_other_rule_as_before(lifted, tmp_path):
+    destination = Path(shutil.copytree(lifted, tmp_path / "converted"))
     table = read_analyses(destination / "analyses.tsv")
     lines = (destination / "analyses.tsv").read_text(encoding="utf-8").splitlines()
     column = table.fieldnames.index("n_missing_se_out_of_range")
