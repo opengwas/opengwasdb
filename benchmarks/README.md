@@ -1069,6 +1069,13 @@ and the report, rendered from `docs/benchmark-output`:
 cd docs/benchmark-output && pixi run -e report quarto render opengwasdb_ogs00011_hybrid_benchmark.qmd
 ```
 
+The current artifacts measure the Store published on 25 Nov 2026: OGS-00011's
+rebuild (opengwas/opengwasdb-stores#478), with 3,245 Analyses at format 0.2.3.
+They were measured at `40446bb0`, the engine that finished that release, from
+a worktree put first on `PYTHONPATH`. The harness cannot run on `main` since
+#480 removed `HybridStoreQuery._shared_is_on_panel` (#491). The 1 Nov
+measurement of the 3,169-Analysis Store is in git history.
+
 `benchmarks/ogs00011_ab.py` is the committed before/after entry point: for each
 shape it runs the before tree and then the after tree back to back, each in a
 fresh interpreter that imports its own tree's `opengwasdb`, and records elapsed,
