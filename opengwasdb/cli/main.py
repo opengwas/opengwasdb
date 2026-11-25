@@ -1994,15 +1994,20 @@ def build_dense_rho_command(
     ),
     n_workers: int = typer.Option(1, help="Process pool size for the per-pair MLE"),
 ) -> None:
-    """Build (or rebuild) the pairwise Rho Matrix for a Dense store."""
-    from opengwasdb.layouts.dense.rho import build_dense_rho
-    build_dense_rho(
-        store_path,
-        window_bp=window_bp,
-        z_thresh=z_thresh,
-        min_nulls=min_nulls,
-        n_workers=n_workers,
-    )
+    """Build (or rebuild) the pairwise Rho Matrix for a Dense store, or for a Hybrid
+    release's Dense Component: give the Hybrid release, not its `dense/` directory."""
+    from opengwasdb.layouts.dense.rho import RhoBuildPathError, build_dense_rho
+    try:
+        build_dense_rho(
+            store_path,
+            window_bp=window_bp,
+            z_thresh=z_thresh,
+            min_nulls=min_nulls,
+            n_workers=n_workers,
+        )
+    except RhoBuildPathError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo("done")
 
 
