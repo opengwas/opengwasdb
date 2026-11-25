@@ -176,26 +176,30 @@ components:
   # are both Use and check and must not import each other; the layers allow a
   # same-layer import, so `independent` below forbids it (ogld's sibling rule).
   # Variant identity is the engine's own `variants` (#456).
+  # The LD read side is ogquery's (`ogquery.ld`, a dependency; opengwas/ogquery#2, ogquery
+  # ADR 0002): reading an LD Store, its queries, results and refusals, and the read side of
+  # the format. These components re-export it and own the build, write, derive and validate
+  # side, the Genotype Store and `opengwasdb.ld.open`.
   - id: ld-format
     name: LD Store format
     container: engine
     layer: 0
     stages: [cross]
-    summary: The LD Store encoding, geometry, semantics and provenance; the r scale, the near and far distances; the OPENGWASDB_LD_* environment reader.
+    summary: "The LD Store format's build side: REncoding's quantising, step, floors and pair masks (a subclass of ogquery's), t_far and the build's distances, the geometry only a build computes, Sourced and the validation rules; the read side (semantics, provenance types, reader geometry) is ogquery.ld.format's, re-exported. The OPENGWASDB_LD_* environment reader."
     paths: [opengwasdb/ld/format/, opengwasdb/ld/env.py]
   - id: ld-store
-    name: LD Store reader and writer
+    name: LD Store writer
     container: engine
     layer: 1
     stages: [build, query]
-    summary: The LD Store's arrays, tables, variant axis and Partner Rows, and the code that reads, assembles, writes and validates them.
+    summary: "The LD Store's write side: the array creators, the Partner Rows' frame encoding, assembly and derivations, the writer and validation. Reading a store (StoreReader, VariantTable, the chunk cache, decoding, frame reads) is ogquery.ld.store's, re-exported where these modules name it."
     paths: [opengwasdb/ld/store/]
   - id: ld-genotypes
     name: Genotype Store
     container: engine
     layer: 2
     stages: [build, query]
-    summary: The Genotype Store sidecar, its PC Adjustment, pgen reading and validation.
+    summary: The Genotype Store sidecar, its PC Adjustment, pgen reading, its reader (which implements ogquery's Reader protocol, with pgenlib and threadpoolctl) and validation.
     paths: [opengwasdb/ld/genotypes/]
   - id: ld-build
     name: LD Store build
@@ -209,7 +213,7 @@ components:
     container: engine
     layer: 4
     stages: [query]
-    summary: Matrix, region, proxies and clump requests over an LD Store or Genotype Store, and the validation of both.
+    summary: "opengwasdb.ld.open, which reads a root's kind through ogquery and hands a Genotype Store to its own reader, and the validation of both kinds; the matrix, region, proxies and clump queries themselves are ogquery.ld.query's."
     paths: [opengwasdb/ld/query/]
   - id: ld-cli
     name: LD CLI
