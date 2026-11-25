@@ -25,6 +25,7 @@ draft spelling -- see `opengwasdb.model.enums`.
 from __future__ import annotations
 
 import csv
+import io
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -43,6 +44,7 @@ from opengwasdb.model.enums import (
     SampleSizeScope,
     StoredEffectScale,
 )
+from opengwasdb.model.files import replace_durably
 from opengwasdb.model.info_score_policy import INFO_SCORE_COLUMNS, parse_info_score_policy
 from opengwasdb.model.maf_policy import MAF_COLUMNS, parse_maf_policy
 
@@ -225,11 +227,18 @@ def write_analyses(path: str | Path, table: AnalysesTable) -> Path:
     """Write `table` back to a TSV file, in its own column order."""
     out_path = Path(path)
     with out_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(table.fieldnames), delimiter="\t")
-        writer.writeheader()
-        for row in table.rows:
-            writer.writerow(row)
+        handle.write(_analyses_text(table))
     return out_path
+
+
+def _analyses_text(table: AnalysesTable) -> str:
+    """`table` as `analyses.tsv` spells it, in its own column order."""
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=list(table.fieldnames), delimiter="\t")
+    writer.writeheader()
+    for row in table.rows:
+        writer.writerow(row)
+    return buffer.getvalue()
 
 
 def validate_analyses(table: AnalysesTable) -> list[str]:
@@ -743,8 +752,8 @@ def write_analysis_columns(path: str | Path, columns: Mapping[str, list[str]]) -
     The one in-place write of `analyses.tsv`: the Clumps' counts, which `opengwasdb
     clump` adds to an existing release (spec §21.4, ADR 0106 §10). A column the table
     holds keeps its place; a new one is added at the end. Every other column and value
-    is written back as read. The table is written beside itself and renamed over it, so
-    a reader sees the old table or the new one, never part of either.
+    is written back as read. The write is `model.files.replace_durably`: a reader sees
+    the old table or the new one, and the file keeps its mode and group.
     """
     table_path = Path(path)
     table = read_analyses(table_path)
@@ -759,9 +768,7 @@ def write_analysis_columns(path: str | Path, columns: Mapping[str, list[str]]) -
         {**row, **{name: values[i] for name, values in columns.items()}}
         for i, row in enumerate(table.rows)
     )
-    staged = table_path.with_name(f".{table_path.name}.writing")
-    write_analyses(staged, AnalysesTable(fieldnames=fieldnames, rows=rows))
-    staged.replace(table_path)
+    replace_durably(table_path, _analyses_text(AnalysesTable(fieldnames=fieldnames, rows=rows)))
     return table_path
 
 

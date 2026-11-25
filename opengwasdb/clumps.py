@@ -55,6 +55,7 @@ from opengwasdb.store_reader.hybrid import dense_to_shared_path
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import StoreRelease
 from opengwasdb.store_reader.top_hits import (
+    CLUMPS_ARRAYS,
     CLUMPS_ATTRIBUTE,
     CLUMPS_CONFIGURATION,
     CLUMPS_GROUP,
@@ -89,6 +90,18 @@ MARKERS: Final = {"absent": ABSENT, "imputed": IMPUTED, "ambiguous": AMBIGUOUS,
                   "not_clumped": NOT_CLUMPED}
 #: The `r` of a row whose `lead` is negative: the LD Store's reserved code (ADR 0090).
 NO_R: Final = REncoding.reserved_code
+
+#: The `clumps` attribute's values that are the one stored Clumping Configuration (§18.1), the
+#: same on every release: what the step writes and `clumps.structure` holds it to.
+CONFIGURATION_ATTRIBUTE: Final = {
+    "configuration": CLUMPS_CONFIGURATION,
+    "threshold": THRESHOLD,
+    "score": "abs(z)",
+    "ties": "store_variant_index",
+    "kb": KB,
+    "join": "r2_gt_distance_lt",
+    "markers": MARKERS,
+}
 
 #: The manifest's `clumps` entry (§2).
 MANIFEST_KEY: Final = "clumps"
@@ -630,14 +643,9 @@ def group_attribute(
 ) -> dict[str, Any]:
     """The `clumps` attribute of one component's group (§18.1)."""
     return {
-        "configuration": CLUMPS_CONFIGURATION,
-        "threshold": THRESHOLD,
-        "tier_rows": component.n_rows,
-        "score": "abs(z)",
-        "ties": "store_variant_index",
-        "kb": KB,
-        "join": "r2_gt_distance_lt",
+        **CONFIGURATION_ATTRIBUTE,
         "markers": dict(MARKERS),
+        "tier_rows": component.n_rows,
         "ld_stores": {
             ancestry: {**mapped.identity, **clumps.counts[ancestry]}
             for ancestry, mapped in sorted(ld_stores.items())
@@ -656,8 +664,9 @@ def _write_group(
     with staged_named_group(component.tier_path / CLUMPS_GROUP, overwrite=True) as work:
         root = open_group_for_write(work, "w", zarr_format=3)
         group = create_group(root, CLUMPS_CONFIGURATION)
-        for name, values, dtype in (("lead", clumps.lead, "int32"), ("r", clumps.r, "int16")):
-            create_array(group, name, ArrayRole.TOP_HIT_INDEX, data=values, dtype=dtype,
+        values = {"lead": clumps.lead, "r": clumps.r}
+        for name, dtype in CLUMPS_ARRAYS.items():
+            create_array(group, name, ArrayRole.TOP_HIT_INDEX, data=values[name], dtype=dtype,
                          hint=TOP_HIT_CHUNK_SIZE)
         group.attrs[CLUMPS_ATTRIBUTE] = attribute
 

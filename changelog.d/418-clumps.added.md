@@ -13,5 +13,6 @@
   configuration. The engine holds no default LD Store: the mapping is the caller's. The
   `format_version` does not move. `validate` gains the seven `clumps.*` rules (spec
   §20.0), and `--ld-store ANCESTRY=PATH`, which lets `clumps.reclump` re-clump a seeded
-  sample; without it that rule is recorded as not run. `analyses.tsv` gains two columns
+  sample; without it that rule is recorded as not run. `validate --fidelity-seed S` seeds that
+  sample (0 unless given). `analyses.tsv` gains two columns
   wherever the step runs: a change for opengwas/opengwasdb-stores too.

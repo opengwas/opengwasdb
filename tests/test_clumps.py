@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -29,7 +30,6 @@ from opengwasdb.clumps import (
     ABSENT,
     AMBIGUOUS,
     IMPUTED,
-    KB,
     NO_R,
     NOT_CLUMPED,
     ClumpRefusal,
@@ -40,6 +40,7 @@ from opengwasdb.clumps import (
     read_clumps,
 )
 from opengwasdb.ld.format import REncoding
+from opengwasdb.ld.query.ldstore import LDStore
 from opengwasdb.ld.query.ldstore import open as open_ld_store
 from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store import open_store
@@ -48,6 +49,10 @@ from opengwasdb.store_reader.top_hits import TierClumps
 from opengwasdb.top_hits import recomputed_abs_z_and_p
 
 EUR = {"EUR": LD_STORE}
+#: The stored Clumping Configuration's window, as spec §18.1 states it: kb 10,000, so
+#: W = 10,000,000 bp. Written here, never imported from the code it checks.
+SPEC_KB = 10_000
+SPEC_WINDOW_BP = 10_000_000
 
 
 @pytest.fixture(scope="module")
@@ -125,7 +130,7 @@ def _independent(part: dict[str, np.ndarray], ambiguous: set[str]) -> tuple[np.n
     score[order] = np.arange(len(given), 0, -1)
     with open_ld_store(LD_STORE) as ld:
         scale = REncoding.of(ld.provenance["encoding"]).scale
-        found = ld.clump(names, score, r2=ld.t_far, kb=KB)
+        found = ld.clump(names, score, r2=ld.t_far, kb=SPEC_KB)
     offset = dict(zip(names, given.tolist(), strict=True))
     for alid, lead_alid, value in zip(found.alid, found.lead, found.r, strict=True):
         row = offset[str(alid)]
@@ -170,6 +175,27 @@ def test_the_counts_are_the_leads_and_the_rows_not_clumped(clumped: dict[str, Pa
         assert loci > 1
         assert table[analysis_id]["n_loci_5e8"] == str(loci)
         assert table[analysis_id]["n_unclumped_5e8"] == str(unclumped)
+
+
+def test_the_stored_window_is_the_spec_s_10_000_kb(
+    clumped: dict[str, Path], built: dict[str, Path], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The window is the spec's literal, not whatever the code's constant says: the attribute
+    records kb 10,000, and every request the step makes of the LD Store asks for it."""
+    attribute = _held(read_clumps(open_store(clumped["completed"]))[0]).attribute
+    assert attribute["kb"] == SPEC_KB
+    assert SPEC_KB * 1_000 == SPEC_WINDOW_BP
+    asked: list[float] = []
+    original = LDStore.clump
+
+    def spy(self: LDStore, alids: Any, score: Any, *, r2: float, kb: float) -> Any:
+        asked.append(kb)
+        return original(self, alids, score, r2=r2, kb=kb)
+
+    monkeypatch.setattr(LDStore, "clump", spy)
+    clump_store(copied(built["dense"], tmp_path), EUR)
+    assert len(asked) > 1 and set(asked) == {SPEC_KB}
 
 
 # ── seam 2: each marker, and an Analysis no LD Store was mapped for ──────────
