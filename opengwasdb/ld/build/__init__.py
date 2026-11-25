@@ -20,18 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import zarr
+from ogquery.ld.format import Adjustment, InputError, Provenance
 from threadpoolctl import threadpool_limits
 
 from opengwasdb.ld.build import diagnostic, passes, pc_check, record
 from opengwasdb.ld.build.variant_set import Chromosome, Pass, Settings, variant_set
-from opengwasdb.ld.format import (
-    FAR_BP,
-    NEAR_BP,
-    Adjustment,
-    InputError,
-    Provenance,
-    REncoding,
-)
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding
 from opengwasdb.ld.store import StoreWriter
 
 

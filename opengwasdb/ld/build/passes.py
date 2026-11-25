@@ -22,6 +22,9 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
+from ogquery.ld.format import InputError
+from ogquery.ld.format.geometry import chromosome_index, local_rows, windows
+from ogquery.ld.store import Variants
 
 from opengwasdb.ld.build import pc_check, tiles
 from opengwasdb.ld.build.diagnostic import (
@@ -44,15 +47,9 @@ from opengwasdb.ld.build.inputs import (
     read_pc_file,
 )
 from opengwasdb.ld.build.variant_set import Chromosome, Pass
-from opengwasdb.ld.format import InputError
-from opengwasdb.ld.format.geometry import (
-    chromosome_index,
-    chromosome_ranges,
-    local_rows,
-    windows,
-)
+from opengwasdb.ld.format.geometry import chromosome_ranges
 from opengwasdb.ld.genotypes import Covariates, Genotypes, covariates, prepare, r, residuals
-from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.ld.store import StoreWriter
 from opengwasdb.variants.sorted_spelling import SortedIdentity
 
 STRINGS: Final = np.dtypes.StringDType()

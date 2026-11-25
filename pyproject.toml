@@ -37,8 +37,9 @@ classifiers = [
 dependencies = [
   # The Store Reader: opengwasdb reads Store Releases through it, and
   # opengwasdb.store_reader re-exports it (#475). ogquery needs numpy>=2.0.
-  # 0.2 carries the Clumps reads (#418) and the narrowed proof range (#492).
-  "ogquery>=0.2,<0.3",
+  # 0.2 carries the Clumps reads (#418) and the narrowed proof range (#492);
+  # 0.3 the LD Store read side, which opengwasdb.ld re-exports (opengwas/ogquery#2).
+  "ogquery>=0.3,<0.4",
   "numpy>=2.0,<2.5",
   "zarr>=3.4,<4",
   # 0.17 is the first numcodecs that locks Blosc's global context on decompress
@@ -311,7 +312,7 @@ platforms = ["linux-64"]
 opengwasdb = { path = ".", editable = true }
 # ogquery is on PyPI only; the editable install above would pull it in, but
 # naming it keeps the pin visible beside the conda dependencies (#475).
-ogquery = ">=0.2,<0.3"
+ogquery = ">=0.3,<0.4"
 
 [tool.pixi.dependencies]
 # zarr 3.4 requires python >=3.12 and numpy >=2 (#244); ogquery, the Store

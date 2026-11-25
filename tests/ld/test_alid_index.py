@@ -28,10 +28,11 @@ import numpy.typing as npt
 import pytest
 import zarr
 from ld_script_modules import load_script
+from ogquery.ld.store import StoreReader, Variants
 from store_copies import DERIVED
 
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, layout
+from opengwasdb.ld.store import StoreWriter, assembly, layout
 from opengwasdb.ld.store.validation import validate
 from opengwasdb.variants.sorted_spelling import sorted_identity
 

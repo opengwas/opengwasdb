@@ -19,9 +19,9 @@ import numpy as np
 import pytest
 import testdata
 from ld_script_modules import load_script
+from ogquery.ld.format import InputError
 
 from opengwasdb.ld.build import pc_check
-from opengwasdb.ld.format import InputError
 
 CHROMS, STEP_BP = 3, 20_000
 # A small panel, where chance alone gives a noise PC a best window over 10%; and a panel the size

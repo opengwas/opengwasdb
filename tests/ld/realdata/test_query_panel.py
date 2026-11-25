@@ -50,7 +50,7 @@ def chr22(tmp_path_factory: pytest.TempPathFactory) -> tuple[opengwasdb.ld.LDSto
     opengwasdb.ld.build(
         inputs(slice_.with_suffix(".pgen"), "v2 EUR chr22:20-32 Mb", HGDP_SCALE), root / "s"
     )
-    from opengwasdb.ld.store import StoreReader
+    from ogquery.ld.store import StoreReader
 
     reader = StoreReader.open(root / "s")
     stored = maker.store_chromosome(reader, "22")

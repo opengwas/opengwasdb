@@ -19,12 +19,12 @@ import build_fixtures as made
 import numpy as np
 import pytest
 import testdata
+from ogquery.ld.format import InputError
+from ogquery.ld.store import StoreReader
 
 import opengwasdb.ld
 from opengwasdb.ld import genotypes as adjust
 from opengwasdb.ld.build import diagnostic, record
-from opengwasdb.ld.format import InputError
-from opengwasdb.ld.store import StoreReader
 
 
 @pytest.fixture(scope="module")

@@ -34,10 +34,11 @@ from pathlib import Path
 from typing import Any, Final
 
 import numpy as np
+from ogquery.ld.format import InputError, Refusal
+from ogquery.ld.query.kind import open_kind
+from ogquery.ld.query.ldstore import LDStore
 
-from opengwasdb.ld.format import InputError, Refusal, REncoding
-from opengwasdb.ld.query.kind import open_kind
-from opengwasdb.ld.query.ldstore import LDStore
+from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.query.ldstore import open as open_ld_store
 from opengwasdb.model.analyses import N_LOCI_5E8, N_UNCLUMPED_5E8, write_analysis_columns
 from opengwasdb.overview import write_overview_html

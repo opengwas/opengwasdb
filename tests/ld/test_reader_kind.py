@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import testdata
 from contract.support import TEST_STORE
+from ogquery.ld.store import StoreReader
+from ogquery.ld.store import location as open_module
+from ogquery.ld.store.variants import VariantTable
 
 import opengwasdb.ld
 from opengwasdb.ld.genotypes.reader import GenotypeReader
-from opengwasdb.ld.store import StoreReader
-from opengwasdb.ld.store import location as open_module
-from opengwasdb.ld.store.variants import VariantTable
 
 
 def count_root_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
@@ -54,7 +54,7 @@ def test_an_open_and_a_validate_read_a_genotype_store_s_root_once(
 
 
 def test_the_genotype_reader_composes_the_variant_table_and_store(genotype_store: Path) -> None:
-    from opengwasdb.ld.query.reader import Reader
+    from ogquery.ld.query.reader import Reader
 
     reader = opengwasdb.ld.open(genotype_store)._reader
     assert isinstance(reader, GenotypeReader)

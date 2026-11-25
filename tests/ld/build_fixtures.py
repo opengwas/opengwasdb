@@ -19,9 +19,9 @@ import pytest
 import store_copies
 import testdata
 from contract import support
+from ogquery.ld.store import StoreReader
 
 import opengwasdb.ld
-from opengwasdb.ld.store import StoreReader
 
 #: The Test Panel is built at the Test Store's scale, so a build compares with it code for code.
 R_SCALE: Final = store_copies.R_SCALE

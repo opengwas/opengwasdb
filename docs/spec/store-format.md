@@ -2502,7 +2502,7 @@ Top-hit results from Reference-Completed releases include imputed associations b
 The **Clumps** of a Store Release are its 5e-8 tier clumped at build time, each Analysis
 against its Assigned Ancestry's LD Store, by `opengwasdb.ld` (ADR 0106, issue #417). They are
 one thing in two places: what `LDStore.clump` returns for an Analysis, an
-`opengwasdb.ld.query.results.Clumps` (`opengwasdb/ld/query/results.py`), is what this
+`ogquery.ld.query.results.Clumps` (`ogquery.ld.query.results`), is what this
 component persists, its `lead` as an offset and its `r` as a code, one row per tier row. They
 are optional, derived and rebuildable: deleting them, with their manifest entry (§2) and
 their two `analyses.tsv` columns (§7a), changes no other answer the release gives, and
@@ -2551,7 +2551,7 @@ joins a lead at r̂² > r2 and d < W, plink2's edges.
   underflows to 0 past |z| ≈ 38. A 0.3.0 tier stores `z` and no `abs_z` (§18), so |z| is taken
   from `z` through `top_hits.recomputed_abs_z_and_p` (`opengwasdb/top_hits.py`), the |z|
   `top_hits.threshold` recomputes. `clump` leads with the largest score and breaks
-  ties by the LD Store's row order (`_component`, `opengwasdb/ld/query/clumping.py`), which
+  ties by the LD Store's row order (`_component`, `ogquery.ld.query.clumping`), which
   differs from the Store's at a translated indel. So the step passes a score that is larger for
   a stronger row and has no ties: **n − rank**, where n is the rows given and rank 0 is the
   largest |z|, ties by Store Variant Index ascending. The score enters only that ordering, so

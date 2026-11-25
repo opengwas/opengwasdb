@@ -24,8 +24,11 @@ The numbers that chose the layout and the codec come from prototypes run on real
 chr22 genotypes. They are on the prototype branch `proto/1-ld-store-layout`, and each is cited as
 `proto/1-ld-store-layout@65f94ca:<path>`, so a citation stays fixed if the branch moves.
 
-The semantics of §3, §8 and §9 are implemented in `opengwasdb/ld/format/`, and `tests/ld/test_format.py`
-holds that code to this document's tables.
+The semantics of §8 and §9, and the read side of §3 (which encodings a reader implements, and
+dequantising), are implemented in `ogquery.ld.format`, and ogquery's
+[tests/ld/test_format.py](https://github.com/opengwas/ogquery/blob/v0.3.0/tests/ld/test_format.py) holds that code to this document's answer and refusal tables
+(opengwas/ogquery#2). The build side of §3 -- quantising, the floors and t_far -- is implemented in
+`opengwasdb/ld/format/`, and `tests/ld/test_format.py` here holds it to §3's tables.
 
 Normative language:
 
@@ -886,14 +889,14 @@ is refused from 0.2.0, where about 90% of the pairs such a threshold passes are 
   and d < W, and `proxies` keeps ≥ and ≤. A stored r̂² equals r2 exactly only at 0 or 1.
 
 `opengwasdb.ld.format.judge_partner_request` implements the table's refusals for `clump` and `proxies`,
-called through `opengwasdb.ld.query.requests.window_of`, and it names the store it judged: a request below
+called through `ogquery.ld.query.requests.window_of`, and it names the store it judged: a request below
 the store's `t_partner` within `near_bp` is answered with the r2 asked for, the `t_partner`
 recorded, and the two ways out — ask at or above that `t_partner`, or read a store derived at a
 lower one. `opengwasdb.ld.format.judge_request` is that table without the Partner Threshold's row — the
 0.1.0 table, which a call through `opengwasdb.ld` no longer reaches — and `opengwasdb.ld.format.judge_window` is the
 same rule for a window already in bp; `opengwasdb.ld.format.judge_region` judges a region. All but
 one of them are the judge's: a `clump` score that is not one finite, non-negative number per ALID
-is refused as `invalid` by `opengwasdb.ld.query.clumping._checked_score`, because it depends on the score,
+is refused as `invalid` by `ogquery.ld.query.clumping._checked_score`, because it depends on the score,
 which the judges never see. The judge runs first.
 `proto/1-ld-store-layout@65f94ca:prototypes/answer-semantics.html` drives them and the answer
 table interactively, with walkthroughs of the edge cases: exactly 3 Mb, exactly 10 Mb, r²
@@ -969,14 +972,15 @@ or allele frequencies it never returns.
 
 `clump` reads one Partner Rows row per lead — 3,869 for GCST90476460's whole input — and `proxies`
 one per present query variant; neither reads a Near Band element, and neither
-resolves a square among the hits (§9). `tests/ld/test_partner_reads.py` holds the one row a lead, and
+resolves a square among the hits (§9). ogquery's [tests/ld/test_partner_reads.py](https://github.com/opengwas/ogquery/blob/v0.3.0/tests/ld/test_partner_reads.py) holds the one row a lead, and
 `proxies` reading no string column but the ALIDs it returns. Neither query reads any array under
 `near/`: their positions and ALIDs come from `variants/`, their LD from
 `partners/<chrom>/`, and the chromosome ranges from the store's record (opengwas/ogld#71). `matrix`, `region`
 and `pair_r` still read a chromosome's `near/<c>/indptr`, and its Far Pairs' `indptr` when their
 pairs reach beyond `near_bp`, as below.
 
-What the reads hold, measured with tracemalloc and held by `tests/ld/test_partner_reads.py`:
+What the reads hold, measured with tracemalloc and held by ogquery's [tests/ld/test_partner_reads.py](https://github.com/opengwas/ogquery/blob/v0.3.0/tests/ld/test_partner_reads.py)
+(the LD read path is ogquery's since opengwas/ogquery#2):
 
 - `r_of_pairs`: its result, 8 bytes a pair, and one step of pairs, about 60 bytes each, with
   that step's Far Pairs rows. One row against many is never copied out to a full list.
@@ -1054,7 +1058,7 @@ is read the first time a request needs its pairs beyond `near_bp`, so `proxies` 
 never do, read no more than they did before the Far Pairs (ADR 0093). From 0.2.0 a chromosome's `partners/<chrom>/` adds its group's attributes
 and the `frames_idx` chunk, read the first time a request asks for one of its rows, and a frame
 cache of its own (§10's Partner Rows paragraph). Every other read the reader makes goes through its cache of decoded inner chunks
-(`opengwasdb.ld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
+(`ogquery.ld.store.location.ChunkCache`). It reads the inner chunks that hold the elements a request
 needs, whole, which is what Zarr fetches and decodes in any case. So a query that reads a few
 pairs at a time fetches each chunk once: clumping the Test Store's 1,056 variants, one read per
 lead, took 3.6 s reading through Zarr call by call and 0.7 s with the cache, against 0.6 s for the
@@ -1065,8 +1069,8 @@ directly, in bounded windows: one pass over each chromosome, and a second read o
 
 **Direct numeric decoding** (ogld#40; ADR 0095). For a one-dimensional numeric array whose
 metadata declares exactly sharding_indexed with bytes then zstd internally and bytes then
-CRC32C in an end-located shard index, `opengwasdb/ld/store/location.py` reads through the store's async interface
-using its `decoding.py` backend. A one-byte dtype's `bytes` codec declares no byte order, and the
+CRC32C in an end-located shard index, `ogquery.ld.store.location` reads through the store's async interface
+using its `ogquery.ld.store.decoding` backend. A one-byte dtype's `bytes` codec declares no byte order, and the
 backend reads it as it lies (ADR 0096); that is how the ALID index's keys are decoded directly. That backend owns shard/frame parsing and one process-shared
 seven-worker I/O/decode pool. Both declared
 byte orders are honoured. The index's uint64 offset/length pairs are absolute; both all ones
@@ -1257,8 +1261,8 @@ refusals:
 - a pair beyond it is a Far Pair exactly when its |code| ≥ `far_code_floor`, the rule that put it
   in either component, so it reads the same Stored r or the same Bound (§8);
 - the refusals depend only on r2, the window, t_far and the distances (§9), none of which the
-  merge touches. `tests/ld/test_format.py` holds the answer and refusal tables, and they do not
-  change with the layout.
+  merge touches. ogquery's [tests/ld/test_format.py](https://github.com/opengwas/ogquery/blob/v0.3.0/tests/ld/test_format.py) holds the answer and refusal tables
+  (opengwas/ogquery#2), and they do not change with the layout.
 
 The trade-off as the owner weighed it on 8 November, on the prototype's numbers at k = 0, with the
 five stores' as built at k = 10 (§6) beside them:
@@ -1547,8 +1551,11 @@ ADR 0097).
 The canonical Zarr index of §2 remains authoritative. Local Stores may additionally publish
 `variants/alid_mmap/<generation>/keys.bin`, `rows.i32le`, and a manifest.json. Keys copy the
 canonical bytes without another sort; rows copy its rows as signed little-endian int32.
-The exact deterministic manifest schema and source/content pins are defined in ADR 0098
-and owned by `opengwasdb.ld.store.layout`. Schema 2 pins normalized root metadata and every canonical
+The exact deterministic manifest schema and source/content pins are defined in ADR 0098.
+Their read side -- the paths, the schema, the pins a reader checks and checked attachment -- is
+owned by `ogquery.ld.store.layout` (opengwas/ogquery#2); opengwasdb writes them, through
+`opengwasdb.ld.store.assembly` (`derive_variant_companion`), and validates their correspondence
+(`alid_index.count`). Schema 2 pins normalized root metadata and every canonical
 index file (array metadata and all chunk/shard files), not just array metadata. Source inventory
 follows shard-directory links and refuses cycles, repeated directories, walk errors and
 nonregular sources rather than trusting an incomplete file set. Schema 1

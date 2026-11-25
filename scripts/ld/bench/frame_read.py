@@ -32,9 +32,9 @@ from pathlib import Path
 from typing import Final
 
 import zarr
+from ogquery.ld.store.location import PreadSource, RangeSource
 
 from opengwasdb.ld.store import layout
-from opengwasdb.ld.store.location import PreadSource, RangeSource
 
 #: The frames GCST90476460's clump read (opengwas/ogld#65): what a per-read cost is projected onto.
 FRAMES: Final = 3_850

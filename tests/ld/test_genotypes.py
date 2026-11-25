@@ -43,8 +43,9 @@ def test_codes_equal_the_base_builder_for_every_near_band_pair(k: int, scale: in
 
 
 def test_codes_equal_the_independently_built_test_store_for_every_stored_pair() -> None:
+    from ogquery.ld.store import StoreReader
+
     from opengwasdb.ld.genotypes import covariates, prepare, r
-    from opengwasdb.ld.store import StoreReader
 
     rows = np.flatnonzero(testdata.variants().passes_filters)
     calls = made.hard_calls()[rows].astype(np.float64)
@@ -130,9 +131,10 @@ def test_build_and_query_have_no_pgen_calls_or_pc_adjustment_implementation() ->
 
 
 def test_a_missing_call_is_not_hidden_by_either_read_path(tmp_path: Path) -> None:
+    from ogquery.ld.format import InputError
+
     import opengwasdb.ld
     from opengwasdb.ld.build.passes import plan
-    from opengwasdb.ld.format import InputError
     from opengwasdb.ld.genotypes import Genotypes
 
     calls = made.hard_calls()[:2].copy()

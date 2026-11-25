@@ -24,21 +24,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+
+# The sorted spelling's read side -- parsing a sorted ALID and refusing a reference-first indel --
+# is the LD Store reader's, and its one owner is ogquery (opengwas/ogquery#2). This module keeps
+# the record identity a build forms, and re-exports the read names where a caller imports them.
+from ogquery.alid import ReferenceFirstIndel as ReferenceFirstIndel
+from ogquery.alid import refuse_reference_first_indel as refuse_reference_first_indel
+from ogquery.alid import sorted_alid_locus as sorted_alid_locus
+from ogquery.alid import spells_indel_reference_first as spells_indel_reference_first
 
 from opengwasdb.store_reader.identity import (
-    CANONICAL_CHROMOSOMES,
-    VALID_BASES,
     VariantNormalisationError,
     identity_allele,
     normalise_allele,
 )
 from opengwasdb.variants.normalise import orient_to_canonical, sorted_alid_alleles
-
-#: A position an LD Store's int32 column holds (ld-store spec §2), spelt with at most this many
-#: digits.
-_MAX_POSITION: Final = 2**31 - 1
-_MAX_POSITION_DIGITS: Final = 10
 
 
 class DuplicateRecord(VariantNormalisationError):
@@ -46,18 +46,6 @@ class DuplicateRecord(VariantNormalisationError):
     identical REF and ALT, a third record, or two SNVs (`resolve_sorted_reversed_indels`)."""
 
     reason = "duplicate_record"
-
-
-class ReferenceFirstIndel(VariantNormalisationError):
-    """An ALID that spells an indel reference first where ALIDs are spelt sorted.
-
-    Its alleles differ in length and its A1 sorts after its A2: a deletion whose REF sorts after
-    its ALT, which no sorted spelling forms. A sorted Store would hold that variant as
-    `chr:pos:A2:A1`. That row is this deletion unless the panel also has the insertion at that
-    site, and either way r there is signed against the other allele, A2 here (#462).
-    """
-
-    reason = "indel_spelt_reference_first"
 
 
 @dataclass(frozen=True)
@@ -98,47 +86,6 @@ def sorted_identity(chrom: str, position: int, ref: str, alt: str) -> SortedIden
     )
 
 
-def sorted_alid_locus(alid: str) -> tuple[str, int] | None:
-    """The chromosome and position a sorted-spelling ALID names, or None when it is not one.
-
-    The strict parser, for an LD Store's lookup: an ALID either is one exactly as such a Store
-    spells it or names nothing there. `opengwasdb.variants.axis.parse_canonical_alid` is the
-    lenient one, for the engine's GWAS Store and variant-list reads: it normalises a chromosome
-    alias and an allele's case, takes the alleles in either order, and has no int32 or digit
-    limit. Both exist because an LD lookup must find nothing under a spelling its Store never
-    wrote, while the engine resolves an identifier as it is given.
-
-    A reader finds an ALID by this locus, then compares whole ALID strings there, so a malformed
-    one is Absent rather than an error, and this never raises. Such an ALID is
-    `chrom:position:A1:A2`: a chromosome `1`–`22`, `X`, `Y` or `MT`, a position of at most 10
-    ASCII digits, positive, unpadded and within int32, and two distinct alleles over A, C, G, T
-    with A1 sorted before A2. A reference-first indel ALID is not one
-    (`spells_indel_reference_first`).
-    """
-    parts = alid.split(":")
-    if len(parts) != 4:
-        return None
-    chrom, pos, a1, a2 = parts
-    if not (chrom in CANONICAL_CHROMOSOMES and _is_canonical_position(pos)):
-        return None
-    if not (_is_allele(a1) and _is_allele(a2) and a1 < a2):
-        return None
-    return chrom, int(pos)
-
-
-def spells_indel_reference_first(alid: str) -> bool:
-    """Whether `alid` is a well-formed ALID that only the reference-first spelling forms: an
-    indel whose A1 sorts after its A2, which `sorted_alid_locus` would accept with its alleles
-    swapped."""
-    parts = alid.split(":")
-    if len(parts) != 4:
-        return False
-    chrom, pos, a1, a2 = parts
-    if len(a1) == len(a2) or not a1 > a2:
-        return False
-    return sorted_alid_locus(f"{chrom}:{pos}:{a2}:{a1}") is not None
-
-
 @dataclass(frozen=True)
 class SortedLookup:
     """How a GWAS Store's ALID is looked up in a Store spelt sorted (ADR 0106 §6).
@@ -176,19 +123,6 @@ def sorted_lookup(alid: str) -> SortedLookup:
     return SortedLookup(spelt, swapped, reversed_indel)
 
 
-def refuse_reference_first_indel(alid: str, where: str) -> None:
-    """Raise `ReferenceFirstIndel` when `alid` spells an indel reference first; `where` names
-    the Store or reader that spells ALIDs sorted."""
-    if spells_indel_reference_first(alid):
-        chrom, pos, a1, a2 = alid.split(":")
-        raise ReferenceFirstIndel(
-            f"{alid} spells an indel reference first (ADR 0079), but {where} spells indels "
-            f"sorted, so it would hold this variant as {chrom}:{pos}:{a2}:{a1}. That row is "
-            "this deletion unless the panel also has the insertion at that site; either way r "
-            f"there is signed against the other allele, {a2}, not {a1} (#462)"
-        )
-
-
 def resolve_sorted_reversed_indels(
     records: Sequence[tuple[str, int, str, str]],
 ) -> tuple[list[int], list[int]]:
@@ -224,16 +158,6 @@ def _require_a_split(identity: SortedIdentity, index: int, by_side: dict[bool, i
             f"record {index} is not a split of one site: it shares {identity.alid} with record "
             f"{next(iter(by_side.values()))}"
         )
-
-
-def _is_canonical_position(text: str) -> bool:
-    if not (text.isascii() and text.isdigit()) or len(text) > _MAX_POSITION_DIGITS:
-        return False
-    return text == str(int(text)) and 0 < int(text) <= _MAX_POSITION
-
-
-def _is_allele(text: str) -> bool:
-    return bool(text) and VALID_BASES.issuperset(text)
 
 
 __all__ = [

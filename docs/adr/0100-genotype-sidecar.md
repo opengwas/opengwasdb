@@ -52,7 +52,7 @@ emitter and this reader all call them, so the Bound and Not Measured cannot drif
 between a materialised store and a computed one.
 
 The reader composes rather than subclasses: it holds its own `OpenedStore` and composes
-`VariantTable` exactly as `StoreReader` does, and both satisfy `opengwasdb.ld.query.reader.Reader`
+`VariantTable` exactly as `StoreReader` does, and both satisfy `ogquery.ld.query.reader.Reader`
 structurally. So a genotype reader has no LD reader's members that mean nothing here
 (`r_of_pairs`, `frame_cache_bytes`, `has_partner_rows`), and `opengwasdb.ld.open` and `ogld.validate`
 read the root once and hand the opened metadata to the kind that owns it.
@@ -105,3 +105,7 @@ per-worker memory cost. Compressed adjustment arrays would force each worker to
 decode its own copy; mmap instead uses the shared page cache. Publishing
 individual-level data or remote genotype reading is not authorised by this ADR.
 LD Stores remain the route for restricted and large panels.
+
+> **Note (opengwas/ogquery#2, 25 November 2026).** The LD read path this ADR names moved to
+> ogquery 0.3.0 (ogquery ADR 0002); its module paths here now name ogquery's modules. The
+> decision is unchanged.

@@ -16,9 +16,9 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import testdata
+from ogquery.ld.store import StoreReader
 
 import opengwasdb.ld
-from opengwasdb.ld.store import StoreReader
 
 N = 771
 

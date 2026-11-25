@@ -19,18 +19,18 @@ from typing import Final
 
 import numpy as np
 import zarr
-
-from opengwasdb.ld.build.variant_set import PASSING_FILTERS
-from opengwasdb.ld.format import (
+from ogquery.ld.format import (
     Adjustment,
     Build,
     Panel,
     PcCheck,
     PcDiagnostic,
     Source,
-    Sourced,
     VariantFilters,
 )
+
+from opengwasdb.ld.build.variant_set import PASSING_FILTERS
+from opengwasdb.ld.format import Sourced
 from opengwasdb.version import __version__
 
 _STATUS: Final = Path("/proc/self/status")

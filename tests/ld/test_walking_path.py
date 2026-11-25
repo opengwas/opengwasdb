@@ -18,11 +18,12 @@ import numpy.typing as npt
 import pytest
 import testdata
 from ld_script_modules import load_script
+from ogquery.ld.store import StoreReader, Variants
 from store_copies import HALF_STEP, R_SCALE
 
 import opengwasdb.ld
 from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants
+from opengwasdb.ld.store import StoreWriter
 
 
 def k0_r(alt: npt.NDArray[np.int8], a1_is_alt: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:

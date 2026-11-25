@@ -1,8 +1,12 @@
 """The public surface, pinned signature by signature.
 
-What a caller of ogld sees is pinned here: `opengwasdb.ld.open`, the four queries and their results,
-`opengwasdb.ld.build` and its inputs, `opengwasdb.ld.validate`, the identity functions an LD
-Store's ALIDs are spelt by (`opengwasdb.variants.sorted_spelling`) and the CLI's entry.
+What a caller of `opengwasdb.ld` sees of opengwasdb's own is pinned here: `opengwasdb.ld.open`
+(the dispatcher that also opens a Genotype Store), `opengwasdb.ld.build` and its inputs,
+`opengwasdb.ld.validate` and its `Finding`, the sorted identity a build spells an LD Store's ALIDs
+by (`opengwasdb.variants.sorted_spelling`) and the CLI's entry. The four queries, their results,
+`Refusal` and the read side of the identity (`normalise_chromosome`, `sorted_alid_locus`) are
+ogquery's objects since opengwas/ogquery#2, re-exported here, and ogquery's own `tests/ld`
+pins them; `tests/ld/test_read_side_is_ogquery.py` holds that they are the very objects.
 Changing an entry is an API change, made on purpose, with a changelog fragment that says so.
 cleat's public-api gate records only a declaration's first line at column 0, so it cannot see
 a method or a signature that ruff wraps; this test sees both.
@@ -29,7 +33,6 @@ import testdata
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.store_reader import identity
 from opengwasdb.variants import sorted_spelling
 
 #: The committed Test Store (tests/ld/contract/support.py), written by the walking skeleton.
@@ -56,73 +59,13 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
         "t_partner: 'float', k: 'int' = 10, k_min: 'int' = 5, mac_min: 'int' = 20, "
         "info_min: 'float | None' = 0.8) -> None",
     ),
-    "opengwasdb.ld.LDStore.matrix": (
-        opengwasdb.ld.LDStore.matrix,
-        "(self, alids: 'Sequence[str]', *, fill: 'float | None' = None) -> 'LDMatrix'",
-    ),
-    "opengwasdb.ld.LDStore.region": (
-        opengwasdb.ld.LDStore.region,
-        "(self, chrom: 'str', centre: 'int', radius: 'int', *, fill: 'float | None' = None)"
-        " -> 'LDMatrix'",
-    ),
-    "opengwasdb.ld.LDStore.proxies": (
-        opengwasdb.ld.LDStore.proxies,
-        "(self, alids: 'Sequence[str]', *, r2: 'float' = 0.8, kb: 'float' = 10000) -> 'Proxies'",
-    ),
-    "opengwasdb.ld.LDStore.clump": (
-        opengwasdb.ld.LDStore.clump,
-        "(self, alids: 'Sequence[str]', score: 'npt.ArrayLike', *, r2: 'float', kb: 'float')"
-        " -> 'Clumps'",
-    ),
-    "opengwasdb.ld.LDMatrix": (
-        opengwasdb.ld.LDMatrix,
-        "(r: 'npt.NDArray[np.float64]', variants: 'Variants', absent: 'tuple[str, ...]', "
-        "t_far: 'float', near_bp: 'int', far_bp: 'int', fill: 'float | None') -> None",
-    ),
-    "opengwasdb.ld.LDMatrix.kinds": (
-        opengwasdb.ld.LDMatrix.kinds,
-        "(self) -> 'npt.NDArray[np.str_]'",
-    ),
-    "opengwasdb.ld.Proxies": (
-        opengwasdb.ld.Proxies,
-        "(query: 'npt.NDArray[np.str_]', proxy: 'npt.NDArray[np.str_]', "
-        "r: 'npt.NDArray[np.float64]', r2: 'npt.NDArray[np.float64]', "
-        "distance: 'npt.NDArray[np.int64]', "
-        "absent: 'tuple[str, ...]', r2_min: 'float', window_bp: 'float', t_far: 'float') -> None",
-    ),
-    "opengwasdb.ld.Clumps": (
-        opengwasdb.ld.Clumps,
-        "(alid: 'npt.NDArray[np.str_]', chrom: 'npt.NDArray[np.str_]', "
-        "position: 'npt.NDArray[np.int64]', score: 'npt.NDArray[np.float64]', "
-        "lead: 'npt.NDArray[np.str_]', r: 'npt.NDArray[np.float64]', absent: 'tuple[str, ...]', "
-        "r2: 'float', window_bp: 'float') -> None",
-    ),
-    "opengwasdb.ld.Clumps.leads": (opengwasdb.ld.Clumps.leads, "(self) -> 'npt.NDArray[np.str_]'"),
-    "opengwasdb.ld.Variants": (
-        opengwasdb.ld.Variants,
-        "(chrom: 'npt.NDArray[np.str_]', position: 'npt.NDArray[np.int64]', "
-        "alid: 'npt.NDArray[np.str_]', a1: 'npt.NDArray[np.str_]', a2: 'npt.NDArray[np.str_]', "
-        "a1_frequency: 'npt.NDArray[np.float64]') -> None",
-    ),
     "opengwasdb.ld.Finding": (
         opengwasdb.ld.Finding,
         "(rule: 'str', where: 'str', message: 'str') -> None",
     ),
-    "opengwasdb.ld.Refusal": (
-        opengwasdb.ld.Refusal,
-        "(reason: 'RefusalReason', detail: 'str') -> 'None'",
-    ),
     "opengwasdb.variants.sorted_spelling.sorted_identity": (
         sorted_spelling.sorted_identity,
         "(chrom: 'str', position: 'int', ref: 'str', alt: 'str') -> 'SortedIdentity'",
-    ),
-    "opengwasdb.store_reader.identity.normalise_chromosome": (
-        identity.normalise_chromosome,
-        "(chromosome: 'str') -> 'str'",
-    ),
-    "opengwasdb.variants.sorted_spelling.sorted_alid_locus": (
-        sorted_spelling.sorted_alid_locus,
-        "(alid: 'str') -> 'tuple[str, int] | None'",
     ),
     "opengwasdb.variants.sorted_spelling.SortedIdentity": (
         sorted_spelling.SortedIdentity,
@@ -137,6 +80,12 @@ SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
 def test_the_signature_is_the_recorded_one(name: str) -> None:
     function, signature = SURFACE[name]
     assert str(inspect.signature(function)) == signature
+
+
+def test_the_pins_are_opengwasdb_s_own() -> None:
+    """A pin here is for an object opengwasdb defines; ogquery pins its own."""
+    for name, (function, _) in SURFACE.items():
+        assert function.__module__.startswith("opengwasdb."), (name, function.__module__)
 
 
 def test_the_top_level_names_are_the_public_surface() -> None:

@@ -15,9 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from ogquery.ld.format.geometry import stop_within
 
 from opengwasdb.ld.format import NEAR_BP, REncoding
-from opengwasdb.ld.format.geometry import stop_within
 from test_panel import pcs as pc_file
 from test_panel import reference
 from test_panel.params import Params

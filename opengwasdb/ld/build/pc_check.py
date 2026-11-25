@@ -37,8 +37,7 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
-
-from opengwasdb.ld.format import InputError, PcCheck, PcNull, PcScan
+from ogquery.ld.format import InputError, PcCheck, PcNull, PcScan
 
 #: Dosages (variants × samples), whatever their dtype: the scan casts them (`common`, `_basis`).
 Dosages = npt.NDArray[np.floating] | npt.NDArray[np.integer]

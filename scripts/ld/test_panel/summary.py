@@ -10,9 +10,9 @@ judged on is the reference's own (`test_panel.reference`), independent of ogld b
 from __future__ import annotations
 
 import numpy as np
+from ogquery.ld.format.geometry import within
 
 from opengwasdb.ld.format import NEAR_BP, REncoding
-from opengwasdb.ld.format.geometry import within
 from test_panel.answers import Answers
 from test_panel.assemble import Panel
 from test_panel.params import Params

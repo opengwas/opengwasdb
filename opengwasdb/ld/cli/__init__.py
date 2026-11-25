@@ -23,11 +23,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from ogquery.ld.format import InputError, Refusal
 
 from opengwasdb.ld import env
 from opengwasdb.ld.build import BuildInputs, build, build_genotypes
 from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
-from opengwasdb.ld.format import FAR_BP, NEAR_BP, InputError, Refusal
+from opengwasdb.ld.format import FAR_BP, NEAR_BP
 from opengwasdb.ld.query import open as open_store
 from opengwasdb.ld.query.validation import validate_at
 from opengwasdb.ld.store import Finding
