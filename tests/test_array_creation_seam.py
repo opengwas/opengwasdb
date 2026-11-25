@@ -30,6 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import ogquery.arrays
+import ogquery.opening
 import pytest
 import zarr
 
@@ -55,6 +56,10 @@ SEAM = PACKAGE_ROOT / "store" / "arrays.py"
 # The read side of the seam is ogquery's (#475): `opengwasdb.store_reader.arrays` re-exports
 # it, so this guard reads the installed package's source, which opengwasdb's reads rely on.
 READ_SEAM = Path(ogquery.arrays.__file__)
+#: Since ogquery 0.3 the open itself is `ogquery.opening.open_group`, which sets no zarr
+#: configuration so the LD read path can use it (opengwas/ogquery#2, ogquery ADR 0002);
+#: `ogquery.arrays` re-exports it under its old name and keeps the configuration.
+READ_OPEN = Path(ogquery.opening.__file__)
 #: opengwasdb.ld writes LD Stores and Genotype Stores, a different format with its
 #: own writer (`opengwasdb/ld/store/writer.py`, docs/spec/ld-store.md); this seam
 #: is the GWAS Store's, so it does not scan them (#455).
@@ -712,28 +717,39 @@ def test_the_read_seam_opens_a_group_it_cannot_write(tmp_path: Path) -> None:
 
 
 def test_the_read_seam_only_opens_a_group_read_only() -> None:
-    """The read side of the seam sets zarr's runtime configuration and opens a group,
-    once, in mode ``r``: it creates nothing, and every other call the scanner
-    forbids stays in `SEAM`."""
-    source = READ_SEAM.read_text(encoding="utf-8")
-    found = _violations(source, "ogquery/arrays.py")
+    """The read side of the seam sets zarr's runtime configuration and opens a group in mode
+    ``r``: it creates nothing, and every other call the scanner forbids stays in `SEAM`.
+    Since ogquery 0.3 it is two modules: `ogquery.arrays` sets the configuration, and
+    `ogquery.opening` opens, a local path once and an http(s) URL once, both read-only."""
+    sources = {
+        "ogquery/arrays.py": READ_SEAM.read_text(encoding="utf-8"),
+        "ogquery/opening.py": READ_OPEN.read_text(encoding="utf-8"),
+    }
+    found = [entry for name, source in sources.items() for entry in _violations(source, name)]
     assert sorted(entry.rsplit(": ", 1)[1] for entry in found) == [
         "zarr.config.set(",
         "zarr.config.set(",
         "zarr.core.sync.sync(",
         "zarr.open_group(",
+        "zarr.open_group(",
         "zarr.storage.LocalStore.open(",
     ], found
+    assert [e.rsplit(": ", 1)[1] for e in found if e.startswith("ogquery/arrays.py")] == [
+        "zarr.config.set(",
+        "zarr.config.set(",
+    ], "ogquery.arrays configures and opens nothing itself"
     opens = [
         node
+        for source in sources.values()
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "open_group"
     ]
-    assert len(opens) == 1
-    modes = [keyword.value for keyword in opens[0].keywords if keyword.arg == "mode"]
-    assert [ast.literal_eval(mode) for mode in modes] == ["r"]
+    assert len(opens) == 2
+    for call in opens:
+        modes = [keyword.value for keyword in call.keywords if keyword.arg == "mode"]
+        assert [ast.literal_eval(mode) for mode in modes] == ["r"]
 
 
 #: One (shape, component_chunk) per role, for the default-layout coverage test

@@ -40,14 +40,14 @@ EXPECTED = check_distributions.Expected(
     licence_expression=EXPRESSION,
     licence_text=LICENCE,
     project_urls=URLS,
-    requirements={"ogquery": frozenset({">=0.2", "<0.3"})},
+    requirements={"ogquery": frozenset({">=0.3", "<0.4"})},
 )
 
 
 def _metadata(
     version: str = VERSION,
     expression: str = EXPRESSION,
-    requires: tuple[str, ...] = ("numpy<2.5,>=2.0", "ogquery<0.3,>=0.2"),
+    requires: tuple[str, ...] = ("numpy<2.5,>=2.0", "ogquery<0.4,>=0.3"),
 ) -> bytes:
     lines = [
         "Metadata-Version: 2.4",
@@ -199,13 +199,13 @@ def test_a_wheel_that_does_not_require_ogquery_is_refused(tmp_path: Path) -> Non
 
 
 def test_a_wheel_requiring_another_range_of_ogquery_is_refused(tmp_path: Path) -> None:
-    problems = _problems(tmp_path, wheel=_wheel_requiring("ogquery>=0.3"))
+    problems = _problems(tmp_path, wheel=_wheel_requiring("ogquery>=0.4"))
     assert len(problems) == 1
-    assert "ogquery ['>=0.3'] is not pyproject.toml's ['<0.3', '>=0.2']" in problems[0]
+    assert "ogquery ['>=0.4'] is not pyproject.toml's ['<0.4', '>=0.3']" in problems[0]
 
 
 def test_an_extra_that_names_ogquery_is_not_the_dependency(tmp_path: Path) -> None:
-    problems = _problems(tmp_path, wheel=_wheel_requiring('ogquery>=0.2,<0.3; extra == "dev"'))
+    problems = _problems(tmp_path, wheel=_wheel_requiring('ogquery>=0.3,<0.4; extra == "dev"'))
     assert problems == ["opengwasdb-1.2.3-py3-none-any.whl: Requires-Dist has no ogquery"]
 
 
@@ -220,7 +220,7 @@ def test_the_repository_expects_its_resources_licence_and_urls() -> None:
     expected = check_distributions.expected_from_repository(REPO)
     assert "opengwasdb/readers/column_maps/gwas-ssf.toml" in expected.tracked
     assert expected.licence_expression == "GPL-3.0-only"
-    assert expected.requirements == {"ogquery": frozenset({">=0.2", "<0.3"})}
+    assert expected.requirements == {"ogquery": frozenset({">=0.3", "<0.4"})}
     assert expected.licence_text.lstrip().startswith(b"GNU GENERAL PUBLIC LICENSE\n")
     assert expected.sdist_top_level == {
         "PKG-INFO",
