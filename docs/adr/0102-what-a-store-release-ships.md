@@ -1,5 +1,14 @@
 # What a Store Release ships, and the rule that decides it
 
+> **§3 gains a row in [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §11** (issues
+> #417, #418, epic #62): the Clumps of the 5e-8 tier, `lead` and `r` under
+> `data.zarr/top_hits/p_5e_08/clumps/default/`. By this ADR's rule they are **read** once #419's
+> Top-Hit Query reads them to answer a query; the read validation makes through the Store Reader
+> (`TopHitTier.clumps`, #418) answers none, so until then they do not ship. They are an optional
+> accelerator that also needs an LD Store outside the release, which ADR 0106 records by digest,
+> and ADR 0106 measures their gain against their size, as §2 asks of a new accelerator. This ADR's
+> rule is applied as written, not changed.
+
 Issue [#463](https://github.com/opengwas/opengwasdb/issues/463), part of epic
 [#450](https://github.com/opengwas/opengwasdb/issues/450) (the Store Reader, `ogquery`). Spec §1.1
 holds the classification this ADR decides. ADRs 0057 (format 0.2.0), 0060 (By-Variant Index), 0061

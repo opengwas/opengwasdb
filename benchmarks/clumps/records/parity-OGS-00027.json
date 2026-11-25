@@ -1,0 +1,37 @@
+{
+ "analyses_every_observed_row_absent": 117,
+ "analyses_whose_leads_differ": 0,
+ "analyses_whose_present_or_absent_rows_differ": 0,
+ "analyses_with_rows": 15785,
+ "bytes_per_row": 1.772,
+ "compared_with_prototype": 15785,
+ "format_version": "0.2.0",
+ "loci_lost": {
+  "1mb": 272,
+  "250kb": 675
+ },
+ "loci_lost_in_analyses_with_a_present_row": {
+  "1mb": 154,
+  "250kb": 542
+ },
+ "markers": {
+  "absent": 1181968,
+  "ambiguous": 0,
+  "imputed": 0,
+  "not_clumped": 0
+ },
+ "n_loci_5e8": 111673,
+ "prototype_leads": 111673,
+ "prototype_seconds": {
+  "clump": 125.6,
+  "identity": 11.2
+ },
+ "seconds": {
+  "clump": 87.8,
+  "read_tiers_and_identity": 11.8,
+  "total": 99.6
+ },
+ "store": "OGS-00027",
+ "stored_bytes": 13876873,
+ "tier_rows": 7831679
+}

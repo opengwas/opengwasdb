@@ -22,7 +22,7 @@ import pytest
 import residual_stores
 import zarr
 from presence_fixtures import CELLS, build_stores, csr_position, plant
-from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _make_manifest, _make_vcf, _panel
+from test_hybrid_build import HG19_POS_1, HG19_POS_2, HG19_POS_3, _panel, make_manifest, make_vcf
 from test_query_metadata_reads import _BUILDERS
 from test_ragged_residual_completion import RaggedResidualScenario
 
@@ -186,10 +186,10 @@ def hybrid_two_sided(tmp_path_factory: pytest.TempPathFactory) -> Path:
                 strict=True,
             )
         ]
-        entries.append((trait, _make_vcf(tmp, trait, lines), trait.replace("_", " ")))
+        entries.append((trait, make_vcf(tmp, trait, lines), trait.replace("_", " ")))
     store = tmp / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
-        _make_manifest(tmp, entries), store, reference_panel=_panel(tmp),
+        make_manifest(tmp, entries), store, reference_panel=_panel(tmp),
         store_id="hybrid-order", release_id="v1", n_workers=1,
     )
     return store

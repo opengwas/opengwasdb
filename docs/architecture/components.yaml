@@ -163,6 +163,13 @@ components:
     stages: [cross]
     summary: Representation-only repairs, the SE re-encode of existing Store Releases, layout conversion, and the rewrite to format 0.3.0 with the query digests that prove it.
     paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py, opengwasdb/store/query_digests.py, opengwasdb/store/rewrite.py]
+  - id: clumps
+    name: Clumps
+    container: engine
+    layer: 4
+    stages: [build, complete]
+    summary: The Clumps of a Store Release's 5e-8 tier and n_loci_5e8, clumped against each Assigned Ancestry's LD Store and written in place by `opengwasdb clump` (ADR 0106); builders never call it.
+    paths: [opengwasdb/clumps.py]
   # opengwasdb.ld, imported from opengwas/ogld whole (#455), is six components
   # on the engine's layers (#459). Its own layering: format at the
   # bottom, then store, genotypes, build and query, cli on top. build and query

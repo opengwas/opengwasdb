@@ -321,11 +321,47 @@ PANEL_VARIANTS = 40
 OFF_PANEL = 4
 
 
+@pytest.fixture(scope="session")
+def clump_seeds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """`clump_stores`' four Stores on Test Panel positions, built once per session for the
+    Clumps' tests (#418): Dense, Dense Reference-Completed, Ragged and Hybrid. Never
+    written to: copy one to change it."""
+    from clump_stores import build_dense, build_dense_completed, build_hybrid, build_ragged
+
+    root = tmp_path_factory.mktemp("clump-seeds")
+    return {
+        "completed": build_dense_completed(root / "completed"),
+        "dense": build_dense(root / "dense" / "dense.opengwasdb"),
+        "ragged": build_ragged(root / "ragged"),
+        "hybrid": build_hybrid(root / "hybrid"),
+    }
+
+
+@pytest.fixture(scope="session")
+def clumped_seeds(
+    clump_seeds: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, Path]:
+    """`clump_seeds`, each copied once a session and clumped against the Test Panel's LD
+    Store for EUR (#418). The completed one is first held to what the Clumps' tests assert
+    of it (`require_meaningful`). Never written to: copy one to change it."""
+    from clump_stores import LD_STORE, copied, require_meaningful
+
+    from opengwasdb.clumps import clump_store
+
+    root = tmp_path_factory.mktemp("clumped-seeds")
+    out = {}
+    for name, store in clump_seeds.items():
+        out[name] = copied(store, root / name)
+        clump_store(out[name], {"EUR": LD_STORE})
+    require_meaningful(out["completed"])
+    return out
+
+
 @pytest.fixture(scope="module")
 def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Hybrid release of three traits over a 40-variant panel, each with four
     off-panel variants in its Overflow, and a subset of every other panel variant."""
-    from test_hybrid_build import _make_manifest, _make_vcf
+    from test_hybrid_build import make_manifest, make_vcf
 
     from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 
@@ -337,14 +373,14 @@ def hybrid_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
             f"{0.05 * (i + 1) * (trait + 1):.4f}:{0.1 + 0.01 * trait:.3f}:{0.1 + 0.015 * i:.4f}\n"
             for i in range(PANEL_VARIANTS + (OFF_PANEL if trait else 0) * (trait + 1))
         ]
-        entries.append((f"t{trait}", _make_vcf(root, f"t{trait}", rows), f"Trait {trait}"))
+        entries.append((f"t{trait}", make_vcf(root, f"t{trait}", rows), f"Trait {trait}"))
     panel = root / "panel.txt"
     panel.write_text(
         "".join(f"1:{1_000 * (i + 1)}:A:G\n" for i in range(PANEL_VARIANTS)), encoding="utf-8"
     )
     store = root / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
-        _make_manifest(root, entries),
+        make_manifest(root, entries),
         store,
         reference_panel=panel,
         store_id="h",

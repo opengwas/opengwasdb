@@ -186,7 +186,7 @@ def test_the_dense_vcf_spill_keeps_only_the_rows_it_stores(tmp_path, monkeypatch
 def test_the_hybrid_spill_keeps_only_the_rows_it_stores(tmp_path, monkeypatch) -> None:
     """trait_a's refused SE sits on the panel (Dense) and off it (Overflow)."""
     _inject(monkeypatch, _se_is(REFUSED_SE), hybrid_build)
-    vcf_a = hb._make_vcf(
+    vcf_a = hb.make_vcf(
         tmp_path,
         "trait_a",
         [
@@ -195,10 +195,10 @@ def test_the_hybrid_spill_keeps_only_the_rows_it_stores(tmp_path, monkeypatch) -
             f"1\t{hb.HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",
         ],
     )
-    vcf_b = hb._make_vcf(
+    vcf_b = hb.make_vcf(
         tmp_path, "trait_b", [f"1\t{hb.HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.25\n"]
     )
-    manifest = hb._make_manifest(tmp_path, [("trait_a", vcf_a, "A"), ("trait_b", vcf_b, "B")])
+    manifest = hb.make_manifest(tmp_path, [("trait_a", vcf_a, "A"), ("trait_b", vcf_b, "B")])
     store = tmp_path / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest, store, reference_panel=hb._panel(tmp_path), store_id="s", release_id="r",

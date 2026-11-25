@@ -15,7 +15,7 @@ import logging
 import os
 import shutil
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import zarr
 
+from opengwasdb.model.files import replace_durably
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import STORE_ZARR_FORMAT, open_group
 from opengwasdb.store_reader.alid_index import ALID_INDEX_FILENAMES, alid_index_kind
@@ -643,13 +644,14 @@ class OpenGWASDBStore(StoreRelease):
 
     The Store Reader's read-only `StoreRelease` (#464), with what writes to a
     release added: its arrays opened in any mode, its ``index.sqlite``,
-    provenance amendment and atomic staging. `open_store` opens one with
+    in-place manifest writes (provenance amendment, an optional component's entry) and
+    atomic staging. `open_store` opens one with
     opengwasdb's reader of the 0.2.x Store Variant Table
     (`open_legacy_variant_table`).
 
-    Frozen: the manifest a caller holds never changes under them. In-place
-    provenance amendment (``amend_provenance``) rebinds it to a fresh
-    instance rather than mutating this one.
+    Frozen: the manifest a caller holds never changes under them. An in-place
+    manifest write (``amend_provenance``, ``set_manifest_entry``) rebinds it to a
+    fresh instance rather than mutating this one.
     """
 
     # ---- opening -----------------------------------------------------------
@@ -679,26 +681,61 @@ class OpenGWASDBStore(StoreRelease):
     def amend_provenance(self, patch: dict[str, Any]) -> OpenGWASDBStore:
         """Fold additional facts into ``manifest.json``'s provenance dict, in place.
 
-        The one supported in-place write against a built release -- e.g.
-        folding release-level Catalogue facts into a store's manifest after
-        the fact (``ancestry/subset.py``), or a format migration updating its
-        own provenance (``scripts/migrate_store_to_analyses_tsv.py``).
-        Everything else that changes association data or metadata derives a
-        new release via ``staging()`` instead.
+        One of the two in-place manifest writes against a built release, with
+        `set_manifest_entry` -- e.g. folding release-level Catalogue facts into
+        a store's manifest after the fact (``ancestry/subset.py``), or a format
+        migration updating its own provenance
+        (``scripts/migrate_store_to_analyses_tsv.py``). Everything else that
+        changes association data or metadata derives a new release via
+        ``staging()`` instead (spec §21.4).
 
         Returns a new ``OpenGWASDBStore`` bound to the amended manifest;
         this instance is left untouched.
         """
+
+        def fold(data: dict[str, Any]) -> None:
+            data["provenance"] = {**data.get("provenance", {}), **patch}
+
+        return self._rewrite_manifest(fold)
+
+    def set_manifest_entry(self, key: str, value: Any | None) -> OpenGWASDBStore:
+        """Write the manifest's entry `key`, or remove it when `value` is None, in place.
+
+        The other in-place manifest write: the entry declaring an optional component
+        added to an existing release, the Clumps' ``clumps`` (spec §2, §21.4, ADR 0106
+        §10), which only the step that writes that component writes. Every other key is
+        kept as the manifest holds it. Returns a new ``OpenGWASDBStore`` bound to the
+        rewritten manifest.
+        """
+
+        def put(data: dict[str, Any]) -> None:
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+
+        return self._rewrite_manifest(put)
+
+    def _rewrite_manifest(self, change: Callable[[dict[str, Any]], None]) -> OpenGWASDBStore:
+        """The in-place write of ``manifest.json`` behind `amend_provenance` and
+        `set_manifest_entry`: read it, `change` it, write it beside itself and rename it over
+        itself, so a reader sees the old manifest or the new one. (The Ragged variant-index
+        build records its index with a rename of its own,
+        `layouts.ragged.by_variant._record_index_in_manifest`.)
+
+        The write is `model.files.replace_durably`: the file keeps its mode and group, and
+        is flushed to disk before the rename and the directory after.
+
+        The rewrite also leaves the coverage in the written vocabulary: editing a
+        published release's metadata to it is the one in-place edit the pre-release
+        rule allows (ADR 0064 §5), and it keeps `full` from surviving in a manifest
+        this build just wrote (#298).
+        """
         data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        data["provenance"] = {**data.get("provenance", {}), **patch}
-        # The amendment rewrites the manifest as JSON, so the coverage it leaves
-        # behind is whatever the source said. Editing a published release's
-        # metadata to the written vocabulary is the one in-place edit the
-        # pre-release rule allows (ADR 0064 §5), and it keeps `full` from
-        # surviving in a manifest this build just wrote (#298).
+        change(data)
         normalise_coverage(data)
-        self.manifest_path.write_text(
-            json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        replace_durably(
+            self.manifest_path, json.dumps(data, indent=2, sort_keys=True) + "\n"
         )
         return OpenGWASDBStore(
             path=self.path, manifest=StoreManifest.from_dict(data), legacy=self.legacy

@@ -25,6 +25,7 @@ draft spelling -- see `opengwasdb.model.enums`.
 from __future__ import annotations
 
 import csv
+import io
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -43,6 +44,7 @@ from opengwasdb.model.enums import (
     SampleSizeScope,
     StoredEffectScale,
 )
+from opengwasdb.model.files import replace_durably
 from opengwasdb.model.info_score_policy import INFO_SCORE_COLUMNS, parse_info_score_policy
 from opengwasdb.model.maf_policy import MAF_COLUMNS, parse_maf_policy
 
@@ -90,6 +92,16 @@ SHARED_CORE_COLUMNS: tuple[str, ...] = (
 # -- it is also the schema opengwasdb-stores validates manifests against.
 TOP_HIT_COUNT_COLUMNS: tuple[str, ...] = ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4")
 
+# The counts the Clumps of the 5e-8 tier give each Analysis (store-format spec §7a,
+# §18.1, ADR 0106 §8): its Clump Leads, and its observed rows its LD Store could not
+# clump. Present exactly when the release declares `clumps`; blank, never 0, for an
+# Analysis that was not clumped. Written by `opengwasdb clump` alone, in place, so they
+# are not fields of `Analysis`: a record written back from `Analysis` (a completion's)
+# drops them, as it drops the Clumps they count.
+N_LOCI_5E8 = "n_loci_5e8"
+N_UNCLUMPED_5E8 = "n_unclumped_5e8"
+CLUMP_COUNT_COLUMNS: tuple[str, ...] = (N_LOCI_5E8, N_UNCLUMPED_5E8)
+
 # EAF orientation evidence (issue #115, ADR 0037 §6): the outcome of
 # correlating this Analysis's A1-oriented EAF against a reference, the observed
 # r, and how many variants it was computed over. Persisted per Analysis because
@@ -123,6 +135,7 @@ STORE_ONLY_COLUMNS: tuple[str, ...] = (
     N_MISSING_SE_OUT_OF_RANGE,
     *EAF_ORIENTATION_COLUMNS,
     *TOP_HIT_COUNT_COLUMNS,
+    *CLUMP_COUNT_COLUMNS,
 )
 
 # A reference listing of known registry build-input columns (issue #9's
@@ -214,11 +227,18 @@ def write_analyses(path: str | Path, table: AnalysesTable) -> Path:
     """Write `table` back to a TSV file, in its own column order."""
     out_path = Path(path)
     with out_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(table.fieldnames), delimiter="\t")
-        writer.writeheader()
-        for row in table.rows:
-            writer.writerow(row)
+        handle.write(_analyses_text(table))
     return out_path
+
+
+def _analyses_text(table: AnalysesTable) -> str:
+    """`table` as `analyses.tsv` spells it, in its own column order."""
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=list(table.fieldnames), delimiter="\t")
+    writer.writeheader()
+    for row in table.rows:
+        writer.writerow(row)
+    return buffer.getvalue()
 
 
 def validate_analyses(table: AnalysesTable) -> list[str]:
@@ -420,7 +440,9 @@ ANALYSIS_COLUMNS: tuple[str, ...] = (
     "publication_pmid",
     "consortium",
     "first_author",
-    *STORE_ONLY_COLUMNS,
+    # The Clumps' counts are store-only too, but no `Analysis` field: only the step
+    # that writes the Clumps writes them (`write_analysis_columns`, ADR 0106 §10).
+    *(name for name in STORE_ONLY_COLUMNS if name not in CLUMP_COUNT_COLUMNS),
 )
 
 # Columns a prior `analyses.tsv` schema carried that this one deliberately
@@ -722,6 +744,32 @@ def analyses_table_from_records(analyses: list[Analysis]) -> AnalysesTable:
 def write_analysis_records(path: str | Path, analyses: list[Analysis]) -> Path:
     """Write `analyses` to `path` as an `analyses.tsv` file."""
     return write_analyses(path, analyses_table_from_records(analyses))
+
+
+def write_analysis_columns(path: str | Path, columns: Mapping[str, list[str]]) -> Path:
+    """Set whole columns of the `analyses.tsv` at `path` in place, one value per row.
+
+    The one in-place write of `analyses.tsv`: the Clumps' counts, which `opengwasdb
+    clump` adds to an existing release (spec §21.4, ADR 0106 §10). A column the table
+    holds keeps its place; a new one is added at the end. Every other column and value
+    is written back as read. The write is `model.files.replace_durably`: a reader sees
+    the old table or the new one, and the file keeps its mode and group.
+    """
+    table_path = Path(path)
+    table = read_analyses(table_path)
+    for name, values in columns.items():
+        if len(values) != len(table.rows):
+            raise ValueError(
+                f"{table_path}: {len(values)} values for column {name!r}, "
+                f"{len(table.rows)} Analyses"
+            )
+    fieldnames = (*table.fieldnames, *(name for name in columns if name not in table.fieldnames))
+    rows = tuple(
+        {**row, **{name: values[i] for name, values in columns.items()}}
+        for i, row in enumerate(table.rows)
+    )
+    replace_durably(table_path, _analyses_text(AnalysesTable(fieldnames=fieldnames, rows=rows)))
+    return table_path
 
 
 def read_analysis_records(path: str | Path) -> list[Analysis]:
