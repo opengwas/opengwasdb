@@ -63,14 +63,23 @@ The means and medians are over the Analyses in each run's records (`all-*.jsonl`
 - **Storage.** Two arrays parallel to the tier, `lead` (int32) and `r` (int16), took 11.4 MB
   for OGS-00009's 5e-8 tier: 6.44 M rows, 1.8 B a row, against a 112 MB tier and a 58 GB Store.
   The prototype stored `r` × 32767; this ADR stores the LD Store's own code (decision 7), so
-  #418 re-measures the size.
+  #418 re-measured the size (25 Nov 2026), the step's arrays written with the tier's role and
+  chunking: 9.9 MB for OGS-00009's 6.44 M rows (1.54 B a row), 13.9 MB for OGS-00027's 7.83 M
+  (1.77 B), and 0.61 MB for the 384,861 rows of OGS-00006 at 0.3.0 (1.58 B).
 - **Query.** A clumped Top-Hit read took 18 ms median against 16 ms unclumped at 5e-8.
 - **Absent.** 13.3% of OGS-00009's observed 5e-8 rows (732,086 of 5,491,801) and 15.1% of
   OGS-00027's (1,181,968 of 7,831,679) are not in HGDP+1kGP EUR (8.6 M variants, n = 665).
   In 86 of the 1,219 OGS-00009 Analyses clumped, and 117 of OGS-00027's 15,785, every observed
-  row is absent: those Analyses have hits and no locus the LD Store can see. How many loci are
-  lost entirely inside the other Analyses, meaning every row of a locus is absent, is #418's to
-  measure and record here.
+  row is absent: those Analyses have hits and no locus the LD Store can see. #418 measured the
+  loci lost entirely inside the other Analyses (25 Nov 2026, the step's compute path on the same
+  tiers; `parity.py` and its records in `/data/opengwasdb/work/orchestrate/opengwasdb-62-r2/scratch/418/`).
+  A lost locus there is a run of an Analysis's absent rows, consecutive ones less than G apart,
+  with no row the LD Store holds within G of the run. At G = 250 kb, plink2's default window,
+  OGS-00009 loses 4,172 loci in its 1,133 Analyses with a present row, against their 76,821
+  Clump Leads (5.4%), and OGS-00027 542 against 111,673 (0.5%); at G = 1 Mb, 2,786 and 154. The
+  86 and 117 Analyses with no present row add 294 and 133 runs at 250 kb. The same run gave
+  76,821 and 111,673 leads, the prototype's exactly, with no Analysis differing in its leads or
+  its present and absent rows.
 - **No errors** on any Analysis. Both Stores are format 0.2.0, whose indels are spelt as the
   LD Stores spell them, so no translation was exercised (`reference_first` 0 in every record).
   These are measurements of 0.2.0 Stores, taken before format 0.3.0 existed. The Clumps
@@ -370,8 +379,8 @@ tier's rows for the stored configuration (decision 1), in `opengwasdb/store_read
   [#62 comment 7110664252](https://github.com/opengwas/opengwasdb/issues/62#issuecomment-7110664252);
   the scripts and raw records are in `/data/opengwasdb/work/clump-62/` on the IEU node):
   - **Size.** 11.4 MB for OGS-00009's 5e-8 tier: 1.8 B a row, against a 112 MB tier and a
-    58 GB Store. `r` stays `int16` as the LD Store's own code (decision 7), and #418
-    re-measures.
+    58 GB Store, as the prototype stored them. With `r` the LD Store's own `int16` code
+    (decision 7), #418 measured 9.9 MB, 1.54 B a row (Context, *Storage*).
   - **Gain.** A clumped Top-Hit read took 18 ms median, against 16 ms unclumped. Clumping on
     the fly took 23 ms median per Analysis, so the median gains little. The gain is in the
     tail and the whole Store. The p99 is 1.0 s and the maximum 5.5 s, both on OGS-00009, and

@@ -573,8 +573,7 @@ def _reclumped(target: Target, view: _View) -> _Reclump:
     try:
         problems += _provenance_problems(opened, view.entries)
         sample = _sample([k for k, a in enumerate(view.ancestry) if a in opened], seed)
-        result = compute_clumps(root.store, opened, components=view.tiers.components,
-                                analyses=sample)
+        result = compute_clumps(root.store, opened, tiers=view.tiers, analyses=sample)
     finally:
         close_ld_stores(opened)
     return _Reclump(problems, result, sample, seed)

@@ -462,19 +462,19 @@ def compute_clumps(
     release: StoreRelease,
     ld_stores: Mapping[str, MappedLDStore],
     *,
-    components: Sequence[TierComponent] | None = None,
+    tiers: Tiers | None = None,
     analyses: Sequence[int] | None = None,
 ) -> ClumpResult:
     """Clump each Analysis's 5e-8 rows as §18.1 says, writing nothing.
 
+    `tiers` is the release's tiers already read (`Tiers.read`); they are read here if not.
     `analyses` restricts the work to those Analyses (validation's seeded re-clump); every
     other Analysis's rows are left −4 and its counts None, and are not counted. The format is
     not judged here (`refuse_format`), so a 0.2 Store's tier can be measured too."""
     started = time.perf_counter()
     assigned = ancestries(release)
-    if components is None:
-        components = tier_components(release, len(assigned))
-    tiers = Tiers.read(release, components)
+    if tiers is None:
+        tiers = Tiers.read(release, tier_components(release, len(assigned)))
     result = ClumpResult(
         tiers.components,
         [ComponentClumps.unclumped(c.n_rows, list(ld_stores)) for c in tiers.components],
@@ -708,7 +708,7 @@ def clump_store(store_path: str | Path, ld_stores: Mapping[str, str | Path]) -> 
     refuse_without_imputed(release, components)
     opened = open_ld_stores(ld_stores, reference_assembly=release.manifest.reference_assembly)
     try:
-        result = compute_clumps(release, opened, components=components)
+        result = compute_clumps(release, opened, tiers=Tiers.read(release, components))
         write_clumps(release, result, opened)
         clumped = [n for n in result.n_loci if n is not None]
         return ClumpRun(
