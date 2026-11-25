@@ -25,7 +25,8 @@ but empties its chunk cache and evicts the pages, as a long-lived service meets 
     pixi run -e dev ld-bench-latency step1 --target local http0 --out results.jsonl
 
 Where things are comes from their owners, never from here: the published EUR store is
-`build_hgdp1kgp.store_path("EUR")` under `$OPENGWASDB_LD_STORES`, #403's Analyses are under
+`build_hgdp1kgp.store_path("EUR")` under `$OPENGWASDB_LD_STORES` (opengwasdb-stores builds and
+records it: OGL-00001), #403's Analyses are under
 `$OPENGWASDB_LD_403_ANALYSES` and the layouts' builds under `$OPENGWASDB_LD_LAYOUTS`, each with its
 default in `scripts/ld/test_panel/roots.py`. Each run's first record says which commit's code ran
 and, through `test_panel.checkout.problem`, whether the checkout could be cited as that code.
@@ -65,13 +66,15 @@ import http_static
 import numpy as np
 
 HERE: Final = Path(__file__).resolve().parent
-#: `scripts/`, where the owners of the recipe's facts and of the roots live.
+#: `scripts/`, where the owners of the roots live.
 SCRIPTS: Final = HERE.parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
-recipe = importlib.import_module("build_hgdp1kgp")
 roots = importlib.import_module("test_panel.roots")
 checkout = importlib.import_module("test_panel.checkout")
+#: The conversion's facts: the five panels, and where their published stores are.
+conversion = importlib.import_module("build_hgdp1kgp")
+PANELS: Final = conversion.PANELS
 
 #: The cases each plan times, in the order it times them.
 CASES: Final = {
@@ -425,9 +428,10 @@ def opened(location: str | Path) -> Any:
     return opengwasdb.ld.open(location)
 
 
-def published() -> Path:
-    """The published HGDP+1kGP EUR store, where the recipe that built it puts it (ogld#7)."""
-    path: Path = recipe.store_path("EUR")
+def published(panel: str = "EUR") -> Path:
+    """A published HGDP+1kGP LD Store, EUR's by default (ogld#7). opengwas/opengwasdb-stores builds
+    and records them (`tools/ld-stores/`; EUR's is OGL-00001)."""
+    path: Path = conversion.store_path(panel)
     return path
 
 

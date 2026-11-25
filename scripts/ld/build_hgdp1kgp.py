@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Convert, build and validate the five HGDP+1kGP LD Stores (ogld#7; spec build-inputs §3, §10).
+"""Convert the five HGDP+1kGP panels' phased BCFs to pgen filesets (ogld#7; build-inputs §3, §10).
 
     pixi run -e dev python scripts/ld/build_hgdp1kgp.py convert  [--panel AFR ...] [--jobs 8]
-    pixi run -e dev python scripts/ld/build_hgdp1kgp.py build    [--panel AFR ...] [--builds 2]
 
 `convert` turns each panel's 22 phased v2 BCFs into one pgen fileset per chromosome. The command
 is `test_panel.tools.conversion_args`, build-inputs §3's, with the panel's unrelated keep file
@@ -13,16 +12,15 @@ exits 0 and the fileset holds exactly the keep file's samples, so a conversion t
 was cut short, has none and is converted again. A conversion that finishes with other samples
 than the keep file's stops the run.
 
-`build` runs `opengwasdb ld build` with `--k` K, `--r-scale` PANEL_SCALE (ADR 0090) and
-`--t-partner` PANEL_T_PARTNER (ADR 0097), the panel's PC File,
-keep file and panel id, then `opengwasdb ld validate`, each at `--threads` (16) threads, `--builds`
-(2) panels at once. It refuses a store that already exists. When a panel fails, panels not yet
-started are cancelled and the one still running finishes; the run then stops with that failure.
+The LD Stores and Genotype Stores are built from these filesets in opengwas/opengwasdb-stores
+(`pixi run ld-stores build`, `tools/ld-stores/`; opengwasdb-stores#541), which runs
+`opengwasdb ld build` and `opengwasdb ld validate` and writes each Store's record. This script's
+`build` step moved there.
 
 Where things live, each overridable and each in `scripts/ld/test_panel/roots.py`:
-`$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_PCS`, `$OPENGWASDB_LD_KEEP`, `$OPENGWASDB_LD_PLINK2`,
-and the recipe's `$OPENGWASDB_LD_PGEN_V2` (the filesets), `$OPENGWASDB_LD_STORES` and
-`$OPENGWASDB_LD_SCRATCH` (the logs; each timing line carries `uptime`).
+`$OPENGWASDB_LD_PHASED_V2`, `$OPENGWASDB_LD_KEEP`, `$OPENGWASDB_LD_PLINK2`, the recipe's
+`$OPENGWASDB_LD_PGEN_V2` (the filesets) and `$OPENGWASDB_LD_SCRATCH` (the logs; each timing line
+carries `uptime`).
 """
 
 from __future__ import annotations
@@ -46,75 +44,25 @@ from test_panel.tools import (
 #: AFR first: it has the most variants, so its chr6 is the memory to watch.
 PANELS = ("AFR", "EUR", "EAS", "SAS", "AMR")
 CHROMS = tuple(range(1, 23))
-#: The stores' encoding (ADR 0090): `BuildInputs.r_scale` has no default, so the recipe names it.
-PANEL_SCALE = 511
-#: The Partner Rows' threshold (ADR 0097, D3): `BuildInputs.t_partner` has no default either, and
-#: 0.01 is the owner's for the HGDP+1kGP panels, below EUR's t_far 0.0319 (partner-rows §3, §11).
-PANEL_T_PARTNER = 0.01
-K = 10
 CONVERT_THREADS = 4
 CONVERT_MEMORY_MB = 16000
-BUILD_THREADS = 16
 MAX_CONVERSIONS = 8
-MAX_BUILDS = 2
 BCF = "hgdp1kgp_chr{chrom}.filtered.SNV_INDEL.phased.shapeit5.bcf"
-#: The program that reports a command's peak memory (`-v`) to a file (`-o`).
-TIME = "/usr/bin/time"
 
 
 def prefix(panel: str, chrom: int) -> Path:
     return root("OPENGWASDB_LD_PGEN_V2") / panel / f"chr{chrom}"
 
 
+def store_path(panel: str) -> Path:
+    """Where a published HGDP+1kGP LD Store is, the one place its name is spelt.
+    opengwas/opengwasdb-stores builds and records them (`tools/ld-stores/`); `scripts/ld/bench/`
+    and the acceptance runs read them."""
+    return root("OPENGWASDB_LD_STORES") / f"hgdp1kgp-v2-{panel}-k10.store"
+
+
 def keep_file(panel: str) -> Path:
     return root("OPENGWASDB_LD_KEEP") / f"{panel}.keep"
-
-
-def panel_id(panel: str) -> str:
-    return f"hgdp1kgp-v2-{panel}"
-
-
-def store_path(panel: str) -> Path:
-    return root("OPENGWASDB_LD_STORES") / f"{panel_id(panel)}-k{K}.store"
-
-
-def build_command(
-    panel: str, pgens: list[Path], store: Path, keep: Path, pcs: Path, threads: int
-) -> list[str]:
-    """`opengwasdb ld build` for one panel: k = K, r scale PANEL_SCALE, the unrelated keep, its PC
-    File."""
-    command = ["opengwasdb", "ld", "build", str(store)]
-    for pgen in pgens:
-        command += ["--pgen", str(pgen)]
-    return [
-        *command,
-        "--keep",
-        str(keep),
-        "--pcs",
-        str(pcs),
-        "--pc-source",
-        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {panel} (ADR 0088)",
-        "--panel-id",
-        panel_id(panel),
-        "--ancestry",
-        panel,
-        "--genotype-source",
-        f"HGDP+1kGP phased v2 (Koenig et al. 2024), {panel}, converted by build-inputs §3",
-        "--k",
-        str(K),
-        "--r-scale",
-        str(PANEL_SCALE),
-        "--t-partner",
-        str(PANEL_T_PARTNER),
-        "--info-min",
-        "none",
-        "--threads",
-        str(threads),
-    ]
-
-
-def validate_command(store: Path, threads: int) -> list[str]:
-    return ["opengwasdb", "ld", "validate", "--threads", str(threads), str(store)]
 
 
 def keep_iids(keep: Path) -> list[str]:
@@ -206,60 +154,14 @@ def convert(panels: list[str], jobs: int, threads: int, memory_mb: int) -> None:
     run_all(work, lambda w: convert_one(plink2, *w, threads, memory_mb), jobs)
 
 
-def timed(command: list[str], log: Path, stage: str) -> None:
-    """Run `command` under `TIME -v`, its stdout and the time report beside `log`, with `uptime`
-    before and after; a non-zero exit stops the run."""
-    stem = log.with_suffix("")
-    log_line(log, f"{stage} start {uptime()}")
-    with Path(f"{stem}.{stage}.out").open("w") as out:
-        done = subprocess.run(
-            [TIME, "-v", "-o", f"{stem}.{stage}.time", *command],
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    log_line(log, f"{stage} end rc={done.returncode} {uptime()}")
-    if done.returncode != 0:
-        raise SystemExit(f"{stage} failed ({done.returncode}); see {stem}.{stage}.out")
-
-
-def build_one(panel: str, threads: int) -> str:
-    keep, store = keep_file(panel), store_path(panel)
-    pcs = root("OPENGWASDB_LD_PCS") / f"{panel}.eigenvec"
-    pgens = [Path(f"{prefix(panel, c)}.pgen") for c in CHROMS]
-    missing = [str(p) for p in (keep, pcs, *pgens) if not p.exists()]
-    if missing:
-        raise SystemExit(f"{panel}: missing inputs: {', '.join(missing)}")
-    if store.exists():
-        raise SystemExit(
-            f"{store} exists; move it away or build under another $OPENGWASDB_LD_STORES"
-        )
-    store.parent.mkdir(parents=True, exist_ok=True)
-    log = root("OPENGWASDB_LD_SCRATCH") / f"{panel}.log"
-    timed(build_command(panel, pgens, store, keep, pcs, threads), log, "build")
-    timed(validate_command(store, threads), log, "validate")
-    return f"{panel}: built and validated, {store}"
-
-
-def build(panels: list[str], builds: int, threads: int) -> None:
-    if not 1 <= builds <= MAX_BUILDS:
-        raise SystemExit(f"--builds must be 1 to {MAX_BUILDS} (the node is shared)")
-    if not 1 <= threads <= BUILD_THREADS:
-        raise SystemExit(f"--threads must be 1 to {BUILD_THREADS} (the node is shared)")
-    run_all(panels, lambda p: build_one(p, threads), builds)
-
-
 def parse(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("convert", "build"):
-        one = sub.add_parser(name)
-        one.add_argument("--panel", action="append", choices=PANELS, help="default: all five")
-    sub.choices["convert"].add_argument("--jobs", type=int, default=MAX_CONVERSIONS)
-    sub.choices["convert"].add_argument("--threads", type=int, default=CONVERT_THREADS)
-    sub.choices["convert"].add_argument("--memory", type=int, default=CONVERT_MEMORY_MB)
-    sub.choices["build"].add_argument("--builds", type=int, default=MAX_BUILDS)
-    sub.choices["build"].add_argument("--threads", type=int, default=BUILD_THREADS)
+    one = sub.add_parser("convert")
+    one.add_argument("--panel", action="append", choices=PANELS, help="default: all five")
+    one.add_argument("--jobs", type=int, default=MAX_CONVERSIONS)
+    one.add_argument("--threads", type=int, default=CONVERT_THREADS)
+    one.add_argument("--memory", type=int, default=CONVERT_MEMORY_MB)
     args = parser.parse_args(argv)
     args.panel = list(dict.fromkeys(args.panel or PANELS))
     return args
@@ -267,10 +169,7 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse(argv)
-    if args.command == "convert":
-        convert(args.panel, args.jobs, args.threads, args.memory)
-    else:
-        build(args.panel, args.builds, args.threads)
+    convert(args.panel, args.jobs, args.threads, args.memory)
 
 
 if __name__ == "__main__":

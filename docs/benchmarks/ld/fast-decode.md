@@ -74,7 +74,8 @@ A reproducible wrapper, `scripts/ld/bench/fast_decode.py`, now runs opengwas/ogl
 records whole-clump SHA-256, distinct chunks counted at `_keep_run`, and full uptime beside
 every timing. The acceptance run of the stores samples first/middle/last chunks of every array in
 all five published stores against zarr (`pixi run -e dev acceptance-stores`, ogld#40); it needs
-no input variable, since `scripts/build_hgdp1kgp.py`'s `store_path` says where they are. That
+no input variable, since `$OPENGWASDB_LD_STORES` (`scripts/ld/test_panel/roots.py`) says where
+they are, and `$OPENGWASDB_LD_STORE` names any other. That
 sample reads every array of five whole stores, which took the realdata tier past its 5-minute
 budget, so it moved to the run that already reads them all.
 

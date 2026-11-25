@@ -344,8 +344,11 @@ expected failure naming the variable before it calls the code, so a missing inpu
 never reads as a defect. An acceptance run fails when an input is missing. The
 acceptance tasks are `ld-acceptance-clump` (`clump` against plink2 on the
 37 analyses of #403), `ld-acceptance-genotypes` (the Genotype Store equals the LD
-Store) and `ld-acceptance-stores` (the five HGDP+1kGP stores validate and decode
-as zarr does).
+Store) and `ld-acceptance-stores` (the five HGDP+1kGP stores, or any LD Store
+`$OPENGWASDB_LD_STORE` names, validate and decode as zarr does). The HGDP+1kGP
+LD Stores and Genotype Stores are built, recorded and rebuilt in
+opengwas/opengwasdb-stores (`tools/ld-stores/`, opengwasdb-stores#541);
+`scripts/ld/build_hgdp1kgp.py` only converts their inputs.
 
 A build's `threads` bounds BLAS and zarr from the moment `opengwasdb ld build`
 starts: importing numpy starts OpenBLAS's own pool, which does no work. Measure a

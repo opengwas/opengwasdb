@@ -7,8 +7,10 @@ every other array keeps its one shape. ogld#8 timed the reads on each, and the o
 (12 November 2026; ADR 0092). So each layout is a real build, by `opengwasdb ld build`, of the
 published EUR store's chr22, with `opengwasdb.ld.store.layout.NEAR_R` set for the run, as
 `tests/ld/test_assembly.py`
-sets it. The command is the recipe's (`build_hgdp1kgp.build_command`, which owns k, the scale,
-the panel id and the source strings), on its chr22 fileset, keep file and PC File.
+sets it. The command is `build_command` below: the one `scripts/ld/build_hgdp1kgp.py build` ran
+for the published EUR store when ogld#8 timed the layouts, kept here because that build step moved
+to opengwas/opengwasdb-stores (`tools/ld-stores/`, opengwasdb-stores#541). It reads the
+conversion's chr22 fileset and keep file (`build_hgdp1kgp.prefix`, `keep_file`) and the PC File.
 
     pixi run -e dev python scripts/ld/bench/build_layouts.py [OUT] [--layout A B C] [--threads 8]
 
@@ -33,7 +35,7 @@ import time
 from pathlib import Path
 from typing import Any, Final
 
-#: `scripts/`, where the recipe and the roots live.
+#: `scripts/`, where the conversion and the roots live.
 SCRIPTS: Final = Path(__file__).resolve().parent.parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -46,22 +48,48 @@ LAYOUTS: Final = {
     "B": (32_768, 16_777_216),
     "C": (262_144, 67_108_864),
 }
-#: The panel and the chromosome built, in the recipe's terms.
+#: The panel and the chromosome built, in the conversion's terms.
 PANEL: Final = "EUR"
 CHROM: Final = 22
+#: The published stores' encoding (ADR 0090), k and Partner Threshold (ADR 0097), as the
+#: HGDP+1kGP build gave them; `opengwasdb ld build` has no default scale or threshold.
+PANEL_SCALE: Final = 511
+PANEL_T_PARTNER: Final = 0.01
+K: Final = 10
 
 
 def build_command(store: Path, threads: int) -> list[str]:
-    """The recipe's `opengwasdb ld build` for the panel's one chromosome, without the program
-    name."""
+    """`opengwasdb ld build` for the panel's one chromosome, without the program name."""
     pgen = Path(f"{recipe.prefix(PANEL, CHROM)}.pgen")
     pcs = roots.root("OPENGWASDB_LD_PCS") / f"{PANEL}.eigenvec"
-    command: list[str] = recipe.build_command(
-        PANEL, [pgen], store, recipe.keep_file(PANEL), pcs, threads
-    )
-    if command[:3] != ["opengwasdb", "ld", "build"]:
-        raise SystemExit(f"the recipe's build command is not `opengwasdb ld build`: {command[:3]}")
-    return command[2:]
+    return [
+        "build",
+        str(store),
+        "--pgen",
+        str(pgen),
+        "--keep",
+        str(recipe.keep_file(PANEL)),
+        "--pcs",
+        str(pcs),
+        "--pc-source",
+        f"scripts/ld/make_pcs.py on HGDP+1kGP v2 {PANEL} (ADR 0088)",
+        "--panel-id",
+        f"hgdp1kgp-v2-{PANEL}",
+        "--ancestry",
+        PANEL,
+        "--genotype-source",
+        f"HGDP+1kGP phased v2 (Koenig et al. 2024), {PANEL}, converted by build-inputs §3",
+        "--k",
+        str(K),
+        "--r-scale",
+        str(PANEL_SCALE),
+        "--t-partner",
+        str(PANEL_T_PARTNER),
+        "--info-min",
+        "none",
+        "--threads",
+        str(threads),
+    ]
 
 
 def load() -> tuple[float, float, float]:

@@ -1,7 +1,7 @@
 """Every test under tests/ld/acceptance/ is in the `acceptance` tier (CONTRIBUTING.md, "Acceptance
 runs"): the default tier and the realdata tier deselect it. Each run has its own task:
 `pixi run -e dev acceptance-clump` runs `test_clump_equals_plink2.py` (ogld#6),
-`pixi run -e dev acceptance-stores` runs `test_hgdp1kgp_stores.py` (ogld#7), and
+`pixi run -e dev acceptance-stores` runs `test_hgdp1kgp_stores.py` (ogld#7) on any LD Store, and
 `pixi run -e dev acceptance-genotypes` runs
 `test_genotype_store_equals_ld_store.py` (ogld#91). Marking by directory means a test placed
 here cannot run in either tier by forgetting its marker."""
@@ -16,7 +16,8 @@ import pytest
 HERE = Path(__file__).resolve().parent
 # The run imports the scripts it exercises (`clump_rule`, `make_403_inputs`) by name.
 sys.path.insert(0, str(HERE.parents[2] / "scripts" / "ld" / "realdata"))
-# The stores' acceptance reads the recipe's constants and paths (`build_hgdp1kgp`), not copies.
+# The stores' acceptance reads where the published stores are, and the keep files, from their owner
+# (`build_hgdp1kgp`).
 sys.path.insert(0, str(HERE.parents[2] / "scripts" / "ld"))
 
 

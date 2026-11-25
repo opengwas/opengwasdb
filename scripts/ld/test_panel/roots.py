@@ -14,7 +14,7 @@ variable plus the rest of its path, and by hash, so no host path is committed.
 - `OPENGWASDB_LD_PGEN_V2`, default `/data/opengwasdb/work/ogld/phased_v2_pgen`:
   `scripts/ld/build_hgdp1kgp.py`'s conversions, one directory per panel (ogld#7);
 - `OPENGWASDB_LD_STORES`, default `/data/opengwasdb/work/ogld/stores`: the five HGDP+1kGP LD
-  Stores, staged there until ogld#9 chooses where they are published;
+  Stores, which opengwas/opengwasdb-stores builds and records (`tools/ld-stores/`, #541);
 - `OPENGWASDB_LD_SCRATCH`, default `/data/opengwasdb/work/ogld/scratch/7`: that script's logs
   and timings;
 - `OPENGWASDB_LD_403_ANALYSES`, default `/data/opengwasdb/work/ogld/realdata/403-analyses`:
