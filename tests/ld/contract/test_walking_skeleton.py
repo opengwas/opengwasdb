@@ -20,7 +20,7 @@ import zarr
 from ld_script_modules import load_script
 from support import alids, reference
 
-from opengwasdb.ld.store import StoreReader
+from ogquery.ld.store import StoreReader
 
 
 def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:

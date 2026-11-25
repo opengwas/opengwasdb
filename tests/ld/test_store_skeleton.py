@@ -20,8 +20,10 @@ from contract import support
 from ld_script_modules import load_script
 from store_copies import FLOOR, PARTNER_FLOOR, R_SCALE, T_PARTNER, codes_at
 
-from opengwasdb.ld.format import NEAR_BP, InputError, REncoding
-from opengwasdb.ld.store import StoreReader, StoreWriter, layout
+from opengwasdb.ld.format import NEAR_BP, REncoding
+from ogquery.ld.format import InputError
+from ogquery.ld.store import StoreReader
+from opengwasdb.ld.store import StoreWriter, layout
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 K = 10

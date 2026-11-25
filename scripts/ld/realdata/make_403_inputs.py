@@ -398,7 +398,7 @@ def prepare_chromosome(
 
 
 def prepare(out: Path, store: Path, jobs: int) -> dict[str, str]:
-    from opengwasdb.ld.store import StoreReader
+    from ogquery.ld.store import StoreReader
 
     reader = StoreReader.open(store)
     pins = check_pins(reader.provenance, GENOTYPES, KEEP)
@@ -510,7 +510,7 @@ def clump_analysis(
 
 
 def clump(out: Path, store: Path, jobs: int) -> None:
-    from opengwasdb.ld.store import StoreReader
+    from ogquery.ld.store import StoreReader
 
     reader = StoreReader.open(store)
     present = {a for c in map(str, range(1, 23)) for a in store_chromosome(reader, c)}

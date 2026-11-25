@@ -16,7 +16,7 @@ import numpy.typing as npt
 import pytest
 
 from opengwasdb.ld.build import diagnostic, tiles
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 
 MHC = (28_510_020, 33_480_577)
 WIDE_MHC_END = 35_032_223  # price2008_12_MHC_wide, the region that ends last on chromosome 6

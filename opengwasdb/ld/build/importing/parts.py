@@ -15,7 +15,7 @@ from typing import Any, BinaryIO, cast
 import numpy as np
 import numpy.typing as npt
 
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 
 
 def optional_module(name: str) -> Any:

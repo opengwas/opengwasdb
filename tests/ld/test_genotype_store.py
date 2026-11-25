@@ -24,7 +24,7 @@ def test_matrix_equals_the_independent_test_store(genotype_store: Path) -> None:
 
 def test_provenance_claims_partner_rows_for_both_store_kinds(genotype_store: Path) -> None:
     """`claims_partner_rows` is the capability rule: both kinds answer `clump` from t_partner."""
-    from opengwasdb.ld.format import claims_partner_rows
+    from ogquery.ld.format import claims_partner_rows
 
     ld = opengwasdb.ld.open(TEST_STORE).provenance
     sidecar = opengwasdb.ld.open(genotype_store).provenance

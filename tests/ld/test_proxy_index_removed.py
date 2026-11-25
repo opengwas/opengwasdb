@@ -34,7 +34,8 @@ from store_copies import (
 
 import opengwasdb.ld
 from opengwasdb.ld.format import VALIDATION_RULES, REncoding
-from opengwasdb.ld.store import StoreReader, layout
+from ogquery.ld.store import StoreReader
+from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.validation import validate_group
 
 #: The package whose source must not name the component.

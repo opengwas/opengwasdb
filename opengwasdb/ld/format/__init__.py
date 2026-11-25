@@ -9,53 +9,12 @@ validation rules (§12). Every other layer takes these from here, so no componen
 thresholds or refuses by a rule of its own. It imports nothing else from ogld.
 """
 
-from opengwasdb.ld.format.encoding import (
-    FAR_BP,
-    NEAR_BP,
-    T_FAR_MIN,
-    T_FAR_Q,
-    Codes,
-    REncoding,
-    t_far,
-)
-from opengwasdb.ld.format.geometry import near_row_lengths
-from opengwasdb.ld.format.provenance import (
-    FORMAT_VERSION,
-    PARTNER_ROWS_SINCE,
-    READABLE_FORMATS,
-    REQUIRED_KEYS,
-    VALIDATION_RULES,
-    Adjustment,
-    Build,
-    Counts,
-    Encoding,
-    Panel,
-    PcCheck,
-    PcDiagnostic,
-    PcFile,
-    PcNull,
-    PcScan,
-    Provenance,
-    Source,
-    Sourced,
-    SourceKind,
-    VariantFilters,
-    claims_partner_rows,
-    release_of,
-)
-from opengwasdb.ld.format.semantics import (
-    AnswerKind,
-    Decision,
-    InputError,
-    Refusal,
-    RefusalReason,
-    answer_kind,
-    answer_kinds,
-    judge_partner_request,
-    judge_region,
-    judge_request,
-    judge_window,
-)
+from opengwasdb.ld.format.encoding import FAR_BP, NEAR_BP, T_FAR_MIN, T_FAR_Q, REncoding, t_far
+from ogquery.ld.format.encoding import Codes
+from ogquery.ld.format.geometry import near_row_lengths
+from ogquery.ld.format.provenance import FORMAT_VERSION, PARTNER_ROWS_SINCE, READABLE_FORMATS, Adjustment, Build, Counts, Encoding, Panel, PcCheck, PcDiagnostic, PcFile, PcNull, PcScan, Provenance, Source, SourceKind, VariantFilters, claims_partner_rows, release_of
+from opengwasdb.ld.format.provenance import REQUIRED_KEYS, VALIDATION_RULES, Sourced
+from ogquery.ld.format.semantics import AnswerKind, Decision, InputError, Refusal, RefusalReason, answer_kind, answer_kinds, judge_partner_request, judge_region, judge_request, judge_window
 
 __all__ = [
     "FAR_BP",

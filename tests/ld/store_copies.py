@@ -22,7 +22,8 @@ from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore
 
 from opengwasdb.ld.format import REncoding, Sourced
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants
+from ogquery.ld.store import StoreReader, Variants
+from opengwasdb.ld.store import StoreWriter
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"

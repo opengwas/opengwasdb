@@ -17,7 +17,8 @@ import numpy as np
 import zarr
 from store_copies import copy_store
 
-from opengwasdb.ld.store import StoreReader, layout
+from ogquery.ld.store import StoreReader
+from opengwasdb.ld.store import layout
 
 
 def oracle(store: Path) -> dict[str, int]:

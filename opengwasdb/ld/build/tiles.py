@@ -22,7 +22,7 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from opengwasdb.ld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
+from ogquery.ld.format.geometry import near_row_lengths, owners, spans, stop_within, windows
 from opengwasdb.ld.genotypes import Block, r
 from opengwasdb.ld.store import Cut
 

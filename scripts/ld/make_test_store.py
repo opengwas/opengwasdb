@@ -46,10 +46,13 @@ import opengwasdb.ld
 from opengwasdb.ld.build import diagnostic, record, tiles
 from opengwasdb.ld.build.inputs import fileset, read_keep
 from opengwasdb.ld.build.pc_check import K_MIN
-from opengwasdb.ld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
-from opengwasdb.ld.format.geometry import chromosome_ranges, local_rows
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
+from ogquery.ld.format import Adjustment, PcCheck
+from opengwasdb.ld.format.geometry import chromosome_ranges
+from ogquery.ld.format.geometry import local_rows
 from opengwasdb.ld.genotypes import Genotypes
-from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.ld.store import StoreWriter
+from ogquery.ld.store import Variants
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.sorted_spelling import (
     SortedIdentity,

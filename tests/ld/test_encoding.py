@@ -26,7 +26,8 @@ from store_copies import R_SCALE, TEST_STORE, copy_store
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import RefusalReason, REncoding
+from ogquery.ld.format import RefusalReason
+from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store import layout
 
 CONTRACT = Path(__file__).resolve().parent / "contract"

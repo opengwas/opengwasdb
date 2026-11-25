@@ -26,7 +26,8 @@ from store_copies import TEST_STORE, copy_store, resharded
 import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.format.geometry import near_pair_of
-from opengwasdb.ld.store import StoreReader, layout
+from ogquery.ld.store import StoreReader
+from opengwasdb.ld.store import layout
 
 #: Inner chunks of 512 elements, 4 to a shard, as `test_store_reads.py` re-shards the Test Store.
 INNER, PER_SHARD = 512, 4

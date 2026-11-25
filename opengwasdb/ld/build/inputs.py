@@ -26,7 +26,7 @@ from typing import Final
 import numpy as np
 import numpy.typing as npt
 
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 
 #: Records a build reads at a time: bounds the genotype block a pass holds.
 CHUNK_RECORDS: Final = 65_536

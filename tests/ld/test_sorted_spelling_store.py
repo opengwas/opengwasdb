@@ -22,7 +22,7 @@ from ld_script_modules import load_script
 import opengwasdb.ld
 from opengwasdb.ld.build import passes
 from opengwasdb.ld.build.variant_set import Settings, variant_set
-from opengwasdb.ld.store import StoreReader
+from ogquery.ld.store import StoreReader
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.sorted_spelling import ReferenceFirstIndel

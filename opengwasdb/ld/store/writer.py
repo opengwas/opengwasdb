@@ -46,7 +46,8 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from opengwasdb.ld.format import Provenance, REncoding, Sourced
+from ogquery.ld.format import Provenance
+from opengwasdb.ld.format import REncoding, Sourced
 from opengwasdb.ld.format.geometry import chromosome_ranges
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.assembly import (
@@ -58,7 +59,7 @@ from opengwasdb.ld.store.assembly import (
     derive_alid_mmap,
     provenance,
 )
-from opengwasdb.ld.store.tables import Variants
+from ogquery.ld.store.tables import Variants
 from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
 

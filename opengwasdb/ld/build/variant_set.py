@@ -31,7 +31,7 @@ import numpy.typing as npt
 
 from opengwasdb.ld.build import pc_check
 from opengwasdb.ld.build.inputs import Fileset, Records, records
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 from opengwasdb.ld.genotypes import Genotypes
 from opengwasdb.store_reader.identity import (
     AUTOSOMES,

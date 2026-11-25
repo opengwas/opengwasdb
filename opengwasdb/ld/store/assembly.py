@@ -53,32 +53,12 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from opengwasdb.ld.format import (
-    FORMAT_VERSION,
-    T_FAR_Q,
-    Codes,
-    Counts,
-    InputError,
-    Provenance,
-    REncoding,
-    Sourced,
-    claims_partner_rows,
-    t_far,
-)
-from opengwasdb.ld.format.geometry import (
-    blocks,
-    chromosome_index,
-    indptr_of,
-    near_pair_of,
-    near_row_lengths,
-    owners,
-    spans_at,
-    stop_within,
-    windows,
-    within,
-)
+from ogquery.ld.format import FORMAT_VERSION, Codes, Counts, InputError, Provenance, claims_partner_rows
+from opengwasdb.ld.format import T_FAR_Q, REncoding, Sourced, t_far
+from ogquery.ld.format.geometry import blocks, chromosome_index, indptr_of, near_row_lengths, owners, stop_within, windows, within
+from opengwasdb.ld.format.geometry import near_pair_of, spans_at
 from opengwasdb.ld.store import frames, layout
-from opengwasdb.ld.store.location import ChunkCache, open_group
+from ogquery.ld.store.location import ChunkCache, open_group
 from opengwasdb.ld.store.validation import (
     PARTNER_RULES,
     ValidationFailed,

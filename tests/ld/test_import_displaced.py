@@ -14,7 +14,7 @@ from opengwasdb.ld.build.importing.lift import Lifted, far_distance
 from opengwasdb.ld.build.importing.run import ImportInputs, load_lifted
 from opengwasdb.ld.cli import main
 from opengwasdb.ld.format import NEAR_BP
-from opengwasdb.ld.store import Variants
+from ogquery.ld.store import Variants
 
 
 def literal_table() -> Lifted:

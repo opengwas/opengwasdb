@@ -14,10 +14,12 @@ A request the store cannot answer exactly raises `Refusal`, naming its reason.
 """
 
 from opengwasdb.ld.build import BuildInputs, build
-from opengwasdb.ld.format import AnswerKind, InputError, Provenance, Refusal, RefusalReason
-from opengwasdb.ld.query import Clumps, LDMatrix, LDStore, Proxies, open
+from ogquery.ld.format import AnswerKind, InputError, Provenance, Refusal, RefusalReason
+from ogquery.ld.query import Clumps, LDMatrix, LDStore, Proxies
+from opengwasdb.ld.query import open
 from opengwasdb.ld.query.validation import validate
-from opengwasdb.ld.store import Finding, Variants
+from opengwasdb.ld.store import Finding
+from ogquery.ld.store import Variants
 from opengwasdb.version import __version__
 
 __all__ = [

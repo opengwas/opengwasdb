@@ -7,7 +7,8 @@ only a
 caller's `fill` turns it into a number.
 """
 
-from opengwasdb.ld.query.ldstore import LDStore, open
-from opengwasdb.ld.query.results import Clumps, LDMatrix, Proxies
+from ogquery.ld.query.ldstore import LDStore
+from opengwasdb.ld.query.ldstore import open
+from ogquery.ld.query.results import Clumps, LDMatrix, Proxies
 
 __all__ = ["Clumps", "LDMatrix", "LDStore", "Proxies", "open"]

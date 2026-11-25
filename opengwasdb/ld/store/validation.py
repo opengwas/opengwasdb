@@ -39,27 +39,17 @@ import zarr
 from zarr.core.sync import sync
 from zarr.storage import LocalStore
 
-from opengwasdb.ld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, Codes, REncoding, t_far
-from opengwasdb.ld.format.geometry import (
-    blocks,
-    near_address,
-    near_pair_of,
-    near_row_lengths,
-    owners,
-    windows,
-    within,
-)
-from opengwasdb.ld.format.provenance import (
-    READABLE_FORMATS,
-    VALIDATION_RULES,
-    claims_partner_rows,
-    release_of,
-)
-from opengwasdb.ld.format.semantics import InputError
+from opengwasdb.ld.format.encoding import FAR_BP, NEAR_BP, T_FAR_Q, REncoding, t_far
+from ogquery.ld.format.encoding import Codes
+from ogquery.ld.format.geometry import blocks, near_address, near_row_lengths, owners, windows, within
+from opengwasdb.ld.format.geometry import near_pair_of
+from ogquery.ld.format.provenance import READABLE_FORMATS, claims_partner_rows, release_of
+from opengwasdb.ld.format.provenance import VALIDATION_RULES
+from ogquery.ld.format.semantics import InputError
 from opengwasdb.ld.store import layout
-from opengwasdb.ld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
-from opengwasdb.ld.store.layout import chromosomes_listed, never_data, shown_fill
-from opengwasdb.ld.store.location import frame_source, open_group
+from ogquery.ld.store.frames import Frame, FrameCache, PartnerFrames, open_partner_frames
+from ogquery.ld.store.layout import chromosomes_listed, never_data, shown_fill
+from ogquery.ld.store.location import frame_source, open_group
 from opengwasdb.store_reader.identity import VariantNormalisationError
 from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identity

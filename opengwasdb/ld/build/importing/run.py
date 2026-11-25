@@ -36,9 +36,11 @@ from opengwasdb.ld.build.importing.lift import (
 from opengwasdb.ld.build.importing.matrix import IntArray, MatrixSource, correlation, diagonal_mask
 from opengwasdb.ld.build.importing.policy import DISPLACED_CAP, FAR_TARGET_BP
 from opengwasdb.ld.build.record import sha256
-from opengwasdb.ld.format import NEAR_BP, Provenance, REncoding, Sourced
-from opengwasdb.ld.format.geometry import stop_within
-from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.ld.format import NEAR_BP, REncoding, Sourced
+from ogquery.ld.format import Provenance
+from ogquery.ld.format.geometry import stop_within
+from opengwasdb.ld.store import StoreWriter
+from ogquery.ld.store import Variants
 from opengwasdb.variants.normalise import chromosome_rank
 from opengwasdb.version import __version__
 

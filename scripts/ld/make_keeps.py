@@ -30,7 +30,7 @@ from test_panel.roots import META_NAME, root
 from test_panel.tools import relatedness
 
 from opengwasdb.ld.build.inputs import pc_file_iids
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 
 PANELS = ("EUR", "AFR", "EAS", "SAS", "AMR")
 

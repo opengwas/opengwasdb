@@ -18,7 +18,7 @@ import pytest
 import testdata
 
 import opengwasdb.ld
-from opengwasdb.ld.store import StoreReader
+from ogquery.ld.store import StoreReader
 
 N = 771
 

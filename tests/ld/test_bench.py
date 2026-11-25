@@ -307,7 +307,7 @@ def test_an_unknown_analysis_is_refused_not_dropped(
 def test_a_record_names_the_budget_of_the_cache_the_store_read_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from opengwasdb.ld.store.location import ChunkCache
+    from ogquery.ld.store.location import ChunkCache
 
     latency.instrument(None, 3, patch=monkeypatch.setattr)
     assert latency.opened(TEST_STORE)._reader.cache_bytes == 3 << 20, "--cache-mib sets it"
@@ -371,7 +371,7 @@ def test_every_lever_off_reads_as_before_ogld_32_and_answers_the_same(
 ) -> None:
     # `--without` measures ogld#32's levers one at a time against the reader ogld#8 measured:
     # each lever off is that reader's code, and no lever changes an answer.
-    from opengwasdb.ld.store import location
+    from ogquery.ld.store import location
 
     rows = np.arange(0, 1056, 9)
     alids = [str(a) for a in latency.opened(TEST_STORE)._reader.alids_of(rows)]
@@ -414,7 +414,7 @@ def test_the_count_before_ogld_32_is_the_cache_s_rule_one_string_at_a_time() -> 
     # Both count an ASCII string's bytes exactly, so they agree on ALIDs short and long.
     from numpy.dtypes import StringDType
 
-    from opengwasdb.ld.store import location
+    from ogquery.ld.store import location
 
     alids = [f"22:{i}:A:" + "C" * (i % 40) for i in range(2000)]
     chunk = np.array(alids, dtype=StringDType())

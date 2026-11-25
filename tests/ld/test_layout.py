@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from opengwasdb.ld.store.layout import chromosomes_listed, chromosomes_record
+from ogquery.ld.store.layout import chromosomes_listed
+from opengwasdb.ld.store.layout import chromosomes_record
 
 
 def test_the_record_lists_each_range_with_the_spec_keys_in_order() -> None:

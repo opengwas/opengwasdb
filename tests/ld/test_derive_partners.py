@@ -26,7 +26,7 @@ from store_copies import TEST_STORE, copy_store, unpartnered
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 from opengwasdb.ld.store import assembly
 from opengwasdb.ld.store.assembly import derive_partners
 from opengwasdb.ld.store.validation import (

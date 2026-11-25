@@ -41,7 +41,8 @@ T_PARTNER, SCALE = 0.01, 511
 
 def written(out: Path, block_rows: int) -> None:
     """The Test Store at `out`, each chromosome's rows cut in blocks of `block_rows`."""
-    from opengwasdb.ld.format.geometry import chromosome_ranges, stop_within
+    from opengwasdb.ld.format.geometry import chromosome_ranges
+    from ogquery.ld.format.geometry import stop_within
     from opengwasdb.ld.store import StoreWriter
 
     vs = make_test_store.variant_set()

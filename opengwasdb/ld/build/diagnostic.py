@@ -30,8 +30,9 @@ import numpy as np
 import numpy.typing as npt
 
 from opengwasdb.ld.build import tiles
-from opengwasdb.ld.format import FAR_BP, InputError, PcDiagnostic
-from opengwasdb.ld.format.geometry import windows
+from opengwasdb.ld.format import FAR_BP
+from ogquery.ld.format import InputError, PcDiagnostic
+from ogquery.ld.format.geometry import windows
 
 SEED: Final = 405
 MAX_VARIANTS: Final = 3_000

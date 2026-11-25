@@ -44,15 +44,12 @@ from opengwasdb.ld.build.inputs import (
     read_pc_file,
 )
 from opengwasdb.ld.build.variant_set import Chromosome, Pass
-from opengwasdb.ld.format import InputError
-from opengwasdb.ld.format.geometry import (
-    chromosome_index,
-    chromosome_ranges,
-    local_rows,
-    windows,
-)
+from ogquery.ld.format import InputError
+from ogquery.ld.format.geometry import chromosome_index, local_rows, windows
+from opengwasdb.ld.format.geometry import chromosome_ranges
 from opengwasdb.ld.genotypes import Covariates, Genotypes, covariates, prepare, r, residuals
-from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.ld.store import StoreWriter
+from ogquery.ld.store import Variants
 from opengwasdb.variants.sorted_spelling import SortedIdentity
 
 STRINGS: Final = np.dtypes.StringDType()

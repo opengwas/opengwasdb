@@ -15,16 +15,16 @@ from typing import cast
 
 import numpy.typing as npt
 
-from opengwasdb.ld.format import Provenance
+from ogquery.ld.format import Provenance
 from opengwasdb.ld.genotypes.reader import GenotypeReader
-from opengwasdb.ld.query import clumping, matrices
-from opengwasdb.ld.query import proxies as proxies_query
-from opengwasdb.ld.query.kind import GENOTYPE, open_kind
-from opengwasdb.ld.query.reader import Reader
-from opengwasdb.ld.query.results import Clumps, LDMatrix, Proxies
-from opengwasdb.ld.store import StoreReader
-from opengwasdb.ld.store.location import OpenedStore
-from opengwasdb.ld.store.reader import opened_ld
+from ogquery.ld.query import clumping, matrices
+from ogquery.ld.query import proxies as proxies_query
+from ogquery.ld.query.kind import GENOTYPE, open_kind
+from ogquery.ld.query.reader import Reader
+from ogquery.ld.query.results import Clumps, LDMatrix, Proxies
+from ogquery.ld.store import StoreReader
+from ogquery.ld.store.location import OpenedStore
+from ogquery.ld.store.reader import opened_ld
 
 
 class LDStore:

@@ -16,7 +16,8 @@ import pytest
 import opengwasdb.ld
 from opengwasdb.ld import cli
 from opengwasdb.ld.format import t_far
-from opengwasdb.ld.store import Partners, StoreReader
+from opengwasdb.ld.store import Partners
+from ogquery.ld.store import StoreReader
 
 EUR_K10 = t_far(771, 10)
 

@@ -40,8 +40,10 @@ from store_copies import (
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES, InputError
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, layout, validation
+from opengwasdb.ld.format import REQUIRED_KEYS, VALIDATION_RULES
+from ogquery.ld.format import InputError
+from ogquery.ld.store import StoreReader, Variants
+from opengwasdb.ld.store import StoreWriter, layout, validation
 from opengwasdb.ld.store.validation import ValidationFailed, validate_group
 
 #: The Partner Rows' ten rules (ld-store §12; partner-rows §10): the component's, and the provenance

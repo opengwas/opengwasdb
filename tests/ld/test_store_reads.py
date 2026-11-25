@@ -29,7 +29,7 @@ from contract.support import RangeHandler
 from store_copies import TEST_STORE, copy_store, resharded
 
 import opengwasdb.ld
-from opengwasdb.ld.store import StoreReader, decoding, location
+from ogquery.ld.store import StoreReader, decoding, location
 from opengwasdb.ld.store.validation import validate_group
 
 #: Inner chunks of 512 elements, 4 to a shard: chr22's Near Band is 136 chunks in 34 shards.

@@ -31,9 +31,9 @@ import numpy as np
 import zarr
 from derive_common import derive_each
 
-from opengwasdb.ld.store import StoreReader
+from ogquery.ld.store import StoreReader
 from opengwasdb.ld.store.assembly import derive_far_pairs
-from opengwasdb.ld.store.layout import chromosomes_listed
+from ogquery.ld.store.layout import chromosomes_listed
 
 #: Where the Far Pairs are written until every chromosome's are, and counted: then it is renamed
 #: `far/`. A reader ignores it (ld-store §1), and no other writer makes it.

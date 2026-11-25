@@ -10,10 +10,11 @@ lookup — which any reader composes (#94). It imports `opengwasdb.ld.format` an
 """
 
 from opengwasdb.ld.store.assembly import Cut
-from opengwasdb.ld.store.reader import StoreReader
-from opengwasdb.ld.store.tables import Partners, Variants
+from ogquery.ld.store.reader import StoreReader
+from opengwasdb.ld.store.tables import Partners
+from ogquery.ld.store.tables import Variants
 from opengwasdb.ld.store.validation import Finding, ValidationFailed, validate
-from opengwasdb.ld.store.variants import VariantTable
+from ogquery.ld.store.variants import VariantTable
 from opengwasdb.ld.store.writer import StoreWriter
 
 __all__ = [

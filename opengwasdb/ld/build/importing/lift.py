@@ -18,7 +18,7 @@ import numpy.typing as npt
 from opengwasdb.ld.build.importing.matrix import IntArray
 from opengwasdb.ld.build.importing.parts import optional_module
 from opengwasdb.ld.format import NEAR_BP
-from opengwasdb.ld.store import Variants
+from ogquery.ld.store import Variants
 from opengwasdb.store_reader.identity import AUTOSOMES, VariantNormalisationError
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.sorted_spelling import sorted_identity

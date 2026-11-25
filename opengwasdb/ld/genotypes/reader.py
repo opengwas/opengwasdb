@@ -22,15 +22,16 @@ import numpy as np
 import numpy.typing as npt
 from threadpoolctl import threadpool_limits
 
-from opengwasdb.ld.format import Codes, InputError, Provenance, REncoding
-from opengwasdb.ld.format.geometry import global_rows, local_rows, position_rows
+from ogquery.ld.format import Codes, InputError, Provenance
+from opengwasdb.ld.format import REncoding
+from ogquery.ld.format.geometry import global_rows, local_rows, position_rows
 from opengwasdb.ld.genotypes.adjust import Block, r
 from opengwasdb.ld.genotypes.layout import KEY, VERSION, Fileset, mapped_arrays, open_filesets
 from opengwasdb.ld.genotypes.pgen import Genotypes, import_pgenlib
-from opengwasdb.ld.store.location import ChunkCache, OpenedStore, open_group
-from opengwasdb.ld.store.tables import Variants
-from opengwasdb.ld.store.variants import VariantTable
-from opengwasdb.ld.store.workers import ComponentWorkers
+from ogquery.ld.store.location import ChunkCache, OpenedStore, open_group
+from ogquery.ld.store.tables import Variants
+from ogquery.ld.store.variants import VariantTable
+from ogquery.ld.store.workers import ComponentWorkers
 
 _READ_ROWS = 8192
 _BLAS_LOCK = threading.Lock()
