@@ -200,9 +200,48 @@ per-file-target-version = { "opengwasdb/ld/**" = "py312", "tests/ld/**" = "py312
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# `opengwasdb.store_reader` re-exports `ogquery` module for module (#475): a star import
-# is the whole of such a module, and an import nothing uses is what it is for.
-"opengwasdb/store_reader/**" = ["F401", "F403"]
+# `opengwasdb.store_reader` re-exports `ogquery` module for module (#475): a star import is
+# the whole of such a module, and an import nothing uses is what it is for. One entry per
+# re-export, so `facade.py` and `rho.py`, which are real code until #495, stay linted;
+# `tests/test_store_reader_is_ogquery.py` holds this list to the files that are re-exports.
+"opengwasdb/store_reader/__init__.py" = ["F401", "F403"]
+"opengwasdb/store/query_digests.py" = ["F401", "F403"]
+"opengwasdb/store_reader/alid.py" = ["F401", "F403"]
+"opengwasdb/store_reader/alid_index.py" = ["F401", "F403"]
+"opengwasdb/store_reader/alid_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/analyses.py" = ["F401", "F403"]
+"opengwasdb/store_reader/arrays.py" = ["F401", "F403"]
+"opengwasdb/store_reader/assembly.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/__init__.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/cells.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/csr.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/dense.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/record.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/subset.py" = ["F401", "F403"]
+"opengwasdb/store_reader/by_variant.py" = ["F401", "F403"]
+"opengwasdb/store_reader/csr.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/__init__.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/codec.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/plan.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/planes.py" = ["F401", "F403"]
+"opengwasdb/store_reader/enums.py" = ["F401", "F403"]
+"opengwasdb/store_reader/format.py" = ["F401", "F403"]
+"opengwasdb/store_reader/hybrid.py" = ["F401", "F403"]
+"opengwasdb/store_reader/identity.py" = ["F401", "F403"]
+"opengwasdb/store_reader/indexed.py" = ["F401", "F403"]
+"opengwasdb/store_reader/layout.py" = ["F401", "F403"]
+"opengwasdb/store_reader/manifest.py" = ["F401", "F403"]
+"opengwasdb/store_reader/npy_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/panel_axis.py" = ["F401", "F403"]
+"opengwasdb/store_reader/position_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/release.py" = ["F401", "F403"]
+"opengwasdb/store_reader/resolve.py" = ["F401", "F403"]
+"opengwasdb/store_reader/rsid_index.py" = ["F401", "F403"]
+"opengwasdb/store_reader/source_alid_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/stats.py" = ["F401", "F403"]
+"opengwasdb/store_reader/stored.py" = ["F401", "F403"]
+"opengwasdb/store_reader/top_hits.py" = ["F401", "F403"]
+"opengwasdb/store_reader/variant_axis.py" = ["F401", "F403"]
 
 [tool.mypy]
 # The floor is Python 3.12 with the zarr 3.4 pin (#244), and zarr-python 3.4 uses
@@ -211,6 +250,12 @@ select = ["E", "F", "I", "UP", "B"]
 # line.
 python_version = "3.12"
 strict = true
+
+# `store.query_digests` star-imports `ogquery.digests` and overrides two of its functions
+# (#475); mypy reads the override as a redefinition. Only that code, only that module.
+[[tool.mypy.overrides]]
+module = ["opengwasdb.store.query_digests"]
+disable_error_code = ["no-redef"]
 
 [[tool.mypy.overrides]]
 module = ["numcodecs", "pandas", "pysam", "zarr"]

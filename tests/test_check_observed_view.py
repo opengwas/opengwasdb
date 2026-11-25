@@ -17,6 +17,7 @@ import numpy as np
 import plane_edits
 import pytest
 import test_dense_completion as tdc
+import zarr
 from cli_output import normalize_cli_output
 from dense_sources import build_dense_fixture
 from format_0_2_3 import component_as_0_2_3
@@ -615,6 +616,10 @@ def _small_chunked_pair(
     complete_dense_store(
         observed, completed, tdc._make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0
     )
+    # The patched shard shape reached the writer AND is the one the readers will check: a
+    # patch that missed one side would build the fixture at another geometry (#475).
+    z = zarr.open_group(str(completed / "data.zarr"), mode="r")["z"]
+    assert (z.shards[0], z.chunks[0]) == (4, 2)  # rows: the patch reached the writer
     return observed, completed
 
 
@@ -770,3 +775,25 @@ def test_a_store_missing_its_alid_index_is_refused_not_scanned(pair, absent):
 
     with pytest.raises(MissingAlidIndex, match="variant_alid_bytes.npy"):
         check_observed_view(observed, completed, seed=1)
+
+
+def test_an_axis_rows_that_fails_to_open_closes_its_axis(monkeypatch, tmp_path):
+    """`_AxisRows` holds the Variant Axis its ALID index reads through; when `__init__` raises
+    nobody holds the object, so it must release the axis (ogquery 0.2 `close()`) itself."""
+    from types import SimpleNamespace
+
+    from opengwasdb.validation import observed_view
+
+    closed = []
+
+    class Index:
+        def unindexed_rows(self, n_rows):
+            raise RuntimeError("index unreadable")
+
+    axis = SimpleNamespace(alid_index=Index(), close=lambda: closed.append(True))
+    store = SimpleNamespace(shared_root=tmp_path, variant_axis=lambda aliases: axis)
+    monkeypatch.setattr(observed_view, "open_store", lambda path: store)
+
+    with pytest.raises(RuntimeError, match="index unreadable"):
+        observed_view._AxisRows(tmp_path, 3)
+    assert closed == [True]

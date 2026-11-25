@@ -46,6 +46,8 @@ def _config_following_zarr(tmp_path: Path) -> Path:
 
 
 def _ini(value: object) -> str:
+    if isinstance(value, list):  # an ini file spells a list as comma-separated
+        return ", ".join(map(str, value))
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 

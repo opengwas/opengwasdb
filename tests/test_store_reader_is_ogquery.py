@@ -99,13 +99,48 @@ def test_the_in_tree_remainder_reads_through_one_class_of_each() -> None:
     import ogquery.manifest
     import ogquery.release
 
+    import opengwasdb.store_reader.manifest as shim_manifest
     from opengwasdb.store_reader import facade, rho
 
     assert facade.StoreRelease is ogquery.release.StoreRelease
-    assert rho.DenseRhoReader.__module__ == "opengwasdb.store_reader.rho"
-    import opengwasdb.store_reader.manifest as shim_manifest
-
     assert shim_manifest.StoreManifest is ogquery.manifest.StoreManifest
+    # Both really are the in-tree files, with code of their own, and not re-exports.
+    for module in (facade, rho):
+        assert Path(module.__file__) == PACKAGE / f"{module.__name__.rpartition('.')[2]}.py"
+        tree = ast.parse(Path(module.__file__).read_text())
+        assert any(isinstance(node, ast.ClassDef) for node in tree.body)
+
+
+@pytest.mark.xfail(strict=True, reason="phase 3: facade.py shimmed after #495")
+def test_both_ways_to_a_query_facade_return_the_same_class(dense_store_path) -> None:
+    """`StoreRelease.query()` is ogquery's facade; `query_store` builds the in-tree one. They
+    are one class only once `facade.py` is shimmed, and until then #495's edit to the in-tree
+    file makes them differ."""
+    from opengwasdb.query import query_store
+    from opengwasdb.store.open import open_store
+
+    with open_store(dense_store_path).query() as through_release:
+        with query_store(dense_store_path) as through_query_store:
+            assert type(through_release) is type(through_query_store)
+
+
+def test_the_ruff_ignore_covers_the_re_exports_and_nothing_else() -> None:
+    """`F401`/`F403` are ignored per file for the re-exports, so the code left in-tree
+    (`facade.py`, `rho.py`) is still linted."""
+    import tomllib
+
+    ignores = tomllib.loads((PACKAGE.parent.parent / "pyproject.toml").read_text())
+    listed = {
+        path
+        for path, rules in ignores["tool"]["ruff"]["lint"]["per-file-ignores"].items()
+        if path.startswith("opengwasdb/store_reader/") and set(rules) == {"F401", "F403"}
+    }
+    shims = {
+        path.relative_to(PACKAGE.parent.parent).as_posix()
+        for path in PACKAGE.rglob("*.py")
+        if path.stem not in STAYS_IN_TREE
+    }
+    assert listed == shims
 
 
 def test_the_digests_default_to_query_store_and_nothing_else_knows_it() -> None:

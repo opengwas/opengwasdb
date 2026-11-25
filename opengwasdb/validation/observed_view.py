@@ -58,6 +58,7 @@ from opengwasdb.store_reader.alid_index import UNINDEXED, AlidIndex, open_alid_i
 from opengwasdb.store_reader.arrays import inner_chunk_of
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.panel_axis import AnyVariantAxis
 
 __all__ = [
     "FAILING_COUNTERS",
@@ -441,14 +442,18 @@ class _AxisRows:
         store = open_store(path)
         # The axis stays open as long as this object reads its index: closing it
         # releases the index's memory maps, and a read after that raises (ogquery 0.2).
-        self._axis: Any = None
+        self._axis: AnyVariantAxis | None = None
         if store.shared_root is not None:
             # A 0.3.0 Dense Component: the shared index, in its panel rows (#472).
             self._axis = store.variant_axis(aliases=False)
             self._index: AlidIndex = self._axis.alid_index
         else:
             self._index = open_alid_index(path, store.manifest.format_version)
-        self.unindexed = self._index.unindexed_rows(n_rows)
+        try:
+            self.unindexed = self._index.unindexed_rows(n_rows)
+        except BaseException:
+            self.close()  # nobody holds this object to close it
+            raise
         self._scanned: dict[int, str] | None = None
 
     def close(self) -> None:

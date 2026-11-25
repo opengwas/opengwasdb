@@ -186,7 +186,11 @@ def test_a_missing_variant_table_raises_rather_than_crashing(hybrids):
 
 def test_the_hybrid_query_reads_one_axis(hybrids):
     """The nested Dense query reads the facade's own shared axis, in panel rows, and the
-    shared Analyses: nothing is resolved against a second index (#472)."""
+    shared Analyses: nothing is resolved against a second index (#472).
+
+    This goes through `StoreRelease.query()`, which is ogquery's facade (#475), not the
+    in-tree one `query_store` builds; the two are one class only after phase 3
+    (`test_store_reader_is_ogquery`)."""
     with open_store(hybrids["hybrid_completed"]).query() as query:
         nested = query._dense._variant_axis
         assert isinstance(nested, PanelVariantAxis)

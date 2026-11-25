@@ -174,7 +174,11 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
         patch.setattr(dense_complete, "DEFAULT_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "_BAND_ROWS", 6)
         observed = _build_observed(root, chunk_shape=(2, 1))
-        return observed, _complete(observed, root)
+        completed = _complete(observed, root)
+    z = open_store(completed).dense_component().arrays(mode="r")["z"]
+    # Rows: the patch reached the writer.
+    assert (z.shards[0], z.chunks[0]) == (4, 2)  # the patch reached the writer
+    return observed, completed
 
 
 @pytest.fixture

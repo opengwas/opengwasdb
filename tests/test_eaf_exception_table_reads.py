@@ -102,6 +102,8 @@ def chunked_store(tmp_path: Path, monkeypatch: MonkeyPatch) -> Path:
         "\n".join(f"1:{row + 1}:A:G" for row in range(SMALL_VARIANTS)) + "\n", encoding="utf-8"
     )
     _build(store, NAME, listing)
+    table = _root(store)[EAF_EXCEPTION_INDEX]
+    assert int(table.chunks[0]) == 64 < int(table.shape[0]), "the table must span several pages"
     return store
 
 
