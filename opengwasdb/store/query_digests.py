@@ -261,8 +261,8 @@ def query_shapes(
     records = [variants[key] for key in sorted(variants)]
     identifiers = _identifiers(_spread(records, N_VARIANTS_ASKED))
     shapes: dict[str, Callable[[], Any]] = {}
+    last = _range_last(records, len(analyses))
     for observed_only, flag in ((False, "all"), (True, "observed_only")):
-        last = _range_last(records, len(analyses))
         asking = _Asking(q, ids, identifiers, records[0], last, observed_only)
         shapes.update({f"{name}/{flag}": shape for name, shape in asking.shapes().items()})
     return shapes
@@ -278,6 +278,17 @@ def _range_last(records: list[dict[str, Any]], n_analyses: int) -> dict[str, Any
     millions of rows on each side (ADR 0105 §3: 844 M cells on OGS-00016); bounded, it
     still asks the range path over many rows, and every fixture release asks it unbounded.
     """
+    narrowed = narrowed_range_question(records, n_analyses)
+    return records[-1] if narrowed is None else {**records[-1], "position": narrowed["end"]}
+
+
+def narrowed_range_question(
+    records: list[dict[str, Any]], n_analyses: int
+) -> dict[str, Any] | None:
+    """The range PheWAS as `_range_last` narrows it, or None where it is asked over its
+    whole span (every fixture release). Where it is narrowed the proof is weaker, so
+    `release_answers` says so (``narrowed_range_question``) and the rewrite records it
+    beside the range questions it could not pose (#492)."""
     limit = max(1, min(RANGE_ROWS_ASKED, RANGE_CELLS_ASKED // max(n_analyses, 1)))
     first, last = records[0], records[-1]
     positions = [
@@ -286,8 +297,16 @@ def _range_last(records: list[dict[str, Any]], n_analyses: int) -> dict[str, Any
         if r["chromosome"] == first["chromosome"] and int(r["position"]) <= int(last["position"])
     ]
     if len(positions) <= limit:
-        return last
-    return {**last, "position": positions[limit - 1]}
+        return None
+    return {
+        "chromosome": str(first["chromosome"]),
+        "start": int(first["position"]),
+        "end": positions[limit - 1],
+        "unbounded_end": int(last["position"]),
+        "variants": limit,
+        "unbounded_variants": len(positions),
+        "analyses": n_analyses,
+    }
 
 
 def _identifiers(asked: list[dict[str, Any]]) -> list[str]:
@@ -650,6 +669,7 @@ def release_answers(
             **{kind: {} for kind in VALUES},
             **{section: {} for section in SECTIONS},
             "unposed_range_questions": unposed_range_questions(range_questions(variants)),
+            **_narrowed(variants, len(analyses)),
         }
         shown: dict[str, Any] = {
             "variants_table": _readable_variants(variants),
@@ -659,6 +679,13 @@ def release_answers(
         for question, answer in _walk(q, variants, path):
             _render(q, question, answer, digests, shown if readable else None)
     return {"digests": digests, "readable": shown} if readable else {"digests": digests}
+
+
+def _narrowed(variants: dict[int, dict[str, Any]], n_analyses: int) -> dict[str, Any]:
+    """``narrowed_range_question`` where the bound narrows the range PheWAS; nothing where
+    it does not, as on every fixture release, whose answers stay as committed (#474)."""
+    narrowed = narrowed_range_question([variants[k] for k in sorted(variants)], n_analyses)
+    return {} if narrowed is None else {"narrowed_range_question": narrowed}
 
 
 def _render(
@@ -896,6 +923,7 @@ __all__ = [
     "differences",
     "digest_array",
     "query_shapes",
+    "narrowed_range_question",
     "range_questions",
     "Question",
     "SECTIONS",

@@ -49,6 +49,11 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.encoding.codec import SE_FLOAT16_MAX, se_above_bound
+from opengwasdb.store.legacy_masking import (
+    cell_coordinates,
+    cell_positions,
+    planes_not_rewritten,
+)
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.store.rewrite import RewriteContext, RewriteError
 from opengwasdb.store_reader.associations import Cells, DenseGridReader, State
@@ -63,6 +68,9 @@ LEGACY_SOURCE_VERSIONS = ("0.2.0", "0.2.1", "0.2.2")
 INDEL_ORDER_RULE = "variant_table.indel_order"
 SOURCE_ALID_RULE = "variant_table.source_alid"
 ROUNDED_SE_RULE = "side_tables.se_exceptions_rounded"
+
+#: Every rule a conversion can record: the only rules `validate` lowers for one.
+DEVIATION_RULES = (INDEL_ORDER_RULE, SOURCE_ALID_RULE, ROUNDED_SE_RULE)
 
 #: The provenance key a converted release records, and a rebuild never writes.
 CONVERTED_FROM = "converted_from"
@@ -122,12 +130,9 @@ class LegacyPlan:
         return tuple(found)
 
     @property
-    def masked_rows(self) -> np.ndarray:
-        return self.masked // self.n_analyses
-
-    @property
-    def masked_analyses(self) -> np.ndarray:
-        return self.masked % self.n_analyses
+    def masked_cells(self) -> tuple[np.ndarray, np.ndarray]:
+        """The masked cells' rows and Analyses."""
+        return cell_coordinates(self.masked, self.n_analyses)
 
     def source_alid(self, row: int, alid: str, carried: str | None) -> str | None:
         """Row `row`'s `source_alid` after the conversion: `carried`, the table's, on a
@@ -161,6 +166,73 @@ class LegacyPlan:
         }
 
 
+def judge_converted_from(record: Any) -> tuple[tuple[str, ...], list[str]]:
+    """The deviations a release's `provenance.converted_from` may record, and why each
+    other one may not: the one judge of the record, which `validate` lowers rules by
+    and fails a release for (`manifest.converted_from`, #492).
+
+    A deviation is accepted only if it is one of `DEVIATION_RULES` and the record says
+    why it holds: `variant_table.source_alid` only where `lifted` is true;
+    `variant_table.indel_order` only from a source before 0.2.2; and
+    `side_tables.se_exceptions_rounded` only with its counts. Anything else is a fault:
+    a hand-edited or mistaken record must not silence a rule."""
+    if not isinstance(record, dict):
+        return (), ["provenance.converted_from is not an object"]
+    listed = record.get("deviations")
+    if not isinstance(listed, list) or not all(isinstance(rule, str) for rule in listed):
+        return (), [f"provenance.converted_from.deviations is {listed!r}, not a list of rules"]
+    accepted, faults = [], []
+    for rule in listed:
+        why_not = _why_not_recorded(rule, record)
+        if why_not:
+            faults.append(f"provenance.converted_from.deviations lists {rule!r}, {why_not}")
+        else:
+            accepted.append(rule)
+    return tuple(accepted), faults
+
+
+def _why_not_recorded(rule: str, record: dict[str, Any]) -> str:
+    """Why `record` may not list `rule`, or ``""`` where it may."""
+    if rule not in DEVIATION_RULES:
+        return f"which no conversion records (it records only {', '.join(DEVIATION_RULES)})"
+    return _UNJUSTIFIED[rule](record)
+
+
+def _not_lifted(record: dict[str, Any]) -> str:
+    if record.get("lifted") is True:
+        return ""
+    return "but the record does not say the release was lifted"
+
+
+def _not_sorted(record: dict[str, Any]) -> str:
+    if _sorts_indels(record.get("source_format_version")):
+        return ""
+    return (
+        f"but its source_format_version {record.get('source_format_version')!r} already "
+        "spells indels reference first"
+    )
+
+
+def _not_counted(record: dict[str, Any]) -> str:
+    counts = (record.get("se_exceptions_rounded"), record.get("se_exceptions"))
+    if all(isinstance(n, int) for n in counts):
+        return ""
+    return "without the counts se_exceptions_rounded and se_exceptions"
+
+
+#: Each deviation rule, and why a record would not justify it.
+_UNJUSTIFIED = {
+    INDEL_ORDER_RULE: _not_sorted,
+    SOURCE_ALID_RULE: _not_lifted,
+    ROUNDED_SE_RULE: _not_counted,
+}
+
+
+def _sorts_indels(version: Any) -> bool:
+    """Whether `version` is a 0.2 source before 0.2.2, whose indels are sorted."""
+    return version in LEGACY_SOURCE_VERSIONS and not indels_reference_first(str(version))
+
+
 def _rounded_record(plan: LegacyPlan) -> dict[str, int]:
     if plan.rounded_se is None:
         return {}
@@ -168,24 +240,41 @@ def _rounded_record(plan: LegacyPlan) -> dict[str, int]:
     return {"se_exceptions_rounded": exact, "se_exceptions": total}
 
 
-def _refused(message: str) -> LegacyConversionError:
-    return LegacyConversionError(message)
-
-
 def refuse_unconvertible(store: OpenGWASDBStore, version: str) -> None:
     """Refuse a source `--convert-legacy` does not take, from its manifest alone."""
     if version not in LEGACY_SOURCE_VERSIONS:
-        raise _refused(
+        raise LegacyConversionError(
             f"{store.path}: format_version is {version}; --convert-legacy converts only a "
             f"{', '.join(LEGACY_SOURCE_VERSIONS)} release (a 0.2.3 one is rewritten "
             "without the flag)"
         )
     layout = store.manifest.primary_layout
     if layout is not PrimaryStorageLayout.DENSE:
-        raise _refused(
+        raise LegacyConversionError(
             f"{store.path}: primary_layout is {layout.value}; --convert-legacy converts only a "
             "Dense release (#492). Rebuild a Ragged or Hybrid one from source"
         )
+    _refuse_other_planes(store)
+
+
+def _refuse_other_planes(store: OpenGWASDBStore) -> None:
+    """Refuse, before a cell is read, a release whose grid or Indexed Variant Subsets
+    carry a plane a masked cell is not rewritten in (`legacy_masking`)."""
+    from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
+
+    root = store.arrays()
+    groups = [("data.zarr", root)]
+    if INDEXED_SUBSETS_GROUP in root:
+        subsets = root[INDEXED_SUBSETS_GROUP]
+        groups += [(f"subset {name}", subsets[name]) for name in sorted(subsets.group_keys())]
+    for where, group in groups:
+        held = planes_not_rewritten(group)
+        if held:
+            raise LegacyConversionError(
+                f"{store.path}: {where} carries {', '.join(held)}, which a cell masked for an "
+                "SE above 65,504 is not rewritten in; --convert-legacy does not convert it: "
+                "rebuild it from source"
+            )
 
 
 def plan_conversion(
@@ -228,7 +317,7 @@ def _read_cells(grid: DenseGridReader) -> tuple[np.ndarray, np.ndarray, np.ndarr
     for r0, r1 in _bands(grid):
         cells = grid.inspect(Cells.variants(np.arange(r0, r1, dtype=np.int64)))
         rows = cells.variant_index.astype(np.int64)
-        flat = rows * m + cells.analysis_index
+        flat = cell_positions(rows, cells.analysis_index, m)
         over = se_above_bound(cells.se)
         over_bound.append(flat[over])
         if cells.flags is not None:
@@ -261,11 +350,11 @@ def _bands(grid: DenseGridReader) -> Iterator[tuple[int, int]]:
 
 def _refuse_masked_fills(store: OpenGWASDBStore, fills: np.ndarray, n_analyses: int) -> None:
     if fills.size:
-        first = int(fills.min())
-        raise _refused(
+        rows, analyses = cell_coordinates(fills[:1], n_analyses)
+        raise LegacyConversionError(
             f"{store.path}: {fills.size:,} imputed cell(s) hold an SE above "
-            f"{SE_FLOAT16_MAX:,.0f} (first, row {first // n_analyses}, Analysis "
-            f"{first % n_analyses}). Masking one would leave its block's completion_quality "
+            f"{SE_FLOAT16_MAX:,.0f} (first, row {int(rows[0])}, Analysis "
+            f"{int(analyses[0])}). Masking one would leave its block's completion_quality "
             "row counting a missing cell as imputed, and the release records no "
             "block-to-cell membership to correct it by: rebuild it from source"
         )
@@ -301,9 +390,9 @@ def _quality_missing(
     from opengwasdb.store.legacy_quality import UnattributableCell, attribute
 
     try:
-        counted = attribute(store, positions // n_analyses, positions % n_analyses)
+        counted = attribute(store, *cell_coordinates(positions, n_analyses))
     except UnattributableCell as exc:
-        raise _refused(str(exc)) from exc
+        raise LegacyConversionError(str(exc)) from exc
     return tuple(sorted(counted.items()))
 
 
@@ -315,7 +404,7 @@ def _panel_rows(store: OpenGWASDBStore, unobserved: np.ndarray) -> np.ndarray:
         return np.empty(0, dtype=np.int64)
     added = manifest.provenance.get("completion", {}).get("n_variants_new")
     if not isinstance(added, int) or added != unobserved.size:
-        raise _refused(
+        raise LegacyConversionError(
             f"{store.path}: {unobserved.size:,} row(s) hold no observed cell, but the "
             f"completion records n_variants_new={added!r}. The rows a source observed "
             "cannot then be told from those completion added, so no row's source_alid "
@@ -385,12 +474,14 @@ def name_own_source_alids(context: RewriteContext, plan: LegacyPlan) -> None:
 
     written = rewrite_source_alid_column(context.staged, named)
     if contradicting:
-        raise _refused(
+        raise LegacyConversionError(
             f"{context.source}: the Variant Table names another ALID as a row's source_alid "
             f"({contradicting[0]}), so the release lifted it; it is converted with --lifted"
         )
     if written != plan.n_variants:
-        raise _refused(f"the Variant Table holds {written} rows, the grid {plan.n_variants}")
+        raise LegacyConversionError(
+            f"the Variant Table holds {written} rows, the grid {plan.n_variants}"
+        )
 
 
 def stamped(manifest: dict[str, Any], plan: LegacyPlan, record: dict[str, Any]) -> dict[str, Any]:
@@ -426,10 +517,12 @@ def expected_query(plan: LegacyPlan) -> Any:
 
 __all__ = [
     "CONVERTED_FROM",
+    "DEVIATION_RULES",
     "LEGACY_SOURCE_VERSIONS",
     "LegacyConversion",
     "LegacyConversionError",
     "LegacyPlan",
+    "judge_converted_from",
     "expected_query",
     "count_in_quality",
     "mask_out_of_range",

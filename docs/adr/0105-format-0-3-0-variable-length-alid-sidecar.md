@@ -173,6 +173,16 @@ variants, not in rows, and on a large Dense release some cannot run. Measured on
 No bounded variant of the proof is built: under the owner's decision no large release is
 rewritten.
 
+*Note, 25 Nov 2026 (#492):* superseded. The owner's decision that day converts the large
+priority Stores, so the proof is bounded: its range PheWAS spans at most 10,000 variants and
+2,500,000 cells (`RANGE_ROWS_ASKED`, `RANGE_CELLS_ASKED`), for every source, 0.2.3 included.
+Where the bound narrows it, `release_answers` names the narrowed range
+(`narrowed_range_question`), the log says so, and `format_rewrite.range_question_narrowed`
+records it beside `range_questions_not_posed`; it is None where the whole span was asked, as
+on every fixture release. The other questions are bounded in Analyses and variants already;
+`variants_table()` is read whole (26 GB peak on OGS-00015's 11.65 M rows). See the dated
+section "25 Nov 2026 (#492)".
+
 ### 4. Validation
 
 `variant_table.alid_sidecar` (spec §20.0) judges a 0.3.0 release from the one streamed read of its
@@ -943,6 +953,8 @@ conversion), and so are Ragged and Hybrid sources: none of the priority Stores n
 | Gap from 0.2.3 | What the conversion does |
 |---|---|
 | An SE above 65,504 stored (ADR 0068) | **Fixed.** Step `se_out_of_range`: each cell whose SE decodes above `SE_FLOAT16_MAX` (`se_above_bound`, the bound's one comparison), `+inf` included, gets the missing codes `storable` would have left: z, SE and frequency missing and imputed flag 0. Its exact-value side-table entries are removed. This is done in the grid and in each Indexed Variant Subset (`legacy_masking`), and the cell's row leaves every Top-Hit tier. `n_missing_se_out_of_range` counts the cells per Analysis, and `n_hits_*` is recounted from the tiers. Step `completion_quality_missing`, after `provenance_index`, counts each masked cell on a panel row of a completed release as missing in its block's `completion_quality` row. |
+| A sample-size plane or a Rho Matrix, in the grid or a subset | **Refused** before a cell is read: what a build holds there for a left-out association is not the mask's to decide. No priority Store carries one. |
+| A Reference-Completed release with no `on_panel` | **Refused** where a cell is masked: no array then says which masked cells `completion_quality` counts. |
 | A completion's fill above the bound | **Refused.** It would also move a block's `n_imputed`, which no record attributes. No priority Store holds one that has been measured (OGS-00015 holds none). |
 | `source_alid` of an unlifted release (#470) | **Fixed.** Step `own_source_alid` rewrites the table's column through its one writer (`variants.axis.rewrite_source_alid_column`), then `source_alid_sidecar` writes the sidecar from it. A row that any cell is observed in gets its own ALID (state 1). A row completion added from the panel gets none, as completion leaves it (`carried_source_alids`). Those panel rows are the rows with no observed cell, and the conversion refuses unless they number the completion's `n_variants_new`. |
 | An indel's ALID before 0.2.2 (ADR 0079) | **Recorded** as the deviation `variant_table.indel_order`. The reference allele of a sorted indel is not in the release, so the ALIDs are carried byte for byte. |
@@ -968,7 +980,13 @@ rebuild from source writes no `converted_from`, which clears it.
 
 **Validation: exactly the recorded rules are downgraded, in one place.** `Rule.finding` lowers
 a judgement's error to a warning when the release's `converted_from.deviations` names the
-rule. The message then states that the conversion recorded it and that a rebuild fixes it. Every
+rule, and only for the three rules a conversion records (`legacy_conversion.DEVIATION_RULES`),
+each for its reason: `variant_table.source_alid` where `lifted` is true,
+`variant_table.indel_order` from a source before 0.2.2, `side_tables.se_exceptions_rounded`
+with its counts (`judge_converted_from`). Any other entry is not lowered and fails the new
+rule `manifest.converted_from` (fix round 2 of #492: a hand-edited list blanking
+`n_missing_se_out_of_range` and naming `analyses.se_out_of_range_count` validated with two
+warnings). The message then states that the conversion recorded it and that a rebuild fixes it. Every
 other rule is unchanged. A rule that could not read what it judges still fails, and nothing is
 skipped. Drop a rule from `deviations` and the release fails it again
 (`test_without_the_recorded_deviation_the_same_release_fails`). A sorted indel spelt sorted

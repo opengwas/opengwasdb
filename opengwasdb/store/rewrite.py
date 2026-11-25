@@ -819,6 +819,7 @@ def rewrite_release(
             steps,
             now=datetime.now(UTC).isoformat(),
             unposed=reference["unposed_range_questions"],
+            narrowed=reference.get("narrowed_range_question"),
             plan=plan,
         )
         _refresh_overviews(context)
@@ -897,7 +898,8 @@ def _reference_digests(source: Path, plan: LegacyPlan | None) -> dict[str, Any]:
         f"{len(reference['range_probes'])} range probes, "
         f"{len(reference['indexed_subsets'])} Indexed Variant Subset questions and "
         f"{len(reference['misses'])} rsID misses; "
-        + _unposed_said(reference["unposed_range_questions"]),
+        + _unposed_said(reference["unposed_range_questions"])
+        + _narrowed_said(reference.get("narrowed_range_question")),
         started,
     )
     return reference
@@ -994,6 +996,17 @@ def _copy_release(source: Path, staged: Path, left_out: frozenset[Path] = frozen
             copy_path(entry, staged / entry.name)
 
 
+def _narrowed_said(narrowed: dict[str, Any] | None) -> str:
+    """The log's account of a range PheWAS the proof narrowed (`narrowed_range_question`)."""
+    if narrowed is None:
+        return ""
+    return (
+        f"; the range PheWAS is narrowed to {narrowed['variants']:,} of "
+        f"{narrowed['unbounded_variants']:,} variants (chromosome {narrowed['chromosome']}, "
+        f"{narrowed['start']:,}-{narrowed['end']:,})"
+    )
+
+
 def _unposed_said(unposed: list[str]) -> str:
     """The log's account of the range questions the release cannot pose."""
     if not unposed:
@@ -1007,6 +1020,7 @@ def _stamp(
     *,
     now: str,
     unposed: list[str],
+    narrowed: dict[str, Any] | None = None,
     plan: LegacyPlan | None = None,
 ) -> None:
     """Stamp every manifest as one new 0.3.0 release, recording what the rewrite did.
@@ -1014,8 +1028,10 @@ def _stamp(
     Every manifest gets the same fresh `release_id`, so a Hybrid's nested Dense
     Component still names the release that nests it, as the 0.2.0 converter does.
     `unposed` names the range questions the proof could not ask of the release's rows
-    (`query_digests.unposed_range_questions`): there the proof is weaker, and says so.
-    A conversion (`plan`) also records `provenance.converted_from`, its deviations by
+    (`query_digests.unposed_range_questions`), and `narrowed` the range PheWAS it asked
+    over fewer variants than the whole span (`query_digests.narrowed_range_question`,
+    None where it asked all): there the proof is weaker, and says so. A conversion
+    (`plan`) also records `provenance.converted_from`, its deviations by
     validator rule name (`legacy_conversion.stamped`).
     """
     commit = installed_commit()
@@ -1040,6 +1056,7 @@ def _stamp(
                 "to_format_version": data["format_version"],
                 "steps": [step.name for step in steps],
                 "range_questions_not_posed": list(unposed),
+                "range_question_narrowed": narrowed,
                 "tool": "ogdb rewrite-release",
                 "at": now,
                 "opengwasdb_git_hash": commit,

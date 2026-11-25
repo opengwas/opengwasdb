@@ -40,15 +40,10 @@ def attribute(
 ) -> dict[tuple[int, str], int]:
     """How many of the cells `(rows, analyses)` each `(analysis, block_id)` row gains in
     `n_missing`: the cells on panel rows, each in its one block (module docstring)."""
-    root = store.arrays()
-    on_panel = np.asarray(root["on_panel"][:])[rows] if "on_panel" in root else rows * 0
-    rows, analyses = rows[on_panel == 1], analyses[on_panel == 1]
+    rows, analyses = _on_panel(store, rows, analyses)
     if not rows.size:
         return {}
-    with ReleaseIndex(store.path) as index:
-        blocks: dict[int, list[str]] = {}
-        for analysis, block_id, *_counts in index.completion_quality():
-            blocks.setdefault(int(analysis), []).append(str(block_id))
+    blocks = _blocks(store)
     axis = store.variant_axis(aliases=False)
     try:
         records = axis.by_indices(rows.tolist())
@@ -67,6 +62,32 @@ def attribute(
             )
         counted[(analysis, block)] += 1
     return dict(counted)
+
+
+def _on_panel(
+    store: OpenGWASDBStore, rows: np.ndarray, analyses: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The cells on panel rows; a release with cells and no `on_panel` is refused, never
+    read as having none on the panel."""
+    if not rows.size:
+        return rows, analyses
+    root = store.arrays()
+    if "on_panel" not in root:
+        raise UnattributableCell(
+            f"{store.path}: a Reference-Completed release with no on_panel array cannot say "
+            "which masked cells are panel cells its completion_quality counts"
+        )
+    held = np.asarray(root["on_panel"][:])[rows] == 1
+    return rows[held], analyses[held]
+
+
+def _blocks(store: OpenGWASDBStore) -> dict[int, list[str]]:
+    """Each Analysis's `completion_quality` block ids."""
+    blocks: dict[int, list[str]] = {}
+    with ReleaseIndex(store.path) as index:
+        for analysis, block_id, *_counts in index.completion_quality():
+            blocks.setdefault(int(analysis), []).append(str(block_id))
+    return blocks
 
 
 def _block_of(blocks: list[str], chromosome: str, position: int) -> str | None:

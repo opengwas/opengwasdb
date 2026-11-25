@@ -618,9 +618,11 @@ class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
 
     def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
         severity = validation_rule.Severity
-        level = severity_owed(target, severity.ERROR)
+        owed = severity_owed(target, severity.ERROR)
         for message in self.judge(target, total):
-            yield self.finding(target, message, level)
+            # As `side_tables._SeverityByFormat`: a release whose format owes the error is
+            # judged through `finding` like any rule; an earlier one is warned.
+            yield self.finding(target, message, None if owed is severity.ERROR else owed)
         if not total.n_rows and total.n_unjudged:
             yield self.finding(
                 target,

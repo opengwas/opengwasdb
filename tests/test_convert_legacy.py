@@ -11,7 +11,9 @@ source's with exactly those changes, and validates with the recorded rules as wa
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import shutil
 from pathlib import Path
@@ -317,6 +319,7 @@ def test_a_recorded_indel_order_deviation_warns_and_an_unrecorded_one_fails(tmp_
     ):
         manifest["provenance"]["converted_from"] = {
             "source_format_version": "0.2.0", "source_release_id": "r", "deviations": recorded,
+            "lifted": True,
         }
         path.write_text(json.dumps(manifest), encoding="utf-8")
         result = validate_store(store)
@@ -387,16 +390,39 @@ def test_an_unlifted_conversion_of_a_table_naming_another_alid_is_refused(source
     assert not (tmp_path / "converted").exists()
 
 
-def test_the_cli_needs_a_lift_answer_and_converts_with_one(sources, tmp_path):
-    source, _cells = _legacy(sources, tmp_path, "dense_observed")
+def test_the_cli_needs_a_lift_answer_and_only_with_the_flag(sources, tmp_path):
+    """The flags are checked before the release is read: no conversion runs."""
     runner = CliRunner()
-    args = ["rewrite-release", str(source), str(tmp_path / "converted"), "--convert-legacy"]
+    args = ["rewrite-release", str(sources["dense_observed"]), str(tmp_path / "converted")]
 
-    asked = runner.invoke(app, args)
+    asked = runner.invoke(app, [*args, "--convert-legacy"])
     assert asked.exit_code == 2 and "--lifted or --not-lifted" in asked.output
-    converted = runner.invoke(app, [*args, "--not-lifted", "--n-workers", "2"])
-    assert converted.exit_code == 0, converted.output
-    assert "Published" in converted.output
+    stray = runner.invoke(app, [*args, "--lifted"])
+    assert stray.exit_code == 2 and "for --convert-legacy only" in stray.output
+    assert not (tmp_path / "converted").exists()
+
+
+def test_a_plane_the_mask_cannot_rewrite_is_refused_by_the_cli_before_any_read(
+    sources, tmp_path
+):
+    """A Rho Matrix (or sample-size plane) is refused from the manifest and the array
+    names, before the release is read, with the CLI's message and no traceback."""
+    from opengwasdb.store import arrays as store_arrays
+
+    source = as_0_2_0(Path(shutil.copytree(sources["dense_observed"], tmp_path / "source")))
+    root = store_arrays.open_group_for_write(source / "data.zarr", "a")
+    root.create_array("rho", shape=(2, 2), dtype="float32")
+
+    result = CliRunner().invoke(app, [
+        "rewrite-release", str(source), str(tmp_path / "converted"), "--convert-legacy",
+        "--not-lifted", "--n-workers", "2",
+    ])
+
+    assert result.exit_code == 1, result.output
+    assert "error:" in result.output and "carries rho" in result.output
+    assert "read " not in result.output, "refused before the cells were read"
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert not (tmp_path / "converted").exists()
 
 
 def test_the_range_question_is_bounded_by_variants_and_by_cells():
@@ -458,3 +484,130 @@ def test_a_converted_release_not_listing_the_rounding_fails_it(rounded, tmp_path
     path.write_text(json.dumps(manifest), encoding="utf-8")
 
     assert validate_store(destination).failed() == {ROUNDED}
+
+
+def test_the_downgrade_takes_only_the_conversions_rules(lifted, tmp_path):
+    """The review's forge: blank `n_missing_se_out_of_range` and list the rule that
+    catches it. The rule is not lowered, and `manifest.converted_from` fails the list."""
+    destination = Path(shutil.copytree(lifted, tmp_path / "converted"))
+    table = read_analyses(destination / "analyses.tsv")
+    column = table.fieldnames.index("n_missing_se_out_of_range")
+    lines = (destination / "analyses.tsv").read_text(encoding="utf-8").splitlines()
+    (destination / "analyses.tsv").write_text("\n".join(
+        "\t".join(v if i != column or n == 0 else "" for i, v in enumerate(line.split("\t")))
+        for n, line in enumerate(lines)
+    ) + "\n", encoding="utf-8")
+    path = destination / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["provenance"]["converted_from"]["deviations"].append("analyses.se_out_of_range_count")
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = validate_store(destination)
+
+    assert result.failed() == {"analyses.se_out_of_range_count", "manifest.converted_from"}
+    assert any("which no conversion records" in e for e in result.errors)
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        ({"lifted": False}, "does not say the release was lifted"),
+        ({"source_format_version": "0.2.2"}, "already spells indels reference first"),
+        ({"deviations": ["side_tables.se_exceptions_rounded"]}, "without the counts"),
+        ({"deviations": "variant_table.source_alid"}, "not a list of rules"),
+    ],
+)
+def test_a_deviation_its_record_does_not_justify_is_refused(change, why):
+    from opengwasdb.store.legacy_conversion import judge_converted_from
+
+    record = {
+        "source_format_version": "0.2.0", "lifted": True,
+        "deviations": ["variant_table.indel_order", "variant_table.source_alid"],
+    }
+    accepted, faults = judge_converted_from({**record, **change})
+    assert faults and why in faults[0], faults
+    assert judge_converted_from(record) == (tuple(record["deviations"]), [])
+    assert set(accepted) < set(record["deviations"]) | {"side_tables.se_exceptions_rounded"}
+
+
+def test_a_mismatched_record_fails_validation(lifted, tmp_path):
+    destination = Path(shutil.copytree(lifted, tmp_path / "converted"))
+    path = destination / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["provenance"]["converted_from"]["lifted"] = False
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert validate_store(destination).failed() == {
+        "manifest.converted_from", "variant_table.source_alid",
+    }
+
+
+def test_a_completed_release_without_on_panel_is_refused_not_counted_off_panel(
+    sources, tmp_path
+):
+    source, _cells = _legacy(sources, tmp_path, "dense_completed")
+    shutil.rmtree(source / "data.zarr" / "on_panel")
+
+    with pytest.raises(RewriteError, match="no on_panel"):
+        rewrite_release(source, tmp_path / "converted", legacy=UNLIFTED)
+    assert not (tmp_path / "converted").exists()
+
+
+def test_a_narrowed_range_question_is_recorded(sources, tmp_path, monkeypatch):
+    """Where the bound narrows the range PheWAS, of a 0.2.3 source too, the rewrite
+    logs and records the range it asked; elsewhere it records None."""
+    from opengwasdb.store import query_digests
+
+    monkeypatch.setattr(query_digests, "RANGE_ROWS_ASKED", 50)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        destination = rewrite_release(sources["dense_observed"], tmp_path / "rewritten")
+
+    record = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))[
+        "provenance"]["format_rewrite"]["range_question_narrowed"]
+    assert record is not None and record["variants"] == 50, record
+    assert record["unbounded_variants"] > 50 and record["end"] < record["unbounded_end"]
+    assert "the range PheWAS is narrowed to 50 of" in printed.getvalue()
+
+
+@pytest.fixture(scope="module")
+def panel_rows(tmp_path_factory: pytest.TempPathFactory):
+    """`test_dense_completion`'s completed release -- three rows completion added from
+    its panel (`n_variants_new` 3) -- as a 0.2.0 release, converted `--not-lifted`."""
+    from dense_sources import build_dense_fixture
+    from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS, _make_ld_panel
+
+    from opengwasdb.layouts.dense.complete import complete_dense_store
+
+    root = tmp_path_factory.mktemp("panel-rows")
+    associations = root / "associations.tsv"
+    associations.write_text(SOURCE_HEADER + "\n" + "\n".join(SOURCE_ROWS) + "\n", "utf-8")
+    observed = root / "obs.opengwasdb"
+    build_dense_fixture([associations], observed, store_id="test", release_id="obs-v1",
+                        reference_assembly="GRCh38")
+    completed = root / "comp.opengwasdb"
+    complete_dense_store(observed, completed, _make_ld_panel(root), ancestry="EUR",
+                         min_cor=0.0, release_id="comp-v1")
+    source = as_0_2_0(as_0_2_3(completed))
+    return source, rewrite_release(source, root / "converted", legacy=UNLIFTED)
+
+
+def test_panel_rows_get_state_0_and_observed_rows_state_1(panel_rows):
+    source, destination = panel_rows
+    manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["provenance"]["completion"]["n_variants_new"] == 3, "panel rows"
+    q = query_store(source)
+    try:
+        observed = set(q.range_phewas("1", 1, 10**9, observed_only=True)["variant_index"].tolist())
+        observed |= set(q.range_phewas("2", 1, 10**9, observed_only=True)["variant_index"].tolist())
+    finally:
+        q.close()
+    sidecar = SourceAlidSidecar.open(destination)
+    assert sidecar is not None
+    states = np.asarray(sidecar.state).tolist()
+    assert [row for row, state in enumerate(states) if state == 0] == sorted(
+        set(range(len(states))) - observed
+    )
+    assert states.count(0) == 3 and states.count(1) == len(states) - 3
+    result = validate_store(destination)
+    assert result.ok, result.errors

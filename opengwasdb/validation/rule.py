@@ -252,17 +252,23 @@ class Target:
 
 
 def _converted_deviations(release: Target) -> dict[str, str]:
+    """The deviations the release's `converted_from` records that a conversion may record
+    (`legacy_conversion.judge_converted_from`); `manifest.converted_from` fails the rest."""
     if release._store is None:
         return {}
     record = release.store.manifest.provenance.get("converted_from")
-    if not isinstance(record, dict):
+    if record is None:
         return {}
+    # On use: the conversion's module imports the rewrite, which imports the validator.
+    from opengwasdb.store.legacy_conversion import judge_converted_from
+
+    accepted, _faults = judge_converted_from(record)
     note = (
         "a deviation recorded by ogdb rewrite-release --convert-legacy, which converted "
         f"this release from format_version {record.get('source_format_version')} "
         f"(release {record.get('source_release_id')}); a rebuild from source fixes it"
     )
-    return {str(rule): note for rule in record.get("deviations", ())}
+    return {rule: note for rule in accepted}
 
 
 def _always(_target: Target) -> bool:

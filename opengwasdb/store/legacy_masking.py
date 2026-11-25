@@ -31,12 +31,26 @@ from opengwasdb.store_reader.indexed import INDEXED_SUBSETS_GROUP
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.top_hits import TOP_HIT_GROUP
 
-#: The planes a masked cell is rewritten in. A sample-size plane or a Rho Matrix is
-#: refused: what a build holds there for a left-out association is not this module's
-#: to decide, and no release `--convert-legacy` is for carries one.
+#: Planes a masked cell is not rewritten in: what a build holds in a sample-size plane
+#: or a Rho Matrix for a left-out association is not this module's to decide, so the
+#: conversion refuses a release carrying one before it reads a cell
+#: (`legacy_conversion.refuse_unconvertible`); no release it is for carries one.
 _REFUSED_PLANES = ("n", "rho")
 
 _TABLES: tuple[type[SparseExactTable], ...] = (ZOverflowTable, SeExceptionTable, EafExceptionTable)
+
+
+def cell_positions(rows: Any, analyses: Any, n_analyses: int) -> np.ndarray:
+    """Each cell's flat position in a grid of `n_analyses` columns, ``row * n_analyses +
+    analysis``: the key the exact-value side tables use, and the conversion's one
+    spelling of a cell."""
+    return np.asarray(rows, dtype=np.int64) * n_analyses + np.asarray(analyses, dtype=np.int64)
+
+
+def cell_coordinates(positions: np.ndarray, n_analyses: int) -> tuple[np.ndarray, np.ndarray]:
+    """The rows and Analyses of flat `positions` (`cell_positions`' inverse)."""
+    positions = np.asarray(positions, dtype=np.int64)
+    return positions // n_analyses, positions % n_analyses
 
 
 def missing_codes(encoding: StoreEncoding) -> dict[str, Any]:
@@ -53,8 +67,7 @@ def mask_cells(group: Any, positions: np.ndarray, encoding: StoreEncoding, n_ana
     """Mask the cells at flat `positions` of the grid in `group`."""
     if not positions.size:
         return
-    _refuse_other_planes(group)
-    rows, cols = positions // n_analyses, positions % n_analyses
+    rows, cols = cell_coordinates(positions, n_analyses)
     for name, code in missing_codes(encoding).items():
         if name in group:
             plane = group[name]
@@ -64,13 +77,9 @@ def mask_cells(group: Any, positions: np.ndarray, encoding: StoreEncoding, n_ana
         _drop_entries(group, table, positions)
 
 
-def _refuse_other_planes(group: Any) -> None:
-    held = [name for name in _REFUSED_PLANES if name in group]
-    if held:
-        raise ValueError(
-            f"{group.path or 'data.zarr'} carries {', '.join(held)}: a cell masked for an SE "
-            "above 65,504 is not rewritten there, so the release is rebuilt from source"
-        )
+def planes_not_rewritten(group: Any) -> list[str]:
+    """The planes of `group` a masked cell is not rewritten in (`_REFUSED_PLANES`)."""
+    return [name for name in _REFUSED_PLANES if name in group]
 
 
 def _drop_entries(group: Any, table_type: type[SparseExactTable], positions: np.ndarray) -> None:
@@ -90,7 +99,7 @@ def mask_subsets(
     """Mask the cells in every Indexed Variant Subset that holds their row."""
     if INDEXED_SUBSETS_GROUP not in root:
         return
-    rows, cols = positions // n_analyses, positions % n_analyses
+    rows, cols = cell_coordinates(positions, n_analyses)
     subsets = root[INDEXED_SUBSETS_GROUP]
     for name in sorted(subsets.group_keys()):
         subset = subsets[name]
@@ -98,7 +107,8 @@ def mask_subsets(
         slot = np.searchsorted(held, rows)
         inside = slot < held.size
         inside[inside] = held[slot[inside]] == rows[inside]
-        mask_cells(subset, slot[inside] * n_analyses + cols[inside], encoding, n_analyses)
+        mask_cells(subset, cell_positions(slot[inside], cols[inside], n_analyses), encoding,
+                   n_analyses)
 
 
 def mask_tiers(root: Any, positions: np.ndarray, n_analyses: int) -> None:
@@ -108,9 +118,7 @@ def mask_tiers(root: Any, positions: np.ndarray, n_analyses: int) -> None:
     index = root[TOP_HIT_GROUP]
     for key in sorted(index.group_keys()):
         tier = index[key]
-        cells = np.asarray(tier["variant_index"][:], np.int64) * n_analyses + np.asarray(
-            tier["analysis_index"][:], np.int64
-        )
+        cells = cell_positions(tier["variant_index"][:], tier["analysis_index"][:], n_analyses)
         keep = ~np.isin(cells, positions)
         if not keep.all():
             _rewrite_tier(tier, keep, n_analyses)
@@ -131,4 +139,12 @@ def _rewrite_tier(tier: Any, keep: np.ndarray, n_analyses: int) -> None:
         )
 
 
-__all__ = ["mask_cells", "mask_subsets", "mask_tiers", "missing_codes"]
+__all__ = [
+    "cell_coordinates",
+    "cell_positions",
+    "mask_cells",
+    "mask_subsets",
+    "mask_tiers",
+    "missing_codes",
+    "planes_not_rewritten",
+]

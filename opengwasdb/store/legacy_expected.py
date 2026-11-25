@@ -31,6 +31,7 @@ import numpy as np
 
 from opengwasdb.model.analyses import N_MISSING_SE_OUT_OF_RANGE, TOP_HIT_COUNT_COLUMNS
 from opengwasdb.store.legacy_conversion import LegacyPlan
+from opengwasdb.store.legacy_masking import cell_positions
 from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.analyses import AnalysesIndex
 from opengwasdb.store_reader.associations import Associations, Cells, DenseGridReader
@@ -46,8 +47,7 @@ from opengwasdb.store_reader.variant_axis import VariantAxis
 
 def _hit(plan: LegacyPlan, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
     """Which of the cells `(rows, cols)` (broadcast together) the plan masks."""
-    positions = np.asarray(rows, dtype=np.int64) * plan.n_analyses + np.asarray(cols, np.int64)
-    return np.isin(positions, plan.masked)
+    return np.isin(cell_positions(rows, cols, plan.n_analyses), plan.masked)
 
 
 class _MaskedGrid(DenseGridReader):
@@ -175,7 +175,15 @@ def _dropped_hits(plan: LegacyPlan, tiers: TopHitTiers) -> dict[str, np.ndarray]
 
 
 class _ExpectedStoreQuery(StoreQuery):
-    """The source's Dense query facade, answering as the converted release must."""
+    """The source's Dense query facade, answering as the converted release must.
+
+    It, and the readers it holds, override private methods (`_decode`,
+    `_indexed_analysis`) and replace `_grid` and `_top_hits`: the deliberate changes are
+    made where every question's cells are decoded, so no question can be answered around
+    them. That cannot hide a read-path defect: a question that reached the source by a
+    path the view does not cover would answer unchanged, and the proof would refuse the
+    conversion for the difference (#492 fix round 2, the standards review's finding).
+    """
 
     def __init__(self, path: Path, plan: LegacyPlan) -> None:
         store = open_store(path)
