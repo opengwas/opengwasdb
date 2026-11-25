@@ -36,6 +36,7 @@ from typing import Any
 import numpy as np
 import pytest
 import zarr
+from reader_constants import set_reader_constant
 from store_reads import chunk_reads
 from test_hybrid_completion import (
     _residual_hybrid_crossover_source,
@@ -527,7 +528,7 @@ def wide_small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
     filtered, manifest = _prepare_wide_sources(root)
     out = root / "small.opengwasdb"
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(store_layout, "ASSOCIATION_SEQUENCE_CHUNK", _SMALL_CHUNK)
+        set_reader_constant(patch, store_layout, "ASSOCIATION_SEQUENCE_CHUNK", _SMALL_CHUNK)
         build_ragged_from_ssf(
             manifest, filtered, out, store_id="small", release_id="small",
             allow_unverified_eaf=True, association_coverage="cis_and_signals",

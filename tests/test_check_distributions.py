@@ -40,10 +40,15 @@ EXPECTED = check_distributions.Expected(
     licence_expression=EXPRESSION,
     licence_text=LICENCE,
     project_urls=URLS,
+    requirements={"ogquery": frozenset({">=0.2", "<0.3"})},
 )
 
 
-def _metadata(version: str = VERSION, expression: str = EXPRESSION) -> bytes:
+def _metadata(
+    version: str = VERSION,
+    expression: str = EXPRESSION,
+    requires: tuple[str, ...] = ("numpy<2.5,>=2.0", "ogquery<0.3,>=0.2"),
+) -> bytes:
     lines = [
         "Metadata-Version: 2.4",
         "Name: opengwasdb",
@@ -52,6 +57,7 @@ def _metadata(version: str = VERSION, expression: str = EXPRESSION) -> bytes:
         "License-File: LICENSE",
     ]
     lines += [f"Project-URL: {label}, {url}" for label, url in URLS.items()]
+    lines += [f"Requires-Dist: {requirement}" for requirement in requires]
     return ("\n".join(lines) + "\n\n").encode()
 
 
@@ -181,6 +187,28 @@ def test_a_declared_licence_that_is_not_pyproject_s_is_refused(tmp_path: Path) -
     ]
 
 
+def _wheel_requiring(*requires: str) -> dict[str, bytes]:
+    files = _wheel_files()
+    files[f"opengwasdb-{VERSION}.dist-info/METADATA"] = _metadata(requires=requires)
+    return files
+
+
+def test_a_wheel_that_does_not_require_ogquery_is_refused(tmp_path: Path) -> None:
+    problems = _problems(tmp_path, wheel=_wheel_requiring("numpy<2.5,>=2.0"))
+    assert problems == ["opengwasdb-1.2.3-py3-none-any.whl: Requires-Dist has no ogquery"]
+
+
+def test_a_wheel_requiring_another_range_of_ogquery_is_refused(tmp_path: Path) -> None:
+    problems = _problems(tmp_path, wheel=_wheel_requiring("ogquery>=0.3"))
+    assert len(problems) == 1
+    assert "ogquery ['>=0.3'] is not pyproject.toml's ['<0.3', '>=0.2']" in problems[0]
+
+
+def test_an_extra_that_names_ogquery_is_not_the_dependency(tmp_path: Path) -> None:
+    problems = _problems(tmp_path, wheel=_wheel_requiring('ogquery>=0.2,<0.3; extra == "dev"'))
+    assert problems == ["opengwasdb-1.2.3-py3-none-any.whl: Requires-Dist has no ogquery"]
+
+
 def test_anything_but_one_sdist_and_one_wheel_is_refused(tmp_path: Path) -> None:
     dist = _write(tmp_path / "dist", _sdist_files(), _wheel_files())
     (dist / "opengwasdb-1.2.2.tar.gz").write_bytes(b"")
@@ -192,6 +220,7 @@ def test_the_repository_expects_its_resources_licence_and_urls() -> None:
     expected = check_distributions.expected_from_repository(REPO)
     assert "opengwasdb/readers/column_maps/gwas-ssf.toml" in expected.tracked
     assert expected.licence_expression == "GPL-3.0-only"
+    assert expected.requirements == {"ogquery": frozenset({">=0.2", "<0.3"})}
     assert expected.licence_text.lstrip().startswith(b"GNU GENERAL PUBLIC LICENSE\n")
     assert expected.sdist_top_level == {
         "PKG-INFO",

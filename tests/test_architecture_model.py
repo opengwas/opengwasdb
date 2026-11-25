@@ -288,7 +288,7 @@ def test_the_model_holds_the_engines_twenty_five_components() -> None:
         "resolution",
         "ancestry",
         "variants",
-        "store_reader",  # the Store Reader, ogquery to be (#464)
+        "store_reader",  # re-exports of ogquery, the Store Reader (#475)
         "routing",
         "dense",
         "ragged",
@@ -346,7 +346,7 @@ def test_admission_and_routing_are_components_of_their_own(path: str, owner: str
 @pytest.mark.parametrize(
     ("path", "owner"),
     [
-        # The Store Reader (#464) claims the read halves it absorbed ...
+        # The Store Reader's import path (#464, now ogquery's re-exports, #475) ...
         ("opengwasdb/store_reader/facade.py", "store_reader"),
         ("opengwasdb/store_reader/associations/record.py", "store_reader"),
         ("opengwasdb/store_reader/encoding/codec.py", "store_reader"),

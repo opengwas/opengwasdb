@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import zarr
 
 from opengwasdb.clumps import (
     ABSENT,
@@ -218,7 +219,10 @@ def _configurations(tier: Any) -> list[str] | None:
     """The members of the 5e-8 tier's `clumps/` group; None when it has none."""
     if tier is None or CLUMPS_GROUP not in tier:
         return None
-    return sorted(name for name, _ in tier[CLUMPS_GROUP].members())
+    group = tier[CLUMPS_GROUP]
+    if not isinstance(group, zarr.Group):
+        return []  # an array where the group belongs: `_declaration` names it
+    return sorted(name for name, _ in group.members())
 
 
 _GROUP = f"{TOP_HIT_GROUP}/{TIER}/{CLUMPS_GROUP}"

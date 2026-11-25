@@ -35,7 +35,11 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-  "numpy>=1.26,<2.5",
+  # The Store Reader: opengwasdb reads Store Releases through it, and
+  # opengwasdb.store_reader re-exports it (#475). ogquery needs numpy>=2.0.
+  # 0.2 carries the Clumps reads (#418) and the narrowed proof range (#492).
+  "ogquery>=0.2,<0.3",
+  "numpy>=2.0,<2.5",
   "zarr>=3.4,<4",
   # 0.17 is the first numcodecs that locks Blosc's global context on decompress
   # as well as compress; the seam's threaded decoding relies on it (#244).
@@ -195,6 +199,50 @@ per-file-target-version = { "opengwasdb/ld/**" = "py312", "tests/ld/**" = "py312
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# `opengwasdb.store_reader` re-exports `ogquery` module for module (#475): a star import is
+# the whole of such a module, and an import nothing uses is what it is for. One entry per
+# re-export, so `facade.py` and `rho.py`, which are real code until #495, stay linted;
+# `tests/test_store_reader_is_ogquery.py` holds this list to the files that are re-exports.
+"opengwasdb/store_reader/__init__.py" = ["F401", "F403"]
+"opengwasdb/store/query_digests.py" = ["F401", "F403"]
+"opengwasdb/store_reader/alid.py" = ["F401", "F403"]
+"opengwasdb/store_reader/alid_index.py" = ["F401", "F403"]
+"opengwasdb/store_reader/alid_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/analyses.py" = ["F401", "F403"]
+"opengwasdb/store_reader/arrays.py" = ["F401", "F403"]
+"opengwasdb/store_reader/assembly.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/__init__.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/cells.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/csr.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/dense.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/record.py" = ["F401", "F403"]
+"opengwasdb/store_reader/associations/subset.py" = ["F401", "F403"]
+"opengwasdb/store_reader/by_variant.py" = ["F401", "F403"]
+"opengwasdb/store_reader/csr.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/__init__.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/codec.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/plan.py" = ["F401", "F403"]
+"opengwasdb/store_reader/encoding/planes.py" = ["F401", "F403"]
+"opengwasdb/store_reader/enums.py" = ["F401", "F403"]
+"opengwasdb/store_reader/format.py" = ["F401", "F403"]
+"opengwasdb/store_reader/hybrid.py" = ["F401", "F403"]
+"opengwasdb/store_reader/identity.py" = ["F401", "F403"]
+"opengwasdb/store_reader/indexed.py" = ["F401", "F403"]
+"opengwasdb/store_reader/layout.py" = ["F401", "F403"]
+"opengwasdb/store_reader/manifest.py" = ["F401", "F403"]
+"opengwasdb/store_reader/npy_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/panel_axis.py" = ["F401", "F403"]
+"opengwasdb/store_reader/position_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/release.py" = ["F401", "F403"]
+"opengwasdb/store_reader/resolve.py" = ["F401", "F403"]
+"opengwasdb/store_reader/rsid_index.py" = ["F401", "F403"]
+"opengwasdb/store_reader/source_alid_sidecar.py" = ["F401", "F403"]
+"opengwasdb/store_reader/stats.py" = ["F401", "F403"]
+"opengwasdb/store_reader/stored.py" = ["F401", "F403"]
+"opengwasdb/store_reader/top_hits.py" = ["F401", "F403"]
+"opengwasdb/store_reader/variant_axis.py" = ["F401", "F403"]
+
 [tool.mypy]
 # The floor is Python 3.12 with the zarr 3.4 pin (#244), and zarr-python 3.4 uses
 # PEP 695 type-parameter syntax, which mypy cannot parse under a 3.11 target.
@@ -202,6 +250,12 @@ select = ["E", "F", "I", "UP", "B"]
 # line.
 python_version = "3.12"
 strict = true
+
+# `store.query_digests` star-imports `ogquery.digests` and overrides two of its functions
+# (#475); mypy reads the override as a redefinition. Only that code, only that module.
+[[tool.mypy.overrides]]
+module = ["opengwasdb.store.query_digests"]
+disable_error_code = ["no-redef"]
 
 [[tool.mypy.overrides]]
 module = ["numcodecs", "pandas", "pysam", "zarr"]
@@ -255,12 +309,15 @@ platforms = ["linux-64"]
 # pip. Declaring it via conda too installs the same compiled extension twice
 # into one environment (see opengwasdb-stores' pixi.toml for the same note).
 opengwasdb = { path = ".", editable = true }
+# ogquery is on PyPI only; the editable install above would pull it in, but
+# naming it keeps the pin visible beside the conda dependencies (#475).
+ogquery = ">=0.2,<0.3"
 
 [tool.pixi.dependencies]
-# zarr 3.4 requires python >=3.12 and numpy >=2; the numpy range below already
-# admits numpy 2, so it is unchanged (#244).
+# zarr 3.4 requires python >=3.12 and numpy >=2 (#244); ogquery, the Store
+# Reader, needs numpy >=2.0 too (#475).
 python = "3.12.*"
-numpy = ">=1.26,<2.5"
+numpy = ">=2.0,<2.5"
 zarr = ">=3.4,<4"
 numcodecs = ">=0.17"  # threaded Blosc needs its decompress lock; see [project] (#244)
 typer = ">=0.12"

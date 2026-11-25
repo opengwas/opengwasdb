@@ -34,6 +34,7 @@ from dense_sources import build_dense_from_records
 from fork_order import CompletionOrder, CrashAfterTwo
 from ld_blocks import write_ld_block
 from pool_budget import pin_pool_units
+from reader_constants import set_reader_constant
 from zarr.storage import LocalStore
 
 import opengwasdb.layouts.dense.complete as complete_module
@@ -116,8 +117,8 @@ def _ld_panel(root: Path) -> Path:
 
 def _narrow_bands(patch: pytest.MonkeyPatch) -> None:
     """A 20-row Dense shard, so the completion band is 20 rows too."""
-    patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (BAND_ROWS, 2))
-    patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (10, 1))
+    set_reader_constant(patch, store_layout, "DENSE_SHARD_SHAPE", (BAND_ROWS, 2))
+    set_reader_constant(patch, store_layout, "DENSE_CHUNK_SHAPE", (10, 1))
     patch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (10, 1))
     patch.setattr(complete_module, "_BAND_ROWS", BAND_ROWS)
 

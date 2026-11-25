@@ -25,12 +25,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Modules that read associations only through `opengwasdb.store_reader.associations`.
+#: The reader's own modules (`resolve`, `indexed`, `csr`) moved to ogquery (#475), and so
+#: did their share of this guard; `facade.py` stays until the Hybrid Rho change (#495).
 READERS = (
     "layouts/dense/complete.py",
     "layouts/hybrid/complete.py",
     "layouts/ragged/complete.py",
     "store_reader/facade.py",
-    "store_reader/resolve.py",
     "validation/observed_view.py",
     "validation/observed_view_ragged.py",
     "validation/observed_view_hybrid.py",
@@ -61,7 +62,6 @@ VALIDATION = tuple(
 CHECKED = (
     *(module for module in VALIDATION if module not in READERS),
     "layouts/dense/indexed_subsets.py",
-    "store_reader/indexed.py",
 )
 
 #: The reviewed SE decodes, by the function (or class) each sits in.
@@ -78,8 +78,6 @@ ALLOWED = {
     ("layouts/dense/indexed_subsets.py", "_sample_decoded_view"):
         "the sampled primary cells the subset's EAF is compared against",
     # The planes those decodes read, and the decoders the readers stand on.
-    ("store_reader/indexed.py", "_decode_se_column"):
-        "the subset's own decoder, which `SubsetReader` reads through",
     ("layouts/dense/indexed_subsets.py", "_decode_index_se"):
         "the subset's own SE band, decoded against its own EAF, which the comparison and "
         "the digest of a unit it vouches for both compare against the primary's",
@@ -112,8 +110,6 @@ CSR_DECODES = frozenset(
 
 #: The modules that may call them, and why.
 CSR_DECODE_CALLERS = {
-    "store_reader/associations/csr.py": "the CSR adapter",
-    "store_reader/csr.py": "the reader that defines them",
     "layouts/ragged/top_hits.py": (
         "the Top-Hit harvest, which decodes each slice's z alone, keeps the cells "
         "clearing the loosest tier, and decodes SE, EAF and the imputed mask for those "

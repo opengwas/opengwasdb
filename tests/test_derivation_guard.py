@@ -11,9 +11,10 @@ expression that looks like another one:
 - a call of `erfc`, `p_value_from_z`, `norm.sf`, `logsf` or `log_ndtr`;
 - `10 ** x` or `np.power(10, x)` of a `log10_p`-like `x`.
 
-`store_reader/stats.py` is exempt, as the derivation itself. Every other site
-must be in `ALLOWED`, by module and enclosing function, with its reason; an entry
-that no longer matches anything fails too, so the list cannot go stale.
+`ogquery/stats.py` (re-exported as `store_reader/stats.py`, which holds no code) is the
+derivation itself. Every other site must be in `ALLOWED`, by module and enclosing
+function, with its reason; an entry that no longer matches anything fails too, so the
+list cannot go stale.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
+import ogquery.stats
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -216,7 +218,8 @@ def test_nothing_else_derives_beta_or_p_from_a_stored_z_and_se():
 @pytest.mark.parametrize("function", ["association_statistics", "p_value_from_z"])
 def test_the_exempt_module_is_where_the_derivation_lives(function):
     """The exemption covers the derivation the guard would otherwise flag."""
-    source = (ROOT / EXEMPT).read_text(encoding="utf-8")
+    # The derivation is ogquery's now (#475); `EXEMPT` is the re-export, which holds none.
+    source = Path(ogquery.stats.__file__).read_text(encoding="utf-8")
     kinds = {kind for _, where, kind in derivations(source) if where == function}
     assert kinds, function
 

@@ -11,6 +11,8 @@ interpreter of a clean environment the wheel was installed into, and checks:
   checkout;
 * it reports the version the wheel was built as;
 * every built-in reader Column Map loads from the installed package;
+* `ogquery`, the Store Reader, is installed beside it from site-packages and is
+  among the distribution's declared requirements (#475);
 * the installed `opengwasdb` command answers `--help`;
 * the tiny Dense example builds, validates `valid`, and `query-phewas rs111`
   returns exactly the two rows docs/getting-started.md promises.
@@ -66,6 +68,23 @@ def check_import_location() -> Path:
             f"site-packages {site_packages}: a checkout is on the import path"
         )
     return package
+
+
+def check_ogquery() -> str:
+    """The Store Reader is a declared dependency and imports from this environment."""
+    from importlib.metadata import requires
+
+    declared = [entry for entry in requires("opengwasdb") or [] if "extra ==" not in entry]
+    if not any(entry.replace(" ", "").startswith("ogquery") for entry in declared):
+        raise SmokeTestFailure(
+            f"opengwasdb's installed metadata does not require ogquery: {declared}"
+        )
+    import ogquery
+
+    site_packages = Path(sysconfig.get_paths()["purelib"]).resolve()
+    if not Path(ogquery.__file__).resolve().is_relative_to(site_packages):
+        raise SmokeTestFailure(f"ogquery was imported from {ogquery.__file__}, not site-packages")
+    return distribution_version("ogquery")
 
 
 def check_version(required: str) -> None:
@@ -150,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         package = check_import_location()
         check_version(args.version)
+        reader = check_ogquery()
         maps = check_column_maps()
         command = installed_command()
         _run([command, "--help"], cwd=Path.cwd())
@@ -159,7 +179,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FAIL: {failure}", file=sys.stderr)
         return 1
     print(
-        f"ok: opengwasdb {args.version} from {package}; column maps {', '.join(maps)}; "
+        f"ok: opengwasdb {args.version} from {package}; ogquery {reader}; "
+        f"column maps {', '.join(maps)}; "
         "tiny Store built, valid, and rs111 returned the documented rows"
     )
     return 0

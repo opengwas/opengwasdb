@@ -71,7 +71,7 @@ RANGE_RELEASES = {"dense_ranges": "dense", "ragged_ranges": "ragged", "hybrid_ra
 
 #: The ALID lengths, in bytes, `relabel_long_alids` gives one row each: either side of the
 #: ALID sidecar's 24-byte key and of the 0.2 series' 32-byte slot
-#: (`query_digests.PROBED_ALID_LENGTHS`), and two over 100.
+#: (`ogquery.digests.PROBED_ALID_LENGTHS`), and two over 100.
 LONG_ALID_LENGTHS = (23, 24, 25, 32, 33, 101, 160)
 #: The rsIDs `name_rsids` plants on a digest release's first rows: two rows with none, and
 #: a cell naming two rsIDs, which is one name, whole (spec §19).

@@ -52,10 +52,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "opengwasdb"
 
-#: The Store Reader, and its injected 0.2.x implementations (#473 ruling 1, #464
-#: ruling 5): pysam's and SQLite's reads of a release live here until #476.
+#: The injected 0.2.x implementations (#473 ruling 1, #464 ruling 5): pysam's and
+#: SQLite's reads of a release live here until #476. The Store Reader itself is ogquery's
+#: (#475); `opengwasdb/store_reader/` holds re-exports and, until #495 moves them,
+#: `facade.py` and `rho.py`, whose `arrays` calls are listed in COMPLIANT_ARRAYS_CALLS.
 STORE_READER = {
-    "opengwasdb/store_reader/": "the Store Reader",
     "opengwasdb/variants/axis.py": (
         "the Store Reader's VariantAxis constructed from a path, for opengwasdb-stores' audit; "
         "it also writes the Variant Table"
@@ -141,6 +142,7 @@ COMPLIANT_ARRAYS_CALLS = frozenset(
         ("opengwasdb/layouts/dense/complete.py", "_dense_shard_rows"),
         ("opengwasdb/layouts/dense/rho.py", "build_dense_rho"),
         ("opengwasdb/layouts/hybrid/complete.py", "_crossover_cells"),
+        ("opengwasdb/store_reader/facade.py", "StoreQuery.__init__"),  # in-tree until #495
         ("opengwasdb/store/legacy_conversion.py", "_grid"),
         ("opengwasdb/store/legacy_conversion.py", "_rounded_se"),
         ("opengwasdb/store/legacy_conversion.py", "_refuse_other_planes"),

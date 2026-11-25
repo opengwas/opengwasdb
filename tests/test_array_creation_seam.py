@@ -29,6 +29,7 @@ import ast
 from pathlib import Path
 
 import numpy as np
+import ogquery.arrays
 import pytest
 import zarr
 
@@ -51,7 +52,9 @@ SEAM = PACKAGE_ROOT / "store" / "arrays.py"
 #: The seam's read side (#464): zarr's runtime configuration and the read-only
 #: open of a Store's group, which the Store Reader may not import the creation
 #: seam for. It may open a group read-only and nothing else (see below).
-READ_SEAM = PACKAGE_ROOT / "store_reader" / "arrays.py"
+# The read side of the seam is ogquery's (#475): `opengwasdb.store_reader.arrays` re-exports
+# it, so this guard reads the installed package's source, which opengwasdb's reads rely on.
+READ_SEAM = Path(ogquery.arrays.__file__)
 #: opengwasdb.ld writes LD Stores and Genotype Stores, a different format with its
 #: own writer (`opengwasdb/ld/store/writer.py`, docs/spec/ld-store.md); this seam
 #: is the GWAS Store's, so it does not scan them (#455).
@@ -713,7 +716,7 @@ def test_the_read_seam_only_opens_a_group_read_only() -> None:
     once, in mode ``r``: it creates nothing, and every other call the scanner
     forbids stays in `SEAM`."""
     source = READ_SEAM.read_text(encoding="utf-8")
-    found = _violations(source, "store_reader/arrays.py")
+    found = _violations(source, "ogquery/arrays.py")
     assert sorted(entry.rsplit(": ", 1)[1] for entry in found) == [
         "zarr.config.set(",
         "zarr.config.set(",

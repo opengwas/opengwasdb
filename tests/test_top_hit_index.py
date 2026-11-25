@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from reader_constants import set_reader_constant
 from top_hit_fixtures import build_ragged
 
 from opengwasdb import top_hits
@@ -243,7 +244,7 @@ def test_the_index_and_the_scan_fallback_cut_at_one_function(tmp_path, monkeypat
     scanned = query_store(store).top_hits(threshold=1e-9)  # no tier: scans the CSR
     assert len(indexed["z"]) == 4 and len(scanned["z"]) == 3
 
-    monkeypatch.setattr(reader_stats, "z_critical", lambda threshold: 100.0)
+    set_reader_constant(monkeypatch, reader_stats, "z_critical", lambda threshold: 100.0)
     assert len(query_store(store).top_hits(threshold=1e-9)["z"]) == 0
     from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 

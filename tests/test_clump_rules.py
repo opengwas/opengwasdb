@@ -104,6 +104,21 @@ def test_a_group_the_manifest_does_not_declare_fails_declared(
     assert _failed(store) == {"clumps.declared"}
 
 
+def test_a_clumps_array_where_the_group_belongs_fails_declared_by_name(
+    clumped: dict[str, Path], tmp_path: Path
+) -> None:
+    """`clumps` is an array, not a group: the rule names that (ogquery's
+    `clumps_configuration_problem`) instead of raising `AttributeError` on `.members()`."""
+    store = copied(clumped["completed"], tmp_path)
+    tier = zarr.open_group(str(store / "data.zarr/top_hits/p_5e_08"), mode="r+")
+    del tier["clumps"]
+    tier.create_array("clumps", shape=(3,), dtype="int8")
+    result = validate_store(store, rules=CLUMP_RULES)
+    assert "clumps.declared" in result.failed()
+    messages = " ".join(str(finding) for finding in result.of("clumps.declared"))
+    assert "clumps is an array, not a group" in messages
+
+
 def test_columns_without_the_clumps_fail_declared(clumped: dict[str, Path], tmp_path: Path) -> None:
     store = copied(clumped["unclumped"], tmp_path)
     assert _failed(store) == set()
