@@ -203,7 +203,9 @@ def test_the_readable_rows_reach_every_status_a_release_holds():
         assert statuses == want, (name, statuses)
 
 
-@pytest.mark.parametrize("name", [n for n in NAMES if not n.endswith("_ranges")])
+@pytest.mark.parametrize(
+    "name", [n for n in NAMES if n.endswith(("_observed", "_completed"))]
+)
 def test_each_digest_release_holds_its_planted_rows(name: str):
     """Read through the Store Reader's Variant Axis: `source_alid` in states 0, 1 and 2
     (ADR 0105 §8), rows with no rsID, and a cell naming two rsIDs."""

@@ -6,8 +6,8 @@ Two checks too slow for every test run (`CONTRIBUTING.md`, Test tiers):
    temporary directory, and `git diff --no-index --exit-code` compares its `releases`,
    `expected` and `VERSION` with the committed ones. A difference means a builder, a
    planting or an answer changed without the bundle: regenerate and commit it.
-2. **Format parity, the other six releases.** `tests/test_store_reader_contract_parity.py`
-   runs three of the nine releases in every test run; this runs the rest
+2. **Format parity, the other eight releases.** `tests/test_store_reader_contract_parity.py`
+   runs three of the eleven releases in every test run; this runs the rest
    (`STORE_READER_CONTRACT_PARITY=rest`).
 
 Exits non-zero, naming the check, if either fails.
@@ -59,7 +59,7 @@ def main() -> int:
         regenerated = regenerated_matches(Path(scratch))
     print("regeneration:", "the committed bundle" if regenerated else "DIFFERS (above)")
     parity = parity_passes()
-    print("parity, the other six releases:", "passed" if parity else "FAILED")
+    print("parity, the other eight releases:", "passed" if parity else "FAILED")
     return 0 if regenerated and parity else 1
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import shutil
 
@@ -474,3 +475,17 @@ def test_a_rho_group_whose_arrays_do_not_pair_up_is_refused_and_writes_nothing(t
             n_analyses=1,
         )
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_completed_release_without_its_imputed_mask_is_refused(rho_store_path):
+    """Read without its mask, a Reference-Completed grid's imputed Z would pass for
+    observed (spec §15): the build reads through the Association Reader, which refuses it."""
+    manifest_path = rho_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["completion_state"] = "reference_completed"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert "imputed" not in open_store(rho_store_path).arrays()
+
+    with pytest.raises(ValueError, match="imputed mask"):
+        build_dense_rho(rho_store_path, window_bp=50, z_thresh=1.0, min_nulls=1)
+    assert "rho" not in open_store(rho_store_path).arrays()

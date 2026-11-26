@@ -1,5 +1,5 @@
 {
- "bundle_version": "1",
+ "bundle_version": "2",
  "digests": {
   "adapter": "RaggedStoreQuery",
   "alid_probes": {
@@ -15872,6 +15872,7 @@
     "z": "3128aca5a03d9293ec6bcb67e531cf20018445b32a5876d7c679b0ad3b6697b6"
    }
   },
+  "rho": {},
   "shapes": {
    "analysis/a/all": {
     "analysis_index": "8e679480779bd9f88f408642078b30645ede8183e1c59a3e5b328619ff5a936c",
@@ -17408,6 +17409,7 @@
     "message": "unsupported chromosome '27'"
    }
   },
+  "rho": {},
   "shapes": {
    "analysis/a/all": {
     "by_status": {
