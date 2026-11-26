@@ -204,9 +204,26 @@ def test_a_wheel_requiring_another_range_of_ogquery_is_refused(tmp_path: Path) -
     assert "ogquery ['>=0.5'] is not pyproject.toml's ['<0.5', '>=0.4']" in problems[0]
 
 
-def test_an_extra_that_names_ogquery_is_not_the_dependency(tmp_path: Path) -> None:
-    problems = _problems(tmp_path, wheel=_wheel_requiring('ogquery>=0.4,<0.5; extra == "dev"'))
-    assert problems == ["opengwasdb-1.2.3-py3-none-any.whl: Requires-Dist has no ogquery"]
+@pytest.mark.parametrize(
+    "marker",
+    [
+        'python_version < "3.12"',
+        'python_version<"3.12"',
+        'extra=="dev"',
+        "extra == 'dev'",
+        'sys_platform == "win32"',
+    ],
+)
+def test_a_marked_ogquery_does_not_count_as_the_dependency(tmp_path: Path, marker: str) -> None:
+    """The right range behind an environment marker is no dependency for an install that the
+    marker excludes, so a wheel that declares it only so is refused, however the marker is
+    spelled."""
+    wheel = _wheel_requiring(f"ogquery>=0.4,<0.5; {marker}")
+    problems = _problems(tmp_path, wheel=wheel)
+    assert problems == [
+        "opengwasdb-1.2.3-py3-none-any.whl: Requires-Dist has no unconditional ogquery "
+        f"(only `ogquery>=0.4,<0.5; {marker}`)"
+    ]
 
 
 def test_anything_but_one_sdist_and_one_wheel_is_refused(tmp_path: Path) -> None:
