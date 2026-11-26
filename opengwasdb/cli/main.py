@@ -2121,6 +2121,23 @@ def regenerate_overview_command(store_path: Path) -> None:
     typer.echo(f"wrote {out_path}")
 
 
+@app.command("recount-top-hits")
+def recount_top_hits_command(store_path: Path) -> None:
+    """Set n_hits_5e8, n_hits_5e6 and n_hits_5e4 from the stored tiers, in place: a
+    Hybrid's Dense Component's analyses.tsv (where it carries one) and its root's, or a
+    Dense or Ragged release's own, then the overview (issue #509). Writes only a table
+    whose counts change. Prints, as JSON, how many Analyses changed per table and
+    column."""
+    from opengwasdb.store.top_hit_counts import RecountRefusal, recount_top_hits
+
+    try:
+        run = recount_top_hits(store_path)
+    except RecountRefusal as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(run.as_dict(), sort_keys=True))
+
+
 _CONVERT_LEGACY_OPTION = typer.Option(
     False,
     "--convert-legacy",

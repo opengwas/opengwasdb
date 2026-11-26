@@ -1,5 +1,5 @@
 {
- "bundle_version": "2",
+ "bundle_version": "3",
  "digests": {
   "adapter": "StoreQuery",
   "alid_probes": {

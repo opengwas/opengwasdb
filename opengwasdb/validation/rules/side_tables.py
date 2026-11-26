@@ -37,15 +37,13 @@ from opengwasdb.store_reader.encoding.plan import (
     StoreEncoding,
 )
 from opengwasdb.validation.rule import (
-    Check,
-    Finding,
     Fold,
     Rule,
     Target,
 )
 from opengwasdb.validation.rules.associations import EAF_EXCEPTIONS, VALUE_KINDS, VALUES_AFTER
 from opengwasdb.validation.rules.encoding import plane_label
-from opengwasdb.validation.rules.release import current_builders_wrote, severity_owed
+from opengwasdb.validation.rules.release import SeverityByFormat, current_builders_wrote
 from opengwasdb.validation.scans import ASSOCIATIONS, Block
 
 
@@ -360,26 +358,6 @@ def _rounded_se_exceptions(target: Target) -> Iterator[str]:
     )
 
 
-@dataclass(frozen=True, kw_only=True)
-class _SeverityByFormat(Check):
-    """A check whose severity says what the release's *format* owes, not what a reader saw.
-
-    An error fails the release, so only one written by a builder that had to hold
-    the value exactly can be failed: a release of an earlier format, package
-    0.9.0's 0.2.1 among them, may hold a rounded table and is reported as a
-    warning (`severity_owed`), which says what it is without failing a Store
-    nobody can fix in place (issue #355, #367). Every other rule's severity is
-    its own.
-    """
-
-    def findings(self, target: Target) -> Iterator[Finding]:
-        owed = severity_owed(target, self.severity)
-        for message in self.run(target):
-            # A release whose format owes the rule's own severity is judged as any rule
-            # is, so a deviation its conversion recorded is lowered there (#492).
-            yield self.finding(target, message, None if owed is self.severity else owed)
-
-
 RULES: tuple[Rule, ...] = (
     Fold(
         name="side_tables.z_overflow",
@@ -408,7 +386,7 @@ RULES: tuple[Rule, ...] = (
         measure=_se_exceptions,
         judge=_judge_se_exceptions,
     ),
-    _SeverityByFormat(
+    SeverityByFormat(
         name="side_tables.se_exceptions_rounded",
         kinds=VALUE_KINDS,
         after=("side_tables.se_exceptions",),

@@ -11,6 +11,11 @@
 > §21.1, §21.4). This exception is pending the owner's sign-off at epic #62's merge (ADR 0106,
 > *Awaiting the owner's sign-off*).
 >
+> **§4–§5 narrowed again by [ADR 0107](0107-top-hit-counts-are-held-to-the-tiers.md)**
+> (issue #509, 26 Nov 2026; awaiting the owner's sign-off): the Top-Hit Counts may be set
+> in place to what the release's own stored tiers count (`opengwasdb recount-top-hits`).
+> No association, tier, other column, `release_id` or `format_version` changes.
+>
 > **§3 amended by the owner's decision of 2026-11-11 (issue #430, spec §21.3):**
 > a build stamps each release **the lowest `format_version` whose features it
 > uses**, rather than one version for everything it writes. `0.2.1` is `0.2.0`

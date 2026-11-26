@@ -1,5 +1,5 @@
 {
- "bundle_version": "2",
+ "bundle_version": "3",
  "digests": {
   "adapter": "HybridStoreQuery",
   "alid_probes": {
@@ -97,9 +97,9 @@
    "license": "a7ecf94286d120038d9a3a428c78de76ae94b9a104149304860ae014f9dca9b3",
    "n_cases": "a7ecf94286d120038d9a3a428c78de76ae94b9a104149304860ae014f9dca9b3",
    "n_controls": "a7ecf94286d120038d9a3a428c78de76ae94b9a104149304860ae014f9dca9b3",
-   "n_hits_5e4": "1402879147e62394d354b4b92251b8db493fd152f6fe88dccba95e1ebff6c6e6",
-   "n_hits_5e6": "1402879147e62394d354b4b92251b8db493fd152f6fe88dccba95e1ebff6c6e6",
-   "n_hits_5e8": "1402879147e62394d354b4b92251b8db493fd152f6fe88dccba95e1ebff6c6e6",
+   "n_hits_5e4": "9f28b53815e7bddfe723dc843e33d294975e5cf941a6a8119cda728e08f2e31d",
+   "n_hits_5e6": "9f28b53815e7bddfe723dc843e33d294975e5cf941a6a8119cda728e08f2e31d",
+   "n_hits_5e8": "9f28b53815e7bddfe723dc843e33d294975e5cf941a6a8119cda728e08f2e31d",
    "n_missing_se_out_of_range": "c1fa6725e474537d48e0ca16a342779af21ea80860e17b995d521602130961d6",
    "original_effect_scale": "a7ecf94286d120038d9a3a428c78de76ae94b9a104149304860ae014f9dca9b3",
    "original_sd": "a7ecf94286d120038d9a3a428c78de76ae94b9a104149304860ae014f9dca9b3",
@@ -6868,9 +6868,9 @@
      "license": "",
      "n_cases": "",
      "n_controls": "",
-     "n_hits_5e4": "7",
-     "n_hits_5e6": "7",
-     "n_hits_5e8": "7",
+     "n_hits_5e4": "8",
+     "n_hits_5e6": "8",
+     "n_hits_5e8": "8",
      "n_missing_se_out_of_range": "0",
      "original_effect_scale": "",
      "original_sd": "",

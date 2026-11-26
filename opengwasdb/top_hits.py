@@ -37,6 +37,7 @@ from opengwasdb.store import arrays as store_arrays
 # module, so a test that moves the cut moves every caller with it.
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
+from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.store_reader.format import carries_stored_p
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import release_arrays
@@ -45,8 +46,10 @@ from opengwasdb.store_reader.top_hits import (
     TOP_HIT_GROUP,
     TOP_HIT_THRESHOLDS,
     analysis_hit_counts,
+    index_group,
     threshold_key,
 )
+from opengwasdb.store_reader.top_hits import has_index as reader_has_index
 
 log = logging.getLogger(__name__)
 
@@ -225,6 +228,48 @@ def read_top_hit_counts(
         _THRESHOLD_COLUMNS[threshold]: analysis_hit_counts(root, threshold, n_analyses)
         for threshold in thresholds
     }
+
+
+def summed_hit_counts(
+    store_paths: list[Path], n_analyses: int
+) -> dict[str, list[int]]:
+    """Per-Analysis Top-Hit Counts over several components' indexes, summed: what the
+    `analyses.tsv` beside them records (ADR 0032, #509). A Hybrid root's counts both its
+    Dense Component's tiers and its own (the Ragged Overflow's); every other table, its
+    own release's. A component whose tier counts other than `n_analyses` Analyses is a
+    `ValueError`, and one with no Top-Hit Index or no tier a `KeyError`, never a zero."""
+    summed = {column: [0] * n_analyses for column in TOP_HIT_COUNT_COLUMNS}
+    for path in store_paths:
+        for column, counts in read_top_hit_counts(path, n_analyses).items():
+            if len(counts) != n_analyses:
+                raise ValueError(
+                    f"{path}: the {column} tier counts {len(counts)} Analyses, the "
+                    f"analyses.tsv beside it holds {n_analyses}"
+                )
+            summed[column] = [a + b for a, b in zip(summed[column], counts, strict=True)]
+    return summed
+
+
+def misshapen_tier(store_path: str | Path, n_analyses: int) -> str | None:
+    """The first tier of the release at `store_path` whose `analysis_offsets` do not
+    partition its rows over `n_analyses` Analyses, or None. A count read through such
+    offsets is not a count. This is `structural_problem`'s offsets test without loading
+    the tier, and `top_hits.structure` reports the tier itself. A tier that predates
+    the offsets is counted from `analysis_index`, and is not judged here."""
+    tiers = index_group(release_arrays(store_path))
+    for threshold in TOP_HIT_THRESHOLDS:
+        key = threshold_key(threshold)
+        if key not in tiers or "analysis_offsets" not in tiers[key]:
+            continue
+        offsets = np.asarray(tiers[key]["analysis_offsets"][:], dtype=np.int64)
+        if not _offsets_ok(offsets, array_length(tiers[key]["variant_index"]), n_analyses):
+            return f"{store_path}: tier {key} has invalid analysis offsets"
+    return None
+
+
+def has_top_hit_index(store_path: str | Path) -> bool:
+    """Whether the release at `store_path` carries a Top-Hit Index."""
+    return bool(reader_has_index(release_arrays(store_path)))
 
 
 def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Analysis]:
