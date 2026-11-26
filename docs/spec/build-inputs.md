@@ -456,7 +456,8 @@ reads it.
 - `--chain` maps GRCh37 to GRCh38. REF and ALT are reverse-complemented on
   negative-strand mappings, and REF must match the chromosome in `--fasta`
   (plain or gzip). Unmapped/ambiguous loci, chromosome/strand or allele-span
-  failures, allele mismatch/identity, invalid frequency and every member of
+  failures, allele mismatch/identity, invalid frequency (the AF oriented to A1 and
+  cast to the store's float32 is not both finite and inside (0, 1)) and every member of
   an identity collision are dropped under named loss classes, as in opengwas/ogld#89.
 - A non-finite or non-positive covariance diagonal drops its variant, counted
   separately. Surviving covariance is divided by sqrt(C_ii C_jj), then signed

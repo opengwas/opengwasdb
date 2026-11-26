@@ -296,7 +296,10 @@ def write_variant_table(
     layout.put_strings(group, "a1", variants.a1)
     layout.put_strings(group, "a2", variants.a2)
     layout.put_numbers(
-        group, "a1_frequency", variants.a1_frequency.astype(np.float32), layout.FREQUENCY_FILL
+        group,
+        "a1_frequency",
+        variants.a1_frequency.astype(layout.FREQUENCY_DTYPE),
+        layout.FREQUENCY_FILL,
     )
     group.attrs["chromosomes"] = layout.chromosomes_record(ranges)
     return root

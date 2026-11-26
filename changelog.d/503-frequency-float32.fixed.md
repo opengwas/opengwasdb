@@ -1,0 +1,1 @@
+`opengwasdb ld import` now drops a variant whose frequency, oriented to A1 and cast to the store's float32, is not inside (0, 1), counted as `invalid_frequency`. Pan-UKB rows with AF near 1e-8 could round to exactly 1.0 and make the writer refuse the store (#503, ogld#102).

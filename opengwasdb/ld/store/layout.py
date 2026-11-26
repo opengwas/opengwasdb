@@ -195,6 +195,8 @@ POSITION_FILL: Final = 0
 
 
 FREQUENCY_FILL: Final = float("nan")
+#: The dtype `variants/a1_frequency` is stored in; a frequency is only valid once cast to it.
+FREQUENCY_DTYPE: Final = np.float32
 
 
 #: The file the frames are appended to until the group is closed, when it becomes the `frames`
