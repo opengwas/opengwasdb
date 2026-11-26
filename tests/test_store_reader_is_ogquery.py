@@ -16,17 +16,15 @@ Every module is a re-export, `facade.py` and `rho.py` included: the Hybrid Rho w
 """
 
 from __future__ import annotations
-import __future__
 
 import ast
-import importlib
-import types
 from pathlib import Path
-from typing import Any
 
 import pytest
+from ogquery_seam import exported, module_pair, not_the_same_object
 
 PACKAGE = Path(__file__).resolve().parent.parent / "opengwasdb" / "store_reader"
+
 
 def _modules() -> list[str]:
     """The dotted name, below `store_reader`, of every module the package holds."""
@@ -38,20 +36,6 @@ def _modules() -> list[str]:
     return names
 
 
-def _exported(module: object) -> dict[str, object]:
-    names = getattr(module, "__all__", None)
-    if names is None:
-        names = [name for name in vars(module) if not name.startswith("_")]
-    values = {name: getattr(module, name) for name in names}
-    # A submodule is its own shim here, and `annotations`/`Any` are the module's own imports.
-    return {
-        name: value
-        for name, value in values.items()
-        if not isinstance(value, types.ModuleType) and value is not Any
-        and not isinstance(value, __future__._Feature)
-    }
-
-
 def test_the_package_holds_modules() -> None:
     # The parametrised tests below are worthless on an empty list.
     assert len(_modules()) > 30
@@ -59,14 +43,16 @@ def test_the_package_holds_modules() -> None:
 
 @pytest.mark.parametrize("name", _modules())
 def test_a_store_reader_module_re_exports_the_ogquery_module(name: str) -> None:
-    shim = importlib.import_module(f"opengwasdb.store_reader.{name}".rstrip("."))
-    reader = importlib.import_module(f"ogquery.{name}".rstrip("."))
-    theirs = _exported(reader)
-    ours = _exported(shim)
+    shim, reader = module_pair(
+        f"opengwasdb.store_reader.{name}".rstrip("."), f"ogquery.{name}".rstrip(".")
+    )
+    theirs = exported(reader)
+    ours = exported(shim)
     # A package that only holds submodules has nothing to compare; a module must.
     assert theirs or hasattr(reader, "__path__"), f"ogquery.{name} exports nothing"
+    # A pure shim is complete: it has every name ogquery exports, as ogquery's own object.
     assert sorted(set(theirs) - set(ours)) == [], "names the shim does not re-export"
-    assert [n for n in theirs if ours[n] is not theirs[n]] == [], "names that are copies"
+    assert not_the_same_object(shim, reader, theirs) == [], "names that are copies"
 
 
 def test_no_store_reader_module_defines_a_function_or_class() -> None:
@@ -83,22 +69,17 @@ def test_no_store_reader_module_defines_a_function_or_class() -> None:
     assert defining == {}
 
 
-def test_facade_and_rho_see_one_class_of_each() -> None:
-    """The two modules that were in-tree until phase 3 are re-exports like the rest, and
-    the Store Reader's classes are ogquery's, not a second copy."""
-    import ogquery.facade
+def test_the_shims_hold_one_release_class_of_each() -> None:
+    """The per-name identity above covers every export; this is the claim it exists for, in
+    one place: a process holds one `StoreRelease` and one `StoreManifest`."""
     import ogquery.manifest
     import ogquery.release
-    import ogquery.rho
 
     import opengwasdb.store_reader.manifest as shim_manifest
-    from opengwasdb.store_reader import facade, rho
+    from opengwasdb.store_reader import facade
 
     assert facade.StoreRelease is ogquery.release.StoreRelease
     assert shim_manifest.StoreManifest is ogquery.manifest.StoreManifest
-    assert facade.query_release is ogquery.facade.query_release
-    assert rho.DenseRhoReader is ogquery.rho.DenseRhoReader
-    assert rho.OverflowOnlyAnalysisError is ogquery.rho.OverflowOnlyAnalysisError
 
 
 def test_both_ways_to_a_query_facade_return_the_same_class(dense_store_path) -> None:
@@ -130,6 +111,10 @@ def test_the_ruff_ignore_covers_the_re_exports_and_nothing_else() -> None:
     assert listed == shims
 
 
+#: The two functions the wrapper overrides to default `query=`.
+OVERRIDDEN_DIGESTS = {"release_answers", "release_digests"}
+
+
 def test_the_digests_default_to_query_store_and_nothing_else_knows_it() -> None:
     from ogquery import digests as theirs
 
@@ -139,3 +124,7 @@ def test_the_digests_default_to_query_store_and_nothing_else_knows_it() -> None:
     assert ours.differences is theirs.differences  # everything else is ogquery's own
     assert ours.RANGE_ROWS_ASKED == theirs.RANGE_ROWS_ASKED
     assert ours.adapter_name is theirs.adapter_name
+    # Explicit exports: every name ogquery's `__all__` has is listed, so a name it adds is
+    # missed here loudly, not silently dropped as a star import would not.
+    assert set(theirs.__all__) - set(ours.__all__) == set()
+    assert not_the_same_object(ours, theirs, set(ours.__all__) - OVERRIDDEN_DIGESTS) == []

@@ -207,7 +207,6 @@ select = ["E", "F", "I", "UP", "B"]
 # re-export; `tests/test_store_reader_is_ogquery.py` holds this list to the files that are
 # re-exports, so no file that holds code can hide behind it.
 "opengwasdb/store_reader/__init__.py" = ["F401", "F403"]
-"opengwasdb/store/query_digests.py" = ["F401", "F403"]
 "opengwasdb/store_reader/alid.py" = ["F401", "F403"]
 "opengwasdb/store_reader/alid_index.py" = ["F401", "F403"]
 "opengwasdb/store_reader/alid_sidecar.py" = ["F401", "F403"]
@@ -254,12 +253,6 @@ select = ["E", "F", "I", "UP", "B"]
 # line.
 python_version = "3.12"
 strict = true
-
-# `store.query_digests` star-imports `ogquery.digests` and overrides two of its functions
-# (#475); mypy reads the override as a redefinition. Only that code, only that module.
-[[tool.mypy.overrides]]
-module = ["opengwasdb.store.query_digests"]
-disable_error_code = ["no-redef"]
 
 [[tool.mypy.overrides]]
 module = ["numcodecs", "pandas", "pysam", "zarr"]
