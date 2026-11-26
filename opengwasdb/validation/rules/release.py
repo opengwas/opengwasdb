@@ -77,6 +77,26 @@ def severity_owed(target: Target, severity: Severity) -> Severity:
     return severity if current_builders_wrote(target) else Severity.WARNING
 
 
+@dataclass(frozen=True, kw_only=True)
+class SeverityByFormat(Check):
+    """A check whose severity says what the release's *format* owes, not what a reader saw.
+
+    An error fails the release, so only one written by a builder that had to hold
+    the value exactly can be failed: a release of an earlier format, package
+    0.9.0's 0.2.1 among them, may hold a rounded table and is reported as a
+    warning (`severity_owed`), which says what it is without failing a Store
+    nobody can fix in place (issue #355, #367). Every other rule's severity is
+    its own.
+    """
+
+    def findings(self, target: Target) -> Iterator[Finding]:
+        owed = severity_owed(target, self.severity)
+        for message in self.run(target):
+            # A release whose format owes the rule's own severity is judged as any rule
+            # is, so a deviation its conversion recorded is lowered there (#492).
+            yield self.finding(target, message, None if owed is self.severity else owed)
+
+
 def zarr_format(target: Target) -> list[str]:
     """The release's Zarr tree is in the format its `format_version` names."""
     errors: list[str] = []

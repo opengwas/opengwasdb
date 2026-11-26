@@ -662,6 +662,34 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     assert result.n_imputed >= 0
 
 
+def test_a_crossover_hit_is_counted_by_the_final_tiers(tmp_path):
+    """issue #509: the crossover fold writes trait_a's observed z=-4.0 into the Dense
+    Component, whose rebuilt 5e-4 tier then holds it; its Top-Hit Counts, and the root's,
+    are those of the final tiers, not of the tiers completion built before the fold."""
+    from opengwasdb.store_reader.release import release_arrays
+    from opengwasdb.store_reader.top_hits import index_group, tier_arrays
+
+    src = _build_source(tmp_path)
+    dst = tmp_path / "dst.opengwasdb"
+    complete_hybrid_store(src, dst, _make_ld_panel_with_crossover(tmp_path), min_cor=0.0,
+                          thresh=0.9)
+
+    rows = sorted(read_analyses(dst / "analyses.tsv").rows, key=lambda r: int(r["analysis_index"]))
+    trait_a = next(int(r["analysis_index"]) for r in rows if r["analysis_id"] == "trait_a")
+    tier = tier_arrays(index_group(release_arrays(dst / "dense"))[threshold_key(5e-4)])
+    held = tier["z_values"][tier["cols"] == trait_a]
+    assert np.isclose(held, -4.0, rtol=5e-3).any(), "the fixture's crossover hit is in the tier"
+
+    dense_counts = read_top_hit_counts(dst / "dense", len(rows))
+    overflow_counts = read_top_hit_counts(dst, len(rows))
+    for column in dense_counts:
+        assert [int(r[column]) for r in rows] == [
+            d + o for d, o in zip(dense_counts[column], overflow_counts[column], strict=True)
+        ], column
+    result = validate_store(dst, rules={"analyses.top_hit_counts"})
+    assert result.ok and not result.findings, result.findings
+
+
 def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

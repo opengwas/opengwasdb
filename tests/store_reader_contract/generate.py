@@ -54,7 +54,7 @@ for _path in (REPOSITORY / "tests", REPOSITORY, BUNDLE):
         sys.path.insert(0, str(_path))
 
 #: The bundle's own version: raised whenever a release or an expected answer changes.
-BUNDLE_VERSION = "2"
+BUNDLE_VERSION = "3"
 #: The `format_version` every release of the bundle is.
 FORMAT_VERSION = "0.3.0"
 #: What `normalise` stamps in place of each build's time, version and build root.

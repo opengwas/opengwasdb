@@ -21,6 +21,8 @@ import math
 import re
 from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 from opengwasdb.model.analyses import (
     N_MISSING_SE_OUT_OF_RANGE,
@@ -46,8 +48,17 @@ from opengwasdb.store.open import records_se_out_of_range
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.plan import EafEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
-from opengwasdb.validation.rules.release import REQUIRED
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.top_hits import has_index
+from opengwasdb.top_hits import (
+    MisshapenTier,
+    UncountableTiers,
+    counted_components,
+    counted_hits,
+    table_slots,
+)
+from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Skip, Target
+from opengwasdb.validation.rules.release import REQUIRED, SeverityByFormat
 
 #: The rule every `analyses.tsv` rule runs after: the table could be read at all.
 READABLE = "analyses.readable"
@@ -240,6 +251,63 @@ def top_hit_count_columns(target: Target) -> Iterator[str]:
                     f"analyses.tsv analysis {row.get('analysis_id')!r} has invalid "
                     f"{column} {value!r} (must be a non-negative integer)"
                 )
+
+
+# --- the Top-Hit Counts against the tiers (issue #509, ADR 0032) ---
+
+
+def top_hit_counts(target: Target) -> Iterator[str]:
+    """Each Analysis's `n_hits_5e8`, `n_hits_5e6` and `n_hits_5e4` is the number of rows
+    its tier holds for it (ADR 0032, ADR 0107), matched by `analysis_index`, over the
+    components the table counts (`top_hits.counted_components`). One message per column
+    that disagrees anywhere, with its count and first Analysis: `complete-hybrid` once
+    left 1,028 of OGS-00011's 3,245 wrong (#509), which `opengwasdb recount-top-hits`
+    repairs in place. What cannot be counted -- a component with no Top-Hit Index, rows
+    whose `analysis_index` is not 0 to n-1 -- fails the rule; a tier whose offsets are
+    malformed skips it, as `top_hits.structure` fails that tier (`top_hits.counted_hits`)."""
+    rows = target.analyses.rows
+    try:
+        slots = table_slots(rows)
+        expected = counted_hits(_component_roots(target), len(rows))
+    except MisshapenTier as exc:
+        raise Skip(f"{exc}, which top_hits.structure reports: no count can be read") from exc
+    except UncountableTiers as exc:
+        yield str(exc)
+        return
+    for column in TOP_HIT_COUNT_COLUMNS:
+        problem = _count_problem(column, rows, [expected[column][slot] for slot in slots])
+        if problem:
+            yield problem
+
+
+def _count_problem(column: str, rows: tuple[dict[str, str], ...], held: list[int]) -> str:
+    """How `column` disagrees with `held`, each row's tier rows, or ``""``."""
+    wrong = [(row, n) for row, n in zip(rows, held, strict=True) if row.get(column) != str(n)]
+    if not wrong:
+        return ""
+    row, n = wrong[0]
+    return (
+        f"{column} disagrees with its tier on {len(wrong):,} of {len(rows):,} Analyses "
+        f"(first, {row.get('analysis_id')!r} records {row.get(column, '')!r} and the tier "
+        f"holds {n}): run opengwasdb recount-top-hits"
+    )
+
+
+def _component_roots(target: Target) -> dict[Path, Any]:
+    """Each counted component's `data.zarr` group, opened once for the run."""
+    return target.remember(
+        "top_hit_counts/roots",
+        lambda: {path: release_arrays(path) for path in counted_components(target.store)},
+    )
+
+
+def _counts_its_tiers(target: Target) -> bool:
+    """A release with an `analyses.tsv` (`_with_analyses`) and a Top-Hit Index in any
+    component it counts. One with none has nothing to count; one where a component
+    lacks it is judged, and fails."""
+    return _with_analyses(target) and any(
+        has_index(root) for root in _component_roots(target).values()
+    )
 
 
 # --- n_missing_se_out_of_range (issue #338, ADR 0068) ---
@@ -521,6 +589,11 @@ TABLE_RULES: tuple[Rule, ...] = (
     _table_rule("analyses.original_sd_recorded", original_sd_recorded),
     _table_rule("analyses.sd_scale_standardised", sd_scale_standardised),
     _table_rule("analyses.top_hit_count_columns", top_hit_count_columns),
+    # An error on a release this package's builders write, a warning before (#509).
+    SeverityByFormat(
+        name="analyses.top_hit_counts", kinds=Kind.RELEASE, when=_counts_its_tiers,
+        after=(READABLE,), run=top_hit_counts,
+    ),
     Check(
         name="analyses.se_out_of_range_count", kinds=Kind.RELEASE, when=_with_analyses,
         after=(READABLE,), run=se_out_of_range_count,

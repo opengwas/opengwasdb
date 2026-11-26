@@ -62,7 +62,12 @@ from opengwasdb.layouts.hybrid.build import require_panel_mapped, write_variant_
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
-from opengwasdb.model.analyses import Analysis, read_analysis_records, with_se_out_of_range
+from opengwasdb.model.analyses import (
+    Analysis,
+    read_analysis_records,
+    reset_top_hit_counts,
+    with_se_out_of_range,
+)
 from opengwasdb.store import check_format_version_stamp, completed_format_version
 from opengwasdb.store.arrays import open_group_for_write
 from opengwasdb.store.open import (
@@ -397,9 +402,9 @@ def _remap_shared_axis(
             n_reclaimed_imputed,
         )
         # Rebuild the top-hit index complete_dense_store built from its
-        # pre-patch z. Quality counts are corrected above; Top-Hit Count rollups
-        # retain the pre-existing narrow imprecision for crossover cells.
+        # pre-patch z, then recount the Dense Component's Top-Hit Counts from it.
         build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding, n_workers=n_workers)
+        _recount_dense_hits(dense.dir)
 
     union = sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
     return _SharedAxis(
@@ -411,6 +416,19 @@ def _remap_shared_axis(
         n_panel=len(dense.alids),
         n_off_panel=len(union) - len(dense.alids),
         n_imputed=n_imputed,
+    )
+
+
+def _recount_dense_hits(dense_dir: Path) -> None:
+    """Set the completed Dense Component's `n_hits_*` from its final tiers (#509).
+
+    `complete_dense_store` counted the tiers it built before the crossover fold wrote
+    observed values into the component; the rebuilt tiers then hold other rows. The
+    counts are reset, so they are set rather than added onto, as `complete-ragged`
+    does; the root later adds the Overflow's on top (`_finalize_completed_hybrid`)."""
+    write_analyses_tsv(
+        dense_dir,
+        top_hits.add_hit_counts(dense_dir, reset_top_hit_counts(_read_analyses(dense_dir))),
     )
 
 

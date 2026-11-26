@@ -161,8 +161,8 @@ components:
     container: engine
     layer: 4
     stages: [cross]
-    summary: Representation-only repairs, the SE re-encode of existing Store Releases, layout conversion, and the rewrite to format 0.3.0 with the query digests that prove it, and its conversion of a 0.2.0-0.2.2 Dense release (#492).
-    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py, opengwasdb/store/query_digests.py, opengwasdb/store/rewrite.py, opengwasdb/store/legacy_conversion.py, opengwasdb/store/legacy_expected.py, opengwasdb/store/legacy_masking.py, opengwasdb/store/legacy_quality.py]
+    summary: Representation-only repairs, the SE re-encode of existing Store Releases, layout conversion, and the rewrite to format 0.3.0 with the query digests that prove it, and its conversion of a 0.2.0-0.2.2 Dense release (#492); the in-place recount of a release's Top-Hit Counts from its tiers, `opengwasdb recount-top-hits` (#509, ADR 0107).
+    paths: [opengwasdb/repair.py, opengwasdb/reencode.py, opengwasdb/store/convert.py, opengwasdb/store/query_digests.py, opengwasdb/store/rewrite.py, opengwasdb/store/legacy_conversion.py, opengwasdb/store/legacy_expected.py, opengwasdb/store/legacy_masking.py, opengwasdb/store/legacy_quality.py, opengwasdb/store/top_hit_counts.py]
   - id: clumps
     name: Clumps
     container: engine

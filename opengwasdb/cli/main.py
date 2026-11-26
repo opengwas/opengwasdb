@@ -1946,7 +1946,11 @@ def _keep_stored_p(store_path: Path) -> None:
 
 @app.command("build-ragged-top-hits")
 def build_ragged_top_hits_command(store_path: Path) -> None:
-    """Build (or rebuild) the top-hit index for a Ragged store."""
+    """Build (or rebuild) the top-hit index for a Ragged store.
+
+    It does not recount `n_hits_*`: after tiers are rebuilt in place, run
+    `opengwasdb recount-top-hits` (#509), or `analyses.top_hit_counts` fails the release.
+    """
     build_ragged_top_hit_indexes(store_path)
     _keep_stored_p(store_path)
     typer.echo("done")
@@ -1957,6 +1961,9 @@ def build_dense_top_hits_command(
     store_path: Path, n_workers: int = _N_WORKERS_OPTION
 ) -> None:
     """Build (or rebuild) the top-hit index for a Dense store.
+
+    It does not recount `n_hits_*`: after tiers are rebuilt in place, run
+    `opengwasdb recount-top-hits` (#509), or `analyses.top_hit_counts` fails the release.
 
     A 0.2 release's rebuilt tiers keep the `abs_z` and `p_value` its format stores, and
     a 0.3.0 release's store neither (ADR 0102, #471).
@@ -2119,6 +2126,23 @@ def regenerate_overview_command(store_path: Path) -> None:
     table = read_analyses(store_path / "analyses.tsv")
     out_path = write_overview_html(store_path, table)
     typer.echo(f"wrote {out_path}")
+
+
+@app.command("recount-top-hits")
+def recount_top_hits_command(store_path: Path) -> None:
+    """Set n_hits_5e8, n_hits_5e6 and n_hits_5e4 from the stored tiers, in place: a
+    Hybrid's Dense Component's analyses.tsv (where it carries one) and its root's, or a
+    Dense or Ragged release's own, then the overview (issue #509). Writes only a table
+    whose counts change. Prints, as JSON, how many Analyses changed per table and
+    column."""
+    from opengwasdb.store.top_hit_counts import RecountRefusal, recount_top_hits
+
+    try:
+        run = recount_top_hits(store_path)
+    except RecountRefusal as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(run.as_dict(), sort_keys=True))
 
 
 _CONVERT_LEGACY_OPTION = typer.Option(
