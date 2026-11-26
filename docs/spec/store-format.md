@@ -3763,7 +3763,8 @@ Store Releases are immutable. Reference Completion, re-indexing and migration al
   It is nuisance metadata recomputable from the Store, carries no Analytical Metadata,
   and changes no association, `format_version` included;
 - **the Top-Hit Counts set to what the release's own stored tiers count** (ADR 0107,
-  #509; awaiting the owner's sign-off). `opengwasdb recount-top-hits STORE` recounts
+  #509; the owner's ruling of 26 Nov 2026). `n_loci_5e8` and `n_unclumped_5e8` stay
+  beside them, unchanged. `opengwasdb recount-top-hits STORE` recounts
   `n_hits_5e8`, `n_hits_5e6` and `n_hits_5e4` from the tiers in every `analyses.tsv`
   the release carries: a 0.2 Hybrid's Dense Component's own first, then the root's,
   which counts both components. It reads every table and tier before it writes, and

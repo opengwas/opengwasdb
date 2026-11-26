@@ -12,9 +12,11 @@
 > *Awaiting the owner's sign-off*).
 >
 > **§4–§5 narrowed again by [ADR 0107](0107-top-hit-counts-are-held-to-the-tiers.md)**
-> (issue #509, 26 Nov 2026; awaiting the owner's sign-off): the Top-Hit Counts may be set
+> (issue #509; the owner's ruling of 26 Nov 2026, item 10 of
+> [opengwasdb-stores#520](https://github.com/opengwas/opengwasdb-stores/issues/520#issuecomment-7202276131)): the Top-Hit Counts may be set
 > in place to what the release's own stored tiers count (`opengwasdb recount-top-hits`).
-> No association, tier, other column, `release_id` or `format_version` changes.
+> No association, tier, other column (`n_loci_5e8` and `n_unclumped_5e8` included),
+> `release_id` or `format_version` changes.
 >
 > **§3 amended by the owner's decision of 2026-11-11 (issue #430, spec §21.3):**
 > a build stamps each release **the lowest `format_version` whose features it

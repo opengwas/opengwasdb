@@ -212,3 +212,38 @@ def test_a_tier_with_malformed_offsets_skips_the_rule_and_is_refused(digest_rele
     with pytest.raises(RecountRefusal, match="invalid analysis offsets"):
         recount_top_hits(release)
     assert (release / "analyses.tsv").read_bytes() == held
+
+
+@pytest.mark.parametrize("name", ["completed", "hybrid"])
+def test_the_recount_leaves_every_other_column_byte_identical_beside_clumps(
+    clumped_seeds, tmp_path, name
+):
+    """The owner's ruling on ADR 0107 decision 3 (26 Nov 2026): `n_loci_5e8` and
+    `n_unclumped_5e8` stay beside `n_hits_*`, and the recount leaves them, and every other
+    column, as they were. The planted count is OGS-00011's case: an `n_hits_5e8` below
+    the Analysis's loci and unclumped rows, which `clumps.counts` fails."""
+    release = Path(shutil.copytree(clumped_seeds[name], tmp_path / name))
+    table = release / "analyses.tsv"
+    rows = read_analyses(table).rows
+    clumped = [i for i, row in enumerate(rows) if row.get("n_loci_5e8", "").isdigit()
+               and int(row["n_loci_5e8"]) > 0]
+    assert clumped, "the fixture holds an Analysis with Clumps"
+    stale = [row["n_hits_5e8"] for row in rows]
+    stale[clumped[0]] = "0"
+    write_analysis_columns(table, {"n_hits_5e8": stale})
+    before = table.read_text(encoding="utf-8").splitlines()
+    assert "clumps.counts" in validate_store(release, rules={"clumps.counts"}).failed()
+
+    run = recount_top_hits(release)
+
+    after = table.read_text(encoding="utf-8").splitlines()
+    header = before[0].split("\t")
+    assert after[0] == before[0] and len(after) == len(before)
+    assert {"n_loci_5e8", "n_unclumped_5e8"} <= set(header)
+    kept = [i for i, column in enumerate(header) if column not in TOP_HIT_COUNT_COLUMNS]
+    for old, new in zip(before[1:], after[1:], strict=True):
+        old_fields, new_fields = old.split("\t"), new.split("\t")
+        assert [old_fields[i] for i in kept] == [new_fields[i] for i in kept]
+    assert sum(t.n_analyses_changed for t in run.tables) == 1
+    result = validate_store(release, rules={"clumps.counts", RULE})
+    assert result.ok and not result.failed(), result.errors

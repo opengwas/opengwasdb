@@ -2,12 +2,13 @@
 
 ## Status
 
-Proposed. Issue [#509](https://github.com/opengwas/opengwasdb/issues/509), under
+Accepted. Issue [#509](https://github.com/opengwas/opengwasdb/issues/509), under
 opengwas/opengwasdb-stores epic #520. Decisions 1 and 2 follow from the evidence and from
 [ADR 0032](0032-overview-html-is-a-single-tabbed-page-with-persisted-hit-counts.md)'s definition
-of the counts. Decision 3, the in-place repair, is #509's request. It is a second exception to
-immutability, beside [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10, and
-**awaits the owner's sign-off** before it is run on a published Store.
+of the counts. Decision 3, the in-place repair, is a second exception to immutability, beside
+[ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10. It is **the owner's**: approved
+on 26 Nov 2026 (AskUserQuestion in the orchestrating session), recorded as item 10 of
+[opengwas/opengwasdb-stores#520](https://github.com/opengwas/opengwasdb-stores/issues/520#issuecomment-7202276131).
 
 What this ADR changes in other documents:
 
@@ -97,12 +98,27 @@ Hybrid's Dense Component's table first, then the root's. It changes nothing else
 - **It prints one JSON object:** `store`, `seconds`, and per table its Analyses, how many
   changed and the changes per column. `written` names the tables it wrote.
 
-**An exception to immutability (awaiting the owner).** ADR 0038 §4–§5 and spec §21.4 derive a new
+**An exception to immutability (the owner's, 26 Nov 2026).** ADR 0038 §4–§5 and spec §21.4 derive a new
 release for any change to Analytical Metadata, and the Top-Hit Counts are Analytical Metadata.
 The exception is exactly this: **the Top-Hit Counts may be set in place to what the release's own
 stored tiers count.** That is the value ADR 0032 defines them as, so no association, tier or
 other column changes, and neither the `release_id` nor the `format_version` moves. Anything else
 that touches Analytical Metadata still derives a new release.
+
+**The owner's ruling** (26 Nov 2026, AskUserQuestion in the orchestrating session; item 10 of
+[opengwas/opengwasdb-stores#520](https://github.com/opengwas/opengwasdb-stores/issues/520#issuecomment-7202276131)):
+
+- `recount-top-hits` may correct a published release's `n_hits_5e8`, `n_hits_5e6` and
+  `n_hits_5e4` in place, from its own tiers.
+- It runs inside the registry's in-place release: a reflink copy is recounted and validated, then
+  published, and the old Store is archived to `replaced/`.
+- **`n_loci_5e8` and `n_unclumped_5e8` are kept alongside `n_hits_*`, unchanged.** The recount
+  writes only the three Top-Hit Count columns. It leaves every other column of `analyses.tsv`
+  byte-identical, the Clumps' two included
+  (`test_the_recount_leaves_every_other_column_byte_identical_beside_clumps`). On a clumped
+  release whose stale `n_hits_5e8` is below the Analysis's loci and unclumped rows, OGS-00011's
+  case, `clumps.counts` then passes with the Clumps untouched.
+- OGS-00011, with 3,047 of its 3,245 Analyses stale, is repaired this way.
 
 **On a reflink copy of OGS-00011 (26 Nov 2026):** the command took 1.79 s. It changed **3,047 of
 3,245 Analyses**: 1,028 at 5e-8, 2,080 at 5e-6 and 3,037 at 5e-4. The rule then passes, a second
@@ -121,5 +137,5 @@ run writes nothing, and no other column of `analyses.tsv` changed.
 
 - A completed Hybrid built after this fix counts its final tiers. One built before it fails
   `analyses.top_hit_counts` until `recount-top-hits` runs on it.
-- The opengwasdb-stores registry runs `recount-top-hits` on OGS-00011 as a post step before
-  `clump`, once the owner signs off on decision 3.
+- The opengwasdb-stores registry runs `recount-top-hits` on OGS-00011 inside its in-place
+  release, as the owner ruled (decision 3).
