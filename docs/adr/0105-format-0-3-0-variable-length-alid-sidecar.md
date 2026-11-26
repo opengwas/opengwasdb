@@ -32,6 +32,9 @@ What this ADR changes in other documents:
   `--convert-legacy`, `provenance.converted_from` and the rules a converted release reports
   as warnings. It amends §3's "Only 0.2.3 is a source" and "Hosted releases are not
   rewritten", and the Consequences' "Nothing hosted is rewritten".
+- From #504 (the dated section "26 Nov 2026 (#504)" below): spec §20.0 and §21.4 for the
+  fourth recorded deviation, `variant_table.lifted_contig`, and `lifted_contig_unjudged`. It
+  amends #492's "only for the three rules a conversion records".
 - [ADR 0038](0038-store-format-versioning-and-migration-policy.md) and
   [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md) stand: this applies them.
 
@@ -999,13 +1002,15 @@ judges through `Rule.finding` like every rule, so the same record lowers it, wit
 its own. Unlisted, it fails a converted release
 (`test_a_converted_release_not_listing_the_rounding_fails_it`).
 
-The three deviations a conversion can record, by rule:
+The deviations a conversion can record, by rule (three as decided here; the fourth is the
+amendment of 26 Nov 2026 below):
 
 | Rule | Recorded when |
 |---|---|
 | `variant_table.indel_order` | the source is before 0.2.2 |
 | `variant_table.source_alid` | `--lifted` |
 | `side_tables.se_exceptions_rounded` | the source's SE exception table is rounded (#355) |
+| `variant_table.lifted_contig` | `--lifted`, where rows on alt, random or unplaced contigs have no `source_alid` (#504, amendment below) |
 
 **The proof compares each change; it does not skip it.** The source is asked the rewrite's
 questions through a view of its 0.2 reader that makes exactly the conversion's changes
@@ -1075,6 +1080,52 @@ Consequences.
   - The full validator reports no error, no skip, and one warning: the recorded
     `side_tables.se_exceptions_rounded`. `variant_table.indel_order` does not fire, for the
     reason above.
+
+## 26 Nov 2026 (#504): a lifted release's unjudged off-primary rows, a fourth deviation
+
+**The gap.** `variant_table.lifted_contig` judges a row on an alt, random or unplaced contig
+by the contig of its `source_alid`. A lifted release converted here carries no `source_alid`
+(the `variant_table.source_alid` deviation above), so the rule can judge none of those rows.
+It then gives a hard-coded warning, "N not judged (no source ALID)". That warning went to no
+recorded deviation, so publishing the converted release (opengwasdb-stores ADR 0042,
+`publish-rewrite`) refused it. OGS-00009 (UKB-B, hg19 to hg38), converted at `c8ebe4ca`, has
+**1,271** such rows: `7_KI270803v1_alt` 750, `8_KI270821v1_alt` 327,
+`14_GL000009v2_random` 35, and others. They hold 1,959,551 observed cells. Its 0.2.0 record
+passed only because that validator (`d405de0a`) predates the rule.
+
+**The owner's ruling (25 Nov 2026; AskUserQuestion in the orchestrating session, posted as
+item 6 of
+[opengwas/opengwasdb-stores#520](https://github.com/opengwas/opengwasdb-stores/issues/520#issuecomment-7185997253)):**
+record it as an engine deviation, convert OGS-00009 again and publish it. The rows are kept, as in
+0.2.0. A rebuild from source drops a row lifted onto such a contig as `lift_off_primary`
+(#376).
+
+**What changes:**
+
+- **The conversion records it.** On `--lifted`, the plan counts the table's rows on a
+  non-primary contig with no `source_alid`. It uses the rule's own test
+  (`is_primary_contig`, a blank `source_alid` as `parse_variant_line` reads it) on the
+  table the conversion carries unchanged. Where there are any,
+  `variant_table.lifted_contig` joins `deviations` and the count is recorded as
+  `converted_from.lifted_contig_unjudged`. `--not-lifted` names each observed row's own
+  ALID, so the rule judges every row and nothing is recorded.
+- **`judge_converted_from` accepts it only for a reason.** `lifted` must be true,
+  `variant_table.source_alid` must be listed too (without it every row is judged), and
+  `lifted_contig_unjudged` must be a positive count. Any other listing fails
+  `manifest.converted_from` and is not lowered.
+- **The validator lowers only the unjudged warning.** Where the release records the
+  deviation and the count equals what the rule finds, the "not judged" finding goes through
+  `Rule.finding` and carries the conversion's note. Its rule is still
+  `variant_table.lifted_contig`.
+  - If the count differs, the finding is an **error**: the record does not describe the
+    table.
+  - With no recorded deviation (a 0.3.0 build, an unlifted conversion, or a lifted one that
+    does not list it), it is the plain warning, as before.
+  - A row the rule *does* judge as lifted onto such a contig is given its severity by
+    format explicitly, so this deviation never lowers it: it stays an error from 0.2.2.
+
+The stores side follows the merge: `publish_rewrite.DEVIATION_RULES` gains the rule, and
+OGS-00009 is converted again.
 
 ## Alternatives considered
 

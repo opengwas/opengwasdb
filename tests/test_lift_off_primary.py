@@ -20,6 +20,8 @@ from liftover_fixtures import (
     ALT_LIFTED_ROW,
     ALT_TARGET_CONTIG,
     PRIMARY_LIFTED_ROW,
+    vcf_manifest,
+    vcf_row,
     write_alt_target_chain,
 )
 from residual_fixtures import write_gwas_vcf_with_eaf
@@ -39,28 +41,8 @@ def chain(tmp_path: Path) -> Path:
     return write_alt_target_chain(tmp_path / "alt-target.chain")
 
 
-def _vcf_row(chrom: str, pos: int, ref: str, alt: str, es: float = 0.2) -> str:
-    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tES:SE:AF\t{es}:0.1:0.2\n"
-
-
 def _alt_and_primary_rows() -> list[str]:
-    return [_vcf_row(*ALT_LIFTED_ROW[:4]), _vcf_row(*PRIMARY_LIFTED_ROW[:4])]
-
-
-def _vcf_manifest(
-    tmp_path: Path, vcfs: dict[str, Path], assembly: str | dict[str, str] | None = None
-) -> Path:
-    """A build manifest; ``assembly`` is every row's source assembly, or each one's."""
-    by_trait = assembly if isinstance(assembly, dict) else dict.fromkeys(vcfs, assembly)
-    header = "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
-    lines = [header + ("\tsource_assembly" if assembly else "")] + [
-        f"{trait}\t{vcf}\tTrait {trait}\t1000\tsd\tdeclared_standardised"
-        + (f"\t{by_trait[trait]}" if assembly else "")
-        for trait, vcf in vcfs.items()
-    ]
-    path = tmp_path / "manifest.tsv"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return path
+    return [vcf_row(*ALT_LIFTED_ROW[:4]), vcf_row(*PRIMARY_LIFTED_ROW[:4])]
 
 
 def _admission(store: Path) -> list[Mapping[str, object]]:
@@ -85,7 +67,7 @@ def test_dense_drops_a_row_lifted_onto_an_alt_contig_and_counts_it(tmp_path, cha
     }
     store = tmp_path / "store.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(tmp_path, vcfs), store, store_id="s", release_id="r", chain_file=chain,
+        vcf_manifest(tmp_path, vcfs), store, store_id="s", release_id="r", chain_file=chain,
         liftover_failure_threshold=0.0,
     )
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}, "the alt-contig variant is not stored"
@@ -100,11 +82,11 @@ def test_dense_drops_a_row_lifted_onto_an_alt_contig_and_counts_it(tmp_path, cha
 
 def test_dense_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
     """The same alt contig in a source already on GRCh38 is a chromosome."""
-    alt_row = _vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A")
+    alt_row = vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A")
     vcfs = {"a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [alt_row])}
     store = tmp_path / "store.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(tmp_path, vcfs, assembly="hg38"), store, store_id="s", release_id="r",
+        vcf_manifest(tmp_path, vcfs, assembly="hg38"), store, store_id="s", release_id="r",
     )
     assert _alids(store) == {ALT_LIFTED_ROW[4]}
     (analysis,) = _admission(store)
@@ -113,10 +95,10 @@ def test_dense_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
 
 
 def test_dense_stores_a_row_lifted_onto_a_primary_contig_as_before(tmp_path, chain):
-    vcfs = {"a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [_vcf_row(*PRIMARY_LIFTED_ROW[:4])])}
+    vcfs = {"a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [vcf_row(*PRIMARY_LIFTED_ROW[:4])])}
     store = tmp_path / "store.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(tmp_path, vcfs), store, store_id="s", release_id="r", chain_file=chain,
+        vcf_manifest(tmp_path, vcfs), store, store_id="s", release_id="r", chain_file=chain,
     )
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
     (analysis,) = _admission(store)
@@ -210,7 +192,7 @@ def _hybrid_build(tmp_path: Path, rows: list[str], *, panel: bool = True, **opti
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
     vcf = write_gwas_vcf_with_eaf(tmp_path / "h.vcf", rows)
-    manifest = _vcf_manifest(tmp_path, {"a": vcf, "b": vcf})
+    manifest = vcf_manifest(tmp_path, {"a": vcf, "b": vcf})
     store = tmp_path / "hybrid.opengwasdb"
     if panel:
         panel_file = tmp_path / "panel.txt"
@@ -253,9 +235,9 @@ def test_hybrid_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
     vcf = write_gwas_vcf_with_eaf(
-        tmp_path / "h.vcf", [_vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A")]
+        tmp_path / "h.vcf", [vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A")]
     )
-    manifest = _vcf_manifest(tmp_path, {"a": vcf}, assembly="hg38")
+    manifest = vcf_manifest(tmp_path, {"a": vcf}, assembly="hg38")
     panel = tmp_path / "panel.txt"
     panel.write_text(f"{ALT_LIFTED_ROW[4]}\n", encoding="utf-8")
     store = tmp_path / "hybrid.opengwasdb"
@@ -268,7 +250,7 @@ def test_hybrid_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
 
 
 def test_hybrid_stores_a_row_lifted_onto_a_primary_contig_as_before(tmp_path, chain):
-    store = _hybrid_build(tmp_path, [_vcf_row(*PRIMARY_LIFTED_ROW[:4])], chain_file=chain)
+    store = _hybrid_build(tmp_path, [vcf_row(*PRIMARY_LIFTED_ROW[:4])], chain_file=chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
     for analysis in _admission(store):
         assert (analysis["dropped"], analysis["admitted"]) == ({}, 1)
@@ -345,7 +327,7 @@ def test_extraction_leaves_out_a_site_lifted_onto_an_alt_contig(tmp_path, chain,
     artifact = tmp_path / "ref.variant-ref.tsv.gz"
     with caplog.at_level(logging.WARNING):
         extract_from_manifest(
-            _vcf_manifest(tmp_path, {"a": vcf}), artifact, chain_file=chain,
+            vcf_manifest(tmp_path, {"a": vcf}), artifact, chain_file=chain,
             liftover_failure_threshold=0.0,
         )
     reference = read_variant_reference(artifact)
@@ -360,10 +342,10 @@ def test_extraction_keeps_a_grch38_source_site_on_an_alt_contig(tmp_path):
     from opengwasdb.variants.reference import read_variant_reference
 
     vcf = write_gwas_vcf_with_eaf(
-        tmp_path / "e.vcf", [_vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A")]
+        tmp_path / "e.vcf", [vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A")]
     )
     artifact = tmp_path / "ref.variant-ref.tsv.gz"
-    extract_from_manifest(_vcf_manifest(tmp_path, {"a": vcf}, assembly="hg38"), artifact)
+    extract_from_manifest(vcf_manifest(tmp_path, {"a": vcf}, assembly="hg38"), artifact)
     assert list(read_variant_reference(artifact).alids) == [ALT_LIFTED_ROW[4]]
 
 
@@ -439,7 +421,7 @@ def _extracted_reference(tmp_path: Path, chain: Path) -> Path:
     vcf = write_gwas_vcf_with_eaf(tmp_path / "e.vcf", _alt_and_primary_rows())
     artifact = tmp_path / "ref.variant-ref.tsv.gz"
     extract_from_manifest(
-        _vcf_manifest(tmp_path, {"a": vcf}), artifact, chain_file=chain,
+        vcf_manifest(tmp_path, {"a": vcf}), artifact, chain_file=chain,
         liftover_failure_threshold=0.0,
     )
     return artifact
@@ -451,7 +433,7 @@ def _dense_single_pass(tmp_path: Path, reference: Path, chain: Path) -> Path:
     vcf = write_gwas_vcf_with_eaf(sub / "a.vcf", _alt_and_primary_rows())
     store = sub / "dense.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(sub, {"a": vcf}), store, store_id="s", release_id="r", chain_file=chain,
+        vcf_manifest(sub, {"a": vcf}), store, store_id="s", release_id="r", chain_file=chain,
         variant_reference=reference,
     )
     return store
@@ -486,11 +468,11 @@ def test_dense_keeps_a_reference_site_on_an_alt_contig_of_its_own_assembly(tmp_p
     from extraction_fixtures import write_hg38_artifact
 
     reference = write_hg38_artifact(tmp_path / "hg38.variant-ref.tsv.gz", [ALT_LIFTED_ROW[4]], {})
-    alt_row = _vcf_row(ALT_TARGET_CONTIG, 1_000, "A", "G")
+    alt_row = vcf_row(ALT_TARGET_CONTIG, 1_000, "A", "G")
     vcf = write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [alt_row])
     store = tmp_path / "dense.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(tmp_path, {"a": vcf}, assembly="hg38"), store, store_id="s",
+        vcf_manifest(tmp_path, {"a": vcf}, assembly="hg38"), store, store_id="s",
         release_id="r", variant_reference=reference,
     )
     assert _alids(store) == {ALT_LIFTED_ROW[4]}
@@ -510,7 +492,7 @@ def test_hybrid_drops_a_reference_extracted_before_the_drop_and_counts_it(tmp_pa
 
 # --- A GRCh38 source spelling a lifted-off key does not take the dropped row ----
 
-_GRCH38_SAME_KEY = _vcf_row("5", 1_000, "A", "G")  # the hg38 locus 5:1000, A1=A, A2=G
+_GRCH38_SAME_KEY = vcf_row("5", 1_000, "A", "G")  # the hg38 locus 5:1000, A1=A, A2=G
 
 
 def test_dense_a_grch38_row_does_not_take_the_place_of_a_dropped_lifted_one(tmp_path, chain):
@@ -519,12 +501,12 @@ def test_dense_a_grch38_row_does_not_take_the_place_of_a_dropped_lifted_one(tmp_
     vcfs = {
         "old": write_gwas_vcf_with_eaf(tmp_path / "o.vcf", _alt_and_primary_rows()),
         "new": write_gwas_vcf_with_eaf(
-            tmp_path / "n.vcf", [_vcf_row("5", 1_000, "G", "A"), _vcf_row("3", 2_000, "G", "A")]
+            tmp_path / "n.vcf", [vcf_row("5", 1_000, "G", "A"), vcf_row("3", 2_000, "G", "A")]
         ),
     }
     store = tmp_path / "store.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(tmp_path, vcfs, assembly={"old": "hg19", "new": "hg38"}), store,
+        vcf_manifest(tmp_path, vcfs, assembly={"old": "hg19", "new": "hg38"}), store,
         store_id="s", release_id="r", chain_file=chain,
     )
     assert "5:1000:A:G" not in _alids(store)
@@ -559,12 +541,12 @@ def test_extraction_a_grch38_site_does_not_take_the_place_of_a_dropped_lifted_on
     vcfs = {
         "old": write_gwas_vcf_with_eaf(tmp_path / "o.vcf", _alt_and_primary_rows()),
         "new": write_gwas_vcf_with_eaf(
-            tmp_path / "n.vcf", [_vcf_row("5", 1_000, "G", "A"), _vcf_row("3", 2_000, "G", "A")]
+            tmp_path / "n.vcf", [vcf_row("5", 1_000, "G", "A"), vcf_row("3", 2_000, "G", "A")]
         ),
     }
     artifact = tmp_path / "ref.variant-ref.tsv.gz"
     extract_from_manifest(
-        _vcf_manifest(tmp_path, vcfs, assembly={"old": "hg19", "new": "hg38"}), artifact,
+        vcf_manifest(tmp_path, vcfs, assembly={"old": "hg19", "new": "hg38"}), artifact,
         chain_file=chain, liftover_failure_threshold=0.0,
     )
     assert list(read_variant_reference(artifact).alids) == [
@@ -676,7 +658,7 @@ def _mixed_assembly_vcfs(tmp_path: Path) -> dict[str, Path]:
     return {
         "old": write_gwas_vcf_with_eaf(tmp_path / "o.vcf", _alt_and_primary_rows()),
         "new": write_gwas_vcf_with_eaf(
-            tmp_path / "n.vcf", [_vcf_row("5", 1_000, "G", "A"), _vcf_row("3", 2_000, "G", "A")]
+            tmp_path / "n.vcf", [vcf_row("5", 1_000, "G", "A"), vcf_row("3", 2_000, "G", "A")]
         ),
     }
 
@@ -686,7 +668,7 @@ def _mixed_dense(tmp_path: Path, chain: Path, **options) -> list[Mapping[str, ob
     sub.mkdir()
     store = sub / "dense.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
+        vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
         store, store_id="s", release_id="r", chain_file=chain, **options,
     )
     return [analysis["dropped"] for analysis in _admission(store)]
@@ -705,7 +687,7 @@ def test_single_pass_dense_counts_a_shared_key_as_two_pass_does(tmp_path, chain)
     sub.mkdir()
     artifact = sub / "head.variant-ref.tsv.gz"
     extract_from_manifest(
-        _vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
+        vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
         artifact, chain_file=chain, liftover_failure_threshold=0.0,
     )
     assert _mixed_dense(tmp_path, chain, variant_reference=artifact) == expected
@@ -725,8 +707,28 @@ def test_the_lifted_contig_rule_warns_when_it_found_nothing_but_could_not_judge_
 
     rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
     target = SimpleNamespace(
-        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")), label="."
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")),
+        converted_deviations=dict,  # a 0.3.0 build, not a converted release (#504)
+        label=".",
     )
     (finding,) = rule.judged(target, _LiftedOffPrimary(0, "", 3))
     assert finding.severity.value == "warning"
     assert "3 not judged (no source ALID)" in finding.message
+
+
+def test_a_recorded_lifted_contig_deviation_never_lowers_a_lift_onto_an_alt_contig():
+    """The deviation a lifted conversion records is its unjudged rows' (#504): a row the
+    rule judges lifted onto an alt contig still fails a 0.3.0 release."""
+    from types import SimpleNamespace
+
+    from opengwasdb.validation.rules.variants import RULES, _LiftedOffPrimary
+
+    rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
+    target = SimpleNamespace(
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")),
+        converted_deviations=lambda: {"variant_table.lifted_contig": "a recorded deviation"},
+        label=".",
+    )
+    (finding,) = rule.judged(target, _LiftedOffPrimary(1, "row 7: x from y", 2))
+    assert finding.severity.value == "error"
+    assert "recorded deviation" not in finding.message

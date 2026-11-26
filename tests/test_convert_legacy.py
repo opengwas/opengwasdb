@@ -611,3 +611,154 @@ def test_panel_rows_get_state_0_and_observed_rows_state_1(panel_rows):
     assert states.count(0) == 3 and states.count(1) == len(states) - 3
     result = validate_store(destination)
     assert result.ok, result.errors
+
+
+LIFTED_CONTIG = "variant_table.lifted_contig"
+NOT_JUDGED = "3 not judged (no source ALID)"
+
+
+@pytest.fixture(scope="module")
+def off_primary(tmp_path_factory: pytest.TempPathFactory):
+    """A GRCh38 Dense release with three rows on alt contigs, as a 0.2.0 release (no row
+    keeps a `source_alid`, as on OGS-00009), converted `--lifted` and `--not-lifted` once
+    for the module (#504). Never written to: copy one to change it."""
+    from liftover_fixtures import ALT_TARGET_CONTIG, vcf_manifest, vcf_row
+    from residual_fixtures import write_gwas_vcf_with_eaf
+
+    from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+
+    root = tmp_path_factory.mktemp("off-primary")
+    rows = [vcf_row("1", 1_000 + i, "G", "A") for i in range(5)] + [
+        vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A"),
+        vcf_row(ALT_TARGET_CONTIG, 2_000, "C", "T"),
+        vcf_row("7_KI270803v1_alt", 500, "A", "G"),
+    ]
+    vcfs = {"a": write_gwas_vcf_with_eaf(root / "a.vcf", rows)}
+    built = root / "built.opengwasdb"
+    build_dense_from_vcf_manifest(
+        vcf_manifest(root, vcfs, assembly="hg38"), built, store_id="s", release_id="r"
+    )
+    source = as_0_2_0(as_0_2_3(built))
+    return source, {
+        lifted: rewrite_release(
+            source, root / f"converted-{lifted}", legacy=LegacyConversion(lifted=lifted)
+        )
+        for lifted in (True, False)
+    }
+
+
+def _record(release: Path) -> dict:
+    return json.loads((release / "manifest.json").read_text(encoding="utf-8"))[
+        "provenance"]["converted_from"]
+
+
+def _edit_record(release: Path, tmp_path: Path, edit) -> Path:
+    destination = Path(shutil.copytree(release, tmp_path / "converted"))
+    path = destination / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    edit(manifest["provenance"]["converted_from"])
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return destination
+
+
+def test_the_off_primary_fixture_has_unjudged_rows(off_primary):
+    source, _converted = off_primary
+    records = list(iter_variant_records(source / "variants.tsv.gz"))
+    off = [r for r in records if not r.chromosome.isdigit()]
+    assert len(off) == 3 and len(records) == 8, records
+    assert all(r.source_alid is None for r in records), "a 0.2.0 table keeps no source_alid"
+
+
+def test_a_lifted_conversion_records_its_unjudged_rows_and_the_warning_names_it(off_primary):
+    _source, converted = off_primary
+    record = _record(converted[True])
+    assert record["deviations"] == [
+        "variant_table.indel_order", "variant_table.source_alid", LIFTED_CONTIG,
+    ]
+    assert record["lifted_contig_unjudged"] == 3
+
+    result = validate_store(converted[True])
+
+    assert result.ok, result.errors
+    (finding,) = [f for f in result.findings if f.rule == LIFTED_CONTIG]
+    assert finding.severity is Severity.WARNING
+    assert finding.message.startswith(NOT_JUDGED)
+    assert "[a deviation recorded by ogdb rewrite-release --convert-legacy" in finding.message
+
+
+def test_a_lifted_release_not_recording_the_deviation_keeps_the_plain_warning(
+    off_primary, tmp_path
+):
+    _source, converted = off_primary
+
+    def strip(record: dict) -> None:
+        record["deviations"].remove(LIFTED_CONTIG)
+        del record["lifted_contig_unjudged"]
+
+    result = validate_store(_edit_record(converted[True], tmp_path, strip))
+
+    assert result.ok, result.errors
+    (finding,) = [f for f in result.findings if f.rule == LIFTED_CONTIG]
+    assert finding.severity is Severity.WARNING and finding.message.startswith(NOT_JUDGED)
+    assert "--convert-legacy" not in finding.message
+
+
+def test_a_recorded_count_the_table_does_not_hold_fails(off_primary, tmp_path):
+    _source, converted = off_primary
+
+    def miscount(record: dict) -> None:
+        record["lifted_contig_unjudged"] = 2
+
+    result = validate_store(_edit_record(converted[True], tmp_path, miscount))
+
+    assert result.failed() == {LIFTED_CONTIG}
+    assert any("records 2 as its" in e for e in result.errors), result.errors
+
+
+def test_an_unlifted_conversion_names_the_rows_and_records_no_deviation(off_primary):
+    """`--not-lifted` names each observed row's own ALID, so the rule judges every row:
+    there is nothing unjudged to record, and nothing to warn of."""
+    _source, converted = off_primary
+    assert LIFTED_CONTIG not in _record(converted[False])["deviations"]
+    assert "lifted_contig_unjudged" not in _record(converted[False])
+
+    result = validate_store(converted[False])
+
+    assert result.ok, result.errors
+    assert not [f for f in result.findings if f.rule == LIFTED_CONTIG]
+
+
+def test_the_deviation_recorded_on_an_unlifted_release_is_refused(off_primary, tmp_path):
+    _source, converted = off_primary
+
+    def forge(record: dict) -> None:
+        record["deviations"].append(LIFTED_CONTIG)
+        record["lifted_contig_unjudged"] = 3
+
+    result = validate_store(_edit_record(converted[False], tmp_path, forge))
+
+    assert result.failed() == {"manifest.converted_from"}
+    assert any("does not say the release was lifted" in e for e in result.errors), result.errors
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        ({"lifted": False}, "does not say the release was lifted"),
+        ({"deviations": [LIFTED_CONTIG]}, "does not list variant_table.source_alid"),
+        ({"lifted_contig_unjudged": None}, "without a positive count"),
+        ({"lifted_contig_unjudged": 0}, "without a positive count"),
+        ({"lifted_contig_unjudged": True}, "without a positive count"),
+    ],
+)
+def test_a_lifted_contig_deviation_its_record_does_not_justify_is_refused(change, why):
+    from opengwasdb.store.legacy_conversion import judge_converted_from
+
+    record = {
+        "source_format_version": "0.2.0", "lifted": True, "lifted_contig_unjudged": 3,
+        "deviations": ["variant_table.source_alid", LIFTED_CONTIG],
+    }
+    assert judge_converted_from(record) == (tuple(record["deviations"]), [])
+    accepted, faults = judge_converted_from({**record, **change})
+    assert LIFTED_CONTIG not in accepted
+    assert any(f"lists {LIFTED_CONTIG!r}" in f and why in f for f in faults), faults
