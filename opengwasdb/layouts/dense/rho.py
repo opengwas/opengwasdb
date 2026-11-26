@@ -7,8 +7,12 @@ and docs/adr/0025-dense-rho-matrix.md. The estimator mirrors pleiodb's
 "Estimator"): sufficient statistics on the shared both-null subset, minimised
 against a precomputed normalising-constant grid.
 
-Dense-only, opt-in, add-in-place (same pattern as ``top_hits.py``): a built
-Dense store gains a ``data.zarr/rho`` group; nothing else changes.
+Opt-in, add-in-place (same pattern as ``top_hits.py``): a built Dense store gains
+a ``data.zarr/rho`` group; nothing else changes. A Hybrid release's Rho Matrix is its
+Dense Component's, over that component's grid (#496): the builder is given the Hybrid
+release and builds in ``dense/data.zarr/rho``, and records the Overflow-only Analyses,
+those with no observed association in the component, which have no Rho. A Ragged
+release has none (no shared variant axis to thin; owner, 25 Nov 2026).
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
 from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 
 from opengwasdb.build.ordered_pool import single_threaded_fork_pool
+from opengwasdb.encoding.banding import band_limits
 from opengwasdb.encoding.codec import require_parallel
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_RHO_MIN_NULLS,
@@ -32,14 +37,24 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_RHO_Z_THRESH,
 )
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.open import open_store
-from opengwasdb.store_reader.encoding.plan import StoreEncoding
-from opengwasdb.store_reader.encoding.planes import DenseZPlane
+from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store_reader.arrays import inner_chunk_of
+from opengwasdb.store_reader.associations.cells import Cells
+from opengwasdb.store_reader.associations.dense import DenseGridReader
+from opengwasdb.store_reader.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.store_reader.hybrid import hybrid_root_of
 from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.store_reader.rho import OVERFLOW_ONLY_ATTR
 
 RHO_METHOD = "pleiodb-cml"
+
 RHO_GRID_N = 2000
 _RHO_BOUNDS = (-1.0 + 1e-6, 1.0 - 1e-6)
+
+
+class RhoBuildPathError(ValueError):
+    """`build_dense_rho` was given a release it does not build a Rho Matrix for: a Hybrid's
+    Dense Component (it is built from the Hybrid release) or a Ragged release (none)."""
 
 
 # ── Distance-thinned variant selection (PRD "Independent variant selection") ─
@@ -159,23 +174,63 @@ def estimate_rho_cml(
 # ── Batched sufficient statistics over all pairs ─────────────────────────────
 
 
-def _null_matrices(
-    root: Any, thinned_rows: np.ndarray, z_thresh: float, encoding: StoreEncoding
-) -> tuple[np.ndarray, np.ndarray]:
-    """Observed, nulls-zeroed Z and the null mask at the thinned rows.
+def _grid_reader(release: OpenGWASDBStore, root: Any) -> DenseGridReader:
+    """The release's Dense grid, `root` (its `data.zarr`), through its Association
+    Reader: a Reference-Completed grid without its imputed mask is refused there, never
+    read as all-observed (spec §15)."""
+    return DenseGridReader.open(
+        root,
+        release.manifest.encoding,
+        source=f"Dense grid of {release.path}",
+        requires_mask=release.manifest.completion_state is CompletionState.REFERENCE_COMPLETED,
+    )
 
-    Imputed cells (Reference-Completed stores) are treated as missing --
-    Rho is estimated from source-observed statistics only (PRD "Estimation
-    inputs").
+
+def _observed_z(reader: DenseGridReader, rows: np.ndarray) -> np.ndarray:
+    """Every Analysis's observed Z at `rows` (ascending), NaN at an imputed or missing cell.
+
+    Imputed cells (Reference-Completed stores) are not observed: Rho is estimated
+    from source-observed statistics only (PRD "Estimation inputs"). The rows are read a
+    batch at a time under the decoded-band budget (`band_limits`), so the association
+    records one read decodes never span every thinned row of a wide grid: at 177,862
+    rows x 2,514 Analyses their coordinates alone would be ~6.7 GiB. The rows are
+    scattered, not a band, so batches are not aligned to the plane's chunks.
     """
-    z = np.asarray(DenseZPlane.open(root, encoding).rows(thinned_rows), dtype=np.float64)
-    finite = np.isfinite(z)
-    if "imputed" in root:
-        imputed = np.asarray(root["imputed"].oindex[thinned_rows, :], dtype=np.uint8)
-        finite = finite & (imputed == 0)
-    mask = finite & (np.abs(z) < z_thresh)
-    z_nulls_zeroed = np.where(mask, z, 0.0)
-    return z_nulls_zeroed, mask
+    z = np.full((len(rows), reader.n_analyses), np.nan, dtype=np.float64)
+    for lo, hi in band_limits(len(rows), reader.n_analyses, 0):
+        batch = rows[lo:hi]
+        found = reader.read(Cells.variants(batch), observed_only=True)
+        z[lo + np.searchsorted(batch, found.variant_index), found.analysis_index] = found.z
+    return z
+
+
+def _null_matrices(z: np.ndarray, z_thresh: float) -> tuple[np.ndarray, np.ndarray]:
+    """Observed, nulls-zeroed Z and the null mask, from `_observed_z`."""
+    mask = np.isfinite(z) & (np.abs(z) < z_thresh)
+    return np.where(mask, z, 0.0), mask
+
+
+def _overflow_only_analyses(
+    reader: DenseGridReader, observed: np.ndarray, row_chunk: int
+) -> list[int]:
+    """The Analyses of a Hybrid's Dense Component with no observed association in it --
+    its Overflow-only Analyses -- by `analysis_index`, ascending.
+
+    `observed` says which Analyses an association already read showed observed (those
+    at the thinned rows); the others are read over the rest of the grid through the
+    same reader, a band at a time (`band_limits`, whole `row_chunk`s of the Z plane),
+    until each has shown one. A
+    component whose every Analysis is observed at a thinned row reads nothing more.
+    """
+    unseen = np.flatnonzero(~np.asarray(observed, dtype=bool))
+    if not len(unseen):
+        return []
+    for lo, hi in band_limits(reader.n_variants, len(unseen), row_chunk):
+        found = reader.read(Cells.cross(np.arange(lo, hi), unseen), observed_only=True)
+        unseen = np.setdiff1d(unseen, found.analysis_index)
+        if not len(unseen):
+            break
+    return [int(i) for i in unseen]
 
 
 def _pairwise_sufficient_statistics(
@@ -271,9 +326,13 @@ def write_rho_group(
     min_nulls: int,
     window_bp: int,
     n_analyses: int,
+    overflow_only: list[int] | None = None,
 ) -> None:
     """Write the packed strict-lower-triangle ``rho``/``n_null`` arrays plus
     provenance into ``data.zarr/rho``, replacing any existing group.
+
+    `overflow_only` is a Hybrid Dense Component's Overflow-only Analyses, recorded as
+    the `overflow_only` attribute; None, for a standalone Dense release, records none.
 
     The two packed arrays are one cell list -- a pair's estimate and the null
     count it was measured on -- so they are judged parallel before the group
@@ -315,9 +374,42 @@ def write_rho_group(
     group.attrs["observed_only"] = True
     group.attrs["method"] = RHO_METHOD
     group.attrs["n_analyses"] = int(n_analyses)
+    if overflow_only is not None:
+        group.attrs[OVERFLOW_ONLY_ATTR] = [int(i) for i in overflow_only]
 
 
 # ── Build entry point ────────────────────────────────────────────────────────
+
+
+def _rho_component(store_path: str | Path) -> tuple[OpenGWASDBStore, bool]:
+    """The release whose grid a Rho Matrix for `store_path` is built over, and whether it
+    is a Hybrid's Dense Component.
+
+    A Dense release is its own. A Hybrid release's is its Dense Component (#496). The
+    path is judged where it leads: a Hybrid's Dense Component, however it is named --
+    `dense/`, a symlink, `dense/data.zarr/..` -- is refused, naming the Hybrid release
+    to give instead, so a component's matrix is never built without its Overflow-only
+    Analyses recorded; and a Ragged release, which has none, is refused.
+    (`indexed_subsets._resolve_build_target` accepts the nested path, as spec §10b
+    requires of an Indexed Variant Subset, so it cannot carry this policy.)
+    """
+    resolved = Path(store_path).resolve()
+    hybrid = hybrid_root_of(resolved)
+    if hybrid is not None:
+        raise RhoBuildPathError(
+            f"{store_path} is the Dense Component of the Hybrid release {hybrid}: its Rho "
+            f"Matrix is built from the Hybrid release, `opengwasdb build-dense-rho {hybrid}`"
+        )
+    release = open_store(resolved)
+    layout = release.manifest.primary_layout
+    if layout is PrimaryStorageLayout.HYBRID:
+        return release.dense_component(), True
+    if layout is not PrimaryStorageLayout.DENSE:
+        raise RhoBuildPathError(
+            f"{store_path} is a {layout.value.capitalize()} release: a Rho Matrix is built "
+            "for a Dense release or a Hybrid release's Dense Component only"
+        )
+    return release, False
 
 
 def build_dense_rho(
@@ -328,19 +420,20 @@ def build_dense_rho(
     min_nulls: int = DEFAULT_RHO_MIN_NULLS,
     n_workers: int = 1,
 ) -> None:
-    """(Re)build the pairwise Rho Matrix for a Dense store, in place.
+    """(Re)build the pairwise Rho Matrix for a Dense release, or for a Hybrid release's
+    Dense Component, in place (`_rho_component`).
 
-    Distance-thins the store's own variant axis to approximately independent
+    Distance-thins the grid's own variant axis to approximately independent
     variants, estimates Rho for every Analysis pair with the pleiodb CML
     estimator on their shared observed non-significant Z-scores, and writes
-    ``data.zarr/rho`` -- the same add-in-place pattern as the top-hit index.
-    Dense-only: Ragged stores have no shared variant axis to thin.
+    ``data.zarr/rho`` -- the same add-in-place pattern as the top-hit index. A Hybrid's
+    Dense Component is read through the shared Variant Axis from format 0.3.0 (#472) and
+    through its own Variant Table on 0.2, and records its Overflow-only Analyses.
     """
-    store_path = Path(store_path)
-    release = open_store(store_path)
-    encoding = release.manifest.encoding
+    release, is_component = _rho_component(store_path)
     root = release.arrays()
-    n_analyses = int(root["z"].shape[1])
+    reader = _grid_reader(release, root)
+    n_analyses = reader.n_analyses
 
     with closing(release.variant_axis(aliases=False)) as variant_axis:
         records = variant_axis.all()
@@ -348,7 +441,15 @@ def build_dense_rho(
     positions = np.array([r.position for r in records], dtype=np.int64)
     thinned_rows = select_thinned_variants(chromosomes, positions, window_bp)
 
-    z_nulls_zeroed, mask = _null_matrices(root, thinned_rows, z_thresh, encoding)
+    z = _observed_z(reader, thinned_rows)
+    overflow_only = (
+        _overflow_only_analyses(
+            reader, np.isfinite(z).any(axis=0), inner_chunk_of(root["z"])[0]
+        )
+        if is_component
+        else None
+    )
+    z_nulls_zeroed, mask = _null_matrices(z, z_thresh)
     A, B, C, n = _pairwise_sufficient_statistics(z_nulls_zeroed, mask)
 
     rows, cols = np.tril_indices(n_analyses, k=-1)
@@ -357,7 +458,7 @@ def build_dense_rho(
     rho_flat = _estimate_all_pairs(A_flat, B_flat, C_flat, n_flat, z_thresh, min_nulls, n_workers)
 
     write_rho_group(
-        store_path,
+        release.path,
         rho_flat,
         n_flat,
         thinned_rows,
@@ -365,6 +466,7 @@ def build_dense_rho(
         min_nulls=min_nulls,
         window_bp=window_bp,
         n_analyses=n_analyses,
+        overflow_only=overflow_only,
     )
 
 

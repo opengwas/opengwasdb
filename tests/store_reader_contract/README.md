@@ -1,6 +1,6 @@
 # The Store Reader contract bundle
 
-Nine small Store Releases at format `0.3.0`, and what the Store Reader must answer on
+Eleven small Store Releases at format `0.3.0`, and what the Store Reader must answer on
 each (opengwas/opengwasdb#474). It is the contract ogquery, opengwaspy, opengwasr and any
 other port of the Store Reader test against. `VERSION` names the bundle's version and the
 `format_version` its releases are.
@@ -14,12 +14,14 @@ other port of the Store Reader test against. `VERSION` names the bundle's versio
 | `generate.py` | writes `releases/`, `expected/` and `VERSION`; runs in opengwasdb only |
 | `.gitattributes` | every file is bytes: no line-ending conversion on checkout |
 
-The bundle is 3.9 MB: 1,083,672 bytes of releases in 1,033 files and 2,806,742 bytes of
+The bundle is 4.9 MB: 1,343,114 bytes of releases in 1,238 files and 3,582,150 bytes of
 expected answers.
 
 ## The releases
 
-Each of Dense, Ragged and Hybrid, Observed-Only and Reference-Completed. The six
+Each of Dense, Ragged and Hybrid, Observed-Only and Reference-Completed, and two more, built from the
+same four Analyses: a Dense, and a Hybrid with an Overflow-only Analysis. The Dense and Hybrid ones carry a Rho Matrix
+(below). The six
 `*_observed` and `*_completed` releases are the test suite's digest releases; the three
 `*_ranges` ones span three chromosomes, so they pose every range question.
 
@@ -34,6 +36,8 @@ Each of Dense, Ragged and Hybrid, Observed-Only and Reference-Completed. The six
 | `dense_ranges` | Dense, Observed-Only | 8 variants on chromosomes 1, 2 and X, three at one position; every range question; a multi-allelic rsID (`rs5000`, two variants of 1:5000) and a variant of that site with none; an infinite SE (`1:1000:A:G`) |
 | `ragged_ranges` | Ragged, Observed-Only | the same 8 variants, signals-only; every range question; the multi-allelic rsID |
 | `hybrid_ranges` | Hybrid, Observed-Only | the same 8 variants, 4 on the Dense Component's panel and 4 in the Overflow; every range question; the multi-allelic rsID |
+| `dense_rho` | Dense, Observed-Only | `overflow_only_dense`: the same four Analyses over all 720 variants; `trait_a` and `trait_b` correlated, Rho 0.617 (interior: a reader answering the diagonal, or 1.0, for every pair fails here); `trait_c` and `trait_d` have no null support (NaN); a Rho Matrix |
+| `hybrid_overflow_only` | Hybrid, Observed-Only | `overflow_only_hybrid` (#496): four Analyses over 600 panel and 120 off-panel variants; `trait_a` and `trait_b` correlated (Rho 0.617); `trait_c` observed off the panel only, an Overflow-only Analysis; `trait_d` Dense but with no null support at the thinned rows; a Rho Matrix recording `overflow_only: [2]` |
 
 What each planted state is:
 
@@ -44,6 +48,16 @@ What each planted state is:
   `rs77;rs78`, which is one name, whole (spec §19), and every other names its own.
 - **`source_alid`.** A collision row (state 0, none), an unlifted row (state 1, its own
   ALID) and lifted rows (state 2), lifted values of 24, 32, 33 and 130 bytes among them.
+- **Rho Matrix.** `dense_observed`, `dense_completed`, `hybrid_observed`, `hybrid_completed`,
+  `dense_rho` and `hybrid_overflow_only` carry one, built by `build-dense-rho` (on a Hybrid release it
+  is written in the Dense Component, `dense/data.zarr/rho`, and records its Overflow-only
+  Analyses, `overflow_only`; #496). The two Analyses of a digest release share enough null
+  Z for a finite Rho (window 1 bp, Z threshold 2, support floor 2), but are near-identical,
+  so it is 1.0: `dense_rho` and `hybrid_overflow_only` hold the interior estimate (0.617); a Ragged release and
+  the `*_ranges` ones hold none, and answer every Rho question empty or not at all
+  (a Ragged release has no Rho readers). `hybrid_overflow_only` is where the refusal is
+  exercised: a Rho question naming `trait_c` is `OverflowOnlyAnalysisError`, never a NaN;
+  `trait_d`'s NaN is an Analysis with Rho but no support, which is not refused.
 - **Refusals.** Every release is asked `top_hits`, `analysis()` and `lookup()` of an
   Analysis it does not hold (`UnknownAnalysisError`, the owner's ruling of 24 Nov 2026:
   every shape that names an Analysis refuses one it lacks) and a range on chromosome
@@ -90,6 +104,12 @@ hold the same answers, in sections:
   wrong, rsIDs no release names, and each Indexed Variant Subset;
 - `variant_reads`: `variant_count`, `variants` and `variants_in_range`;
 - `refusals`: the questions above whose answer is an error;
+- `rho` (a Dense or Hybrid release only): `rho_matrix` whole, `rho_row` of each spread
+  Analysis and of one the release lacks, and `rho` and `rho_matrix` of each consecutive
+  pair, in the order named and reversed. Each array is a `readable` value with its `shape`
+  and every value (a Rho Matrix is tiny), and a digest. A question the release refuses is
+  its error: `UnknownAnalysisError` (`analysis_id`) or, on a Hybrid release, `OverflowOnlyAnalysisError`
+  (`analysis_id`), for a question that names an Overflow-only Analysis;
 - and, beside them, `variants_table` and `analyses_table`, and in `digests` the resolved
   rows of the lookup, the range and the widest top hits (`resolved`) with their `log10_p`,
   and every answer's `pval` as numbers, by `<section>/<question>` (`pval`; a resolved row's
@@ -137,6 +157,12 @@ lines that change.
 
 ## Regenerating
 
+**What CI checks.** CI runs the default parity cases and the contract test, not regeneration:
+`contract-check` is run by hand (CONTRIBUTING.md, Test tiers). The Rho Matrix is stored as
+float16, and regeneration compares bytes with no tolerance; four local reruns agreed, but an
+estimate lies near a rounding boundary, so a regeneration on another machine's libm that
+differs in a Rho byte is a real finding to look at, not noise to tolerate.
+
 From the opengwasdb repository root:
 
     pixi run -e dev python tests/store_reader_contract/generate.py
@@ -155,7 +181,7 @@ writes a chunk's blocks in the order its threads finish.
 runs what is too slow for every test run (`CONTRIBUTING.md`, Test tiers): the generator
 into a temporary directory, then `git diff --no-index --exit-code` against `releases`,
 `expected` and `VERSION`, so a builder, planting or answer that changed without the bundle
-fails; and the six format-parity cases `tests/test_store_reader_contract_parity.py` leaves
+fails; and the eight format-parity cases `tests/test_store_reader_contract_parity.py` leaves
 to it. That file runs three in every test run (`dense_ranges`, `ragged_completed`,
 `hybrid_completed`: one per layout, both legacy states): each release, built with the same
 plantings at format 0.2.3 (`tests/format_0_2_3.py`), rewritten by `ogdb rewrite-release`

@@ -1,14 +1,12 @@
 - **The Store Reader is now the `ogquery` package, and `opengwasdb.store_reader` re-exports it (issue #475, epic #450).**
-  `pip install opengwasdb` installs `ogquery>=0.2,<0.3`; the distribution check and the
+  `pip install opengwasdb` installs `ogquery>=0.4,<0.5`; the distribution check and the
   installed-wheel smoke test fail a wheel that does not declare it. The declared floor of
   `numpy` is now 2.0, which `ogquery` needs and `zarr>=3.4`, already required, needed too: no
-  installable environment had numpy 1.26. Every module of `opengwasdb.store_reader` except
-  `facade.py` and `rho.py` (which stay until the Hybrid Rho change, #495, is ported) is
+  installable environment had numpy 1.26. Every module of `opengwasdb.store_reader`,
+  `facade.py` and `rho.py` included (the Hybrid Rho reads, #495, are in ogquery 0.4), is
   `from ogquery.<module> import *` with no code of its own, so the same names resolve to the
-  same objects and a process holds one `StoreRelease`. `opengwasdb.store_reader.facade` and
-  `rho` are still opengwasdb's code, so `StoreRelease.query()` returns ogquery's facade while
-  `query_store` returns the in-tree one; once #495 edits the in-tree file the two can differ
-  until the facade is shimmed too. `opengwasdb.store.query_digests` is a wrapper: it
+  same objects, a process holds one `StoreRelease`, and `StoreRelease.query()` and
+  `query_store` return the same facade class. `opengwasdb.store.query_digests` is a wrapper: it
   re-exports `ogquery.digests`' `__all__` and a few names it leaves out, and
   `release_answers` and `release_digests` still default to `query_store`, so a 0.2.3 release
   is read with its Store Variant Table. A Clumps group of the wrong kind now raises

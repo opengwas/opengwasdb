@@ -1,5 +1,5 @@
 {
- "bundle_version": "1",
+ "bundle_version": "2",
  "digests": {
   "adapter": "StoreQuery",
   "alid_probes": {
@@ -852,6 +852,21 @@
     "se": "7a158e275f00c6aeedde7bdabd660345b900d9872243b69ed0ae2f0862c4a4c8",
     "source_alid": "ab2346687d2779fc1549e95226fb9f0ca0674485b198a483d7075ccf4bc3c97a",
     "z": "e92441883d9f5b757c382896e20acc17b501ebb1bc9247203d5ef86f052e785d"
+   }
+  },
+  "rho": {
+   "rho_matrix": {
+    "analysis_id": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "n_null": "a36a8c6a295f45d5f18dc13b1f5220fec7df93304f029857c9b6246759b0fdf1",
+    "rho": "8e67f34d1ee14f9186cda188e378763a7195c271b528fd0c893c1ec2241d9eae"
+   },
+   "rho_row/bmi_irn": {
+    "analysis_id": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1",
+    "n_null": "4b9af4b1e2313aba5a9a139ae3ecfc8fcae09a440c65802207a26775700f6eca",
+    "rho": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000"
+   },
+   "rho_row/unknown_analysis": {
+    "error": "33445ac90e97a78eeb40a6b2ed31a7dbd57f3bc83ef1718c84219cc75017e86c"
    }
   },
   "shapes": {
@@ -2284,6 +2299,57 @@
      "chromosome": "27"
     },
     "message": "unsupported chromosome '27'"
+   }
+  },
+  "rho": {
+   "rho_matrix": {
+    "analysis_id": {
+     "shape": [
+      0
+     ],
+     "values": []
+    },
+    "n_null": {
+     "shape": [
+      0,
+      0
+     ],
+     "values": []
+    },
+    "rho": {
+     "shape": [
+      0,
+      0
+     ],
+     "values": []
+    }
+   },
+   "rho_row/bmi_irn": {
+    "analysis_id": {
+     "shape": [
+      0
+     ],
+     "values": []
+    },
+    "n_null": {
+     "shape": [
+      0
+     ],
+     "values": []
+    },
+    "rho": {
+     "shape": [
+      0
+     ],
+     "values": []
+    }
+   },
+   "rho_row/unknown_analysis": {
+    "error": "UnknownAnalysisError",
+    "fields": {
+     "analysis_id": "absent"
+    },
+    "message": "unknown analysis_id 'absent': not in this Store Release"
    }
   },
   "shapes": {

@@ -38,8 +38,9 @@ dependencies = [
   # The Store Reader: opengwasdb reads Store Releases through it, and
   # opengwasdb.store_reader re-exports it (#475). ogquery needs numpy>=2.0.
   # 0.2 carries the Clumps reads (#418) and the narrowed proof range (#492);
-  # 0.3 the LD Store read side, which opengwasdb.ld re-exports (opengwas/ogquery#2).
-  "ogquery>=0.3,<0.4",
+  # 0.3 the LD Store read side, which opengwasdb.ld re-exports (opengwas/ogquery#2);
+  # 0.4 the Hybrid Rho reads (#495) and the Rho Matrix digests.
+  "ogquery>=0.4,<0.5",
   "numpy>=2.0,<2.5",
   "zarr>=3.4,<4",
   # 0.17 is the first numcodecs that locks Blosc's global context on decompress
@@ -203,8 +204,8 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 # `opengwasdb.store_reader` re-exports `ogquery` module for module (#475): a star import is
 # the whole of such a module, and an import nothing uses is what it is for. One entry per
-# re-export, so `facade.py` and `rho.py`, which are real code until #495, stay linted;
-# `tests/test_store_reader_is_ogquery.py` holds this list to the files that are re-exports.
+# re-export; `tests/test_store_reader_is_ogquery.py` holds this list to the files that are
+# re-exports, so no file that holds code can hide behind it.
 "opengwasdb/store_reader/__init__.py" = ["F401", "F403"]
 "opengwasdb/store/query_digests.py" = ["F401", "F403"]
 "opengwasdb/store_reader/alid.py" = ["F401", "F403"]
@@ -222,6 +223,8 @@ select = ["E", "F", "I", "UP", "B"]
 "opengwasdb/store_reader/by_variant.py" = ["F401", "F403"]
 "opengwasdb/store_reader/csr.py" = ["F401", "F403"]
 "opengwasdb/store_reader/encoding/__init__.py" = ["F401", "F403"]
+"opengwasdb/store_reader/facade.py" = ["F401", "F403"]
+"opengwasdb/store_reader/rho.py" = ["F401", "F403"]
 "opengwasdb/store_reader/encoding/codec.py" = ["F401", "F403"]
 "opengwasdb/store_reader/encoding/plan.py" = ["F401", "F403"]
 "opengwasdb/store_reader/encoding/planes.py" = ["F401", "F403"]
@@ -312,7 +315,7 @@ platforms = ["linux-64"]
 opengwasdb = { path = ".", editable = true }
 # ogquery is on PyPI only; the editable install above would pull it in, but
 # naming it keeps the pin visible beside the conda dependencies (#475).
-ogquery = ">=0.3,<0.4"
+ogquery = ">=0.4,<0.5"
 
 [tool.pixi.dependencies]
 # zarr 3.4 requires python >=3.12 and numpy >=2 (#244); ogquery, the Store

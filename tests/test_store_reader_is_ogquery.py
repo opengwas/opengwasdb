@@ -11,11 +11,8 @@ properties make that true, and a third makes the copy's deletion hold:
   nothing in opengwasdb can re-implement a Store Reader operation and drift from
   ogquery's answers, which is how a wrong answer that looks right gets made.
 
-`opengwasdb/store_reader/facade.py` and `rho.py` are the owner's exception for now
-(25 Nov): the Hybrid Rho work (#495) edits them, and a later phase shims them once
-that is ported to ogquery and released. They are named in `STAYS_IN_TREE` so the
-exception is one line to remove.
-
+Every module is a re-export, `facade.py` and `rho.py` included: the Hybrid Rho work
+(#495) was ported to ogquery 0.4 and those two were shimmed after it (#475, phase 3).
 """
 
 from __future__ import annotations
@@ -30,11 +27,6 @@ from typing import Any
 import pytest
 
 PACKAGE = Path(__file__).resolve().parent.parent / "opengwasdb" / "store_reader"
-#: Modules that stay in opengwasdb until the Hybrid Rho change (#495) is ported to
-#: ogquery and released; the owner's ruling of 25 Nov 2026.
-STAYS_IN_TREE = frozenset({"facade", "rho"})
-
-
 
 def _modules() -> list[str]:
     """The dotted name, below `store_reader`, of every module the package holds."""
@@ -65,7 +57,7 @@ def test_the_package_holds_modules() -> None:
     assert len(_modules()) > 30
 
 
-@pytest.mark.parametrize("name", [m for m in _modules() if m not in STAYS_IN_TREE])
+@pytest.mark.parametrize("name", _modules())
 def test_a_store_reader_module_re_exports_the_ogquery_module(name: str) -> None:
     shim = importlib.import_module(f"opengwasdb.store_reader.{name}".rstrip("."))
     reader = importlib.import_module(f"ogquery.{name}".rstrip("."))
@@ -80,8 +72,6 @@ def test_a_store_reader_module_re_exports_the_ogquery_module(name: str) -> None:
 def test_no_store_reader_module_defines_a_function_or_class() -> None:
     defining = {}
     for path in sorted(PACKAGE.rglob("*.py")):
-        if path.stem in STAYS_IN_TREE:
-            continue
         tree = ast.parse(path.read_text())
         found = [
             node.name
@@ -93,29 +83,27 @@ def test_no_store_reader_module_defines_a_function_or_class() -> None:
     assert defining == {}
 
 
-def test_the_in_tree_remainder_reads_through_one_class_of_each() -> None:
-    """`facade.py` and `rho.py` stay in opengwasdb for now and import the Store Reader
-    through the shims: they must see ogquery's classes, not a second copy."""
+def test_facade_and_rho_see_one_class_of_each() -> None:
+    """The two modules that were in-tree until phase 3 are re-exports like the rest, and
+    the Store Reader's classes are ogquery's, not a second copy."""
+    import ogquery.facade
     import ogquery.manifest
     import ogquery.release
+    import ogquery.rho
 
     import opengwasdb.store_reader.manifest as shim_manifest
     from opengwasdb.store_reader import facade, rho
 
     assert facade.StoreRelease is ogquery.release.StoreRelease
     assert shim_manifest.StoreManifest is ogquery.manifest.StoreManifest
-    # Both really are the in-tree files, with code of their own, and not re-exports.
-    for module in (facade, rho):
-        assert Path(module.__file__) == PACKAGE / f"{module.__name__.rpartition('.')[2]}.py"
-        tree = ast.parse(Path(module.__file__).read_text())
-        assert any(isinstance(node, ast.ClassDef) for node in tree.body)
+    assert facade.query_release is ogquery.facade.query_release
+    assert rho.DenseRhoReader is ogquery.rho.DenseRhoReader
+    assert rho.OverflowOnlyAnalysisError is ogquery.rho.OverflowOnlyAnalysisError
 
 
-@pytest.mark.xfail(strict=True, reason="phase 3: facade.py shimmed after #495")
 def test_both_ways_to_a_query_facade_return_the_same_class(dense_store_path) -> None:
-    """`StoreRelease.query()` is ogquery's facade; `query_store` builds the in-tree one. They
-    are one class only once `facade.py` is shimmed, and until then #495's edit to the in-tree
-    file makes them differ."""
+    """`StoreRelease.query()` and `query_store` both build ogquery's facade, since `facade.py`
+    is a re-export (phase 3). Before that `query_store` built an in-tree copy that #495 edited."""
     from opengwasdb.query import query_store
     from opengwasdb.store.open import open_store
 
@@ -125,8 +113,8 @@ def test_both_ways_to_a_query_facade_return_the_same_class(dense_store_path) -> 
 
 
 def test_the_ruff_ignore_covers_the_re_exports_and_nothing_else() -> None:
-    """`F401`/`F403` are ignored per file for the re-exports, so the code left in-tree
-    (`facade.py`, `rho.py`) is still linted."""
+    """`F401`/`F403` are ignored per file for the re-exports, so a file that holds code
+    is still linted."""
     import tomllib
 
     ignores = tomllib.loads((PACKAGE.parent.parent / "pyproject.toml").read_text())
@@ -138,7 +126,6 @@ def test_the_ruff_ignore_covers_the_re_exports_and_nothing_else() -> None:
     shims = {
         path.relative_to(PACKAGE.parent.parent).as_posix()
         for path in PACKAGE.rglob("*.py")
-        if path.stem not in STAYS_IN_TREE
     }
     assert listed == shims
 

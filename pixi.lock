@@ -104,7 +104,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/d5/94/237843136b52062cbeae1ac2e9a244ca0a9d6ea115e4a346f3ae7924d6d4/ogquery-0.3.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
   dev:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -225,8 +225,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/d5/94/237843136b52062cbeae1ac2e9a244ca0a9d6ea115e4a346f3ae7924d6d4/ogquery-0.3.0-py3-none-any.whl
   report:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -464,7 +464,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/d5/94/237843136b52062cbeae1ac2e9a244ca0a9d6ea115e4a346f3ae7924d6d4/ogquery-0.3.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/bioconda/linux-64/bcftools-1.24-h118bc1c_2.conda
   sha256: 00db35c4efca39b9fe4597f5507fa7f248ec16fa71e03c0eb0f0917e9d982c13
@@ -4346,7 +4346,7 @@ packages:
   - fsspec>=2024.12
   - numcodecs>=0.17
   - numpy>=2.0,<2.5
-  - ogquery>=0.3,<0.4
+  - ogquery>=0.4,<0.5
   - pandas>=2.0
   - pyliftover>=0.4
   - pysam>=0.22
@@ -4373,17 +4373,10 @@ packages:
   version: 0.24.0
   sha256: 4a642f18649e59817de272173e9c27c031dceaca199809e4f8b338ebfc5d6698
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-  name: pgenlib
-  version: 0.95.2
-  sha256: 8ae84fe5e0070ae0d32bd048cf187440e1aeb01380c37b3049bc17d797589423
-  requires_dist:
-  - numpy>=1.21.3
-  requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/d5/94/237843136b52062cbeae1ac2e9a244ca0a9d6ea115e4a346f3ae7924d6d4/ogquery-0.3.0-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
   name: ogquery
-  version: 0.3.0
-  sha256: 2cf6cecc65902f5a9cd2d04ca70c83084a0256bc51c2128e3bf729d6c35070d6
+  version: 0.4.0
+  sha256: 859832ae5a725ca1b1c01f81cb13d8868f7412c7740ef3f97417cd427b6cb5df
   requires_dist:
   - numcodecs>=0.17
   - numpy>=2.0,<2.5
@@ -4401,3 +4394,10 @@ packages:
   - pytest>=8 ; extra == 'test'
   - scipy>=1.11 ; extra == 'test'
   requires_python: '>=3.12'
+- pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+  name: pgenlib
+  version: 0.95.2
+  sha256: 8ae84fe5e0070ae0d32bd048cf187440e1aeb01380c37b3049bc17d797589423
+  requires_dist:
+  - numpy>=1.21.3
+  requires_python: '>=3.10'

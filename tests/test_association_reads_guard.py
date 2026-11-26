@@ -26,12 +26,11 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Modules that read associations only through `opengwasdb.store_reader.associations`.
 #: The reader's own modules (`resolve`, `indexed`, `csr`) moved to ogquery (#475), and so
-#: did their share of this guard; `facade.py` stays until the Hybrid Rho change (#495).
+#: did their share of this guard, and so did `facade.py` once it became a re-export (#475).
 READERS = (
     "layouts/dense/complete.py",
     "layouts/hybrid/complete.py",
     "layouts/ragged/complete.py",
-    "store_reader/facade.py",
     "validation/observed_view.py",
     "validation/observed_view_ragged.py",
     "validation/observed_view_hybrid.py",

@@ -79,3 +79,33 @@ the top-hit index, and parallelised over pairs with a single-level process pool
   tens of thousands of Analyses (see PRD "Known Limitation").
 - `n_workers` is a pure runtime knob; serial and parallel runs produce identical
   matrices.
+
+## Amendment: a Hybrid's Rho Matrix is its Dense Component's (#496, 25 Nov 2026)
+
+A Hybrid release's Dense Component holds a full Dense grid of every Analysis, so it
+carries a Rho Matrix the same way, at `dense/data.zarr/rho`, built by this ADR's builder
+over that grid (one builder; nothing copies a matrix). `build-dense-rho` takes the Hybrid
+release; the Dense Component is refused with the release's name, judged by where its
+path resolves (a symlink or `dense/data.zarr/..` is refused as `dense/` is), so a
+component's matrix is never built without the record below. A Ragged release has none:
+Rho from shared nulls may not be meaningful on sparse, mostly cis data (owner, 25 Nov
+2026). The builder reads observed Z through the Association Reader on both layouts, so
+an imputed cell is never observed and a Reference-Completed grid without its mask is
+refused, as every reader refuses it.
+
+An Analysis with no observed association in the Dense Component (an Overflow-only
+Analysis) has NaN Rho with every partner, as does a pair below `min_nulls`. The two must
+not be confused, so the builder records exactly the first as the group attribute
+`overflow_only`, and a Rho query naming one raises `OverflowOnlyAnalysisError` rather
+than answer NaN. Membership is a fact of the Store, not of null support: an Analysis
+observed only at rows thinning drops has no support and is not Overflow-only, so the
+builder finds members from the association read itself (the thinned rows, read in
+batches under the same decoded-band budget, then the rest of the grid in `band_limits`
+bands for the Analyses not yet seen; nothing more when every Analysis is observed at a
+thinned row), and `rho.overflow_only` recomputes the set from validation's association
+scan and requires the record to equal it; on a standalone Dense release, which records
+none, it counts no cells. The packed triangle
+keeps its slots for Overflow-only Analyses, unchanged from a Dense release's format.
+No manifest field declares the matrix, for a Hybrid as for a Dense release, and
+`format_version` does not move: the group is optional and no published release carries
+one (spec §1.1, `rho/`; §21.4 lists it among in-place additions).
