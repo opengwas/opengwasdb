@@ -135,3 +135,24 @@ def assert_strand_statistics(query: StoreQuery, analysis_id: str) -> None:
         assert len(result["z"]) == 1, f"{name}: no association at {alid}"
         assert abs(float(result["z"][0]) - expected_z) < 0.01, name
         assert abs(float(result["eaf"][0]) - expected_eaf) < 0.01, name
+
+
+def vcf_row(chrom: str, pos: int, ref: str, alt: str, es: float = 0.2) -> str:
+    """One GWAS-VCF data line: ES, SE and AF at fixed values but `es`."""
+    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tES:SE:AF\t{es}:0.1:0.2\n"
+
+
+def vcf_manifest(
+    tmp_path: Path, vcfs: dict[str, Path], assembly: str | dict[str, str] | None = None
+) -> Path:
+    """A build manifest; ``assembly`` is every row's source assembly, or each one's."""
+    by_trait = assembly if isinstance(assembly, dict) else dict.fromkeys(vcfs, assembly)
+    header = "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
+    lines = [header + ("\tsource_assembly" if assembly else "")] + [
+        f"{trait}\t{vcf}\tTrait {trait}\t1000\tsd\tdeclared_standardised"
+        + (f"\t{by_trait[trait]}" if assembly else "")
+        for trait, vcf in vcfs.items()
+    ]
+    path = tmp_path / "manifest.tsv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path

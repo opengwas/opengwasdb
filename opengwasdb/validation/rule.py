@@ -229,10 +229,26 @@ class Target:
         """The rules the release this target belongs to records as deviations of a
         `--convert-legacy` conversion (`provenance.converted_from.deviations`, #492), each
         with the words its downgraded finding carries; none for any other release."""
+        release = self._release()
+        return release.remember("converted_deviations", lambda: _converted_deviations(release))
+
+    def converted_count(self, key: str) -> int | None:
+        """A count the release this target belongs to records in
+        `provenance.converted_from` under `key` (`lifted_contig_unjudged`, #504), or None
+        where it records no integer there, or is not a converted release."""
+        release = self._release()
+        if release._store is None:
+            return None
+        record = release.store.manifest.provenance.get("converted_from")
+        count = record.get(key) if isinstance(record, dict) else None
+        return count if isinstance(count, int) and not isinstance(count, bool) else None
+
+    def _release(self) -> Target:
+        """The release this target belongs to: itself, or its outermost parent."""
         release = self
         while release.parent is not None:
             release = release.parent
-        return release.remember("converted_deviations", lambda: _converted_deviations(release))
+        return release
 
     @cached_property
     def analyses(self) -> AnalysesTable:
@@ -324,7 +340,11 @@ class Rule:
         by `--convert-legacy` is a warning naming the conversion when the release records
         this rule among its deviations (#492): the one place a rule's severity is lowered,
         and only by what the release itself records. A rule that could not read what it
-        judges (`severity` given) fails as before."""
+        judges (`severity` given) fails as before. An explicit `severity` is also how a
+        rule keeps a finding from being lowered by a deviation the release records under
+        its name: `variant_table.lifted_contig`'s deviation covers only its unjudged rows,
+        so its `lift_off_primary` finding passes its severity and is never lowered
+        (#504)."""
         if severity is None and self.severity is Severity.ERROR:
             recorded = target.converted_deviations()
             if self.name in recorded:

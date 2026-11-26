@@ -376,20 +376,17 @@ _NONE = np.empty(0, dtype=np.int64)
 
 
 def _unjudged_off_primary(store: OpenGWASDBStore) -> int:
-    """The Variant Table's rows on an alt, random or unplaced contig with no
-    `source_alid`: the rows `variant_table.lifted_contig` counts as not judged, by the
-    same test (`is_primary_contig`, a blank `source_alid`), read from the table the
-    lifted conversion carries unchanged (#504)."""
-    from opengwasdb.store_reader.identity import is_primary_contig
-    from opengwasdb.store_reader.variant_axis import parse_variant_line, variant_table_path
-    from opengwasdb.variants.legacy_table import variant_table_lines
+    """The Variant Table's rows `variant_table.lifted_contig` counts as not judged, by
+    its own test (`unjudged_off_primary`) over the rows it folds over
+    (`written_table_records`), read from the table the lifted conversion carries
+    unchanged (#504)."""
+    from opengwasdb.validation.rules.variants import unjudged_off_primary
 
-    unjudged = 0
-    for line in variant_table_lines(variant_table_path(store.path)):
-        record = parse_variant_line(line)
-        if record.source_alid is None and not is_primary_contig(record.chromosome):
-            unjudged += 1
-    return unjudged
+    axis = store.variant_axis(aliases=False)
+    try:
+        return sum(1 for record in axis.written_table_records() if unjudged_off_primary(record))
+    finally:
+        axis.close()
 
 
 def _grid(store: OpenGWASDBStore) -> DenseGridReader:

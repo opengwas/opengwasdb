@@ -573,21 +573,38 @@ class _LiftedOffPrimary:
         )
 
 
+def unjudged_off_primary(record: VariantRecord) -> bool:
+    """Whether `variant_table.lifted_contig` cannot judge `record`: a row on an alt,
+    random or unplaced contig with no ``source_alid`` (no lift, a collision blanked it,
+    or a lifted 0.2 release never kept it). The one test, which the rule counts by and a
+    lifted legacy conversion records its deviation by (#504)."""
+    return record.source_alid is None and not is_primary_contig(record.chromosome)
+
+
+def _lifted_onto_another_contig(record: VariantRecord) -> bool:
+    """Whether `record` is on an alt, random or unplaced contig and its ``source_alid``
+    on another: a lift landed it there."""
+    source = record.source_alid
+    return (
+        source is not None
+        and not is_primary_contig(record.chromosome)
+        and source.split(":", 1)[0] != record.chromosome
+    )
+
+
 def _lifted_off_primary(_target: Target, block: TableBlock) -> _LiftedOffPrimary:
     """Each row on an alt, random or unplaced contig whose ``source_alid`` is on another.
 
     A source on the release's assembly keeps its alt contig, so its ``source_alid``
     is the ALID itself; a lift's is the source's own coordinate, on another contig.
-    A row on such a contig with no ``source_alid`` (no lift, or a collision blanked
-    it) cannot be judged, and is counted so the message can say so.
+    A row on such a contig with no ``source_alid`` cannot be judged
+    (`unjudged_off_primary`), and is counted so the message can say so.
     """
     n_rows, first, n_unjudged = 0, "", 0
     for offset, record in enumerate(block.records):
-        if is_primary_contig(record.chromosome):
-            continue
-        if record.source_alid is None:
+        if unjudged_off_primary(record):
             n_unjudged += 1
-        elif record.source_alid.split(":", 1)[0] != record.chromosome:
+        elif _lifted_onto_another_contig(record):
             n_rows += 1
             first = first or f"row {block.start + offset}: {record.alid} from {record.source_alid}"
     return _LiftedOffPrimary(n_rows, first, n_unjudged)
@@ -645,16 +662,16 @@ class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
                 )
 
 
-def _recorded_unjudged(target: Target, rule: str) -> object:
+def _recorded_unjudged(target: Target, rule: str) -> int | None:
     """The count of unjudged rows a converted release records as its `rule` deviation
     (`legacy_conversion.LIFTED_CONTIG_UNJUDGED`), or None where it records no such
     deviation: an unconverted, unlifted or 0.3.0-built release, or one whose record
-    `manifest.converted_from` refuses."""
+    `manifest.converted_from` refuses (which accepts the deviation only with a count)."""
     if rule not in target.converted_deviations():
         return None
     from opengwasdb.store.legacy_conversion import LIFTED_CONTIG_UNJUDGED
 
-    return target.store.manifest.provenance["converted_from"].get(LIFTED_CONTIG_UNJUDGED)
+    return target.converted_count(LIFTED_CONTIG_UNJUDGED)
 
 
 @dataclass(frozen=True)

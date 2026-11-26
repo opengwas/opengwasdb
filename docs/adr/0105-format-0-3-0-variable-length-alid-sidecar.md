@@ -1093,8 +1093,10 @@ recorded deviation, so publishing the converted release (opengwasdb-stores ADR 0
 `14_GL000009v2_random` 35, and others. They hold 1,959,551 observed cells. Its 0.2.0 record
 passed only because that validator (`d405de0a`) predates the rule.
 
-**The owner's ruling (25 Nov 2026, recorded on opengwas/opengwasdb-stores#520):** record it
-as an engine deviation, convert OGS-00009 again and publish it. The rows are kept, as in
+**The owner's ruling (25 Nov 2026; AskUserQuestion in the orchestrating session, posted as
+item 6 of
+[opengwas/opengwasdb-stores#520](https://github.com/opengwas/opengwasdb-stores/issues/520#issuecomment-7185997253)):**
+record it as an engine deviation, convert OGS-00009 again and publish it. The rows are kept, as in
 0.2.0. A rebuild from source drops a row lifted onto such a contig as `lift_off_primary`
 (#376).
 

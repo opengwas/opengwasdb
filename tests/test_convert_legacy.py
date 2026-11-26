@@ -622,25 +622,21 @@ def off_primary(tmp_path_factory: pytest.TempPathFactory):
     """A GRCh38 Dense release with three rows on alt contigs, as a 0.2.0 release (no row
     keeps a `source_alid`, as on OGS-00009), converted `--lifted` and `--not-lifted` once
     for the module (#504). Never written to: copy one to change it."""
-    from liftover_fixtures import ALT_TARGET_CONTIG
+    from liftover_fixtures import ALT_TARGET_CONTIG, vcf_manifest, vcf_row
     from residual_fixtures import write_gwas_vcf_with_eaf
-    from test_lift_off_primary import _vcf_manifest, _vcf_row
 
     from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 
     root = tmp_path_factory.mktemp("off-primary")
-    rows = [_vcf_row("1", 1_000 + i, "G", "A") for i in range(5)] + [
-        _vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A"),
-        _vcf_row(ALT_TARGET_CONTIG, 2_000, "C", "T"),
-        _vcf_row("7_KI270803v1_alt", 500, "A", "G"),
+    rows = [vcf_row("1", 1_000 + i, "G", "A") for i in range(5)] + [
+        vcf_row(ALT_TARGET_CONTIG, 1_000, "G", "A"),
+        vcf_row(ALT_TARGET_CONTIG, 2_000, "C", "T"),
+        vcf_row("7_KI270803v1_alt", 500, "A", "G"),
     ]
-    vcfs = {
-        "a": write_gwas_vcf_with_eaf(root / "a.vcf", rows),
-        "b": write_gwas_vcf_with_eaf(root / "b.vcf", rows[:6]),
-    }
+    vcfs = {"a": write_gwas_vcf_with_eaf(root / "a.vcf", rows)}
     built = root / "built.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(root, vcfs, assembly="hg38"), built, store_id="s", release_id="r"
+        vcf_manifest(root, vcfs, assembly="hg38"), built, store_id="s", release_id="r"
     )
     source = as_0_2_0(as_0_2_3(built))
     return source, {
