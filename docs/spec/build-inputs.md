@@ -500,6 +500,18 @@ reads it.
   single-chromosome store in WORK is the checkpoint; an unfinished chromosome
   is rebuilt, never finished over. Retained input parts are re-hashed; deleted
   parts of closed chromosomes are not fetched again.
+- `--plan-only` makes the plan and stops (opengwas/opengwasdb-stores#542). It
+  runs the same checks, takes the same `WORK` lock and pins the same identity as
+  a full import, then writes the plan file in `WORK` and each `WORK/<chr>.lifted.npz`
+  and exits, printing the plan's path, its `far_bp` and its chromosomes. It
+  makes no network access: no bucket listing, no download, no part read. `OUT`
+  must not exist and is not created. Its plan is the plan a full import makes,
+  because it is the same code, and a saved plan with the same identity is
+  reused: the same command without `--plan-only` resumes from it, and one that
+  pins other inputs is refused as above. `--parts`, `--delete-parts`,
+  `--download-workers` and `--threads` are accepted and unused; `--ledger`'s
+  SHA-256 is pinned. A re-plan of a published Store compares this plan with the
+  one its import made, chromosome by chromosome, without a download.
 - `--delete-parts` deletes only owned downloads, after close and after their
   last consuming chromosome (a source block can span a chromosome boundary).
   A receipt grants deletion only when `downloaded` is true and its recorded

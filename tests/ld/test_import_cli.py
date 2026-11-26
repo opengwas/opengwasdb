@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from import_cli_args import FIXTURE, required_import_args
 from ogquery.ld.store import StoreReader
 
 import opengwasdb.ld
@@ -14,23 +15,10 @@ from opengwasdb.ld.build.importing import run
 from opengwasdb.ld.cli import main
 from opengwasdb.ld.format import REQUIRED_KEYS
 
-FIXTURE = Path(__file__).parent / "data" / "panukb"
-
 
 def import_args(out: Path, work: Path) -> list[str]:
     return [
-        "import",
-        str(out),
-        "--work",
-        str(work),
-        "--metadata",
-        str(FIXTURE / "metadata.json"),
-        "--variants",
-        str(FIXTURE / "variants.tsv"),
-        "--chain",
-        str(FIXTURE / "identity.chain"),
-        "--fasta",
-        str(FIXTURE / "reference.fa.gz"),
+        *required_import_args(out, work),
         "--ledger",
         str(FIXTURE / "ledger.json"),
         "--parts",
