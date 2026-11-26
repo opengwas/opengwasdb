@@ -381,7 +381,9 @@ benchmark-indexed-subset = "python benchmarks/benchmark_indexed_subset.py"
 ld-test-realdata = "env PYTHONNOUSERSITE=1 bash tests/ld/realdata/run.sh"
 # The whole-panel comparison of `clump` with plink2: about an hour.
 ld-acceptance-clump = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run.sh"
-# The five HGDP+1kGP LD Stores: every validation rule, and the provenance each records.
+# The engine's checks of LD Stores: every validation rule, the autosomes held, and the direct decoder
+# against zarr, on the five HGDP+1kGP LD Stores or on `$OPENGWASDB_LD_STORE`. Their build, and the
+# checks of what `opengwasdb ld info` shows, are opengwasdb-stores' (`tools/ld-stores/`, #541).
 ld-acceptance-stores = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run_stores.sh"
 # The whole-panel comparison of the Genotype Store with the LD Store, code for code.
 ld-acceptance-genotypes = "env PYTHONNOUSERSITE=1 bash tests/ld/acceptance/run_genotypes.sh"

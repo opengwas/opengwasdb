@@ -1,6 +1,7 @@
 """`scripts/ld/build_hgdp1kgp.py` (ogld#7): when a conversion counts as current, and every way the
-recipe stops rather than go on. plink2 is a fake script that writes small filesets, or fails in
-one chosen way (`FAKE_PLINK2`)."""
+conversion stops rather than go on. plink2 is a fake script that writes small filesets, or fails in
+one chosen way (`FAKE_PLINK2`). The build from these filesets is opengwas/opengwasdb-stores'
+(`tools/ld-stores/`, opengwasdb-stores#541), and its tests are there."""
 
 from __future__ import annotations
 
@@ -38,13 +39,6 @@ echo pvar > "$out.pvar"
 [ "$FAKE_PLINK2" = fail ] && exit 3
 [ "$FAKE_PLINK2" = nopgen ] && exit 0
 echo pgen > "$out.pgen"
-"""
-#: Stands in for /usr/bin/time: `time -v -o FILE command...`.
-FAKE_TIME = """#!/bin/sh
-out=$3; shift 3
-"$@"; rc=$?
-echo "Exit status: $rc" > "$out"
-exit $rc
 """
 
 
@@ -185,27 +179,24 @@ def _parsed(argv):
             return dict(inner.params)
 
 
-def test_the_build_command_is_one_ogld_accepts(tmp_path):
-    pgens = [tmp_path / f"chr{c}.pgen" for c in recipe.CHROMS]
-    command = recipe.build_command(
-        "AFR", pgens, tmp_path / "s.store", tmp_path / "k", tmp_path / "p", 16
-    )
-    args = _parsed(command[2:])
-    assert args["pgen"] == tuple(str(p) for p in pgens)
-    assert (args["r_scale"], args["k"], args["threads"]) == (recipe.PANEL_SCALE, recipe.K, 16)
-    assert args["t_partner"] == recipe.PANEL_T_PARTNER
-    assert (args["panel_id"], args["ancestry"]) == (recipe.panel_id("AFR"), "AFR")
-
-
-def test_the_validate_command_is_one_ogld_accepts(tmp_path):
-    args = _parsed(recipe.validate_command(tmp_path / "s", 16)[2:])
-    assert (args["location"], args["threads"]) == (str(tmp_path / "s"), 16)
+def test_the_layout_benchmarks_build_command_is_one_the_cli_accepts(world, tmp_path):
+    """`scripts/ld/bench/build_layouts.py` keeps the published EUR store's build of chr22."""
+    if str(SCRIPTS / "bench") not in sys.path:
+        sys.path.insert(0, str(SCRIPTS / "bench"))
+    build_layouts = importlib.import_module("build_layouts")
+    args = _parsed(build_layouts.build_command(tmp_path / "s.store", 8))
+    assert args["pgen"] == (f"{recipe.prefix('EUR', 22)}.pgen",)
+    assert args["keep"] == str(recipe.keep_file("EUR"))
+    assert (args["r_scale"], args["k"], args["t_partner"], args["threads"]) == (511, 10, 0.01, 8)
+    assert (args["panel_id"], args["ancestry"]) == ("hgdp1kgp-v2-EUR", "EUR")
 
 
 def test_the_arguments_dedupe_panels_and_refuse_an_unknown_one():
     assert recipe.parse(["convert", "--panel", "EAS", "--panel", "EAS"]).panel == ["EAS"]
     with pytest.raises(SystemExit):
-        recipe.parse(["build", "--panel", "XYZ"])
+        recipe.parse(["convert", "--panel", "XYZ"])
+    with pytest.raises(SystemExit):
+        recipe.parse(["build", "--panel", "AFR"])  # the build moved to opengwasdb-stores
 
 
 @pytest.mark.parametrize("jobs", [0, 9])
@@ -214,47 +205,13 @@ def test_conversions_are_capped_at_eight(jobs):
         recipe.convert(["AFR"], jobs, 4, 16000)
 
 
-@pytest.mark.parametrize(("builds", "threads"), [(3, 16), (0, 16), (2, 17)])
-def test_builds_are_capped_at_two_of_sixteen_threads(builds, threads):
-    with pytest.raises(SystemExit, match=r"--builds|--threads"):
-        recipe.build(["AFR"], builds, threads)
-
-
-def test_a_build_with_missing_inputs_names_them(world):
-    with pytest.raises(SystemExit, match=r"missing inputs.*AFR\.eigenvec"):
-        recipe.build_one("AFR", 16)
-
-
-def test_an_existing_store_is_refused_and_left_alone(world, tmp_path):
-    (tmp_path / "pcs" / "AFR.eigenvec").write_text("x")
-    for chrom in recipe.CHROMS:
-        Path(f"{recipe.prefix('AFR', chrom)}.pgen").parent.mkdir(exist_ok=True)
-        Path(f"{recipe.prefix('AFR', chrom)}.pgen").write_text("x")
-    store = recipe.store_path("AFR")
-    store.mkdir()
-    (store / "kept").write_text("mine")
-    with pytest.raises(SystemExit, match="exists"):
-        recipe.build_one("AFR", 16)
-    assert (store / "kept").read_text() == "mine"
-
-
-def test_a_stage_that_exits_non_zero_stops_the_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(recipe, "TIME", str(script(tmp_path / "time", FAKE_TIME)))
-    log = tmp_path / "AFR.log"
-    recipe.timed(["true"], log, "build")
-    with pytest.raises(SystemExit, match=r"validate failed \(1\)"):
-        recipe.timed(["false"], log, "validate")
-    assert "validate end rc=1" in log.read_text()
-
-
-def test_a_failed_panel_cancels_the_ones_not_yet_started(monkeypatch):
+def test_a_failed_conversion_cancels_the_ones_not_yet_started():
     started = []
 
-    def build_one(panel: str, threads: int) -> str:
+    def convert_one(panel: str) -> str:
         started.append(panel)
         raise SystemExit(f"{panel} failed")
 
-    monkeypatch.setattr(recipe, "build_one", build_one)
     with pytest.raises(SystemExit, match="AFR failed"):
-        recipe.build(["AFR", "EUR", "EAS"], 1, 16)
+        recipe.run_all(["AFR", "EUR", "EAS"], convert_one, 1)
     assert started == ["AFR"]

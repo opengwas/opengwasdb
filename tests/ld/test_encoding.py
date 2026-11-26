@@ -318,7 +318,7 @@ NAMED_ON_PURPOSE = {
         "The Test Store is × 511 (ogld#16, ADR 0090)",
         "r_scale: int = 32767",
     ),
-    "scripts/ld/build_hgdp1kgp.py": ("PANEL_SCALE = 511",),
+    "scripts/ld/bench/build_layouts.py": ("PANEL_SCALE: Final = 511",),
     "opengwasdb/ld/build/importing/run.py": ("PANUKB_SCALE: Final = 2047",),
     "scripts/ld/bench/partner_carry.py": ("T_PARTNER, SCALE = 0.01, 511",),
     "scripts/ld/make_test_store.py": (

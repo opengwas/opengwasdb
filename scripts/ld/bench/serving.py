@@ -149,7 +149,7 @@ def memory(args: argparse.Namespace, out: TextIO) -> None:
     write(out, memory_record("imported", stores))
     for panel in args.panels:
         started = time.perf_counter()
-        stores[panel] = opengwasdb.ld.open(latency.recipe.store_path(panel))
+        stores[panel] = opengwasdb.ld.open(latency.published(panel))
         write(out, memory_record("opened", stores, panel=panel, seconds=elapsed(started)))
     for panel, store in stores.items():
         started = time.perf_counter()
@@ -214,7 +214,7 @@ def lag_queries() -> dict[str, latency.Query]:
     """Each query `lag` times, ogld#8's own, its inputs chosen first on a reader of their own
     (ogld#8's `Sample`), so choosing them warms nothing a timing reads."""
     alids, z = latency.hits(latency.analyses([LAG_ANALYSIS])[0], None)
-    sample = latency.Sample(latency.recipe.store_path("EUR"))
+    sample = latency.Sample(latency.published())
     scattered = sample.alids(sample.rows(500, None, latency.SEED))
     return {
         "clump": latency.clump_query(alids, z, 0.01),
@@ -231,7 +231,7 @@ def lag(args: argparse.Namespace, out: TextIO) -> None:
     idle = asyncio.run(lags_while(for_seconds(5.0)))
     write(out, {"measurement": "lag", "query": "idle", **summary(idle), **context(args)})
     queries = lag_queries()
-    path = latency.recipe.store_path("EUR")
+    path = latency.published()
     for repeat in range(args.repeats):
         for name in args.queries:
             latency.evict(path)
@@ -384,7 +384,7 @@ def main() -> None:
         each = sub.add_parser(name)
         each.add_argument("--out", type=Path, required=True)
         each.add_argument("--zarr-threads", type=int, default=6)
-    sub.choices["memory"].add_argument("--panels", nargs="+", default=list(latency.recipe.PANELS))
+    sub.choices["memory"].add_argument("--panels", nargs="+", default=list(latency.PANELS))
     timed = sub.choices["lag"]
     timed.add_argument("--queries", nargs="+", default=list(LAG_QUERIES))
     timed.add_argument("--repeats", type=int, default=1, help="rounds of the queries")

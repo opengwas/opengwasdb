@@ -1,24 +1,23 @@
-"""Epic opengwas/ogld#1's acceptance for the five HGDP+1kGP LD Stores (ogld#7): every validation
-rule passes on each, each records what a reader of its provenance needs, and the direct decoder
-returns the same bytes as zarr on each (ogld#40, ADR 0095).
+"""The engine's acceptance of LD Stores on whole panels (ogld#7): every validation rule passes on
+each, each holds chromosomes 1 to 22, and the direct decoder returns the same bytes as zarr on each
+(ogld#40, ADR 0095). These checks need the engine's internals, so they stay here.
 
-The stores are the ones `scripts/ld/build_hgdp1kgp.py build` writes under `$OPENGWASDB_LD_STORES`;
-its constants and paths (`recipe`) say the scale, k, names and roots, and
-`$OPENGWASDB_LD_STORE_<ANC>` names one elsewhere. `$OPENGWASDB_LD_KEEP` holds the keep files, so n
-is checked against the unrelated samples, not against what the store says of itself. Each store must
-hold chromosomes 1 to 22. Validating all five takes about an hour of the node (`pixi run -e dev
-acceptance-stores`), which is why this is an acceptance run and not the realdata tier. The decoder
-equality reads every array of each store, so it belongs here too: it took the realdata tier over its
-five-minute budget. An input missing fails the run; it never skips (CONTRIBUTING.md, "Acceptance
-runs").
+Any LD Store: `$OPENGWASDB_LD_STORE` names one, at any path, such as a Store rebuilt by
+opengwas/opengwasdb-stores. Unset, the run checks the five published HGDP+1kGP LD Stores,
+`build_hgdp1kgp.store_path` under `$OPENGWASDB_LD_STORES`, or `$OPENGWASDB_LD_STORE_<ANC>` for
+one elsewhere. Their build, and the checks of what `opengwasdb ld info` shows of them (panel, n,
+scale, k, the PC Check), are opengwasdb-stores' (`tools/ld-stores/`, opengwasdb-stores#541).
+Validating all five takes about an hour of the node (`pixi run -e dev ld-acceptance-stores`),
+which is why this is an acceptance run and not the realdata tier. The decoder equality reads every
+array of each store, so it belongs here too: it took the realdata tier over its five-minute
+budget. A Store missing fails the run; it never skips (CONTRIBUTING.md, "Acceptance runs").
 """
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
-import build_hgdp1kgp as recipe
+import build_hgdp1kgp as conversion
 import numpy as np
 import pytest
 from ogquery.ld.store.layout import chromosomes_listed
@@ -31,26 +30,45 @@ from opengwasdb.ld.store.validation import validate_at
 
 #: ADR 0088, decision 11: each panel's unrelated samples (`scripts/ld/make_keeps.py`).
 PANELS = {"EUR": 665, "AFR": 608, "EAS": 724, "SAS": 672, "AMR": 341}
-K_MIN = 5  # build-inputs §1's default `k_min`
-AUTOSOMES = [str(c) for c in recipe.CHROMS]
+AUTOSOMES = [str(c) for c in range(1, 23)]
 
 
-def store_path(panel: str) -> Path:
-    path = Path(env.read(f"OPENGWASDB_LD_STORE_{panel}", str(recipe.store_path(panel))))
-    assert path.exists(), (
-        f"the {panel} store is not at {path}: build it or set $OPENGWASDB_LD_STORE_{panel}"
-    )
+def stores() -> dict[str, str]:
+    """The Stores this run checks, by name: `$OPENGWASDB_LD_STORE`, or the five published."""
+    one = env.read("OPENGWASDB_LD_STORE", "")
+    if one:
+        return {Path(one).name: one}
+    return {
+        panel: env.read(f"OPENGWASDB_LD_STORE_{panel}", str(conversion.store_path(panel)))
+        for panel in PANELS
+    }
+
+
+STORES = stores()
+
+
+def store_path(name: str) -> Path:
+    path = Path(STORES[name])
+    assert path.exists(), f"the {name} store is not at {path}: set $OPENGWASDB_LD_STORE"
     return path
 
 
 def keep_count(panel: str) -> int:
-    keep = recipe.keep_file(panel)
-    assert keep.exists(), f"{keep} is missing: scripts/make_keeps.py writes it"
-    return len(recipe.keep_iids(keep))
+    keep = conversion.keep_file(panel)
+    assert keep.exists(), f"{keep} is missing: scripts/ld/make_keeps.py writes it"
+    return len(conversion.keep_iids(keep))
 
 
-@pytest.mark.parametrize("panel", PANELS)
-def test_sampled_chunks_of_published_stores_equal_zarr(panel: str) -> None:
+@pytest.mark.parametrize("panel", STORES)
+def test_n_is_the_panels_unrelated_samples(panel: str) -> None:
+    """n is the panel's unrelated samples: the literal count, and its keep file's."""
+    p = opengwasdb.ld.open(store_path(panel)).provenance
+    ancestry = p["panel"]["ancestry"]
+    assert p["panel"]["n"] == PANELS[ancestry] == keep_count(ancestry)
+
+
+@pytest.mark.parametrize("panel", STORES)
+def test_sampled_chunks_equal_zarr(panel: str) -> None:
     """The direct decoder's first, middle and last chunk of every array in the store equals
     zarr's own read of it (ogld#40, ADR 0095)."""
     import zarr
@@ -74,7 +92,7 @@ def test_sampled_chunks_of_published_stores_equal_zarr(panel: str) -> None:
             np.testing.assert_array_equal(got, expected, err_msg=f"{panel}/{array.path}/{k}")
 
 
-@pytest.mark.parametrize("panel", PANELS)
+@pytest.mark.parametrize("panel", STORES)
 def test_every_rule_passes(panel: str) -> None:
     threads = int(env.read("OPENGWASDB_LD_VALIDATE_THREADS", "16"))
     found = validate_at(store_path(panel), threads=threads)
@@ -83,50 +101,8 @@ def test_every_rule_passes(panel: str) -> None:
     assert not failing, f"{panel} breaks {len(failing)} rule(s): {failing}"
 
 
-@pytest.mark.parametrize("panel", PANELS)
-def test_provenance_records_what_a_reader_needs(panel: str) -> None:
-    p = opengwasdb.ld.open(store_path(panel)).provenance
-    assert p["panel"]["id"] == recipe.panel_id(panel)
-    assert p["panel"]["ancestry"] == panel
-    assert p["panel"]["n"] == PANELS[panel] == keep_count(panel)
-    assert p["encoding"]["r_scale"] == recipe.PANEL_SCALE
-    assert p["n_variants"] > 0
+@pytest.mark.parametrize("panel", STORES)
+def test_it_holds_the_autosomes(panel: str) -> None:
     held = chromosomes_listed(open_group(store_path(panel))["variants"].attrs["chromosomes"])
     assert [name for name, _, _ in held] == AUTOSOMES, f"{panel} holds chromosomes {held}"
     assert all(stop > start for _, start, stop in held), "a chromosome with no variants"
-    assert p["counts"]["near_pairs"] > 0, "the Near Band's pair count"
-    # These five are 0.1.0 stores, so they still record the Proxy Index they hold: opengwas/ogld#73
-    # derives their Partner Rows and drops it, and this assertion goes with the last of them
-    # (opengwas/ogld#72).
-    assert p["counts"]["index_entries"] > 0, (
-        "a 0.1.0 store's Proxy Index, until opengwas/ogld#73 drops it"
-    )
-    t_far = p["t_far"]
-    assert isinstance(t_far, float), f"t_far is {t_far!r}"
-    assert 0 < t_far < 1, f"t_far is {t_far!r}"
-    build = p["build"]
-    assert build["wall_seconds"] > 0, "the build time"
-    assert build["peak_memory_bytes"] > 0
-    assert p["software"]["ogld"], "the builder's version"
-
-
-@pytest.mark.parametrize("panel", PANELS)
-def test_the_pc_check_and_its_diagnostic_are_recorded(panel: str) -> None:
-    adjustment = opengwasdb.ld.open(store_path(panel)).provenance["adjustment"]
-    assert adjustment["k_target"] == recipe.K
-    assert adjustment["k_min"] == K_MIN
-    dropped = adjustment["pc_check"]["dropped"]
-    assert isinstance(dropped, list), "the PC Check's dropped PCs are recorded, even when none"
-    assert K_MIN <= adjustment["k"] <= recipe.K, f"{panel} kept {adjustment['k']} PCs"
-    assert len(adjustment["covariates"]) == adjustment["k"]
-    diagnostic = opengwasdb.ld.open(store_path(panel)).provenance["pc_diagnostic"]
-    assert diagnostic["pairs"]["n_pairs"] > 0
-    for rate in (
-        "rate_r2_ge_0_01_unadjusted",
-        "rate_r2_ge_0_01_adjusted",
-        "rate_r2_ge_0_01_sampling",
-    ):
-        assert math.isfinite(diagnostic[rate]), f"{rate} is {diagnostic[rate]!r}"
-    change = diagnostic["near_100kb_change"]
-    assert set(change) == {"0", "0.5", "0.9", "0.99", "1"}
-    assert all(math.isfinite(v) for v in change.values())

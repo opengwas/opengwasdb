@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# The acceptance run of the five HGDP+1kGP LD Stores (CONTRIBUTING.md, "Acceptance runs"):
-# `pixi run -e dev ld-acceptance-stores`. It validates each store (`opengwasdb.ld.validate` at 16 threads),
-# reads each provenance, and compares the direct decoder's sampled chunks of every array with
-# zarr's (ogld#40, ADR 0095); the stores are `scripts/ld/build_hgdp1kgp.py build`'s. It fails, never
-# skips, when a store is missing.
+# The engine's acceptance run of LD Stores (CONTRIBUTING.md, "Acceptance runs"):
+# `pixi run -e dev ld-acceptance-stores`. It validates each store (every rule, at 16 threads),
+# checks it holds chromosomes 1 to 22, and compares the direct decoder's sampled chunks of every
+# array with zarr's (ogld#40, ADR 0095). `$OPENGWASDB_LD_STORE` names any one LD Store; unset, the
+# five published HGDP+1kGP LD Stores, which opengwas/opengwasdb-stores builds (#541). It fails,
+# never skips, when a store is missing.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 source scripts/ld/refuse_old_env.sh
