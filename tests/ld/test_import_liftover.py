@@ -1,5 +1,6 @@
 """Liftover loss classes against a tiny chain and reference (opengwas/ogld#93)."""
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ from ogquery.ld.store import Variants
 from opengwasdb.ld.build.importing.lift import (
     Lifted,
     SourceVariant,
+    _a1_frequency,
     drop_displaced,
     far_distance,
     lift_variants,
@@ -159,3 +161,43 @@ def test_equal_segments_tie_drops_the_one_with_the_lowest_grch37_position() -> N
 def test_complete_radius_uses_lifted_not_source_distances() -> None:
     # Target distance 9,000,001 joins a pair outside the published source band.
     assert far_distance(np.array([1, 10_000_002]), np.array([1, 9_000_002])) == 9_000_000
+
+
+def test_frequency_rounding_to_one_in_float32_is_dropped_when_a1_is_ref() -> None:
+    assert np.float32(1 - 4.6625e-09) == 1.0
+    rows = [SourceVariant(0, "22", 1, "A", "C", 4.6625e-09)]
+    table, losses = lift_variants(rows, FIXTURE / "tiny.chain", FIXTURE / "tiny.fa")
+    assert len(table) == 0
+    assert losses.get("invalid_frequency", 0) == 1
+
+
+def test_tiny_frequency_is_kept_when_a1_is_alt() -> None:
+    rows = [SourceVariant(0, "22", 1, "AA", "A", 4.6625e-09)]
+    table, losses = lift_variants(rows, FIXTURE / "tiny.chain", FIXTURE / "tiny.fa")
+    assert losses.get("invalid_frequency", 0) == 0
+    assert table.alid.tolist() == ["22:1:A:AA"]
+    assert np.float32(table.variants.a1_frequency[0]) == np.float32(4.6625e-09)
+
+
+def test_frequency_just_below_one_is_dropped_when_a1_is_alt() -> None:
+    assert np.float32(1 - 4.6625e-09) == 1.0
+    rows = [SourceVariant(0, "22", 1, "AA", "A", 1 - 4.6625e-09)]
+    table, losses = lift_variants(rows, FIXTURE / "tiny.chain", FIXTURE / "tiny.fa")
+    assert len(table) == 0
+    assert losses.get("invalid_frequency", 0) == 1
+
+
+@pytest.mark.parametrize("af", [float("nan"), 0.0, 1.0, -0.1])
+def test_regression_guard_unusable_frequency_is_still_invalid(af: float) -> None:
+    rows = [SourceVariant(0, "22", 1, "A", "C", af)]
+    table, losses = lift_variants(rows, FIXTURE / "tiny.chain", FIXTURE / "tiny.fa")
+    assert len(table) == 0
+    assert losses["invalid_frequency"] == 1
+
+
+@pytest.mark.parametrize("a1_is_alt", [True, False])
+def test_out_of_range_float64_is_refused_before_the_cast_without_a_warning(a1_is_alt: bool) -> None:
+    # float32(1e300) overflows with a RuntimeWarning; the float64 range check must refuse it first.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _a1_frequency(1e300, a1_is_alt) == "invalid_frequency"

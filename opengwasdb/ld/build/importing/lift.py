@@ -19,6 +19,7 @@ from ogquery.ld.store import Variants
 from opengwasdb.ld.build.importing.matrix import IntArray
 from opengwasdb.ld.build.importing.parts import optional_module
 from opengwasdb.ld.format import NEAR_BP
+from opengwasdb.ld.store import layout
 from opengwasdb.store_reader.identity import AUTOSOMES, VariantNormalisationError
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.sorted_spelling import sorted_identity
@@ -164,9 +165,15 @@ def _target_alleles(
 
 
 def _a1_frequency(af: float, a1_is_alt: bool) -> float | str:
-    if not np.isfinite(af) or not 0 < af < 1:
+    oriented = af if a1_is_alt else 1 - af
+    if not np.isfinite(oriented) or not 0 < oriented < 1:
         return "invalid_frequency"
-    return af if a1_is_alt else 1 - af
+    stored = layout.FREQUENCY_DTYPE(oriented)
+    if not 0 < stored < 1:
+        return "invalid_frequency"
+    # float64 is returned: the writer applies this same cast (astype(layout.FREQUENCY_DTYPE)),
+    # so the tested value is the stored one, and other lifted tables stay unchanged.
+    return oriented
 
 
 def _target(row: SourceVariant, lift: Any, reference: str) -> LiftedVariant | str:
