@@ -11,12 +11,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from test_alid_index import written
+from ogquery.ld.format import InputError
 
-from opengwasdb.ld.format import InputError
-from opengwasdb.ld.store import StoreReader, layout
-from opengwasdb.ld.store import variants as variants_module
-from opengwasdb.ld.store.variants import _MappedAlids
+# The companion's reader is ogquery's (opengwas/ogquery#2): patches go where the reads look.
+from ogquery.ld.store import StoreReader, layout
+from ogquery.ld.store import variants as variants_module
+from ogquery.ld.store.variants import _MappedAlids
+from test_alid_index import written
 
 
 class ObservedLock:
@@ -53,6 +54,12 @@ def test_open_and_row_based_reads_do_not_hash_the_companion(tmp_path: Path, monk
     assert not hashed, "opening and row-based matrix/region reads must not verify ALID payloads"
     reader.close()
     assert not hashed, "closing before lookup must not attach"
+    # Witness: the recording is what a reader's attachment calls, so its silence above means
+    # something (a patch on a module the reader never consults would stay silent too).
+    witness = StoreReader.open(store)
+    assert witness.rows_of(["22:200:A:C"]).tolist() == [2]
+    assert hashed, "a fitting lookup hashes the companion through the patched file_sha256"
+    witness.close()
 
 
 def test_only_wide_queries_do_not_attach_until_a_fitting_query(tmp_path: Path, monkeypatch) -> None:
@@ -67,6 +74,10 @@ def test_only_wide_queries_do_not_attach_until_a_fitting_query(tmp_path: Path, m
     monkeypatch.setattr(layout, "file_sha256", forbidden)
     assert reader.rows_of([names[1], names[1]]).tolist() == [1, 1]
     assert reader._variant_table._alid_mmap is None
+    # Witness: a fitting lookup reaches the forbidden hash, so the wide-only one above did not.
+    with pytest.raises(InputError) as refused:  # the reader refuses a failed attachment
+        reader.rows_of(["22:200:A:C"])
+    assert "wide-only lookup hashed" in str(refused.value.__cause__)
     reader.close()
 
 

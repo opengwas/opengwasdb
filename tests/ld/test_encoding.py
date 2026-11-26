@@ -22,11 +22,12 @@ import numpy as np
 import pytest
 import zarr
 from ld_script_modules import load_script
+from ogquery.ld.format import RefusalReason
 from store_copies import R_SCALE, TEST_STORE, copy_store
 
 import opengwasdb.ld
 from opengwasdb.ld import cli
-from opengwasdb.ld.format import RefusalReason, REncoding
+from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store import layout
 
 CONTRACT = Path(__file__).resolve().parent / "contract"
@@ -325,6 +326,8 @@ NAMED_ON_PURPOSE = {
         "the committed Test Store is × 511, and tests write",
         "× 32767 stores beside it.",
         "511 for the committed Test Store, HGDP+1kGP EUR's",
+        # The k = 0 Test Store's recipe, which ogquery's copy records (opengwas/ogquery#2).
+        "--r-scale=511 --t-partner=0.01 --k 0",
     ),
 }
 SCALE_LITERAL = re.compile(r"\b(?:511|2047|32767)\b")

@@ -433,42 +433,43 @@ def _sample_and_compare(
         source, np.diff(_flat_offsets(pair.source_path)), admitted, seed=seed, n_random=n_random
     )
     sampled = sorted(chosen)
-    sample = _Sample(
-        admitted=admitted,
-        retained=_retained(source, sampled, admitted, panel),
-        rows=_RegionRows(_AxisRows(pair.target_path, pair.n_target_rows)),
-        quality=_quality_blocks(pair.target),
-    )
-    totals = dict.fromkeys(_TOTAL_KEYS, 0)
-    max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
-    listing: list[dict[str, Any]] = []
-    # A sampled Analysis is compared whole, so what it finds left out is exact for it.
-    found = np.zeros(len(source), dtype=np.int64)
-    exact = np.zeros(len(source), dtype=bool)
-    for i in sampled:
-        counts, diffs = _compare_analysis(pair, axis, sample, i)
-        found[i], exact[i] = counts["se_out_of_range_left_out"], True
-        # The accounting's counters are decided over the whole sample, below.
-        for key in totals:
-            totals[key] += counts.get(key, 0)
-        for plane in _DIFF_PLANES:
-            max_diff[plane] = max(max_diff[plane], diffs[plane])
-        entry = _listing_entry(source[i], i, chosen[i], bool(admitted[i]), counts)
-        entry["blocks"] = sorted(b.block_id for b in sample.retained.blocks.get(i, []))
-        listing.append(entry)
-    counters, accounting = se_out_of_range_accounting(pair.source, pair.target, found, exact)
-    totals.update(counters)
-    return {
-        "se_out_of_range": accounting,
-        "sample": {
-            "analyses_checked": len(sampled),
-            "non_admitted": sum(not admitted[i] for i in sampled),
-            "by_stratum": {s: sum(s in strata for strata in chosen.values()) for s in STRATA},
-            "analyses": listing,
-        },
-        "totals": totals,
-        "max_abs_diff": max_diff,
-    }
+    with _AxisRows(pair.target_path, pair.n_target_rows) as target_rows:
+        sample = _Sample(
+            admitted=admitted,
+            retained=_retained(source, sampled, admitted, panel),
+            rows=_RegionRows(target_rows),
+            quality=_quality_blocks(pair.target),
+        )
+        totals = dict.fromkeys(_TOTAL_KEYS, 0)
+        max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
+        listing: list[dict[str, Any]] = []
+        # A sampled Analysis is compared whole, so what it finds left out is exact for it.
+        found = np.zeros(len(source), dtype=np.int64)
+        exact = np.zeros(len(source), dtype=bool)
+        for i in sampled:
+            counts, diffs = _compare_analysis(pair, axis, sample, i)
+            found[i], exact[i] = counts["se_out_of_range_left_out"], True
+            # The accounting's counters are decided over the whole sample, below.
+            for key in totals:
+                totals[key] += counts.get(key, 0)
+            for plane in _DIFF_PLANES:
+                max_diff[plane] = max(max_diff[plane], diffs[plane])
+            entry = _listing_entry(source[i], i, chosen[i], bool(admitted[i]), counts)
+            entry["blocks"] = sorted(b.block_id for b in sample.retained.blocks.get(i, []))
+            listing.append(entry)
+        counters, accounting = se_out_of_range_accounting(pair.source, pair.target, found, exact)
+        totals.update(counters)
+        return {
+            "se_out_of_range": accounting,
+            "sample": {
+                "analyses_checked": len(sampled),
+                "non_admitted": sum(not admitted[i] for i in sampled),
+                "by_stratum": {s: sum(s in strata for strata in chosen.values()) for s in STRATA},
+                "analyses": listing,
+            },
+            "totals": totals,
+            "max_abs_diff": max_diff,
+        }
 
 
 def _compare_analysis(

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from dense_sources import build_dense_from_records
 from pool_budget import pin_pool_units
+from reader_constants import set_reader_constant
 from test_dense_completion import _make_ld_panel
 
 from benchmarks import profile_reference_completion as profiler
@@ -232,8 +233,8 @@ def _narrow_bands(patch: pytest.MonkeyPatch) -> None:
     last two on chromosome 2; and pool units a fixture's size (`pool_budget`)."""
     import opengwasdb.layouts.dense.complete as complete_module
 
-    patch.setattr(store_layout, "DENSE_SHARD_SHAPE", (2, 2))
-    patch.setattr(store_layout, "DENSE_CHUNK_SHAPE", (1, 1))
+    set_reader_constant(patch, store_layout, "DENSE_SHARD_SHAPE", (2, 2))
+    set_reader_constant(patch, store_layout, "DENSE_CHUNK_SHAPE", (1, 1))
     patch.setattr(complete_module, "DEFAULT_CHUNK_SHAPE", (1, 1))
     patch.setattr(complete_module, "_BAND_ROWS", 2)
     pin_pool_units(patch)

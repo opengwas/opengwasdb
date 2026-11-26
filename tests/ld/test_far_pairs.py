@@ -21,12 +21,13 @@ import numpy.typing as npt
 import pytest
 import zarr
 from ld_script_modules import load_script
+from ogquery.ld.store import StoreReader
 from store_copies import TEST_STORE, copy_store, resharded
 
 import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.format.geometry import near_pair_of
-from opengwasdb.ld.store import StoreReader, layout
+from opengwasdb.ld.store import layout
 
 #: Inner chunks of 512 elements, 4 to a shard, as `test_store_reads.py` re-shards the Test Store.
 INNER, PER_SHARD = 512, 4
@@ -96,23 +97,6 @@ def write_a_proxy_index(store: Path) -> None:
 # ------------------------------------------------------------------ what the store holds
 
 
-def test_the_test_store_holds_its_far_pairs_once_each_and_at_the_floor() -> None:
-    counts = provenance(TEST_STORE)["counts"]
-    assert isinstance(counts, dict)
-    assert counts["far_pairs"] > 0, "the Test Store must hold Far Pairs for this to mean anything"
-    held = 0
-    for chrom, start, _ in chromosomes(TEST_STORE):
-        owner, partner, code = rows_of(TEST_STORE, "far", chrom)
-        position = np.asarray(zarr.open_array(TEST_STORE / "variants" / "position", mode="r"))
-        near_bp = int(str(provenance(TEST_STORE)["near_bp"]))
-        gap = position[start + partner].astype(np.int64) - position[start + owner]
-        assert (np.abs(gap) > near_bp).all(), "a Far Pair is beyond near_bp"
-        assert (np.abs(code) >= int(str(provenance(TEST_STORE)["far_code_floor"]))).all()
-        assert (partner > owner).all(), "each in its earlier row"
-        held += len(owner)
-    assert held == counts["far_pairs"], "each Far Pair once, as provenance counts them"
-
-
 # ------------------------------------------------------------------ what a matrix reads
 
 
@@ -179,13 +163,6 @@ def test_a_matrix_fetches_far_chunks_and_no_proxy_index_chunk(small_chunks: Path
     fetched = {key[0] for key in reader._cache._kept if isinstance(key, tuple)}
     assert {"far/21/partner", "far/22/partner", "far/21/r", "far/22/r"} <= fetched
     assert not [path for path in fetched if path.startswith("index/")], sorted(fetched)
-
-
-def test_a_store_without_far_pairs_is_refused_naming_them(tmp_path: Path) -> None:
-    copy = copy_store(tmp_path / "store")
-    shutil.rmtree(copy / "far")
-    with pytest.raises(ValueError, match=r"far/2[12]/indptr is missing"):
-        opengwasdb.ld.open(copy).matrix(every_alid())
 
 
 # ------------------------------------------------------------------ stores written before them

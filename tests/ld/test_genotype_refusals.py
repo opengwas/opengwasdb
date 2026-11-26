@@ -9,12 +9,12 @@ import pytest
 import testdata
 import zarr
 from contract.support import TEST_STORE
+from ogquery.ld.store import StoreReader
 from store_copies import private_sidecar_copy
 
 import opengwasdb.ld
 from opengwasdb.ld.build import build_genotypes
 from opengwasdb.ld.genotypes.reader import GenotypeReader
-from opengwasdb.ld.store import StoreReader
 
 
 @pytest.fixture

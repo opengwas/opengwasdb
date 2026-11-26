@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components, write_variant_offsets
+from reader_constants import set_reader_constant
 from rsid_releases import RELEASE_NAMES
 from variant_info_answers import answers
 
@@ -102,15 +103,28 @@ def test_the_codec_round_trips_every_value_whole(tmp_path: Path):
 def test_the_scan_finds_the_first_row_of_each_value_however_long(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(codec, "WINDOW_ROWS", 2)  # several windows, a value in a later one
+    # several windows, a value in a later one
+    set_reader_constant(monkeypatch, codec, "WINDOW_ROWS", 2)
     long = "2:9:" + "T" * 120 + ":G"
     alids = [f"1:{i}:A:G" for i in range(1, 10)]
     sources = ["0:1:A:G", None, "0:2:A:G", long, "1:5:A:G", "0:2:A:G", None, "0:4:A:GG", long]
     sidecar = _written(tmp_path, sources, alids)
+
     def search(asked):
         return np.array([alids.index(a) if a in alids else -1 for a in asked])
+
+    # The scan really runs a window at a time: a patch the reader does not see leaves one.
+    windows = []
+    scan = type(sidecar)._matches
+
+    def counting(self, start, stop, wanted):
+        windows.append((start, stop))
+        return scan(self, start, stop, wanted)
+
+    monkeypatch.setattr(type(sidecar), "_matches", counting)
     found = sidecar.rows_of(["0:2:A:G", long, "0:4:A:GG", "1:5:A:G", "9:9:A:G", ""], search)
     assert found == {"0:2:A:G": 2, long: 3, "0:4:A:GG": 7, "1:5:A:G": 4}
+    assert len(windows) > 1, windows
     # a row whose ALID is asked but whose state is not its own ALID is no match
     assert sidecar.rows_of(["1:1:A:G"], search) == {}
 
@@ -357,6 +371,8 @@ def test_a_0_3_0_hybrid_dense_component_answers_source_alid_from_the_shared_tabl
         assert found == {v: k for v, k in lifted.items() if expected.index(v) == k}
     finally:
         dense.close()
+    # `StoreRelease.query()` is ogquery's facade (#475), not the in-tree one `query_store`
+    # builds; the two are one class only after phase 3 (`test_store_reader_is_ogquery`).
     with open_store(current).query() as q:
         ids = [row["analysis_id"] for row in q.analyses_table().values()]
         nested = q._dense

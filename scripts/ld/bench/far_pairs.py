@@ -34,8 +34,8 @@ from typing import Any, Final
 
 import latency
 import numpy as np
+from ogquery.ld.format.geometry import indptr_of, owners, spans
 
-from opengwasdb.ld.format.geometry import indptr_of, owners, spans
 from opengwasdb.ld.store.assembly import _beyond_near
 from opengwasdb.ld.store.layout import SIDE
 

@@ -7,12 +7,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from ogquery.ld.store import StoreReader
 
 import opengwasdb.ld
 from opengwasdb.ld.build.importing import run
 from opengwasdb.ld.cli import main
 from opengwasdb.ld.format import REQUIRED_KEYS
-from opengwasdb.ld.store import StoreReader
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 

@@ -10,7 +10,7 @@ ADR 0097's Partner Rows nor the Store format version.
 representation, publication and local lookup behavior onto main.
 
 > **The bundle's owner moved, and kept its behaviour** (see "Clarification, 21 November 2026" at
-> the end). It is `_MappedAlids`, a module-level class in `opengwasdb/ld/store/variants.py`, owned and
+> the end). It is `_MappedAlids`, a module-level class in `ogquery.ld.store.variants`, owned and
 > released by the `VariantTable` that composes it (opengwas/ogld#94); `reader._MappedAlids` below names it as
 > this ADR first wrote it.
 
@@ -95,7 +95,7 @@ completeness, fitting misses need no scan. This extends ADR 0096's always-scan-m
 only for the validated companion. Missing pointers and HTTP retain the canonical fallback;
 a present broken publication refuses rather than silently falling back.
 
-`reader._MappedAlids` — `_MappedAlids` in `opengwasdb/ld/store/variants.py` since opengwas/ogld#94, and owned by the
+`reader._MappedAlids` — `_MappedAlids` in `ogquery.ld.store.variants` since opengwas/ogld#94, and owned by the
 `VariantTable` that composes it — owns its mappings and their diagnostic path. Lookup returns
 independent int64 rows. Release serializes with lookup, discards views, then closes mappings, and
 is idempotent. `StoreReader.close` releases the bundle with its Partner Rows resources, by closing
@@ -140,9 +140,13 @@ tracebacks and event-gated concurrent lookup/release rather than timing guesses.
 
 Epic [#18](https://github.com/opengwas/ogld/issues/18)'s owner decision of 21 November 2026 took the
 variant table and the ALID lookup out of `StoreReader` into `opengwasdb.ld.store.VariantTable`
-(`opengwasdb/ld/store/variants.py`, opengwas/ogld#94) as a pure move, so a second reader composes the same lookup. The
+(`ogquery.ld.store.variants`, opengwas/ogld#94) as a pure move, so a second reader composes the same lookup. The
 companion's owner is unchanged in what it does and named by where it now lives: `_MappedAlids` is a
-module-level class in `opengwasdb/ld/store/variants.py`, and the `VariantTable` owns and releases it, which
+module-level class in `ogquery.ld.store.variants`, and the `VariantTable` owns and releases it, which
 `StoreReader.close` does by closing that table. First-use verification, the sticky refusal, the
 lookup/release lock, the cost of the first use and the absence of any process-global registry are
 as written above.
+
+> **Note (opengwas/ogquery#2, 25 November 2026).** The LD read path this ADR names moved to
+> ogquery 0.3.0 (ogquery ADR 0002); its module paths here now name ogquery's modules. The
+> decision is unchanged.

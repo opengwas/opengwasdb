@@ -18,11 +18,12 @@ from unittest.mock import patch
 import numpy as np
 import numpy.typing as npt
 import zarr
+from ogquery.ld.store import StoreReader, Variants
 from zarr.codecs import ZstdCodec
 from zarr.storage import LocalStore
 
 from opengwasdb.ld.format import REncoding, Sourced
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants
+from opengwasdb.ld.store import StoreWriter
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"

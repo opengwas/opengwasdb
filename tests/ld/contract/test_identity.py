@@ -11,8 +11,7 @@ from __future__ import annotations
 import pytest
 from support import panel_data
 
-from opengwasdb.store_reader.identity import normalise_chromosome
-from opengwasdb.variants.sorted_spelling import sorted_alid_locus, sorted_identity
+from opengwasdb.variants.sorted_spelling import sorted_identity
 
 
 @pytest.mark.parametrize(
@@ -60,41 +59,6 @@ def test_an_alid_is_never_truncated() -> None:
 def test_identical_alleles_are_refused() -> None:
     with pytest.raises(ValueError, match="allele"):
         sorted_identity("22", 100, "A", "a")
-
-
-@pytest.mark.parametrize(
-    ("label", "canonical"),
-    [
-        ("22", "22"),
-        ("chr22", "22"),
-        ("X", "X"),
-        ("chrX", "X"),
-        ("23", "X"),
-        ("M", "MT"),
-        ("chrM", "MT"),
-    ],
-)
-def test_chromosome_labels_are_the_engine_s(label: str, canonical: str) -> None:
-    assert normalise_chromosome(label) == canonical
-
-
-def test_an_unsupported_chromosome_is_refused() -> None:
-    with pytest.raises(ValueError, match="chr"):
-        normalise_chromosome("27")
-
-
-@pytest.mark.parametrize(
-    ("alid", "locus"),
-    [
-        ("22:16050075:A:G", ("22", 16050075)),
-        ("X:100:A:ACGT", ("X", 100)),
-        ("rs123", None),
-        ("22:abc:A:G", None),
-        ("", None),
-    ],
-)
-def test_an_alid_names_its_locus(alid: str, locus: tuple[str, int] | None) -> None:
-    assert sorted_alid_locus(alid) == locus
 
 
 def test_every_test_panel_record_is_oriented_consistently() -> None:

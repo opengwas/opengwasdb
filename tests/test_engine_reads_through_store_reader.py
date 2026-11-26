@@ -52,10 +52,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "opengwasdb"
 
-#: The Store Reader, and its injected 0.2.x implementations (#473 ruling 1, #464
-#: ruling 5): pysam's and SQLite's reads of a release live here until #476.
+#: The injected 0.2.x implementations (#473 ruling 1, #464 ruling 5): pysam's and
+#: SQLite's reads of a release live here until #476. The Store Reader itself is ogquery's
+#: (#475); `opengwasdb/store_reader/` holds re-exports only.
 STORE_READER = {
-    "opengwasdb/store_reader/": "the Store Reader",
     "opengwasdb/variants/axis.py": (
         "the Store Reader's VariantAxis constructed from a path, for opengwasdb-stores' audit; "
         "it also writes the Variant Table"

@@ -2502,7 +2502,7 @@ Top-hit results from Reference-Completed releases include imputed associations b
 The **Clumps** of a Store Release are its 5e-8 tier clumped at build time, each Analysis
 against its Assigned Ancestry's LD Store, by `opengwasdb.ld` (ADR 0106, issue #417). They are
 one thing in two places: what `LDStore.clump` returns for an Analysis, an
-`opengwasdb.ld.query.results.Clumps` (`opengwasdb/ld/query/results.py`), is what this
+`ogquery.ld.query.results.Clumps` (`ogquery.ld.query.results`), is what this
 component persists, its `lead` as an offset and its `r` as a code, one row per tier row. They
 are optional, derived and rebuildable: deleting them, with their manifest entry (§2) and
 their two `analyses.tsv` columns (§7a), changes no other answer the release gives, and
@@ -2515,7 +2515,7 @@ says what the stored data mean; the Store Reader reads them (`TopHitTier.clumps`
 below), and #419's Top-Hit Query is the first query to.
 
 **Where.** In the 5e-8 tier's group, `p_5e_08` (`threshold_key(5e-8)`,
-`opengwasdb/store_reader/top_hits.py`), of every component holding one:
+`ogquery/top_hits.py`), of every component holding one:
 
 ```text
 data.zarr/top_hits/p_5e_08/
@@ -2551,7 +2551,7 @@ joins a lead at r̂² > r2 and d < W, plink2's edges.
   underflows to 0 past |z| ≈ 38. A 0.3.0 tier stores `z` and no `abs_z` (§18), so |z| is taken
   from `z` through `top_hits.recomputed_abs_z_and_p` (`opengwasdb/top_hits.py`), the |z|
   `top_hits.threshold` recomputes. `clump` leads with the largest score and breaks
-  ties by the LD Store's row order (`_component`, `opengwasdb/ld/query/clumping.py`), which
+  ties by the LD Store's row order (`_component`, `ogquery.ld.query.clumping`), which
   differs from the Store's at a translated indel. So the step passes a score that is larger for
   a stronger row and has no ties: **n − rank**, where n is the rows given and rank 0 is the
   largest |z|, ties by Store Variant Index ascending. The score enters only that ordering, so
@@ -2560,12 +2560,12 @@ joins a lead at r̂² > r2 and d < W, plink2's edges.
 - **Hybrid.** The Dense Component's tier `variant_index` is a panel row of its grid, and the
   Ragged Overflow's a row of the shared Variant Axis. The Dense Component carries no Variant
   Axis of its own (§16, #472), and the Store Reader resolves its rows through the shared axis
-  and `dense_to_shared.npy` (`PanelVariantAxis`, `opengwasdb/store_reader/panel_axis.py`). Order
+  and `dense_to_shared.npy` (`PanelVariantAxis`, `ogquery/panel_axis.py`). Order
   and identity use the shared index, so a Dense Component row is mapped through
-  `dense_to_shared.npy` (`dense_to_shared_path`, `opengwasdb/store_reader/hybrid.py`) first.
+  `dense_to_shared.npy` (`dense_to_shared_path`, `ogquery/hybrid.py`) first.
   "Store Variant Index" below always means the shared one.
 - **Identity.** A row's ALID is its shared Variant Axis ALID, read from the ALID sidecar (§4;
-  `VariantAxis.identity_by_indices`, `opengwasdb/store_reader/variant_axis.py`). A 0.3.0
+  `VariantAxis.identity_by_indices`, `ogquery/variant_axis.py`). A 0.3.0
   release spells an indel's ALID reference first (ADR 0079, ADR 0105), and LD Stores spell
   indels sorted, so it is translated to its sorted spelling through `opengwasdb.variants`
   (`normalise.sorted_alid_alleles`) before the lookup, and the sign of r flips for each of the
@@ -2653,7 +2653,7 @@ itself; LD Stores have no release id (ADR 0106 §4).
 | `indel_rows_by_sorted_spelling` | int | of `rows_clumped`, indel rows looked up by a sorted spelling an insertion and a deletion share |
 
 **Reading.** The Store Reader reads the Clumps, `TopHitTier.clumps` beside `TopHitTier.read`
-(`opengwasdb/store_reader/top_hits.py`), which reads the tier they are parallel to: `lead`, `r`
+(`ogquery/top_hits.py`), which reads the tier they are parallel to: `lead`, `r`
 and the `clumps` attribute, of the tier or of one Analysis's slice, refusing a group not laid out
 as above by name (`MalformedClumps`). It reads them only where the release declares them:
 `StoreRelease.top_hit_tiers` hands `TopHitTiers` the manifest's `clumps` entry, and a group the
@@ -2691,7 +2691,7 @@ the tier; the Store Release Build then runs the step again.
 
 ## 19. Query result contract
 
-A query returns an association record (`opengwasdb.store_reader.associations.Associations`):
+A query returns an association record (`ogquery.associations.Associations`):
 parallel arrays read as a mapping, keyed `variant_index`, `analysis_index`, `z`,
 `se`, `beta`, `pval`, `eaf`, `n` (below) and `association_status` (ADR 0020,
 ADR 0070, ADR 0104). A Dense grid stores no association at a missing cell, so a
@@ -2699,7 +2699,7 @@ Dense result omits them; a Ragged sequence stores a row for every attempted
 pair, so a Ragged or Ragged Overflow result returns such a row as `missing` (§15).
 
 `beta` and `pval` are derived, never stored, by one function of the record's
-`z` and `se` (`opengwasdb.store_reader.stats.association_statistics`, ADR 0104),
+`z` and `se` (`ogquery.stats.association_statistics`, ADR 0104),
 on every layout and every query method alike:
 
 | Value | Derivation | dtype |

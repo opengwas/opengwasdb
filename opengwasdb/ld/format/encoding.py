@@ -1,27 +1,38 @@
-"""How r is stored, and which pairs beyond the Near Band an LD Store keeps (ld-store §3).
+"""How a build quantises r, and which pairs beyond the Near Band an LD Store keeps (ld-store §3).
 
-An LD Store records its encoding (ld-store §7), and `REncoding` is that record as a value: the one
-owner of the dtype, the scale, the reserved code and the rounding, and so of quantising,
-dequantising, the step and the far code floor (ADR 0090). The builder (ogld#5) quantises with
-the encoding it was given, the reader (ogld#4) decodes with the one the store records, and
-validation recomputes the floor with it. No other module holds a scale, a dtype or a reserved
-code of its own, so no component can round, decode or threshold at another store's scale.
+An LD Store records its encoding (ld-store §7), and `REncoding` is that record as a value. Its read
+side -- the container, which encodings a reader implements (`of`), `holds`, `require_codes` and
+dequantising -- is `ogquery.ld.format.encoding.REncoding`, the one owner of the dtype, the scale,
+the reserved code and the rounding (ADR 0090; opengwas/ogquery#2, ogquery ADR 0002). This module
+extends it with the build side, which ogquery leaves out: the record a build writes, quantising
+and the step, the far code floor and the Partner Floor, and the masks the builder, the Partner
+Rows emitter and the Genotype Store reader keep pairs by. The builder quantises with the encoding
+it was given, validation recomputes the floors with the one the store records, and the reader
+(ogquery's) decodes with that one too, so no component can round, decode or threshold at another
+store's scale.
+
+opengwasdb's `REncoding` is a subclass, so it is an `ogquery.ld.format.REncoding` wherever a reader
+takes one, and `REncoding.of` and its constructor give this class. ogquery's readers construct
+their own, which has none of these members: a build or validation step handed one raises
+`AttributeError` rather than quantise at a guessed scale. Construct `REncoding(encoding.scale)` to
+cross over.
 
 t_far and the distances are not the encoding's: they depend on the panel and on ADR 0087, and a
-store records them beside it.
+store records them beside it. A reader uses the t_far, floors and distances a store records.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, TypeGuard
+from typing import Final
 
 import numpy as np
 import numpy.typing as npt
-
-from opengwasdb.ld.format.provenance import Encoding
-from opengwasdb.ld.format.semantics import InputError
+from ogquery.ld.format.encoding import Codes as Codes
+from ogquery.ld.format.encoding import REncoding as ReadEncoding
+from ogquery.ld.format.provenance import Encoding
+from ogquery.ld.format.semantics import InputError
 
 #: The χ²₁ upper quantile at p = 5×10⁻⁶ in t_far = max(0.001, q / (n − k − 1)) (ADR 0087).
 T_FAR_Q: Final = 20.84
@@ -39,69 +50,24 @@ FAR_BP: Final = 10_000_000
 # not rounding error but a builder fault, and clamping it would store a plausible r = ±1.
 _R_SLACK: Final = 1e-6
 
-#: An array of codes, in the dtype every admitted encoding's container has (ADR 0090).
-type Codes = npt.NDArray[np.int16]
-
 
 @dataclass(frozen=True)
-class REncoding:
-    """One LD Store's encoding of r: r̂ = code / `scale`, in an int16 container (ld-store §3).
-
-    Every admitted encoding shares the container (owner, 10 November 2026; ADR 0090): int16
-    codes, −32768 reserved and every `r` array's fill value, and rounding half to even. Only
-    the scale differs, a whole number from 1 to 32767, so the scale is symmetric: negating a
-    code never overflows, r = ±1 is exact, and a lost chunk still reads as a code that is never
-    a correlation. The HGDP+1kGP stores are × 511 and UK Biobank EUR × 2047. There is no
-    default: a build is given its scale and a store records it.
+class REncoding(ReadEncoding):
+    """One LD Store's encoding of r, as a build quantises with it: ogquery's `REncoding` (the
+    container, `of`, `holds`, `require_codes`, `dequantise`) and the build side ogquery leaves out
+    (ld-store §3; ADR 0090). It adds no field, so it equals another of its class at the same scale.
     """
-
-    scale: int
-
-    #: The container's dtype, the same for every admitted encoding.
-    dtype: ClassVar[np.dtype[np.int16]] = np.dtype(np.int16)
-    #: Never a correlation. Every `r` array's fill value, so a chunk that was never written
-    #: cannot read as r = 0 (ld-store §3, §6).
-    reserved_code: ClassVar[int] = int(np.iinfo(np.int16).min)
-    #: The largest scale the container holds symmetrically: the other end from the reserved code.
-    largest_scale: ClassVar[int] = int(np.iinfo(np.int16).max)
-    #: How r × scale becomes a code: `numpy.rint`, which rounds half to even.
-    rounding: ClassVar[str] = "half_to_even"
-
-    def __post_init__(self) -> None:
-        if not self.admits(self.scale):
-            raise InputError(
-                f"an r scale is a whole number from 1 to {self.largest_scale}, not "
-                f"{self.scale!r} (ld-store §3)"
-            )
-
-    @classmethod
-    def admits(cls, scale: object) -> bool:
-        """Whether `scale` is one the container holds: a whole number from 1 to 32767."""
-        return _whole(scale) and 1 <= scale <= cls.largest_scale
 
     @classmethod
     def of(cls, record: object) -> REncoding:
-        """The encoding a store's `encoding` record names (ld-store §7), or an `InputError` naming
-        the record when this package does not implement it (ld-store §13): another dtype, reserved
-        code or rounding, a scale outside 1–32767, or a key it does not know."""
-        if not cls._implements(record):
-            raise InputError(
-                f"the encoding {record!r} is not one opengwasdb.ld implements: exactly the keys "
-                f"{sorted(Encoding.__required_keys__)}, an int16 container with "
-                f"{cls.reserved_code} reserved, rounded {cls.rounding}, at a whole scale from 1 to "
-                f"{cls.largest_scale} (ld-store §3, §13)"
-            )
-        return cls(record["r_scale"])
-
-    @classmethod
-    def _implements(cls, record: object) -> TypeGuard[dict[str, Any]]:
-        # Exactly the record's keys, as `Encoding` types them: a key this package does not know
-        # could change what a code means, so a record with one is refused, not ignored.
-        if not isinstance(record, dict) or set(record) != Encoding.__required_keys__:
-            return False
-        container = (record["r_dtype"], record["r_reserved_code"], record["rounding"])
-        expected = (cls.dtype.name, cls.reserved_code, cls.rounding)
-        return container == expected and cls.admits(record["r_scale"])
+        """The encoding a store's `encoding` record names, as this class, so a build or
+        validation step quantises and computes floors with it; refused as ogquery's `of` refuses
+        an encoding it does not implement (ld-store §3, §13)."""
+        encoding = super().of(record)
+        # ogquery's `of` constructs `cls`; were it to construct its own class, this class's
+        # members would be missing, and a build would fail later and further from the cause.
+        assert isinstance(encoding, REncoding), type(encoding)
+        return encoding
 
     def record(self) -> Encoding:
         """The store's `encoding` provenance record of this encoding (ld-store §7)."""
@@ -139,35 +105,6 @@ class REncoding:
             )
         codes = np.clip(np.rint(values * self.scale), -self.scale, self.scale)
         return codes.astype(self.dtype)
-
-    def holds(self, codes: npt.ArrayLike) -> npt.NDArray[np.bool_]:
-        """Where `codes` are codes of this encoding, |code| ≤ scale: the reserved code never is,
-        and neither is a code past the scale, which would decode to |r̂| > 1 (ld-store §12)."""
-        # Compared in the codes' own dtype: every scale fits int16, and a validation block of 8 Mi
-        # codes would otherwise hold a 64 MiB copy (ld-store §12).
-        values = np.asarray(codes)
-        return np.asarray((values >= -self.scale) & (values <= self.scale))
-
-    def require_codes(self, codes: npt.ArrayLike) -> None:
-        """Raise ValueError naming the values of `codes` this encoding never writes. The
-        reserved code −32768 is what an unwritten chunk reads as, so taking it for a number is
-        exactly the silent zero it exists to prevent; a code past the scale would be an r beyond
-        ±1. The reader refuses both before it decodes, and the writer before it stores."""
-        values = np.asarray(codes)
-        held = self.holds(values)
-        if not held.all():
-            found = values[~held].ravel()[:5].tolist()
-            raise ValueError(
-                f"codes {found} are not codes of r at × {self.scale}: {self.reserved_code} is "
-                "reserved for an unwritten chunk, and any other is past the scale (ld-store §3)"
-            )
-
-    def dequantise(self, codes: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """The Stored r of each code: code / scale (ld-store §3). A code this encoding never writes
-        raises, naming it (`require_codes`)."""
-        values = np.asarray(codes)
-        self.require_codes(values)
-        return values.astype(np.float64) / self.scale
 
     def far_code_floor(self, t_far: float) -> int:
         """The smallest code c ≥ 0 with (c / scale)² ≥ t_far, in float64 (ld-store §3).
@@ -257,11 +194,6 @@ class REncoding:
         magnitude = np.abs(np.asarray(codes, dtype=np.int32))
         floor = np.where(gap <= near_bp, partner_code_floor, far_code_floor)
         return (gap <= far_bp) & (magnitude >= floor)
-
-
-def _whole(value: object) -> TypeGuard[int]:
-    """A whole number as JSON holds one: an int, never a bool or a float."""
-    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def t_far(n: int, k: int) -> float:

@@ -6,8 +6,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from ogquery.ld.query.kind import GENOTYPE, open_kind
+
 from opengwasdb.ld.genotypes import validation as genotypes
-from opengwasdb.ld.query.kind import GENOTYPE, open_kind
 from opengwasdb.ld.store import Finding
 from opengwasdb.ld.store.validation import validate_group
 

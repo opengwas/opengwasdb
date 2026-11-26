@@ -28,11 +28,13 @@ from typing import Any
 import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3, components
+
+# The module that owns `_SCANNED_ROWS`: patching a re-export would change nothing (#475).
+from ogquery import rsid_index
 from rsid_releases import RELEASE_NAMES, rsid_names, with_rsids
 from variant_info_answers import answers
 
 from opengwasdb.query import query_store
-from opengwasdb.store_reader import rsid_index
 from opengwasdb.store_reader.identity import VariantNormalisationError
 from opengwasdb.store_reader.rsid_index import MalformedRsidIndex, MissingRsidIndex, RsidIndex
 from opengwasdb.validation import validate_store

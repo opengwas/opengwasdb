@@ -238,7 +238,8 @@ def test_repeated_index_keys_are_counted_across_window_boundaries(tmp_path, monk
     two windows must still be counted, and a key compared with itself must not be."""
     import numpy as np
 
-    from opengwasdb.store_reader import alid_index
+    # The module that owns `_KEY_WINDOW`: patching a re-export would change nothing (#475).
+    from ogquery import alid_index
 
     keys = np.array([b"a", b"b", b"b", b"c", b"d", b"d", b"d"], dtype="|S4")
     index = alid_index.FixedWidthAlidIndex(keys, np.arange(len(keys), dtype="int32"))

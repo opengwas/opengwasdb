@@ -200,7 +200,7 @@ def _counted_per_string(chunk: np.ndarray) -> int:
     bytes, one string at a time, by the same rule and constants."""
     import math
 
-    from opengwasdb.ld.store import location
+    from ogquery.ld.store import location
 
     if chunk.dtype.kind != "T":
         return int(chunk.nbytes)
@@ -224,7 +224,7 @@ def _index_passed_sync(
 def without(levers: list[str], cache_mib: int | None, patch: Patch = setattr) -> int | None:
     """Turn `levers` off, each as it was before ogld#32, from outside `opengwasdb/ld/`: the cache's
     budget in MiB that leaves, None for ogld's default."""
-    from opengwasdb.ld.store import location
+    from ogquery.ld.store import location
 
     if "concurrency" in levers:
         patch(location.ChunkCache, "_chunks", _sequential_chunks)
@@ -242,12 +242,11 @@ def instrument(zarr_threads: int | None, cache_mib: int | None, patch: Patch = s
     """Bound zarr's threads and count what each timing reads. The counting wraps the store's
     reads from outside ogld: the benchmark measures the reader, it does not change it."""
     import zarr
+    from ogquery.ld.query import clumping
+    from ogquery.ld.store import location
+    from ogquery.ld.store.location import ChunkCache
+    from ogquery.ld.store.reader import StoreReader
     from zarr.storage import FsspecStore, LocalStore
-
-    from opengwasdb.ld.query import clumping
-    from opengwasdb.ld.store import location
-    from opengwasdb.ld.store.location import ChunkCache
-    from opengwasdb.ld.store.reader import StoreReader
 
     if zarr_threads is not None:
         zarr.config.set({"threading.max_workers": zarr_threads})
@@ -509,7 +508,7 @@ class Sample:
     def near_pairs(self, count: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
         """`count` chr22 pairs within the store's near_bp: a random row, and a random later
         row within it, by the Near Band's own stop (`geometry.stop_within`, ld-store §4)."""
-        from opengwasdb.ld.format.geometry import stop_within
+        from ogquery.ld.format.geometry import stop_within
 
         reader = opened(self.store)._reader
         c = reader._chromosome("22")

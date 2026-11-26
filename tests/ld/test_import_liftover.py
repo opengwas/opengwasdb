@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from ogquery.ld.store import Variants
 
 from opengwasdb.ld.build.importing.lift import (
     Lifted,
@@ -14,7 +15,6 @@ from opengwasdb.ld.build.importing.lift import (
     variant_chromosomes,
 )
 from opengwasdb.ld.format import NEAR_BP
-from opengwasdb.ld.store import Variants
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 
 PREFIX = "OPENGWASDB_LD_"
 _LEGACY_PREFIX = "OGLD_"

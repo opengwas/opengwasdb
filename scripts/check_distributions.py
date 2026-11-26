@@ -15,7 +15,10 @@ compared with the repository it was built from (#438):
   from it reads (`pyproject.toml`'s `[tool.hatch.build.targets.sdist]`);
 * the licence the metadata declares is `pyproject.toml`'s, and the licence
   text in each archive is the repository's `LICENSE`, byte for byte;
-* the metadata's project URLs are `pyproject.toml`'s.
+* the metadata's project URLs are `pyproject.toml`'s;
+* the metadata requires `ogquery`, the Store Reader, with the range `pyproject.toml`
+  declares (#475): a wheel without it installs and imports, and fails on the first
+  read of a Store Release.
 
 Run it on a `python -m build` output directory, from the checkout the archives
 were built from:
@@ -48,6 +51,9 @@ LICENSE_FILE = "LICENSE"
 WHEEL_TAG = "py3-none-any"
 # What hatchling puts at a source archive's top level beyond the include list.
 SDIST_GENERATED = frozenset({"PKG-INFO", "pyproject.toml", ".gitignore"})
+# Dependencies whose absence from the metadata is a silent failure, not a style
+# point: the Store Reader every query reads through (#475).
+REQUIRED_DEPENDENCIES = ("ogquery",)
 
 
 class DistributionError(Exception):
@@ -63,6 +69,8 @@ class Expected:
     licence_expression: str
     licence_text: bytes
     project_urls: dict[str, str]
+    # REQUIRED_DEPENDENCIES name -> the version specifiers pyproject.toml gives it
+    requirements: dict[str, frozenset[str]]
 
 
 @dataclass(frozen=True)
@@ -144,6 +152,50 @@ def _compare_metadata(archive: Archive, expected: Expected) -> list[str]:
     return problems
 
 
+def _requirement_parts(requirement: str) -> tuple[str, frozenset[str]]:
+    """A requirement string as (name, version specifiers): ``ogquery>=0.1,<0.2`` and
+    hatchling's ``ogquery<0.2,>=0.1`` are the same requirement."""
+    text = requirement.partition(";")[0].replace(" ", "")
+    name = text
+    for mark in "<>=!~([":
+        name = name.partition(mark)[0]
+    specifiers = text[len(name):].strip("()")
+    return name, frozenset(part for part in specifiers.split(",") if part)
+
+
+def _archive_requirements(archive: Archive) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
+    """The unconditional requirements (name to specifiers) and, for each name declared only
+    behind an environment marker, its first marked entry."""
+    declared: dict[str, frozenset[str]] = {}
+    conditional: dict[str, str] = {}
+    for entry in archive.metadata.get_all("Requires-Dist") or []:
+        name, specifiers = _requirement_parts(entry)
+        if ";" in entry:
+            conditional.setdefault(name, entry)
+        else:
+            declared[name] = specifiers
+    return declared, conditional
+
+
+def _compare_requirements(archive: Archive, expected: Expected) -> list[str]:
+    """A required dependency counts only when declared with no environment marker: one behind
+    `python_version`, `extra == ...` or any other marker is not installed everywhere, so it
+    proves nothing about an install the marker excludes."""
+    declared, conditional = _archive_requirements(archive)
+    problems = []
+    for name in REQUIRED_DEPENDENCIES:
+        if name not in declared:
+            only = f" (only `{conditional[name]}`)" if name in conditional else ""
+            kind = "unconditional " if name in conditional else ""
+            problems.append(f"{archive.filename}: Requires-Dist has no {kind}{name}{only}")
+        elif declared[name] != expected.requirements[name]:
+            problems.append(
+                f"{archive.filename}: Requires-Dist {name} {sorted(declared[name])} is not "
+                f"pyproject.toml's {sorted(expected.requirements[name])}"
+            )
+    return problems
+
+
 def _licence_text(archive: Archive, path: str, expected: bytes) -> list[str]:
     if path not in archive.files:
         return [f"{archive.filename}: no licence text at {path}"]
@@ -161,6 +213,7 @@ def check_sdist(sdist: Archive, expected: Expected) -> list[str]:
     ]
     problems += _compare_package(sdist, expected.tracked)
     problems += _compare_metadata(sdist, expected)
+    problems += _compare_requirements(sdist, expected)
     problems += _licence_text(sdist, LICENSE_FILE, expected.licence_text)
     return problems
 
@@ -179,6 +232,7 @@ def check_wheel(wheel: Archive, expected: Expected) -> list[str]:
     problems = [f"{wheel.filename}: unexpected file {name}" for name in sorted(stray)]
     problems += _compare_package(wheel, expected.tracked)
     problems += _compare_metadata(wheel, expected)
+    problems += _compare_requirements(wheel, expected)
     problems += _licence_text(wheel, f"{dist_info}/licenses/{LICENSE_FILE}", expected.licence_text)
     return problems
 
@@ -231,6 +285,14 @@ def check(dist: Path, expected: Expected, required_version: str | None = None) -
     )
 
 
+def _declared_requirements(dependencies: list[str]) -> dict[str, frozenset[str]]:
+    declared = dict(_requirement_parts(entry) for entry in dependencies)
+    missing = [name for name in REQUIRED_DEPENDENCIES if name not in declared]
+    if missing:
+        raise DistributionError(f"pyproject.toml's dependencies lack {', '.join(missing)}")
+    return {name: declared[name] for name in REQUIRED_DEPENDENCIES}
+
+
 def expected_from_repository(root: Path) -> Expected:
     """What the checkout at `root` says the archives hold."""
     tracked = subprocess.run(
@@ -250,6 +312,7 @@ def expected_from_repository(root: Path) -> Expected:
         licence_expression=project["license"],
         licence_text=(root / LICENSE_FILE).read_bytes(),
         project_urls=dict(project["urls"]),
+        requirements=_declared_requirements(project["dependencies"]),
     )
 
 

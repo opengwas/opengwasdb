@@ -20,6 +20,38 @@ precomputed r" in miniature. It is deterministic: the same inputs write the same
 reference for, at any scale the format admits: the committed Test Store is × 511, and tests write
 × 32767 stores beside it. The scale and the Partner Threshold are always given, as a build's are:
 neither has a default.
+
+The k = 0 Test Store, `tests/ld/data/test-panel/store-k0/`, is committed too, for ogquery's copy of
+the LD read path's tests, which read the plink2 comparisons from it (opengwas/ogquery#2, ogquery
+ADR 0002). It is ogquery `v0.3.0`'s bytes, written by this script at opengwasdb `c8ebe4ca` (tag
+v0.20.0), from a `git archive` of that commit installed in its own pixi environment as version
+0.20.0, which the store records as `software.ogld`. The recipe, as ogquery's
+`tests/ld/data/SOURCE` records it:
+
+    pixi install --locked -e dev
+    SETUPTOOLS_SCM_PRETEND_VERSION=0.20.0 pixi reinstall -e dev opengwasdb
+    PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+        pixi run -e dev python scripts/ld/make_test_store.py \
+        --r-scale=511 --t-partner=0.01 --k 0 tests/ld/data/test-panel/store-k0
+
+The files it read there, by git blob id (`tests/ld/test_store_k0_source.py` holds every one but
+this script, which has changed since, to the file committed here, and the store to the recipe):
+
+    input e58c64996f866472d7b7dd718afff0bf5fcac047 scripts/ld/make_test_store.py
+    input 758004ba3319ded3728c15ba9bba968683ef50cc tests/ld/testdata.py
+    input 253b8dbbddaa379d7961b0f0b8017c8781b90b9a tests/ld/data/test-panel/manifest.json
+    input 8c8a09e39437cc9ce5ab167ce2c612c681327450 tests/ld/data/test-panel/variants.tsv
+    input feeb18a3b6a1bd5cf06840a6d2f1d62438baa0b3 tests/ld/data/test-panel/panel.pgen
+    input c178089019e85037c737dbdc50075fbaa4b52560 tests/ld/data/test-panel/panel.pvar
+    input 52392f961f751594db980198b0247a222a314f15 tests/ld/data/test-panel/panel.psam
+    input 57c18ea00f9b6cf1ebaa31ec0dc5d0818f8881df tests/ld/data/test-panel/panel.keep
+    input c77abcb60b8cf228cf6bb5c4468ac01f3d19a25e tests/ld/data/test-panel/pcs.eigenvec
+    input 3c48d7c0bb2583173b17cae4fe2e77a424e5c597 tests/ld/data/test-panel/reference/r.npz
+    input 4a8b358bfeec4366f0fde52d6c25e6a0ba55acbb tests/ld/data/test-panel/gwas/z.tsv
+
+Run again, it writes the same arrays (`tests/ld/contract/test_walking_skeleton.py` holds that).
+Only the root's `build` record (when, how long, peak memory), `software.ogld` (the version that
+ran) and the ALID companion's generation, which hashes the root document, differ.
 """
 
 from __future__ import annotations
@@ -41,15 +73,18 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import zarr
+from ogquery.ld.format import Adjustment, PcCheck
+from ogquery.ld.format.geometry import local_rows
+from ogquery.ld.store import Variants
 
 import opengwasdb.ld
 from opengwasdb.ld.build import diagnostic, record, tiles
 from opengwasdb.ld.build.inputs import fileset, read_keep
 from opengwasdb.ld.build.pc_check import K_MIN
-from opengwasdb.ld.format import FAR_BP, NEAR_BP, Adjustment, PcCheck, REncoding, Sourced
-from opengwasdb.ld.format.geometry import chromosome_ranges, local_rows
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REncoding, Sourced
+from opengwasdb.ld.format.geometry import chromosome_ranges
 from opengwasdb.ld.genotypes import Genotypes
-from opengwasdb.ld.store import StoreWriter, Variants
+from opengwasdb.ld.store import StoreWriter
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.sorted_spelling import (
     SortedIdentity,

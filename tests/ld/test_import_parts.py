@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from ogquery.ld.format import InputError
 
 from opengwasdb.ld.build.importing.parts import read_part
-from opengwasdb.ld.format import InputError
 
 FIXTURE = Path(__file__).parent / "data" / "panukb"
 

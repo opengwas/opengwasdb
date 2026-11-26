@@ -24,6 +24,9 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import zarr
+from ogquery.ld.format import Provenance
+from ogquery.ld.format.geometry import near_row_lengths
+from ogquery.ld.store import StoreReader, Variants
 from partner_oracle import decoded_frames
 from store_copies import (
     DERIVED,
@@ -37,9 +40,8 @@ from store_copies import (
     sourced,
 )
 
-from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, Provenance, REncoding, Sourced
-from opengwasdb.ld.format.geometry import near_row_lengths
-from opengwasdb.ld.store import StoreReader, StoreWriter, Variants, assembly, frames, layout
+from opengwasdb.ld.format import FAR_BP, NEAR_BP, REQUIRED_KEYS, REncoding, Sourced
+from opengwasdb.ld.store import StoreWriter, assembly, frames, layout
 from opengwasdb.variants.sorted_spelling import sorted_identity
 
 N_SAMPLES, K = 771, 10

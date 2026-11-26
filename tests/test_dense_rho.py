@@ -6,6 +6,7 @@ import shutil
 
 import numpy as np
 import pytest
+from conftest import SOURCE_HEADER
 from dense_sources import build_dense_fixture, build_dense_from_records
 from typer.testing import CliRunner
 
@@ -25,22 +26,8 @@ from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 
-RHO_SOURCE_HEADER = "\t".join(
-    [
-        "analysis_id",
-        "phenotype_id",
-        "phenotype_label",
-        "analysis_label",
-        "chromosome",
-        "position",
-        "effect_allele",
-        "other_allele",
-        "z",
-        "se",
-        "rsid",
-        "stored_effect_scale",
-    ]
-)
+#: The shared fixtures' source columns, which this file's sources write too.
+RHO_SOURCE_HEADER = SOURCE_HEADER
 
 N_PER_CHROM = 150
 N_CHROM = 2

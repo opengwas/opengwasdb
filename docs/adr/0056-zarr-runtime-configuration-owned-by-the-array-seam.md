@@ -12,6 +12,13 @@
 > as below. Where the text below says `opengwasdb/store/arrays.py` sets the
 > configuration, read `opengwasdb/store_reader/arrays.py`.
 
+> **Moved, 26 November 2026 (#475).** The Store Reader is now the `ogquery` package, and the
+> read half is split in two there: the configuration (the four settings, on import) is in
+> `ogquery.arrays`, and the read-only opener `open_group` is in `ogquery.opening`.
+> `opengwasdb/store_reader/arrays.py` re-exports the first and holds no code. Where the text
+> above says `opengwasdb/store_reader/arrays.py`, read `ogquery.arrays` for the configuration and
+> `ogquery.opening` for the opener. The values, reasons and tests are unchanged.
+
 zarr-python 3 keeps several behaviours that decide what a built Store Release contains, how
 fast it reads, and whether a forked build worker can finish, in **process-wide runtime
 configuration** rather than in array metadata. `opengwasdb/store/arrays.py`, the seam every

@@ -10,6 +10,11 @@
 > the read path into the Store Reader: the three adapters, and the module
 > docstring stating the contract's axes, are in `opengwasdb/store_reader/facade.py`.
 > Where the text below says `opengwasdb/query/facade.py`, read that.
+
+> **Moved, 26 November 2026 (#475).** The Store Reader is now the `ogquery` package. The three
+> adapters and the module docstring stating the contract's axes are in `ogquery/facade.py`;
+> `opengwasdb/store_reader/facade.py` is a re-export of it and holds no code. Where the text
+> above says `opengwasdb/store_reader/facade.py`, read `ogquery/facade.py`.
 > `opengwasdb.query` keeps `StoreQuery` and `query_store`, which opens a release
 > with opengwasdb's reader of the 0.2.x Store Variant Table and hands it to the
 > Store Reader's `query_release`. Nothing in this decision changes.

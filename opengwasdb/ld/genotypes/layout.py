@@ -14,8 +14,8 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+from ogquery.ld.format import InputError
 
-from opengwasdb.ld.format import InputError
 from opengwasdb.ld.genotypes.pgen import PgenFileset
 from opengwasdb.ld.store import layout
 

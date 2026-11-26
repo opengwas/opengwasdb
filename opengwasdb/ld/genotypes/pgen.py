@@ -17,8 +17,7 @@ from typing import Any, Protocol, TypeVar
 
 import numpy as np
 import numpy.typing as npt
-
-from opengwasdb.ld.format import InputError
+from ogquery.ld.format import InputError
 
 T = TypeVar("T")
 D = TypeVar("D", np.float64, np.int8)

@@ -11,6 +11,10 @@ Admission contract ([#357](https://github.com/opengwas/opengwasdb/issues/357)).
 > `opengwasdb/store_reader/facade.py`. The rule, the record and the three adapters
 > are unchanged.
 
+> **Moved, 26 November 2026 (#475).** The Store Reader is now the `ogquery` package: the modules
+> named above are `ogquery/associations/` and `ogquery/facade.py`, and the files under
+> `opengwasdb/store_reader/` re-export them and hold no code.
+
 > **Amended by [#393](https://github.com/opengwas/opengwasdb/issues/393)
 > (5 Nov 2026).** The two region reads deferred below exist.
 > `Cells.analyses(first, stop)` names a span of Analyses: a Dense grid reads it

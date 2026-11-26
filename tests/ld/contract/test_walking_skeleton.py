@@ -18,10 +18,8 @@ import numpy as np
 import support
 import zarr
 from ld_script_modules import load_script
-from support import alids, panel_data, passing_rows, reference
-
-import opengwasdb.ld
-from opengwasdb.ld.store import StoreReader
+from ogquery.ld.store import StoreReader
+from support import alids, reference
 
 
 def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:
@@ -33,33 +31,6 @@ def near_pair_r(reader: StoreReader, k: int) -> tuple[float, float]:
     return float(reader.pair_r(rows)[0, 1]), float(pair.r[0])
 
 
-def test_the_test_store_opens_through_ogld_open() -> None:
-    store = opengwasdb.ld.open(support.TEST_STORE)
-    assert (store.t_far, store.near_bp, store.far_bp) == (support.T_FAR, 3_000_000, 10_000_000)
-
-
-def test_one_near_band_pair_reads_back_its_reference_r() -> None:
-    got, expected = near_pair_r(StoreReader.open(support.TEST_STORE), 10)
-    assert abs(got - expected) <= support.HALF_STEP + support.SLACK
-
-
-def test_pairs_the_store_does_not_hold_read_as_nan() -> None:
-    reader = StoreReader.open(support.TEST_STORE)
-    ref = reference()
-    far = (ref.distance > 3_000_000) & (ref.distance <= 10_000_000)
-    bound = ref.where(far & (np.abs(ref.code) < support.FLOOR), "a 3–10 Mb pair below t_far")
-    v = panel_data().variants()
-    rows = passing_rows()
-    pos, chrom = v.pos[rows].astype(np.int64), v.chrom[rows]
-    apart = (pos[None, :] - pos[:, None] > 10_000_000) & (chrom[None, :] == chrom[:, None])
-    assert apart.any(), "the Test Panel must hold a pair more than 10 Mb apart"
-    a, b = np.argwhere(apart)[0]
-    for i, j in ((int(bound.row_i[0]), int(bound.row_j[0])), (int(rows[a]), int(rows[b]))):
-        found = reader.rows_of(alids([i, j]))
-        assert (found >= 0).all(), "both variants must be in the Test Store"
-        assert np.isnan(reader.pair_r(found)[0, 1]), f"rows {i} and {j}: unstored, so NaN"
-
-
 def test_the_test_store_can_be_written_again_at_k0(tmp_path: Path) -> None:
     StoreReader.open(support.TEST_STORE)
     out = load_script("make_test_store").write_test_store(0, tmp_path / "k0", support.R_SCALE, 0.01)
@@ -67,6 +38,18 @@ def test_the_test_store_can_be_written_again_at_k0(tmp_path: Path) -> None:
     assert reader.provenance["adjustment"]["k"] == 0
     got, expected = near_pair_r(reader, 0)
     assert abs(got - expected) <= support.HALF_STEP + support.SLACK
+    # The committed k = 0 Test Store, which ogquery's tests copy, is this run's arrays
+    # (scripts/ld/make_test_store.py; opengwas/ogquery#2).
+    committed = arrays(zarr.open_group(TEST_STORE_K0, mode="r"))
+    again = arrays(zarr.open_group(out, mode="r"))
+    assert len(committed) > 20, "the committed k = 0 store must hold its arrays"
+    assert committed.keys() == again.keys()
+    for path, array in committed.items():
+        np.testing.assert_array_equal(again[path], array, err_msg=path)
+
+
+#: The k = 0 Test Store, committed beside the Test Store (opengwas/ogquery#2).
+TEST_STORE_K0 = support.TEST_STORE.parent / "store-k0"
 
 
 def arrays(group: zarr.Group, prefix: str = "") -> dict[str, np.ndarray]:

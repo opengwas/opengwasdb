@@ -30,10 +30,11 @@ from pathlib import Path
 import numpy as np
 import zarr
 from derive_common import derive_each
+from ogquery.ld.store import StoreReader
+from ogquery.ld.store.layout import chromosomes_listed
 
-from opengwasdb.ld.store import StoreReader
+from opengwasdb.ld.format import REncoding
 from opengwasdb.ld.store.assembly import derive_far_pairs
-from opengwasdb.ld.store.layout import chromosomes_listed
 
 #: Where the Far Pairs are written until every chromosome's are, and counted: then it is renamed
 #: `far/`. A reader ignores it (ld-store §1), and no other writer makes it.
@@ -71,6 +72,9 @@ def _write(store: Path, reader: StoreReader) -> int:
     root = zarr.open_group(store, mode="r+")
     position = root["variants/position"]
     assert isinstance(position, zarr.Array)
+    # The reader is ogquery's, whose encoding decodes only; the derivation writes codes with
+    # opengwasdb's, which carries the build side, at the scale the store records (ogquery#2).
+    encoding = REncoding(reader.encoding.scale)
     written = 0
     for name, start, stop in chromosomes_listed(root["variants"].attrs["chromosomes"]):
         here = np.asarray(position[start:stop]).astype(np.int64)
@@ -78,7 +82,7 @@ def _write(store: Path, reader: StoreReader) -> int:
         assert isinstance(index, zarr.Group)
         far = root.require_group(f"{PARTIAL}/{name}")
         near_bp = reader.provenance["near_bp"]
-        written += derive_far_pairs(index, far, here, near_bp, reader.encoding)
+        written += derive_far_pairs(index, far, here, near_bp, encoding)
     return written
 
 
