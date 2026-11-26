@@ -84,7 +84,7 @@ components:
     container: engine
     layer: 0
     stages: [query, validate, complete]
-    summary: "Where the Store Reader's import path lives in this repository: re-exports of the ogquery package (opengwas/ogquery, a dependency; #475), module for module, with no code of their own. The Store Reader itself is ogquery's. The one temporary exception is facade.py and rho.py, still in-tree until the Hybrid Rho change (#495) is ported to ogquery and released, so StoreRelease.query() returns ogquery's facade while query_store returns the in-tree one, and once #495 edits facade.py the two can differ until the facade is shimmed; this claim goes when they and the re-exports do."
+    summary: "Where the Store Reader's import path lives in this repository: re-exports of the ogquery package (opengwas/ogquery, a dependency; #475), module for module, with no code of their own. The Store Reader itself is ogquery's. Every module, facade.py and rho.py included, is a re-export (#475 phase 3), so StoreRelease.query() and query_store build the same facade class. The component stays in the model only because the model test requires every tracked file under opengwasdb/ to be claimed; it goes when the re-exports do."
     paths: [opengwasdb/store_reader/]
   - id: routing
     name: Variant Routing
