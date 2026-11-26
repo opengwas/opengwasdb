@@ -1,8 +1,9 @@
-- **`opengwasdb.ld` reads LD Stores through `ogquery` 0.3, and its read modules are gone: import
+- **`opengwasdb.ld` reads LD Stores through `ogquery`, and its read modules are gone: import
   them from `ogquery.ld` (opengwas/ogquery#2, epic #450).** `pip install opengwasdb` installs
-  `ogquery>=0.3,<0.4`, which carries the LD Store read side (`ogquery.ld`) beside the Store
-  Reader; the distribution check fails a wheel that declares another range. The GWAS re-exports
-  (`opengwasdb.store_reader`) are unchanged: 0.3 holds 0.2's names.
+  `ogquery>=0.4,<0.5`, which carries the LD Store read side (`ogquery.ld`) beside the Store
+  Reader; the distribution check fails a wheel that does not declare that range
+  unconditionally (a requirement behind a `python_version` or `extra` marker does not count).
+  The GWAS side of the same move is in the `ogquery` Store Reader note.
   - **What moved, and where to import it now.** These modules are deleted, and each is
     `ogquery.ld` at the same path: `opengwasdb.ld.format.semantics`,
     `opengwasdb.ld.query.{clumping,kind,matrices,proxies,reader,requests,results}` and
@@ -32,8 +33,13 @@
     codes are unchanged (2 and 1), and so is the output on a valid store. A refusal's class is
     `ogquery.ld`'s; `opengwasdb.ld.Refusal` and `InputError` are those classes, so an `except`
     on them still catches it.
-  - `opengwasdb.ld.open` still opens a Genotype Store, with its reader here (it needs pgenlib
-    and threadpoolctl); `ogquery.ld.open` refuses one, naming `opengwasdb.ld.open`.
+  - `opengwasdb.ld.open` is still opengwasdb's dispatcher: it opens an LD Store through
+    `ogquery.ld` and also opens a Genotype Store, whose reader stays here (it needs pgenlib and
+    threadpoolctl). `ogquery.ld.open` opens an LD Store only and refuses a Genotype Store,
+    naming `opengwasdb.ld.open`.
+  - **`file://` URIs no longer open an LD Store.** `opengwasdb ld info` and `ld validate` on a
+    `file://` location exit 2, where they opened it before; `ld.open()` refuses it too. Use the
+    plain path. opengwas/ogquery#10 restores `file://`.
   - `import opengwasdb.ld` and its read names no longer import the LD build, writer, derivations,
     validation or CLI: the package initialisers are lazy.
   - The answers are the same: 49 answers each on the LD Test Store at k = 10 and k = 0 and on the

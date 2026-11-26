@@ -29,10 +29,9 @@ import ast
 from pathlib import Path
 
 import numpy as np
-import ogquery.arrays
-import ogquery.opening
 import pytest
 import zarr
+from ogquery_seam import ogquery_source
 
 from opengwasdb.encoding import write_eaf_baseline
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
@@ -55,11 +54,11 @@ SEAM = PACKAGE_ROOT / "store" / "arrays.py"
 #: seam for. It may open a group read-only and nothing else (see below).
 # The read side of the seam is ogquery's (#475): `opengwasdb.store_reader.arrays` re-exports
 # it, so this guard reads the installed package's source, which opengwasdb's reads rely on.
-READ_SEAM = Path(ogquery.arrays.__file__)
+READ_SEAM = ogquery_source("arrays.py")
 #: Since ogquery 0.3 the open itself is `ogquery.opening.open_group`, which sets no zarr
 #: configuration so the LD read path can use it (opengwas/ogquery#2, ogquery ADR 0002);
 #: `ogquery.arrays` re-exports it under its old name and keeps the configuration.
-READ_OPEN = Path(ogquery.opening.__file__)
+READ_OPEN = ogquery_source("opening.py")
 #: opengwasdb.ld writes LD Stores and Genotype Stores, a different format with its
 #: own writer (`opengwasdb/ld/store/writer.py`, docs/spec/ld-store.md); this seam
 #: is the GWAS Store's, so it does not scan them (#455).

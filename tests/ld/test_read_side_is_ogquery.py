@@ -24,12 +24,13 @@ from pathlib import Path
 
 import ogquery.ld
 import pytest
+from ogquery_seam import exported, module_pair, not_the_same_object, ogquery_root
 
 import opengwasdb.ld
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "opengwasdb" / "ld"
-OGQUERY = Path(ogquery.ld.__file__).resolve().parent.parent
+OGQUERY = ogquery_root()
 
 #: What `opengwasdb.ld` keeps of its own: building, validating, the version, and the `open`
 #: that dispatches a Genotype Store to its reader.
@@ -52,17 +53,6 @@ MIXED = {
 }
 
 
-def _ogquery_of(name: str) -> types.ModuleType:
-    return importlib.import_module(name.replace("opengwasdb.ld", "ogquery.ld", 1))
-
-
-def _public(module: types.ModuleType) -> list[str]:
-    names = getattr(module, "__all__", None)
-    if names is None:
-        names = [n for n, v in vars(module).items() if not n.startswith("_")]
-    return [n for n in names if not isinstance(getattr(module, n), types.ModuleType)]
-
-
 def test_the_top_level_read_names_are_ogquery_s() -> None:
     read = [name for name in opengwasdb.ld.__all__ if name not in OWN_TOP]
     assert len(read) == 10, read  # the read surface is not empty, nor a stray few
@@ -71,11 +61,12 @@ def test_the_top_level_read_names_are_ogquery_s() -> None:
 
 @pytest.mark.parametrize("name", sorted(MIXED))
 def test_a_module_s_read_names_are_ogquery_s_objects(name: str) -> None:
-    ours = importlib.import_module(name)
-    theirs = _ogquery_of(name)
-    shared = [n for n in _public(theirs) if hasattr(ours, n) and n not in MIXED[name]]
+    ours, theirs = module_pair(name, name.replace("opengwasdb.ld", "ogquery.ld", 1))
+    # A mixed module is not complete: it has the build names beside the read ones, and keeps
+    # the few it extends (`MIXED[name]`). What it does share with ogquery is ogquery's object.
+    shared = [n for n in exported(theirs) if hasattr(ours, n) and n not in MIXED[name]]
     assert shared, f"{name} re-exports nothing of {theirs.__name__}"
-    assert [n for n in shared if getattr(ours, n) is not getattr(theirs, n)] == []
+    assert not_the_same_object(ours, theirs, shared) == []
 
 
 def test_opengwasdb_s_encoding_extends_ogquery_s() -> None:
@@ -295,7 +286,9 @@ def re_exported_patches(paths: list[Path]) -> list[str]:
             except ImportError:
                 continue  # not a module: a class or a function, patched where it is defined
             try:
-                theirs = _ogquery_of(module_name)
+                theirs = importlib.import_module(
+                    module_name.replace("opengwasdb.ld", "ogquery.ld", 1)
+                )
             except ImportError:
                 continue
             value = getattr(module, attribute, None)

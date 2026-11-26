@@ -163,17 +163,31 @@ def _requirement_parts(requirement: str) -> tuple[str, frozenset[str]]:
     return name, frozenset(part for part in specifiers.split(",") if part)
 
 
-def _compare_requirements(archive: Archive, expected: Expected) -> list[str]:
-    declared = {}
+def _archive_requirements(archive: Archive) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
+    """The unconditional requirements (name to specifiers) and, for each name declared only
+    behind an environment marker, its first marked entry."""
+    declared: dict[str, frozenset[str]] = {}
+    conditional: dict[str, str] = {}
     for entry in archive.metadata.get_all("Requires-Dist") or []:
-        if "extra ==" in entry:
-            continue
         name, specifiers = _requirement_parts(entry)
-        declared[name] = specifiers
+        if ";" in entry:
+            conditional.setdefault(name, entry)
+        else:
+            declared[name] = specifiers
+    return declared, conditional
+
+
+def _compare_requirements(archive: Archive, expected: Expected) -> list[str]:
+    """A required dependency counts only when declared with no environment marker: one behind
+    `python_version`, `extra == ...` or any other marker is not installed everywhere, so it
+    proves nothing about an install the marker excludes."""
+    declared, conditional = _archive_requirements(archive)
     problems = []
     for name in REQUIRED_DEPENDENCIES:
         if name not in declared:
-            problems.append(f"{archive.filename}: Requires-Dist has no {name}")
+            only = f" (only `{conditional[name]}`)" if name in conditional else ""
+            kind = "unconditional " if name in conditional else ""
+            problems.append(f"{archive.filename}: Requires-Dist has no {kind}{name}{only}")
         elif declared[name] != expected.requirements[name]:
             problems.append(
                 f"{archive.filename}: Requires-Dist {name} {sorted(declared[name])} is not "

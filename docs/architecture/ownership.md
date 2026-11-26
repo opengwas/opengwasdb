@@ -14,7 +14,10 @@ with its owners renamed to their modules here.
 `VariantTable`, the chunk cache and location handling, decoding, the Partner Rows' frame reads,
 and the read side of the format -- is owned by `ogquery.ld`, a dependency, and the rows below
 name its modules. `opengwasdb.ld` re-exports those names and holds no copy of them
-(`tests/ld/test_read_side_is_ogquery.py`). It owns what builds, writes, derives and validates an
+(`tests/ld/test_read_side_is_ogquery.py`); a re-exporting file, here and under
+`opengwasdb/store_reader/` (`docs/architecture/components.yaml`'s `store_reader`), is claimed
+for file coverage only and owns nothing: where this table names such a file as an owner, read
+the `ogquery` module it re-exports. It owns what builds, writes, derives and validates an
 LD Store, the build side of the format (`REncoding`'s quantising, floors and masks, t_far, the
 build's distances, the geometry only a build computes, `Sourced` and the validation rules), the
 Genotype Store, `opengwasdb.ld.open` (which dispatches a Genotype Store to its own reader), and
@@ -120,7 +123,7 @@ below may import it.
 | Knowledge | Spec | Owner | Copies still to remove |
 |---|---|---|---|
 | The rule names | ld-store §12 | `opengwasdb.ld.format` | |
-| Which components a store's provenance claims: the recorded format version, and the Partner Rows' `t_partner` with it | ld-store §7, §13 | `opengwasdb.ld.format` (`opengwasdb/ld/format/provenance.py`): `claims_partner_rows`, which the reader (`has_partner_rows`), validation (`partners_judged`) and `opengwasdb ld derive-partners` all call | |
+| Which components a store's provenance claims: the recorded format version, and the Partner Rows' `t_partner` with it | ld-store §7, §13 | `ogquery.ld.format.provenance`: `claims_partner_rows` (`opengwasdb/ld/format/provenance.py` re-exports it), which the reader (`has_partner_rows`), validation (`partners_judged`) and `opengwasdb ld derive-partners` all call | |
 | The rules | ld-store §12 | `opengwasdb/ld/store/validation.py` | |
 | The Partner Rows' ten rules: files, frames, rows, codes, distance, threshold, symmetric, near, far and provenance.partner_threshold | ld-store §12; partner-rows §10 | `opengwasdb/ld/store/validation.py` (opengwas/ogld#68), where they stand alone: the six `index.*` rules and `far.index` went in opengwas/ogld#72 | |
 | Refusing a `format_version` or an `encoding` it does not implement | ld-store §13 | `StoreReader.open` | |
