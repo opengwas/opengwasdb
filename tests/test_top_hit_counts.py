@@ -165,17 +165,87 @@ def test_a_release_without_a_top_hit_index_is_refused_and_untouched(digest_relea
     assert (release / "analyses.tsv").read_bytes() == held
 
 
-def test_a_row_out_of_analysis_index_order_is_refused(digest_releases, tmp_path):
+def _swap_first_two_rows(table: Path) -> None:
+    """Reorder `table`'s first two data rows, whole: a permuted table, as written."""
+    header, first, second, *rest = table.read_text(encoding="utf-8").splitlines(keepends=True)
+    table.write_text("".join([header, second, first, *rest]), encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", ["dense_observed", "hybrid_completed"])
+def test_a_permuted_stale_table_is_repaired_in_its_own_row_order(
+    digest_releases, tmp_path, name
+):
+    """The rule matches rows by `analysis_index`, so the command does too: a table whose
+    rows are out of order is recounted, not refused, and keeps its order."""
+    release = _copy(digest_releases, name, tmp_path)
+    table = release / "analyses.tsv"
+    _swap_first_two_rows(table)
+    order = [row["analysis_id"] for row in read_analyses(table).rows]
+    assert [row["analysis_index"] for row in read_analyses(table).rows][:2] == ["1", "0"]
+    assert _rule_findings(release) == [], "a permuted table counts its tiers"
+    analysis = _plant_stale(table)
+    assert _rule_findings(release), "the planted count is stale"
+
+    run = recount_top_hits(release)
+
+    assert [t.n_analyses_changed for t in run.tables] == [1]
+    assert [row["analysis_id"] for row in read_analyses(table).rows] == order
+    assert analysis == order[0]
+    assert _rule_findings(release) == []
+
+
+@pytest.mark.parametrize("slots", [["0", "0"], ["0", "2"], ["0", ""]])
+def test_an_analysis_index_that_is_not_each_slot_once_is_refused(
+    digest_releases, tmp_path, slots
+):
     release = _copy(digest_releases, "dense_observed", tmp_path)
     table = release / "analyses.tsv"
-    indexes = [row["analysis_index"] for row in read_analyses(table).rows]
-    assert len(indexes) >= 2, "the fixture has two Analyses to swap"
-    write_analysis_columns(table, {"analysis_index": [indexes[1], indexes[0], *indexes[2:]]})
+    n = len(read_analyses(table).rows)
+    assert n == 2, "the fixture holds two Analyses"
+    write_analysis_columns(table, {"analysis_index": slots})
     held = table.read_bytes()
 
-    with pytest.raises(RecountRefusal, match="analysis_index"):
+    with pytest.raises(RecountRefusal, match="analysis_index is not 0 to 1, each once"):
         recount_top_hits(release)
     assert table.read_bytes() == held
+    (finding,) = [f for f in _rule_findings(release) if "analysis_index" in f.message]
+    assert finding.severity is Severity.ERROR
+
+
+def test_a_run_killed_before_its_overview_is_completed_by_the_next(digest_releases, tmp_path):
+    """A kill after `analyses.tsv` is replaced leaves the old, stale page. The next run
+    finds the counts right, writes no table, and still regenerates the page."""
+    from opengwasdb.overview import write_overview_html
+
+    release = _copy(digest_releases, "dense_observed", tmp_path)
+    overview = release / "overview.html"
+    _plant_stale(release / "analyses.tsv")
+    write_overview_html(release, read_analyses(release / "analyses.tsv"))
+    stale = overview.read_bytes()
+    recount_top_hits(release)
+    assert overview.read_bytes() != stale
+    overview.write_bytes(stale)  # as a kill between the table and its page leaves it
+
+    run = recount_top_hits(release)
+
+    assert run.as_dict()["written"] == []
+    assert run.as_dict()["overviews_written"] == [str(overview)]
+    assert overview.read_bytes() != stale
+    write_overview_html(release, read_analyses(release / "analyses.tsv"))
+    assert recount_top_hits(release).as_dict()["overviews_written"] == []
+
+
+def test_write_atomically_creates_or_replaces_keeping_the_mode(tmp_path):
+    from opengwasdb.model.files import write_atomically
+
+    path = tmp_path / "overview.html"
+    write_atomically(path, "first")
+    assert path.read_text(encoding="utf-8") == "first"
+    path.chmod(0o640)
+    write_atomically(path, "second")
+    assert path.read_text(encoding="utf-8") == "second"
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["overview.html"], "no staged file"
 
 
 def test_the_cli_prints_what_changed_and_refuses_with_exit_1(digest_releases, tmp_path):

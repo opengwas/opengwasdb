@@ -38,7 +38,9 @@ from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store_reader import layout as store_layout
 from opengwasdb.store_reader import stats as reader_stats
 from opengwasdb.store_reader.arrays import array_length
+from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import carries_stored_p
+from opengwasdb.store_reader.hybrid import dense_component_path
 from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.release import release_arrays
 from opengwasdb.store_reader.stats import z_critical as z_critical
@@ -230,46 +232,81 @@ def read_top_hit_counts(
     }
 
 
-def summed_hit_counts(
-    store_paths: list[Path], n_analyses: int
-) -> dict[str, list[int]]:
-    """Per-Analysis Top-Hit Counts over several components' indexes, summed: what the
-    `analyses.tsv` beside them records (ADR 0032, #509). A Hybrid root's counts both its
-    Dense Component's tiers and its own (the Ragged Overflow's); every other table, its
-    own release's. A component whose tier counts other than `n_analyses` Analyses is a
-    `ValueError`, and one with no Top-Hit Index or no tier a `KeyError`, never a zero."""
+# ── a table's counts against its tiers (#509, ADR 0107) ───────────────────────
+#
+# The one owner of which tiers an `analyses.tsv` counts and how they are counted, for the
+# rule that holds the counts to the tiers (`analyses.top_hit_counts`) and the command that
+# repairs them (`opengwasdb recount-top-hits`).
+
+
+class UncountableTiers(ValueError):
+    """Why a table's Top-Hit Counts cannot be counted from the tiers it counts."""
+
+
+class MisshapenTier(UncountableTiers):
+    """A tier whose `analysis_offsets` do not partition its rows: no count can be read
+    from it, and `top_hits.structure` reports the tier itself."""
+
+
+def counted_components(release: Any) -> list[Path]:
+    """The releases whose tiers the `analyses.tsv` of `release` counts (ADR 0032): a
+    Hybrid root's own, the Ragged Overflow's, and its Dense Component's, which partition
+    an Analysis's associations; every other release's own, a Dense Component that
+    carries its own table (before 0.3.0, #472) included."""
+    if release.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        return [Path(release.path), dense_component_path(release.path)]
+    return [Path(release.path)]
+
+
+def table_slots(rows: Any) -> list[int]:
+    """Each row's `analysis_index`: the slot a tier counts its Analysis at, in the table's
+    own row order. `UncountableTiers` unless they are 0 to n-1, each once."""
+    slots = [row.get("analysis_index", "") for row in rows]
+    expected = {str(i) for i in range(len(slots))}
+    if set(slots) != expected or len(set(slots)) != len(slots):
+        wrong = next((s for s in slots if s not in expected), None)
+        raise UncountableTiers(
+            f"analyses.tsv's analysis_index is not 0 to {len(slots) - 1}, each once "
+            f"(first out of place: {wrong!r}): its rows cannot be held to the tiers"
+        )
+    return [int(slot) for slot in slots]
+
+
+def counted_hits(roots: dict[Path, Any], n_analyses: int) -> dict[str, list[int]]:
+    """Per-Analysis Top-Hit Counts, in `analysis_index` order, summed over `roots` (each
+    component's `data.zarr` group, by its release's path; `counted_components`): what
+    the table beside them must record. Each group is read through as given, so a caller
+    opens it once. `UncountableTiers` names a component with no Top-Hit Index, a missing
+    tier, or a tier counting other than `n_analyses` Analyses; `MisshapenTier` one whose
+    offsets are malformed. Never a zero for what could not be counted."""
     summed = {column: [0] * n_analyses for column in TOP_HIT_COUNT_COLUMNS}
-    for path in store_paths:
-        for column, counts in read_top_hit_counts(path, n_analyses).items():
-            if len(counts) != n_analyses:
-                raise ValueError(
-                    f"{path}: the {column} tier counts {len(counts)} Analyses, the "
-                    f"analyses.tsv beside it holds {n_analyses}"
-                )
+    for path, root in roots.items():
+        if not reader_has_index(root):
+            raise UncountableTiers(f"{path} has no Top-Hit Index to count from")
+        for threshold, column in _THRESHOLD_COLUMNS.items():
+            counts = _tier_counts(path, root, threshold, n_analyses)
             summed[column] = [a + b for a, b in zip(summed[column], counts, strict=True)]
     return summed
 
 
-def misshapen_tier(store_path: str | Path, n_analyses: int) -> str | None:
-    """The first tier of the release at `store_path` whose `analysis_offsets` do not
-    partition its rows over `n_analyses` Analyses, or None. A count read through such
-    offsets is not a count. This is `structural_problem`'s offsets test without loading
-    the tier, and `top_hits.structure` reports the tier itself. A tier that predates
-    the offsets is counted from `analysis_index`, and is not judged here."""
-    tiers = index_group(release_arrays(store_path))
-    for threshold in TOP_HIT_THRESHOLDS:
-        key = threshold_key(threshold)
-        if key not in tiers or "analysis_offsets" not in tiers[key]:
-            continue
-        offsets = np.asarray(tiers[key]["analysis_offsets"][:], dtype=np.int64)
-        if not _offsets_ok(offsets, array_length(tiers[key]["variant_index"]), n_analyses):
-            return f"{store_path}: tier {key} has invalid analysis offsets"
-    return None
-
-
-def has_top_hit_index(store_path: str | Path) -> bool:
-    """Whether the release at `store_path` carries a Top-Hit Index."""
-    return bool(reader_has_index(release_arrays(store_path)))
+def _tier_counts(path: Path, root: Any, threshold: float, n_analyses: int) -> list[int]:
+    key = threshold_key(threshold)
+    tiers = index_group(root)
+    if key not in tiers:
+        raise UncountableTiers(f"{path} has no tier {key}")
+    tier = tiers[key]
+    if "analysis_offsets" in tier:
+        offsets = np.asarray(tier["analysis_offsets"][:], dtype=np.int64)
+        if not _offsets_ok(offsets, array_length(tier["variant_index"]), n_analyses):
+            raise MisshapenTier(f"{path}: tier {key} has invalid analysis offsets")
+        diffs: list[int] = np.diff(offsets).tolist()
+        return diffs
+    counts = analysis_hit_counts(root, threshold, n_analyses)
+    if len(counts) != n_analyses:
+        raise UncountableTiers(
+            f"{path}: tier {key} counts {len(counts)} Analyses, not {n_analyses}"
+        )
+    return counts
 
 
 def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Analysis]:

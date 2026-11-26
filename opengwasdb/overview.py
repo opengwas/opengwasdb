@@ -44,6 +44,7 @@ from typing import Any, Protocol, cast
 import numpy as np
 
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX
+from opengwasdb.model.files import write_atomically
 from opengwasdb.store_reader.analyses import AnalysesTable, analysis_label
 from opengwasdb.store_reader.format import UnsupportedFormatVersion
 from opengwasdb.store_reader.indexed import (
@@ -1507,11 +1508,26 @@ def render_overview_html(overview: StoreOverview, *, title: str = "OpenGWASDB An
 def write_overview_html(
     output_path: str | Path, table: AnalysesTable, *, title: str = "OpenGWASDB Analyses"
 ) -> Path:
-    """Render `table` (an `analyses.tsv` read) as `overview.html` at `output_path`."""
+    """Render `table` (an `analyses.tsv` read) as `overview.html` at `output_path`,
+    written atomically (`model.files.write_atomically`): a process killed part-way leaves
+    the old page or the new one, never a truncated one (#509)."""
     output_path = Path(output_path)
     out_path = output_path / "overview.html"
-    out_path.write_text(
-        render_overview_html(gather_store_overview(output_path, table), title=title),
-        encoding="utf-8",
+    write_atomically(
+        out_path, render_overview_html(gather_store_overview(output_path, table), title=title)
     )
     return out_path
+
+
+def refresh_overview_html(output_path: str | Path, table: AnalysesTable) -> bool:
+    """Write `overview.html` at `output_path` only where it differs from what `table`
+    renders; return whether it did. A step that rewrites `analyses.tsv` in place and is
+    killed before its overview can then be run again: the table is already right, and the
+    page is still regenerated (`recount-top-hits`, #509). The page is deterministic, so
+    an unchanged one compares equal."""
+    out_path = Path(output_path) / "overview.html"
+    text = render_overview_html(gather_store_overview(output_path, table))
+    if out_path.is_file() and out_path.read_text(encoding="utf-8") == text:
+        return False
+    write_atomically(out_path, text)
+    return True

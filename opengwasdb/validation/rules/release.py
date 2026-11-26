@@ -86,8 +86,7 @@ class SeverityByFormat(Check):
     0.9.0's 0.2.1 among them, may hold a rounded table and is reported as a
     warning (`severity_owed`), which says what it is without failing a Store
     nobody can fix in place (issue #355, #367). Every other rule's severity is
-    its own. `side_tables.se_exceptions_rounded` and `analyses.top_hit_counts` (#509)
-    are judged so.
+    its own.
     """
 
     def findings(self, target: Target) -> Iterator[Finding]:

@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1] / "opengwasdb"
 
 #: Every function under `validation/` that raises `Skip`, by the rule it judges for.
 RAISED = {
-    ("validation/rules/analyses.py", "_skip_misshapen"): "analyses.top_hit_counts",
+    ("validation/rules/analyses.py", "top_hit_counts"): "analyses.top_hit_counts",
     ("validation/rules/associations.py", "_judge_eaf_range"): "associations.eaf_range",
     ("validation/rules/by_variant.py", "present"): "by_variant.present",
     ("validation/rules/clumps.py", "reclump"): "clumps.reclump",

@@ -22,6 +22,7 @@ import re
 from collections.abc import Callable, Iterable, Iterator
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from opengwasdb.model.analyses import (
     N_MISSING_SE_OUT_OF_RANGE,
@@ -47,7 +48,15 @@ from opengwasdb.store.open import records_se_out_of_range
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.plan import EafEncoding
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
-from opengwasdb.top_hits import has_top_hit_index, misshapen_tier, summed_hit_counts
+from opengwasdb.store_reader.release import release_arrays
+from opengwasdb.store_reader.top_hits import has_index
+from opengwasdb.top_hits import (
+    MisshapenTier,
+    UncountableTiers,
+    counted_components,
+    counted_hits,
+    table_slots,
+)
 from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED, SeverityByFormat
 
@@ -249,47 +258,26 @@ def top_hit_count_columns(target: Target) -> Iterator[str]:
 
 def top_hit_counts(target: Target) -> Iterator[str]:
     """Each Analysis's `n_hits_5e8`, `n_hits_5e6` and `n_hits_5e4` is the number of rows
-    its tier holds for it (ADR 0032, ADR 0107): a Dense or Ragged release's own tiers; a
-    Hybrid root's, both components' (`_counted_components`); a Dense Component that
-    carries its own table, its own. One message per column that disagrees anywhere, with
-    its count and first Analysis: `complete-hybrid` once left 1,028 of OGS-00011's 3,245
-    wrong (#509), which `opengwasdb recount-top-hits` repairs in place. A component with
-    no Top-Hit Index, or a row whose `analysis_index` names no Analysis, fails the rule;
-    a tier whose offsets are malformed skips it, as no count can be read from it."""
+    its tier holds for it (ADR 0032, ADR 0107), matched by `analysis_index`, over the
+    components the table counts (`top_hits.counted_components`). One message per column
+    that disagrees anywhere, with its count and first Analysis: `complete-hybrid` once
+    left 1,028 of OGS-00011's 3,245 wrong (#509), which `opengwasdb recount-top-hits`
+    repairs in place. What cannot be counted -- a component with no Top-Hit Index, rows
+    whose `analysis_index` is not 0 to n-1 -- fails the rule; a tier whose offsets are
+    malformed skips it, as `top_hits.structure` fails that tier (`top_hits.counted_hits`)."""
     rows = target.analyses.rows
-    components = _counted_components(target)
-    _skip_misshapen(components, len(rows))
-    slots = [row.get("analysis_index", "") for row in rows]
-    unplaced = _unplaced(slots)
-    if unplaced:
-        yield unplaced
+    try:
+        slots = table_slots(rows)
+        expected = counted_hits(_component_roots(target), len(rows))
+    except MisshapenTier as exc:
+        raise Skip(f"{exc}, which top_hits.structure reports: no count can be read") from exc
+    except UncountableTiers as exc:
+        yield str(exc)
         return
-    expected = summed_hit_counts(components, len(rows))
     for column in TOP_HIT_COUNT_COLUMNS:
-        held = [expected[column][int(slot)] for slot in slots]
-        problem = _count_problem(column, rows, held)
+        problem = _count_problem(column, rows, [expected[column][slot] for slot in slots])
         if problem:
             yield problem
-
-
-def _skip_misshapen(components: list[Path], n_analyses: int) -> None:
-    """Skip the rule where a counted tier's offsets are malformed (`misshapen_tier`)."""
-    for path in components:
-        problem = misshapen_tier(path, n_analyses)
-        if problem:
-            raise Skip(f"{problem}, which top_hits.structure reports: no count can be read")
-
-
-def _unplaced(slots: list[str]) -> str:
-    """The rows whose `analysis_index` names no Analysis of the table, or ``""``."""
-    unplaced = [s for s in slots if not s.isdigit() or int(s) >= len(slots)]
-    if not unplaced:
-        return ""
-    return (
-        f"{len(unplaced):,} row(s) of analyses.tsv have an analysis_index that names no "
-        f"Analysis of {len(slots):,} (first {unplaced[0]!r}): their Top-Hit Counts cannot "
-        "be held to the tiers"
-    )
 
 
 def _count_problem(column: str, rows: tuple[dict[str, str], ...], held: list[int]) -> str:
@@ -305,14 +293,12 @@ def _count_problem(column: str, rows: tuple[dict[str, str], ...], held: list[int
     )
 
 
-def _counted_components(target: Target) -> list[Path]:
-    """The releases whose tiers `target`'s `analyses.tsv` counts: a Hybrid root's own
-    (its Ragged Overflow's) and its Dense Component's; every other release's own. The
-    root's other child, the Overflow's sequence, is the root's own release."""
-    paths = [target.store.path]
-    if target.layout is PrimaryStorageLayout.HYBRID:
-        paths += [child.store.path for child in target.children if child.kind is Kind.RELEASE]
-    return paths
+def _component_roots(target: Target) -> dict[Path, Any]:
+    """Each counted component's `data.zarr` group, opened once for the run."""
+    return target.remember(
+        "top_hit_counts/roots",
+        lambda: {path: release_arrays(path) for path in counted_components(target.store)},
+    )
 
 
 def _counts_its_tiers(target: Target) -> bool:
@@ -320,7 +306,7 @@ def _counts_its_tiers(target: Target) -> bool:
     component it counts. One with none has nothing to count; one where a component
     lacks it is judged, and fails."""
     return _with_analyses(target) and any(
-        has_top_hit_index(path) for path in _counted_components(target)
+        has_index(root) for root in _component_roots(target).values()
     )
 
 

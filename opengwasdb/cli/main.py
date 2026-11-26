@@ -1946,7 +1946,11 @@ def _keep_stored_p(store_path: Path) -> None:
 
 @app.command("build-ragged-top-hits")
 def build_ragged_top_hits_command(store_path: Path) -> None:
-    """Build (or rebuild) the top-hit index for a Ragged store."""
+    """Build (or rebuild) the top-hit index for a Ragged store.
+
+    It does not recount `n_hits_*`: after tiers are rebuilt in place, run
+    `opengwasdb recount-top-hits` (#509), or `analyses.top_hit_counts` fails the release.
+    """
     build_ragged_top_hit_indexes(store_path)
     _keep_stored_p(store_path)
     typer.echo("done")
@@ -1957,6 +1961,9 @@ def build_dense_top_hits_command(
     store_path: Path, n_workers: int = _N_WORKERS_OPTION
 ) -> None:
     """Build (or rebuild) the top-hit index for a Dense store.
+
+    It does not recount `n_hits_*`: after tiers are rebuilt in place, run
+    `opengwasdb recount-top-hits` (#509), or `analyses.top_hit_counts` fails the release.
 
     A 0.2 release's rebuilt tiers keep the `abs_z` and `p_value` its format stores, and
     a 0.3.0 release's store neither (ADR 0102, #471).

@@ -83,20 +83,29 @@ warning before. The reasons:
 ### 3. `opengwasdb recount-top-hits STORE` repairs a release in place
 
 The command recounts every `analyses.tsv` the release carries from its stored tiers: a 0.2
-Hybrid's Dense Component's table first, then the root's. It changes nothing else.
+Hybrid's Dense Component's table first, then the root's. It changes nothing else. The rule and
+the command share one owner, in `top_hits.py`, for which components a table counts
+(`counted_components`) and for counting them (`table_slots`, `counted_hits`). So each row is
+matched to its tier slot by `analysis_index` in both, and a permuted table is repaired in its
+own row order.
 
 - **Before it writes**, it reads every table and tier and computes every count. It refuses, and
   writes nothing, if:
-  - a counted component has no Top-Hit Index;
-  - a tier counts a different number of Analyses from its table;
-  - a row's `analysis_index` is not its position;
+  - a counted component has no Top-Hit Index, or lacks a tier;
+  - a tier's offsets are malformed, or it counts a different number of Analyses from its table;
+  - the table's `analysis_index` is not 0 to n-1, each once;
   - a table lacks the three columns.
 - **It writes a table only where a count changes**, through `write_analysis_columns`, as `clump`
-  writes its counts: every other column and value as read, and the file replaced atomically. It
-  then regenerates that table's `overview.html`, as `regenerate-overview` does. A release whose
-  counts are right is left untouched, so a second run writes nothing.
+  writes its counts: every other column and value as read, and the file replaced atomically.
+- **Then it regenerates each table's `overview.html`**, where the release carries one, if the page
+  differs from what the table renders (`overview.refresh_overview_html`). Every `overview.html`
+  is now written atomically (`model.files.write_atomically`), for every caller. A kill between a
+  table and its page leaves the old page whole. The next run finds the counts right, writes no
+  table, and regenerates the stale page, which atomicity alone would not do. A release whose
+  counts and pages are right is left untouched, so a second run writes nothing.
 - **It prints one JSON object:** `store`, `seconds`, and per table its Analyses, how many
-  changed and the changes per column. `written` names the tables it wrote.
+  changed and the changes per column. `written` names the tables it wrote, and
+  `overviews_written` the pages.
 
 **An exception to immutability (the owner's, 26 Nov 2026).** ADR 0038 §4–§5 and spec §21.4 derive a new
 release for any change to Analytical Metadata, and the Top-Hit Counts are Analytical Metadata.
@@ -120,7 +129,7 @@ that touches Analytical Metadata still derives a new release.
   case, `clumps.counts` then passes with the Clumps untouched.
 - OGS-00011, with 3,047 of its 3,245 Analyses stale, is repaired this way.
 
-**On a reflink copy of OGS-00011 (26 Nov 2026):** the command took 1.79 s. It changed **3,047 of
+**On a reflink copy of OGS-00011 (26 Nov 2026):** the command took 1.14 s. It changed **3,047 of
 3,245 Analyses**: 1,028 at 5e-8, 2,080 at 5e-6 and 3,037 at 5e-4. The rule then passes, a second
 run writes nothing, and no other column of `analyses.tsv` changed.
 
@@ -139,3 +148,10 @@ run writes nothing, and no other column of `analyses.tsv` changed.
   `analyses.top_hit_counts` until `recount-top-hits` runs on it.
 - The opengwasdb-stores registry runs `recount-top-hits` on OGS-00011 inside its in-place
   release, as the owner ruled (decision 3).
+- `build-dense-top-hits` and `build-ragged-top-hits` rebuild tiers in place and do not recount.
+  Their help names `recount-top-hits` as the follow-up, and the rule fails a release whose
+  counts were left behind.
+- The Store Reader contract bundle is now version 3: `hybrid_completed`'s `trait_a` counts go from
+  7 to 8. The Store Reader ports (ogquery, opengwaspy, opengwasr) need no code change, but each
+  must re-vendor bundle 3 and bump any pinned `bundle_version`, or its contract test fails on the
+  stale digest.
