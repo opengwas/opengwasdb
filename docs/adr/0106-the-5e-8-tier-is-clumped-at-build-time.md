@@ -1,5 +1,9 @@
 # The 5e-8 tier is clumped at build time, into a Clumps component and `n_loci_5e8`
 
+> **Moved, 26 November 2026 (#475).** The Store Reader is now the `ogquery` package. Where the
+> text below names `opengwasdb/store_reader/<module>.py` (`panel_axis`, `manifest`, `format`,
+> `top_hits`), the code is in `ogquery/<module>.py`; the opengwasdb file re-exports it.
+
 Issue [#417](https://github.com/opengwas/opengwasdb/issues/417), under epic
 [#62](https://github.com/opengwas/opengwasdb/issues/62). The spec is store-format §18.1,
 with §1.1, §2, §7a, §20 and §21. Amends [ADR 0032](0032-overview-html-is-a-single-tabbed-page-with-persisted-hit-counts.md):

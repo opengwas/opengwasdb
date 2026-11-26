@@ -164,7 +164,8 @@ def main(path: Path) -> None:
     w(
         "Python candidate / Rust candidate on the same store; above 1 means Rust is faster. "
         "`python-zarr-pool16` is not paired: it ran with Blosc threads on, a set-up "
-        "`store_reader/arrays.py:107-110` records as queueing on numcodecs' lock. "
+        "`store_reader/arrays.py:107-110` at opengwasdb `34d220ed` (the measured revision; "
+        "the seam is now `ogquery/arrays.py`) records as queueing on numcodecs' lock. "
         "The Python thread pool is one implementation (up to 16 row partitions of `grid.read`), "
         "not a bound on what Python can do."
     )
@@ -208,7 +209,10 @@ def main(path: Path) -> None:
                 blosc = "n/a (not used by zarrs)"
                 other += "; zarrs-python's own concurrency is not recorded"
             if c["run"].startswith("python-zarr-pool16"):
-                other += "; Blosc threads on: queues on numcodecs' lock (`arrays.py:107-110`)"
+                other += (
+                    "; Blosc threads on: queues on numcodecs' lock "
+                    "(`store_reader/arrays.py:107-110` at `34d220ed`)"
+                )
             w(f"| {c['run']} | {cfg['array_pipeline_class']} | {workers} | {blosc} | {other} |")
         else:
             w(
