@@ -725,8 +725,28 @@ def test_the_lifted_contig_rule_warns_when_it_found_nothing_but_could_not_judge_
 
     rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
     target = SimpleNamespace(
-        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")), label="."
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")),
+        converted_deviations=dict,  # a 0.3.0 build, not a converted release (#504)
+        label=".",
     )
     (finding,) = rule.judged(target, _LiftedOffPrimary(0, "", 3))
     assert finding.severity.value == "warning"
     assert "3 not judged (no source ALID)" in finding.message
+
+
+def test_a_recorded_lifted_contig_deviation_never_lowers_a_lift_onto_an_alt_contig():
+    """The deviation a lifted conversion records is its unjudged rows' (#504): a row the
+    rule judges lifted onto an alt contig still fails a 0.3.0 release."""
+    from types import SimpleNamespace
+
+    from opengwasdb.validation.rules.variants import RULES, _LiftedOffPrimary
+
+    rule = next(r for r in RULES if r.name == "variant_table.lifted_contig")
+    target = SimpleNamespace(
+        store=SimpleNamespace(manifest=SimpleNamespace(format_version="0.3.0")),
+        converted_deviations=lambda: {"variant_table.lifted_contig": "a recorded deviation"},
+        label=".",
+    )
+    (finding,) = rule.judged(target, _LiftedOffPrimary(1, "row 7: x from y", 2))
+    assert finding.severity.value == "error"
+    assert "recorded deviation" not in finding.message

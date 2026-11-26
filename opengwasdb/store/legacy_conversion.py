@@ -26,6 +26,11 @@ converted fast, with known deviations recorded, and rebuilt from source later. P
 - **`source_alid` of a lifted release: recorded.** The pre-liftover ALID is not in a
   release that did not keep it; the table's column is carried, and
   `variant_table.source_alid` is a recorded deviation.
+- **A lifted release's alt, random or unplaced rows: recorded (#504).** With no
+  `source_alid`, `variant_table.lifted_contig` cannot tell such a row from a lift onto
+  that contig. Where the release has any, `variant_table.lifted_contig` is a recorded
+  deviation, with their count as `lifted_contig_unjudged`; the rows are carried, as the
+  source served them. A rebuild from source drops a lifted one as `lift_off_primary`.
 
 The deviations are recorded by validator rule name in `provenance.converted_from`, and
 `validate` reports exactly those rules as warnings that name the conversion
@@ -68,9 +73,13 @@ LEGACY_SOURCE_VERSIONS = ("0.2.0", "0.2.1", "0.2.2")
 INDEL_ORDER_RULE = "variant_table.indel_order"
 SOURCE_ALID_RULE = "variant_table.source_alid"
 ROUNDED_SE_RULE = "side_tables.se_exceptions_rounded"
+LIFTED_CONTIG_RULE = "variant_table.lifted_contig"
 
 #: Every rule a conversion can record: the only rules `validate` lowers for one.
-DEVIATION_RULES = (INDEL_ORDER_RULE, SOURCE_ALID_RULE, ROUNDED_SE_RULE)
+DEVIATION_RULES = (INDEL_ORDER_RULE, SOURCE_ALID_RULE, ROUNDED_SE_RULE, LIFTED_CONTIG_RULE)
+
+#: The `converted_from` key counting the rows `LIFTED_CONTIG_RULE` cannot judge (#504).
+LIFTED_CONTIG_UNJUDGED = "lifted_contig_unjudged"
 
 #: The provenance key a converted release records, and a rebuild never writes.
 CONVERTED_FROM = "converted_from"
@@ -116,6 +125,10 @@ class LegacyPlan:
     #: Of the source's SE exceptions, how many are `float16` values and of how many,
     #: where the table was rounded (#355): recorded as a deviation; None where it was not.
     rounded_se: tuple[int, int] | None = None
+    #: On a lifted release, its rows on an alt, random or unplaced contig with no
+    #: `source_alid`, which `variant_table.lifted_contig` cannot judge (#504): recorded
+    #: as a deviation where there are any. 0 on an unlifted one, whose rows are named.
+    unjudged_off_primary: int = 0
 
     @property
     def deviations(self) -> tuple[str, ...]:
@@ -127,6 +140,8 @@ class LegacyPlan:
             found.append(SOURCE_ALID_RULE)
         if self.rounded_se is not None:
             found.append(ROUNDED_SE_RULE)
+        if self.lifted and self.unjudged_off_primary:
+            found.append(LIFTED_CONTIG_RULE)
         return tuple(found)
 
     @property
@@ -156,6 +171,7 @@ class LegacyPlan:
             "lifted_decided_by": "operator flag " + ("--lifted" if self.lifted else "--not-lifted"),
             "se_out_of_range_masked": int(self.masked.size),
             **_rounded_record(self),
+            **_unjudged_record(self),
             "note": (
                 "Converted by ogdb rewrite-release --convert-legacy (#492): every SE above "
                 f"{SE_FLOAT16_MAX:,.0f} was masked and counted, and an unlifted release's "
@@ -173,9 +189,11 @@ def judge_converted_from(record: Any) -> tuple[tuple[str, ...], list[str]]:
 
     A deviation is accepted only if it is one of `DEVIATION_RULES` and the record says
     why it holds: `variant_table.source_alid` only where `lifted` is true;
-    `variant_table.indel_order` only from a source before 0.2.2; and
-    `side_tables.se_exceptions_rounded` only with its counts. Anything else is a fault:
-    a hand-edited or mistaken record must not silence a rule."""
+    `variant_table.indel_order` only from a source before 0.2.2;
+    `side_tables.se_exceptions_rounded` only with its counts; and
+    `variant_table.lifted_contig` only where `lifted` is true, `variant_table.source_alid`
+    is listed too and `lifted_contig_unjudged` counts its rows (#504). Anything else is a
+    fault: a hand-edited or mistaken record must not silence a rule."""
     if not isinstance(record, dict):
         return (), ["provenance.converted_from is not an object"]
     listed = record.get("deviations")
@@ -220,11 +238,26 @@ def _not_counted(record: dict[str, Any]) -> str:
     return "without the counts se_exceptions_rounded and se_exceptions"
 
 
+def _not_unjudged(record: dict[str, Any]) -> str:
+    """`variant_table.lifted_contig` is a deviation only of a lifted release that kept no
+    `source_alid`, and only for the rows it counts (#504)."""
+    not_lifted = _not_lifted(record)
+    if not_lifted:
+        return not_lifted
+    if SOURCE_ALID_RULE not in record.get("deviations", []):
+        return f"but does not list {SOURCE_ALID_RULE}, without which every row is judged"
+    count = record.get(LIFTED_CONTIG_UNJUDGED)
+    if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+        return ""
+    return f"without a positive count {LIFTED_CONTIG_UNJUDGED} (it records {count!r})"
+
+
 #: Each deviation rule, and why a record would not justify it.
 _UNJUSTIFIED = {
     INDEL_ORDER_RULE: _not_sorted,
     SOURCE_ALID_RULE: _not_lifted,
     ROUNDED_SE_RULE: _not_counted,
+    LIFTED_CONTIG_RULE: _not_unjudged,
 }
 
 
@@ -238,6 +271,12 @@ def _rounded_record(plan: LegacyPlan) -> dict[str, int]:
         return {}
     exact, total = plan.rounded_se
     return {"se_exceptions_rounded": exact, "se_exceptions": total}
+
+
+def _unjudged_record(plan: LegacyPlan) -> dict[str, int]:
+    if LIFTED_CONTIG_RULE not in plan.deviations:
+        return {}
+    return {LIFTED_CONTIG_UNJUDGED: plan.unjudged_off_primary}
 
 
 def refuse_unconvertible(store: OpenGWASDBStore, version: str) -> None:
@@ -298,11 +337,13 @@ def plan_conversion(
         unobserved_rows=_NONE if conversion.lifted else _panel_rows(store, unobserved),
         quality_missing=_quality_missing(store, positions, m),
         rounded_se=_rounded_se(store),
+        unjudged_off_primary=_unjudged_off_primary(store) if conversion.lifted else 0,
     )
     print(
         f"  read {n:,} rows x {m:,} Analyses: {positions.size:,} cell(s) with an SE above "
         f"{SE_FLOAT16_MAX:,.0f}, {plan.unobserved_rows.size:,} row(s) no cell is observed "
-        f"in: {time.perf_counter() - started:.1f}s",
+        f"in, {plan.unjudged_off_primary:,} off-primary row(s) with no source_alid: "
+        f"{time.perf_counter() - started:.1f}s",
         flush=True,
     )
     return plan
@@ -332,6 +373,23 @@ def _read_cells(grid: DenseGridReader) -> tuple[np.ndarray, np.ndarray, np.ndarr
 
 
 _NONE = np.empty(0, dtype=np.int64)
+
+
+def _unjudged_off_primary(store: OpenGWASDBStore) -> int:
+    """The Variant Table's rows on an alt, random or unplaced contig with no
+    `source_alid`: the rows `variant_table.lifted_contig` counts as not judged, by the
+    same test (`is_primary_contig`, a blank `source_alid`), read from the table the
+    lifted conversion carries unchanged (#504)."""
+    from opengwasdb.store_reader.identity import is_primary_contig
+    from opengwasdb.store_reader.variant_axis import parse_variant_line, variant_table_path
+    from opengwasdb.variants.legacy_table import variant_table_lines
+
+    unjudged = 0
+    for line in variant_table_lines(variant_table_path(store.path)):
+        record = parse_variant_line(line)
+        if record.source_alid is None and not is_primary_contig(record.chromosome):
+            unjudged += 1
+    return unjudged
 
 
 def _grid(store: OpenGWASDBStore) -> DenseGridReader:
@@ -518,6 +576,7 @@ def expected_query(plan: LegacyPlan) -> Any:
 __all__ = [
     "CONVERTED_FROM",
     "DEVIATION_RULES",
+    "LIFTED_CONTIG_UNJUDGED",
     "LEGACY_SOURCE_VERSIONS",
     "LegacyConversion",
     "LegacyConversionError",
