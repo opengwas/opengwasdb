@@ -566,11 +566,23 @@ class _CompletedCsr:
     and store."""
 
     writer: RaggedCSRWriter
-    total_imputed: int
-    total_missing: int
+    #: Per Analysis, the imputed rows it holds once its conflicted fills are
+    #: cleared, and the panel rows it holds no value at: what `analyses.tsv`
+    #: declares (#362). The `completion_quality` rows' sums are more where two
+    #: blocks attempt one row.
+    imputed_by_analysis: np.ndarray
+    missing_by_analysis: np.ndarray
     #: Per Analysis, the fills the checkpoint merge left missing for an SE above
     #: `float16`'s range (issue #338); set once the merge has run.
     left_missing: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+
+    @property
+    def total_imputed(self) -> int:
+        return int(self.imputed_by_analysis.sum())
+
+    @property
+    def total_missing(self) -> int:
+        return int(self.missing_by_analysis.sum())
 
     @property
     def left_out(self) -> LeftOut:
@@ -1213,18 +1225,9 @@ def _assemble_completed_csr(
         len(axis.variants),
         ReferenceCompletion(tuple(analysis_ids), eaf_reference, where="complete-ragged"),
     )
-    largest = _largest_analysis(plan.source)
-    workers = pool_workers(
-        n_workers,
-        _assembly_bytes(len(axis.variants), largest),
-        what="Assembly",
-        unit=f"completed Analysis over {len(axis.variants):,} variants",
-        units=plan.state.n_analyses,
-        parent_bytes=resident_bytes()
-        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + int(added.sum())),
-        result_bytes=_RESULT_BYTES_PER_ROW * (largest + int(added.max(initial=0))),
-    )
-    total_imputed = total_missing = 0
+    workers = _assembly_workers(assembly, n_workers, added)
+    imputed_by_analysis = np.zeros(plan.state.n_analyses, dtype=np.int64)
+    missing_by_analysis = np.zeros(plan.state.n_analyses, dtype=np.int64)
     items = _analysis_fills(fill_shard_dir, batch_of)
     outcomes = ordered_map(_complete_analysis, items, workers, shared=assembly)
     for expected, (ai, completed) in enumerate(outcomes):
@@ -1234,14 +1237,35 @@ def _assemble_completed_csr(
             completed.vi, completed.z, completed.se, eaf=completed.eaf, imputed=completed.imp,
             where=f"complete-ragged, Analysis {analysis_ids[ai]}", phenotype_sd=PhenotypeSd.APPLIED,
         )
-        total_imputed += completed.n_imputed
-        total_missing += completed.n_missing
+        imputed_by_analysis[ai] = completed.n_imputed
+        missing_by_analysis[ai] = completed.n_missing
         if (ai + 1) % 500 == 0:
             print(
                 f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
-                f"imputed {total_imputed:,} | missing {total_missing:,}"
+                f"imputed {int(imputed_by_analysis.sum()):,} | "
+                f"missing {int(missing_by_analysis.sum()):,}"
             )
-    return _CompletedCsr(writer=writer, total_imputed=total_imputed, total_missing=total_missing)
+    return _CompletedCsr(
+        writer=writer, imputed_by_analysis=imputed_by_analysis,
+        missing_by_analysis=missing_by_analysis,
+    )
+
+
+def _assembly_workers(assembly: _Assembly, n_workers: int, added: np.ndarray) -> int:
+    """The assembly pool's size: it holds every completed row by the end, at most
+    the source's rows and what completion may add to each Analysis."""
+    plan, axis = assembly.plan, assembly.axis
+    largest = _largest_analysis(plan.source)
+    return pool_workers(
+        n_workers,
+        _assembly_bytes(len(axis.variants), largest),
+        what="Assembly",
+        unit=f"completed Analysis over {len(axis.variants):,} variants",
+        units=plan.state.n_analyses,
+        parent_bytes=resident_bytes()
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + int(added.sum())),
+        result_bytes=_RESULT_BYTES_PER_ROW * (largest + int(added.max(initial=0))),
+    )
 
 
 def _largest_analysis(source: CsrReader) -> int:
@@ -1518,6 +1542,7 @@ def _write_top_hits_and_analyses(
     *,
     ancestry: str,
     left_out: LeftOut,
+    csr: _CompletedCsr,
     source_format_version: str,
 ) -> None:
     """Phase 5 metadata: top-hit indexes built with the completed encoding,
@@ -1537,7 +1562,12 @@ def _write_top_hits_and_analyses(
 
     print("Writing analyses.tsv...")
     with staged.index_connection() as quality_db:
-        quality_rollup = completion_quality_rollup(quality_db, state.n_analyses)
+        # The rows the release holds, not the blocks' sums: a row two blocks attempt
+        # is one row, and a fill they conflict on is none (#362).
+        quality_rollup = completion_quality_rollup(
+            quality_db, state.n_analyses,
+            imputed=csr.imputed_by_analysis, missing=csr.missing_by_analysis,
+        )
     dst_analyses = reset_top_hit_counts(left_out.recorded(
         [
             replace(
@@ -1690,6 +1720,7 @@ def _run_completion(
         )
         _write_top_hits_and_analyses(
             staged, state, encode_plan, ancestry=ancestry, left_out=csr.left_out,
+            csr=csr,
             source_format_version=source_format_version,
         )
         staged.write_manifest(

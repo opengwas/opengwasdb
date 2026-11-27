@@ -23,6 +23,7 @@ from stored_rows import stored_rows
 
 from opengwasdb.completion.ld_panel import LDBlock, list_all_blocks, shared_endpoints
 from opengwasdb.store.open import open_store
+from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.encoding.planes import DenseZPlane
 from opengwasdb.variants.axis import VariantAxis
 
@@ -43,6 +44,19 @@ def quality_counts(store: Path) -> dict[tuple[int, str], tuple[int, int]]:
                 "SELECT analysis_index, block_id, n_imputed, n_missing FROM completion_quality"
             )
         }
+
+
+def declared_and_masked(analyses: Path, component: Path) -> tuple[list[int], list[int]]:
+    """Per Analysis, the `analyses.tsv` at `analyses` declares this many imputed cells
+    (`completion_n_imputed_total`), and the Dense `component`'s imputed mask holds this many.
+    The two paths are one release's for a Dense Store and differ for a Hybrid, whose
+    metadata is at its root and whose mask is its Dense Component's."""
+    rows = read_analyses(analyses).rows
+    mask = np.asarray(open_store(component).arrays(mode="r")["imputed"][:])
+    return (
+        [int(r["completion_n_imputed_total"]) for r in rows],
+        [int((mask[:, i] == 1).sum()) for i in range(len(rows))],
+    )
 
 
 def quality_rows(store: Path) -> dict[tuple[int, str], int]:

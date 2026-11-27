@@ -2170,10 +2170,43 @@ Reference-Completed releases MUST:
 There is no Z-only completion mode.
 
 Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. In a Hybrid release a Dense cell becomes observed only as a crossover, a source Overflow association moved into the Dense Component when the LD panel extends its axis; it holds what that component's own codec gives for the source value. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
-A Hybrid crossover also removes the overwritten imputed or missing attempt from
-each owning block's `completion_quality` row, using the LD panel while completing,
-and refreshes the imputed rollup and completion counts. An observed association
-is not a completion attempt merely because the Dense phase first imputed it.
+A `completion_quality` row is its block's **attempts**, as completion made them, and
+nothing rewrites it afterwards. An attempted cell is held imputed, held missing,
+overwritten by an observation (a Hybrid crossover), or superseded by a missing row
+the source stored and completion carried (Ragged, ADR 0036). A Hybrid's Dense
+Component records how many attempts its crossover overwrote, per Analysis, in
+`provenance.completion.crossover_overwritten` (`n_imputed` and `n_missing`, one
+non-negative integer per Analysis; absent where there is no crossover). (Superseded 28 Nov 2026, #362: #307
+had the crossover remove the overwritten attempt from each owning block's row. That
+could not be done right where blocks overlap, since a block's row records counts and
+not which cells it attempted, and it is not done.) What the release holds is judged by
+`analyses.tsv`'s totals, below.
+
+A cell two LD blocks fill is one imputed cell: fills that agree are one, and fills
+that disagree are all dropped (ADR 0072). A cell two blocks attempt is in both
+blocks' rows, so the rows' `n_imputed` and `n_missing` can sum to more than the
+Analysis holds (a dropped fill is counted imputed by each block that made it).
+`analyses.tsv`'s `completion_n_imputed_total` and `completion_n_missing_total` are the
+cells the release holds, counted where completion wrote them, from the final planes,
+and so is the `eaf_scope` derived from the imputed total (§20.0
+`completion.imputed_total` and `completion.missing_total`, issue #362). Their
+definitions:
+
+- `completion_n_imputed_total` is the cells the imputed mask marks.
+- A Dense release's `completion_n_missing_total` is **exactly** the missing cells the
+  release holds on rows off the LD panel, whatever their cause: cells no source
+  observed, and a source cell left out for an SE above 65,504, which
+  `n_missing_se_out_of_range` also counts, in its own column. (Before #362 the second
+  kind was not in it.)
+- A Ragged release's `completion_n_missing_total` is the rows completion added and left
+  missing. It excludes a missing row the source stored and completion carried (ADR
+  0036), which the release cannot tell from a failed attempt, so it is held to a bound:
+  a non-negative integer no greater than the missing rows the release holds.
+
+A Hybrid's
+crossover takes each cell it overwrites off the totals and the manifest's counts once,
+from one read of the cells' status before it writes, and derives `eaf_scope` again from
+what remains.
 
 The one exception is an association whose SE is above 65,504 (§15, issue #338),
 which only a source before format 0.2.3 holds. Completion does not carry it: a
@@ -2892,7 +2925,7 @@ Validators MUST check at least:
 - the `n` plane is present exactly when the `encoding` block declares one, in the declared dtype, and only beside a `float16` `se` plane; its length equals the CSR's; every code is a count from 1 to `2³² − 2` or the missing code; the plane holds at least one N, since an all-missing plane reads exactly like a release without one; every Analysis holding an N declares `sample_size_scope=variant_level`; and the by-variant copy is present on both sides or neither and its sampled cells equal the CSR's (§6a, §11, ADR 0067). The read is windowed, never the whole plane;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
-- each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
+- each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. `completion.declaration` is that categorical comparison, and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count. `completion.imputed_total` is the exact one (#362): `completion_n_imputed_total` equals the cells the imputed mask marks. It is the mask's count, not the sum of the Analysis's `completion_quality` `n_imputed`, which counts each block's own fills — a cell two LD blocks fill is counted by both blocks but is one cell (and none where their fills disagree, the duplicate rule of ADR 0072), so the sum can exceed the total, never fall below it. It fails an Analysis whose declared total differs from the mask's count in either direction, including where one is zero;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0`, `0.2.1` or `0.2.2`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
 - a 0.2 release is stamped the lowest `format_version` its features use, for every release and component, a Hybrid's outer release included: 0.2.2 when its indel ALIDs are spelt reference first (which its stamp declares and `variant_table.indel_order` holds it to), whether or not it carries `regions.tsv`; otherwise 0.2.1 when its manifest declares `regions.tsv`, and 0.2.0 when it does not (§21.3, issues #430, #381);
@@ -3042,7 +3075,9 @@ change to this table, which the test suite holds to the registry, in its order.
 | `completion.imputed_present` | grid, sequence | fold | an imputed cell carries both Z and SE |
 | `completion.off_panel` | grid | fold | no off-panel row is imputed |
 | `completion.declaration` | grid, sequence | fold | each Analysis holds imputed cells exactly when it declares them |
-| `completion.quality_counts` | grid, sequence | fold | for Analyses with at most one quality row, counts agree with stored cells; ancestry exclusion qualifies missing-cell comparison |
+| `completion.imputed_total` | grid, sequence | fold | each Analysis's `completion_n_imputed_total` is exactly the cells its imputed mask marks (§12); a cell two blocks fill is one, and one they disagree on is none; every `analyses.tsv` that declares it is judged (a 0.2.3 Hybrid's root as well as its Dense Component's), and a value that is not a non-negative integer fails |
+| `completion.missing_total` | grid, sequence | fold | each Analysis's `completion_n_missing_total` against the cells the release holds no value at (§12): a Dense release's off-panel missing cells exactly, a Ragged release's missing rows as an upper bound; unreadable values fail, in every `analyses.tsv` that declares it |
+| `completion.quality_counts` | grid, sequence | fold | for Analyses with at most one quality row (its block's attempts, §12): a Dense row's counts equal the stored cells; a Hybrid Dense Component's equal them plus the attempts its crossover overwrote (`crossover_overwritten`); a Ragged row's imputed count is at least the imputed rows held and at most those plus the missing rows held, its imputed plus missing equal the rows held; ancestry exclusion qualifies missing-cell comparison |
 | `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]`; skipped on a component holding none, and behind `side_tables.eaf_exceptions` where the plane cannot be decoded |
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
 | `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
@@ -3069,7 +3104,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `clumps.reclump` | grid, sequence | check | runs only when `validate` is given the LD Stores (`--ld-store ANCESTRY=PATH`), and is recorded as not run otherwise, which is not a pass. Each given store's recomputed `provenance_sha256` equals its entry's; and for a seeded sample of clumped Analyses (at most 25 of those whose ancestry was given, drawn with the run's fidelity seed, `validate --fidelity-seed`, 0 unless given), clumped again from that LD Store as §18.1 says, `lead` and `r` agree row for row. The finding names the seed and the sample. It re-clumps with the step's own code (`opengwasdb.clumps.compute_clumps`), so it catches arrays changed after they were written, or clumped against another LD Store, not a defect in the step itself, which would write and re-derive the same wrong arrays; `clumps.greedy` and the tests' independent re-clump are the checks of the step. Catches the wrong LD Store, an absent row made its own lead, a present row marked absent, and a sign not flipped where a translated indel's A1 swaps |
 | `by_variant.sample` | sequence | check | sampled index cells hold the codes and exact values the sequence holds |
 | `completion.quality_table` | grid, sequence | check | the `completion_quality` table is complete and names real Analyses |
-| `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_missing_total` |
+| `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_imputed_total` and `completion_n_missing_total`; the rules judging each total skip a table without it |
 | `rho.members` | grid | check | a Rho Matrix records its provenance and carries its arrays |
 | `rho.analyses` | grid | check | the matrix was estimated over the release's Analyses |
 | `rho.lengths` | grid | check | `rho` and `n_null` hold one entry per pair of Analyses |
@@ -3088,8 +3123,12 @@ change to this table, which the test suite holds to the registry, in its order.
 
 `completion.quality_counts` counts cells on the existing `ASSOCIATIONS` scan,
 without another plane read. An Analysis with **one quality row** is judged against
-the final planes: `completion_quality.n_imputed` equals the imputed mask's count,
-and `n_imputed + n_missing` equals imputed plus missing panel cells. Dense off-panel
+the final planes as a row of attempts (§12): `n_imputed` equals the imputed mask's
+count, and `n_imputed + n_missing` equals imputed plus missing panel cells, each
+plus, on a Hybrid's Dense Component, the attempts its crossover overwrote
+(`provenance.completion.crossover_overwritten`). A Ragged row's `n_imputed` is bounded
+instead, since a fill superseded by a carried missing row is held as missing: at least
+the imputed rows held, at most those plus the missing rows held. Dense off-panel
 missing cells are excluded. With **zero quality rows**, both expected counts are
 zero and the same comparisons apply, except that missing completion attempts are
 not judged when recorded panel ancestry, Assigned Ancestry and blank
@@ -3105,7 +3144,8 @@ cell repeatedly, including fills collapsed or dropped under ADR 0072. The Store
 cannot prove whether multiple rows describe distinct cells, so validation skips
 their reconciliation, including apparently non-overlapping blocks. It cannot
 detect lost fills or count transfers in these Analyses from quality counts alone.
-No per-block comparison is made, and a block id is not interpreted as a genomic
+`completion.quality_counts` judges a row as attempts; the release's totals are judged by
+`completion.imputed_total` and `completion.missing_total`. No per-block comparison is made, and a block id is not interpreted as a genomic
 interval or an external panel path. Malformed quality-table structure is reported by
 `completion.quality_table`; `completion.quality_counts` also fails if its counts
 cannot be read, including when selected on its own.

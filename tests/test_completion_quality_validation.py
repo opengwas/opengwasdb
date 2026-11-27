@@ -80,6 +80,30 @@ def test_quality_counts_must_describe_the_cells_written(completed: Path, column:
     assert any(column in message for message in result.errors)
 
 
+@pytest.mark.parametrize(
+    "value", ["-1", "'x'", "1.5", "NULL"], ids=["negative", "text", "float", "null"]
+)
+def test_a_quality_count_that_is_not_a_non_negative_integer_fails_the_rule_alone(
+    completed: Path, value: str
+) -> None:
+    """The rule reads each row's counts and refuses one it cannot (#362)."""
+    with sqlite3.connect(completed / "index.sqlite") as db:
+        # SQLite's own column rules cannot be trusted to stop these: its NOT NULL is the
+        # only one, so a NULL is made by rebuilding the table without it.
+        if value == "NULL":
+            db.executescript(
+                "CREATE TABLE q AS SELECT * FROM completion_quality; DROP TABLE completion_quality;"
+                "CREATE TABLE completion_quality (analysis_index INTEGER NOT NULL, block_id TEXT "
+                "NOT NULL, pearson_r REAL, n_imputed INTEGER, n_missing INTEGER NOT NULL);"
+                "INSERT INTO completion_quality SELECT * FROM q; DROP TABLE q;"
+            )
+        db.execute(f"UPDATE completion_quality SET n_imputed = {value}")
+
+    result = validate_store(completed, rules={RULE})
+
+    assert result.failed() == {RULE}, result.errors
+
+
 @pytest.mark.parametrize("workers", [1, 3])
 def test_a_lost_fill_is_found_even_when_other_fills_survive(
     completed: Path, monkeypatch: pytest.MonkeyPatch, workers: int,
