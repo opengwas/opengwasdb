@@ -24,6 +24,16 @@
     "chain_file": "pyliftover_builtin_hg19_hg38",
     "completion": {
       "ancestry": "EUR",
+      "crossover_overwritten": {
+        "n_imputed": [
+          0,
+          0
+        ],
+        "n_missing": [
+          1,
+          0
+        ]
+      },
       "ld_panel_id": "eur-hg38-gpm",
       "method": "elastic_net_eigenvectors_v2_regioncap",
       "min_cor": 0.0,
