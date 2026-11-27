@@ -282,14 +282,20 @@ def _require_effect_tags(path: str | Path, tags: set[str]) -> None:
 
 #: The FORMAT tags a record row reads, in query order. A tag the header does
 #: not declare is queried as `.`, a missing value, because bcftools fails the
-#: whole query when asked for an undeclared tag (ADR 0036: AF is optional).
-_RECORD_TAGS = ("EZ", "ES", "SE", "AF")
-_RECORD_FIELDS = 9
+#: whole query when asked for an undeclared tag (ADR 0036: AF is optional; so
+#: is LP, the -log10 p-value the effect-consistency check compares, #510).
+_RECORD_TAGS = ("EZ", "ES", "SE", "AF", "LP")
+_RECORD_FIELDS = 10
+#: The FORMAT tag a GWAS-VCF reports its p-value in, as -log10 p.
+P_VALUE_TAG = "LP"
 
 
-def _record_query_format(tags: set[str]) -> str:
+def _record_query_format(tags: set[str], *, p_value: bool = False) -> str:
+    """The record query. `LP` is queried only when the read wants the p-value:
+    elsewhere it prints `.`, so the per-record path parses nothing it drops."""
+    wanted = tags if p_value else tags - {P_VALUE_TAG}
     fields = ["%CHROM", "%POS", "%ID", "%REF", "%ALT"]
-    fields.extend(f"[%{tag}]" if tag in tags else "." for tag in _RECORD_TAGS)
+    fields.extend(f"[%{tag}]" if tag in wanted else "." for tag in _RECORD_TAGS)
     return "\t".join(fields) + "\n"
 
 
@@ -422,6 +428,28 @@ def _parse_float(s: str) -> float | None:
         return None
 
 
+def _p_value(lp_cell: str) -> float | None:
+    """A record's p-value from its `LP` (-log10 p), as the file wrote it; ``None``
+    where it reports none. No range rule is applied (`TabularMetricsRow.p_value`):
+    a p of 0, an `LP` too large for a float, is left for the check to pass over."""
+    if lp_cell in _MISSING_CELLS:
+        return None
+    lp = _parse_float(lp_cell)
+    if lp is None or not math.isfinite(lp):
+        return None
+    try:
+        return float(10.0 ** -lp)
+    except OverflowError:  # an LP below -308: no float p, and no p at all
+        return None
+
+
+def declares_p_value(path: str | Path) -> bool:
+    """Whether a GWAS-VCF's header declares `LP`, its p-value: the effect-consistency
+    check reads a source that does (#510), and records one that does not as
+    `no_source_p_value` without reading a record."""
+    return P_VALUE_TAG in _format_tags(path)
+
+
 def _derive_z(ez_str: str, es_str: str, se: float | None) -> float | None:
     """A record's z: its EZ when it reports one, else ES/SE; ``None`` for no effect.
 
@@ -446,7 +474,7 @@ def _derive_z(ez_str: str, es_str: str, se: float | None) -> float | None:
 
 def _row(
     chromosome: str, position: int, ref: str, alt: str, alid: str, flipped: bool,
-    af: float | None, se: float | None, z: float | None, id_field: str,
+    af: float | None, se: float | None, z: float | None, id_field: str, lp_cell: str,
 ) -> SourceRow:
     """A record's `SourceRow`, built without its frozen ``__init__``.
 
@@ -473,6 +501,7 @@ def _row(
             "z": z,
             "rsid": id_field if id_field.startswith("rs") else "",
             "source_id": "" if id_field == "." else id_field,
+            "p_value": _p_value(lp_cell),
         },
     )
     return row
@@ -485,6 +514,7 @@ def _record_rows(
     liftover: object | None = None,
     restriction: Sequence[str] = (),
     sites: bool = False,
+    p_value: bool = False,
 ) -> Generator[SourceRow, None, None]:
     """Every biallelic record of one GWAS-VCF as a `SourceRow`, in file order.
 
@@ -496,7 +526,8 @@ def _record_rows(
     each row is lifted onto the reference build before its identity is formed
     (`oriented_variant`), which refuses an indel or an ambiguous mapping.
     ``sites`` is a site extraction's order: a record with no usable AF or SE,
-    or a palindromic pair, is passed over before it is lifted.
+    or a palindromic pair, is passed over before it is lifted. ``p_value`` reads
+    each record's `LP` into its `p_value`, which only the metric blocks read (#510).
     """
     tally = tally or StreamTally()
     tags = _format_tags(path)
@@ -504,7 +535,7 @@ def _record_rows(
         # A site extraction reads AF and SE alone (issue #21), so only a read
         # that forms an association or a metric block needs the effect fields.
         _require_effect_tags(path, tags)
-    query_format = _record_query_format(tags)
+    query_format = _record_query_format(tags, p_value=p_value)
     with contextlib.closing(_query(path, query_format, _RECORD_FIELDS, restriction)) as records:
         # A site extraction's frequencies are not the stream's to count (D7).
         frequencies = None if sites else tally.frequencies
@@ -520,7 +551,7 @@ def _rows_of(
 ) -> Iterator[SourceRow]:
     """Each record's row in its own coordinates: Pass 2's per-record path."""
     chromosomes: dict[str, str] = {}
-    for chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell in records:
+    for chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell, lp_cell in records:
         if "," in alt:
             continue
         # A one-base pair on a chromosome already seen is the common record.
@@ -537,7 +568,7 @@ def _rows_of(
         se = _parse_positive_float(se_cell)
         yield _row(
             chrom, oriented[0], ref, alt, oriented[1], oriented[2],
-            parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field,
+            parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field, lp_cell,
         )
 
 
@@ -549,7 +580,7 @@ def _lifted_rows_of(
 ) -> Iterator[SourceRow]:
     """Each record's row lifted onto the reference build (`oriented_variant`)."""
     chromosomes: dict[str, str] = {}
-    for chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell in records:
+    for chrom_raw, pos, id_field, ref, alt, ez, es, se_cell, af_cell, lp_cell in records:
         if "," in alt:
             continue
         identity = _identity(chromosomes, chrom_raw, ref, alt)
@@ -568,14 +599,14 @@ def _lifted_rows_of(
         se = _parse_positive_float(se_cell)
         yield _row(
             variant.chromosome, variant.position, ref, alt, variant.alid, orientation.flipped,
-            parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field,
+            parse_af(af_cell, frequencies), se, _derive_z(ez, es, se), id_field, lp_cell,
         )
 
 
 def _usable_site(cells: list[str]) -> bool:
     """Whether a record can give a site its A1 frequency and SE: both usable, and
     its pair not palindromic. Judged before a record is lifted."""
-    _chrom, _pos, _id, ref, alt, _ez, _es, se_cell, af_cell = cells
+    _chrom, _pos, _id, ref, alt, _ez, _es, se_cell, af_cell, _lp = cells
     return (
         _parse_positive_float(se_cell) is not None
         and parse_af(af_cell) is not None
@@ -672,7 +703,9 @@ class GwasVcfReader:
         """
         # Closed explicitly, so a query that failed is reported to a caller
         # that stops early (the resolver's row cap) rather than lost (#278).
-        with contextlib.closing(_record_rows(self.path, liftover=self.liftover)) as rows:
+        with contextlib.closing(
+            _record_rows(self.path, liftover=self.liftover, p_value=True)
+        ) as rows:
             yield from metrics_chunks_from_rows(rows, chunk_rows=self.chunk_rows)
 
     def extract_at_sites(

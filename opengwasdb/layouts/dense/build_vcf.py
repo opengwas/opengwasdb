@@ -29,10 +29,16 @@ from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
-    apply_orientation_evidence,
     sample_column_rows,
     site_hashes,
     verify_eaf_orientation,
+)
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyReport,
+    apply_build_evidence,
+    declared_p_value_tests,
+    verify_effect_consistency,
 )
 from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
@@ -212,6 +218,7 @@ def build_dense_from_vcf_manifest(
     manifest_rows, rules = _manifest_and_rules(
         manifest_path, source_reader_capability, source_assembly, column_map
     )
+    consistency = _verify_effect_consistency(manifest_path, manifest_rows, rules, n_workers)
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -228,8 +235,8 @@ def build_dense_from_vcf_manifest(
         )
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
-            staged, prepared, encoded, eaf_report, store_id, release_id, chain_file,
-            chunk_shape, dtype, allow_unverified_eaf, n_workers, coverage,
+            staged, prepared, encoded, (eaf_report, consistency), store_id, release_id,
+            chain_file, chunk_shape, dtype, allow_unverified_eaf, n_workers, coverage,
         )
         log.info(
             "Build complete: %d variants × %d analyses",
@@ -665,6 +672,30 @@ def _spill_columns(
     return left_out
 
 
+def _verify_effect_consistency(
+    manifest_path: str | Path,
+    manifest_rows: Sequence[ManifestRow],
+    rules: Mapping[str, AnalysisRules],
+    n_workers: int,
+) -> EffectConsistencyReport:
+    """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
+
+    The first phase that reads a source: each one's first rows, through the
+    resolver's projection and the Analysis's declared INFO and MAF rules, before
+    Pass 1 or the axis, so a build that refuses does so before its hours of
+    routing. A GWAS-VCF's p-value is its `LP`; one whose header declares none is
+    stamped `skipped: no_source_p_value`, unread.
+    """
+    declared = declared_p_value_tests(manifest_path)
+    return verify_effect_consistency(
+        [
+            ConsistencySource(row.source, rules[row.trait_id], declared.get(row.trait_id))
+            for row in manifest_rows
+        ],
+        n_workers=n_workers,
+    )
+
+
 def _survey_and_verify_eaf(
     spill_dir: Path,
     manifest_rows: Sequence[ManifestRow],
@@ -812,7 +843,7 @@ def _finalize_store(
     staged: StagedRelease,
     prepared: _PreparedBuild,
     encoded: _EncodedBands,
-    eaf_report: EafOrientationReport,
+    reports: tuple[EafOrientationReport, EffectConsistencyReport],
     store_id: str,
     release_id: str,
     chain_file: str | Path | None,
@@ -828,8 +859,9 @@ def _finalize_store(
     top-hit indexes are written from the band-write's stored-value harvest
     (issue 046); analyses.tsv is written last, with each Analysis's
     ``eaf_scope`` stamped from what was actually stored (ADR 0036) and the
-    orientation evidence applied (issue #115).
+    orientation and effect-consistency evidence applied (issue #115, #510).
     """
+    eaf_report, consistency = reports
     axis = prepared.axis
     _write_manifest(
         staged,
@@ -850,8 +882,8 @@ def _finalize_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
         encoded.encoding, n_workers=n_workers,
     )
-    analyses = apply_orientation_evidence(
-        apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
+    analyses = apply_build_evidence(
+        apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report, consistency
     )
     write_analyses_tsv(
         staged.path,

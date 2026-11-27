@@ -25,7 +25,11 @@
     "completion": {
       "ancestry": "EUR",
       "cis_window_bp": 1000000,
-      "ld_panel_id": "eur-hg38-gpm",
+      "ld_panel_ancestry_dir": "/store-reader-contract/build/digest/ragged/ragged_residual_140/ld_panel/EUR",
+      "ld_panel_digest": "827e2fdbc75f878cfc1568db5192338e9347fe14a2e5e028c8c0da80cd6344a8",
+      "ld_panel_id": "sha256:827e2fdbc75f878c",
+      "ld_panel_id_source": "digest",
+      "ld_panel_path": "/store-reader-contract/build/digest/ragged/ragged_residual_140/ld_panel",
       "method": "elastic_net_eigenvectors_v2_regioncap",
       "min_cor": 0.0,
       "n_imputed": 10,

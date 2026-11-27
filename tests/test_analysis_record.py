@@ -9,17 +9,21 @@ issue #68 onward), so these tests never go through a builder entrypoint.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
 from opengwasdb.model.analyses import (
     ANALYSIS_COLUMNS,
+    EFFECT_CONSISTENCY_COLUMNS,
     RETIRED_ANALYSIS_COLUMNS,
+    AnalysesTable,
     Analysis,
     analyses_table_from_records,
     ancestry_impute_mask,
     read_analysis_records,
     reset_top_hit_counts,
+    write_analyses,
     write_analysis_records,
 )
 from opengwasdb.store_reader.analyses import read_analyses
@@ -62,6 +66,12 @@ _FULL_ANALYSIS = Analysis(
     eaf_orientation="passed",
     eaf_orientation_r="0.999200",
     eaf_orientation_n="18422",
+    # `refused` is the one outcome that fills every column; no Store holds it.
+    effect_consistency="refused",
+    effect_consistency_reason="median_abs_delta",
+    effect_consistency_median_abs_delta="29.6",
+    effect_consistency_median_delta="-29.6",
+    effect_consistency_n="20000",
     n_hits_5e8="42",
     n_hits_5e6="120",
     n_hits_5e4="900",
@@ -80,7 +90,8 @@ def test_analysis_columns_match_the_adr_0035_order():
     # interpretation columns and the effect-scale ones it sits alongside.
     # `eaf_orientation*` joined it for issue #115, alongside the other
     # build-time evidence columns a store carries and a manifest cannot, and
-    # `n_missing_se_out_of_range` for issue #338, beside the completion counts.
+    # `n_missing_se_out_of_range` for issue #338, beside the completion counts,
+    # and `effect_consistency*` for issue #510, beside the orientation evidence.
     assert ANALYSIS_COLUMNS == (
         "analysis_index",
         "analysis_id",
@@ -117,6 +128,11 @@ def test_analysis_columns_match_the_adr_0035_order():
         "eaf_orientation",
         "eaf_orientation_r",
         "eaf_orientation_n",
+        "effect_consistency",
+        "effect_consistency_reason",
+        "effect_consistency_median_abs_delta",
+        "effect_consistency_median_delta",
+        "effect_consistency_n",
         "n_hits_5e8",
         "n_hits_5e6",
         "n_hits_5e4",
@@ -335,3 +351,29 @@ def test_ancestry_impute_mask_empty_id_set_matches_nothing_but_is_a_mask():
 
     assert mask is not None
     assert mask.tolist() == [False, False]
+
+
+def test_a_table_written_before_the_effect_consistency_columns_is_rewritten_without_them(
+    tmp_path: Path,
+) -> None:
+    """A completion or `--convert-legacy` reads a release built before #510 and writes
+    its `analyses.tsv` again: the columns stay absent, so the release stays honestly
+    pre-check (a warning) rather than gaining blanks a build since #510 never writes
+    (an error). A table that has them keeps them, blank or not (#510)."""
+    built = analyses_table_from_records([Analysis(analysis_id="a"), Analysis(analysis_id="b")])
+    assert set(EFFECT_CONSISTENCY_COLUMNS) <= set(built.fieldnames)
+    kept = tuple(c for c in built.fieldnames if c not in EFFECT_CONSISTENCY_COLUMNS)
+    old = tmp_path / "old.tsv"
+    write_analyses(old, AnalysesTable(kept, tuple({c: r[c] for c in kept} for r in built.rows)))
+    assert not set(EFFECT_CONSISTENCY_COLUMNS) & set(read_analyses(old).fieldnames)
+
+    rewritten = tmp_path / "rewritten.tsv"
+    write_analysis_records(rewritten, read_analysis_records(old))
+    assert not set(EFFECT_CONSISTENCY_COLUMNS) & set(read_analyses(rewritten).fieldnames)
+
+    new = tmp_path / "new.tsv"
+    write_analyses(new, built)
+    again = tmp_path / "again.tsv"
+    write_analysis_records(again, read_analysis_records(new))
+    assert set(EFFECT_CONSISTENCY_COLUMNS) <= set(read_analyses(again).fieldnames)
+

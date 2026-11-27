@@ -56,6 +56,7 @@ from opengwasdb.validation.rules import side_tables as side_table_rules
 from opengwasdb.validation.rules import subsets as subset_rules
 from opengwasdb.validation.rules import top_hits as top_hit_rules
 from opengwasdb.validation.rules import variants as variant_rules
+from opengwasdb.validation.rules import z_plausibility as z_plausibility_rules
 from opengwasdb.validation.rules.release import REQUIRED
 from opengwasdb.validation.run import evaluate, selected
 from opengwasdb.variants.normalise import canonical_alid
@@ -214,6 +215,7 @@ _BEFORE_FIDELITY: tuple[Rule, ...] = (
     *association_rules.PRESENCE_RULES,
     *completion_rules.RULES,
     *association_rules.EAF_RULES,
+    *z_plausibility_rules.RULES,
     *side_table_rules.RULES,
     *sample_size_rules.RULES,
     *top_hit_rules.STRUCTURE_RULES,

@@ -79,12 +79,6 @@ RECLUMP_ANALYSES = 25
 # ── what the rules read ──────────────────────────────────────────────────────
 
 
-def _root(target: Target) -> Target:
-    while target.parent is not None:
-        target = target.parent
-    return target
-
-
 def _component_label(target: Target) -> str:
     """The component a grid or sequence target is, as `read_clumps` names it."""
     return "data.zarr" if target.kind is Kind.CSR else target.label
@@ -148,7 +142,7 @@ def _readable(target: Target) -> bool:
 
 def _view_or_none(target: Target) -> _View | None:
     """The release's view, read once and kept on its root target."""
-    root = _root(target)
+    root = target.outer_release()
     return root.remember("clumps/view", lambda: _read_view(root))
 
 
@@ -176,7 +170,7 @@ def _read_view(root: Target) -> _View | None:
 
 
 def _analysis_ids(target: Target) -> list[str]:
-    rows = sorted(_root(target).analyses.rows, key=lambda row: int(row["analysis_index"]))
+    rows = sorted(target.outer_release().analyses.rows, key=lambda row: int(row["analysis_index"]))
     return [row["analysis_id"] for row in rows]
 
 
@@ -517,7 +511,7 @@ def reclump(target: Target) -> Iterator[str]:
         raise Skip("not run: validate was given no LD Store (--ld-store ANCESTRY=PATH)")
     view = _view(target)
     i = view.component(_component_label(target))
-    found = _root(target).remember("clumps/reclump", lambda: _reclumped(target, view))
+    found = target.outer_release().remember("clumps/reclump", lambda: _reclumped(target, view))
     yield from found.problems
     if found.result is None:
         return
@@ -533,7 +527,7 @@ def reclump(target: Target) -> Iterator[str]:
 
 def _reclumped(target: Target, view: _View) -> _Reclump:
     """A seeded sample of the clumped Analyses whose ancestry was given, re-clumped."""
-    root = _root(target)
+    root = target.outer_release()
     seed = target.options.fidelity_seed
     given = dict(target.options.ld_stores or {})
     problems = [f"--ld-store {a} has no ld_stores entry to check"
