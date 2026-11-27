@@ -732,6 +732,10 @@ _BUILD_RAGGED_REGIONS_HELP = (
     "regions complete-ragged fills; a Store whose coverage is not cis is not completed "
     "without it"
 )
+_BUILD_SSF_WORKERS_HELP = (
+    "Sources the effect-consistency check reads at once, before the ingest (#510); "
+    "the ingest reads one Analysis at a time"
+)
 
 
 @app.command("check-observed-view")
@@ -1762,6 +1766,7 @@ def build_ragged_ssf_command(
     chain_file: _CHAIN_FILE_OPTION = None,
     liftover_failure_threshold: _LIFTOVER_FAILURE_THRESHOLD_OPTION = 0.01,
     regions: Annotated[Path | None, typer.Option(help=_BUILD_RAGGED_REGIONS_HELP)] = None,
+    n_workers: int = typer.Option(1, help=_BUILD_SSF_WORKERS_HELP),
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1791,20 +1796,13 @@ def build_ragged_ssf_command(
     """
     from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
     result = build_ragged_from_ssf(
-        manifest_path,
-        filtered_dir,
-        output_path,
-        store_id=store_id,
-        release_id=release_id,
-        association_coverage=association_coverage,
-        overwrite=overwrite,
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
-        allow_unverified_eaf=allow_unverified_eaf,
-        admission_record=admission_record,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        regions=regions,
+        manifest_path, filtered_dir, output_path,
+        store_id=store_id, release_id=release_id, association_coverage=association_coverage,
+        overwrite=overwrite, eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record, chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold, regions=regions,
+        n_workers=n_workers,
     )
     _echo_ragged_summary(result)
 

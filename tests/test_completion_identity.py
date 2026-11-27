@@ -74,6 +74,11 @@ Since #327 each pin's manifest holds the five `provenance.completion` panel fiel
 the digest and the id derived from it among them. A fixture panel is written with no time
 in its gzip header (`ld_blocks.write_gzipped_matrix`), so its digest is the same on every
 run. Re-derived after checking that every other entry of all nine pins was unchanged.
+
+Since #510 every pin's `analyses.tsv` carries the five `effect_consistency` columns
+each build stamps, and the Dense pin's `overview.html` renders them. Re-derived after
+writing every pin again with those columns stripped from `analyses.tsv`: every entry
+of every pin, the Dense `overview.html` included, then hashed to the previous pin.
 """
 
 from __future__ import annotations

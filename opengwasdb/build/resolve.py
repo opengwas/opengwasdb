@@ -51,16 +51,19 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.admission import AdmissionCounts, AnalysisRules, SourceRows, counting_gate
+from opengwasdb.admission import AdmissionCounts, AnalysisRules
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_ancestry
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.effect_consistency import (
     DEFAULT_EFFECT_CONSISTENCY_POLICY,
     ConsistencySample,
-    ConsistencySkip,
     EffectConsistency,
     EffectConsistencyPolicy,
+    admit_block,
     check_sample_bound,
+    declared_refusal,
+    declared_skip,
+    refusal_text,
 )
 from opengwasdb.build.hash_sample import HashSample
 from opengwasdb.build.info_score_filter import declared_score_state
@@ -574,8 +577,9 @@ def _scan_diagnostics(
 
 def _effect_consistency(request: AnalysisRequest, scan: _Scan) -> EffectConsistency:
     """The check's verdict, or its skip when the declared p cannot witness beta/se."""
-    if request.p_value_test is PValueTest.JOINT_2DF:
-        return scan.consistency.skipped(ConsistencySkip.JOINT_TEST_P_VALUE)
+    skip = declared_skip(request.p_value_test)
+    if skip is not None:
+        return scan.consistency.skipped(skip)
     return scan.consistency.measure(request.effect_consistency_policy)
 
 
@@ -624,7 +628,7 @@ def _scan(
     try:
         for chunk in stream:
             observed = _bounded(chunk, scan, limit)
-            keep, counts = _admit(observed, rules)
+            keep, counts = admit_block(observed, rules)
             retained_indices = np.flatnonzero(keep)
             block = _take(observed, retained_indices)
             stopped_physical: int | None = None
@@ -644,7 +648,7 @@ def _scan(
                         block = _slice(block, stopped + 1)
                         # Tally only the prefix actually read; the rule is
                         # row-wise, so the prefix's mask is unchanged.
-                        _, counts = _admit(observed, rules)
+                        _, counts = admit_block(observed, rules)
                         scan.stop_reason = scan.ancestry_stop_reason
 
             ancestry_end = (
@@ -704,27 +708,6 @@ def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
     if rows >= len(chunk):
         return chunk
     return _take(chunk, np.arange(rows))
-
-
-def _admit(observed: MetricsChunk, rules: AnalysisRules) -> tuple[np.ndarray, AdmissionCounts]:
-    """One block's keep mask and counts, by Association Admission, in the builder's orientation.
-
-    Both come from one counting gate's judgement, so the counts the record
-    reports and the rows the scan keeps cannot disagree (stores #176). The
-    frequency is oriented exactly as `stream_associations` orients the
-    builder's `eaf` (`1.0 - af_alt` on a flipped row): MAF is symmetric in exact
-    arithmetic but not in floating point, so a row whose MAF lies on the
-    threshold would otherwise be kept by one and dropped by the other.
-    """
-    gate = counting_gate(rules)
-    keep = gate.source_rows(
-        SourceRows(
-            eaf=observed.a1_frequency(),
-            imputation_score=observed.imputation_score,
-            imputation_status=observed.imputation_score_status,
-        )
-    )
-    return keep, gate.counts
 
 
 def _count_build_eligible(
@@ -1083,25 +1066,6 @@ def _ancestry(
     return assign_ancestry(scan.panel_af, reference, gates)
 
 
-def _declared_refusal(request: AnalysisRequest) -> str:
-    """The controlled failure for an Analysis whose declaration refuses it, or "".
-
-    MR-MEGA scales each SE by the residual mean square, so beta/se is a
-    t-statistic on (cohorts - 2) df, not a z, and the Store would answer with a
-    p the source never published (issue #371: GCST90833021 returns z -1054 at
-    source p 0.81). No scan can make it a z, so none is made.
-    """
-    if request.p_value_test is not PValueTest.MR_MEGA:
-        return ""
-    return (
-        "p_value_test is mr_mega: MR-MEGA divides each effect by a standard error "
-        "scaled by its residual mean square, so beta/se is a t-statistic on "
-        "(cohorts - 2) degrees of freedom, not a z-score, and its p-value is a "
-        "separate 2-df test. A Store keeps z and answers with the p of z, so the "
-        "Analysis is refused (issue #371)."
-    )
-
-
 def _consistency_refusal(measured: EffectConsistency | None, request: AnalysisRequest) -> str:
     """The controlled failure for a source that contradicts its own p-value, or "".
 
@@ -1110,25 +1074,7 @@ def _consistency_refusal(measured: EffectConsistency | None, request: AnalysisRe
     """
     if measured is None or not measured.refused:
         return ""
-    policy = request.effect_consistency_policy
-    n = measured.n_rows_compared
-    if measured.refused_by == "median_delta":
-        return (
-            "stored z is deflated against the source's own p-value: the median signed "
-            f"(log10 p implied by beta/se - log10 p reported) is {measured.median_delta:.3g} "
-            f"over {n} rows, above the threshold {policy.max_median_delta:g} "
-            f"(median |delta| {measured.median_abs_delta:.3g}). beta/se carries less "
-            "signal than the reported p-value: the standard error is probably not this "
-            "effect's, or is on another scale."
-        )
-    return (
-        "effect contradicts the source's own p-value: the median "
-        f"|log10 p implied by beta/se - log10 p reported| is {measured.median_abs_delta:.3g} "
-        f"(median signed {measured.median_delta:.3g}) over {n} "
-        f"rows, above the threshold {policy.max_median_abs_delta:g}. The source's effect "
-        "column is probably on another scale (an odds ratio in `beta`, or log-odds "
-        "in `odds_ratio`) or its standard error is not this effect's."
-    )
+    return refusal_text(measured, request.effect_consistency_policy)
 
 
 def resolve_analysis(
@@ -1190,7 +1136,7 @@ def resolve_analysis(
     check_sample_bound(evidence_sample, request.effect_consistency_policy)
     if scan_limit is not None:
         scan_limit.validate()
-    declared = _declared_refusal(request)
+    declared = declared_refusal(request.p_value_test)
     if declared:
         return unresolved(
             request.analysis_id, request.source_file, declared, source_ancestry=source_ancestry

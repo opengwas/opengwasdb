@@ -1,5 +1,5 @@
 {
- "bundle_version": "3",
+ "bundle_version": "4",
  "digests": {
   "adapter": "StoreQuery",
   "alid_probes": {
@@ -57,6 +57,11 @@
    "eaf_orientation_n": "9f41f460ed6233aa1dd4be046f804b1686f0e3989f519fed98864e65ad47f64f",
    "eaf_orientation_r": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
    "eaf_scope": "ecb8eebf1a3cb1da5b8b2faa6cbcf16391ed48ed7f8162d9923804522c616bb3",
+   "effect_consistency": "2fff2384c4c733244b445ed60dee6fc3310753c5e4945ef887a756ba7051504f",
+   "effect_consistency_median_abs_delta": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "effect_consistency_median_delta": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "effect_consistency_n": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
+   "effect_consistency_reason": "966d84911407296218316916c8ba51454461e967584bf5dfc144e927a0a89eda",
    "first_author": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
    "license": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
    "n_cases": "ebe5d86ee6010732820d47d06ba126356de29fd7722434ec6083b59e1d08f164",
@@ -1600,6 +1605,11 @@
      "eaf_orientation_n": "0",
      "eaf_orientation_r": "",
      "eaf_scope": "association",
+     "effect_consistency": "skipped",
+     "effect_consistency_median_abs_delta": "",
+     "effect_consistency_median_delta": "",
+     "effect_consistency_n": "",
+     "effect_consistency_reason": "too_few_rows",
      "first_author": "",
      "license": "",
      "n_cases": "",

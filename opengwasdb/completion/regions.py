@@ -36,8 +36,9 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.completion.ld_panel import LDBlock, list_all_blocks, list_chromosomes
+from opengwasdb.completion.ld_panel import LDBlock, list_all_blocks
 from opengwasdb.model.analyses import Analysis
+from opengwasdb.model.ld_panel_files import list_chromosomes
 from opengwasdb.model.regions import (
     REGION_KINDS,
     REGIONS_FILE,

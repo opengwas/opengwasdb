@@ -10,6 +10,7 @@ the same batches.
 
 from __future__ import annotations
 
+import gzip
 import io
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -364,6 +365,36 @@ def _written(name: str) -> Callable[[Path], Path]:
     return case.write
 
 
+def _agreeing(write: Callable[[Path], Path]) -> Callable[[Path], Path]:
+    """``write``, with each row's `p_value` the one its beta and SE imply.
+
+    The cases write `p_value` 0.01 on every row, which no build checks for what a
+    reader does; a build checks beta/se against it (#510, ADR 0069) and refuses a
+    source whose rows contradict it. A row whose beta or SE makes no z keeps its own.
+    """
+
+    def agreeing(directory: Path) -> Path:
+        path = write(directory)
+        gz = path.suffix == ".gz"
+        raw = gzip.decompress(path.read_bytes()) if gz else path.read_bytes()
+        lines = raw.decode("utf-8").split("\n")
+        header = lines[0].split("\t")
+        if "p_value" in header:
+            at = {name: header.index(name) for name in ("beta", "standard_error", "p_value")}
+            for i, line in enumerate(lines[1:], start=1):
+                cells = line.split("\t")
+                if len(cells) == len(header):
+                    cells[at["p_value"]] = ssf_cases.implied_p(
+                        cells[at["beta"]], cells[at["standard_error"]], cells[at["p_value"]]
+                    )
+                    lines[i] = "\t".join(cells)
+        data = "\n".join(lines).encode("utf-8")
+        path.write_bytes(gzip.compress(data) if gz else data)
+        return path
+
+    return agreeing
+
+
 def _scored(directory: Path) -> Path:
     """A source declaring a score in `info`, in every status the columns decide,
     with the duplicates and the unusable SE the other builds meet."""
@@ -388,12 +419,12 @@ def _off_primary(directory: Path) -> Path:
 #: GWAS-SSF row is dropped for, and one declared hg19 whose lift puts a row off
 #: the primary assembly.
 _BUILDS: dict[str, tuple[Callable[[Path], Path], str]] = {
-    "generated": (_written("generated"), "hg38"),
-    "beta": (_written("beta"), "hg38"),
-    "declared score": (_scored, "hg38", "info"),
-    "layout hm_": (_written("hm_ allele columns"), "hg38"),
-    "hm_ unplaced": (_written("hm_ unplaced rows"), "hg38"),
-    "unharmonised": (_written("no harmoniser column"), "hg38"),
+    "generated": (_agreeing(_written("generated")), "hg38"),
+    "beta": (_agreeing(_written("beta")), "hg38"),
+    "declared score": (_agreeing(_scored), "hg38", "info"),
+    "layout hm_": (_agreeing(_written("hm_ allele columns")), "hg38"),
+    "hm_ unplaced": (_agreeing(_written("hm_ unplaced rows")), "hg38"),
+    "unharmonised": (_agreeing(_written("no harmoniser column")), "hg38"),
     "off-primary": (_off_primary, "hg19"),
 }
 

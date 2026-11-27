@@ -65,7 +65,6 @@ from opengwasdb.completion.ld_panel import (
     ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
-    list_chromosomes,
     panel_variant,
 )
 from opengwasdb.completion.manifest import (
@@ -109,6 +108,7 @@ from opengwasdb.model.analyses import (
     read_analysis_records,
     reset_top_hit_counts,
 )
+from opengwasdb.model.ld_panel_files import list_chromosomes
 from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,

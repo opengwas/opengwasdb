@@ -60,7 +60,8 @@ reason, when:
 - `no_source_p_value` — no admitted row carries a usable source p-value: no
   p-value column, or none in `(0, 1]`. GWAS-VCF and BESD are in this class for
   now; reading VCF's `LP` (−log10 p) is deferred, and until it lands a VCF source
-  is not checked. A column that is entirely blank is the same fact as no column.
+  is not checked (it landed with #510: see the addendum of 27 Nov 2026). A column
+  that is entirely blank is the same fact as no column.
 - `all_se_from_p_value` — every row with a source p-value had its standard error
   derived from it.
 - `too_few_rows` — fewer than the minimum (50) rows *compared*, that is, in the
@@ -178,7 +179,8 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
 - **GWAS-VCF and BESD are not checked yet.** Their records say
   `skip_reason = no_source_p_value`. Reading VCF `LP` is deferred, as is any
   check for BESD, whose per-probe statistics carry no p-value in the metrics
-  projection.
+  projection. (Superseded for GWAS-VCF by the addendum of 27 Nov 2026: `LP` is
+  read, and a VCF that declares it is checked.)
 - **A source whose reported standard error is not the effect's** (a standard
   error from a different model than the effect) is refused too when it moves the
   implied p by an order of magnitude on the typical row. That is intended.
@@ -273,3 +275,130 @@ manifest and Column Map in `opengwasdb-stores`; the resolver names no Analysis.
 - **Comparing p-derived standard errors.** Agrees by construction.
 - **A CLI flag for the threshold.** The resolver CLI passes no tolerances
   through; adding the first one for a refusal would invite loosening it per run.
+
+## Addendum, 27 Nov 2026: every build runs the check, and a stored-z audit (#510)
+
+**The gap.** OGS-00032 and OGS-00033 were published with eleven Analyses whose z was
+wrong by a scale: ten of PMID 40222985 (Omae) whose harmonised `beta` holds the odds
+ratio beside a log-scale SE, and GCST90278111 (Kamiza), whose `beta` is about −5.6 × 10⁵.
+They surfaced only because clumping them took hours. The check above would have refused
+every one: run with the current resolver on each source's first 500,000 rows, their
+median |Δ| is 24.5 to 34.0 (Omae) and 1.2 × 10¹² (Kamiza), against a threshold of 1.0.
+It never ran on them. Their Resolution Records were written by opengwasdb 0.3.3
+(`1f1e289a`, Manifest Generation on 5 Nov; `release.yaml` records
+`resolver_opengwasdb_version: 0.3.3`), and the check first shipped in 0.4.0. The Stores were
+built later by 0.20.0 and 0.26.0 from that frozen bundle, and no builder measured anything
+of the kind. Of the published Stores, only OGS-00011 was resolved by an engine with the
+check. OGS-00005 still holds `GCST002047`, the example this ADR names.
+
+**Decision 1: the build runs the check.** Each builder hands every Analysis to
+`verify_effect_consistency` beside its EAF orientation check, and the shape is that
+check's (ADR 0037 §6, `build/eaf_orientation.py`). `check_effect_consistency` measures,
+`enforce_effect_consistency` raises one `EffectConsistencyError` naming every Analysis
+that contradicts its p-value and the rule that fired, and `apply_consistency_evidence`
+stamps each Analysis's `analyses.tsv`. A refused Analysis is handled as a flipped EAF is:
+the build stops before writing, and the registry excludes it by that reason.
+
+- *What is read.* Each source's first `DEFAULT_BUILD_SCAN_ROWS` = 1,000,000 rows,
+  through the resolver's own projection (`stream_metric_chunks`) and Association
+  Admission (`admit_block`, which the resolver now shares), sampled bottom-20,000 by ALID
+  hash. That prefix is what this ADR's calibration measured, and its whole-file
+  confirmation found the medians within 0.0055 (clean) and 0.0128 (refused) of the whole
+  file's. A read costs about 5 s per GWAS-SSF source (4.7 s and 6.3 s measured at load
+  60), run `n_workers` at a time: about 11 minutes for OGS-00011's 3,245 Analyses at 24
+  workers, beside a build of hours. Routing carries no p-value, so the check is its own
+  bounded read rather than a passenger on Pass 2. Because it is its own read, it runs
+  first.
+- *Where, and when.* Each builder's first read of its sources, before it lifts,
+  partitions or routes anything: `build-hybrid` after reading its manifest and before
+  staging (recorded in the checkpoint as `effect_consistency.json`, which a resume
+  reloads; a checkpoint written before this change holds none, and its resume measures
+  one), `build-dense-vcf` before Pass 1 and the axis, and `build-ragged-ssf` after its
+  manifest and before the ingest, with `n_workers` sources at a time (a new
+  `--n-workers`, since the ingest is serial). A refused Analysis stops the build before
+  hours of routing, not after.
+- *Which sources are read.* One whose format can carry a p-value
+  (`readers.registry.carries_p_value`): a GWAS-SSF's `p_value`, a Column Map's mapped
+  `p_value`, FinnGen's `pval`, and a GWAS-VCF's `FORMAT/LP`, read as `p = 10^-LP` by the
+  GWAS-VCF reader's metric blocks. One that cannot is stamped `skipped:
+  no_source_p_value` unread: BESD, the association TSV (`build-ragged-besd` and
+  `build-dense` stamp every Analysis so), a GWAS-VCF whose header declares no `LP`, and a
+  Column Map that maps no `p_value`. The resolver reads the same metric blocks, so
+  `resolve-analyses` now checks GWAS-VCF sources too; a record resolved before keeps its
+  `no_source_p_value` until it is recomputed.
+- *The declaration.* A build manifest may carry `p_value_test` (ADR 0085). `joint_2df`
+  skips the check (`joint_test_p_value`) and `mr_mega` is refused unread, as in the
+  resolver. Unlike the resolver's, the column is optional: an Analysis that declares
+  nothing is checked. Silence therefore cannot store a wrong z. A joint test left
+  undeclared is refused loudly, and the refusal names the declaration.
+- *What is recorded.* `effect_consistency` (`passed` or `skipped`),
+  `effect_consistency_reason`, both medians and `effect_consistency_n`, in `analyses.tsv`
+  (spec §7a, §9.2). No build writes `refused`. `format_version` does not move: the
+  columns are additive. Their presence is the marker of a build since this change, as
+  the completion provenance fields are #327's: every build writes all five on every row,
+  so `effect_consistency.evidence` fails a release with some of them, a blank outcome
+  under them, a recorded `refused`, and evidence that contradicts itself; a release with
+  none of them was built before and `effect_consistency.unchecked` warns, once. A
+  rewrite of such a release (a completion, `--convert-legacy`) keeps the columns absent
+  (`Analysis.effect_consistency` is `None` when read from a table without them), so it
+  stays honestly pre-check rather than failing on blanks it never had.
+
+**Measured on real sources.** Through the build's own path (`check_effect_consistency`,
+first 1,000,000 rows, 12 workers, load 140), all twelve mis-scaled sources (the eleven
+above and `GCST002047`) are refused, with median |Δ| ≥ 24.4. Twenty-six sound ones all
+pass, with median |Δ| ≤ 0.123: 20 random OGS-00011 sources and the six height scans with
+the most 5e-8 hits in the published Stores. The 38 sources took 27.4 s
+(`scratch/510/build_check_real.jsonl`). Three more OGS-00011 sources, published only
+below p = 0.007 or p = 0.00067, pass in a second run with median |Δ| ≤ 0.0045.
+Ten ukb-b GWAS-VCFs (OGS-00009's sources: ukb-b-10001, ukb-b-10002 and eight at random),
+read through `LP`, all pass with median |Δ| 0.00197 to 0.00203 over 20,000 compared rows
+each, the residue of `LP`'s six significant figures; the ten took 26 s
+(`scratch/510/fix1/ukbb_vcf_check*.jsonl`).
+
+**Decision 2: a stored-z audit of Stores already built.** A published Store keeps no
+source p-value, so this check cannot be repeated on one. It keeps every z, and in a
+genome-wide scan few variants are at 5e-8. `associations.z_plausible` is a fold over the
+association scan that counts, per Analysis, the observed associations and those at
+5e-8, summed over a Hybrid's Dense Component and Overflow. It flags an Analysis with
+more than 30% at 5e-8 among at least 1,000 observed. It judges only genome-wide releases, those whose manifest declares
+`association_coverage` `gwas`, and it is an error from `format_version` 0.2.2 and a
+warning before that. Ruling of 27 Nov 2026, option A of the measurement:
+
+- *The gap.* The twelve mis-scaled Analyses have 81% or more of their sources' first
+  500,000 rows at 5e-8. Sound ones have at most 8.2% in the 206-source sample
+  (`scratch/510/signals_table.md`), and at most 9.7% in every published Store
+  (GCST90245992, height, OGS-00011; `scratch/510/survey.jsonl`), with each Hybrid
+  Analysis's counts summed over its components (`option_a_summed_verdicts.txt`). Over
+  every published Store the rule flags GCST002047 in OGS-00005 alone. In the replaced
+  OGS-00032 and OGS-00033 releases it flags exactly the eleven.
+- *A share above |z| 3 was dropped, not kept as a warning.* It flags sound genome-wide
+  sources published only below a p threshold: GCST90444395 (p ≤ 0.007, 55% above
+  |z| 3, 0.7% at 5e-8) and GCST90271757 (p ≤ 0.00067, every row above |z| 3, 2.2% at
+  5e-8). Both pass the build's check with median |Δ| ≤ 0.0045.
+- *Not cis.* With the coverage gate removed, a strong eGene's window is mostly at 5e-8:
+  the bound would flag 560 of OGS-00027's genes and 2 of OGS-00001's.
+- *Per Analysis, not per component.* A Hybrid's Overflow holds its off-panel, mostly
+  rare variants. Their larger SEs keep an odds ratio's z lower there, so the ten Omae
+  Analyses' Overflows sit at 14% to 25% at 5e-8, under the bound, while their Dense
+  Components sit at 86% to 91%. Judged per component, the 1,000-observation floor left
+  a part too small to judge alone, so an Analysis with 999 Dense associations all at
+  5e-8 beside a 1,500-row Overflow at 20% passed: the Dense part went unjudged and the
+  Overflow sat under the bound. Summed, the same Analysis is at 52% and fails. The rule
+  therefore sums each Analysis's counts over both components before it judges. The first
+  component's pass leaves its counts on the release, and the second sums and judges.
+  This closes the gap. (A share under 0.3 in both components is under 0.3 summed, since
+  the sum is a weighted mean; the floor was the hole.)
+
+**Consequences.**
+
+- A build refuses sources it used to build. The error says `effect_consistency=refused`
+  and names the rule, so the registry can exclude by reason.
+- Every release built before this change warns `effect_consistency.unchecked`.
+  `validate` fails OGS-00005 on `associations.z_plausible` until it is rebuilt without
+  GCST002047, which the owner rules is excluded by reason through the registry.
+- Test fixtures that wrote a p-value unrelated to their beta/se were refused once a build
+  checked. The batch-parity generators now write the p their rows imply.
+- The build manifest's optional `p_value_test` and the five `analyses.tsv` columns are
+  sibling-repo documentation: opengwasdb-stores should pass its reviewed
+  `p_value_tests` table through to the build manifest, and exclude by
+  `effect_consistency`.

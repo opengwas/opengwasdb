@@ -49,9 +49,15 @@ from opengwasdb.build.eaf_orientation import (
     EafOrientationOutcome,
     EafOrientationReport,
     OrientationEvidence,
-    apply_orientation_evidence,
     site_hashes,
     verify_eaf_orientation,
+)
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyReport,
+    apply_build_evidence,
+    declared_p_value_tests,
+    verify_effect_consistency,
 )
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
@@ -170,6 +176,7 @@ from opengwasdb.model.info_score_policy import (
     InfoScoreState,
 )
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
@@ -631,6 +638,9 @@ class _PreparedBuild:
     #: table's only reader -- is done.
     table: RouteTable | None
     n_analyses: int
+    #: Each Analysis's check against its source's own p-value (#510), measured
+    #: before anything was prepared and stamped beside the orientation evidence.
+    consistency: EffectConsistencyReport
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
     off_primary: frozenset[str] = frozenset()
     lift_drops: LiftDrops = LiftDrops()
@@ -812,6 +822,10 @@ def _partition_variants(
     )
 
 
+#: The effect-consistency report a resumed build reloads, beside `ORIENTATION` (#510).
+EFFECT_CONSISTENCY = "effect_consistency.json"
+
+
 @dataclass(frozen=True)
 class DeclaredPolicies:
     """The per-Analysis declared INFO and MAF policies one manifest carries.
@@ -823,6 +837,8 @@ class DeclaredPolicies:
 
     info: Mapping[str, InfoScorePolicy]
     maf: Mapping[str, MafPolicy]
+    #: Each Analysis's declared `p_value_test`, `None` where it declares none (#510).
+    p_value_tests: Mapping[str, PValueTest | None] = field(default_factory=dict)
 
 
 def _load_manifest(
@@ -867,6 +883,7 @@ def _read_declared_policies(
     return DeclaredPolicies(
         info={analysis_id: r.info for analysis_id, r in rules.items()},
         maf={analysis_id: r.maf for analysis_id, r in rules.items()},
+        p_value_tests=declared_p_value_tests(manifest_path),
     )
 
 
@@ -2154,6 +2171,32 @@ def _verify_eaf_orientation(
     )
 
 
+def _verify_effect_consistency(
+    manifest_rows: Sequence[ManifestRow], policies: DeclaredPolicies, n_workers: int
+) -> EffectConsistencyReport:
+    """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
+
+    The first phase that reads a source: each one's first rows, read once more by
+    the check itself, before the axis is lifted, partitioned or routed, so a build
+    that refuses does so before its hours of routing.
+    """
+    return verify_effect_consistency(
+        [
+            ConsistencySource(
+                row.source,
+                AnalysisRules(
+                    row.trait_id,
+                    info=policies.info[row.trait_id],
+                    maf=policies.maf[row.trait_id],
+                ),
+                policies.p_value_tests.get(row.trait_id),
+            )
+            for row in manifest_rows
+        ],
+        n_workers=n_workers,
+    )
+
+
 def _plan_joint_encoding(
     prepared: _PreparedBuild,
     evidence: _EafEvidence,
@@ -2265,9 +2308,10 @@ def _stamp_analyses(
     """Stamp each Analysis's eaf_scope (ADR 0036) and orientation columns.
     eaf_scope is the union of what the two components stored, so neither
     analyses.tsv may be written until both have been read."""
-    return apply_orientation_evidence(
+    return apply_build_evidence(
         apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
         evidence.report,
+        prepared.consistency,
     )
 
 
@@ -2522,6 +2566,7 @@ def _prepare_build(
     manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     options: _BuildOptions,
+    consistency: EffectConsistencyReport,
     spill_dir: Path | None = None,
 ) -> _PreparedBuild:
     """Seam - preparation: lifting, partition/routing and the Dense skeleton,
@@ -2558,6 +2603,7 @@ def _prepare_build(
         spill_dir=spill_dir,
         table=axis.table,
         n_analyses=len(manifest_rows),
+        consistency=consistency,
         off_primary=axis.off_primary,
         lift_drops=axis.lift_drops,
     )
@@ -3068,13 +3114,14 @@ def _run_checkpointed_build(
         default_source_assembly=defaults.source_assembly,
         column_map=defaults.column_map,
     )
+    # A build that is not continuing a checkpoint must not orphan one in
+    # silence: refusing is the default, --overwrite the explicit discard.
+    _require_clear_checkpoint(options.out, overwrite)
+    consistency = _verify_effect_consistency(manifest_rows, policies, options.n_workers)
     state = None
     if checkpoint:
         state = _open_checkpoint(manifest_path, options, defaults, overwrite)
-    else:
-        # A build that is not continuing a checkpoint must not orphan one in
-        # silence: refusing is the default, --overwrite the explicit discard.
-        _require_clear_checkpoint(options.out, overwrite)
+        write_json(state.path / EFFECT_CONSISTENCY, consistency.payload())
     try:
         # The whole window is guarded, publication included: a commit that
         # loses a race still leaves a checkpoint, and the operator is told so.
@@ -3088,6 +3135,7 @@ def _run_checkpointed_build(
                 manifest_rows,
                 policies,
                 options,
+                consistency,
                 None if state is None else state.spill_dir,
             )
             result = _run_and_publish(prepared, options, state)
@@ -3204,6 +3252,7 @@ def resume_hybrid_build(
             f"is gone. Start the build again with --checkpoint."
         )
     _require_intact_plates(state, len(rows))
+    consistency = _resumed_consistency(state, rows, policies, options.n_workers)
     try:
         with OpenGWASDBStore.staging(
             Path(params["output_path"]),
@@ -3211,7 +3260,7 @@ def resume_hybrid_build(
             adopt=state.staged_dir,
             retain_on_failure_to=state.staged_dir,
         ) as staged:
-            prepared = _resume_prepared(staged, rows, policies, options, state)
+            prepared = _resume_prepared(staged, rows, policies, options, state, consistency)
             result = _run_and_publish(prepared, options, state)
     except BaseException:
         _log_failed_checkpoint(state)
@@ -3239,6 +3288,7 @@ def _resume_prepared(
     policies: DeclaredPolicies,
     options: _BuildOptions,
     state: CheckpointState,
+    consistency: EffectConsistencyReport,
 ) -> _PreparedBuild:
     """The prepared build a resumed phase sequence re-enters with.
 
@@ -3249,8 +3299,28 @@ def _resume_prepared(
     Dense rows and the Overflow plates are already keyed on that axis.
     """
     if state.has("fold"):
-        return _recorded_prepared(staged, manifest_rows, policies, state)
-    return _prepare_build(staged, manifest_rows, policies, options, state.spill_dir)
+        return _recorded_prepared(staged, manifest_rows, policies, state, consistency)
+    return _prepare_build(
+        staged, manifest_rows, policies, options, consistency, state.spill_dir
+    )
+
+
+def _resumed_consistency(
+    state: CheckpointState,
+    manifest_rows: Sequence[ManifestRow],
+    policies: DeclaredPolicies,
+    n_workers: int,
+) -> EffectConsistencyReport:
+    """The effect-consistency report the first run recorded before it prepared
+    anything. A checkpoint written before builds ran the check (#510) records
+    none: the check reads only the sources, so it is measured again, and recorded,
+    rather than the resume failing on a file that run never wrote."""
+    path = state.path / EFFECT_CONSISTENCY
+    if path.exists():
+        return EffectConsistencyReport.from_payload(read_json(path))
+    consistency = _verify_effect_consistency(manifest_rows, policies, n_workers)
+    write_json(path, consistency.payload())
+    return consistency
 
 
 def _recorded_prepared(
@@ -3258,6 +3328,7 @@ def _recorded_prepared(
     manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     state: CheckpointState,
+    consistency: EffectConsistencyReport,
 ) -> _PreparedBuild:
     """Rebuild the prepared build from the checkpoint's recorded axis alone.
 
@@ -3306,6 +3377,7 @@ def _recorded_prepared(
         spill_dir=state.spill_dir,
         table=None,
         n_analyses=len(manifest_rows),
+        consistency=consistency,
     )
 
 

@@ -54,7 +54,7 @@ the |Δ| rule cannot refuse it, and every clean source's signed median is near 0
 |---|---|
 | refused | either rule fires: median \|Δ\| `>` `max_median_abs_delta` (default **1.0**), or median signed Δ `>` `max_median_delta` (default **0.1**, #370). The \|Δ\| rule is tested first. The resolution fails, the record's `status` is `controlled_failure`, `refused_by` names the rule, and `error` names the statistic that fired, its value, the other median, the row count and the threshold. |
 | compared | otherwise; the measurement is recorded. |
-| skipped | `skip_reason` says why, and nothing is refused: `joint_test_p_value` (the Analysis declares `p_value_test = joint_2df`; checked first), `no_source_p_value` (no admitted row has a usable p-value: no column, none in `(0, 1]`, or a reader that carries none: GWAS-VCF and BESD), `all_se_from_p_value`, or `too_few_rows` (fewer than `min_compared_rows`, default **50**, rows *compared*: in the bounded sample). |
+| skipped | `skip_reason` says why, and nothing is refused: `joint_test_p_value` (the Analysis declares `p_value_test = joint_2df`; checked first), `no_source_p_value` (no admitted row has a usable p-value: no column, none in `(0, 1]`, or a reader that carries none: BESD, and a GWAS-VCF whose header declares no `LP`; a GWAS-VCF's p-value is `10^-LP` since #510), `all_se_from_p_value`, or `too_few_rows` (fewer than `min_compared_rows`, default **50**, rows *compared*: in the bounded sample). |
 
 A caller overrides all three numbers with `EffectConsistencyPolicy` (`AnalysisRequest
 .effect_consistency_policy`; `resolve_analyses_manifest(effect_consistency_policy=)`).

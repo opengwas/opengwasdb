@@ -114,6 +114,7 @@ __all__ = [
     "ResolveManifestRow",
     "compute_file_sha256",
     "compute_fingerprint_digest",
+    "effect_consistency_to_dict",
     "load_extraction_panel",
     "parse_af_references",
     "read_resolve_manifest",
@@ -687,7 +688,7 @@ def _phenotype_sd_to_dict(p: PhenotypeSdResolution | None) -> dict[str, Any] | N
     }
 
 
-def _effect_consistency_to_dict(m: EffectConsistency | None) -> dict[str, Any] | None:
+def effect_consistency_to_dict(m: EffectConsistency | None) -> dict[str, Any] | None:
     """The stored-z-versus-source-p measurement (the threshold is in the fingerprint)."""
     if m is None:
         return None
@@ -745,7 +746,7 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         ),
         "build_eligible_rows_se_from_ci": d.build_eligible_rows_se_from_ci,
         "build_eligible_rows_se_from_p_value": d.build_eligible_rows_se_from_p_value,
-        "effect_consistency": _effect_consistency_to_dict(d.effect_consistency),
+        "effect_consistency": effect_consistency_to_dict(d.effect_consistency),
         "ancestry_scope": d.ancestry_scope.value,
         "ancestry_measurement_id": d.ancestry_measurement_id,
     }

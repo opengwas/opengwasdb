@@ -129,6 +129,18 @@ class EafOrientationOutcome(StrEnum):
     UNVERIFIED = "unverified"
 
 
+# The build's check of each stored z against its source's own p-value (ADR 0069,
+# #510). Persisted per Analysis, as EAF orientation is, so a Store says whether
+# its effects were checked: `skipped` names why not, and a blank cell is a Store
+# built before builds ran the check, never a pass.
+class EffectConsistencyOutcome(StrEnum):
+    PASSED = "passed"
+    SKIPPED = "skipped"
+    #: Never written into a Store: the build refuses the Analysis. Named so that a
+    #: record carrying it is read, and refused by validation, rather than unknown.
+    REFUSED = "refused"
+
+
 class EafOrientationMethod(StrEnum):
     """What the check correlated each Analysis's EAF against."""
 

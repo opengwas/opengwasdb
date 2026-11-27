@@ -10,6 +10,11 @@ import numpy as np
 
 from opengwasdb import admission
 from opengwasdb.admission.rules import AnalysisRules
+from opengwasdb.build.effect_consistency import (
+    ConsistencySkip,
+    apply_consistency_evidence,
+    skipped_effect_consistency,
+)
 from opengwasdb.encoding import (
     association_codec,
     eaf_baseline_from_grid,
@@ -485,7 +490,9 @@ def _collect_analyses(
     records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
 ) -> list[Analysis]:
     """The Analyses with a kept record, in ``sources`` order, each with the
-    frequency scope of its records."""
+    frequency scope of its records. The association TSV format has no p-value
+    column, so the effect-consistency check (#510, ADR 0069) records each as
+    `skipped: no_source_p_value`, never a blank."""
     with_eaf = {record.analysis_id for record in records if record.eaf is not None}
     kept = {record.analysis_id for record in records}
     analyses = []
@@ -496,7 +503,12 @@ def _collect_analyses(
             analyses.append(
                 replace(source.analysis, eaf_scope=eaf_scope, eaf_orientation=eaf_orientation)
             )
-    return analyses
+    return apply_consistency_evidence(
+        analyses,
+        skipped_effect_consistency(
+            (a.analysis_id for a in analyses), ConsistencySkip.NO_SOURCE_P_VALUE
+        ),
+    )
 
 
 def _write_manifest(

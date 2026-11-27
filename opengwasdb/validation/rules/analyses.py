@@ -24,7 +24,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from opengwasdb.build.effect_consistency import ConsistencySkip
 from opengwasdb.model.analyses import (
+    EFFECT_CONSISTENCY,
+    EFFECT_CONSISTENCY_COLUMNS,
     N_MISSING_SE_OUT_OF_RANGE,
     NON_NEGATIVE_INTEGER_OR_BLANK,
     RETIRED_ANALYSIS_COLUMNS,
@@ -35,6 +38,7 @@ from opengwasdb.model.enums import (
     AncestryAssignmentMethod,
     EafOrientationOutcome,
     EafScope,
+    EffectConsistencyOutcome,
     OriginalSdMethod,
     StoredEffectScale,
 )
@@ -159,6 +163,7 @@ _VOCABULARIES: tuple[tuple[str, type[StrEnum]], ...] = (
     ("original_sd_method", OriginalSdMethod),
     ("ancestry_assignment_method", AncestryAssignmentMethod),
     ("eaf_orientation", EafOrientationOutcome),
+    (EFFECT_CONSISTENCY, EffectConsistencyOutcome),
 )
 
 
@@ -545,6 +550,145 @@ def _with_regions(target: Target) -> bool:
     )
 
 
+# --- Effect consistency (#510, ADR 0069) ---
+
+#: Analyses one unchecked-Analyses warning names: the count says how many.
+_UNCHECKED_NAMED = 5
+_SKIP_REASONS = frozenset(reason.value for reason in ConsistencySkip)
+
+
+def effect_consistency_evidence(target: Target) -> Iterator[str]:
+    """Every build stamps every Analysis, and each stamp says what it measured.
+
+    Whether the release carries the columns is the marker: every build since
+    #510 writes all five on every row, and a release built before has none, which
+    `effect_consistency.unchecked` warns of. So a release with some of the
+    columns, or with a blank outcome under them, came from a build that did not
+    stamp what it checked -- or never checked -- and fails, as a blank
+    `eaf_orientation` does.
+
+    `refused` names an Analysis whose stored z contradicts its source's p-value,
+    which no build writes: the Analysis must not be read. A `passed` outcome
+    carries both medians and the rows compared, and no reason; a `skipped` one
+    names a skip reason and carries no measurement.
+    """
+    fieldnames = target.analyses.fieldnames
+    if not any(c in fieldnames for c in EFFECT_CONSISTENCY_COLUMNS):
+        return
+    partial = _partial_columns(fieldnames)
+    if partial:
+        yield partial
+        return
+    unstamped = []
+    for row in target.analyses.rows:
+        outcome = row.get(EFFECT_CONSISTENCY, "")
+        if outcome:
+            yield from _outcome_problems(row.get("analysis_id", ""), outcome, row)
+        else:
+            unstamped.append(row.get("analysis_id", ""))
+    yield from _unstamped(unstamped)
+
+
+def _partial_columns(fieldnames: tuple[str, ...]) -> str:
+    """Why a table with some of the effect-consistency columns is wrong, or ""."""
+    missing = [c for c in EFFECT_CONSISTENCY_COLUMNS if c not in fieldnames]
+    if not missing:
+        return ""
+    present = [c for c in EFFECT_CONSISTENCY_COLUMNS if c in fieldnames]
+    return (
+        f"analyses.tsv has {', '.join(present)} but not {', '.join(missing)}: a "
+        "build writes all five effect-consistency columns or, before #510, none"
+    )
+
+
+def _unstamped(analysis_ids: list[str]) -> Iterator[str]:
+    """One finding for the Analyses a build since #510 left without an outcome."""
+    if not analysis_ids:
+        return
+    named = ", ".join(map(repr, analysis_ids[:_UNCHECKED_NAMED]))
+    yield (
+        f"{len(analysis_ids)} Analysis/Analyses (first {named}) carry a blank "
+        f"{EFFECT_CONSISTENCY}: the release has the effect-consistency columns, so a "
+        "build since #510 wrote it, and that build stamped no outcome for them -- "
+        "passed, or skipped with its reason (ADR 0069)"
+    )
+
+
+def _outcome_problems(analysis_id: str, outcome: str, row: dict[str, str]) -> Iterator[str]:
+    judge = _OUTCOME_JUDGES.get(outcome)
+    if judge is not None:  # an unknown outcome is analyses.vocabularies'
+        yield from judge(
+            analysis_id,
+            row.get("effect_consistency_reason", ""),
+            {c: row.get(c, "") for c in EFFECT_CONSISTENCY_COLUMNS[2:]},
+        )
+
+
+def _refused(analysis_id: str, reason: str, _measured: dict[str, str]) -> Iterator[str]:
+    yield (
+        f"analysis {analysis_id!r} recorded effect_consistency=refused ({reason}): its "
+        "stored z contradicts its source's own p-value, so its effects are on another "
+        "scale and must not be read (ADR 0069, #510)"
+    )
+
+
+def _passed(analysis_id: str, reason: str, measured: dict[str, str]) -> Iterator[str]:
+    if reason:
+        yield f"analysis {analysis_id!r} passed effect_consistency but names reason {reason!r}"
+    bad = [c for c, v in measured.items() if not _is_measurement(c, v)]
+    if bad:
+        yield (
+            f"analysis {analysis_id!r} passed effect_consistency without a measurement: "
+            f"{', '.join(bad)} must hold the medians and a positive row count"
+        )
+
+
+def _skipped(analysis_id: str, reason: str, measured: dict[str, str]) -> Iterator[str]:
+    if reason not in _SKIP_REASONS:
+        yield (
+            f"analysis {analysis_id!r} skipped effect_consistency with reason {reason!r}; "
+            f"expected one of {sorted(_SKIP_REASONS)}"
+        )
+    if any(measured.values()):
+        yield f"analysis {analysis_id!r} skipped effect_consistency but records a measurement"
+
+
+_OUTCOME_JUDGES: dict[str, Callable[[str, str, dict[str, str]], Iterator[str]]] = {
+    EffectConsistencyOutcome.REFUSED.value: _refused,
+    EffectConsistencyOutcome.PASSED.value: _passed,
+    EffectConsistencyOutcome.SKIPPED.value: _skipped,
+}
+
+
+def _is_measurement(column: str, value: str) -> bool:
+    if column == "effect_consistency_n":
+        return value.isdigit() and int(value) > 0
+    try:
+        return math.isfinite(float(value))
+    except ValueError:
+        return False
+
+
+def effect_consistency_unchecked(target: Target) -> Iterator[str]:
+    """A release with none of the effect-consistency columns was built before builds
+    checked effects (#510).
+
+    Honestly unchecked, and still not evidence its effects are on the scale they
+    claim: OGS-00032 published eleven that were not. One warning per release.
+    A release that has the columns is `effect_consistency.evidence`'s to judge.
+    """
+    fieldnames = target.analyses.fieldnames
+    if any(c in fieldnames for c in EFFECT_CONSISTENCY_COLUMNS):
+        return
+    yield (
+        f"analyses.tsv has none of the effect-consistency columns, so none of its "
+        f"{len(target.analyses.rows)} Analyses records the check: the release was built "
+        "before builds checked each stored z against its source's own p-value (ADR 0069, "
+        "#510), so nothing in it says their effects are on the scale they claim. "
+        "associations.z_plausible audits what the Store holds"
+    )
+
+
 def _validated_table(target: Target) -> bool:
     """The releases whose `analyses.tsv` is judged as a table of Analyses: Dense and
     Ragged releases, and in a Hybrid the one copy it carries of its Analyses. Before
@@ -607,6 +751,11 @@ TABLE_RULES: tuple[Rule, ...] = (
     Check(
         name="regions.table", kinds=Kind.RELEASE, when=_with_regions, after=(READABLE,),
         run=regions_table,
+    ),
+    _table_rule("effect_consistency.evidence", effect_consistency_evidence),
+    Check(
+        name="effect_consistency.unchecked", kinds=Kind.RELEASE, when=_validated_table,
+        after=(READABLE,), severity=Severity.WARNING, run=effect_consistency_unchecked,
     ),
 )
 
