@@ -69,7 +69,7 @@ Store, and counted (`eaf_made_absent`) over the rows the Source Reader read.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -83,9 +83,12 @@ from opengwasdb.build.info_score_filter import (
 from opengwasdb.model.info_score_policy import InfoScorePolicy
 from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.store_reader.identity import InvalidAllele, MissingChromosome
+from opengwasdb.variants import assembly_gaps
+from opengwasdb.variants.assembly_gaps import AssemblySequence
 from opengwasdb.variants.normalise import (
     HmCodeIndel,
     HmColumnsIndel,
+    HmUnplaced,
     LiftedOffPrimary,
     UndeclaredReference,
     UnharmonisedIndel,
@@ -152,6 +155,17 @@ class Reason(StrEnum):
     #: that another source locus reaches too: no row of any of them is placed, since
     #: which one owns the ALID is not knowable and none may take its statistics (#325).
     LIFT_COLLISION = "lift_collision"
+    #: A GWAS Catalog row its harmoniser placed nowhere: in the `hm_*` layout, an
+    #: `hm_code` of 14 (required fields not known), 15 (no matching variant in the
+    #: reference VCF) or 16 (several matching variants). Its main-column position is
+    #: the submitter's, so it names no variant (#410). Appended, as every reason is:
+    #: a reason's code is its position.
+    HM_UNPLACED = HmUnplaced.reason
+    #: A row of a source on the Store's assembly whose position is in an assembly
+    #: gap, a run of two or more `N` where the assembly has no sequence (#410).
+    IN_ASSEMBLY_GAP = "in_assembly_gap"
+    #: The same, past its contig's last base (#410).
+    PAST_CONTIG_END = "past_contig_end"
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -175,6 +189,9 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.LIFT_AMBIGUOUS,
         Reason.LIFT_OFF_PRIMARY,
         Reason.LIFT_COLLISION,
+        Reason.HM_UNPLACED,
+        Reason.IN_ASSEMBLY_GAP,
+        Reason.PAST_CONTIG_END,
     }
 )
 
@@ -186,11 +203,24 @@ _LOGGED_CODES = np.array(sorted(int(_CODE[reason]) for reason in LOGGED), dtype=
 
 @dataclass(frozen=True)
 class AnalysisRules:
-    """What one Analysis declared that Admission judges its rows by."""
+    """What one Analysis declared that Admission judges its rows by.
+
+    ``sequence`` is the assembly its rows' positions are on, given where they are
+    the Store's own: a row placed in one of its gaps or past a contig's end is
+    dropped (#410). None judges no position: a lifted source's rows reach a gate at
+    their source coordinates, which only routing places.
+    """
 
     analysis_id: str
     info: InfoScorePolicy = field(default_factory=InfoScorePolicy)
     maf: MafPolicy = field(default_factory=MafPolicy)
+    sequence: AssemblySequence | None = field(default=None, compare=False)
+
+    def judging_positions_on(self, build: str) -> AnalysisRules:
+        """These rules, judging each row's position where ``build`` is one with a gap
+        table (`assembly_gaps.sequence_of`): GRCh38. Every builder calls it with the
+        assembly its rows reach the gate on (#410); a lifted source's are its own."""
+        return replace(self, sequence=assembly_gaps.sequence_of(build))
 
 
 #: The source keys of the rows at some positions of one batch, for the log.
@@ -207,8 +237,9 @@ class SourceRows:
     which is every row `UNDECLARED`. ``se`` is the reported SE, before any
     standardisation, and ``z`` the row's z, NaN where the source reports no
     effect; either is ``None`` from a caller whose reader has already judged
-    it. ``keys_at`` names rows for the log; a batch that can drop a logged row
-    must carry it.
+    it. ``chromosome`` and ``position`` place each row, for an Analysis whose
+    rules judge positions (`AnalysisRules.sequence`). ``keys_at`` names rows for
+    the log; a batch that can drop a logged row must carry it.
     """
 
     eaf: np.ndarray
@@ -217,11 +248,16 @@ class SourceRows:
     se: np.ndarray | None = None
     z: np.ndarray | None = None
     keys_at: KeysAt | None = field(default=None, compare=False)
+    chromosome: np.ndarray | None = field(default=None, compare=False)
+    position: np.ndarray | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         # One row judged against another row's statistics would keep the wrong
         # rows in silence, so a ragged batch is refused (stores #175).
-        columns = (self.eaf, self.imputation_score, self.imputation_status, self.se, self.z)
+        columns = (
+            self.eaf, self.imputation_score, self.imputation_status, self.se, self.z,
+            self.chromosome, self.position,
+        )
         lengths = {len(values) for values in columns if values is not None}
         if len(lengths) != 1:
             raise ValueError(
@@ -230,6 +266,8 @@ class SourceRows:
             )
         if (self.imputation_score is None) != (self.imputation_status is None):
             raise ValueError("a declared score needs both its values and their statuses")
+        if (self.chromosome is None) != (self.position is None):
+            raise ValueError("a placed row needs both its chromosome and its position")
 
     def __len__(self) -> int:
         return len(self.eaf)
@@ -331,8 +369,13 @@ class Verdict:
 
 
 def judge(rows: SourceRows, rules: AnalysisRules) -> Verdict:
-    """Each row's reason, by the rule set's precedence, and what the batch counts."""
+    """Each row's reason, by the rule set's precedence, and what the batch counts.
+
+    A row placed outside its assembly's sequence is dropped for that before any
+    of its values is judged.
+    """
     codes = _value_codes(rows)
+    _judge_placement(codes, rows, rules)
     associations = np.flatnonzero(codes == 0)
     info = _judge_info(codes, rows, associations, rules.info)
     eaf = rows.eaf[associations]
@@ -366,6 +409,22 @@ def _value_codes(rows: SourceRows) -> np.ndarray:
         codes[(codes == 0) & np.isnan(rows.z)] = _CODE[Reason.EFFECT_MISSING]
         codes[(codes == 0) & np.isinf(rows.z)] = _CODE[Reason.Z_NONFINITE]
     return codes
+
+
+def _judge_placement(codes: np.ndarray, rows: SourceRows, rules: AnalysisRules) -> None:
+    """Mark the rows placed in an assembly gap or past their contig's end (#410), over
+    whatever their values were judged: a row there names no variant."""
+    sequence = rules.sequence
+    if sequence is None or not len(rows):
+        return
+    if rows.chromosome is None or rows.position is None:
+        raise ValueError(
+            f"Analysis {rules.analysis_id}: its rules judge positions on {sequence.assembly}, "
+            "and a batch of its rows carries none"
+        )
+    position = np.asarray(rows.position, dtype=np.int64)
+    codes[sequence.in_gap(rows.chromosome, position)] = _CODE[Reason.IN_ASSEMBLY_GAP]
+    codes[sequence.past_end(rows.chromosome, position)] = _CODE[Reason.PAST_CONTIG_END]
 
 
 def _judge_info(

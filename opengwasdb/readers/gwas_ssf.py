@@ -71,7 +71,7 @@ import gzip
 import io
 import logging
 import math
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Protocol, cast
@@ -153,10 +153,23 @@ from opengwasdb.variants.rsid import normalise_rsid
 #:   none, so every indel is dropped. Code-11 deletions there agree with
 #:   FinnGen on 87.42% of rows over 35 files;
 #: - no harmoniser column: none.
+#:
+#: In the `hm_*` layout a row whose `hm_code` is 14, 15 or 16 is one the
+#: harmoniser placed nowhere: EBI's codes say "Required fields are not known",
+#: "No matching variants in reference VCF" and "Multiple matching variants in
+#: reference VCF", each "Not orientated". Its `hm_*` cells are `NA`, and its
+#: main-column position is the submitter's, a GRCh37 position or one on an alt or
+#: random scaffold on real files. It is dropped as `hm_unplaced`, never read at
+#: that position (#410, owner 27 Nov 2026). OGS-00011's 731 such files hold
+#: 4,360,634 code-14, 53,177,527 code-15 and 11,123 code-16 rows; the main-column
+#: layout held none in 30. The palindrome codes 9, 17 and 18 place their row and
+#: are kept.
 MAIN_COLUMNS_REFERENCE = DeclaredReference(
     column=b"hm_code", codes=frozenset({b"10", b"11"}), fault=HmCodeIndel
 )
-HM_COLUMNS_REFERENCE = DeclaredReference(fault=HmColumnsIndel)
+HM_COLUMNS_REFERENCE = DeclaredReference(
+    column=b"hm_code", fault=HmColumnsIndel, unplaced=frozenset({b"14", b"15", b"16"})
+)
 UNHARMONISED_REFERENCE = DeclaredReference(fault=UnharmonisedIndel)
 _HM_ALLELE_COLUMNS = ("hm_other_allele", "hm_effect_allele")
 #: Each harmonised layout, by whether the header names `hm_code` and how many
@@ -809,6 +822,9 @@ class _Block:
     #: whether the raw alleles differ in length once stripped (`_kept_by_code`).
     declared: np.ndarray
     raw_indel: np.ndarray
+    #: Per row: whether its harmoniser placed it nowhere, which only the per-row
+    #: reader names (`HmUnplaced`, #410).
+    unplaced: np.ndarray
     effect: np.ndarray | None
     fallback: np.ndarray | None
     se: np.ndarray | None
@@ -846,18 +862,21 @@ class _Block:
             identity,
             _declared(frame, hm, fmt.declaration),
             _raw_indel(identity.ref, identity.alt),
+            _unplaced(frame, hm, fmt.declaration),
             **arrays,
             by_name=by_name,
         )
 
     def decided(self) -> np.ndarray:
         """The rows the columns decide: every identity rule passed, an indel only
-        where the row declares its reference, and every number read as the
-        per-row reader reads it."""
+        where the row declares its reference, no row its harmoniser placed nowhere,
+        and every number read as the per-row reader reads it."""
         if any(values is None for values in self._numbers()):
             return np.zeros(len(self.identity), dtype=bool)
         indel = columnar.is_indel(self.identity.ref, self.identity.alt)
-        decided: np.ndarray = self.identity.valid() & (~indel | self.declared)
+        decided: np.ndarray = (
+            self.identity.valid() & (~indel | self.declared) & ~self.unplaced
+        )
         return decided
 
     def _numbers(self) -> list[np.ndarray | None]:
@@ -1058,16 +1077,31 @@ def _frame(
 
 def _declared(frame: pd.DataFrame, hm: int | None, declaration: DeclaredReference) -> np.ndarray:
     """Per row: whether it declares its other allele the reference (ADR 0079)."""
-    rows = len(frame)
     if declaration.every_row:
-        return np.ones(rows, dtype=bool)
+        return np.ones(len(frame), dtype=bool)
+    return _by_code(frame, hm, declaration.of_cell)
+
+
+def _unplaced(frame: pd.DataFrame, hm: int | None, declaration: DeclaredReference) -> np.ndarray:
+    """Per row: whether its harmoniser placed it nowhere (`DeclaredReference.unplaced`)."""
+    if not declaration.unplaced:
+        return np.zeros(len(frame), dtype=bool)
+    return _by_code(frame, hm, declaration.unplaced_cell)
+
+
+def _by_code(
+    frame: pd.DataFrame, hm: int | None, test: Callable[[bytes | str | None], bool]
+) -> np.ndarray:
+    """Per row: ``test`` of its harmoniser code cell, asked once per distinct cell;
+    False everywhere for a block with no harmoniser column."""
+    rows = len(frame)
     if hm is None:
         return np.zeros(rows, dtype=bool)
     column = frame[hm]
     categories = column.cat.categories.to_numpy(dtype=object)
-    declares = np.array([declaration.of_cell(cell) for cell in categories.tolist()], dtype=bool)
+    answers = np.array([test(cell) for cell in categories.tolist()], dtype=bool)
     codes = column.cat.codes.to_numpy()
-    return np.zeros(rows, dtype=bool) if not len(declares) else declares[codes]
+    return np.zeros(rows, dtype=bool) if not len(answers) else answers[codes]
 
 
 def _raw_indel(ref: columnar.Cells, alt: columnar.Cells) -> np.ndarray:

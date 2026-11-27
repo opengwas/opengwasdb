@@ -464,7 +464,7 @@ def _route_and_spill_column(
         row.trait_id,
         info=context.info_score_policies[row.trait_id],
         maf=context.maf_policies[row.trait_id],
-    )
+    ).judging_positions_on(row.source_assembly)
     with context.record.gate(rules) as gate:
         dense, overflow, off_reference = _resolve_column_hybrid(
             context.table, row, gate, context.axes, context.folds, context.off_primary,

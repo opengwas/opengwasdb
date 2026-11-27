@@ -193,6 +193,9 @@ class DeclaredReference:
     #: The fault an undeclared indel is recorded under, naming why it is
     #: undeclared (a GWAS-SSF layout); the generic one for every other source.
     fault: type[UndeclaredReference] = UndeclaredReference
+    #: The ``column`` cells of rows its harmoniser placed nowhere: such a row names
+    #: no variant, whatever its main columns say, and is dropped (#410).
+    unplaced: frozenset[bytes] = frozenset()
 
     @property
     def column_name(self) -> str | None:
@@ -213,6 +216,20 @@ class DeclaredReference:
         """`of_cell` of a row read as a mapping of header names to cells."""
         name = self.column_name
         return self.every_row or (name is not None and self.of_cell(row.get(name)))
+
+    def unplaced_cell(self, cell: bytes | str | None) -> bool:
+        """Whether a row whose ``column`` cell is ``cell`` is one its harmoniser placed
+        nowhere (`unplaced`)."""
+        if not self.unplaced or cell is None:
+            return False
+        if isinstance(cell, str):
+            cell = cell.encode("utf-8")
+        return cell.strip() in self.unplaced
+
+    def unplaced_row(self, row: Mapping[str, str | None]) -> bool:
+        """`unplaced_cell` of a row read as a mapping of header names to cells."""
+        name = self.column_name
+        return name is not None and self.unplaced_cell(row.get(name))
 
     def index(self, indexes: Mapping[bytes, int]) -> int | None:
         """Where a header holds ``column``, or ``None`` when it holds none."""
@@ -304,9 +321,15 @@ class _ResolvedProjection:
 
     def declares(self, row: list[bytes]) -> bool:
         """Whether ``row`` declares its `ref` the reference."""
+        return self.declaration.of_cell(self._reference_cell(row))
+
+    def unplaced(self, row: list[bytes]) -> bool:
+        """Whether ``row`` is one its harmoniser placed nowhere (#410)."""
+        return self.declaration.unplaced_cell(self._reference_cell(row))
+
+    def _reference_cell(self, row: list[bytes]) -> bytes | None:
         index = self.reference
-        cell = row[index] if index is not None and index < len(row) else None
-        return self.declaration.of_cell(cell)
+        return row[index] if index is not None and index < len(row) else None
 
 
 def _normalise_projected_chromosome(value: bytes) -> str:
@@ -502,6 +525,8 @@ def _projected_variant(
     row: list[bytes],
     projection: _ResolvedProjection,
 ) -> tuple[SourceVariant, ...]:
+    if projection.unplaced(row):
+        return ()
     try:
         rsid = _fallback_rsid(
             row, projection.first_alias, projection.second_alias, projection.alias_separator
@@ -774,6 +799,8 @@ def _metrics_identity(
     that is not decodable is *not* such a row: it raises, as the full-row parser
     raises, rather than quietly shrinking the file's evidence.
     """
+    if projection.declaration.unplaced_cell(_metrics_cell(row, projection.reference)):
+        return None
     ref_cell = row[projection.ref]
     alt_cell = row[projection.alt]
     try:
@@ -1344,6 +1371,7 @@ def _projected_chunk(
     declared = _declared_rows(frame, names, declaration)
     keep = (
         chromosome_ok & position_ok & alt_ok & other_ok & (alt != other) & (~indel | declared)
+        & ~_unplaced_rows(frame, names, declaration)
     )
     text = np.where(position_ok, position, 0).astype(str).astype(object)
     effect = _projected_effect_arrays(frame, names, effect_source)
@@ -1377,6 +1405,17 @@ def _declared_rows(
     cells = frame[names["reference"]].astype(str).str.strip().str.encode("utf-8")
     declared: np.ndarray = cells.isin(declaration.codes).to_numpy(dtype=bool)
     return declared
+
+
+def _unplaced_rows(
+    frame: pd.DataFrame, names: dict[str, str], declaration: DeclaredReference
+) -> np.ndarray:
+    """Per row, whether its harmoniser placed it nowhere (`DeclaredReference.unplaced`)."""
+    if not declaration.unplaced or "reference" not in names:
+        return np.zeros(len(frame), dtype=bool)
+    cells = frame[names["reference"]].astype(str).str.strip().str.encode("utf-8")
+    unplaced: np.ndarray = cells.isin(declaration.unplaced).to_numpy(dtype=bool)
+    return unplaced
 
 
 def _metric_frame_reader(

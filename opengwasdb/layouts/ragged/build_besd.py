@@ -84,6 +84,7 @@ from opengwasdb.top_hits import add_hit_counts
 from opengwasdb.variants import (
     CanonicalVariant,
     Orientation,
+    assembly_gaps,
     chromosome_sort_key,
     orient_to_canonical,
     write_variant_axis,
@@ -249,7 +250,7 @@ def _build_besd_release(
         command="build-ragged-besd",
     )
     write_unlifted(trait_lift, record.directory)
-    rules = _besd_rules(request.analyses_path, analyses, axis)
+    rules = _sequence_rules(request, analyses, axis)
     csr, encoding, scopes = _ingest_besd(
         _ProbeSources(prefix, request.source_build), axis, staged.path, sample_sizes,
         record, rules, se_divisors,
@@ -415,6 +416,7 @@ def _esi_axis(
         usable, source_build, chain_file=chain_file, variant_reference=variant_reference
     )
     lifted, off_primary_rows, lift_provenance = lift
+    usable = _on_sequence(usable, source_build)
     canonical = _canonical_variants(usable, lifted)
     canonical.collisions.report()
     print(f"Canonical variants: {len(canonical.variants)} (from {len(snps)} ESI entries)")
@@ -444,6 +446,19 @@ def _esi_axis(
         malformed=malformed,
         off_primary=_row_mask(off_primary_rows, len(snps)),
     )
+
+
+def _on_sequence(snps: list[SnpRecord], source_build: str) -> list[SnpRecord]:
+    """The ESI rows of a GRCh38 file set that GRCh38 has sequence at (#410): a row in
+    an assembly gap or past its contig's end is on no axis, and each probe's row there
+    is dropped as `in_assembly_gap` or `past_contig_end`. A lifted file set's rows are
+    kept: their positions are not yet GRCh38's."""
+    sequence = assembly_gaps.sequence_of(source_build)
+    if sequence is None or not snps:
+        return snps
+    outside = sequence.outside_at((normalise_chromosome(s.chromosome) for s in snps),
+                                  (s.bp for s in snps))
+    return [snp for snp, out in zip(snps, outside.tolist(), strict=True) if not out]
 
 
 def _row_mask(rows: Collection[int], n_rows: int) -> np.ndarray:
@@ -1205,6 +1220,18 @@ def _besd_rules(
     return rules
 
 
+def _sequence_rules(
+    request: _BesdBuildRequest, analyses: list[Analysis], axis: _EsiAxis
+) -> dict[str, AnalysisRules]:
+    """`_besd_rules`, judging each row's position where the file set is on GRCh38
+    (#410); a lifted file set's rows are at their source coordinates, which only the
+    axis's lift places."""
+    return {
+        analysis_id: declared.judging_positions_on(request.source_build)
+        for analysis_id, declared in _besd_rules(request.analyses_path, analyses, axis).items()
+    }
+
+
 def _placed_rows(
     batch: ReaderBatch, axis: _EsiAxis, gate: Gate, *, stores_frequencies: bool
 ) -> _ProbeRows:
@@ -1227,8 +1254,12 @@ def _placed_rows(
         if stores_frequencies
         else np.full(len(batch), np.nan, dtype=np.float32)
     )
+    chromosome, position = batch.sites() if gate.rules.sequence is not None else (None, None)
     keep = gate.source_rows(
-        SourceRows(eaf=stored_eaf.astype(np.float64), se=batch.se, z=z, keys_at=batch.keys_at)
+        SourceRows(
+            eaf=stored_eaf.astype(np.float64), se=batch.se, z=z, keys_at=batch.keys_at,
+            chromosome=chromosome, position=position,
+        )
     )
     off_axis = np.flatnonzero(keep & ~on_axis)
     gate.unplaced_off_axis(

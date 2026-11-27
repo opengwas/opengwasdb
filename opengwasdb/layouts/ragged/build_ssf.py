@@ -276,22 +276,27 @@ def _admitted_batches(a: AnalyteInput, gate: admission.Gate) -> list[ReaderBatch
     tally = StreamTally()
     batches = list(reader.stream_batches(tally))
     gate.streamed(tally)
-    declared = declaration is not None
-    return [
-        batch.take(
-            gate.source_rows(
-                admission.SourceRows(
-                    eaf=batch.eaf,
-                    imputation_score=batch.imputation_score if declared else None,
-                    imputation_status=batch.imputation_status if declared else None,
-                    se=batch.se,
-                    z=batch.z,
-                    keys_at=batch.keys_at,
-                )
+    return [_kept(batch, gate, declared=declaration is not None) for batch in batches]
+
+
+def _kept(batch: ReaderBatch, gate: admission.Gate, *, declared: bool) -> ReaderBatch:
+    """One batch's rows its gate keeps: judged by position too where the Analysis's
+    rules place rows (`AnalysisRules.sequence`, #410)."""
+    chromosome, position = batch.sites() if gate.rules.sequence is not None else (None, None)
+    return batch.take(
+        gate.source_rows(
+            admission.SourceRows(
+                eaf=batch.eaf,
+                imputation_score=batch.imputation_score if declared else None,
+                imputation_status=batch.imputation_status if declared else None,
+                se=batch.se,
+                z=batch.z,
+                keys_at=batch.keys_at,
+                chromosome=chromosome,
+                position=position,
             )
         )
-        for batch in batches
-    ]
+    )
 
 
 def _dedupe_per_analysis(
@@ -609,7 +614,7 @@ def _ingest_ssf_sources(
     per_analysis: list[list[_Assoc]] = []
     harvest = _Harvest()
     for a in analytes:
-        with record.gate(rules[a.analysis_id]) as gate:
+        with record.gate(rules[a.analysis_id].judging_positions_on(a.source_build)) as gate:
             batches = _admitted_batches(a, gate)
             for batch in batches:
                 harvest.add(batch)
@@ -638,7 +643,10 @@ def _ingest_lifted(
     variant's rsid is the one it would have had were every source on GRCh38.
     """
     with ExitStack() as stack:
-        gates = [stack.enter_context(record.gate(rules[a.analysis_id])) for a in analytes]
+        gates = [
+            stack.enter_context(record.gate(rules[a.analysis_id].judging_positions_on(a.source_build)))
+            for a in analytes
+        ]
         held = [_admitted_batches(a, g) for a, g in zip(analytes, gates, strict=True)]
         lifted = [a.source_build != STORE_BUILD for a in analytes]
         placement = place_held_sources(list(zip(lifted, held, strict=True)), options)

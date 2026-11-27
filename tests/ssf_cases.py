@@ -231,6 +231,18 @@ def _cases() -> list[Case]:
                           [*row(pos="200", effect="AT", other="A")[:-1], "11", "A", "AT"],
                           [*row(pos="300", effect="G", other="A")[:-1], "10", "A", "G"]]),
         lambda r: r.refused is None and r.associations == 2 and r.faults == 1))
+    # A row the harmoniser placed nowhere (hm_code 14, 15 or 16) is dropped and named
+    # (#410); a palindrome code (17) places its row.
+    cases.append(_case(
+        "hm_ unplaced rows",
+        text(hm_columns, [[*row(pos="100")[:-1], "10", "A", "G"],
+                          [*row(pos="5", effect="G", other="T")[:-1], "15", "NA", "NA"],
+                          [*row(pos="200", effect="AT", other="A")[:-1], "15", "NA", "NA"],
+                          [*row(pos="300")[:-1], " 15 ", "NA", "NA"],
+                          [*row(pos="400")[:-1], "16", "NA", "NA"],
+                          [*row(pos="500")[:-1], "14", "NA", "NA"],
+                          [*row(pos="600")[:-1], "17", "NA", "NA"]]),
+        lambda r: r.refused is None and r.associations == 2 and r.faults == 5))
     unharmonised = MAIN[:-1]
     cases.append(_case(
         "no harmoniser column",

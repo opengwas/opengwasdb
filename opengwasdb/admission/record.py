@@ -48,7 +48,7 @@ __all__ = [
 
 #: The rule set's version, recorded in every summary; each change to what a rule
 #: admits moves it.
-ADMISSION_RULES = "admission/15"
+ADMISSION_RULES = "admission/16"
 
 SUMMARY = "admission.json"
 #: The Analyses whose Trait position a lifting build could not lift (#433); written

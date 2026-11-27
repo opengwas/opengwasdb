@@ -37,7 +37,9 @@ from opengwasdb.readers.interface import (
     SourceVariant,
 )
 from opengwasdb.readers.orientation import a1_frequencies, is_palindromic, swap, swap_one
+from opengwasdb.store_reader.alid import parse_canonical_alid
 from opengwasdb.store_reader.identity import normalise_chromosome
+from opengwasdb.variants.assembly_gaps import site_arrays
 
 __all__ = [
     "DEFAULT_CHUNK_ROWS",
@@ -446,6 +448,16 @@ class ReaderBatch:
         if self.key_prefix:
             return [f"{self.key_prefix}{int(row)}" for row in self.source_row[positions]]
         return [str(alid) for alid in self.alid[positions]]
+
+    def sites(self) -> tuple[np.ndarray, np.ndarray]:
+        """Each row's chromosome and position in the reader's declared assembly, read
+        from its ALID (`parse_canonical_alid`): what Admission places a row by (#410)."""
+        parsed = [parse_canonical_alid(str(alid)) for alid in self.alid]
+        if any(site is None for site in parsed):
+            raise ValueError(f"a reader batch holds an ALID that names no site: {self.alid[:3]}")
+        return site_arrays(
+            (site.chromosome for site in parsed if site), (site.position for site in parsed if site)
+        )
 
 
 def stream_batches(
