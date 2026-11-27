@@ -8,8 +8,6 @@ hg19 → hg38 anchors used (all A/G, ALT>REF → z negated on store):
 
 from __future__ import annotations
 
-import gzip
-import io
 import logging
 import shutil as file_ops
 from pathlib import Path
@@ -20,6 +18,7 @@ import pytest
 import zarr
 from completion_counts import declared_and_masked
 from completion_releases import assert_same_release
+from ld_blocks import write_gzipped_matrix
 from residual_fixtures import write_gwas_vcf_with_eaf
 from store_digest import store_digest
 
@@ -69,11 +68,7 @@ def _write_ld_block(block_dir, block_name, snps, seed=0):
     rng = np.random.default_rng(seed)
     A = rng.standard_normal((n, n))
     ld = A @ A.T + np.eye(n) * n * 0.1
-    buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
-        for row in ld:
-            gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-    (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
+    write_gzipped_matrix(block_dir / f"{block_name}.unphased.vcor1.gz", ld)
 
 
 def _make_ld_panel(tmp_path: Path) -> Path:
