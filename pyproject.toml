@@ -40,7 +40,8 @@ dependencies = [
   # 0.2 carries the Clumps reads (#418) and the narrowed proof range (#492);
   # 0.3 the LD Store read side, which opengwasdb.ld re-exports (opengwas/ogquery#2);
   # 0.4 the Hybrid Rho reads (#495) and the Rho Matrix digests.
-  "ogquery>=0.4,<0.5",
+  # 0.5 the Genotype Store read (opengwas/ogquery#11), behind ogquery's `genotype` extra.
+  "ogquery>=0.5,<0.6",
   "numpy>=2.0,<2.5",
   "zarr>=3.4,<4",
   # 0.17 is the first numcodecs that locks Blosc's global context on decompress
@@ -61,15 +62,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# What opengwasdb.ld builds and imports with, carried over from ogld's `build`
-# and `import` extras (#455). pgenlib reads the pgen genotypes an LD Store build
-# starts from and the calls a Genotype Store request computes LD from. It is
-# imported inside those paths only, so `import opengwasdb.ld` and every LD Store
-# read work without it; a Genotype Store read refuses and names this extra.
-# ogld's extra also carried threadpoolctl, which caps BLAS's threads for a build;
-# here it is a dependency of the package itself (above), so the extra is
-# pgenlib alone and a build never lacks threadpoolctl.
-ld-build = ["pgenlib>=0.90"]
+# What opengwasdb.ld builds with, and what reads a Genotype Store: ogquery's `genotype` extra
+# (pgenlib and threadpoolctl; opengwas/ogquery#11). A build reads the pgen genotypes it starts
+# from through ogquery's `Genotypes`, and a Genotype Store request computes LD from them with
+# ogquery's reader. Both import pgenlib inside those paths only, so `import opengwasdb.ld` and
+# every LD Store read work without it; a build or a Genotype Store read without it raises
+# ogquery's `GenotypeExtraMissing`, naming `ogquery[genotype]`, which this extra installs.
+ld-build = ["ogquery[genotype]>=0.5,<0.6"]
 # Importing a producer's LD (Pan-UKB's LD matrices, opengwasdb.ld.build.importing).
 # ogld's extra also carried pyliftover, which is a dependency of the package
 # itself here (above), so the extra is lz4 alone.
@@ -86,12 +85,13 @@ dev = [
   # runs less of the suite. So it carries the one dependency the architecture
   # model's check reads (docs/architecture/components.yaml, issue #358), and
   # what tests/ld needs (#455): ogld's 5 s per-test timeout, its property tests,
-  # the Test Panel's pgen reader (the `ld-build` extra) and the import fixtures'
+  # the Test Panel's pgen reader and writer (pgenlib, which the `ld-build` extra's
+  # ogquery[genotype] carries) and the import fixtures'
   # decompressor (the `ld-import` extra), so nothing there skips or errors.
   "pyyaml>=6",
   "pytest-timeout>=2.3",
   "hypothesis>=6.100",
-  "pgenlib>=0.90",
+  "ogquery[genotype]>=0.5,<0.6",
   "lz4>=4",
 ]
 
@@ -308,7 +308,9 @@ platforms = ["linux-64"]
 opengwasdb = { path = ".", editable = true }
 # ogquery is on PyPI only; the editable install above would pull it in, but
 # naming it keeps the pin visible beside the conda dependencies (#475).
-ogquery = ">=0.4,<0.5"
+# The `genotype` extra gives the dev and test environments pgenlib and threadpoolctl, which the
+# Test Panel's fixtures and every Genotype Store test need.
+ogquery = { version = ">=0.5,<0.6", extras = ["genotype"] }
 
 [tool.pixi.dependencies]
 # zarr 3.4 requires python >=3.12 and numpy >=2 (#244); ogquery, the Store
@@ -343,11 +345,6 @@ pyyaml = "*"
 pytest-timeout = ">=2.3"
 hypothesis = ">=6.100"
 lz4 = ">=4"
-
-# pgenlib is PyPI-only. The dev environment carries the `ld-build` extra so the
-# suite reads the Test Panel's pgen and never skips (#455).
-[tool.pixi.feature.dev.pypi-dependencies]
-pgenlib = ">=0.90"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting

@@ -178,47 +178,47 @@
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "SOURCE_BAND_BP: Final",
-   "line": 27
+   "line": 28
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "class SourceVariant",
-   "line": 31
+   "line": 32
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "def text_input(path: Path) -> TextIO",
-   "line": 40
+   "line": 41
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "def variant_chromosomes(path: Path) -> Iterator[tuple[str, list[SourceVariant]]]",
-   "line": 45
+   "line": 46
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "class Lifted",
-   "line": 91
+   "line": 92
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "class LiftedVariant",
-   "line": 142
+   "line": 143
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "def lift_variants(",
-   "line": 226
+   "line": 233
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "def drop_displaced(name: str, table: Lifted, *, target: int, cap: int) -> tuple[Lifted, int]",
-   "line": 262
+   "line": 269
   },
   {
    "file": "opengwasdb/ld/build/importing/lift.py",
    "text": "def far_distance(source: IntArray, target: IntArray) -> int",
-   "line": 408
+   "line": 415
   },
   {
    "file": "opengwasdb/ld/build/importing/matrix.py",
@@ -258,22 +258,27 @@
   {
    "file": "opengwasdb/ld/build/importing/run.py",
    "text": "PANUKB_SCALE: Final",
-   "line": 48
+   "line": 49
   },
   {
    "file": "opengwasdb/ld/build/importing/run.py",
    "text": "class ImportInputs",
-   "line": 52
+   "line": 53
   },
   {
    "file": "opengwasdb/ld/build/importing/run.py",
    "text": "def load_lifted(path: Path) -> Lifted",
-   "line": 81
+   "line": 82
   },
   {
    "file": "opengwasdb/ld/build/importing/run.py",
    "text": "def import_panukb(",
-   "line": 300
+   "line": 319
+  },
+  {
+   "file": "opengwasdb/ld/build/importing/run.py",
+   "text": "def plan_panukb(inputs: ImportInputs, out: Path) -> dict[str, Any]",
+   "line": 336
   },
   {
    "file": "opengwasdb/ld/build/inputs.py",
@@ -558,12 +563,12 @@
   {
    "file": "opengwasdb/ld/cli/__init__.py",
    "text": "def report(findings: dict[str, list[Finding]]) -> int",
-   "line": 218
+   "line": 246
   },
   {
    "file": "opengwasdb/ld/cli/__init__.py",
    "text": "def main(argv: Sequence[str] | None = None) -> int",
-   "line": 302
+   "line": 330
   },
   {
    "file": "opengwasdb/ld/env.py",
@@ -593,32 +598,32 @@
   {
    "file": "opengwasdb/ld/format/encoding.py",
    "text": "T_FAR_Q: Final",
-   "line": 38
+   "line": 37
   },
   {
    "file": "opengwasdb/ld/format/encoding.py",
    "text": "T_FAR_MIN: Final",
-   "line": 41
+   "line": 40
   },
   {
    "file": "opengwasdb/ld/format/encoding.py",
    "text": "NEAR_BP: Final",
-   "line": 46
+   "line": 45
   },
   {
    "file": "opengwasdb/ld/format/encoding.py",
    "text": "FAR_BP: Final",
-   "line": 47
+   "line": 46
   },
   {
    "file": "opengwasdb/ld/format/encoding.py",
    "text": "class REncoding(ReadEncoding)",
-   "line": 55
+   "line": 50
   },
   {
    "file": "opengwasdb/ld/format/encoding.py",
    "text": "def t_far(n: int, k: int) -> float",
-   "line": 199
+   "line": 126
   },
   {
    "file": "opengwasdb/ld/format/geometry.py",
@@ -658,127 +663,47 @@
   {
    "file": "opengwasdb/ld/genotypes/adjust.py",
    "text": "FLAT: Final",
-   "line": 17
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/adjust.py",
-   "text": "class Covariates",
    "line": 21
   },
   {
    "file": "opengwasdb/ld/genotypes/adjust.py",
+   "text": "class Covariates",
+   "line": 25
+  },
+  {
+   "file": "opengwasdb/ld/genotypes/adjust.py",
    "text": "def covariates(",
-   "line": 33
+   "line": 37
   },
   {
    "file": "opengwasdb/ld/genotypes/adjust.py",
    "text": "def residuals(",
-   "line": 44
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/adjust.py",
-   "text": "class Block",
-   "line": 58
+   "line": 48
   },
   {
    "file": "opengwasdb/ld/genotypes/adjust.py",
    "text": "def prepare(",
-   "line": 77
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/adjust.py",
-   "text": "def r(rows: Block, span: Block) -> npt.NDArray[np.float64]",
-   "line": 95
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "KEY",
-   "line": 22
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "VERSION",
-   "line": 23
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "ARRAYS",
-   "line": 24
+   "line": 61
   },
   {
    "file": "opengwasdb/ld/genotypes/layout.py",
    "text": "def input_pin(path: Path, root: Path) -> dict[str, Any]",
-   "line": 34
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "def check_input(root: Path, pin: dict[str, Any], *, hashes: bool = False) -> Path",
-   "line": 46
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "class Fileset",
-   "line": 63
+   "line": 20
   },
   {
    "file": "opengwasdb/ld/genotypes/layout.py",
    "text": "def fileset_record(fileset: PgenFileset, pvar: Path, root: Path) -> dict[str, Any]",
-   "line": 74
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "def open_filesets(root: Path, records: list[dict[str, Any]]) -> list[Fileset]",
-   "line": 86
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/layout.py",
-   "text": "def mapped_arrays(root: Path, metadata: dict[str, Any]) -> dict[str, npt.NDArray[Any]]",
-   "line": 103
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/pgen.py",
-   "text": "T",
-   "line": 22
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/pgen.py",
-   "text": "D",
-   "line": 23
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/pgen.py",
-   "text": "class PgenFileset(Protocol)",
-   "line": 26
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/pgen.py",
-   "text": "def import_pgenlib() -> Any",
-   "line": 48
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/pgen.py",
-   "text": "class Genotypes",
-   "line": 75
-  },
-  {
-   "file": "opengwasdb/ld/genotypes/reader.py",
-   "text": "class GenotypeReader(ComponentWorkers)",
-   "line": 138
+   "line": 32
   },
   {
    "file": "opengwasdb/ld/genotypes/sidecar.py",
    "text": "class SidecarWriter",
-   "line": 35
+   "line": 36
   },
   {
    "file": "opengwasdb/ld/genotypes/validation.py",
    "text": "def validate_sidecar(",
    "line": 31
-  },
-  {
-   "file": "opengwasdb/ld/query/ldstore.py",
-   "text": "def open(location: str | os.PathLike[str], *, cache_bytes: int | None = None) -> LDStore",
-   "line": 24
   },
   {
    "file": "opengwasdb/ld/query/validation.py",
@@ -977,83 +902,88 @@
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
+   "text": "FREQUENCY_DTYPE: Final",
+   "line": 199
+  },
+  {
+   "file": "opengwasdb/ld/store/layout.py",
    "text": "FRAMES_BUILDING: Final",
-   "line": 202
+   "line": 204
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "FRAMES_FILL: Final",
-   "line": 207
+   "line": 209
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "FRAMES_INDEX_FILL: Final",
-   "line": 211
+   "line": 213
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "FRAMES_INDEX_DTYPE: Final",
-   "line": 217
+   "line": 219
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def ordered_index(",
-   "line": 220
+   "line": 222
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def alid_index(",
-   "line": 229
+   "line": 231
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def put_alid_index(",
-   "line": 238
+   "line": 240
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def chromosomes_record(ranges: dict[str, tuple[int, int]]) -> list[dict[str, Any]]",
-   "line": 247
+   "line": 249
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def clipped(length: int, inner: int, shard: int) -> tuple[int, int]",
-   "line": 255
+   "line": 257
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def new_frames_array(group: zarr.Group, length: int) -> zarr.Array[Any]",
-   "line": 263
+   "line": 265
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def new_frames_index(group: zarr.Group, length: int) -> zarr.Array[Any]",
-   "line": 279
+   "line": 281
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def local_directory(store_path: StorePath) -> Path",
-   "line": 293
+   "line": 295
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def put_numbers(",
-   "line": 299
+   "line": 301
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def new_numbers(",
-   "line": 313
+   "line": 315
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def put_strings(group: zarr.Group, name: str, data: npt.NDArray[np.str_]) -> zarr.Array[Any]",
-   "line": 335
+   "line": 337
   },
   {
    "file": "opengwasdb/ld/store/layout.py",
    "text": "def new_r_array(",
-   "line": 352
+   "line": 354
   },
   {
    "file": "opengwasdb/ld/store/tables.py",

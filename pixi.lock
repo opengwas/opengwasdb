@@ -104,7 +104,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/89/76/040a855eb07712f389608893ce7984d48b6908abc17c27ee10ddec646d41/ogquery-0.5.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   dev:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -225,7 +226,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/89/76/040a855eb07712f389608893ce7984d48b6908abc17c27ee10ddec646d41/ogquery-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   report:
     channels:
@@ -464,7 +465,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.4.2-pyhc364b38_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/89/76/040a855eb07712f389608893ce7984d48b6908abc17c27ee10ddec646d41/ogquery-0.5.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/b1/b2/c05ee2e07e80816548e993bfa9813208ba528d74f9de2dca9abc1343b74e/pgenlib-0.95.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 packages:
 - conda: https://conda.anaconda.org/bioconda/linux-64/bcftools-1.24-h118bc1c_2.conda
   sha256: 00db35c4efca39b9fe4597f5507fa7f248ec16fa71e03c0eb0f0917e9d982c13
@@ -4346,7 +4348,7 @@ packages:
   - fsspec>=2024.12
   - numcodecs>=0.17
   - numpy>=2.0,<2.5
-  - ogquery>=0.4,<0.5
+  - ogquery>=0.5,<0.6
   - pandas>=2.0
   - pyliftover>=0.4
   - pysam>=0.22
@@ -4359,13 +4361,13 @@ packages:
   - lizard>=1.17 ; extra == 'dev'
   - lz4>=4 ; extra == 'dev'
   - mypy>=1.10 ; extra == 'dev'
-  - pgenlib>=0.90 ; extra == 'dev'
+  - ogquery[genotype]>=0.5,<0.6 ; extra == 'dev'
   - pytest-timeout>=2.3 ; extra == 'dev'
   - pytest-xdist>=3.6 ; extra == 'dev'
   - pytest>=8 ; extra == 'dev'
   - pyyaml>=6 ; extra == 'dev'
   - ruff>=0.6 ; extra == 'dev'
-  - pgenlib>=0.90 ; extra == 'ld-build'
+  - ogquery[genotype]>=0.5,<0.6 ; extra == 'ld-build'
   - lz4>=4 ; extra == 'ld-import'
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/55/0f/e7f1ff3a1cabc6c4486a7ee1b0506aedf2f5f8329760ac1f4e8032feef2b/pysam-0.24.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
@@ -4373,10 +4375,10 @@ packages:
   version: 0.24.0
   sha256: 4a642f18649e59817de272173e9c27c031dceaca199809e4f8b338ebfc5d6698
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/74/dd/0cdb6a44dba7142b1fa0492dc40f65f6a2234cb0e8ccd55face99660bd1e/ogquery-0.4.0-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/89/76/040a855eb07712f389608893ce7984d48b6908abc17c27ee10ddec646d41/ogquery-0.5.0-py3-none-any.whl
   name: ogquery
-  version: 0.4.0
-  sha256: 859832ae5a725ca1b1c01f81cb13d8868f7412c7740ef3f97417cd427b6cb5df
+  version: 0.5.0
+  sha256: 6a42885014e2b8922f62d6bb85f5c2a02b87e0b753b566c2d256d3fd42b52e74
   requires_dist:
   - numcodecs>=0.17
   - numpy>=2.0,<2.5
@@ -4385,9 +4387,13 @@ packages:
   - fsspec>=2024.12 ; extra == 'dev'
   - hypothesis>=6 ; extra == 'dev'
   - mypy>=1.10 ; extra == 'dev'
+  - pgenlib>=0.94 ; sys_platform != 'win32' and extra == 'dev'
   - pytest>=8 ; extra == 'dev'
   - ruff>=0.6 ; extra == 'dev'
   - scipy>=1.11 ; extra == 'dev'
+  - threadpoolctl>=3.5 ; sys_platform != 'win32' and extra == 'dev'
+  - pgenlib>=0.94 ; extra == 'genotype'
+  - threadpoolctl>=3.5 ; extra == 'genotype'
   - aiohttp>=3.10 ; extra == 'http'
   - fsspec>=2024.12 ; extra == 'http'
   - hypothesis>=6 ; extra == 'test'

@@ -100,34 +100,36 @@ def test_pgen_int8_and_float64_paths_read_the_same_test_panel_calls() -> None:
         assert reader.range_int8(0, 0).shape == (0, p.n_samples)
 
 
-def test_build_and_query_have_no_pgen_calls_or_pc_adjustment_implementation() -> None:
+def test_nothing_here_reads_a_pgen_and_the_pc_adjustment_has_one_home() -> None:
+    """Reading a pgen is ogquery's (`ogquery.ld.genotypes.pgen.Genotypes`, opengwas/ogquery#11), so
+    no module under `opengwasdb/` calls pgenlib; and the PC Adjustment is
+    `opengwasdb.ld.genotypes.adjust`'s, so no other module re-implements it."""
     import ast
     import re
 
-    root = Path(__file__).resolve().parents[2] / "opengwasdb" / "ld"
-    forbidden = re.compile(
-        r"\b(?:import pgenlib|PgenReader|read_dosages_\w+|linalg\.qr|"
-        r"def residuals|unit_vectors|residual_fit)\b"
-    )
+    root = Path(__file__).resolve().parents[2] / "opengwasdb"
+    pgen_calls = re.compile(r"\b(?:import pgenlib|PgenReader|read_dosages_\w+)\b")
+    adjustment = re.compile(r"\b(?:linalg\.qr|def residuals|unit_vectors|residual_fit)\b")
+    owner = root / "ld" / "genotypes" / "adjust.py"
     found = []
-    for package in ("build", "query"):
-        for path in (root / package).rglob("*.py"):
-            source = path.read_text()
-            found.extend(
-                (str(path.relative_to(root)), number, line)
-                for number, line in enumerate(source.splitlines(), 1)
-                if forbidden.search(line)
-            )
-            for node in ast.walk(ast.parse(source)):
-                if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult)):
-                    continue
-                names = [part.id for part in ast.walk(node) if isinstance(part, ast.Name)]
-                attributes = [
-                    part.attr for part in ast.walk(node) if isinstance(part, ast.Attribute)
-                ]
-                if any(re.search(r"unit|resid", name) for name in names + attributes):
-                    found.append((str(path.relative_to(root)), node.lineno, ast.unparse(node)))
-    assert not found, f"genotypes owns pgen reads and PC-adjusted r, not build/query: {found}"
+    for path in root.rglob("*.py"):
+        source = path.read_text()
+        patterns = (pgen_calls,) if path == owner else (pgen_calls, adjustment)
+        found.extend(
+            (str(path.relative_to(root)), number, line)
+            for number, line in enumerate(source.splitlines(), 1)
+            if any(pattern.search(line) for pattern in patterns)
+        )
+        if path == owner:
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult)):
+                continue
+            names = [part.id for part in ast.walk(node) if isinstance(part, ast.Name)]
+            attributes = [part.attr for part in ast.walk(node) if isinstance(part, ast.Attribute)]
+            if any(re.search(r"unit|resid", name) for name in names + attributes):
+                found.append((str(path.relative_to(root)), node.lineno, ast.unparse(node)))
+    assert not found, f"ogquery owns pgen reads, genotypes/adjust.py the adjustment: {found}"
 
 
 def test_a_missing_call_is_not_hidden_by_either_read_path(tmp_path: Path) -> None:

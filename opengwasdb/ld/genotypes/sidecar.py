@@ -10,12 +10,13 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 from ogquery.ld.format import InputError, Provenance
+from ogquery.ld.genotypes.adjust import Block
+from ogquery.ld.genotypes.layout import ARRAYS, KEY, VERSION
 from ogquery.ld.store.tables import Variants
 
 from opengwasdb.ld.format import REncoding, Sourced
 from opengwasdb.ld.format.geometry import chromosome_ranges
-from opengwasdb.ld.genotypes.adjust import Block, Covariates
-from opengwasdb.ld.genotypes.layout import ARRAYS, KEY, VERSION
+from opengwasdb.ld.genotypes.adjust import Covariates
 from opengwasdb.ld.genotypes.validation import validate_sidecar
 from opengwasdb.ld.store import layout
 from opengwasdb.ld.store.assembly import (

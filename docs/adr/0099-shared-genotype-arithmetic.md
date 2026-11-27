@@ -7,6 +7,17 @@ and module layer. This records that ruling, not a new Store format or provenance
 ADR 0088 decision 10 still applies: pgenlib remains the optional `opengwasdb[ld-build]` extra,
 imported only when opening a pgen, with the same refusal naming the extra.
 
+> **Clarification (opengwas/ogquery#11, 27 November 2026).** The Genotype Store's read moved
+> to ogquery (ogquery ADR 0002, amended): pgen reading, `Block` and `r` are now
+> `ogquery.ld.genotypes.pgen` and `.adjust`, which the builder's tiles import and
+> `opengwasdb.ld.genotypes` re-exports. What this ADR says `opengwasdb.ld.genotypes` owns
+> stays there for what a build makes (the covariate basis, residuals, FLAT and `prepare`). The
+> single `r` and the quantising it leaves to `REncoding` are unchanged, and so are the codes: the
+> same pair has one code in both repositories. pgenlib is still never a core dependency of
+> either: it is ogquery's `genotype` extra, which `opengwasdb[ld-build]` installs, and a build
+> without it raises ogquery's `GenotypeExtraMissing` naming `ogquery[genotype]`, where this ADR's
+> opening paragraph named `opengwasdb[ld-build]`. The decision is unchanged.
+
 ## Context
 
 The LD Store builder and on-demand genotype reads need the same PC Adjustment. Neither

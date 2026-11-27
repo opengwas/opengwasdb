@@ -13,8 +13,8 @@ The public surface (`docs/spec/ld-store.md` §8, §9):
 A request the store cannot answer exactly raises `Refusal`, naming its reason.
 
 The read side is ogquery's (`ogquery.ld`; opengwas/ogquery#2, ogquery ADR 0002): `LDStore`, the
-results and the refusals here are ogquery's objects. opengwasdb keeps what builds, writes and
-validates a store, and the Genotype Store reader, which `open` dispatches a Genotype Store to.
+results and the refusals here are ogquery's objects, and so are `open` and the Genotype Store's
+reader (opengwas/ogquery#11). opengwasdb keeps what builds, writes and validates a store.
 Every name is imported on first use, so the read names load none of the build code.
 """
 
@@ -36,11 +36,11 @@ if TYPE_CHECKING:
     from ogquery.ld.query import LDMatrix as LDMatrix
     from ogquery.ld.query import LDStore as LDStore
     from ogquery.ld.query import Proxies as Proxies
+    from ogquery.ld.query import open as open
     from ogquery.ld.store import Variants as Variants
 
     from opengwasdb.ld.build import BuildInputs as BuildInputs
     from opengwasdb.ld.build import build as build
-    from opengwasdb.ld.query.ldstore import open as open
     from opengwasdb.ld.query.validation import validate as validate
     from opengwasdb.ld.store.validation import Finding as Finding
     from opengwasdb.version import __version__ as __version__
@@ -60,9 +60,9 @@ _EXPORTS = {
         "LDMatrix",
         "LDStore",
         "Proxies",
+        "open",
     ),
     "ogquery.ld.store": ("Variants",),
-    "opengwasdb.ld.query.ldstore": ("open",),
     "opengwasdb.ld.build": (
         "BuildInputs",
         "build",

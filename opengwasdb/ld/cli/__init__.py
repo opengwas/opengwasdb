@@ -3,7 +3,9 @@
 A thin shell over the public functions, so a job and a person run exactly what a caller of the
 package runs: `build` (ogld#5), `validate` and `info` (ogld#4), and `derive-partners` (ogld#69).
 Exit status: 0 done, 1 the store breaks a rule, 2 a refusal: a `Refusal`, an `InputError`, a
-`VariantNormalisationError` or an environment variable under an old name, printed as
+`VariantNormalisationError`, a `GenotypeExtraMissing` (a build that needs pgenlib without the
+`genotype` extra, which `opengwasdb[ld-build]` installs) or an environment variable under an old
+name, printed as
 `opengwasdb ld <command>: <problem>`. A command line the parser refuses also exits 2, but prints
 Click's own `Usage: … Error: …`. Any other exception is a fault inside `opengwasdb.ld` and
 propagates with its traceback.
@@ -24,6 +26,7 @@ from typing import Annotated, Any
 
 import typer
 from ogquery.ld.format import InputError, Refusal
+from ogquery.opening import GenotypeExtraMissing
 
 from opengwasdb.ld import env
 from opengwasdb.ld.build import BuildInputs, build, build_genotypes
@@ -43,7 +46,7 @@ ld_app = typer.Typer(
 )
 
 _THREADS = {"min": 1}
-_REFUSED = (Refusal, InputError, VariantNormalisationError)
+_REFUSED = (Refusal, InputError, VariantNormalisationError, GenotypeExtraMissing)
 
 
 def _exits(command: str) -> Callable[[Callable[..., int]], Callable[..., None]]:

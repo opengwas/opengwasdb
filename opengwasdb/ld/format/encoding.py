@@ -1,21 +1,22 @@
 """How a build quantises r, and which pairs beyond the Near Band an LD Store keeps (ld-store §3).
 
 An LD Store records its encoding (ld-store §7), and `REncoding` is that record as a value. Its read
-side -- the container, which encodings a reader implements (`of`), `holds`, `require_codes` and
-dequantising -- is `ogquery.ld.format.encoding.REncoding`, the one owner of the dtype, the scale,
-the reserved code and the rounding (ADR 0090; opengwas/ogquery#2, ogquery ADR 0002). This module
-extends it with the build side, which ogquery leaves out: the record a build writes, quantising
-and the step, the far code floor and the Partner Floor, and the masks the builder, the Partner
-Rows emitter and the Genotype Store reader keep pairs by. The builder quantises with the encoding
-it was given, validation recomputes the floors with the one the store records, and the reader
-(ogquery's) decodes with that one too, so no component can round, decode or threshold at another
-store's scale.
+side -- the container, which encodings a reader implements (`of`), `holds`, `require_codes`,
+dequantising, and the quantising and the two masks a Genotype Store's reader judges pairs by
+(`quantise`, `stored_mask`, `partner_mask`) -- is `ogquery.ld.format.encoding.REncoding`, the one
+owner of the dtype, the scale, the reserved code and the rounding (ADR 0090; opengwas/ogquery#2
+and #11, ogquery ADR 0002). This module extends it with the build side, which ogquery leaves out:
+the record a build writes, the step and its error, the far code floor, the Partner Floor and
+`least_r`. The builder quantises and masks with the encoding it was given, validation recomputes
+the floors with the one the store records, and the reader (ogquery's) decodes, quantises and
+masks with that one too, so no component can round, decode or threshold at another store's scale.
 
 opengwasdb's `REncoding` is a subclass, so it is an `ogquery.ld.format.REncoding` wherever a reader
 takes one, and `REncoding.of` and its constructor give this class. ogquery's readers construct
-their own, which has none of these members: a build or validation step handed one raises
-`AttributeError` rather than quantise at a guessed scale. Construct `REncoding(encoding.scale)` to
-cross over.
+their own, which has the read members but none of the build ones above: a build or validation step
+handed one raises `AttributeError` at its first build member (`far_code_floor`, `record`, `step`)
+rather than compute a floor at a guessed scale. Construct `REncoding(encoding.scale)` to cross
+over.
 
 t_far and the distances are not the encoding's: they depend on the panel and on ADR 0087, and a
 store records them beside it. A reader uses the t_far, floors and distances a store records.
@@ -27,8 +28,6 @@ import math
 from dataclasses import dataclass
 from typing import Final
 
-import numpy as np
-import numpy.typing as npt
 from ogquery.ld.format.encoding import Codes as Codes
 from ogquery.ld.format.encoding import REncoding as ReadEncoding
 from ogquery.ld.format.provenance import Encoding
@@ -45,10 +44,6 @@ T_FAR_MIN: Final = 0.001
 #: and readers use those, never these.
 NEAR_BP: Final = 3_000_000
 FAR_BP: Final = 10_000_000
-
-# A dot product of standardised vectors can land a few ulps past ±1. Further than this is
-# not rounding error but a builder fault, and clamping it would store a plausible r = ±1.
-_R_SLACK: Final = 1e-6
 
 
 @dataclass(frozen=True)
@@ -88,24 +83,6 @@ class REncoding(ReadEncoding):
         """Half a step, 1 / (2 × scale): |r̂ − r| never exceeds it (ld-store §3)."""
         return 1 / (2 * self.scale)
 
-    def quantise(self, r: npt.ArrayLike) -> Codes:
-        """The code of each r: clamp(rint(r × scale), −scale, +scale) (ld-store §3).
-
-        `numpy.rint` rounds half to even, as the spec requires. A value that is not finite,
-        or whose magnitude exceeds 1 by more than float error, raises: r is undefined only
-        for a zero-variance variant, which the builder drops (ld-store §3), so such a value means
-        the computation went wrong, and a clamped code would hide it.
-        """
-        values = np.asarray(r, dtype=np.float64)
-        bad = ~np.isfinite(values) | (np.abs(values) > 1 + _R_SLACK)
-        if bad.any():
-            raise ValueError(
-                f"not a correlation, so it has no code: {values[bad].ravel()[:5].tolist()} "
-                "(ld-store §3)"
-            )
-        codes = np.clip(np.rint(values * self.scale), -self.scale, self.scale)
-        return codes.astype(self.dtype)
-
     def far_code_floor(self, t_far: float) -> int:
         """The smallest code c ≥ 0 with (c / scale)² ≥ t_far, in float64 (ld-store §3).
 
@@ -144,56 +121,6 @@ class REncoding(ReadEncoding):
         is (code − ½) / scale; half a step lower, float error in r × scale cannot lose a pair,
         so a builder may judge only the r above it."""
         return (code - 1) / self.scale
-
-    def stored_mask(
-        self,
-        distance: npt.ArrayLike,
-        codes: npt.ArrayLike,
-        *,
-        near_bp: int,
-        far_bp: int,
-        far_code_floor: int,
-    ) -> npt.NDArray[np.bool_]:
-        """Whether each pair is Stored at its distance, from its code (ld-store §8).
-
-        Every pair within `near_bp` is Stored; beyond it, one is Stored exactly when it is
-        within `far_bp` and its |code| reaches `far_code_floor`. The builder, the Partner Rows
-        emitter and the Genotype Store reader all judge with this one predicate, so the Bound
-        and Not Measured cannot drift between them (owner, 21 November 2026).
-        """
-        gap = np.abs(np.asarray(distance, dtype=np.int64))
-        magnitude = np.abs(np.asarray(codes, dtype=np.int32))
-        near = gap <= near_bp
-        far = (gap <= far_bp) & (magnitude >= far_code_floor)
-        return near | far
-
-    def partner_mask(
-        self,
-        distance: npt.ArrayLike,
-        codes: npt.ArrayLike,
-        *,
-        near_bp: int,
-        far_bp: int,
-        partner_code_floor: int,
-        far_code_floor: int,
-    ) -> npt.NDArray[np.bool_]:
-        """Whether each pair is in a Partner Rows row, from its code (partner-rows §3, §7).
-
-        A pair within `near_bp` is kept when its |code| reaches the Partner Floor, and a pair
-        beyond it, out to `far_bp`, when its |code| reaches the far code floor. This is the
-        floor choice the Partner Rows emitter makes and the Genotype Store reader answers
-        `proxies` and `clump` with, held once (owner, 21 November 2026).
-
-        Pass each pair's real `distance`. The Partner Rows emitter instead passes its two
-        already-split groups' boundary: `near_bp` for the Near Band's codes, every one of which
-        is within `near_bp`, and `far_bp` for the Far Pairs, every one of which is beyond
-        `near_bp` and within `far_bp`. The answer is the same for every such pair, and
-        `tests/ld/test_pair_masks.py` holds the emitter's bytes to this rule, pair by pair.
-        """
-        gap = np.abs(np.asarray(distance, dtype=np.int64))
-        magnitude = np.abs(np.asarray(codes, dtype=np.int32))
-        floor = np.where(gap <= near_bp, partner_code_floor, far_code_floor)
-        return (gap <= far_bp) & (magnitude >= floor)
 
 
 def t_far(n: int, k: int) -> float:

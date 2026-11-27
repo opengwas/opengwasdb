@@ -45,16 +45,22 @@ LEADS = {
 CLUMP_P1 = 5e-8
 
 
+#: What the Test Panel's directory holds that its manifest does not list: written by a build.
+GENERATED = ("store", "store-k0", "genotype-store", "genotype-store.SOURCE")
+
+
 def test_every_file_matches_its_manifest_hash() -> None:
     # The Test Stores under store/ and store-k0/ are not the Test Panel:
-    # scripts/ld/make_test_store.py writes them (store-k0/: opengwas/ogquery#2).
+    # scripts/ld/make_test_store.py writes them (store-k0/: opengwas/ogquery#2). Nor is the
+    # Genotype Store, genotype-store/, which `opengwasdb ld build --genotypes` wrote, or its recipe
+    # (opengwas/ogquery#11; test_genotype_store_source.py holds them).
     files = td.manifest()["files"]
     on_disk = sorted(
         str(p.relative_to(td.TEST_PANEL))
         for p in td.TEST_PANEL.rglob("*")
         if p.is_file()
         and p.name != "manifest.json"
-        and p.relative_to(td.TEST_PANEL).parts[0] not in ("store", "store-k0")
+        and p.relative_to(td.TEST_PANEL).parts[0] not in GENERATED
     )
     assert len(on_disk) >= 12, "the fixture must hold the Test Panel's files"
     assert on_disk == sorted(files), "every file is listed, and every listed file exists"

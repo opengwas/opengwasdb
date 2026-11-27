@@ -40,14 +40,14 @@ EXPECTED = check_distributions.Expected(
     licence_expression=EXPRESSION,
     licence_text=LICENCE,
     project_urls=URLS,
-    requirements={"ogquery": frozenset({">=0.4", "<0.5"})},
+    requirements={"ogquery": frozenset({">=0.5", "<0.6"})},
 )
 
 
 def _metadata(
     version: str = VERSION,
     expression: str = EXPRESSION,
-    requires: tuple[str, ...] = ("numpy<2.5,>=2.0", "ogquery<0.5,>=0.4"),
+    requires: tuple[str, ...] = ("numpy<2.5,>=2.0", "ogquery<0.6,>=0.5"),
 ) -> bytes:
     lines = [
         "Metadata-Version: 2.4",
@@ -199,9 +199,9 @@ def test_a_wheel_that_does_not_require_ogquery_is_refused(tmp_path: Path) -> Non
 
 
 def test_a_wheel_requiring_another_range_of_ogquery_is_refused(tmp_path: Path) -> None:
-    problems = _problems(tmp_path, wheel=_wheel_requiring("ogquery>=0.5"))
+    problems = _problems(tmp_path, wheel=_wheel_requiring("ogquery>=0.6"))
     assert len(problems) == 1
-    assert "ogquery ['>=0.5'] is not pyproject.toml's ['<0.5', '>=0.4']" in problems[0]
+    assert "ogquery ['>=0.6'] is not pyproject.toml's ['<0.6', '>=0.5']" in problems[0]
 
 
 @pytest.mark.parametrize(
@@ -218,11 +218,11 @@ def test_a_marked_ogquery_does_not_count_as_the_dependency(tmp_path: Path, marke
     """The right range behind an environment marker is no dependency for an install that the
     marker excludes, so a wheel that declares it only so is refused, however the marker is
     spelled."""
-    wheel = _wheel_requiring(f"ogquery>=0.4,<0.5; {marker}")
+    wheel = _wheel_requiring(f"ogquery>=0.5,<0.6; {marker}")
     problems = _problems(tmp_path, wheel=wheel)
     assert problems == [
         "opengwasdb-1.2.3-py3-none-any.whl: Requires-Dist has no unconditional ogquery "
-        f"(only `ogquery>=0.4,<0.5; {marker}`)"
+        f"(only `ogquery>=0.5,<0.6; {marker}`)"
     ]
 
 
@@ -237,7 +237,7 @@ def test_the_repository_expects_its_resources_licence_and_urls() -> None:
     expected = check_distributions.expected_from_repository(REPO)
     assert "opengwasdb/readers/column_maps/gwas-ssf.toml" in expected.tracked
     assert expected.licence_expression == "GPL-3.0-only"
-    assert expected.requirements == {"ogquery": frozenset({">=0.4", "<0.5"})}
+    assert expected.requirements == {"ogquery": frozenset({">=0.5", "<0.6"})}
     assert expected.licence_text.lstrip().startswith(b"GNU GENERAL PUBLIC LICENSE\n")
     assert expected.sdist_top_level == {
         "PKG-INFO",
