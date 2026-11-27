@@ -27,7 +27,7 @@ resolves after the lift, as it does in a Dense or Hybrid build.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -39,6 +39,8 @@ from opengwasdb.readers.orientation import swap
 from opengwasdb.readers.rows import ReaderBatch
 from opengwasdb.variants.routing.keys import SourceKey, encode_routing_keys, routing_key
 from opengwasdb.variants.routing.lift import (
+    LiftDrops,
+    collided_sites,
     cross_assembly_collisions,
     log_cross_assembly_drop,
     place_sites,
@@ -87,7 +89,9 @@ class SitePlacement:
     ``alid`` and ``reoriented`` are `place_sites`'. ``ambiguous`` holds the
     Routing Keys both a GRCh38 and a lifted source declare. ``n_unmapped`` is
     the number of lifted sites the chain placed nowhere, and ``off_primary`` the
-    sites it placed on an alt, random or unplaced contig (#376).
+    sites it placed on an alt, random or unplaced contig (#376), and ``collisions``
+    the sites dropped because another source locus reached their ALID (#325), by
+    both identities and the routing keys of their rows.
     """
 
     alid: dict[SourceKey, str]
@@ -95,6 +99,7 @@ class SitePlacement:
     ambiguous: frozenset[str]
     n_unmapped: int
     off_primary: frozenset[SourceKey] = frozenset()
+    collisions: LiftDrops = LiftDrops()
 
     def provenance(self, chain_file: Path | None) -> dict[str, object]:
         """The `provenance.lift` block, as `build-ragged-besd` records its lift.
@@ -108,7 +113,7 @@ class SitePlacement:
         return {
             "source_build": "hg19",
             "chain_file": str(chain_file) if chain_file is not None else None,
-            "n_lifted": len(self.alid) + len(self.off_primary),
+            "n_lifted": len(self.alid) + len(self.off_primary) + len(self.collisions.sources),
             "n_unmapped": self.n_unmapped,
             "n_off_primary": len(self.off_primary),
             "n_ambiguous": len(self.ambiguous),
@@ -117,6 +122,28 @@ class SitePlacement:
             "n_reference_other_variant": None,
             "n_reference_absent": None,
         }
+
+
+def _lifted_rsids(
+    held: Sequence[tuple[bool, Sequence[ReaderBatch]]],
+    collisions: Mapping[str, tuple[SourceKey, ...]],
+) -> dict[SourceKey, str]:
+    """The first rsid a lifted source named each collided site, for the record."""
+    wanted = collided_sites(collisions)
+    names: dict[SourceKey, str] = {}
+    for lifted, batches in held if wanted else ():
+        for batch in batches if lifted else ():
+            for site, rsid in zip(_sites(batch), batch.rsid.tolist(), strict=True):
+                if site in wanted and rsid:
+                    names.setdefault(site, rsid)
+    return names
+
+
+def _lifted_sites(held: Sequence[tuple[bool, Sequence[ReaderBatch]]]) -> set[SourceKey]:
+    """The source key of every row of every lifted Analysis."""
+    return {
+        site for lifted, batches in held if lifted for batch in batches for site in _sites(batch)
+    }
 
 
 def place_held_sources(
@@ -128,24 +155,25 @@ def place_held_sources(
     order. Raises `LiftoverFailureError` when the chain fails more of the lifted
     sites than ``options.failure_threshold`` allows.
     """
-    sites = {
-        site for lifted, batches in held if lifted for batch in batches for site in _sites(batch)
-    }
+    sites = _lifted_sites(held)
     placement = place_sites(
         {"hg19": sites}, chain_file=options.chain_file,
         failure_threshold=options.failure_threshold,
     )
     ambiguous = _both_builds_declare(
         [batches for lifted, batches in held if not lifted],
-        placement.alid.keys() | placement.off_primary,
+        placement.alid.keys() | placement.off_primary | collided_sites(placement.collisions),
     )
     log_cross_assembly_drop(len(ambiguous))
+    names = _lifted_rsids(held, placement.collisions)
+    collisions = placement.drops(lambda site: names.get(site, ""))
     return SitePlacement(
         placement.alid,
         placement.reoriented,
         frozenset(ambiguous),
-        len(sites) - len(placement.alid) - len(placement.off_primary),
+        len(sites) - len(placement.alid) - len(placement.off_primary) - len(collisions.sources),
         frozenset(placement.off_primary),
+        collisions,
     )
 
 
@@ -194,8 +222,9 @@ class PlacedBatch:
 
     ``batch`` holds the kept rows, their ALIDs on GRCh38 and their statistics
     on its A1. ``source_alid`` is each kept row's ALID as its own source spelt
-    it, which the rsid harvest compares by. ``unmapped``, ``ambiguous`` and
-    ``off_primary`` name the dropped rows by the source key Admission logs.
+    it, which the rsid harvest compares by. ``unmapped``, ``ambiguous``,
+    ``off_primary`` and ``collided`` name the dropped rows by the source key
+    Admission logs.
     """
 
     batch: ReaderBatch
@@ -203,6 +232,7 @@ class PlacedBatch:
     unmapped: list[str]
     ambiguous: list[str]
     off_primary: list[str] = field(default_factory=list)
+    collided: list[str] = field(default_factory=list)
 
 
 def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> PlacedBatch:
@@ -210,19 +240,19 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
     row of an ambiguous Routing Key dropped, and a GRCh38 source's rows otherwise
     untouched."""
     if not lifted and not placement.ambiguous:
-        return PlacedBatch(batch, batch.alid, [], [], [])
+        return PlacedBatch(batch, batch.alid, [], [], [], [])
     sites = _sites(batch)
-    ambiguous = [
-        i for i, site in enumerate(sites) if routing_key(site) in placement.ambiguous
-    ]
-    moved = _moves(sites, set(ambiguous), placement) if lifted else _Moves({}, [], [])
+    ambiguous, collided = _dropped_rows(sites, lifted, placement)
+    moved = (
+        _moves(sites, {*ambiguous, *collided}, placement) if lifted else _Moves({}, [], [])
+    )
     moves, unmapped, off_primary = moved.moves, moved.unmapped, moved.off_primary
     alid = batch.alid.copy()
     swapped = np.zeros(len(sites), dtype=bool)
     for i, (moved_alid, reoriented) in moves.items():
         alid[i], swapped[i] = moved_alid, reoriented
     keep = np.ones(len(sites), dtype=bool)
-    keep[ambiguous + unmapped + off_primary] = False
+    keep[ambiguous + collided + unmapped + off_primary] = False
     z, eaf = swap(swapped, batch.z, batch.eaf)
     placed = replace(
         batch,
@@ -235,7 +265,24 @@ def place_batch(batch: ReaderBatch, lifted: bool, placement: SitePlacement) -> P
         placed, batch.alid[keep], batch.keys_at(np.array(unmapped, dtype=np.int64)),
         batch.keys_at(np.array(ambiguous, dtype=np.int64)),
         batch.keys_at(np.array(off_primary, dtype=np.int64)),
+        batch.keys_at(np.array(collided, dtype=np.int64)),
     )
+
+
+def _dropped_rows(
+    sites: list[SourceKey], lifted: bool, placement: SitePlacement
+) -> tuple[list[int], list[int]]:
+    """The rows whose Routing Key both builds declare, and (of a lifted source)
+    those of a site a lift collision dropped (#325)."""
+    held = placement.collisions.keys
+    collided = [i for i, site in enumerate(sites) if lifted and routing_key(site) in held]
+    taken = set(collided)
+    ambiguous = [
+        i
+        for i, site in enumerate(sites)
+        if i not in taken and routing_key(site) in placement.ambiguous
+    ]
+    return ambiguous, collided
 
 
 class _Moves(NamedTuple):

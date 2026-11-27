@@ -21,7 +21,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from opengwasdb.store_reader.identity import identity_allele
+from opengwasdb.store_reader.identity import (
+    VariantNormalisationError,
+    identity_allele,
+    normalise_chromosome,
+)
 from opengwasdb.variants.normalise import canonical_alid, identity_alleles
 
 #: A source's own variant identity, exactly as a SourceReader streams it.
@@ -36,6 +40,28 @@ def routing_key(site: SourceKey) -> str:
     """``site`` as a ``chrom:pos:ref:alt`` routing key."""
     chrom, pos, ref, alt = site
     return f"{chrom}:{pos}:{identity_allele(ref)}:{identity_allele(alt)}"
+
+
+def contig_label(label: str) -> str:
+    """``label`` as the contig it names, or ``label`` itself where it names none a
+    Store knows (an alt or unplaced contig of a source's own assembly)."""
+    try:
+        return normalise_chromosome(label)
+    except VariantNormalisationError:
+        return label
+
+
+def raw_site_key(site: SourceKey) -> str:
+    """``site`` as ``chrom:pos:ref:alt``, its alleles as the source spells them: how a
+    dropped source is named in a record, and how the Hybrid fold names an
+    off-reference key."""
+    return ":".join(map(str, site))
+
+
+def split_raw_site_key(key: str) -> SourceKey:
+    """The site `raw_site_key` spelled as ``key``."""
+    chrom, pos, ref, alt = key.split(":")
+    return chrom, int(pos), ref, alt
 
 
 def source_alid(site: SourceKey) -> str:
