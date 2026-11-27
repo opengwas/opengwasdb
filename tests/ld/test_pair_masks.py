@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import testdata
 from contract.support import TEST_STORE
+from ogquery.ld.format import REncoding as ReadEncoding
 
 import opengwasdb.ld
 from opengwasdb.ld.format import REncoding
@@ -56,20 +57,25 @@ def test_the_partner_mask_chooses_the_floor_at_the_distance() -> None:
 
 
 def counted_masks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
-    """Counts each call of the encoding's two masks, by `stored` and `partner`."""
-    calls = {"stored": 0, "partner": 0}
-    stored, partner = REncoding.stored_mask, REncoding.partner_mask
+    """Counts each call of the encoding's two masks, by `stored` and `partner`.
 
-    def counted_stored(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
+    The masks are ogquery's `REncoding`'s (opengwas/ogquery#11), which opengwasdb's inherits and its
+    Genotype Store reader, in ogquery, calls on its own instances: patching the owner's reaches
+    the builder, the emitter and the reader alike, where one on opengwasdb's subclass would not
+    reach the reader."""
+    calls = {"stored": 0, "partner": 0}
+    stored, partner = ReadEncoding.stored_mask, ReadEncoding.partner_mask
+
+    def counted_stored(self: ReadEncoding, *args: Any, **kwargs: Any) -> np.ndarray:
         calls["stored"] += 1
         return stored(self, *args, **kwargs)
 
-    def counted_partner(self: REncoding, *args: Any, **kwargs: Any) -> np.ndarray:
+    def counted_partner(self: ReadEncoding, *args: Any, **kwargs: Any) -> np.ndarray:
         calls["partner"] += 1
         return partner(self, *args, **kwargs)
 
-    monkeypatch.setattr(REncoding, "stored_mask", counted_stored)
-    monkeypatch.setattr(REncoding, "partner_mask", counted_partner)
+    monkeypatch.setattr(ReadEncoding, "stored_mask", counted_stored)
+    monkeypatch.setattr(ReadEncoding, "partner_mask", counted_partner)
     return calls
 
 
@@ -85,11 +91,11 @@ def test_the_builder_and_the_partner_rows_emitter_call_the_masks(
 
 
 def test_the_genotype_reader_calls_the_masks(
-    genotype_store: Path, monkeypatch: pytest.MonkeyPatch
+    committed_genotype_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = counted_masks(monkeypatch)
     names = build_fixtures.alids(np.flatnonzero(testdata.variants().passes_filters)[:20])
-    store = opengwasdb.ld.open(genotype_store)
+    store = opengwasdb.ld.open(committed_genotype_store)
     assert store.matrix(names).r.shape == (len(names), len(names))
     assert store.proxies([names[0]], r2=0.01, kb=3000) is not None
     assert calls == {"stored": 1, "partner": 1}, calls

@@ -95,6 +95,17 @@ def genotype_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return out
 
 
+@pytest.fixture(scope="session")
+def committed_genotype_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The committed Test Panel Genotype Store (`genotype_fixture`), placed beside its inputs once
+    for the session: for a test that reads or validates a store and builds none, which saves the
+    build `genotype_store` runs. Read only; a test that edits a store copies it, or uses
+    `genotype_store`."""
+    import genotype_fixture
+
+    return genotype_fixture.place(tmp_path_factory.mktemp("committed-genotype-store"))
+
+
 #: ogld's per-test limit, in seconds: a hang fails instead of stalling the default tier.
 TIMEOUT_SECONDS = 5
 

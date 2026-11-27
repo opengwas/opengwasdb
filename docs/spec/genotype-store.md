@@ -3,11 +3,17 @@
 Status: implementation of opengwas/ogld#91; authority: opengwas/ogld#18's owner rulings of 20–21 November
 2026 and opengwas/ogld#91's relative-path ruling. ADR 0100 records the storage choices.
 
+Where the code lives (opengwas/ogquery#11, 27 November 2026): the read side of what this
+specifies -- the reader, the pgen reading, `Block` and `r`, and the layout a read opens, with the
+open-time refusals below -- is ogquery's, `ogquery.ld.genotypes`, behind ogquery's `genotype`
+extra, and `opengwasdb.ld.open` is `ogquery.ld.open`. opengwasdb writes and validates the sidecar.
+The contract below is unchanged. A Genotype Store is read from a local path only.
+
 ## Container and shared data
 
 A local Zarr v3 root has `genotype_store` provenance, format `0.1.0`, and no
 `ld_store` attribute. Opening it as an LD Store is refused; opening an LD Store
-as a Genotype Store is refused. `opengwasdb.ld.open` dispatches by the root key.
+as a Genotype Store is refused. `ogquery.ld.open` (`opengwasdb.ld.open`) dispatches by the root key.
 
 `variants/`, its chromosome ranges, ALID Index and companion are exactly
 ld-store.md §2/§14, written by the same writer and assembly and read by
@@ -66,7 +72,7 @@ The builder runs these same checks before writing `genotype_store`. A failed
 candidate remains unreadable. Once the claim is written, the shared companion
 assembly validates correspondence and publishes its optional pointer atomically
 as in ADR 0098. Its failure can leave a complete sidecar without a companion,
-never a half-published mapping. `opengwasdb ld validate` and public `ogld.validate`
+never a half-published mapping. `opengwasdb ld validate` and `opengwasdb.ld.validate`
 dispatch by kind; the LD Store validator's rules and behaviour are unchanged.
 
 ## Pair answers

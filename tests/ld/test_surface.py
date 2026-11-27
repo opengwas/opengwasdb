@@ -39,6 +39,8 @@ from opengwasdb.variants import sorted_spelling
 TEST_STORE = Path(__file__).resolve().parent / "data" / "test-panel" / "store"
 
 SURFACE: dict[str, tuple[Callable[..., Any], str]] = {
+    # ogquery's object since opengwas/ogquery#11, but downstream code calls it by this name: its
+    # signature is pinned here whoever owns it (`REEXPORTED`).
     "opengwasdb.ld.open": (
         opengwasdb.ld.open,
         "(location: 'str | os.PathLike[str]', *, cache_bytes: 'int | None' = None) -> 'LDStore'",
@@ -82,10 +84,16 @@ def test_the_signature_is_the_recorded_one(name: str) -> None:
     assert str(inspect.signature(function)) == signature
 
 
-def test_the_pins_are_opengwasdb_s_own() -> None:
-    """A pin here is for an object opengwasdb defines; ogquery pins its own."""
+#: Pinned here though ogquery defines them: the public name is opengwasdb's, and callers rely on it.
+REEXPORTED = {"opengwasdb.ld.open": "ogquery.ld.query.ldstore"}
+
+
+def test_the_pins_are_opengwasdb_s_own_or_a_named_reexport() -> None:
+    """A pin here is for an object opengwasdb defines, or one it re-exports by name (`REEXPORTED`);
+    ogquery pins the rest of its own."""
     for name, (function, _) in SURFACE.items():
-        assert function.__module__.startswith("opengwasdb."), (name, function.__module__)
+        owner = REEXPORTED.get(name, "opengwasdb.")
+        assert function.__module__.startswith(owner), (name, function.__module__)
 
 
 def test_the_top_level_names_are_the_public_surface() -> None:
@@ -140,11 +148,12 @@ def test_a_pgen_read_without_pgenlib_refuses_naming_the_extra() -> None:
         "from opengwasdb.ld.build.inputs import fileset, read_keep\n"
         f"pgen, keep = Path({str(panel.pgen)!r}), Path({str(panel.keep)!r})\n"
         "opened = fileset(pgen, read_keep(keep, 'p'), None, 'p')\n"
+        "from ogquery.opening import GenotypeExtraMissing\n"
         "try:\n"
         "    Genotypes(opened)\n"
-        "except opengwasdb.ld.InputError as refusal:\n"
+        "except GenotypeExtraMissing as refusal:\n"
         "    print(refusal)\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
-    assert "opengwasdb[ld-build]" in done.stdout
+    assert "pip install 'ogquery[genotype]'" in done.stdout

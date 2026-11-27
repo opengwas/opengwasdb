@@ -13,7 +13,7 @@ How each producer calls it:
 
 - **The builder** creates the writer with its encoding, `NEAR_BP`, `FAR_BP`, `t_partner`, the
   kept samples' n and the covariates' k. Each of its workers computes a tile's product,
-  `opengwasdb.ld.genotypes.r(rows, span)`, with `span` running from the tile's first row to the far
+  `ogquery.ld.genotypes.r(rows, span)`, with `span` running from the tile's first row to the far
   stop
   of row `last − 1`. It cuts the tile, `writer.cut(start + first, r)`, and measures its own PC
   Diagnostic on the same `r`. The build's thread writes the cuts in row order,
@@ -166,7 +166,7 @@ class StoreWriter:
         `r[t, c]` is r(first + t, first + c), signed to A1 after PC Adjustment (ld-store §3). It
         runs for every column c up to the last variant within far_bp of the block's last row, and no
         further: `r.shape[1]` is that variant's row + 1 − first. That is what
-        `opengwasdb.ld.genotypes.r(rows, span)` gives for the block against those rows, and the
+        `ogquery.ld.genotypes.r(rows, span)` gives for the block against those rows, and the
         chromosome's whole matrix for a block of all its rows. Only each row's later partners
         within far_bp are read. On and below the diagonal, and past a row's own far stop, `r` may
         hold anything, NaN included. Any floating dtype is accepted.

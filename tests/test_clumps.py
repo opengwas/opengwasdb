@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from clump_stores import (
     require_meaningful,
 )
 from ogquery.ld.query.ldstore import LDStore
+from ogquery.ld.query.ldstore import open as open_ld_store
 
 from opengwasdb.clumps import (
     ABSENT,
@@ -41,7 +43,6 @@ from opengwasdb.clumps import (
     read_clumps,
 )
 from opengwasdb.ld.format import REncoding
-from opengwasdb.ld.query.ldstore import open as open_ld_store
 from opengwasdb.model.analyses import write_analyses
 from opengwasdb.store import open_store
 from opengwasdb.store_reader.analyses import AnalysesTable, read_analyses
@@ -553,3 +554,15 @@ def test_the_clump_command_exits_1_naming_each_refusal(
     assert refused.exit_code == 1, refused.output
     assert "error:" in refused.output and named in refused.output
     assert refused.exception is None or isinstance(refused.exception, SystemExit)
+
+
+def test_a_genotype_store_without_pgenlib_is_a_refusal_naming_the_ancestry_and_the_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ogquery refuses a Genotype Store without its `genotype` extra with `GenotypeExtraMissing`,
+    an `ImportError`: `ogdb clump` handles a `ClumpRefusal`, so the open translates it, keeping the
+    install hint."""
+    genotype_store = Path(__file__).parent / "ld" / "data" / "test-panel" / "genotype-store"
+    monkeypatch.setitem(sys.modules, "pgenlib", None)
+    with pytest.raises(ClumpRefusal, match=r"\(for EUR\).*pip install 'ogquery\[genotype\]'"):
+        open_ld_stores({"EUR": genotype_store}, reference_assembly="GRCh38")

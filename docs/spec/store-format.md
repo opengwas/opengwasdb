@@ -2548,7 +2548,7 @@ position in that slice, from 0, so a Dense Component row may name a lead past it
 the attribute's `ld_stores`; every other Analysis is not clumped. The step that writes the
 component takes the Assigned Ancestry → LD Store mapping as an explicit input and has no default
 of its own (ADR 0106 §2). For a clumped Analysis, every observed row of its clump slice is given
-to `LDStore.clump` (`opengwasdb/ld/query/ldstore.py`, ld-store §9) against its ancestry's LD
+to `LDStore.clump` (`ogquery.ld.query.ldstore`, ld-store §9) against its ancestry's LD
 Store, at r2 equal to that store's recorded `t_far` and kb 10,000 (W = 10,000,000 bp): a row
 joins a lead at r̂² > r2 and d < W, plink2's edges.
 

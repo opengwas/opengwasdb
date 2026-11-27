@@ -8,9 +8,9 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import zarr
+from ogquery.ld.genotypes.layout import ARRAYS, VERSION, check_input, mapped_arrays
 
 from opengwasdb.ld.format import VALIDATION_RULES, REncoding
-from opengwasdb.ld.genotypes.layout import ARRAYS, VERSION, check_input, mapped_arrays
 from opengwasdb.ld.store import Finding, layout
 from opengwasdb.ld.store.validation import validate_group
 

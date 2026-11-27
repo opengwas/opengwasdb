@@ -106,6 +106,16 @@ decode its own copy; mmap instead uses the shared page cache. Publishing
 individual-level data or remote genotype reading is not authorised by this ADR.
 LD Stores remain the route for restricted and large panels.
 
+> **Clarification (opengwas/ogquery#11, 27 November 2026).** The reader this ADR describes --
+> `GenotypeReader`, its pgen handles and BLAS guard, the sidecar layout a read opens, and the open-time
+> refusals -- moved to ogquery (`ogquery.ld.genotypes`, behind its `genotype` extra; ogquery ADR 0002,
+> amended), and `opengwasdb.ld.open` is `ogquery.ld.open`. `opengwasdb.ld.genotypes` keeps the
+> sidecar's writer, its validation and the pins a writer records. The decision is unchanged, and so
+> are the sidecar's bytes. One refusal is new, from ogquery: a Genotype Store behind an http(s) URL is
+> an `InputError` saying a Genotype Store is read from a local path only, where this ADR's design
+> failed on a mangled input path. References above to `opengwasdb.ld.genotypes` for these paths,
+> `Genotypes`, `adjust.r` and the reader name ogquery's modules now.
+
 > **Note (opengwas/ogquery#2, 25 November 2026).** The LD read path this ADR names moved to
 > ogquery 0.3.0 (ogquery ADR 0002); its module paths here now name ogquery's modules. The
 > decision is unchanged.

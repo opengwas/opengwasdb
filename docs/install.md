@@ -38,6 +38,22 @@ bcftools not found in PATH — install via conda: conda install -c bioconda bcft
 packages both work. Building from TSV, GWAS-SSF or BESD sources, and every
 query, needs no bcftools.
 
+### Building LD Stores, and reading Genotype Stores: the `ld-build` extra
+
+Building an LD Store or a Genotype Store from pgen genotypes, and reading a Genotype Store, need
+pgenlib and threadpoolctl. They come with [ogquery](https://pypi.org/project/ogquery/)'s `genotype`
+extra, which opengwasdb's `ld-build` extra installs (the development and Pixi environments carry it
+too; `pip install opengwasdb` alone does not):
+
+```bash
+pip install 'opengwasdb[ld-build]'
+```
+
+Without them a build that reaches a pgen, or an open of a Genotype Store, stops with ogquery's
+`GenotypeExtraMissing` and says to `pip install 'ogquery[genotype]'`; `opengwasdb ld build`
+prints that and exits 2. Reading an LD Store needs neither. A Genotype Store is read from a local
+path only.
+
 ## A first run
 
 This builds the tiny example Store from [Getting started](getting-started.md)

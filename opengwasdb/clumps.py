@@ -37,9 +37,10 @@ import numpy as np
 from ogquery.ld.format import InputError, Refusal
 from ogquery.ld.query.kind import open_kind
 from ogquery.ld.query.ldstore import LDStore
+from ogquery.ld.query.ldstore import open as open_ld_store
+from ogquery.opening import GenotypeExtraMissing
 
 from opengwasdb.ld.format import REncoding
-from opengwasdb.ld.query.ldstore import open as open_ld_store
 from opengwasdb.model.analyses import N_LOCI_5E8, N_UNCLUMPED_5E8, write_analysis_columns
 from opengwasdb.overview import write_overview_html
 from opengwasdb.store.arrays import (
@@ -272,7 +273,9 @@ def _open_mapped(ancestry: str, location: str, reference_assembly: str) -> Mappe
                            "assigned_ancestry value, and a blank one is Unassigned")
     try:
         store = open_ld_store(location)
-    except (InputError, Refusal, OSError, KeyError) as exc:
+    # GenotypeExtraMissing is an ImportError, not an InputError: a Genotype Store mapped without
+    # ogquery's `genotype` extra is this refusal too, with the extra it names in the message.
+    except (InputError, Refusal, OSError, KeyError, GenotypeExtraMissing) as exc:
         raise ClumpRefusal(f"{where} does not open: {exc}") from exc
     try:
         encoding, identity = _judged(store, location, ancestry, reference_assembly)

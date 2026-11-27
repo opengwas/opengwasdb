@@ -1,7 +1,10 @@
-"""PC Adjustment and one A1-signed r for tiles and on-demand rows (ADR 0099).
+"""The PC Adjustment: a build's covariates, residuals and prepared Blocks (ADR 0099).
 
-The covariates are an intercept and the kept PCs in sample order. At k = 0 the
-intercept alone centres the dosages, giving Pearson r on complete genotypes.
+`Block` and `r`, which a tile and a Genotype Store's on-demand rows share, are ogquery's
+(`ogquery.ld.genotypes.adjust`; opengwas/ogquery#11), imported here.
+
+The covariates are an intercept and the kept PCs in sample order. At k = 0 the intercept
+alone centres the dosages, giving Pearson r on complete genotypes.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from typing import Final
 
 import numpy as np
 import numpy.typing as npt
+from ogquery.ld.genotypes.adjust import Block
 
 #: A residual whose squared length is this small a share of the centred dosages' has no
 #: variance after PC Adjustment, to float error: r with it is undefined (build-inputs §6, 4).
@@ -54,26 +58,6 @@ def residuals(
     return resid, flat
 
 
-@dataclass(frozen=True)
-class Block:
-    """ALT dosages and their PC projections, residual norms and A1 signs (ADR 0099).
-
-    Rows retain the sample order of the covariate basis. Two blocks passed to `r` must use
-    the same samples and basis; a row-against-window call is a one-row slice of a block.
-    """
-
-    calls: npt.NDArray[np.float64]
-    projection: npt.NDArray[np.float64]
-    norm: npt.NDArray[np.float64]
-    sign: npt.NDArray[np.float64]
-
-    def __len__(self) -> int:
-        return len(self.calls)
-
-    def __getitem__(self, rows: slice) -> Block:
-        return Block(self.calls[rows], self.projection[rows], self.norm[rows], self.sign[rows])
-
-
 def prepare(
     dosages: npt.NDArray[np.float64],
     covariates: Covariates,
@@ -90,20 +74,3 @@ def prepare(
         raise ValueError(f"{int(flat.sum())} variants have no residual variance: not dropped")
     norm = np.sqrt(np.einsum("ij,ij->i", resid, resid))
     return Block(dosages, projection, norm, np.where(a1_is_alt, 1.0, -1.0))
-
-
-def r(rows: Block, span: Block) -> npt.NDArray[np.float64]:
-    """A1-signed r for a block against a span, including a single row against a window.
-
-    For complete hard calls the float64 BLAS raw dot is exact: every partial sum is a
-    whole number at most 4n. Only the (k + 1)-term correction and normalisation round.
-    Dosage inputs use the same formula, without the integer exactness claim (ADR 0099).
-    Quantise the result only through `opengwasdb.ld.format.REncoding`.
-    """
-    out = rows.calls @ span.calls.T
-    out -= rows.projection @ span.projection.T
-    out /= rows.norm[:, None]
-    out /= span.norm[None, :]
-    out *= rows.sign[:, None]
-    out *= span.sign[None, :]
-    return out

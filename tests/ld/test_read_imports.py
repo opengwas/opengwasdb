@@ -2,9 +2,10 @@
 
 opengwas/ogquery#2: "Importing the LD read path loads none of the LD build code", on
 opengwasdb's side. `opengwasdb.ld`'s initialisers are lazy (`opengwasdb.lazy_exports`), its read
-names are ogquery's, and its `open` imports the Genotype Store reader only for a Genotype Store.
-So a process that opens an LD Store and queries it never imports the builder, the writer, the
-derivations, validation or the CLI.
+names are ogquery's, and ogquery's `open` imports the Genotype Store reader only for a Genotype
+Store (opengwas/ogquery#11). So a process that opens an LD Store or a Genotype Store and queries it
+never imports the builder, the writer, the derivations, validation, the sidecar's writer or the CLI,
+and one that opens an LD Store loads no genotype reader, pgenlib or threadpoolctl.
 
 Each case runs in a fresh interpreter, because this process has imported everything. The same
 run records zarr's configuration after the query: `opengwasdb.ld` reads under zarr's defaults,
@@ -31,8 +32,7 @@ BUILD_SIDE = (
     "opengwasdb.ld.store.joining",
     "opengwasdb.ld.store.validation",
     "opengwasdb.ld.store.writer",
-    "opengwasdb.ld.genotypes.sidecar",
-    "opengwasdb.ld.genotypes.validation",
+    "opengwasdb.ld.genotypes",
 )
 
 PROBE = """
@@ -40,7 +40,8 @@ import json, sys
 {code}
 import zarr
 print(json.dumps({{
-    "loaded": sorted(m for m in sys.modules if m.startswith("opengwasdb.ld")),
+    "loaded": sorted(m for m in sys.modules if m.startswith(("opengwasdb.ld", "ogquery.ld"))),
+    "native": sorted(m for m in ("pgenlib", "threadpoolctl") if m in sys.modules),
     "pipeline": zarr.config.get("codec_pipeline.path"),
 }}))
 """
@@ -79,16 +80,17 @@ def _build_side(loaded: object) -> list[str]:
 
 def test_an_ld_store_query_loads_none_of_the_build_and_leaves_zarr_s_defaults() -> None:
     probed = _probe(READ.format(store=str(TEST_STORE)))
-    assert "opengwasdb.ld.query.ldstore" in probed["loaded"], "the probe read through opengwasdb.ld"
+    assert "ogquery.ld.query.ldstore" in probed["loaded"], "the probe read through opengwasdb.ld"
     assert _build_side(probed["loaded"]) == []
-    assert "opengwasdb.ld.genotypes.reader" not in probed["loaded"], "an LD Store needs no pgen"
+    assert "ogquery.ld.genotypes.reader" not in probed["loaded"], "an LD Store needs no pgen"
+    assert probed["native"] == [], "an LD Store read imports neither pgenlib nor threadpoolctl"
     assert probed["pipeline"] == "zarr.core.codec_pipeline.BatchedCodecPipeline"
 
 
-def test_a_genotype_store_query_loads_none_of_the_build(genotype_store: Path) -> None:
-    code = READ.format(store=str(genotype_store))
+def test_a_genotype_store_query_loads_none_of_the_build(committed_genotype_store: Path) -> None:
+    code = READ.format(store=str(committed_genotype_store))
     probed = _probe(code)
-    assert "opengwasdb.ld.genotypes.reader" in probed["loaded"]
+    assert "ogquery.ld.genotypes.reader" in probed["loaded"]
     assert _build_side(probed["loaded"]) == []
     assert probed["pipeline"] == "zarr.core.codec_pipeline.BatchedCodecPipeline"
 

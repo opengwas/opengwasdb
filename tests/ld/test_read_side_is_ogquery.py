@@ -1,8 +1,9 @@
-"""`opengwasdb.ld` reads LD Stores through ogquery, not through a copy (opengwas/ogquery#2).
+"""`opengwasdb.ld` reads LD Stores and Genotype Stores through ogquery, not through a copy
+(opengwas/ogquery#2, #11).
 
-The LD read path moved to `ogquery.ld` (ogquery ADR 0002). opengwasdb keeps building, writing,
-validating and the Genotype Store reader, and re-exports the read side where its own modules
-name it. Three properties keep that true:
+The LD read path moved to `ogquery.ld` (ogquery ADR 0002), and the Genotype Store's reader after
+it (ADR 0002, amended). opengwasdb keeps building, writing and validating, and re-exports the read
+side where its own modules name it. Three properties keep that true:
 
 * every read name `opengwasdb.ld` and its mixed modules export is the very object `ogquery.ld`
   has, so an `isinstance` across the two import paths cannot say no and one process decodes with
@@ -32,20 +33,20 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "opengwasdb" / "ld"
 OGQUERY = ogquery_root()
 
-#: What `opengwasdb.ld` keeps of its own: building, validating, the version, and the `open`
-#: that dispatches a Genotype Store to its reader.
-OWN_TOP = {"build", "BuildInputs", "validate", "Finding", "__version__", "open"}
+#: What `opengwasdb.ld` keeps of its own: building, validating and the version.
+OWN_TOP = {"build", "BuildInputs", "validate", "Finding", "__version__"}
 
 #: Each opengwasdb module that re-exports an ogquery module's read side, and the names it keeps
 #: as its own though ogquery has the same name: `REncoding`, opengwasdb's subclass carrying the
-#: build members, and `open`.
+#: build members.
 MIXED = {
     "opengwasdb.ld.format": {"REncoding"},
     "opengwasdb.ld.format.encoding": {"REncoding"},
     "opengwasdb.ld.format.geometry": set(),
     "opengwasdb.ld.format.provenance": set(),
-    "opengwasdb.ld.query": {"open"},
-    "opengwasdb.ld.query.ldstore": {"open"},
+    "opengwasdb.ld.genotypes": set(),
+    "opengwasdb.ld.genotypes.adjust": set(),
+    "opengwasdb.ld.query": set(),
     "opengwasdb.ld.store": set(),
     "opengwasdb.ld.store.frames": {"REncoding"},
     "opengwasdb.ld.store.layout": {"REncoding"},
@@ -55,7 +56,7 @@ MIXED = {
 
 def test_the_top_level_read_names_are_ogquery_s() -> None:
     read = [name for name in opengwasdb.ld.__all__ if name not in OWN_TOP]
-    assert len(read) == 10, read  # the read surface is not empty, nor a stray few
+    assert len(read) == 11, read  # the read surface is not empty, nor a stray few
     assert [n for n in read if getattr(opengwasdb.ld, n) is not getattr(ogquery.ld, n)] == []
 
 
@@ -67,6 +68,56 @@ def test_a_module_s_read_names_are_ogquery_s_objects(name: str) -> None:
     shared = [n for n in exported(theirs) if hasattr(ours, n) and n not in MIXED[name]]
     assert shared, f"{name} re-exports nothing of {theirs.__name__}"
     assert not_the_same_object(ours, theirs, shared) == []
+
+
+#: What opengwasdb's genotype modules import from ogquery's, by module: each is ogquery's object,
+#: not a copy (opengwas/ogquery#11). Mixed modules keep only what builds or validates.
+GENOTYPE_NAMES = {
+    "opengwasdb.ld.genotypes": (
+        "ogquery.ld.genotypes",
+        ("Block", "Genotypes", "import_pgenlib", "r"),
+    ),
+    "opengwasdb.ld.genotypes.adjust": ("ogquery.ld.genotypes.adjust", ("Block",)),
+    "opengwasdb.ld.genotypes.layout": ("ogquery.ld.genotypes.pgen", ("PgenFileset",)),
+    "opengwasdb.ld.genotypes.sidecar": ("ogquery.ld.genotypes.adjust", ("Block",)),
+    "opengwasdb.ld.genotypes.validation": (
+        "ogquery.ld.genotypes.layout",
+        ("ARRAYS", "VERSION", "check_input", "mapped_arrays"),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(GENOTYPE_NAMES))
+def test_a_genotype_module_s_moved_names_are_ogquery_s_objects(name: str) -> None:
+    theirs_name, names = GENOTYPE_NAMES[name]
+    ours, theirs = module_pair(name, theirs_name)
+    assert all(hasattr(ours, n) for n in names), f"{name} no longer names {names}"
+    assert not_the_same_object(ours, theirs, list(names)) == []
+
+
+def test_sidecar_takes_its_layout_from_ogquery() -> None:
+    from ogquery.ld.genotypes import layout as theirs
+
+    from opengwasdb.ld.genotypes import sidecar
+
+    assert (sidecar.KEY, sidecar.VERSION) == (theirs.KEY, theirs.VERSION)
+    assert sidecar.ARRAYS is theirs.ARRAYS
+
+
+def test_the_moved_genotype_modules_and_names_are_gone_from_opengwasdb() -> None:
+    """Deleted, not left as a second copy: the reader and pgen modules, and the layout names a read
+    opens a store with."""
+    import importlib.util
+
+    from opengwasdb.ld.genotypes import adjust, layout
+
+    for module in ("reader", "pgen"):
+        assert importlib.util.find_spec(f"opengwasdb.ld.genotypes.{module}") is None, module
+    assert importlib.util.find_spec("opengwasdb.ld.query.ldstore") is None
+    moved = ("KEY", "VERSION", "ARRAYS", "check_input", "Fileset", "open_filesets", "mapped_arrays")
+    assert [name for name in moved if hasattr(layout, name)] == []
+    assert not hasattr(adjust, "r")
+    assert layout.input_pin and layout.fileset_record, "what a writer records stays"
 
 
 def test_opengwasdb_s_encoding_extends_ogquery_s() -> None:
@@ -81,8 +132,19 @@ def test_opengwasdb_s_encoding_extends_ogquery_s() -> None:
         "r_reserved_code": -32768,
         "rounding": "half_to_even",
     }
-    assert type(REncoding.of(record)) is REncoding, "of() gives the build's class, which quantises"
-    assert not hasattr(ReadEncoding(511), "quantise"), "ogquery's reader never quantises"
+    assert type(REncoding.of(record)) is REncoding, "of() gives the build's class, with its floors"
+    # Quantising and the two masks are ogquery's, which a Genotype Store's reader judges with:
+    # opengwasdb's class inherits them, and only the build members are its own.
+    for name in ("quantise", "stored_mask", "partner_mask"):
+        assert name in vars(ReadEncoding), name
+        assert name not in vars(REncoding), f"{name} is ogquery's, not redefined here"
+        assert getattr(REncoding, name) is getattr(ReadEncoding, name)
+    build_members = (
+        "record", "step", "max_error", "far_code_floor", "partner_code_floor", "least_r",
+    )  # fmt: skip
+    assert [m for m in build_members if m in vars(ReadEncoding)] == []
+    assert all(m in vars(REncoding) for m in build_members)
+    assert not hasattr(ReadEncoding(511), "far_code_floor"), "ogquery's reader computes no floor"
 
 
 #: Bodies opengwasdb keeps though ogquery has the same one, each with the reason it cannot call

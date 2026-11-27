@@ -1,7 +1,7 @@
 """One chromosome's r, tile by tile, from a window of prepared genotypes (ADR 0099).
 
 A tile is a block of rows against every later variant within `far_bp`, computed by
-`opengwasdb.ld.genotypes.r`. The build hands the product to the store, `StoreWriter.cut`,
+`ogquery.ld.genotypes.r`. The build hands the product to the store, `StoreWriter.cut`,
 which quantises, thresholds and counts (ogld#17). The build keeps only its own diagnostic, the
 change in r from PC Adjustment within `change_bp`. Tiles are computed on `threads` worker
 threads and written in row order, so the store is the same for any thread count.
