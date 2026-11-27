@@ -55,7 +55,9 @@ from opengwasdb.completion.block import (
 from opengwasdb.completion.ld_panel import (
     BlockPlacement,
     LDBlock,
+    PanelIdentity,
     PanelPlacement,
+    PanelSource,
     SharedEndpoint,
     check_panel_has_chromosomes,
     panel_variant,
@@ -65,6 +67,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
+from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
@@ -107,7 +110,6 @@ from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
 
-_LD_PANEL_ID = "eur-hg38-gpm"
 
 
 @dataclass(frozen=True)
@@ -308,16 +310,10 @@ def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
 def complete_ragged_store(
     source_path: str | Path,
     dest_path: str | Path,
-    ld_dir: str | Path,
+    panel: PanelSource,
+    options: CompletionOptions = DEFAULT_OPTIONS,
     *,
-    ancestry: str = "EUR",
     cis_window_bp: int = 1_000_000,
-    min_cor: float = 0.7,
-    thresh: float = 0.9,
-    release_id: str | None = None,
-    ld_panel_id: str = _LD_PANEL_ID,
-    n_workers: int = 1,
-    overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
     region_cap_bp: int | None = REGION_CAP_BP,
 ) -> CompletionResult:
@@ -325,7 +321,10 @@ def complete_ragged_store(
 
     source_path: existing observed-only ragged store.
     dest_path:   new store directory to create.
-    ld_dir:      root of LD panel; blocks at ld_dir/{ancestry}/{chr}/{block}.*
+    panel:       the LD panel to read (`PanelSource`); only the blocks that overlap an
+                 Analysis's regions are read.
+    options:     the tuning of the run (`CompletionOptions`); `cis_window_bp` is the
+                 ragged-only one, passed beside it.
     impute_analysis_ids: if given, only these analyses are imputed (the
         ancestry-match filter, ADR 0028); others are carried through
         observed-only. ``None`` auto-derives the filter from the source's
@@ -334,12 +333,15 @@ def complete_ragged_store(
         information).
     The regions are the source's `regions.tsv` (`completion.regions`, issue #430).
     """
+    ld_dir, ancestry = panel.path, panel.ancestry
     table, impute_analysis_ids, resolved = _check_completion_inputs(
         Path(source_path), ld_dir, ancestry, cis_window_bp, impute_analysis_ids
     )
     dst = Path(dest_path)
     checkpoint_dir = checkpoint.checkpoint_dir_for(dst)
-    checkpoint.require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_ragged_completion")
+    checkpoint.require_fresh_destination(
+        dst, checkpoint_dir, options.overwrite, "resume_ragged_completion"
+    )
 
     (checkpoint_dir / "blocks").mkdir(parents=True)
     build_params = {
@@ -348,17 +350,14 @@ def complete_ragged_store(
         "ld_dir": str(Path(ld_dir).resolve()),
         "ancestry": ancestry,
         "cis_window_bp": cis_window_bp,
-        "min_cor": min_cor,
-        "thresh": thresh,
-        "release_id": release_id,
-        "ld_panel_id": ld_panel_id,
+        "min_cor": options.min_cor,
+        "thresh": options.thresh,
+        "release_id": options.release_id,
         "impute_analysis_ids": None if impute_analysis_ids is None else sorted(impute_analysis_ids),
         "region_cap_bp": region_cap_bp,
         **_region_params(table),
     }
-    (checkpoint_dir / "build_params.json").write_text(
-        json.dumps(build_params, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    checkpoint.start_checkpoint(checkpoint_dir, build_params, panel)
 
     result = _run_completion(
         Path(source_path),
@@ -366,11 +365,7 @@ def complete_ragged_store(
         Path(ld_dir),
         ancestry=ancestry,
         cis_window_bp=cis_window_bp,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id,
-        ld_panel_id=ld_panel_id,
-        n_workers=n_workers,
+        options=options,
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_analysis_ids,
         region_cap_bp=region_cap_bp,
@@ -397,6 +392,7 @@ def resume_ragged_completion(
     """
     checkpoint_dir = Path(checkpoint_dir)
     params = json.loads((checkpoint_dir / "build_params.json").read_text())
+    checkpoint.require_same_panel(checkpoint_dir, params)
 
     impute_ids = params.get("impute_analysis_ids")
     impute_ids = set(impute_ids) if impute_ids is not None else None
@@ -410,11 +406,10 @@ def resume_ragged_completion(
         Path(params["ld_dir"]),
         ancestry=params["ancestry"],
         cis_window_bp=params["cis_window_bp"],
-        min_cor=params["min_cor"],
-        thresh=params["thresh"],
-        release_id=params["release_id"],
-        ld_panel_id=params["ld_panel_id"],
-        n_workers=n_workers,
+        options=CompletionOptions(
+            min_cor=params["min_cor"], thresh=params["thresh"],
+            release_id=params["release_id"], n_workers=n_workers,
+        ),
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_ids,
         region_cap_bp=params.get("region_cap_bp"),
@@ -1612,7 +1607,7 @@ def _completed_manifest(
     staged: StagedRelease,
     source_format_version: str,
     release_id: str | None,
-    ld_panel_id: str,
+    panel: PanelIdentity,
     ancestry: str,
     min_cor: float,
     thresh: float,
@@ -1632,10 +1627,10 @@ def _completed_manifest(
         release_id=release_id,
         source_format_version=source_format_version,
         completion_provenance=build_completion_provenance(
-            ld_panel_id=ld_panel_id,
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,
+            ld_panel=panel,
             n_variants_total=len(axis.variants),
             n_variants_new=len(axis.new_variants),
             cis_window_bp=cis_window_bp,
@@ -1685,11 +1680,7 @@ def _run_completion(
     *,
     ancestry: str,
     cis_window_bp: int,
-    min_cor: float,
-    thresh: float,
-    release_id: str | None,
-    ld_panel_id: str,
-    n_workers: int,
+    options: CompletionOptions,
     checkpoint_dir: Path,
     impute_analysis_ids: set[str] | None,
     region_cap_bp: int | None,
@@ -1698,6 +1689,7 @@ def _run_completion(
     """The shared core: block discovery, checkpointed LD-block completion and
     CSR assembly, encoding, metadata and manifest, sequenced inside the
     staging context that makes a completed release atomic."""
+    min_cor, thresh, n_workers = options.min_cor, options.thresh, options.n_workers
     manifest, source_format_version = _open_source(src)
 
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
@@ -1726,7 +1718,8 @@ def _run_completion(
         staged.write_manifest(
             _completed_manifest(
                 manifest, staged=staged, source_format_version=source_format_version,
-                release_id=release_id, ld_panel_id=ld_panel_id, ancestry=ancestry,
+                release_id=options.release_id, panel=checkpoint.checkpointed_panel(checkpoint_dir),
+                ancestry=ancestry,
                 min_cor=min_cor, thresh=thresh, cis_window_bp=cis_window_bp, axis=axis,
                 panel_placement=plan.panel_placement, csr=csr, encode_plan=encode_plan,
                 se_exceptions=se_exceptions,

@@ -13,19 +13,21 @@ and never imputed (`csr.observed_only`), so none of these applies to it.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
+from opengwasdb.completion.manifest import PANEL_FIELDS, PANEL_FIELDS_SINCE_327
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.model.analyses import NON_NEGATIVE_INTEGER_OR_BLANK
 from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.arrays import array_length
 from opengwasdb.store_reader.associations import Tally
-from opengwasdb.validation.rule import Check, Kind, Rule, Target
+from opengwasdb.validation.rule import Check, Kind, Rule, Severity, Target
 from opengwasdb.validation.rules.associations import VALUE_KINDS, grid_counts, tally, value_fold
 from opengwasdb.validation.rules.csr import is_overflow
 from opengwasdb.validation.rules.encoding import plane_label
@@ -417,8 +419,78 @@ def _counts_column(record: object, key: str, n: int) -> list[int] | None:
     return column if ok else None
 
 
+def _panel_record(target: Target) -> Mapping[str, Any]:
+    record = target.store.manifest.provenance.get("completion")
+    return record if isinstance(record, dict) else {}
+
+
+def panel_unrecorded(target: Target) -> Iterator[str]:
+    """A completion that records none of the panel fields added at #327 (`ld_panel_id` was
+    always recorded) was written before they existed; the format is the same, so only a
+    warning says so."""
+    if not any(key in _panel_record(target) for key in PANEL_FIELDS_SINCE_327):
+        yield (
+            "provenance.completion records none of the LD panel fields added at #327: the "
+            "release names its panel only by `ld_panel_id`, which a completion before then "
+            "set to a constant"
+        )
+
+
+def _digest_problems(record: Mapping[str, Any]) -> Iterator[str]:
+    digest = record["ld_panel_digest"]
+    if not (isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+        yield f"provenance.completion.ld_panel_digest {digest!r} is not a sha256"
+    elif (
+        record["ld_panel_id_source"] == "digest"
+        and record["ld_panel_id"] != f"sha256:{digest[:16]}"
+    ):
+        yield (
+            f"provenance.completion.ld_panel_id {record['ld_panel_id']!r} is not the id its "
+            f"digest derives ('sha256:{digest[:16]}')"
+        )
+    if record["ld_panel_id_source"] not in ("caller", "digest"):
+        yield (
+            f"provenance.completion.ld_panel_id_source {record['ld_panel_id_source']!r} "
+            "is neither 'caller' nor 'digest'"
+        )
+
+
+def _component_problems(target: Target, record: Mapping[str, Any]) -> Iterator[str]:
+    for component in target.children:
+        if component.kind is Kind.RELEASE:
+            inner = _panel_record(component)
+            for key in PANEL_FIELDS:
+                if inner.get(key) != record[key]:
+                    yield (
+                        f"provenance.completion.{key} is {record[key]!r}, but the Dense "
+                        f"Component records {inner.get(key)!r}: one panel per completed release"
+                    )
+
+
+def panel_consistent(target: Target) -> Iterator[str]:
+    """A completion that records any panel field added at #327 records all five, consistently: the
+    derived id is the digest's prefix, and a Hybrid and its Dense Component name one panel."""
+    record = _panel_record(target)
+    if not any(key in record for key in PANEL_FIELDS_SINCE_327):
+        return
+    missing = [key for key in PANEL_FIELDS if not record.get(key)]
+    if missing:
+        yield f"provenance.completion records no {', '.join(missing)} of its LD panel"
+        return
+    yield from _digest_problems(record)
+    yield from _component_problems(target, record)
+
+
 CHECKS: tuple[Rule, ...] = (
     Check(name=MASK, kinds=Kind.GRID | Kind.CSR, when=completed, after=(REQUIRED,), run=mask),
+    Check(
+        name="completion.ld_panel", kinds=Kind.RELEASE, when=release_completed,
+        after=(REQUIRED,), run=panel_consistent,
+    ),
+    Check(
+        name="completion.ld_panel_unrecorded", kinds=Kind.RELEASE, when=release_completed,
+        after=(REQUIRED,), severity=Severity.WARNING, run=panel_unrecorded,
+    ),
 )
 
 #: The value rules about the mask, in the order they have always reported.

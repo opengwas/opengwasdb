@@ -22,6 +22,8 @@ from pathlib import Path
 import numpy as np
 from test_hybrid_completion import build_over_panel
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.query import query_store
 from opengwasdb.store_reader.analyses import read_analyses
@@ -82,7 +84,7 @@ def _write_ld_block(block_dir: Path, block_name: str, snps, rho: float = 0.7) ->
     ld = np.full((n, n), rho)
     np.fill_diagonal(ld, 1.0)
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         for row in ld:
             gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
     (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
@@ -118,13 +120,18 @@ def _build_source(tmp_path: Path, ancestry: dict[str, str]) -> Path:
     return build_over_panel(tmp_path, manifest, PANEL_ALIDS)
 
 
+def _complete_and_validate(src, tmp_path):
+    dst = tmp_path / "dst.opengwasdb"
+    ld = _make_ld_panel(tmp_path)
+    options = CompletionOptions(min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(src, dst, PanelSource(ld, ancestry="EUR"), options)
+    assert validate_store(dst).ok, validate_store(dst).errors
+    return dst
+
+
 def test_mixed_store_imputes_only_matching_ancestry(tmp_path):
     src = _build_source(tmp_path, {"trait_eur": "EUR", "trait_eas": "EAS"})
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-
-    complete_hybrid_store(src, dst, ld, ancestry="EUR", min_cor=0.0, thresh=0.9)
-    assert validate_store(dst).ok, validate_store(dst).errors
+    dst = _complete_and_validate(src, tmp_path)
 
     q = query_store(dst)
     # EUR-assigned analysis gains an imputed cell at the panel target.
@@ -155,7 +162,8 @@ def test_an_excluded_analysis_declares_none_of_the_completion_it_did_not_get(tmp
     src = _build_source(tmp_path, {"trait_eur": "EUR", "trait_eas": "EAS"})
     dst = tmp_path / "dst.opengwasdb"
     complete_hybrid_store(
-        src, dst, _make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.9
+        src, dst, PanelSource(_make_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
     )
 
     analyses = _analyses_by_id(dst)
@@ -176,11 +184,7 @@ def test_an_excluded_analysis_declares_none_of_the_completion_it_did_not_get(tmp
 def test_homogeneous_eur_store_no_regression(tmp_path):
     # Same store, both EUR: every analysis matches → both targets imputed.
     src = _build_source(tmp_path, {"trait_eur": "EUR", "trait_eur2": "EUR"})
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-
-    complete_hybrid_store(src, dst, ld, ancestry="EUR", min_cor=0.0, thresh=0.9)
-    assert validate_store(dst).ok, validate_store(dst).errors
+    dst = _complete_and_validate(src, tmp_path)
 
     q = query_store(dst)
     for tid in ("trait_eur", "trait_eur2"):
@@ -200,10 +204,12 @@ def test_mixed_store_imputes_fewer_cells_than_homogeneous(tmp_path):
     ld = _make_ld_panel(tmp_path)
 
     mixed = complete_hybrid_store(
-        mixed_src, tmp_path / "mixed_dst.opengwasdb", ld, ancestry="EUR", min_cor=0.0, thresh=0.9
+        mixed_src, tmp_path / "mixed_dst.opengwasdb", PanelSource(ld, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
     )
     homo = complete_hybrid_store(
-        homo_src, tmp_path / "homo_dst.opengwasdb", ld, ancestry="EUR", min_cor=0.0, thresh=0.9
+        homo_src, tmp_path / "homo_dst.opengwasdb", PanelSource(ld, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
     )
     assert mixed.n_imputed < homo.n_imputed
     assert mixed.n_imputed >= 1  # the matching EUR analysis still imputes

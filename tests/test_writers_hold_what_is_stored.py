@@ -23,6 +23,8 @@ from dense_sources import build_dense_fixture
 from stored_rows import stored_rows
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import association_codec
 from opengwasdb.encoding.association_codec import CellValues, Storable
 from opengwasdb.encoding.sd_units import PhenotypeSd
@@ -231,7 +233,10 @@ def test_dense_completion_writes_only_what_it_stores(tmp_path, monkeypatch) -> N
     # A band is judged as `AssociationCodec` encodes it (#321).
     _inject(monkeypatch, _se_is(REFUSED_SE), association_codec)
     completed = tmp_path / "comp.opengwasdb"
-    complete_dense_store(observed, completed, tdc._make_ld_panel(tmp_path), min_cor=0.0)
+    complete_dense_store(
+        observed, completed, PanelSource(tdc._make_ld_panel(tmp_path)),
+        CompletionOptions(min_cor=0.0),
+    )
 
     stored = _dense_cell(open_store(completed), "1:900000:A:G", 0)
     assert not _absent(stored), "fixture: a1's other cell is stored"
@@ -275,8 +280,11 @@ def test_ragged_completion_keeps_only_the_rows_it_stores(
     judged = _inject(monkeypatch, _se_is(0.05), zarr_csr, association_codec)
     completed = tmp_path / "comp.opengwasdb"
     complete_ragged_store(
-        observed, completed, trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+        observed,
+        completed,
+        PanelSource(trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"),
+        cis_window_bp=500_000,
     )
 
     seen = _judged_at(judged, "complete-ragged", 0.05)
@@ -344,7 +352,10 @@ def test_the_crossover_fold_writes_only_what_it_stores(tmp_path, monkeypatch) ->
     src = _crossover_source(tmp_path)
     judged = _inject(monkeypatch, _in_fold(_se_is(REFUSED_SE)), association_codec)
     dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, thc._make_ld_panel_with_crossover(tmp_path), min_cor=0.0)
+    complete_hybrid_store(
+        src, dst, PanelSource(thc._make_ld_panel_with_crossover(tmp_path)),
+        CompletionOptions(min_cor=0.0),
+    )
 
     seen = _judged_at(judged, "crossover fold", REFUSED_SE)
     assert seen and np.isfinite(seen).all(), "the fold judged trait_a's, with its frequency"

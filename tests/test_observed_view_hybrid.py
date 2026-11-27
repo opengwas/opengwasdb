@@ -59,6 +59,8 @@ from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
 
 import opengwasdb.layouts.dense.complete as dense_complete
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import EafExceptionBuilder, StoreCodec
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -157,8 +159,8 @@ def _extending_ld_panel(root: Path) -> Path:
 def _complete(observed: Path, root: Path) -> Path:
     completed = root / "comp.opengwasdb"
     complete_hybrid_store(
-        observed, completed, _extending_ld_panel(root), min_cor=0.0, thresh=0.9,
-        release_id="comp-v1",
+        observed, completed, PanelSource(_extending_ld_panel(root)),
+        CompletionOptions(min_cor=0.0, thresh=0.9, release_id="comp-v1"),
     )
     return completed
 

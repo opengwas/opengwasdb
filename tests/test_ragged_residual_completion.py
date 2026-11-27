@@ -46,6 +46,8 @@ from logged_warnings import logged_warnings
 from stored_rows import stored_rows
 
 from opengwasdb import open_store
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.query import query_store
 from opengwasdb.store_reader.csr import RaggedCSRReader
@@ -230,13 +232,8 @@ class RaggedResidualScenario:
         self.completed = root / "comp.opengwasdb"
         with logged_warnings() as warnings:
             self.result = complete_ragged_store(
-                self.source,
-                self.completed,
-                self.panel,
-                ancestry="EUR",
-                cis_window_bp=1_000_000,
-                min_cor=0.0,
-                release_id="comp",
+                self.source, self.completed, PanelSource(self.panel, ancestry="EUR"),
+                CompletionOptions(min_cor=0.0, release_id="comp"), cis_window_bp=1_000_000,
             )
         self.warnings = warnings
 

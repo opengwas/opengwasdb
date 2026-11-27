@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 import test_indel_pairs as pair
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.query import query_store
 from opengwasdb.variants.legacy_table import iter_variant_records
 
@@ -82,7 +84,8 @@ def _dense(root: Path, alids: dict[str, str]) -> Path:
     )
     completed = root / "completed.opengwasdb"
     complete_dense_store(
-        observed, completed, _panel(root, alids), ancestry="EUR", min_cor=0.0, release_id="c"
+        observed, completed, PanelSource(_panel(root, alids)),
+        CompletionOptions(min_cor=0.0, release_id="c"),
     )
     return completed
 
@@ -97,7 +100,8 @@ def _ragged(root: Path, alids: dict[str, str]) -> Path:
     with_regions(observed, every_analysis(observed, "significant_trans", "1", 900_000, 1_300_000))
     completed = root / "completed.opengwasdb"
     complete_ragged_store(
-        observed, completed, _panel(root, alids), ancestry="EUR", min_cor=0.0, release_id="c"
+        observed, completed, PanelSource(_panel(root, alids)),
+        CompletionOptions(min_cor=0.0, release_id="c"),
     )
     return completed
 

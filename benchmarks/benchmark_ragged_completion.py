@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.query import query_store
@@ -208,8 +210,8 @@ def main() -> None:
         print("Running reference completion...")
         t0 = time.time()
         cr = complete_ragged_store(
-            observed_path, completed_path, args.ld_panel,
-            ancestry=args.ancestry, min_cor=args.min_cor, overwrite=args.overwrite,
+            observed_path, completed_path, PanelSource(args.ld_panel, ancestry=args.ancestry),
+            CompletionOptions(min_cor=args.min_cor, overwrite=args.overwrite),
         )
         elapsed = time.time() - t0
         results["build"] = {

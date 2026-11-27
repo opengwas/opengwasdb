@@ -33,6 +33,8 @@ from stored_rows import stored_rows
 from test_check_observed_view import HEADER, ROWS
 
 import opengwasdb.completion.block as block_module
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import association_codec, codec, se
 from opengwasdb.encoding.association_codec import CellValues, Storable
 from opengwasdb.encoding.sd_units import PhenotypeSd
@@ -173,8 +175,8 @@ def dense_pair(tmp_path_factory) -> tuple[Path, Path]:
     _stamp_0_2_2(observed)
     completed = root / "comp.opengwasdb"
     complete_dense_store(
-        observed, completed, tdc._make_ld_panel(root), ancestry="EUR", min_cor=0.0,
-        release_id="comp",
+        observed, completed, PanelSource(tdc._make_ld_panel(root), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"),
     )
     return observed, completed
 
@@ -238,8 +240,8 @@ def test_a_source_cell_above_the_bound_off_the_panel_is_declared_missing(tmp_pat
     completed = tmp_path / "comp.opengwasdb"
 
     complete_dense_store(
-        observed, completed, tdc._make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0,
-        release_id="comp",
+        observed, completed, PanelSource(tdc._make_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"),
     )
 
     z, _, _ = _dense_cell(completed, "1:1200000:A:G", 0)
@@ -409,7 +411,10 @@ def test_a_dense_fill_above_the_bound_is_left_missing_and_counted(tmp_path, monk
 
     def complete(name: str) -> Path:
         out = tmp_path / name
-        complete_dense_store(source, out, panel, ancestry="EUR", min_cor=0.0, release_id="c")
+        complete_dense_store(
+            source, out, PanelSource(panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="c"),
+        )
         return out
 
     baseline = complete("baseline.opengwasdb")
@@ -447,8 +452,8 @@ def _complete_ragged(observed: Path, tmp_path: Path, name: str) -> tuple[Path, P
     panel = trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000)
     out = tmp_path / name
     complete_ragged_store(
-        observed, out, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-        release_id="comp",
+        observed, out, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"), cis_window_bp=500_000,
     )
     return out, panel
 
@@ -486,8 +491,8 @@ def test_a_ragged_fill_above_the_bound_is_left_missing_and_counted(tmp_path, mon
     def complete(name: str) -> Path:
         out = tmp_path / name
         complete_ragged_store(
-            observed, out, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-            release_id="comp",
+            observed, out, PanelSource(panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp"), cis_window_bp=500_000,
         )
         return out
 
@@ -581,7 +586,8 @@ def test_a_hybrid_completion_counts_what_each_component_left_out(tmp_path, monke
 
     dst = tmp_path / "dst.opengwasdb"
     complete_hybrid_store(
-        src, dst, thc._make_ld_panel_with_crossover(tmp_path), min_cor=0.0, thresh=0.9
+        src, dst, PanelSource(thc._make_ld_panel_with_crossover(tmp_path)),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
     )
 
     # The completed Dense Component counts the crossover in its completion's parts; at

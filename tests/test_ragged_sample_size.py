@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi, write_sample_size_table
 
+from opengwasdb.completion.ld_panel import PanelSource
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.store_reader.encoding.plan import (
     N_MISSING,
@@ -912,7 +913,9 @@ def test_ragged_completion_refuses_a_source_with_an_n_plane(sampled: Path, tmp_p
     from opengwasdb.layouts.ragged.complete import complete_ragged_store
 
     with pytest.raises(ValueError, match="per-association sample-size plane"):
-        complete_ragged_store(sampled, tmp_path / "completed.opengwasdb", tmp_path / "ld")
+        complete_ragged_store(
+            sampled, tmp_path / "completed.opengwasdb", PanelSource(tmp_path / "ld")
+        )
     assert not (tmp_path / "completed.opengwasdb").exists()
 
 

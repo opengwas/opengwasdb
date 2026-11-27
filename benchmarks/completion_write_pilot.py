@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 
 import opengwasdb
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 
 
 class _Stop(Exception):
@@ -51,8 +53,12 @@ def blocks(layout: str, src: Path, dst: Path, ld: Path, n_workers: int, subset: 
         module._merge_checkpoint_fills = stop
         try:
             module.complete_dense_store(
-                src, dst, ld, ancestry="EUR", release_id=f"{_store_id(src)}-completed",
-                n_workers=n_workers, overwrite=True,
+                src,
+                dst,
+                PanelSource(ld, ancestry="EUR"),
+                CompletionOptions(
+                    release_id=f"{_store_id(src)}-completed", n_workers=n_workers, overwrite=True
+                ),
             )
         except _Stop:
             print("stopped after the LD-block phase", flush=True)
@@ -71,8 +77,8 @@ def blocks(layout: str, src: Path, dst: Path, ld: Path, n_workers: int, subset: 
     chosen = {a.analysis_id for a in analyses[:subset]} if subset > 0 else None
     try:
         module.complete_ragged_store(
-            src, dst, ld, ancestry="EUR", n_workers=n_workers, overwrite=True,
-            impute_analysis_ids=chosen,
+            src, dst, PanelSource(ld, ancestry="EUR"),
+            CompletionOptions(n_workers=n_workers, overwrite=True), impute_analysis_ids=chosen,
         )
     except _Stop:
         print("stopped after the LD-block phase", flush=True)

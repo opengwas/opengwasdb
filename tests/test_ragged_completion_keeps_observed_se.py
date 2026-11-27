@@ -50,6 +50,8 @@ from test_ragged_residual_completion import _FREQS, RaggedResidualScenario, _sou
 
 from opengwasdb import open_store
 from opengwasdb.completion.impute import scalar_n_se
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding.codec import StoreCodec, se_residual_codes
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analysis_records
@@ -153,8 +155,12 @@ def _complete(
 ) -> _Completion:
     with logged_warnings() as warnings:
         result = complete_ragged_store(
-            source, root / "comp.opengwasdb", panel, ancestry="EUR", cis_window_bp=1_000_000,
-            min_cor=0.0, release_id="comp", impute_analysis_ids=impute_analysis_ids,
+            source,
+            root / "comp.opengwasdb",
+            PanelSource(panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp"),
+            cis_window_bp=1_000_000,
+            impute_analysis_ids=impute_analysis_ids,
         )
     return _Completion(root / "comp.opengwasdb", panel, result.n_imputed, warnings)
 

@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from dense_sources import build_dense_fixture
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -86,6 +88,7 @@ def panel_only_eaf_ragged(root: Path) -> Path:
     with_regions(source, every_analysis(source, "significant_trans", "1", 100, 900))
     completed = root / "completed.opengwasdb"
     complete_ragged_store(
-        source, completed, _ld_panel(root), ancestry="EUR", min_cor=0.0, thresh=0.99
+        source, completed, PanelSource(_ld_panel(root), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     return completed

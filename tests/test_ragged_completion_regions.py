@@ -43,6 +43,8 @@ from stored_rows import stored_rows
 from test_ragged_completion import _write_ssf_manifest
 
 from opengwasdb.completion.impute import min_observed_points
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.variants.axis import VariantAxis
 from tests.ssf_builds import build_ragged_from_ssf
@@ -203,8 +205,8 @@ def cis_only(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     source = _write_source(root, [GENE], coverage="cis")
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
-        source, completed, _write_panel(root), ancestry="EUR", cis_window_bp=WINDOW,
-        min_cor=0.0, release_id="comp-v1",
+        source, completed, PanelSource(_write_panel(root), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=WINDOW,
     )
     return source, completed
 
@@ -259,8 +261,8 @@ def tabled(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     )
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
-        source, completed, _write_panel(root), ancestry="EUR", cis_window_bp=500_000,
-        min_cor=0.0, release_id="comp-v1",
+        source, completed, PanelSource(_write_panel(root), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     return source, completed
 
@@ -392,8 +394,8 @@ def _complete_with_indels(root: Path, **kwargs) -> Completed:
     panel = _add_indel_rows(_write_panel(root))
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
-        source, completed, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-        release_id="comp-v1", **kwargs,
+        source, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000, **kwargs,
     )
     return Completed(source, completed, panel)
 
@@ -674,8 +676,11 @@ def test_a_completion_refuses_a_source_stamped_other_than_its_features(tmp_path,
 
     with pytest.raises(UnsupportedFormatVersion, match="0.2.1 Store sorts an indel's alleles"):
         complete_ragged_store(
-            source, tmp_path / "comp.opengwasdb", _write_panel(tmp_path), ancestry="EUR",
-            cis_window_bp=WINDOW, min_cor=0.0,
+            source,
+            tmp_path / "comp.opengwasdb",
+            PanelSource(_write_panel(tmp_path), ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
+            cis_window_bp=WINDOW,
         )
     assert not (tmp_path / "comp.opengwasdb").exists()
 
@@ -748,8 +753,10 @@ def test_a_region_that_ends_before_it_starts_is_refused(tmp_path):
 def _refused(tmp_path: Path, source: Path, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         complete_ragged_store(
-            source, tmp_path / "comp.opengwasdb", _write_panel(tmp_path), ancestry="EUR",
-            min_cor=0.0,
+            source,
+            tmp_path / "comp.opengwasdb",
+            PanelSource(_write_panel(tmp_path), ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
         )
     assert not (tmp_path / "comp.opengwasdb").exists()
 
@@ -806,7 +813,10 @@ def test_a_resume_refuses_a_regions_tsv_changed_since_its_checkpoints(
     monkeypatch.setattr(ragged, "_run_block", crash_after_the_block)
     dst = tmp_path / "comp.opengwasdb"
     with pytest.raises(RuntimeError, match="simulated crash"):
-        complete_ragged_store(source, dst, _write_panel(tmp_path), ancestry="EUR", min_cor=0.0)
+        complete_ragged_store(
+            source, dst, PanelSource(_write_panel(tmp_path), ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
+        )
     monkeypatch.undo()
     assert list((checkpoint_dir_for(dst) / "blocks").glob("*.npz")), "a checkpoint to resume"
     with_regions(source, [*TABLE, ("no_sig", "significant_trans", *SIGNIFICANT)])

@@ -2280,6 +2280,51 @@ Completion fits no SE model (ADR 0078), so an Analysis left with fewer than two
 SEs under a residual plan is coded against its source's model like any other.
 A completion of a 0.2.2 source is stamped 0.2.3 (§21.3).
 
+### 12.1 The panel a completion records
+
+`provenance.completion` names the LD Reference Panel the completion read, and
+every Dense, Ragged and Hybrid completion writes the same five fields (Hybrid
+copies them up from its Dense Component, which read the panel):
+
+| Field | Meaning |
+|---|---|
+| `ld_panel_id` | The caller's `--ld-panel-id` when given (an empty one is an error); otherwise `sha256:` and the first 16 hex digits of `ld_panel_digest`. Never a constant. |
+| `ld_panel_id_source` | `caller` where `ld_panel_id` was given, `digest` where it was derived. |
+| `ld_panel_path` | The panel root as the caller spelt it, not resolved or normalised (the CLI's `--ld-panel ./panel/` is recorded as `./panel/`); a resumed completion records the same spelling. |
+| `ld_panel_digest` | The sha256 defined below. |
+| `ld_panel_ancestry_dir` | `ld_panel_path/<ancestry>`, the directory the blocks were read from. |
+
+A completion is asked for its panel as one `PanelSource`: the root as given, the ancestry and the caller's optional name. Its other tuning (`min_cor`, `thresh`, `release_id`, `n_workers`, `overwrite`) is one `CompletionOptions`.
+
+**The digest** is the sha256, over the text of one record per input file, in the
+order completion reads them, of `<path relative to <panel>/<ancestry>>`, a line
+feed, the file's size in bytes, a line feed, the file's own sha256 in hex and a
+line feed. Every input is hashed whole. The inputs are every file a completion
+may read, and no other file under the directory. One enumerator names them
+(`opengwasdb.model.ld_panel_files.panel_input_files`), and the block loader, the
+EAF reader and the digest all take their files from the parts it is built of:
+
+1. For each chromosome directory `list_chromosomes` finds (a link to one is followed), in its sort order, and in each, in file-name order, every `*.tsv` (the EAF reader opens all of them, whether or not a block loads from it, and what it reads becomes `eaf_reference`), each followed by its `.ldeig.npz` and its `.unphased.vcor1.gz`, each if it exists. The `.unphased.vcor1.gz` is hashed whenever it exists, though the loader reads it only where the `.npz` is missing or unreadable: a file completion may read is an input.
+2. Then `indel_reference.tsv.gz`, `indel_reference.tsv.gz.tbi` and `indel_reference.json` in the ancestry directory, each if it exists.
+
+One changed byte of an input therefore changes the digest; a file under the
+directory that is not an input (a log, an `.rds`) does not. The digest is of
+bytes: a panel copied byte for byte keeps it, and one regenerated from the same
+samples, whose archives carry the time they were written, takes a new one.
+Measured with 16 reading threads: the HGDP+1kGP EUR panel (37 GB, 2,717 files) takes
+5 s with its files cached, and the UKB EUR panel (337 GB, 4,074 files) 42 s.
+
+Completion records the panel before it reads it: `build_params.json` of a Dense
+or Ragged checkpoint is written first, and the digest is added to it atomically
+once computed. A resumed completion reads the panel again and refuses where its
+digest is not the checkpoint's. A checkpoint with no digest was written before
+#327 or interrupted while the panel was read: it is refused where it holds a
+completed block, which no panel can be shown to have produced, and otherwise
+(no block done, so nothing to mix) the resume reads the panel and records its
+digest. A Hybrid keeps no checkpoint of its own.
+
+`completion.ld_panel` (§20.0) judges the fields on a completed release.
+
 ## 13. LD Reference Panel requirements
 
 An LD Reference Panel used for Reference Completion MUST define:
@@ -3123,6 +3168,8 @@ change to this table, which the test suite holds to the registry, in its order.
 | `grid.planes` | grid | check | `z` and `se` are present, and every plane spans the grid's axes |
 | `grid.eaf_side_lengths` | grid | check | the per-variant `eaf` side arrays are the variant axis's length |
 | `completion.mask` | grid, sequence | check | a completed component carries a mask of its shape, and a grid binary panel flags |
+| `completion.ld_panel` | release | check | a completion that records any of the LD panel fields added at #327 (§12.1) records all five, the digest is a sha256, a `digest`-sourced `ld_panel_id` is the digest's `sha256:` prefix, and a Hybrid's root and Dense Component record the same panel; an error |
+| `completion.ld_panel_unrecorded` | release | check, warning | a completion records the LD panel fields added at #327; a **warning**, since an earlier completion records only `ld_panel_id` (the one name every completion carried) and its `format_version` is unchanged |
 | `csr.segment_order` | sequence | fold | `variant_index` strictly increases within every Analysis's segment |
 | `csr.shared_rows` | sequence | fold | an Overflow's `variant_index` addresses rows of the shared variant table |
 | `hybrid.partition` | sequence | fold | no Overflow association is at a Dense Component variant |

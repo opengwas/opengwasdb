@@ -13,6 +13,8 @@ import pytest
 from format_0_2_3 import follow_stamp
 
 from opengwasdb.admission.rules import LOGGED, Reason
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.readers.tabular import NO_REFERENCE
 from opengwasdb.store_reader.alid_sidecar import AlidSidecar, write_alid_sidecar
 from opengwasdb.store_reader.identity import MalformedIdentity, VariantNormalisationError
@@ -354,7 +356,10 @@ def _complete_an_observed_deletion(tmp_path, *, reference: str | None):
         )
         panel_fixture._compress_and_index(table)
     completed = tmp_path / "completed.opengwasdb"
-    complete_dense_store(observed, completed, panel, ancestry="EUR", min_cor=0.0, release_id="c")
+    complete_dense_store(
+        observed, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="c"),
+    )
     return observed, completed
 
 
