@@ -1679,6 +1679,15 @@ with `--resumed`, against a resumed tree, an SQLite file is compared by its
 dump, because a resume writes the index metadata a second time. The script's
 docstring lists the paths and the commands.
 
+Three cases, `dense-lift-n{1,2}` and `hybrid-panel-lift`, hold what a checkout
+before #325 stores: both hg19 sources that land on `4:5501:A:G`, one with the other's
+statistics. They are `until="#325"`: `build --cases base` builds them with the inputs'
+base checkout, and the default `all` leaves them out for `dense-lift-collision-n{1,2}`
+and `hybrid-panel-lift-collision`, the same inputs `since` #325, which expect the ALID
+absent. No results of this instrument are committed; at the integration tip the
+base and head trees of #325 compare equal over the eight cases both build, apart
+from `admission.json`'s rules version (`admission/14` to `admission/15`).
+
 Two cases, extraction's refusal of a reverse-strand lift, record an outcome that
 arrived with #354's guard (98a6e7a), after the inputs' base (6415be4). Build
 them with `--cases since` at that commit or later, build the base with
