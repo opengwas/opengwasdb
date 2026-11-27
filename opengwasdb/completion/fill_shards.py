@@ -412,8 +412,11 @@ def apply_fill_batch(
     ai: np.ndarray,
     z: np.ndarray,
     se: np.ndarray,
+    tally: np.ndarray | None = None,
 ) -> int:
-    """Apply one batch of fill records; returns the net count of cells filled.
+    """Apply one batch of fill records; returns the net count of cells filled,
+    and adds it per Analysis to ``tally`` where one is given (Ragged counts its final
+    mask separately and gives none).
 
     A cell is a target while the source leaves it missing: unfilled, filled
     by an earlier record, or already in conflict. The batch's own repeats are
@@ -426,7 +429,7 @@ def apply_fill_batch(
     if not len(lr):
         return 0
     found = collapse_duplicates(lr.astype(np.int64) * zb.shape[1] + ai, z, se)
-    filled = -_mark_conflicted(imputed_band, lr[found.dropped], ai[found.dropped])
+    filled = -_mark_conflicted(imputed_band, lr[found.dropped], ai[found.dropped], tally)
     k = found.keep
     lr, ai, z, se, state = lr[k], ai[k], z[k], se[k], state[k]
     open_ = state == 0
@@ -434,20 +437,27 @@ def apply_fill_batch(
     sb[lr[open_], ai[open_]] = se[open_]
     imputed_band[lr[open_], ai[open_]] = 1
     filled += int(open_.sum())
+    if tally is not None:
+        tally += np.bincount(ai[open_], minlength=len(tally))
     held = state == 1
     disagree = held & ((zb[lr, ai] != z) | (sb[lr, ai] != se))
-    return filled - _mark_conflicted(imputed_band, lr[disagree], ai[disagree])
+    return filled - _mark_conflicted(imputed_band, lr[disagree], ai[disagree], tally)
 
 
-def _mark_conflicted(imputed_band: np.ndarray, lr: np.ndarray, ai: np.ndarray) -> int:
-    """Mark these cells conflicted; returns how many had been counted filled."""
+def _mark_conflicted(
+    imputed_band: np.ndarray, lr: np.ndarray, ai: np.ndarray, tally: np.ndarray | None
+) -> int:
+    """Mark these cells conflicted; returns how many had been counted filled, and
+    takes them off ``tally`` per Analysis where one is given."""
     if not len(lr):
         return 0
     n_analyses = imputed_band.shape[1]
     rows, cols = np.divmod(np.unique(lr.astype(np.int64) * n_analyses + ai), n_analyses)
-    was_filled = int((imputed_band[rows, cols] == 1).sum())
+    was_filled = imputed_band[rows, cols] == 1
+    if tally is not None:
+        tally -= np.bincount(cols[was_filled], minlength=len(tally))
     imputed_band[rows, cols] = CONFLICTED
-    return was_filled
+    return int(was_filled.sum())
 
 
 def clear_conflicted(

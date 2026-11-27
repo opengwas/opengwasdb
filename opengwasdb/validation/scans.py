@@ -346,6 +346,20 @@ class Block:
         counts: np.ndarray = np.asarray(mask).sum(axis=0, dtype=np.int64)
         return counts
 
+    @cached_property
+    def imputed_cells(self) -> np.ndarray:
+        """Per Analysis, the cells the release flags imputed here: counted once for every
+        rule that compares them."""
+        if self.imputed is None:
+            return np.zeros(self.n_analyses, dtype=np.int64)
+        return self.per_analysis(self.imputed == 1)
+
+    @cached_property
+    def missing_cells(self) -> np.ndarray:
+        """Per Analysis, the cells this block holds no Z at: counted once for every rule
+        that compares them."""
+        return self.per_analysis(self.z_missing)
+
     def locate(self, cells: CellIndex) -> tuple[np.ndarray, np.ndarray]:
         """The cells of `cells` this block holds: their indices, and where they sit here.
 

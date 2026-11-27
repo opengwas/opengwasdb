@@ -10,6 +10,7 @@ from shutil import copytree
 
 import numpy as np
 import pytest
+from completion_counts import declared_and_masked
 from completion_releases import assert_same_release
 from dense_sources import build_dense_fixture, write_dense_manifest
 from format_0_2_3 import follow_stamp
@@ -1658,6 +1659,121 @@ def test_validator_rejects_imputed_cells_held_but_not_declared(imputing_complete
     assert _matching(imputing_completed_store, fragment)
 
 
+@pytest.mark.parametrize(
+    ("declare", "phrase"),
+    [(lambda masked: masked + 1, "1 more than"), (lambda masked: 0, "fewer than")],
+    ids=["one-more", "zero"],
+)
+def test_the_exact_rule_alone_fails_a_total_that_is_not_the_masks(
+    imputing_completed_store: Path, declare, phrase: str
+):
+    """Run on its own (`rules=`), `completion.imputed_total` fails a total one
+    above or zero against what the mask holds (#362): it needs no
+    other rule to catch the difference."""
+    imputed = open_store(imputing_completed_store).arrays(mode="r")["imputed"][:, 0]
+    masked = int((imputed == 1).sum())
+    assert masked >= 1  # fixture first: the Analysis holds imputed cells
+    rule = {"completion.imputed_total"}
+    clean = validate_store(imputing_completed_store, rules=rule)
+    assert clean.failed() == set(), clean.errors
+
+    _rewrite_analyses(
+        imputing_completed_store, completion_n_imputed_total=str(declare(masked))
+    )
+
+    result = validate_store(imputing_completed_store, rules=rule)
+    assert result.failed() == rule
+    (message,) = result.of("completion.imputed_total")
+    assert f"declares completion_n_imputed_total={declare(masked)}" in str(message)
+    assert f"marks {masked} imputed=1 cell(s)" in str(message) and phrase in str(message)
+
+
+@pytest.mark.parametrize(
+    "value", ["", "-1", "x", "1.5", "007"],
+    ids=["blank", "negative", "text", "float", "leading-zero"],
+)
+@pytest.mark.parametrize(
+    ("rule", "column"),
+    [("completion.imputed_total", "completion_n_imputed_total"),
+     ("completion.missing_total", "completion_n_missing_total")],
+)
+def test_an_exact_total_rule_alone_fails_a_value_it_cannot_read(
+    imputing_completed_store: Path, rule: str, column: str, value: str
+):
+    """A blank is not a zero and a negative is no count: the rule says which, on its own
+    (#362)."""
+    assert validate_store(imputing_completed_store, rules={rule}).failed() == set()  # clean first
+    _rewrite_analyses(imputing_completed_store, **{column: value})
+
+    result = validate_store(imputing_completed_store, rules={rule})
+
+    assert result.failed() == {rule}
+    assert any(
+        f"{column}={value!r}" in str(m) and "not a non-negative integer" in str(m)
+        for m in result.of(rule)
+    ), result.errors
+
+
+@pytest.mark.parametrize("column", ["completion_n_imputed_total", "completion_n_missing_total"])
+def test_a_completed_release_without_a_total_column_fails_once(
+    imputing_completed_store: Path, column: str
+):
+    """A total the table does not carry is a total nobody declared, not a zero: validation
+    says so, once, whichever total it is (#362)."""
+    from opengwasdb.store_reader.analyses import AnalysesTable
+
+    before = validate_store(imputing_completed_store).failed()  # the fixture's own failures
+    table = read_analyses(imputing_completed_store / "analyses.tsv")
+    kept = tuple(f for f in table.fieldnames if f != column)
+    write_analyses(
+        imputing_completed_store / "analyses.tsv",
+        AnalysesTable(kept, tuple({k: row[k] for k in kept} for row in table.rows)),
+    )
+
+    result = validate_store(imputing_completed_store)
+
+    named = [e for e in result.errors if f"missing {column} " in e]
+    assert result.failed() - before == {"completion.n_missing_column"}, result.errors
+    assert len(named) == 1, result.errors
+
+
+def test_a_missing_total_is_not_excused_by_a_source_se_loss_elsewhere(completed_store: Path):
+    """The Dense missing total is exactly the off-panel cells held: a1's recorded SE loss of
+    one cannot hide a2's one off-panel missing cell going undeclared (#362)."""
+    table = read_analyses(completed_store / "analyses.tsv")
+    assert table.rows[1]["completion_n_missing_total"] == "1"  # fixture first
+    table.rows[1]["completion_n_missing_total"] = "0"
+    table.rows[1]["n_missing_se_out_of_range"] = "1"
+    write_analyses(completed_store / "analyses.tsv", table)
+
+    result = validate_store(completed_store, rules={"completion.missing_total"})
+
+    assert result.failed() == {"completion.missing_total"}
+
+
+def test_the_missing_rule_alone_fails_a_missing_total_that_is_not_the_releases(
+    completed_store: Path,
+):
+    """Dense declares the cells it holds no value at off the panel: a2 observes nothing at
+    the one off-panel variant. Declaring one more than the release holds there fails the
+    exact missing-total rule on its own (#362)."""
+    rule = {"completion.missing_total"}
+    rows = read_analyses(completed_store / "analyses.tsv").rows
+    held = int(rows[1]["completion_n_missing_total"])
+    assert held == 1  # fixture first: a2's one off-panel missing cell
+    clean = validate_store(completed_store, rules=rule)
+    assert clean.failed() == set(), clean.errors
+
+    table = read_analyses(completed_store / "analyses.tsv")
+    table.rows[1]["completion_n_missing_total"] = str(held + 1)
+    write_analyses(completed_store / "analyses.tsv", table)
+
+    result = validate_store(completed_store, rules=rule)
+    assert result.failed() == rule
+    (message,) = result.of("completion.missing_total")
+    assert f"declares completion_n_missing_total={held + 1}" in str(message)
+
+
 def test_validator_rejects_a_completion_count_without_a_completion(
     imputing_completed_store: Path,
 ):
@@ -2135,6 +2251,47 @@ def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
         1.767842,
         2.949039,
     ]
+
+
+@pytest.mark.parametrize("agree", [False, True], ids=["conflicting-fills", "agreeing-fills"])
+def test_a_cell_two_overlapping_blocks_fill_is_counted_as_the_mask_holds_it(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agree: bool,
+):
+    """Two blocks both fill a1 at 1:1050000:C:T, which is no endpoint of either.
+    Different blocks fill it differently (the cell is cleared); a second copy of
+    the same block fills it alike (the cell is kept, once). Either way the
+    declared imputed total is the mask's count, not the blocks' sum (#362)."""
+    _stub_fits(monkeypatch)
+    if agree:  # the fixture's own block under another name: the same fill, same SE
+        variants = [
+            ("1:900000:A:G", 0.35, 900_000), ("1:950000:A:C", 0.32, 950_000),
+            ("1:1000000:A:G", 0.30, 1_000_000), ("1:1050000:C:T", 0.40, 1_050_000),
+            ("1:1100000:A:C", 0.45, 1_100_000),
+        ]
+        write_ld_block(ld_panel / "EUR" / "1", "900000-1300001", variants, seed=0)
+    else:
+        variants = [
+            ("1:1000000:A:G", 0.30, 1_000_000), ("1:1050000:C:T", 0.40, 1_050_000),
+            ("1:1100000:A:C", 0.45, 1_100_000),
+        ]
+        write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", variants, seed=2)
+    blocks = list_all_blocks(ld_panel, "EUR", "1")
+    assert [len(b.snp_ids) for b in blocks] == [len(variants), 5]  # fixture first
+    assert shared_endpoints(blocks) == {}
+    dst = tmp_path / "comp.opengwasdb"
+
+    complete_dense_store(
+        observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+    )
+
+    assert _cell(dst, "1:1050000:C:T", 0)[1] == int(agree)  # meaningful before compared
+    declared, masked = declared_and_masked(dst / "analyses.tsv", dst)
+    assert masked == [int(agree), 0]
+    assert declared == masked
 
 
 def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyPatch):

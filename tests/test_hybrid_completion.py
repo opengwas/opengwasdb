@@ -18,6 +18,7 @@ import numpy as np
 import plane_edits
 import pytest
 import zarr
+from completion_counts import declared_and_masked
 from completion_releases import assert_same_release
 from residual_fixtures import write_gwas_vcf_with_eaf
 from store_digest import store_digest
@@ -690,7 +691,7 @@ def test_a_crossover_hit_is_counted_by_the_final_tiers(tmp_path):
     assert result.ok and not result.findings, result.findings
 
 
-def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
+def test_an_observed_crossover_stays_in_each_blocks_attempts_and_leaves_the_totals(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from completion_counts import quality_counts
@@ -714,8 +715,10 @@ def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
     mask = np.asarray(dense.arrays(mode="r")["imputed"][:])
     assert mask.sum(axis=0).tolist() == [0, 2], "one fill was reclaimed; two must survive"
     counted = quality_counts(dense.path)
+    # The block's row is its attempts: it filled the crossover cell, which the observation
+    # then overwrote, so Analysis 0 keeps its one fill while its total is the mask's, 0.
     assert counted == {
-        (0, "1/arbitrary-block-name"): (0, 0),
+        (0, "1/arbitrary-block-name"): (1, 0),
         (1, "1/arbitrary-block-name"): (2, 0),
     }
     declarations = [
@@ -726,7 +729,7 @@ def test_an_observed_crossover_is_removed_from_each_blocks_quality_counts(
     assert result.ok, result.errors
 
 
-def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_blocks(
+def test_a_crossover_stays_in_every_owning_blocks_attempts_but_not_the_ceders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from completion_counts import quality_counts
@@ -764,8 +767,9 @@ def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_bloc
     completed = tmp_path / "completed.opengwasdb"
     complete_hybrid_store(source, completed, panel, min_cor=0.0)
 
+    # Each block that owns the crossover filled it; the ceder neither fills nor counts it.
     assert quality_counts(completed / "dense") == {
-        (0, f"1/{name}"): (int(name == "unaffected"), 0) for name in blocks
+        (0, f"1/{name}"): (int(name != "ceder"), 0) for name in blocks
     }
     with query_store(completed) as query:
         assert query.lookup([crossover], ["trait_a"])["association_status"].tolist() == ["observed"]
@@ -775,6 +779,194 @@ def test_crossover_corrects_multiple_owners_but_leaves_ceded_and_unaffected_bloc
     file_ops.rmtree(panel)
     result = validate_store(completed)
     assert result.ok, result.errors
+
+
+def _crossover_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocks: dict[str, list[str]], fills,
+) -> tuple[Path, Path]:
+    """A Hybrid source whose Dense panel lacks `PANEL_ALIDS[1]` (an Overflow variant
+    the completion's blocks then put on the panel: the crossover), completed against
+    `blocks` with every block's fit stubbed by `fills(len(z))`. Returns source and
+    completed release."""
+    from opengwasdb.completion import block
+
+    vcf = _vcf(tmp_path, "observed", [
+        f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.2:0.3\n"
+        for pos in (100_000, 750_000, 1_000_000, 1_500_000, 2_000_000)
+    ])
+    source = build_over_panel(
+        tmp_path, write_manifest(tmp_path, [(vcf, "trait_a", "Trait A")]),
+        [alid for alid in [*PANEL_ALIDS, OFF_PANEL_ALID] if alid != PANEL_ALIDS[1]],
+    )
+    panel = tmp_path / "ld_panel"
+    for name, alids in blocks.items():
+        _write_ld_block(panel / "EUR" / "1", name, [
+            (alid, 0.3, int(alid.split(":")[1])) for alid in alids
+        ])
+    monkeypatch.setattr(
+        block, "impute_z_block",
+        lambda z, *args, **kwargs: (np.broadcast_to(fills(len(z)), (len(z),)).astype(float), 0.9),
+    )
+    completed = tmp_path / "completed.opengwasdb"
+    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+    return source, completed
+
+
+def test_a_duplicate_fill_that_survives_the_crossover_is_declared_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two blocks over the same variants fill the same cell alike beside the crossover:
+    the crossover folds a real value over one cell and leaves the duplicate, which is
+    one imputed cell, not two (#362)."""
+    unaffected = [*PANEL_ALIDS[2:], "1:1700000:A:G", OFF_PANEL_ALID]
+    blocks = {
+        "owner": PANEL_ALIDS[:3], "unaffected": unaffected, "unaffected-copy": unaffected,
+    }
+
+    _, completed = _crossover_release(tmp_path, monkeypatch, blocks, lambda n: 2.2)
+
+    declared, masked = declared_and_masked(completed / "analyses.tsv", completed / "dense")
+    assert masked == [1], "fixture: the duplicated block's one fill survives, the crossover's goes"
+    assert declared == masked
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
+def test_a_crossover_onto_conflicting_fills_completes_and_declares_the_mask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two blocks fill the crossover cell differently, so completion left it missing; the
+    crossover then holds a real value there. No quality count goes negative (#362)."""
+    blocks = {"three": PANEL_ALIDS[:3], "four": PANEL_ALIDS}
+
+    _, completed = _crossover_release(
+        tmp_path, monkeypatch, blocks, lambda n: {3: 2.2, 4: 1.1}[n]
+    )
+
+    declared, masked = declared_and_masked(completed / "analyses.tsv", completed / "dense")
+    assert declared == masked == [0]
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
+def test_a_crossover_one_block_fills_and_another_fails_leaves_each_blocks_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three-variant block fills the crossover; the four-variant block, over the same
+    cell, fails it. Each row keeps what its block did, and the totals are the final mask's
+    (#362): no crossover rewrites a block's attempts."""
+    from completion_counts import quality_counts
+
+    _, completed = _crossover_release(
+        tmp_path, monkeypatch, {"three": PANEL_ALIDS[:3], "four": PANEL_ALIDS},
+        lambda n: 2.2 if n == 3 else np.nan,
+    )
+
+    assert quality_counts(completed / "dense") == {(0, "1/three"): (1, 0), (0, "1/four"): (0, 1)}
+    declared, masked = declared_and_masked(completed / "analyses.tsv", completed / "dense")
+    assert declared == masked == [0]
+    record = open_store(completed / "dense").manifest.provenance["completion"]
+    assert (record["n_imputed"], record["n_missing_imputation_failed"]) == (0, 0)
+    assert record["crossover_overwritten"] == {"n_imputed": [1], "n_missing": [0]}
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
+def test_conflicting_crossover_fills_leave_an_unrelated_failure_in_its_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two blocks fill the crossover differently, and the larger one fails an unrelated
+    variant. The crossover reclaims a cell no block's row can attribute, so no row moves: the
+    larger block still records one fill and one failure (#362)."""
+    from completion_counts import quality_counts
+
+    extra = "1:1700000:A:G"
+    fits = {3: np.full(3, 2.2), 5: np.array([1.1, 1.1, 1.1, 1.1, np.nan])}
+    _, completed = _crossover_release(
+        tmp_path, monkeypatch, {"three": PANEL_ALIDS[:3], "five": [*PANEL_ALIDS, extra]},
+        lambda n: fits[n],
+    )
+
+    assert quality_counts(completed / "dense") == {(0, "1/three"): (1, 0), (0, "1/five"): (1, 1)}
+    declared, masked = declared_and_masked(completed / "analyses.tsv", completed / "dense")
+    assert declared == masked == [0]
+    # The cleared conflict at the crossover came off the manifest's missing count; the
+    # unrelated failed variant stays in it.
+    record = open_store(completed / "dense").manifest.provenance["completion"]
+    assert (record["n_imputed"], record["n_missing_imputation_failed"]) == (0, 1)
+    assert record["crossover_overwritten"] == {"n_imputed": [0], "n_missing": [1]}
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+
+def test_a_quality_row_beyond_the_attempts_the_crossover_accounts_for_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one block's one fill was the crossover's, so its row says (1, 0) and the release holds
+    none imputed: the record accounts for exactly that attempt. A second imputed attempt has
+    no cell to have become and fails; the true row passes (#362)."""
+    import sqlite3
+
+    _, completed = _crossover_release(
+        tmp_path, monkeypatch, {"only": PANEL_ALIDS[:3]}, lambda n: 2.2
+    )
+    rule = {"completion.quality_counts"}
+    assert validate_store(completed, rules=rule).failed() == set()  # fixture first: (1, 0) holds
+    with sqlite3.connect(completed / "dense" / "index.sqlite") as db:
+        rows = db.execute("SELECT n_imputed, n_missing FROM completion_quality").fetchall()
+        assert rows == [(1, 0)]
+        db.execute("UPDATE completion_quality SET n_imputed = 2")
+
+    result = validate_store(completed, rules=rule)
+
+    assert result.failed() == rule, result.errors
+
+
+def test_the_root_of_a_legacy_hybrid_is_held_to_the_mask_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 0.2.3 Hybrid carries an `analyses.tsv` in each component. Declaring one more
+    imputed cell in the root's alone fails the exact rule on its own (#362)."""
+    from format_0_2_3 import as_0_2_3
+
+    from opengwasdb.model.analyses import write_analyses
+
+    _, completed = _crossover_release(
+        tmp_path, monkeypatch,
+        {"three": PANEL_ALIDS[:3], "unaffected": [*PANEL_ALIDS[2:], "1:1700000:A:G"]},
+        lambda n: 2.2,
+    )
+    as_0_2_3(completed)
+    rule = {"completion.imputed_total"}
+    own, root = completed / "dense" / "analyses.tsv", completed / "analyses.tsv"
+    assert own.exists() and own != root  # fixture first: a copy in each component
+    assert validate_store(completed, rules=rule).failed() == set()
+    table = read_analyses(root)
+    declared = int(table.rows[0]["completion_n_imputed_total"])
+    table.rows[0]["completion_n_imputed_total"] = str(declared + 1)
+    write_analyses(root, table)
+
+    result = validate_store(completed, rules=rule)
+
+    assert result.failed() == rule, result.errors
+    messages = [m.message for m in result.of("completion.imputed_total")]
+    assert messages and all(m.endswith("(in completed.opengwasdb/analyses.tsv)") for m in messages)
+
+
+def test_an_analysis_whose_only_fills_are_reclaimed_does_not_declare_reference_frequencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The source carries no frequency, so `eaf_scope` says association only for an Analysis
+    holding imputed cells (spec §9); one whose every fill the crossover reclaimed holds none."""
+    source, completed = _crossover_release(
+        tmp_path, monkeypatch, {"only": PANEL_ALIDS[:3]}, lambda n: 2.2
+    )
+
+    source_scope = read_analyses(source / "analyses.tsv").rows[0]["eaf_scope"]
+    assert source_scope != "association"  # fixture first
+    declared, masked = declared_and_masked(completed / "analyses.tsv", completed / "dense")
+    assert declared == masked == [0]
+    assert read_analyses(completed / "analyses.tsv").rows[0]["eaf_scope"] == source_scope
 
 
 def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
@@ -841,8 +1033,8 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     344,510/4,916,057-variant repro actually hit. Forcing a real ElasticNetCV
     fit to succeed deterministically on a fixture this small isn't reliable
     (test_dense_completion.py notes the same fragility for its own iid-random
-    LD blocks), so this exercises `_fold_panel_crossovers`'s count of reclaimed
-    imputed cells directly against a synthetic completed-dense zarr array instead of
+    LD blocks), so this exercises `_fold_panel_crossovers`'s overwrite of an imputed
+    cell directly against a synthetic completed-dense zarr array instead of
     routing through a real completion run."""
     from opengwasdb.encoding import StoreCodec
     from opengwasdb.layouts.hybrid.complete import _fold_panel_crossovers
@@ -873,13 +1065,13 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     overflow_alids = np.array([OFF_PANEL_ALID], dtype=object)
     is_crossover = np.array([True])
 
-    n_reclaimed = _fold_panel_crossovers(
+    _fold_panel_crossovers(
         dense_dir, dense_alid_to_row, offsets, src_z, src_se, src_eaf,
         overflow_alids, is_crossover, dense_encoding=encoding,
     )
 
-    assert n_reclaimed == 1
     written = zarr.open_group(str(dense_dir / "data.zarr"), mode="r")
+    assert int(written["imputed"][1, 0]) == 0  # the cell is observed now
     assert float(DenseZPlane.open(written, encoding).points([1], [0])[0]) == pytest.approx(
         -4.0, rel=1e-3
     )

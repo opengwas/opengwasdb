@@ -63,6 +63,12 @@ Since epic #450's final review the Dense pin's `overview.html` is re-derived onc
 its file guide describes `variants.tsv.gz` as a file no 0.3.0 query reads, and names
 the position, `source_alid` and rsID sidecars. Fresh pins of every fixture differed from
 the previous ones in that entry alone, and the previous one held at the integration tip.
+
+Since #362 the `ragged_overlap` pin's `analyses.tsv` is re-derived: its blocks fill AGREED
+twice and disagree on DISPUTED (three conflicting fills in all), and the two completion
+totals were the blocks' sums, 5 imputed and 0 missing, where they are now the cells the
+release holds: 1 imputed (AGREED) and 1 missing (DISPUTED). Every other entry of the pin is
+unchanged.
 """
 
 from __future__ import annotations
