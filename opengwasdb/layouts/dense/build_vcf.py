@@ -108,7 +108,7 @@ from opengwasdb.variants.routing import (
     route_variants,
 )
 from opengwasdb.variants.routing.keys import routing_key
-from opengwasdb.variants.routing.lift import lifted_off_primary
+from opengwasdb.variants.routing.lift import LiftDrops, lifted_off_primary
 
 log = logging.getLogger(__name__)
 
@@ -316,6 +316,9 @@ class _PreparedBuild:
     rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
     off_primary: frozenset[str] = frozenset()
+    #: The sites a lift collision dropped (#325): their keys count their rows, and
+    #: the Admission record names each.
+    lift_drops: LiftDrops = LiftDrops()
     #: The chain a single-pass build lifts its hg19 Analyses' unmatched rows by, to
     #: tell a lift's off-primary drops from `off_axis` ones; None for a two-pass
     #: build, whose union has lifted every site already (#376).
@@ -470,6 +473,7 @@ def _prepare_axis(
         column_map=column_map_provenance(manifest_rows),
         rules=rules,
         off_primary=routing.off_primary,
+        lift_drops=routing.lift_drops,
         unmatched_lift=(
             UnmatchedLift(
                 chain_file,
@@ -493,6 +497,7 @@ class _Pass2Context:
     rules: Mapping[str, AnalysisRules]
     off_primary: frozenset[str] = frozenset()
     unmatched_lift: UnmatchedLift | None = None
+    lift_collided: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -557,11 +562,12 @@ def _unmatched_off_primary(
 
 def _route_and_spill(
     context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, int]:
+) -> tuple[int, int, frozenset[str]]:
     """Route one Analysis's column through the shared table and spill it.
 
-    Returns the column index and how many of its associations `storable` left
-    out (issue #338): the compact result stays on disk, never in a pipe. An
+    Returns the column index, how many of its associations `storable` left
+    out (issue #338) and the keys of its rows dropped as a lift collision
+    (#325, a handful at most): the compact result stays on disk, never in a pipe. An
     earlier design returned each column over IPC, and at genome-wide scale
     (~9.85M rows per file, thousands of files) that pipe traffic deadlocked the
     pool.
@@ -579,9 +585,13 @@ def _route_and_spill(
         gate.streamed(tally)
         placed = routed.placed[0]
         record_duplicates(gate, placed, context.alids)
-        gate.unplaced_off_axis(
-            routed.unmatched.keys, _unmatched_off_primary(routed.unmatched.keys, row, context)
+        gate.unplaced_unmatched(
+            routed.unmatched,
+            _unmatched_off_primary(routed.unmatched.keys, row, context),
+            context.lift_collided,
+            lifted=row.source_assembly == "hg19",
         )
+        collided = gate.lift_collided_rows
         where = f"build-dense-vcf, Analysis {row.trait_id}"
         kept = storable(
             CellValues(placed.z, placed.se, placed.eaf), 0, 1, where=where,
@@ -589,7 +599,7 @@ def _route_and_spill(
         )
         log_se_out_of_range(kept.se_out_of_range, where=where)
         _spill_stored(context.spill_dir, col_idx, placed.index, kept)
-    return col_idx, int(kept.se_out_of_range.sum())
+    return col_idx, int(kept.se_out_of_range.sum()), collided
 
 
 def _spill_stored(spill_dir: Path, col_idx: int, rows: np.ndarray, kept: Storable) -> None:
@@ -640,12 +650,14 @@ def _spill_columns(
     )
     context = _Pass2Context(
         prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules,
-        prepared.off_primary, prepared.unmatched_lift,
+        prepared.off_primary, prepared.unmatched_lift, prepared.lift_drops.keys,
     )
     left_out = np.zeros(len(prepared.axis.analyses), dtype=np.int64)
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
-    for i, (col_idx, n_left_out) in enumerate(columns):
+    seen: set[str] = set()
+    for i, (col_idx, n_left_out, collided) in enumerate(columns):
         left_out[col_idx] = n_left_out
+        seen |= collided
         log_progress(
             "Pass 2",
             i + 1,
@@ -654,6 +666,8 @@ def _spill_columns(
             f"last: {id_by_col[col_idx]}",
             every=25,
         )
+    # Named by what Pass 2 really dropped, not by what the harvest found to collide.
+    record.write_lift_collisions(prepared.lift_drops.among(seen))
     record.finish()
     return left_out
 

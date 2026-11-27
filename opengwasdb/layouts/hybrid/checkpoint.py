@@ -113,7 +113,13 @@ __all__ = [
 #: ``analyses.tsv`` counts and nothing else can recover once the spills are
 #: written. A format-4 checkpoint has no such record, so it is refused and the
 #: build starts again.
-CHECKPOINT_FORMAT_VERSION = 5
+#:
+#: **6** (opengwasdb#325): the recorded axis names the keys a lift collision
+#: dropped, with their identities, which the fold counts as ``lift_collision`` and
+#: names in the Admission record. A format-5 checkpoint's axis does not, so a
+#: resumed fold would count them as ``off_axis``; it is refused and the build
+#: starts again.
+CHECKPOINT_FORMAT_VERSION = 6
 
 #: The function a refusal tells an operator to call.
 RESUME_FUNCTION = "resume_hybrid_build"
@@ -137,6 +143,7 @@ AXIS_PANEL = "axis_panel.txt"
 AXIS_OFF_PANEL = "axis_off_panel.txt"
 AXIS_SHARED = "axis_shared.txt"
 AXIS_OFF_PRIMARY = "axis_off_primary.txt"
+AXIS_LIFT_COLLISIONS = "axis_lift_collisions.tsv"
 PROVENANCE_SOURCE = "provenance_source.tsv"
 PROVENANCE_RSID = "provenance_rsid.tsv"
 RSID_CONFLICTS = "rsid_conflicts.json"

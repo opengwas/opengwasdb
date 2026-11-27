@@ -12,7 +12,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from liftover_fixtures import write_collision_chain, write_two_strand_chain
+from liftover_fixtures import (
+    write_collision_chain,
+    write_reverse_collision_chain,
+    write_two_strand_chain,
+)
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.fake import FakeReader
@@ -30,6 +34,11 @@ from opengwasdb.variants.routing import (
     route_variants,
 )
 from opengwasdb.variants.routing import table as route_table
+from opengwasdb.variants.routing.lift import (
+    DroppedSource,
+    LiftDrops,
+    require_one_locus_per_alid,
+)
 from opengwasdb.variants.rsid import RsidConflictPolicy
 
 #: The fake sources of the running test, by path. Forked Pass 1 workers
@@ -352,17 +361,17 @@ def test_swapping_the_sources_changes_no_name(authority, policy):
     assert outcomes == [expected, expected]
 
 
-def test_source_alids_blank_an_ambiguous_liftover_collision(tmp_path):
-    """A stored variant several source loci lift onto has an ambiguous origin,
-    left blank rather than guessed -- unless the sources are one locus, its
-    alleles reported either way round (issue #85)."""
+def test_a_liftover_collision_leaves_no_source_alid_for_its_alid(tmp_path):
+    """Source loci that lift onto one ALID are all dropped (#325), so the ALID has no
+    provenance to blank -- unless the sources are one locus, its alleles reported
+    either way round."""
     chain = write_collision_chain(tmp_path / "collision.chain")
     source = _source(
         "a",
         "hg19",
         [
             ("1", 501, "A", "G", ""),  # lifts to 1:5501
-            ("1", 1_001, "A", "G", ""),  # also lifts to 1:5501: ambiguous
+            ("1", 1_001, "A", "G", ""),  # also lifts to 1:5501: both dropped
             ("1", 1_501, "C", "T", ""),  # lifts to 1:6001
             ("1", 1_501, "T", "C", ""),  # the same locus, reported flipped
         ],
@@ -370,7 +379,170 @@ def test_source_alids_blank_an_ambiguous_liftover_collision(tmp_path):
 
     routing = _route([source], LiftedUnion(chain))
 
-    assert routing.source_alids() == {"1:5501:A:G": None, "1:6001:C:T": "1:1501:C:T"}
+    assert routing.source_alids() == {"1:6001:C:T": "1:1501:C:T"}
+    assert [d.source_key for d in routing.lift_drops.sources] == ["1:501:A:G", "1:1001:A:G"]
+
+
+COLLIDED = "1:5501:A:G"
+CLEAN = "1:6001:C:T"
+#: (chrom, pos, ref, alt, rsid): hg19 501 and 1001 both lift to 1:5501:A:G, as the
+#: forward duplicate at 4:74450339 does; 1501's two spellings are one locus.
+FORWARD_COLLISION = [
+    ("1", 501, "A", "G", "rs_first"),
+    ("1", 1_001, "A", "G", "rs_second"),
+    ("1", 1_501, "C", "T", "rs_clean"),
+    ("1", 1_501, "T", "C", "rs_clean"),
+]
+
+
+def test_a_forward_duplicate_drops_both_sources_and_records_each(tmp_path):
+    chain = write_collision_chain(tmp_path / "forward.chain")
+    # Fixture first: each colliding source reaches the ALID on its own.
+    for site in (("1", 501, "A", "G"), ("1", 1_001, "A", "G")):
+        alone = place_sites({"hg19": [site]}, chain_file=chain, failure_threshold=1.0)
+        assert alone.alid == {site: COLLIDED}
+
+    routing = _route([_source("a", "hg19", FORWARD_COLLISION)], LiftedUnion(chain))
+
+    assert routing.alids == [CLEAN], "the collided ALID is on no axis"
+    assert routing.source_alids() == {CLEAN: "1:1501:C:T"}
+    assert routing.lift_drops.sources == (
+        DroppedSource(COLLIDED, "1:501:A:G", "rs_first"),
+        DroppedSource(COLLIDED, "1:1001:A:G", "rs_second"),
+    )
+    assert routing.lift_drops.keys == {"1:501:A:G", "1:1001:A:G"}
+    # Neither source's rsid names anything: the ALID is not stored.
+    assert routing.names.rsid_by_alid == {CLEAN: "rs_clean"}
+
+
+def test_a_reverse_strand_block_onto_another_sources_alid_drops_both(tmp_path):
+    chain = write_reverse_collision_chain(tmp_path / "reverse.chain")
+    forward, reverse = ("1", 501, "A", "G"), ("1", 1_001, "T", "C")
+    for site in (forward, reverse):
+        alone = place_sites({"hg19": [site]}, chain_file=chain, failure_threshold=1.0)
+        assert alone.alid == {site: COLLIDED}
+    assert alone.reoriented == {reverse}, "fixture: the second source is the reverse-strand one"
+
+    routing = _route(
+        [_source("a", "hg19", [("1", 501, "A", "G", "rs_fwd"), ("1", 1_001, "T", "C", "rs_rev")])],
+        LiftedUnion(chain),
+    )
+
+    assert routing.alids == []
+    assert [tuple(d) for d in routing.lift_drops.sources] == [
+        (COLLIDED, "1:501:A:G", "rs_fwd"),
+        (COLLIDED, "1:1001:T:C", "rs_rev"),
+    ]
+    table = routing.table([[COLLIDED]], keep_unmatched=True)
+    stream = [
+        _association(("1", 501, "A", "G"), 3.0, eaf=0.2),
+        _association(("1", 1_001, "T", "C"), -7.0, eaf=0.2),
+    ]
+    routed = table.route_column(stream)
+    assert routed.placed[0].index.tolist() == [], "no row of either source takes the ALID"
+    assert sorted(routed.unmatched.keys) == ["1:1001:T:C", "1:501:A:G"]
+
+
+def test_a_folds_collisions_are_named_as_the_harvest_named_them():
+    """A Hybrid fold's spill keeps a site upper-cased (#360), so its drops take the
+    harvest's spelling and hg19 rsid for the same Routing Key at the same ALID: a named
+    spelling first, else the one there is. A site the harvest's lift never met there is
+    refused, not recorded under the fold's spelling."""
+    harvest = LiftDrops(
+        (
+            DroppedSource(COLLIDED, "1:501:a:g", ""),
+            DroppedSource(COLLIDED, "1:501:A:G", "rs_first"),
+            DroppedSource(COLLIDED, "1:1001:a:g", ""),
+        )
+    )
+    found = harvest.found_by({COLLIDED: (("1", 501, "A", "G"), ("1", 1_001, "A", "G"))})
+    assert found.sources == (
+        DroppedSource(COLLIDED, "1:501:A:G", "rs_first"),
+        DroppedSource(COLLIDED, "1:1001:a:g", ""),
+    )
+    assert found.spelled == ("1:501:A:G", "1:1001:A:G"), "rows are found by the fold's keys"
+    with pytest.raises(ValueError, match="1:2001:A:G .* harvest's own lift did not"):
+        harvest.found_by({COLLIDED: (("1", 2_001, "A", "G"),)})
+    with pytest.raises(ValueError, match="1:501:A:G as a lift collision at 1:9:A:G"):
+        harvest.found_by({"1:9:A:G": (("1", 501, "A", "G"),)})
+
+
+def test_one_locus_in_both_allele_orders_is_not_a_collision(tmp_path):
+    chain = write_collision_chain(tmp_path / "forward.chain")
+    source = _source("a", "hg19", [("1", 1_501, "C", "T", "rs_a"), ("1", 1_501, "T", "C", "")])
+    routing = _route([source], LiftedUnion(chain))
+    assert routing.alids == [CLEAN]
+    assert not routing.lift_drops.sources
+    assert routing.source_alids() == {CLEAN: "1:1501:C:T"}
+
+
+def test_the_guard_refuses_two_loci_on_one_alid():
+    with pytest.raises(ValueError, match=r"1:9:A:G by 1:1:A:G, 1:2:A:G"):
+        require_one_locus_per_alid(
+            {("1", 1, "A", "G"): "1:9:A:G", ("1", 2, "A", "G"): "1:9:A:G"}, where="test"
+        )
+    # One locus under both allele orders, and under two spellings of its chromosome, pass.
+    require_one_locus_per_alid(
+        {("1", 1, "A", "G"): "1:9:A:G", ("1", 1, "G", "A"): "1:9:A:G"}, where="test"
+    )
+    require_one_locus_per_alid(
+        {("chr1", 1, "A", "G"): "1:9:A:G", ("1", 1, "G", "A"): "1:9:A:G"}, where="test"
+    )
+    with pytest.raises(ValueError, match="reached by two or more source loci"):
+        require_one_locus_per_alid(
+            {("chr1", 1, "A", "G"): "1:9:A:G", ("1", 2, "A", "G"): "1:9:A:G"}, where="test"
+        )
+
+
+def test_a_grch38_variant_on_the_collided_alid_keeps_it_with_its_own_name(tmp_path):
+    """The rule holds the lifted group to itself: a source already on GRCh38 that names
+    the ALID is one variant seen from another build, and neither lifted source may
+    give it their statistics or rsid."""
+    chain = write_collision_chain(tmp_path / "forward.chain")
+    sources = [
+        _source("a", "hg19", FORWARD_COLLISION[:2]),
+        _source("b", "hg38", [("1", 5_501, "A", "G", "rs_native")]),
+    ]
+
+    routing = _route(sources, LiftedUnion(chain))
+
+    assert routing.alids == [COLLIDED]
+    assert routing.source_alids() == {COLLIDED: COLLIDED}, "only the GRCh38 source's own origin"
+    assert routing.names.rsid_by_alid == {COLLIDED: "rs_native"}
+    assert [d.source_key for d in routing.lift_drops.sources] == ["1:501:A:G", "1:1001:A:G"]
+
+
+def test_a_collided_source_never_routes_by_its_raw_key_onto_a_native_row(tmp_path):
+    """hg19 501 and 1001 collide at 1:5501, and GRCh38 declares 1:501:A:G. The dropped
+    hg19 501 spells the native row's key, so (as any key both assemblies declare) neither
+    owns it: the hg19 row's statistics must not land on the native variant."""
+    chain = write_collision_chain(tmp_path / "forward.chain")
+    sources = [
+        _source("a", "hg19", FORWARD_COLLISION[:2]),
+        _source("b", "hg38", [("1", 501, "A", "G", "rs_native")]),
+    ]
+
+    routing = _route(sources, LiftedUnion(chain))
+
+    assert routing.alids == []
+    placed = routing.table([["1:501:A:G"]], keep_unmatched=True).route_column(
+        [_association(("1", 501, "A", "G"), 9.0)]
+    )
+    assert placed.placed[0].index.tolist() == []
+    assert placed.unmatched.keys == ["1:501:A:G"]
+
+
+def test_a_source_the_reference_routes_under_another_case_is_not_recorded_as_dropped(tmp_path):
+    """hg19 501 and 1001 collide at 1:5501. The reference routes 501 under a lower-case
+    spelling, which Pass 2 matches case-folded, so only 1001 is a drop of the build."""
+    chain = write_collision_chain(tmp_path / "forward.chain")
+    reference = _reference({("1", 501, "a", "g"): "1:501:A:G", ("1", 1_501, "C", "T"): CLEAN})
+    source = _source("a", "hg19", FORWARD_COLLISION[:2])
+
+    routing = _route([source], FromReference(reference, chain))
+
+    assert [d.source_key for d in routing.lift_drops.sources] == ["1:1001:A:G"]
+    assert routing.lift_drops.keys == {"1:1001:A:G"}
 
 
 # ── RouteTable ───────────────────────────────────────────────────────────────
