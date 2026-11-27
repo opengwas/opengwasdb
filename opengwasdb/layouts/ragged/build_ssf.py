@@ -36,6 +36,13 @@ from opengwasdb.build.eaf_orientation import (
     load_eaf_reference,
     select_sites,
 )
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyReport,
+    apply_consistency_evidence,
+    declared_p_value_tests,
+    verify_effect_consistency,
+)
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult, trait_positions
@@ -443,6 +450,7 @@ def _build_ssf_release(
     """
     manifest_path, filtered_dir = sources
     analytes, ingested = _read_sources(manifest_path, filtered_dir, request)
+    consistency = _verify_effect_consistency(manifest_path, analytes)
     eaf_report = _verify_eaf_orientation(
         analytes, ingested.per_analysis, ingested.alid_variant,
         eaf_reference=request.eaf_reference,
@@ -458,7 +466,7 @@ def _build_ssf_release(
     )
     _write_indexes_and_metadata(
         staged, analytes, eaf_scopes, encoding=encoding, eaf_report=eaf_report,
-        csr=csr,
+        consistency=consistency, csr=csr,
     )
     regions = None
     if request.regions is not None:
@@ -854,6 +862,33 @@ def _print_ingest_summary(
     print(msg)
 
 
+def _verify_effect_consistency(
+    manifest_path: str | Path, analytes: list[AnalyteInput]
+) -> EffectConsistencyReport:
+    """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
+
+    Each filtered file's first rows are read once more, through the resolver's
+    projection and the Analysis's own declared INFO and MAF rules, before anything
+    is written. The check compares each row with itself, so a source on another
+    build is read as it is, unlifted.
+    """
+    rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
+    declared = declared_p_value_tests(manifest_path)
+    return verify_effect_consistency(
+        [
+            ConsistencySource(
+                SourceSpec(
+                    a.analysis_id, str(a.filtered_path), GWAS_SSF_CAPABILITY, a.source_build,
+                    a.stored_effect_scale,
+                ),
+                rules[a.analysis_id],
+                declared.get(a.analysis_id),
+            )
+            for a in analytes
+        ]
+    )
+
+
 def _verify_eaf_orientation(
     analytes: list[AnalyteInput],
     per_analysis: list[list[_Assoc]],
@@ -1015,13 +1050,15 @@ def _write_indexes_and_metadata(
     *,
     encoding: StoreEncoding,
     eaf_report: EafOrientationReport,
+    consistency: EffectConsistencyReport,
     csr: RaggedCSRWriter,
 ) -> None:
     """Build the top-hit index and write analyses.tsv from the manifest.
 
     The shared-core metadata columns arrive as one PassthroughMetadata per
     analysis and are copied verbatim (issue #83); the orientation evidence
-    each analysis earned in Phase 2 is stamped onto its row, the hit counts
+    each analysis earned in Phase 2 is stamped onto its row with its
+    effect-consistency evidence (#510), the hit counts
     are added from the just-built index, and `csr` counts what it left out of
     each (issue #338).
     """
@@ -1049,7 +1086,14 @@ def _write_indexes_and_metadata(
     ]
     write_analysis_records(
         staged.path / "analyses.tsv",
-        csr.counted(add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report))),
+        csr.counted(
+            add_hit_counts(
+                staged.path,
+                apply_consistency_evidence(
+                    apply_orientation_evidence(analyses, eaf_report), consistency
+                ),
+            )
+        ),
     )
 
 

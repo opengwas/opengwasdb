@@ -1307,6 +1307,11 @@ n_missing_se_out_of_range   (associations not stored for an SE above 65,504; req
 eaf_orientation      (see §9.1; `passed`, `failed` or `unverified`; blank only on a store built before the check existed)
 eaf_orientation_r    (the observed correlation; blank when none was computed)
 eaf_orientation_n    (variants the correlation was computed over)
+effect_consistency   (see §9.2; `passed` or `skipped`; blank only on a store built before builds ran the check)
+effect_consistency_reason             (the skip's reason; blank on a pass)
+effect_consistency_median_abs_delta   (median |log10 p implied − log10 p reported|; blank when skipped)
+effect_consistency_median_delta       (the median signed difference; blank when skipped)
+effect_consistency_n                  (source rows the medians were taken over; blank when skipped)
 n_hits_5e8   (count of associations at p <= 5e-8, genome-wide significant)
 n_hits_5e6   (count of associations at p <= 5e-6, suggestive)
 n_hits_5e4   (count of associations at p <= 5e-4, nominal)
@@ -1630,6 +1635,31 @@ of the difference: a bottlenecked cohort's frequencies legitimately differ from
 a reference panel's by three orders of magnitude (FinnGen, max log-residual
 8.07) while still correlating at r = +0.995, because a bottleneck changes
 magnitudes, not direction.
+
+### 9.2 Each stored z is checked against its source's p-value, and the check is recorded
+
+Nothing in a row can tell an odds ratio from a log-odds ratio: both are finite
+numbers, and a `beta` column holding odds ratios beside a log-scale standard error
+gives a z that is wrong by a scale on every row and plausible on none looked at
+alone. The source's own p-value is the witness (ADR 0069). Every build compares
+`z = beta / se` with it on each Analysis's source before writing anything, as it
+verifies EAF orientation (§9.1), and refuses the build naming every Analysis
+whose effect contradicts it: the median of
+`Δ = log10 p_implied − log10 p_reported` over a bounded sample of the source's
+first 1,000,000 rows (after Association Admission) has `|Δ|` above 1.0, or a
+signed median above 0.1. OGS-00032 and OGS-00033 were published with eleven such
+Analyses (median `|Δ|` 24.5 to 1.2 × 10¹²) because the check ran only in the
+resolver, and their Resolution Records predated it (#510).
+
+The outcome is Analytical Metadata, one row per Analysis (§7a):
+`effect_consistency` is `passed`, with both medians and the rows compared, or
+`skipped`, with the reason the check could not be made — `no_source_p_value`
+(GWAS-VCF, BESD and association-TSV sources carry none), `all_se_from_p_value`,
+`too_few_rows` (fewer than 50 compared) or `joint_test_p_value` (the build
+manifest declares `p_value_test=joint_2df`, ADR 0085). No build writes
+`refused`; validation fails a release that records it. A blank outcome is a Store
+built before #510 and is reported as unchecked, not as passed. A published Store
+keeps no source p-value, so the check cannot be repeated on it.
 
 ## 10. Dense Observed-Only layout
 
@@ -2894,6 +2924,7 @@ Validators MUST check at least:
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
+- every recorded `effect_consistency` outcome describes the build's check of each stored z against its source's p-value (§9.2, #510): a recorded `refused` fails, a `passed` carries its measurement and a `skipped` its reason; a blank outcome warns, since a release built before builds ran the check says nothing about whether its effects are on the scale they claim;
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0`, `0.2.1` or `0.2.2`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
 - a 0.2 release is stamped the lowest `format_version` its features use, for every release and component, a Hybrid's outer release included: 0.2.2 when its indel ALIDs are spelt reference first (which its stamp declares and `variant_table.indel_order` holds it to), whether or not it carries `regions.tsv`; otherwise 0.2.1 when its manifest declares `regions.tsv`, and 0.2.0 when it does not (§21.3, issues #430, #381);
 - an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is stored `int32` and is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; every array's inner chunk and shard match the format's `ArrayRole` policy (the layout is derived, never an attribute); its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. This is the **standalone** `validate` contract and it is exhaustive. The build's own staged publication gate is narrower and documented: exhaustively it checks only the enumerated structural rules -- self-describing identity and attributes, the exact array set, shapes and dtypes, the inner-chunk/shard layout, the full Variant Index (dtype, non-empty, sorted, unique, in bounds), counts and provenance, and the small side tables' structure and remapping (with the per-variant `eaf_baseline`/`eaf_reference`) -- while the `imputed` mask domain and agreement, Z/SE missingness, and decoded Z/SE/EAF values are compared over a documented deterministic, bounded, input-checksum-seeded sample (the endpoints of both axes, a spread of physical write-unit and inner-chunk boundaries, a spread of Analyses and seeded cells). The build records `validation_mode`, the sample strategy, seed and cell count, and its duration, and an isolated unsampled corruption is caught by the exhaustive standalone audit instead. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0061, issue #264, #266);
@@ -3003,6 +3034,8 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
 | `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a); from 0.3.0 the component counts none of its own, so nothing is compared (§16) |
 | `regions.table` | release | check | `regions.tsv`, when present or declared, is declared by the manifest's `regions` entry, has its SHA-256, parses as a region table and names only Analyses the release holds (§2, §17) |
+| `effect_consistency.evidence` | release | check | each recorded `effect_consistency` outcome says what the build measured: `refused` fails (the Analysis's stored z contradicts its source's p-value); `passed` carries both medians and a positive row count and no reason; `skipped` names a skip reason and no measurement; no other `effect_consistency_*` cell is filled under a blank outcome (§9.2, #510) |
+| `effect_consistency.unchecked` | release | check, warning | counts and names the first Analyses with no `effect_consistency` outcome, which a release built before #510 has: nothing in it says their effects are on the scale they claim (§9.2) |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
 | `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
 | `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |

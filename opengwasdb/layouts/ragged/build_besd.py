@@ -35,6 +35,11 @@ from opengwasdb.admission import (
 )
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
+from opengwasdb.build.effect_consistency import (
+    ConsistencySkip,
+    apply_consistency_evidence,
+    skipped_effect_consistency,
+)
 from opengwasdb.build.liftover import (
     LiftedRow,
     lift_hg19_to_hg38,
@@ -1471,12 +1476,19 @@ def _stamp_probe_scopes(
     0036 §4): `eaf_scope` is `association` for a probe holding a `.esi`
     frequency and `absent` otherwise, and stays blank, as it always was, for a
     `.esi` with none. The one `.esi` orientation outcome is recorded against
-    every probe (`per_probe_report`).
+    every probe (`per_probe_report`). A BESD file carries no p-value to check
+    a stored z against, so every probe records the effect-consistency check as
+    `skipped: no_source_p_value` (#510, ADR 0069), never a blank.
     """
-    stamped = [
-        _stamped_analysis(analysis, scope, stores_frequencies=axis.eaf_by_esi is not None)
-        for analysis, scope in zip(analyses, scopes, strict=True)
-    ]
+    stamped = apply_consistency_evidence(
+        [
+            _stamped_analysis(analysis, scope, stores_frequencies=axis.eaf_by_esi is not None)
+            for analysis, scope in zip(analyses, scopes, strict=True)
+        ],
+        skipped_effect_consistency(
+            (a.analysis_id for a in analyses), ConsistencySkip.NO_SOURCE_P_VALUE
+        ),
+    )
     if eaf_report is None:
         return stamped, None
     report = per_probe_report(

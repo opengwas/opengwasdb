@@ -14,7 +14,7 @@ other port of the Store Reader test against. `VERSION` names the bundle's versio
 | `generate.py` | writes `releases/`, `expected/` and `VERSION`; runs in opengwasdb only |
 | `.gitattributes` | every file is bytes: no line-ending conversion on checkout |
 
-The bundle is 4.9 MB: 1,343,114 bytes of releases in 1,238 files and 3,582,150 bytes of
+The bundle is 4.9 MB: 1,348,797 bytes of releases in 1,238 files and 3,592,703 bytes of
 expected answers.
 
 ## The releases

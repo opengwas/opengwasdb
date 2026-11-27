@@ -9,6 +9,7 @@ it is named for.
 from __future__ import annotations
 
 import gzip
+import math
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -330,6 +331,20 @@ def _cases() -> list[Case]:
     cases.append(_case("generated", generated(), _beta_holds, gzipped=True))
     cases.append(_case("decided", decided(), _plain, gzipped=True))
     return cases
+
+
+def implied_p(beta: str, se: str, otherwise: str = "0.01") -> str:
+    """The two-sided p a row's beta and SE imply, or ``otherwise`` where they do not
+    make a z. A real file's p agrees with its beta/se, and a build checks that it
+    does (#510, ADR 0069); a row whose SE is blank keeps ``otherwise``, which the
+    reader derives that SE from."""
+    try:
+        z = float(beta) / float(se)
+    except (ValueError, ZeroDivisionError):
+        return otherwise
+    if not math.isfinite(z):
+        return otherwise
+    return repr(max(math.erfc(abs(z) / math.sqrt(2.0)), 1e-300))
 
 
 def generated(rows: int = 6_000) -> bytes:

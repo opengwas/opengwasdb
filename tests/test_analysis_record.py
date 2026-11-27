@@ -62,6 +62,12 @@ _FULL_ANALYSIS = Analysis(
     eaf_orientation="passed",
     eaf_orientation_r="0.999200",
     eaf_orientation_n="18422",
+    # `refused` is the one outcome that fills every column; no Store holds it.
+    effect_consistency="refused",
+    effect_consistency_reason="median_abs_delta",
+    effect_consistency_median_abs_delta="29.6",
+    effect_consistency_median_delta="-29.6",
+    effect_consistency_n="20000",
     n_hits_5e8="42",
     n_hits_5e6="120",
     n_hits_5e4="900",
@@ -80,7 +86,8 @@ def test_analysis_columns_match_the_adr_0035_order():
     # interpretation columns and the effect-scale ones it sits alongside.
     # `eaf_orientation*` joined it for issue #115, alongside the other
     # build-time evidence columns a store carries and a manifest cannot, and
-    # `n_missing_se_out_of_range` for issue #338, beside the completion counts.
+    # `n_missing_se_out_of_range` for issue #338, beside the completion counts,
+    # and `effect_consistency*` for issue #510, beside the orientation evidence.
     assert ANALYSIS_COLUMNS == (
         "analysis_index",
         "analysis_id",
@@ -117,6 +124,11 @@ def test_analysis_columns_match_the_adr_0035_order():
         "eaf_orientation",
         "eaf_orientation_r",
         "eaf_orientation_n",
+        "effect_consistency",
+        "effect_consistency_reason",
+        "effect_consistency_median_abs_delta",
+        "effect_consistency_median_delta",
+        "effect_consistency_n",
         "n_hits_5e8",
         "n_hits_5e6",
         "n_hits_5e4",

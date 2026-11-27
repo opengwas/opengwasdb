@@ -63,6 +63,11 @@ Since epic #450's final review the Dense pin's `overview.html` is re-derived onc
 its file guide describes `variants.tsv.gz` as a file no 0.3.0 query reads, and names
 the position, `source_alid` and rsID sidecars. Fresh pins of every fixture differed from
 the previous ones in that entry alone, and the previous one held at the integration tip.
+
+Since #510 every pin's `analyses.tsv` carries the five `effect_consistency` columns
+each build stamps, and the Dense pin's `overview.html` renders them. Re-derived after
+writing every pin again with those columns stripped from `analyses.tsv`: every entry
+of every pin, the Dense `overview.html` included, then hashed to the previous pin.
 """
 
 from __future__ import annotations
