@@ -10,9 +10,9 @@ every output's git blob id. This holds the three to each other, so none drifts s
 * this repository's build, run now with the recipe's command on those inputs, writes the same
   store: every file the same bytes and every array the same values, but for what a run records of
   itself, and the last bits of the float64 arrays: a QR basis and what is projected on it differ
-  by a few ulps with the process's BLAS (2e-16 to 7e-15 here, up to 2 ulps of the array's largest
-  element; under the project's `test` task, with `PYTHONNOUSERSITE=1` and one BLAS thread, they
-  match to the byte), and the sidecar records each float array's SHA-256, which follows.
+  with the BLAS kernel's summation order (`FLOAT_TOLERANCE`; under the project's `test` task on
+  this host, with `PYTHONNOUSERSITE=1` and one BLAS thread, they match to the byte), and the
+  sidecar records each float array's SHA-256, which follows.
 """
 
 from __future__ import annotations
@@ -84,25 +84,25 @@ def _files(root: Path) -> set[str]:
 #: The arrays the sidecar holds as float64. A few ulps of BLAS drift move them, and so the SHA-256
 #: the root records for each; the integer arrays and every input pin's SHA-256 never move.
 FLOAT_ARRAYS = ("basis", "norm", "projection", "sign")
-#: Float64 drift allowed, in units of the last place of the largest value compared: the QR basis
-#: and what is projected on it moved by up to 2 ulps of their largest element here.
-ULPS = 8
-#: The PC Check's ratios and quantiles, which the arrays' drift moves, derived values: relative
-#: 3e-15 at most here, held to 1e-14.
-DOCUMENT_RTOL = 1e-14
+#: How far a rebuilt float may be from the committed one, relative to the larger array's largest
+#: absolute element (to the value itself, for the root document's derived floats). The sidecar's
+#: float64 arrays hold a QR basis and what is projected on it, whose last bits follow the BLAS
+#: kernel's summation order: here, on this host, they moved by 2 ulps or less (4e-16 relative);
+#: on GitHub's runners, 4.1e-15 relative (about 20 ulps; opengwasdb#513). 1e-12 is 250 times that
+#: and far below any real change: a flip of one value by 1e-9 fails. Answers do not depend on it,
+#: because r is quantised to 1/511.
+FLOAT_TOLERANCE = 1e-12
 
 
 def _same_floats(first: Any, second: Any, name: str) -> None:
-    """`first` and `second` equal to `ULPS` ulps of the larger's largest element."""
+    """`first` and `second` equal to `FLOAT_TOLERANCE` of the larger's largest element."""
     assert first.shape == second.shape, name
     largest = max(float(np.abs(first).max(initial=0.0)), float(np.abs(second).max(initial=0.0)))
-    np.testing.assert_allclose(
-        first, second, rtol=0, atol=ULPS * np.spacing(largest or 1.0), err_msg=name
-    )
+    np.testing.assert_allclose(first, second, rtol=0, atol=FLOAT_TOLERANCE * largest, err_msg=name)
 
 
 def _same_array(first: np.ndarray[Any, Any], second: np.ndarray[Any, Any], name: str) -> None:
-    """Integers exactly; float64 to `ULPS` ulps."""
+    """Integers exactly; float64 to `FLOAT_TOLERANCE`."""
     assert first.dtype == second.dtype and first.shape == second.shape, name
     if first.dtype.kind == "f":
         _same_floats(first, second, name)
@@ -113,8 +113,8 @@ def _same_array(first: np.ndarray[Any, Any], second: np.ndarray[Any, Any], name:
 def _same_document(first: Any, second: Any, path: str = "") -> None:
     """Two root documents equal, but for what a build records of itself (when and how long it ran,
     the library versions, the ALID companion's generation, which hashes this very document) and
-    the float64 arrays' recorded SHA-256, with floats to `DOCUMENT_RTOL`. Every other key, an input
-    pin's SHA-256 included, is compared exactly."""
+    the float64 arrays' recorded SHA-256, with floats to `FLOAT_TOLERANCE`. Every other key, an
+    input pin's SHA-256 included, is compared exactly."""
     if isinstance(first, dict):
         assert isinstance(second, dict) and first.keys() == second.keys(), path
         for key in first:
@@ -129,7 +129,7 @@ def _same_document(first: Any, second: Any, path: str = "") -> None:
         for index, (one, other) in enumerate(zip(first, second, strict=True)):
             _same_document(one, other, f"{path}[{index}]")
     elif isinstance(first, float):
-        np.testing.assert_allclose(first, second, rtol=DOCUMENT_RTOL, atol=0, err_msg=path)
+        np.testing.assert_allclose(first, second, rtol=FLOAT_TOLERANCE, atol=0, err_msg=path)
     else:
         assert first == second, path
 
