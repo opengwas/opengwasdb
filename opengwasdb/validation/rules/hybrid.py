@@ -47,22 +47,15 @@ def is_hybrid(target: Target) -> bool:
     return target.layout is PrimaryStorageLayout.HYBRID and not target.is_component
 
 
-def _release(target: Target) -> Target:
-    """The outer release a Hybrid target belongs to."""
-    while target.parent is not None:
-        target = target.parent
-    return target
-
-
 def component(target: Target) -> Target:
     """The Dense Component's release target, which exists once `hybrid.component` passed."""
-    release = _release(target)
+    release = target.outer_release()
     return next(child for child in release.children if child.kind is Kind.RELEASE)
 
 
 def dense_to_shared(target: Target) -> np.ndarray:
     """The shared row of each Dense Component row, read once for the run."""
-    release = _release(target)
+    release = target.outer_release()
     return release.remember(
         "dense_to_shared", lambda: np.load(dense_to_shared_path(release.store.path))
     )

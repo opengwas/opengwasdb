@@ -116,11 +116,13 @@ EAF_ORIENTATION_COLUMNS: tuple[str, ...] = (
 )
 
 # The build's check of each stored z against its source's own p-value (ADR 0069,
-# #510): the outcome (`passed` / `skipped`), why (the skip's reason, blank on a
-# pass), both medians of Delta = log10 p implied - log10 p reported, and how many
-# rows they were taken over. Persisted per Analysis because a Store keeps no
-# source p-value, so nothing can repeat the check once it is built. Blank on an
-# Analysis no build-time check ran over -- a Store built before #510.
+# #510): the outcome (`EffectConsistencyOutcome`: `passed` / `skipped`, or
+# `refused`, which no build writes and validation fails), why (the skip's reason,
+# or the rule that refused; blank on a pass), both medians of Delta = log10 p
+# implied - log10 p reported, and how many rows they were taken over. Persisted
+# per Analysis because a Store keeps no source p-value, so nothing can repeat the
+# check once it is built. Every build writes all five on every row; a release
+# built before #510 has none of them, and keeps none when it is rewritten.
 EFFECT_CONSISTENCY = "effect_consistency"
 EFFECT_CONSISTENCY_COLUMNS: tuple[str, ...] = (
     EFFECT_CONSISTENCY,
@@ -553,9 +555,12 @@ class Analysis:
     eaf_orientation: str = ""
     eaf_orientation_r: str = ""
     eaf_orientation_n: str = ""
-    # The build's effect-consistency check (ADR 0069, #510). Blank on an Analysis
-    # no build-time check ran over, which validation reports as unchecked.
-    effect_consistency: str = ""
+    # The build's effect-consistency check (ADR 0069, #510). A builder stamps it
+    # (`apply_consistency_evidence`); blank is a build that did not, which
+    # validation fails. None is an Analysis read from an `analyses.tsv` with no
+    # such column, a release built before #510: a table of only such Analyses is
+    # written without the columns, so a rewrite keeps the release pre-#510.
+    effect_consistency: str | None = ""
     effect_consistency_reason: str = ""
     effect_consistency_median_abs_delta: str = ""
     effect_consistency_median_delta: str = ""
@@ -638,12 +643,21 @@ class PassthroughMetadata:
         return replace(analysis, **asdict(self))
 
 
+def _written_columns(analyses: list[Analysis]) -> tuple[str, ...]:
+    """`ANALYSIS_COLUMNS`, without the effect-consistency columns for a table read from
+    a release built before #510 (`Analysis.effect_consistency`), which keeps none."""
+    if analyses and all(a.effect_consistency is None for a in analyses):
+        return tuple(c for c in ANALYSIS_COLUMNS if c not in EFFECT_CONSISTENCY_COLUMNS)
+    return ANALYSIS_COLUMNS
+
+
 def _analysis_fieldnames(analyses: list[Analysis]) -> tuple[str, ...]:
     prop_populations = sorted({pop for a in analyses for pop in a.ancestry_prop})
+    columns = _written_columns(analyses)
     return (
-        *ANALYSIS_COLUMNS[:_ANALYSIS_SAMPLE_SIZE_KIND_INDEX],
+        *columns[:_ANALYSIS_SAMPLE_SIZE_KIND_INDEX],
         *(f"{ANCESTRY_PROP_PREFIX}{pop}" for pop in prop_populations),
-        *ANALYSIS_COLUMNS[_ANALYSIS_SAMPLE_SIZE_KIND_INDEX:],
+        *columns[_ANALYSIS_SAMPLE_SIZE_KIND_INDEX:],
     )
 
 
@@ -687,7 +701,7 @@ def _analysis_row(index: int, a: Analysis, fieldnames: tuple[str, ...]) -> dict[
         "eaf_orientation": a.eaf_orientation,
         "eaf_orientation_r": a.eaf_orientation_r,
         "eaf_orientation_n": a.eaf_orientation_n,
-        "effect_consistency": a.effect_consistency,
+        "effect_consistency": a.effect_consistency or "",
         "effect_consistency_reason": a.effect_consistency_reason,
         "effect_consistency_median_abs_delta": a.effect_consistency_median_abs_delta,
         "effect_consistency_median_delta": a.effect_consistency_median_delta,
@@ -699,6 +713,9 @@ def _analysis_row(index: int, a: Analysis, fieldnames: tuple[str, ...]) -> dict[
     for column in fieldnames:
         if column.startswith(ANCESTRY_PROP_PREFIX):
             row[column] = a.ancestry_prop.get(column[len(ANCESTRY_PROP_PREFIX):], "")
+    if EFFECT_CONSISTENCY not in fieldnames:  # a release built before #510 (`Analysis`)
+        for column in EFFECT_CONSISTENCY_COLUMNS:
+            del row[column]
     return row
 
 
@@ -744,7 +761,8 @@ def _analysis_from_row(row: dict[str, str], fieldnames: tuple[str, ...]) -> Anal
         eaf_orientation=row.get("eaf_orientation", ""),
         eaf_orientation_r=row.get("eaf_orientation_r", ""),
         eaf_orientation_n=row.get("eaf_orientation_n", ""),
-        effect_consistency=row.get("effect_consistency", ""),
+        effect_consistency=row.get(EFFECT_CONSISTENCY, "") if EFFECT_CONSISTENCY in fieldnames
+        else None,
         effect_consistency_reason=row.get("effect_consistency_reason", ""),
         effect_consistency_median_abs_delta=row.get("effect_consistency_median_abs_delta", ""),
         effect_consistency_median_delta=row.get("effect_consistency_median_delta", ""),

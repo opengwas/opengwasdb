@@ -30,7 +30,6 @@ from opengwasdb import admission
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
-    apply_orientation_evidence,
     check_eaf_orientation,
     enforce_eaf_orientation,
     load_eaf_reference,
@@ -39,7 +38,7 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.effect_consistency import (
     ConsistencySource,
     EffectConsistencyReport,
-    apply_consistency_evidence,
+    apply_build_evidence,
     declared_p_value_tests,
     verify_effect_consistency,
 )
@@ -377,6 +376,7 @@ def build_ragged_from_ssf(
     chain_file: str | Path | None = None,
     liftover_failure_threshold: float = 0.01,
     regions: str | Path | None = None,
+    n_workers: int = 1,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -395,15 +395,14 @@ def build_ragged_from_ssf(
     rows until the lift has placed them; a GRCh38-only build reads one Analysis
     at a time. ``regions``, the bundle's region table, is refused whole before
     anything is built and written into the Store as `regions.tsv` (issue #430).
+    ``n_workers``: sources the effect-consistency check reads at once (#510).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     table = None if regions is None else read_region_table(regions, RAGGED_REFERENCE_ASSEMBLY)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         return _build_ssf_release(
-            staged,
-            out,
-            (manifest_path, filtered_dir),
+            staged, out, (manifest_path, filtered_dir),
             _SsfBuildRequest(
                 store_id=store_id,
                 release_id=release_id,
@@ -416,6 +415,7 @@ def build_ragged_from_ssf(
                     None if chain_file is None else Path(chain_file), liftover_failure_threshold
                 ),
                 regions=table,
+                n_workers=n_workers,
             ),
         )
 
@@ -434,6 +434,8 @@ class _SsfBuildRequest:
     lift: LiftOptions
     #: The Release Bundle's region table, written into the Store as `regions.tsv`.
     regions: RegionTable | None = None
+    #: Sources the effect-consistency check reads at once (#510).
+    n_workers: int = 1
 
 
 def _build_ssf_release(
@@ -449,8 +451,9 @@ def _build_ssf_release(
     passed over.
     """
     manifest_path, filtered_dir = sources
-    analytes, ingested = _read_sources(manifest_path, filtered_dir, request)
-    consistency = _verify_effect_consistency(manifest_path, analytes)
+    analytes = _read_build_manifest(manifest_path, filtered_dir, request)
+    consistency = _verify_effect_consistency(manifest_path, analytes, request.n_workers)
+    analytes, ingested = _read_sources(manifest_path, analytes, request)
     eaf_report = _verify_eaf_orientation(
         analytes, ingested.per_analysis, ingested.alid_variant,
         eaf_reference=request.eaf_reference,
@@ -495,15 +498,23 @@ def _build_ssf_release(
     )
 
 
-def _read_sources(
+def _read_build_manifest(
     manifest_path: str | Path, filtered_dir: str | Path, request: _SsfBuildRequest
-) -> tuple[list[AnalyteInput], _Ingested]:
-    """Phase 1: the manifest, the lift refused if it cannot be done, and every source read."""
+) -> list[AnalyteInput]:
+    """Phase 1: the manifest, refused if its lift cannot be done or its region table
+    names another Analysis, before a source is read."""
     analytes = _read_manifest(manifest_path, filtered_dir)
     require_liftable([(a.analysis_id, a.source_build) for a in analytes], request.lift.chain_file)
     if request.regions is not None:
         check_region_table(request.regions, (a.analysis_id for a in analytes))
     print(f"Manifest: {len(analytes)} analyses")
+    return analytes
+
+
+def _read_sources(
+    manifest_path: str | Path, analytes: list[AnalyteInput], request: _SsfBuildRequest
+) -> tuple[list[AnalyteInput], _Ingested]:
+    """Phase 3: every source read through Association Admission, after the check."""
     record = admission.AdmissionRecord.open(
         request.admission_record,
         [a.analysis_id for a in analytes],
@@ -863,14 +874,15 @@ def _print_ingest_summary(
 
 
 def _verify_effect_consistency(
-    manifest_path: str | Path, analytes: list[AnalyteInput]
+    manifest_path: str | Path, analytes: list[AnalyteInput], n_workers: int
 ) -> EffectConsistencyReport:
-    """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
+    """Phase 2: check each Analysis's stored z against its source's own p-value (#510,
+    ADR 0069).
 
-    Each filtered file's first rows are read once more, through the resolver's
-    projection and the Analysis's own declared INFO and MAF rules, before anything
-    is written. The check compares each row with itself, so a source on another
-    build is read as it is, unlifted.
+    Each filtered file's first rows are read by the check itself, `n_workers` at a
+    time, through the resolver's projection and the Analysis's own declared INFO and
+    MAF rules, before the ingest reads a source. The check compares each row with
+    itself, so a source on another build is read as it is, unlifted.
     """
     rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
     declared = declared_p_value_tests(manifest_path)
@@ -885,7 +897,8 @@ def _verify_effect_consistency(
                 declared.get(a.analysis_id),
             )
             for a in analytes
-        ]
+        ],
+        n_workers=n_workers,
     )
 
 
@@ -1089,9 +1102,7 @@ def _write_indexes_and_metadata(
         csr.counted(
             add_hit_counts(
                 staged.path,
-                apply_consistency_evidence(
-                    apply_orientation_evidence(analyses, eaf_report), consistency
-                ),
+                apply_build_evidence(analyses, eaf_report, consistency),
             )
         ),
     )

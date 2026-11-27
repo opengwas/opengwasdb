@@ -9,17 +9,21 @@ issue #68 onward), so these tests never go through a builder entrypoint.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
 from opengwasdb.model.analyses import (
     ANALYSIS_COLUMNS,
+    EFFECT_CONSISTENCY_COLUMNS,
     RETIRED_ANALYSIS_COLUMNS,
+    AnalysesTable,
     Analysis,
     analyses_table_from_records,
     ancestry_impute_mask,
     read_analysis_records,
     reset_top_hit_counts,
+    write_analyses,
     write_analysis_records,
 )
 from opengwasdb.store_reader.analyses import read_analyses
@@ -347,3 +351,29 @@ def test_ancestry_impute_mask_empty_id_set_matches_nothing_but_is_a_mask():
 
     assert mask is not None
     assert mask.tolist() == [False, False]
+
+
+def test_a_table_written_before_the_effect_consistency_columns_is_rewritten_without_them(
+    tmp_path: Path,
+) -> None:
+    """A completion or `--convert-legacy` reads a release built before #510 and writes
+    its `analyses.tsv` again: the columns stay absent, so the release stays honestly
+    pre-check (a warning) rather than gaining blanks a build since #510 never writes
+    (an error). A table that has them keeps them, blank or not (#510)."""
+    built = analyses_table_from_records([Analysis(analysis_id="a"), Analysis(analysis_id="b")])
+    assert set(EFFECT_CONSISTENCY_COLUMNS) <= set(built.fieldnames)
+    kept = tuple(c for c in built.fieldnames if c not in EFFECT_CONSISTENCY_COLUMNS)
+    old = tmp_path / "old.tsv"
+    write_analyses(old, AnalysesTable(kept, tuple({c: r[c] for c in kept} for r in built.rows)))
+    assert not set(EFFECT_CONSISTENCY_COLUMNS) & set(read_analyses(old).fieldnames)
+
+    rewritten = tmp_path / "rewritten.tsv"
+    write_analysis_records(rewritten, read_analysis_records(old))
+    assert not set(EFFECT_CONSISTENCY_COLUMNS) & set(read_analyses(rewritten).fieldnames)
+
+    new = tmp_path / "new.tsv"
+    write_analyses(new, built)
+    again = tmp_path / "again.tsv"
+    write_analysis_records(again, read_analysis_records(new))
+    assert set(EFFECT_CONSISTENCY_COLUMNS) <= set(read_analyses(again).fieldnames)
+

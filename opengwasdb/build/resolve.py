@@ -57,11 +57,12 @@ from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.effect_consistency import (
     DEFAULT_EFFECT_CONSISTENCY_POLICY,
     ConsistencySample,
-    ConsistencySkip,
     EffectConsistency,
     EffectConsistencyPolicy,
     admit_block,
     check_sample_bound,
+    declared_refusal,
+    declared_skip,
     refusal_text,
 )
 from opengwasdb.build.hash_sample import HashSample
@@ -576,8 +577,9 @@ def _scan_diagnostics(
 
 def _effect_consistency(request: AnalysisRequest, scan: _Scan) -> EffectConsistency:
     """The check's verdict, or its skip when the declared p cannot witness beta/se."""
-    if request.p_value_test is PValueTest.JOINT_2DF:
-        return scan.consistency.skipped(ConsistencySkip.JOINT_TEST_P_VALUE)
+    skip = declared_skip(request.p_value_test)
+    if skip is not None:
+        return scan.consistency.skipped(skip)
     return scan.consistency.measure(request.effect_consistency_policy)
 
 
@@ -1064,25 +1066,6 @@ def _ancestry(
     return assign_ancestry(scan.panel_af, reference, gates)
 
 
-def _declared_refusal(request: AnalysisRequest) -> str:
-    """The controlled failure for an Analysis whose declaration refuses it, or "".
-
-    MR-MEGA scales each SE by the residual mean square, so beta/se is a
-    t-statistic on (cohorts - 2) df, not a z, and the Store would answer with a
-    p the source never published (issue #371: GCST90833021 returns z -1054 at
-    source p 0.81). No scan can make it a z, so none is made.
-    """
-    if request.p_value_test is not PValueTest.MR_MEGA:
-        return ""
-    return (
-        "p_value_test is mr_mega: MR-MEGA divides each effect by a standard error "
-        "scaled by its residual mean square, so beta/se is a t-statistic on "
-        "(cohorts - 2) degrees of freedom, not a z-score, and its p-value is a "
-        "separate 2-df test. A Store keeps z and answers with the p of z, so the "
-        "Analysis is refused (issue #371)."
-    )
-
-
 def _consistency_refusal(measured: EffectConsistency | None, request: AnalysisRequest) -> str:
     """The controlled failure for a source that contradicts its own p-value, or "".
 
@@ -1153,7 +1136,7 @@ def resolve_analysis(
     check_sample_bound(evidence_sample, request.effect_consistency_policy)
     if scan_limit is not None:
         scan_limit.validate()
-    declared = _declared_refusal(request)
+    declared = declared_refusal(request.p_value_test)
     if declared:
         return unresolved(
             request.analysis_id, request.source_file, declared, source_ancestry=source_ancestry

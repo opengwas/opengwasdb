@@ -49,7 +49,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from opengwasdb.store_reader.analyses import read_analyses
 from opengwasdb.store_reader.associations.record import State, states
 from opengwasdb.store_reader.enums import AssociationCoverage, PrimaryStorageLayout
 from opengwasdb.store_reader.stats import z_critical
@@ -160,9 +159,7 @@ def _hybrid_total(target: Target, counts: np.ndarray) -> tuple[str, np.ndarray] 
     sums and judges. If the other component's pass never ends -- its fold skipped
     behind a failed prerequisite -- that skip is the record, as for any fold.
     """
-    root = target
-    while root.parent is not None:
-        root = root.parent
+    root = target.outer_release()
     if root.layout is not PrimaryStorageLayout.HYBRID:
         return target.label, counts
     waiting = root.forget(_WAITING)
@@ -188,11 +185,13 @@ def _summed(one: np.ndarray, two: np.ndarray) -> np.ndarray:
 
 
 def _analysis_ids(target: Target) -> dict[int, str]:
+    """Each Analysis's id by index, from the outer release's `analyses.tsv`, which
+    every layout's release carries (a Hybrid's root, its Analyses' copy)."""
     ids: dict[int, str] = {}
-    path = target.store.analyses_path
-    if not path.exists():
-        return ids
-    for row in read_analyses(path).rows:
+    release = target.outer_release()
+    if not release.store.analyses_path.exists():
+        return ids  # the analyses.tsv rules report a release without one
+    for row in release.analyses.rows:
         try:
             ids[int(row.get("analysis_index", ""))] = str(row.get("analysis_id", ""))
         except ValueError:

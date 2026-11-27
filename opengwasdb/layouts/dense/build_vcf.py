@@ -29,7 +29,6 @@ from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
-    apply_orientation_evidence,
     sample_column_rows,
     site_hashes,
     verify_eaf_orientation,
@@ -37,7 +36,7 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.effect_consistency import (
     ConsistencySource,
     EffectConsistencyReport,
-    apply_consistency_evidence,
+    apply_build_evidence,
     declared_p_value_tests,
     verify_effect_consistency,
 )
@@ -219,6 +218,7 @@ def build_dense_from_vcf_manifest(
     manifest_rows, rules = _manifest_and_rules(
         manifest_path, source_reader_capability, source_assembly, column_map
     )
+    consistency = _verify_effect_consistency(manifest_path, manifest_rows, rules, n_workers)
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -226,7 +226,6 @@ def build_dense_from_vcf_manifest(
             staged, out, manifest_rows, chain_file, liftover_failure_threshold,
             n_workers, variant_reference, rules,
         )
-        consistency = _verify_effect_consistency(manifest_path, manifest_rows, rules, n_workers)
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
         # even when a phase fails, keeping the staged release atomic.
         eaf_report, encoded = _spill_verify_and_encode(
@@ -667,10 +666,11 @@ def _verify_effect_consistency(
 ) -> EffectConsistencyReport:
     """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
 
-    Each source's first rows are read once more, through the resolver's projection
-    and the Analysis's declared INFO and MAF rules, before Pass 2 spills anything:
-    a build that refuses does so before its hour of routing. A GWAS-VCF source
-    carries no p-value the readers read, and is stamped `skipped`.
+    The first phase that reads a source: each one's first rows, through the
+    resolver's projection and the Analysis's declared INFO and MAF rules, before
+    Pass 1 or the axis, so a build that refuses does so before its hours of
+    routing. A GWAS-VCF's p-value is its `LP`; one whose header declares none is
+    stamped `skipped: no_source_p_value`, unread.
     """
     declared = declared_p_value_tests(manifest_path)
     return verify_effect_consistency(
@@ -868,11 +868,8 @@ def _finalize_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
         encoded.encoding, n_workers=n_workers,
     )
-    analyses = apply_consistency_evidence(
-        apply_orientation_evidence(
-            apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
-        ),
-        consistency,
+    analyses = apply_build_evidence(
+        apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report, consistency
     )
     write_analyses_tsv(
         staged.path,

@@ -15,17 +15,30 @@ writing `exp(beta)` into `beta` (an odds ratio, GCST002047's defect) does not.
 from __future__ import annotations
 
 import gzip
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 from scipy import stats
 
-from opengwasdb.build.effect_consistency import EffectConsistencyError
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyError,
+    EffectConsistencyReport,
+)
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.model.analyses import write_analysis_columns
+from opengwasdb.model.analyses import (
+    EFFECT_CONSISTENCY_COLUMNS,
+    AnalysesTable,
+    write_analyses,
+    write_analysis_columns,
+)
+from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.store_reader.analyses import read_analyses
+from opengwasdb.validation.rule import Severity, ValidationResult
 from opengwasdb.validation.validate import validate_store
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -164,33 +177,177 @@ def test_a_source_without_p_values_is_stamped_skipped_not_blank(tmp_path: Path, 
     assert rows["good"]["effect_consistency"] == "passed"
 
 
-_VCF = (
-    "##fileformat=VCFv4.2\n"
-    '##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size">\n'
-    '##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error">\n'
-    "##SAMPLE=<ID=STUDY1,StudyType=Continuous>\n"
-    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSTUDY1\n"
-    "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.6:0.3\n"
-)
+def _vcf(path: Path, *, odds_ratio_in_es: bool = False, with_lp: bool = True) -> Path:
+    """One GWAS-VCF of the same rows as `_ssf`: ES, SE and, unless told not to, LP."""
+    beta = _Z * _SE
+    shown = np.exp(beta) if odds_ratio_in_es else beta
+    lp = -np.log10(2.0 * stats.norm.sf(np.abs(_Z)))
+    tags = ["ES", "SE", *(["LP"] if with_lp else [])]
+    header = [
+        "##fileformat=VCFv4.2",
+        '##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size">',
+        '##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error">',
+        *(['##FORMAT=<ID=LP,Number=A,Type=Float,Description="-log10 p-value">'] if with_lp
+          else []),
+        "##SAMPLE=<ID=STUDY1,StudyType=Continuous>",
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSTUDY1",
+    ]
+    records = []
+    for i in range(N_ROWS):
+        values = [f"{shown[i]:.10g}", f"{_SE:.10g}", *([f"{lp[i]:.6g}"] if with_lp else [])]
+        records.append(
+            f"1\t{1000 + i}\t.\tC\tA\t.\tPASS\t.\t{':'.join(tags)}\t{':'.join(values)}"
+        )
+    path.write_text("\n".join([*header, *records]) + "\n", encoding="utf-8")
+    return path
 
 
-def test_a_gwas_vcf_source_is_stamped_skipped_in_a_dense_build(tmp_path: Path):
-    """GWAS-VCF carries no p-value the readers read (ADR 0069), so the check skips."""
-    vcf = tmp_path / "study.vcf"
-    vcf.write_text(_VCF, encoding="utf-8")
+def _vcf_build(tmp_path: Path, **kinds: dict[str, bool]) -> Path:
+    lines = ["trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
+             "\tsource_assembly"]
+    for name, kind in kinds.items():
+        vcf = _vcf(tmp_path / f"{name}.vcf", **kind)
+        lines.append(f"{name}\t{vcf}\t{name}\t10000\tsd\tdeclared_standardised\thg38")
     manifest = tmp_path / "vcf_manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
-        "\tsource_assembly\n"
-        f"study1\t{vcf}\tStudy 1\t10000\tsd\tdeclared_standardised\thg38\n",
-        encoding="utf-8",
-    )
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
     store = tmp_path / "dense.opengwasdb"
     build_dense_from_vcf_manifest(manifest, store, store_id="ec", release_id="r1")
-    row = _rows(store)["study1"]
+    return store
+
+
+def test_the_fixture_vcf_lp_is_its_rows_own_p(tmp_path: Path):
+    """The VCF fixture's LP is -log10 of the p its ES/SE imply, and the odds-ratio one's is
+    not: the verdicts below come from how the files were made."""
+    for odds_ratio, close in ((False, True), (True, False)):
+        path = _vcf(tmp_path / f"or{odds_ratio}.vcf", odds_ratio_in_es=odds_ratio)
+        cells = [line.split("\t")[9].split(":") for line in path.read_text().splitlines()
+                 if not line.startswith("#")]
+        z = np.array([float(c[0]) / float(c[1]) for c in cells])
+        lp = np.array([float(c[2]) for c in cells])
+        implied = -np.log10(np.maximum(2.0 * stats.norm.sf(np.abs(z)), 1e-300))
+        assert bool(np.median(np.abs(implied - lp)) < 1e-4) is close
+
+
+def test_a_gwas_vcf_source_is_checked_through_its_lp(tmp_path: Path):
+    """A GWAS-VCF carries its p-value as LP (= -log10 p): `build-dense-vcf` reads it and
+    measures each Analysis, never stamping `no_source_p_value` on a source with one."""
+    row = _rows(_vcf_build(tmp_path, study1={}))["study1"]
+    assert (row["effect_consistency"], row["effect_consistency_reason"]) == ("passed", "")
+    assert row["effect_consistency_n"] == str(N_ROWS)
+    # LP is written to 6 significant digits, so |Delta| is a rounding error.
+    assert float(row["effect_consistency_median_abs_delta"]) < 1e-4
+
+
+def test_an_odds_ratio_in_a_gwas_vcf_es_refuses_the_build(tmp_path: Path):
+    with pytest.raises(EffectConsistencyError, match="bad: refused by median_abs_delta"):
+        _vcf_build(tmp_path, good={}, bad={"odds_ratio_in_es": True})
+
+
+def test_a_gwas_vcf_without_lp_is_stamped_skipped_without_being_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """No LP in the header: nothing to compare, so the check records why and reads no
+    record of the source for it."""
+    from opengwasdb.build import effect_consistency
+
+    def _unread(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the check read a source whose format carries no p-value")
+
+    monkeypatch.setattr(effect_consistency, "open_source", _unread)
+    row = _rows(_vcf_build(tmp_path, study1={"with_lp": False}))["study1"]
     assert (row["effect_consistency"], row["effect_consistency_reason"]) == (
         "skipped", "no_source_p_value",
     )
+
+
+def test_which_sources_can_carry_a_p_value_is_decided_without_reading_one(tmp_path: Path):
+    """`carries_p_value`: the formats with no p-value column at all, a GWAS-VCF by its
+    header's LP, a Column Map by whether it maps `p_value`."""
+    import dataclasses
+
+    from opengwasdb.readers.column_map import load_column_map
+    from opengwasdb.readers.registry import SourceSpec, carries_p_value
+
+    def spec(capability: str, path: Path) -> SourceSpec:
+        return SourceSpec("a", str(path), capability, "hg38", StoredEffectScale.SD)
+
+    with_lp = _vcf(tmp_path / "lp.vcf")
+    without_lp = _vcf(tmp_path / "no_lp.vcf", with_lp=False)
+    assert carries_p_value(spec("opengwasdb.gwas-vcf", with_lp))
+    assert not carries_p_value(spec("opengwasdb.gwas-vcf", without_lp))
+    assert not carries_p_value(spec("opengwasdb.association-tsv", tmp_path / "x.tsv"))
+    assert carries_p_value(spec(_SSF, tmp_path / "x.tsv.gz"))
+    mapped = load_column_map("gwas-ssf")
+    unmapped = dataclasses.replace(
+        mapped,
+        optional_columns={k: v for k, v in mapped.optional_columns.items() if k != "p_value"},
+    )
+    for column_map, expected in ((mapped, True), (unmapped, False)):
+        source = SourceSpec(
+            "a", str(tmp_path / "x.tsv.gz"), "opengwasdb.column-map", "hg38",
+            StoredEffectScale.SD, column_map,
+        )
+        assert carries_p_value(source) is expected
+
+
+#: Each builder's first phase after the check: a build reaching it has routed nothing yet.
+_FIRST_EXPENSIVE_PHASE = {
+    "hybrid": ("opengwasdb.layouts.hybrid.build", "_prepare_build"),
+    "dense": ("opengwasdb.layouts.dense.build_vcf", "_prepare_axis"),
+    "ragged": ("opengwasdb.layouts.ragged.build_ssf", "_ingest_with_trait_positions"),
+}
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_a_refused_analysis_stops_the_build_before_it_routes_anything(
+    tmp_path: Path, layout: str, monkeypatch: pytest.MonkeyPatch
+):
+    """The check reads its own prefix of each source, so it runs first: a build that is
+    going to refuse does so before its hours of lifting and routing."""
+    import importlib
+
+    module, phase = _FIRST_EXPENSIVE_PHASE[layout]
+
+    def _routed(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(f"{phase} ran before the effect-consistency check refused")
+
+    monkeypatch.setattr(importlib.import_module(module), phase, _routed)
+    sources = _sources(tmp_path, good={}, bad={"odds_ratio_in_beta": True})
+    with pytest.raises(EffectConsistencyError, match="bad: refused by median_abs_delta"):
+        _build(layout, tmp_path, sources)
+
+
+def test_a_ragged_ssf_build_checks_its_sources_n_workers_at_a_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from opengwasdb.layouts.ragged import build_ssf
+
+    asked: list[int] = []
+    check = build_ssf.verify_effect_consistency
+
+    def _counted(sources: Sequence[ConsistencySource], **kwargs: Any) -> EffectConsistencyReport:
+        asked.append(kwargs["n_workers"])
+        return check(sources, **kwargs)
+
+    monkeypatch.setattr(build_ssf, "verify_effect_consistency", _counted)
+    sources = _sources(tmp_path, good1={}, good2={})
+    build_ragged_from_ssf(
+        _ragged_manifest(tmp_path, sources), tmp_path, tmp_path / "r.opengwasdb", store_id="ec",
+        release_id="r1", association_coverage="cis_and_signals", n_workers=2,
+    )
+    assert asked == [2]
+
+
+def test_an_mr_mega_analysis_is_refused_in_the_resolver_s_words(tmp_path: Path):
+    """One refusal text for MR-MEGA, the resolver's and every build's (issue #371)."""
+    sources = _sources(tmp_path, good={}, meta={})
+    with pytest.raises(EffectConsistencyError) as refused:
+        _build("hybrid", tmp_path, sources, declared={"meta": "mr_mega"})
+    assert (
+        "meta: refused by p_value_test_mr_mega -- p_value_test is mr_mega: MR-MEGA divides "
+        "each effect by a standard error scaled by its residual mean square, so beta/se is "
+        "a t-statistic on (cohorts - 2) degrees of freedom, not a z-score"
+    ) in str(refused.value)
 
 
 def test_a_declared_joint_test_skips_the_check_that_would_refuse_it(tmp_path: Path):
@@ -238,20 +395,30 @@ def test_a_general_dense_build_stamps_every_analysis_skipped(tmp_path: Path):
 _EVIDENCE, _UNCHECKED = "effect_consistency.evidence", "effect_consistency.unchecked"
 
 
-def _ragged_store(tmp_path: Path) -> Path:
-    return _build("ragged", tmp_path, _sources(tmp_path, good={}, no_p={"with_p": False}))
+def _ragged_store(tmp_path: Path, **kinds: dict[str, bool]) -> Path:
+    sources = _sources(tmp_path, **(kinds or {"good": {}, "no_p": {"with_p": False}}))
+    return _build("ragged", tmp_path, sources)
 
 
-def _judged(store: Path) -> tuple[list[str], list[str]]:
-    result = validate_store(store, rules=[_EVIDENCE, _UNCHECKED])
-    return (
-        [f.message for f in result.of(_EVIDENCE) if f.severity.value == "error"],
-        [f.message for f in result.of(_UNCHECKED) if f.severity.value == "warning"],
+def _drop_columns(store: Path, dropped: tuple[str, ...]) -> None:
+    """Rewrite the store's `analyses.tsv` without `dropped`, every other cell as it was."""
+    table = read_analyses(store / "analyses.tsv")
+    assert set(dropped) <= set(table.fieldnames)
+    kept = tuple(c for c in table.fieldnames if c not in dropped)
+    write_analyses(
+        store / "analyses.tsv",
+        AnalysesTable(kept, tuple({c: row[c] for c in kept} for row in table.rows)),
     )
 
 
+def _warned(result: ValidationResult, rule: str) -> list[str]:
+    return [f.message for f in result.of(rule) if f.severity is Severity.WARNING]
+
+
 def test_a_built_store_carries_evidence_validation_accepts(tmp_path: Path):
-    assert _judged(_ragged_store(tmp_path)) == ([], [])
+    result = validate_store(_ragged_store(tmp_path))
+    assert result.failed() == set(), result.errors
+    assert result.of(_EVIDENCE) == [] and result.of(_UNCHECKED) == []
 
 
 @pytest.mark.parametrize(
@@ -266,8 +433,7 @@ def test_a_built_store_carries_evidence_validation_accepts(tmp_path: Path):
           "effect_consistency_n": ""},
          "skipped effect_consistency with reason 'felt_like_it'"),
         ({"effect_consistency": ""},
-         "records effect_consistency_median_abs_delta, effect_consistency_median_delta, "
-         "effect_consistency_n but no effect_consistency outcome"),
+         "1 Analysis/Analyses (first 'good') carry a blank effect_consistency"),
     ],
 )
 def test_evidence_that_says_nothing_true_is_refused(
@@ -278,24 +444,49 @@ def test_evidence_that_says_nothing_true_is_refused(
     assert rows[0]["analysis_id"] == "good" and rows[0]["effect_consistency"] == "passed"
     doctored = {column: [value, rows[1][column]] for column, value in cells.items()}
     write_analysis_columns(store / "analyses.tsv", doctored)
-    errors, _ = _judged(store)
-    assert len(errors) == 1 and expected in errors[0]
+    result = validate_store(store)
+    assert result.failed() == {_EVIDENCE}, result.errors
+    [error] = [f.message for f in result.of(_EVIDENCE)]
+    assert expected in error
 
 
-def test_an_analysis_with_no_outcome_is_warned_unchecked(tmp_path: Path):
-    """A Store built before #510: honestly blank, and reported as such."""
+def test_a_release_with_the_columns_and_no_outcome_fails(tmp_path: Path):
+    """A build since #510 writes the columns; one that stamped nothing in them shipped a
+    blank, which reads as unchecked and is not: it fails, as a blank `eaf_orientation`
+    does."""
     store = _ragged_store(tmp_path)
     write_analysis_columns(
-        store / "analyses.tsv", {column: ["", ""] for column in (
-            "effect_consistency", "effect_consistency_reason",
-            "effect_consistency_median_abs_delta", "effect_consistency_median_delta",
-            "effect_consistency_n",
-        )},
+        store / "analyses.tsv", {column: ["", ""] for column in EFFECT_CONSISTENCY_COLUMNS}
     )
-    errors, warnings = _judged(store)
-    assert errors == []
-    assert len(warnings) == 1
-    assert warnings[0].startswith("2 Analysis/Analyses (first 'good', 'no_p') carry no")
+    assert set(EFFECT_CONSISTENCY_COLUMNS) <= set(read_analyses(store / "analyses.tsv").fieldnames)
+    result = validate_store(store)
+    assert result.failed() == {_EVIDENCE}, result.errors
+    [error] = [f.message for f in result.of(_EVIDENCE)]
+    assert error.startswith("2 Analysis/Analyses (first 'good', 'no_p') carry a blank")
+    assert _warned(result, _UNCHECKED) == []
+
+
+def test_a_release_with_some_of_the_columns_fails(tmp_path: Path):
+    """A build writes all five or, before #510, none: a partial set is neither."""
+    store = _ragged_store(tmp_path, good={}, also_good={})
+    _drop_columns(store, ("effect_consistency_reason",))
+    result = validate_store(store)
+    assert result.failed() == {_EVIDENCE}, result.errors
+    [error] = [f.message for f in result.of(_EVIDENCE)]
+    assert "but not effect_consistency_reason" in error
+
+
+def test_a_release_with_none_of_the_columns_is_warned_built_before_the_check(tmp_path: Path):
+    """A release built before #510 has none of the columns: honestly unchecked, a
+    warning, never an error."""
+    store = _ragged_store(tmp_path)
+    _drop_columns(store, EFFECT_CONSISTENCY_COLUMNS)
+    result = validate_store(store)
+    assert result.failed() == set(), result.errors
+    [warning] = _warned(result, _UNCHECKED)
+    assert warning.startswith(
+        "analyses.tsv has none of the effect-consistency columns, so none of its 2 Analyses"
+    )
 
 
 # --- a resumed Hybrid build ---

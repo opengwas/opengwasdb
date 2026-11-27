@@ -229,22 +229,23 @@ class Target:
         """The rules the release this target belongs to records as deviations of a
         `--convert-legacy` conversion (`provenance.converted_from.deviations`, #492), each
         with the words its downgraded finding carries; none for any other release."""
-        release = self._release()
+        release = self.outer_release()
         return release.remember("converted_deviations", lambda: _converted_deviations(release))
 
     def converted_count(self, key: str) -> int | None:
         """A count the release this target belongs to records in
         `provenance.converted_from` under `key` (`lifted_contig_unjudged`, #504), or None
         where it records no integer there, or is not a converted release."""
-        release = self._release()
+        release = self.outer_release()
         if release._store is None:
             return None
         record = release.store.manifest.provenance.get("converted_from")
         count = record.get(key) if isinstance(record, dict) else None
         return count if isinstance(count, int) and not isinstance(count, bool) else None
 
-    def _release(self) -> Target:
-        """The release this target belongs to: itself, or its outermost parent."""
+    def outer_release(self) -> Target:
+        """The release this target belongs to: itself, or its outermost parent -- a
+        Hybrid's own release for its Dense Component's targets."""
         release = self
         while release.parent is not None:
             release = release.parent

@@ -1084,8 +1084,8 @@ def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, 
         def __init__(self, _command, *, stdout, stderr, text):
             del stdout, stderr, text
             self.stdout = _TrackedOutput(
-                "1\t1000\t.\tC\tA\t1\t0.2\t0.1\t0.3\n"
-                "1\t1001\t.\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1000\t.\tC\tA\t1\t0.2\t0.1\t0.3\t.\n"
+                "1\t1001\t.\tC\tA\t1\t0.2\t0.1\t0.3\t.\n"
             )
 
         def poll(self):

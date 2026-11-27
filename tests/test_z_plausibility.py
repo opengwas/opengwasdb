@@ -107,16 +107,18 @@ def test_the_fixture_scans_are_what_they_are_said_to_be():
 
 def test_a_store_holding_an_inflated_analysis_fails_naming_it(tmp_path: Path):
     store = _store(tmp_path, clean=_NULL, inflated=_INFLATED)
-    findings = validate_store(store, rules=[zp.RULE]).of(zp.RULE)
-    assert [f.severity for f in findings] == [Severity.ERROR]
-    message = findings[0].message
+    result = validate_store(store)
+    assert result.failed() == {zp.RULE}, result.errors
+    [message] = [f.message for f in result.of(zp.RULE)]
     assert "'inflated': 100.0% of 1,200 observed associations at 5e-8" in message
     assert "'clean'" not in message
 
 
 def test_a_clean_store_passes(tmp_path: Path):
     store = _store(tmp_path, clean=_NULL, also_clean=-_NULL)
-    assert validate_store(store, rules=[zp.RULE]).of(zp.RULE) == []
+    result = validate_store(store)
+    assert result.failed() == set(), result.errors
+    assert result.of(zp.RULE) == []
 
 
 #: The Hybrid case: 999 on-panel rows, every one at |z| 8 -- a Dense part under
@@ -151,9 +153,9 @@ def test_the_split_fixture_passes_each_component_and_fails_summed():
 
 def test_a_hybrid_analysis_is_judged_on_both_components_summed(tmp_path: Path):
     store = _hybrid_store(tmp_path, split=_SPLIT, clean=_SPLIT_CLEAN)
-    findings = validate_store(store, rules=[zp.RULE]).of(zp.RULE)
-    assert [f.severity for f in findings] == [Severity.ERROR]
-    message = findings[0].message
+    result = validate_store(store)
+    assert result.failed() == {zp.RULE}, result.errors
+    [message] = [f.message for f in result.of(zp.RULE)]
     assert "in data.zarr/ragged and dense/data.zarr" in message
     assert "'split': 52.0% of 2,499 observed associations at 5e-8" in message
     assert "'clean'" not in message
@@ -184,17 +186,20 @@ def test_the_share_fixtures_are_what_they_are_said_to_be():
 
 def test_an_analysis_mostly_at_5e8_fails_on_that_share_alone(tmp_path: Path):
     store = _store(tmp_path, clean=_NULL, mostly=_MOSTLY_GENOME_WIDE)
-    findings = validate_store(store, rules=[zp.RULE]).of(zp.RULE)
-    assert [f.severity for f in findings] == [Severity.ERROR]
-    assert "'mostly': 35.0% of 1,200 observed associations at 5e-8" in findings[0].message
-    assert "|z| 3" not in findings[0].message
+    result = validate_store(store)
+    assert result.failed() == {zp.RULE}, result.errors
+    [message] = [f.message for f in result.of(zp.RULE)]
+    assert "'mostly': 35.0% of 1,200 observed associations at 5e-8" in message
+    assert "|z| 3" not in message
 
 
 def test_a_threshold_published_source_with_every_z_above_three_passes(tmp_path: Path):
     """The |z| > 3 share flagged GCST90444395 and GCST90271757, sound sources published
     only below a p threshold; the rule judges the share at 5e-8 alone (#510)."""
     store = _store(tmp_path, clean=_NULL, threshold=_THRESHOLD_PUBLISHED)
-    assert validate_store(store, rules=[zp.RULE]).of(zp.RULE) == []
+    result = validate_store(store)
+    assert result.failed() == set(), result.errors
+    assert result.of(zp.RULE) == []
 
 
 def test_a_release_before_the_current_builders_is_warned_not_failed(tmp_path: Path):

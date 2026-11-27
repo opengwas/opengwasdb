@@ -27,7 +27,12 @@ from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, ColumnMap
 from opengwasdb.readers.column_map_reader import ColumnMapReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
+from opengwasdb.readers.gwas_vcf import (
+    GWAS_VCF_CAPABILITY,
+    GwasVcfReader,
+    declares_p_value,
+    load_liftover,
+)
 from opengwasdb.readers.interface import ImputationScoreDeclaration, SourceReader
 
 if TYPE_CHECKING:
@@ -265,6 +270,28 @@ def open_source(
         liftover=liftover,
         probe_id=spec.probe_id,
     )
+
+
+#: The capabilities whose Source Format has no p-value column at all.
+_NO_P_VALUE = frozenset({ASSOCIATION_TSV_CAPABILITY, BESD_CAPABILITY})
+
+
+def carries_p_value(spec: SourceSpec) -> bool:
+    """Whether an Analysis's source can carry its own p-value, decided without
+    reading a record: the effect-consistency check reads a source that can, and
+    records one that cannot as `no_source_p_value` unread (#510, ADR 0069).
+
+    A BESD file set and an association TSV have no p-value column; a GWAS-VCF
+    carries one where its header declares `LP`; a Column Map, where it maps
+    `p_value`. Every other format's reader reads its p-value column.
+    """
+    if spec.capability in _NO_P_VALUE:
+        return False
+    if spec.capability == GWAS_VCF_CAPABILITY:
+        return declares_p_value(spec.path)
+    if spec.column_map is not None:
+        return "p_value" in spec.column_map.field_spellings()
+    return True
 
 
 def lifting_capabilities() -> frozenset[str]:

@@ -58,6 +58,7 @@ import numpy as np
 from scipy.stats import norm
 
 from opengwasdb.admission import AdmissionCounts, AnalysisRules, SourceRows, counting_gate
+from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
 from opengwasdb.build.hash_sample import HashSample
 from opengwasdb.build.ordered_pool import fork_each
 from opengwasdb.build.phenotype_sd import DEFAULT_EVIDENCE_SAMPLE
@@ -65,8 +66,12 @@ from opengwasdb.encoding.timing import log_phase
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import EffectConsistencyOutcome
 from opengwasdb.model.manifest_columns import manifest_column
-from opengwasdb.model.p_value_test import P_VALUE_TEST_COLUMN, PValueTest
-from opengwasdb.readers.registry import SourceSpec, open_source
+from opengwasdb.model.p_value_test import (
+    P_VALUE_TEST_COLUMN,
+    PValueTest,
+    parse_p_value_test,
+)
+from opengwasdb.readers.registry import SourceSpec, carries_p_value, open_source
 from opengwasdb.readers.tabular import MetricsChunk
 
 log = logging.getLogger(__name__)
@@ -87,10 +92,13 @@ __all__ = [
     "EffectConsistencyPolicy",
     "EffectConsistencyReport",
     "admit_block",
+    "apply_build_evidence",
     "apply_consistency_evidence",
     "check_effect_consistency",
     "check_sample_bound",
     "declared_p_value_tests",
+    "declared_refusal",
+    "declared_skip",
     "enforce_effect_consistency",
     "log10_two_sided_p",
     "refusal_text",
@@ -119,6 +127,16 @@ DEFAULT_BUILD_SCAN_ROWS = 1_000_000
 #: `refused_by` for an Analysis whose declared p-value test is MR-MEGA: refused
 #: unread, as the resolver refuses it (issue #371).
 MR_MEGA_REFUSAL = "p_value_test_mr_mega"
+
+#: Why an MR-MEGA Analysis is refused, in the words a Resolution Record and a build
+#: both use (`declared_refusal`).
+_MR_MEGA_REFUSAL_TEXT = (
+    "p_value_test is mr_mega: MR-MEGA divides each effect by a standard error "
+    "scaled by its residual mean square, so beta/se is a t-statistic on "
+    "(cohorts - 2) degrees of freedom, not a z-score, and its p-value is a "
+    "separate 2-df test. A Store keeps z and answers with the p of z, so the "
+    "Analysis is refused (issue #371)."
+)
 
 _LN2 = math.log(2.0)
 _LN10 = math.log(10.0)
@@ -298,6 +316,28 @@ def refusal_text(measured: EffectConsistency, policy: EffectConsistencyPolicy) -
     )
 
 
+def declared_refusal(p_value_test: PValueTest | None) -> str:
+    """The controlled failure for an Analysis whose declaration refuses it, or "".
+
+    MR-MEGA scales each SE by the residual mean square, so beta/se is a
+    t-statistic on (cohorts - 2) df, not a z, and the Store would answer with a
+    p the source never published (issue #371: GCST90833021 returns z -1054 at
+    source p 0.81). No scan can make it a z, so none is made: the resolver and
+    every build refuse it unread.
+    """
+    return _MR_MEGA_REFUSAL_TEXT if p_value_test is PValueTest.MR_MEGA else ""
+
+
+def declared_skip(p_value_test: PValueTest | None) -> ConsistencySkip | None:
+    """The skip an Analysis's declaration decides, or None where it is checked.
+
+    A joint 2-df p tests the stored coefficient and a main effect together, so it
+    cannot witness beta/se (issue #371): the check is skipped, recorded as
+    `joint_test_p_value`. The resolver and every build skip it the same way.
+    """
+    return ConsistencySkip.JOINT_TEST_P_VALUE if p_value_test is PValueTest.JOINT_2DF else None
+
+
 def admit_block(observed: MetricsChunk, rules: AnalysisRules) -> tuple[np.ndarray, AdmissionCounts]:
     """One block's keep mask and counts, by Association Admission, in the builder's orientation.
 
@@ -343,14 +383,14 @@ def declared_p_value_tests(manifest_path: str | Path) -> dict[str, PValueTest | 
     declared: dict[str, PValueTest | None] = {}
     for row in rows:
         analysis_id = row.get(id_column, "")
-        raw = (row.get(P_VALUE_TEST_COLUMN) or "").strip()
+        if not (row.get(P_VALUE_TEST_COLUMN) or "").strip():
+            declared[analysis_id] = None
+            continue
         try:
-            declared[analysis_id] = PValueTest(raw) if raw else None
+            declared[analysis_id] = parse_p_value_test(row)
         except ValueError as exc:
-            allowed = ", ".join(test.value for test in PValueTest)
             raise ValueError(
-                f"manifest {manifest_path}: analysis {analysis_id!r} has invalid "
-                f"{P_VALUE_TEST_COLUMN} {raw!r}; expected one of {allowed}, or blank"
+                f"manifest {manifest_path}: analysis {analysis_id!r}: {exc}, or blank"
             ) from exc
     return declared
 
@@ -415,21 +455,14 @@ class ConsistencyEvidence:
 
     def payload(self) -> dict[str, Any]:
         """A JSON form a resumed build reloads (`from_payload`)."""
-        m = self.measured
+        # On use: the Resolution Record's writer imports this module.
+        from opengwasdb.build.resolve_manifest import effect_consistency_to_dict
+
         return {
             "analysis_id": self.analysis_id,
             "outcome": self.outcome.value,
             "reason": self.reason,
-            "measured": None if m is None else {
-                "n_rows_considered": m.n_rows_considered,
-                "n_rows_compared": m.n_rows_compared,
-                "sampled": m.sampled,
-                "median_abs_delta": m.median_abs_delta,
-                "median_delta": m.median_delta,
-                "skip_reason": None if m.skip_reason is None else m.skip_reason.value,
-                "refused": m.refused,
-                "refused_by": m.refused_by,
-            },
+            "measured": effect_consistency_to_dict(self.measured),
         }
 
     @classmethod
@@ -492,16 +525,16 @@ def measure_source(
     The rows are the resolver's: its metrics projection, admitted by the
     Analysis's own INFO and MAF rules, sampled bottom-`k` by ALID hash.
     """
-    declared = source.p_value_test
-    if declared is PValueTest.MR_MEGA:
+    if declared_refusal(source.p_value_test):
         return ConsistencyEvidence(
             source.analysis_id, EffectConsistencyOutcome.REFUSED, MR_MEGA_REFUSAL, None
         )
     sample = ConsistencySample(k)
-    if declared is PValueTest.JOINT_2DF:
-        return ConsistencyEvidence.of(
-            source.analysis_id, sample.skipped(ConsistencySkip.JOINT_TEST_P_VALUE)
-        )
+    skip = declared_skip(source.p_value_test)
+    if skip is None and not carries_p_value(source.spec):
+        skip = ConsistencySkip.NO_SOURCE_P_VALUE
+    if skip is not None:
+        return ConsistencyEvidence.of(source.analysis_id, sample.skipped(skip))
     reader = open_source(
         source.spec, imputation_score_declaration=source.rules.info.imputation_score_declaration
     )
@@ -582,14 +615,12 @@ def enforce_effect_consistency(report: EffectConsistencyReport) -> None:
 
 
 def _refusal_line(evidence: ConsistencyEvidence, policy: EffectConsistencyPolicy) -> str:
-    if evidence.measured is None:
-        return (
-            f"{evidence.analysis_id}: refused by {evidence.reason} -- MR-MEGA's beta/se is a "
-            "t-statistic, not a z (issue #371)"
-        )
-    return f"{evidence.analysis_id}: refused by {evidence.reason} -- " + refusal_text(
-        evidence.measured, policy
+    why = (
+        declared_refusal(PValueTest.MR_MEGA)
+        if evidence.measured is None
+        else refusal_text(evidence.measured, policy)
     )
+    return f"{evidence.analysis_id}: refused by {evidence.reason} -- {why}"
 
 
 def verify_effect_consistency(
@@ -658,3 +689,16 @@ def apply_consistency_evidence(
             )
         )
     return stamped
+
+
+def apply_build_evidence(
+    analyses: Sequence[Analysis],
+    eaf_report: EafOrientationReport,
+    consistency: EffectConsistencyReport,
+) -> list[Analysis]:
+    """Stamp both checks a build ran: EAF orientation, then effect consistency.
+
+    The one place a builder that ran both stamps them, so no builder can stamp one
+    and forget the other (`apply_orientation_evidence`, `apply_consistency_evidence`).
+    """
+    return apply_consistency_evidence(apply_orientation_evidence(analyses, eaf_report), consistency)

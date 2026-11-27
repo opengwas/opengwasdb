@@ -60,7 +60,8 @@ reason, when:
 - `no_source_p_value` — no admitted row carries a usable source p-value: no
   p-value column, or none in `(0, 1]`. GWAS-VCF and BESD are in this class for
   now; reading VCF's `LP` (−log10 p) is deferred, and until it lands a VCF source
-  is not checked. A column that is entirely blank is the same fact as no column.
+  is not checked (it landed with #510: see the addendum of 27 Nov 2026). A column
+  that is entirely blank is the same fact as no column.
 - `all_se_from_p_value` — every row with a source p-value had its standard error
   derived from it.
 - `too_few_rows` — fewer than the minimum (50) rows *compared*, that is, in the
@@ -178,7 +179,8 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
 - **GWAS-VCF and BESD are not checked yet.** Their records say
   `skip_reason = no_source_p_value`. Reading VCF `LP` is deferred, as is any
   check for BESD, whose per-probe statistics carry no p-value in the metrics
-  projection.
+  projection. (Superseded for GWAS-VCF by the addendum of 27 Nov 2026: `LP` is
+  read, and a VCF that declares it is checked.)
 - **A source whose reported standard error is not the effect's** (a standard
   error from a different model than the effect) is refused too when it moves the
   implied p by an order of magnitude on the typical row. That is intended.
@@ -305,14 +307,25 @@ the build stops before writing, and the registry excludes it by that reason.
   file's. A read costs about 5 s per GWAS-SSF source (4.7 s and 6.3 s measured at load
   60), run `n_workers` at a time: about 11 minutes for OGS-00011's 3,245 Analyses at 24
   workers, beside a build of hours. Routing carries no p-value, so the check is its own
-  bounded read rather than a passenger on Pass 2.
-- *Where.* `build-hybrid` (with its EAF phase, recorded in the checkpoint as
-  `effect_consistency.json`), `build-dense-vcf` (before Pass 2) and `build-ragged-ssf`
-  (before anything is written). A Hybrid checkpoint written before this change holds no
-  report, and its resume measures one. `build-ragged-besd` and `build-dense` stamp every
-  Analysis `skipped: no_source_p_value` without reading, because BESD's metrics and the
-  association TSV format carry no p-value. GWAS-VCF sources are read and come out the
-  same way, since the readers read no `LP`.
+  bounded read rather than a passenger on Pass 2. Because it is its own read, it runs
+  first.
+- *Where, and when.* Each builder's first read of its sources, before it lifts,
+  partitions or routes anything: `build-hybrid` after reading its manifest and before
+  staging (recorded in the checkpoint as `effect_consistency.json`, which a resume
+  reloads; a checkpoint written before this change holds none, and its resume measures
+  one), `build-dense-vcf` before Pass 1 and the axis, and `build-ragged-ssf` after its
+  manifest and before the ingest, with `n_workers` sources at a time (a new
+  `--n-workers`, since the ingest is serial). A refused Analysis stops the build before
+  hours of routing, not after.
+- *Which sources are read.* One whose format can carry a p-value
+  (`readers.registry.carries_p_value`): a GWAS-SSF's `p_value`, a Column Map's mapped
+  `p_value`, FinnGen's `pval`, and a GWAS-VCF's `FORMAT/LP`, read as `p = 10^-LP` by the
+  GWAS-VCF reader's metric blocks. One that cannot is stamped `skipped:
+  no_source_p_value` unread: BESD, the association TSV (`build-ragged-besd` and
+  `build-dense` stamp every Analysis so), a GWAS-VCF whose header declares no `LP`, and a
+  Column Map that maps no `p_value`. The resolver reads the same metric blocks, so
+  `resolve-analyses` now checks GWAS-VCF sources too; a record resolved before keeps its
+  `no_source_p_value` until it is recomputed.
 - *The declaration.* A build manifest may carry `p_value_test` (ADR 0085). `joint_2df`
   skips the check (`joint_test_p_value`) and `mr_mega` is refused unread, as in the
   resolver. Unlike the resolver's, the column is optional: an Analysis that declares
@@ -321,10 +334,14 @@ the build stops before writing, and the registry excludes it by that reason.
 - *What is recorded.* `effect_consistency` (`passed` or `skipped`),
   `effect_consistency_reason`, both medians and `effect_consistency_n`, in `analyses.tsv`
   (spec §7a, §9.2). No build writes `refused`. `format_version` does not move: the
-  columns are additive, and a blank outcome is a Store built before this change.
-  `effect_consistency.evidence` fails a recorded `refused` and evidence that contradicts
-  itself. `effect_consistency.unchecked` warns, once per release, on the Analyses with no
-  outcome.
+  columns are additive. Their presence is the marker of a build since this change, as
+  the completion provenance fields are #327's: every build writes all five on every row,
+  so `effect_consistency.evidence` fails a release with some of them, a blank outcome
+  under them, a recorded `refused`, and evidence that contradicts itself; a release with
+  none of them was built before and `effect_consistency.unchecked` warns, once. A
+  rewrite of such a release (a completion, `--convert-legacy`) keeps the columns absent
+  (`Analysis.effect_consistency` is `None` when read from a table without them), so it
+  stays honestly pre-check rather than failing on blanks it never had.
 
 **Measured on real sources.** Through the build's own path (`check_effect_consistency`,
 first 1,000,000 rows, 12 workers, load 140), all twelve mis-scaled sources (the eleven
@@ -333,6 +350,10 @@ pass, with median |Δ| ≤ 0.123: 20 random OGS-00011 sources and the six height
 the most 5e-8 hits in the published Stores. The 38 sources took 27.4 s
 (`scratch/510/build_check_real.jsonl`). Three more OGS-00011 sources, published only
 below p = 0.007 or p = 0.00067, pass in a second run with median |Δ| ≤ 0.0045.
+Ten ukb-b GWAS-VCFs (OGS-00009's sources: ukb-b-10001, ukb-b-10002 and eight at random),
+read through `LP`, all pass with median |Δ| 0.00197 to 0.00203 over 20,000 compared rows
+each, the residue of `LP`'s six significant figures; the ten took 26 s
+(`scratch/510/fix1/ukbb_vcf_check*.jsonl`).
 
 **Decision 2: a stored-z audit of Stores already built.** A published Store keeps no
 source p-value, so this check cannot be repeated on one. It keeps every z, and in a
