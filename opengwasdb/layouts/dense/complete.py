@@ -446,6 +446,8 @@ class _CompletedArrays:
     n_missing_off_panel_total: int
     n_missing_imputation_failed: int
     total_imputed: int
+    #: Per Analysis, the cells the imputed mask holds (#362).
+    imputed_by_analysis: np.ndarray
     #: What the completion left out for an SE above `float16`'s range, per
     #: Analysis: source cells it did not carry, and fills it left missing (#338).
     left_out: LeftOut
@@ -836,6 +838,7 @@ def _completed_arrays(
         n_missing_off_panel_total=n_missing_off_panel_total,
         n_missing_imputation_failed=n_missing_imputation_failed,
         total_imputed=total_imputed,
+        imputed_by_analysis=tallies.imputed_by_analysis,
         left_out=left_out,
     )
 
@@ -955,7 +958,12 @@ def _completed_analysis_rows(
     carried = carried_counts(axis.src_analyses, source_format_version, source=source)
     print("Writing analyses.tsv...")
     with staged.index_connection() as dst_db:
-        quality_rollup = completion_quality_rollup(dst_db, axis.n_analyses)
+        # The cells the mask holds, not the blocks' sum: a cell two blocks fill is
+        # one cell, and one they conflict on is none (#362).
+        quality_rollup = completion_quality_rollup(
+            dst_db, axis.n_analyses,
+            imputed=arrays.imputed_by_analysis, missing=arrays.n_missing_off_panel,
+        )
     return reset_top_hit_counts(arrays.left_out.recorded(
         [
             replace(
@@ -969,7 +977,7 @@ def _completed_analysis_rows(
                 eaf_scope=completed_eaf_scope(a, quality_rollup[i], arrays.eaf_reference_present),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=str(int(arrays.n_missing_off_panel[i])),
+                completion_n_missing_total=quality_rollup[i].n_missing_total,
             )
             for i, a in enumerate(axis.src_analyses)
         ],
@@ -1231,10 +1239,10 @@ def _band_bytes(n_analyses: int, band_rows: int) -> int:
     return _BAND_FIXED_BYTES + _BAND_BYTES_PER_CELL * n_analyses * band_rows
 
 
-#: What the parent holds of one band's outcome until it takes it: two counts a
-#: band per Analysis, and the band's table entries
-#: (`EXCEPTION_CELLS_PER_RESULT_BYTE`).
-_BAND_RESULT_BYTES_PER_ANALYSIS = 16
+#: What the parent holds of one band's outcome until it takes it: four `int64`
+#: counts a band per Analysis (off-panel missing, SE out of range, imputed out of
+#: range, imputed), and the band's table entries (`EXCEPTION_CELLS_PER_RESULT_BYTE`).
+_BAND_RESULT_BYTES_PER_ANALYSIS = 32
 
 
 def _band_result_bytes(n_analyses: int, band_rows: int) -> int:
@@ -1298,6 +1306,10 @@ class _BandOutcome:
     se_out_of_range: np.ndarray
     imputed_out_of_range: np.ndarray
     n_imputed: int
+    #: Per Analysis, the cells the band's imputed mask holds once its conflicted
+    #: cells are cleared: what `analyses.tsv` declares (#362), which the
+    #: `completion_quality` rows' sum is not where two blocks fill one cell.
+    imputed_by_analysis: np.ndarray
     n_missing_imputation_failed: int
     tables: SideTables
     #: The fill records at the cells two fills disagree on, none of them kept
@@ -1317,16 +1329,20 @@ def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
     n_missing_off_panel = np.zeros(plan.n_analyses, dtype=np.int64)
     _count_band_off_panel_missing(n_missing_off_panel, cells.z, plan.on_panel, r0, r1)
     assert cells.imputed is not None
-    n_imputed, dropped, n_conflicted = _apply_fill_shard_records(
+    imputed_by_analysis, dropped, n_conflicted = _apply_fill_shard_records(
         cells.z, cells.se, cells.imputed, fill_shard_path(plan.fill_shard_dir, band), r0,
         impute_mask=plan.impute_mask,
     )
     n_failed = _count_band_imputation_failed(cells.z, plan.on_panel, r0, r1)
-    codes, tables, left_out = _encode_band(plan, cells, r0)
+    codes, tables, left_out, left_out_off_panel = _encode_band(plan, cells, r0)
+    # An off-panel cell the encode leaves out is a cell the release holds no value at.
+    n_missing_off_panel += left_out_off_panel
     del cells
     _write_band(plan, codes, r0, r1)
     return _BandOutcome(
-        band, n_missing_off_panel, *left_out, n_imputed, n_failed, tables, dropped,
+        band, n_missing_off_panel, *left_out, int(imputed_by_analysis.sum()), imputed_by_analysis,
+        n_failed, tables,
+        dropped,
         n_conflicted,
     )
 
@@ -1418,12 +1434,12 @@ def _apply_fill_shard_records(
     r0: int,
     *,
     impute_mask: np.ndarray | None = None,
-) -> tuple[int, np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray, int]:
     """Stream one band's fill-shard records into its NaN-seeded z and SE bands.
 
     A record lands only in a cell the source left missing -- it never
     overwrites an observed value -- and fills z and SE together and marks the
-    cell imputed. Returns the count of cells filled, the records at cells two
+    cell imputed. Returns per Analysis the cells filled, the records at cells two
     fills disagree on, and how many cells those are.
 
     A cell two records fill is resolved by Association Admission's duplicate
@@ -1437,7 +1453,7 @@ def _apply_fill_shard_records(
     here disagree -- the disagreement that let ``completion_quality`` count
     cells the release did not hold -- so it is said, not silently re-filtered.
     """
-    filled = 0
+    filled = np.zeros(imputed_band.shape[1], dtype=np.int64)
     for records in iter_fill_records(shard_path):
         lr = records["row"] - r0
         ai = records["ai"]
@@ -1447,7 +1463,7 @@ def _apply_fill_shard_records(
                 f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
                 "checkpoint resolution and the one applied here disagree"
             )
-        filled += apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"])
+        apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"], filled)
     if imputed_band.max(initial=0) < CONFLICTED:
         return filled, _NO_FILLS, 0
     conflicted = imputed_band == CONFLICTED
@@ -1493,10 +1509,11 @@ def _band_planes(plan: _BandPlan) -> tuple[str, ...]:
 
 def _encode_band(
     plan: _BandPlan, cells: CellValues, r0: int
-) -> tuple[dict[str, np.ndarray], SideTables, tuple[np.ndarray, np.ndarray]]:
+) -> tuple[dict[str, np.ndarray], SideTables, tuple[np.ndarray, np.ndarray], np.ndarray]:
     """Judge and encode the band a step at a time: each plane's codes, the
-    band's side-table entries, and per Analysis the cells it left out for an SE
-    above `float16`'s range, and how many of those were flagged imputed.
+    band's side-table entries, per Analysis the cells it left out for an SE
+    above `float16`'s range and how many of those were flagged imputed, and how
+    many of those cells sit on off-panel rows.
 
     Each step is placed at its own rows, so a cell's code and its side-table
     entry are the ones a whole-band encode gives it.
@@ -1509,6 +1526,7 @@ def _encode_band(
     )
     se_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
     imputed_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
+    off_panel_left_out = np.zeros(plan.n_analyses, dtype=np.int64)
     for s0, s1 in plan.steps(n_rows):
         step = CellValues(
             cells.z[s0:s1],
@@ -1523,6 +1541,8 @@ def _encode_band(
         )
         se_out_of_range += encoded.storable.se_out_of_range
         imputed_out_of_range += encoded.storable.imputed_out_of_range
+        off = plan.on_panel[r0 + s0 : r0 + s1] == 0
+        off_panel_left_out += (~encoded.storable.stored[off]).sum(axis=0, dtype=np.int64)
         held = {"z": encoded.z, "se": encoded.se, "imputed": encoded.imputed, "eaf": encoded.eaf}
         for name in codes:
             codes[name][s0:s1] = held[name]
@@ -1533,7 +1553,7 @@ def _encode_band(
         ):
             builder.add(table.index, table.value)
     tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
-    return codes, tables, (se_out_of_range, imputed_out_of_range)
+    return codes, tables, (se_out_of_range, imputed_out_of_range), off_panel_left_out
 
 
 def _write_band(plan: _BandPlan, codes: dict[str, np.ndarray], r0: int, r1: int) -> None:
@@ -1550,6 +1570,7 @@ class _BandTallies:
     n_missing_off_panel: np.ndarray
     se_out_of_range: np.ndarray
     imputed_out_of_range: np.ndarray
+    imputed_by_analysis: np.ndarray
     total_imputed: int = 0
     n_missing_imputation_failed: int = 0
 
@@ -1557,6 +1578,7 @@ class _BandTallies:
         self.n_missing_off_panel += outcome.n_missing_off_panel
         self.se_out_of_range += outcome.se_out_of_range
         self.imputed_out_of_range += outcome.imputed_out_of_range
+        self.imputed_by_analysis += outcome.imputed_by_analysis
         self.total_imputed += outcome.n_imputed
         self.n_missing_imputation_failed += outcome.n_missing_imputation_failed
 
@@ -1686,6 +1708,7 @@ def _run_bands(
         n_missing_off_panel=np.zeros(plan.n_analyses, dtype=np.int64),
         se_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
         imputed_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
+        imputed_by_analysis=np.zeros(plan.n_analyses, dtype=np.int64),
     )
     tables = _BandTables()
     n_bands = -(-plan.n_variants // plan.band_rows)

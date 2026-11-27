@@ -173,7 +173,8 @@ def test_a_sequence_whose_metadata_denies_its_imputed_cells_fails(
 
     result = validate_store(store)
 
-    assert result.failed() == {"completion.declaration"}, result.errors
+    # The exact rule fails the same Analysis too: a total of 0 is not the mask's count (#362).
+    assert result.failed() == {"completion.declaration", "completion.imputed_total"}, result.errors
     (finding,) = result.of("completion.declaration")
     assert finding.message.startswith(
         f"analysis {row['analysis_id']!r} has "
@@ -201,10 +202,15 @@ def test_a_completed_analysis_whose_count_is_not_an_integer_fails(
 
     result = validate_store(store)
 
-    assert result.failed() == {"analyses.completion_declared"}, result.errors
+    # The exact rule reads no total it cannot parse either (#362).
+    assert result.failed() == {"analyses.completion_declared", "completion.imputed_total"}, (
+        result.errors
+    )
     assert result.errors == [
         f"analyses.tsv row {row['analysis_id']!r} has a non-integer "
-        "completion_n_imputed_total 'not-an-integer'"
+        "completion_n_imputed_total 'not-an-integer'",
+        f"analysis {row['analysis_id']!r} has completion_n_imputed_total='not-an-integer' "
+        "in comp.opengwasdb/analyses.tsv, which is not a non-negative integer",
     ]
 
 

@@ -32,8 +32,7 @@ favour of an estimate (issue #99).
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,8 +41,8 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
-from opengwasdb.completion.schema import completion_quality_rollup
+from opengwasdb.completion.reference_eaf import completed_eaf_scope
+from opengwasdb.completion.schema import CompletionQualityRollup
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
 from opengwasdb.encoding.association_codec import (
@@ -222,7 +221,7 @@ def complete_hybrid_store(
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow, ld, ancestry, n_workers)
+        axis = _remap_shared_axis(dense, overflow, src, n_workers)
         # Phase 3: shared variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -358,8 +357,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
 
 
 def _remap_shared_axis(
-    dense: _CompletedDense, overflow: _SourceOverflow, ld_dir: Path, ancestry: str,
-    n_workers: int,
+    dense: _CompletedDense, overflow: _SourceOverflow, src: Path, n_workers: int,
 ) -> _SharedAxis:
     """Fold panel crossovers into the completed Dense Component and rebuild
     the shared union axis (issue #99): an off-panel variant that became
@@ -379,8 +377,8 @@ def _remap_shared_axis(
         else np.empty(0, dtype=bool)
     )
     folded, left_out = _stored_crossovers(overflow, is_crossover)
-    _correct_crossover_quality(dense, overflow, overflow_alids, folded, ld_dir, ancestry)
-    n_reclaimed_imputed = _fold_panel_crossovers(
+    n_reclaimed_imputed = _publish_crossover_totals(dense, overflow, overflow_alids, folded, src)
+    _fold_panel_crossovers(
         dense.dir,
         dense.alid_to_row,
         overflow.offsets,
@@ -528,89 +526,77 @@ def _root_analyses(
     )
 
 
-def _correct_crossover_quality(
+def _publish_crossover_totals(
     dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray,
-    crossed: np.ndarray, ld_dir: Path, ancestry: str,
-) -> None:
-    """A real Overflow observation replaces a completion attempt, including its counts.
+    crossed: np.ndarray, src: Path,
+) -> int:
+    """A real Overflow observation replaces a completion attempt: the totals say so.
 
-    The Dense phase did not see the Overflow. Keeping its quality row unchanged
-    describes an imputed or missing cell the completed Hybrid no longer holds
-    (#307's completion.quality_counts rule). The panel is still available here,
-    so correct each owning block rather than guessing from its id later.
+    The Dense phase did not see the Overflow, so the totals it published still count
+    the imputed and missing cells the observation is about to overwrite. This takes
+    each off once, from the one read of the cells' status that precedes the fold, and
+    returns how many were imputed. The totals are the release's, the final mask's:
+    `analyses.tsv`'s imputed total, the manifest's `n_imputed` and
+    `n_missing_imputation_failed`, and `eaf_scope`, derived again from what remains
+    (spec §9). The `completion_quality` rows are left as completion wrote them: they
+    are each block's attempts, and an overwritten cell is one of them (#362; spec §12).
     """
     selected = np.flatnonzero(crossed)
     if not len(selected):
-        return
-    cells = _crossover_cells(dense, overflow, alids[selected], selected)
+        return 0
+    imputed, missing = _crossover_status(dense, overflow, alids[selected], selected)
     store = open_store(dense.dir)
-    with store.index_connection() as db:
-        for ai, block_id, filled, empty in _crossover_quality_deltas(cells, ld_dir, ancestry):
-            db.execute(
-                "UPDATE completion_quality SET n_imputed=n_imputed-?, n_missing=n_missing-? "
-                "WHERE analysis_index=? AND block_id=?",
-                (filled, empty, ai, block_id),
-            )
-        invalid = db.execute(
-            "SELECT COUNT(*) FROM completion_quality WHERE n_imputed<0 OR n_missing<0"
-        ).fetchone()[0]
-        if invalid:
-            raise HybridCompletionError("crossover correction would make quality counts negative")
-        rollup = completion_quality_rollup(db, overflow.n_analyses)
-        db.commit()
-    write_analyses_tsv(dense.dir, [
-        replace(a, completion_n_imputed_total=rollup[int(a.analysis_index)].n_imputed_total)
-        for a in _read_analyses(dense.dir)
-    ])
+    _rewrite_corrected_analyses(dense, src, imputed)
     provenance = dict(store.manifest.provenance)
+    completion = provenance["completion"]
+    n_imputed = int(imputed.sum())
     provenance["completion"] = {
-        **provenance["completion"],
-        "n_imputed": sum(int(r.n_imputed_total) for r in rollup.values()),
-        "n_missing_imputation_failed": sum(int(r.n_missing_total) for r in rollup.values()),
+        **completion,
+        "n_imputed": int(completion["n_imputed"]) - n_imputed,
+        "n_missing_imputation_failed": (
+            int(completion["n_missing_imputation_failed"]) - int(missing.sum())
+        ),
+        # What the crossover overwrote, which a block's quality row still counts as an
+        # attempt (spec §12): `completion.quality_counts` needs it to judge the row.
+        "crossover_overwritten": {
+            "n_imputed": imputed.tolist(), "n_missing": missing.tolist(),
+        },
     }
     StagedRelease(dense.dir).write_manifest(replace(store.manifest, provenance=provenance))
+    return n_imputed
 
 
-def _crossover_cells(
+def _rewrite_corrected_analyses(
+    dense: _CompletedDense, src: Path, reclaimed: np.ndarray
+) -> None:
+    """The Dense Component's `analyses.tsv` with each total less what the crossover
+    reclaimed, and `eaf_scope` derived from it as completion derives it."""
+    source = {int(a.analysis_index): a for a in read_analysis_records(src / "analyses.tsv")}
+    carries_reference = dense.encoding.eaf.reference
+    corrected = []
+    for a in _read_analyses(dense.dir):
+        ai = int(a.analysis_index)
+        total = int(a.completion_n_imputed_total) - int(reclaimed[ai])
+        scope = completed_eaf_scope(
+            source[ai], CompletionQualityRollup("", str(total), ""), carries_reference
+        )
+        corrected.append(replace(a, completion_n_imputed_total=str(total), eaf_scope=scope))
+    write_analyses_tsv(dense.dir, corrected)
+
+
+def _crossover_status(
     dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, selected: np.ndarray,
-) -> dict[str, list[tuple[int, int, int]]]:
-    """The Dense cells about to be replaced, by ALID and their previous status."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per Analysis, how many of the Dense cells about to be replaced are imputed, and how
+    many are missing: the one read of their status."""
     rows = np.asarray([dense.alid_to_row[alid] for alid in alids], dtype=np.int64)
     analyses = np.searchsorted(overflow.offsets[1:], selected, side="right")
     root = open_store(dense.dir).arrays(mode="r")
-    associations = DenseGridReader.open(root, dense.encoding).read(Cells.pairs(rows, analyses))
-    imputed = associations.status == Status.IMPUTED
-    missing = associations.status == Status.MISSING
-    cells: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
-    for alid, ai, filled, empty in zip(alids, analyses, imputed, missing, strict=True):
-        cells[str(alid)].append((int(ai), int(filled), int(empty)))
-    return cells
-
-
-def _crossover_quality_deltas(
-    cells: dict[str, list[tuple[int, int, int]]], ld_dir: Path, ancestry: str,
-) -> Iterator[tuple[int, str, int, int]]:
-    """Each block's own attempted crossovers, excluding ceded shared endpoints."""
-    for chromosome in sorted({alid.split(":", 1)[0] for alid in cells}):
-        blocks = list_all_blocks(ld_dir, ancestry, chromosome)
-        ceded = ceded_at_end(blocks)
-        for block in blocks:
-            owned = {alid for alid in block.alids if alid is not None}
-            owned -= ceded.get(block.block_id, frozenset())
-            for ai, (filled, empty) in _owned_crossover_counts(cells, owned).items():
-                yield ai, block.block_id, filled, empty
-
-
-def _owned_crossover_counts(
-    cells: dict[str, list[tuple[int, int, int]]], owned: set[str],
-) -> dict[int, tuple[int, int]]:
-    """Per Analysis, the former imputed and missing attempts a block must remove."""
-    counts: dict[int, tuple[int, int]] = {}
-    for alid in cells.keys() & owned:
-        for ai, filled, empty in cells[alid]:
-            old_filled, old_empty = counts.get(ai, (0, 0))
-            counts[ai] = old_filled + filled, old_empty + empty
-    return counts
+    status = DenseGridReader.open(root, dense.encoding).read(Cells.pairs(rows, analyses)).status
+    return (
+        np.bincount(analyses[status == Status.IMPUTED], minlength=overflow.n_analyses),
+        np.bincount(analyses[status == Status.MISSING], minlength=overflow.n_analyses),
+    )
 
 
 # ── Phase 3: shared tables + overflow rebuild ───────────────────────────────
@@ -810,7 +796,7 @@ def _fold_panel_crossovers(
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
     dense_encoding: StoreEncoding,
-) -> int:
+) -> None:
     """Write every crossover association's real observed value into the
     completed Dense Component at ``(dense_row, analysis)``, marked
     ``imputed=0``, in place of whatever dense completion computed there.
@@ -818,12 +804,12 @@ def _fold_panel_crossovers(
     ``is_crossover`` is a boolean mask over the flat source-overflow
     association array (same order/length as ``overflow_alids``/``src_z``/
     ``src_se``/``src_eaf``); ``offsets`` partitions that flat array by analysis, exactly
-    as the sequence's own ``offsets`` array does. Returns how many of the overwritten
-    cells were previously marked imputed, so the caller can correct the
-    reported imputed count -- see the module docstring (issue #99).
+    as the sequence's own ``offsets`` array does. The totals of what it overwrites are
+    `_publish_crossover_totals`', read before this writes -- see the module docstring
+    (issue #99).
     """
     if not is_crossover.any():
-        return 0
+        return
 
     n_analyses = len(offsets) - 1
     assoc_ai = np.repeat(np.arange(n_analyses), np.diff(offsets))
@@ -840,7 +826,6 @@ def _fold_panel_crossovers(
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = open_group_for_write(dense_dir / "data.zarr", "a")
-    n_reclaimed = int(np.asarray(root["imputed"].vindex[row_idx, col_idx]).sum())
     # One encode under the Dense Component's own plan, and every side table
     # rewritten with its plane. The crossed-over cell's EAF moves with its z/se
     # (ADR 0036): the fold writes one real observation, not two. It is coded
@@ -859,7 +844,6 @@ def _fold_panel_crossovers(
     )
     _refuse_unjudged_crossovers(encoded.storable.se_out_of_range)
     write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
-    return n_reclaimed
 
 
 def _refuse_unjudged_crossovers(left_out: np.ndarray) -> None:

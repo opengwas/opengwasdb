@@ -375,7 +375,9 @@ def _counts(rows: Iterable[dict[str, str]]) -> dict[str, int | None]:
     out: dict[str, int | None] = {}
     for row in rows:
         value = row.get(N_MISSING_SE_OUT_OF_RANGE, "")
-        out[row.get("analysis_id", "")] = int(value) if value.isdigit() else None
+        out[row.get("analysis_id", "")] = (
+            int(value) if value and re.fullmatch(NON_NEGATIVE_INTEGER_OR_BLANK, value) else None
+        )
     return out
 
 

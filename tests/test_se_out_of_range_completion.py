@@ -218,6 +218,39 @@ def test_a_dense_completion_leaves_out_a_source_cell_above_the_bound(dense_pair)
     _validates_cleanly(completed)
 
 
+def test_a_source_cell_above_the_bound_off_the_panel_is_declared_missing(tmp_path) -> None:
+    """a1's association at the one off-panel variant carries SE 100,000, so the completion
+    leaves it out: the release then holds no value at it, off the panel, and declares it
+    (spec §12: the Dense missing total is the missing cells the release holds off the panel,
+    whatever their cause). It declared 0 before, and `completion.missing_total` judges it
+    exactly (#362)."""
+    fields = [row.split("\t") for row in tdc.SOURCE_ROWS]
+    (off,) = [f for f in fields if (f[0], f[5]) == ("a1", "1200000")]
+    off[9] = str(HUGE)
+    rows = tmp_path / "associations.tsv"
+    rows.write_text(tdc.SOURCE_HEADER + "\n" + "\n".join("\t".join(f) for f in fields) + "\n")
+    observed = tmp_path / "obs.opengwasdb"
+    with pytest.MonkeyPatch.context() as monkeypatch, _as_before_0_2_3(monkeypatch):
+        build_dense_fixture(
+            [rows], observed, store_id="t", release_id="obs", reference_assembly="GRCh38"
+        )
+    _stamp_0_2_2(observed)
+    completed = tmp_path / "comp.opengwasdb"
+
+    complete_dense_store(
+        observed, completed, tdc._make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0,
+        release_id="comp",
+    )
+
+    z, _, _ = _dense_cell(completed, "1:1200000:A:G", 0)
+    assert np.isnan(z)  # fixture: the cell is left out
+    rows = read_analyses(completed / "analyses.tsv").rows
+    declared = [r["completion_n_missing_total"] for r in rows]
+    assert declared == ["1", "1"]  # a1: the left-out cell; a2: the cell it never observed
+    result = validate_store(completed, rules={"completion.missing_total"})
+    assert result.failed() == set(), result.errors
+
+
 @pytest.mark.parametrize(
     ("observed", "imputed"), [([2], [-1]), ([-1], [2]), ([1], [-1])],
     ids=["negative-imputed", "negative-observed", "zero-sum"],

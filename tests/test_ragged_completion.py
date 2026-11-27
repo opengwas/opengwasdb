@@ -271,6 +271,98 @@ class TestTopHitCountsRefreshedByCompletion:
             assert [int(r[column]) for r in dst_rows] == expected[column]
 
 
+def _mask_counts(store: Path, n_analyses: int) -> list[int]:
+    """Per Analysis, the rows its imputed mask marks (an independent read)."""
+    ragged = open_store(store).arrays(mode="r")["ragged"]
+    offsets, imputed = ragged["offsets"][:], ragged["imputed"][:]
+    return [
+        int((imputed[int(offsets[i]):int(offsets[i + 1])] == 1).sum()) for i in range(n_analyses)
+    ]
+
+
+def _overlapping_rich_completion(tmp_path, monkeypatch, fit):
+    """The rich fixture completed against its one block and a copy of it under another
+    name, with every block's fit stubbed (so convergence is not in question)."""
+    from opengwasdb.completion import block
+
+    monkeypatch.setattr(block, "impute_z_block", fit)
+    prefix = _make_rich_besd_fixture(tmp_path)
+    observed = tmp_path / "rich_obs.opengwasdb"
+    build_ragged_from_besd(
+        prefix, observed, store_id="test", release_id="obs-v1", tissue="Blood",
+        association_coverage="cis",
+    )
+    panel = _make_rich_ld_panel(tmp_path)
+    chromosome = panel / "EUR" / "1"
+    for source in sorted(chromosome.glob("900000-1300000.*")):
+        shutil.copy(source, chromosome / source.name.replace("1300000", "1300001"))
+    assert len(list(chromosome.glob("*.tsv"))) == 2  # fixture first: two blocks
+    dst = tmp_path / "overlapping.opengwasdb"
+    complete_ragged_store(
+        observed, dst, panel,
+        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+    )
+    return dst
+
+
+def test_a_row_two_overlapping_blocks_fill_is_declared_once(tmp_path, monkeypatch):
+    """Both blocks fill the same panel-only row alike: one imputed row, so the
+    declared total is the mask's, not twice it (#362)."""
+    from opengwasdb.store_reader.analyses import read_analyses
+
+    dst = _overlapping_rich_completion(
+        tmp_path, monkeypatch, lambda z, *args, **kwargs: (np.full(len(z), 2.0), 0.9)
+    )
+
+    rows = sorted(read_analyses(dst / "analyses.tsv").rows, key=lambda r: int(r["analysis_index"]))
+    masked = _mask_counts(dst, len(rows))
+    assert masked == [1]  # the one panel-only row, filled by both blocks
+    assert [int(r["completion_n_imputed_total"]) for r in rows] == masked
+
+
+def test_a_row_two_overlapping_blocks_both_fail_is_declared_missing_once(tmp_path, monkeypatch):
+    """Both blocks fail the same panel-only row: one row left missing, so the
+    declared missing total is 1, not the blocks' 2 (#362)."""
+    from opengwasdb.store_reader.analyses import read_analyses
+
+    dst = _overlapping_rich_completion(
+        tmp_path, monkeypatch, lambda z, *args, **kwargs: (None, float("nan"))
+    )
+
+    ragged = open_store(dst).arrays(mode="r")["ragged"]
+    held = RaggedCSRReader(dst).z_slice(0, int(ragged["offsets"][-1]))
+    assert int((ragged["imputed"][:] == 1).sum()) == 0  # fixture first: nothing filled
+    assert int(np.isnan(held).sum()) == 1  # the one panel-only row, left missing
+    rows = read_analyses(dst / "analyses.tsv").rows
+    assert [int(r["completion_n_missing_total"]) for r in rows] == [1]
+
+
+def test_the_missing_rule_alone_fails_a_ragged_missing_total_above_the_rows_held(
+    tmp_path, monkeypatch
+):
+    """One panel row both blocks fail is one row left missing. A release declaring 2 holds
+    one row, which the rule judges on its own: a Ragged release cannot tell a failed attempt
+    from a missing row its source stored, so it bounds the declaration above (#362)."""
+    from opengwasdb.model.analyses import write_analyses
+    from opengwasdb.store_reader.analyses import read_analyses
+
+    dst = _overlapping_rich_completion(
+        tmp_path, monkeypatch, lambda z, *args, **kwargs: (None, float("nan"))
+    )
+    rule = {"completion.missing_total"}
+    assert validate_store(dst, rules=rule).failed() == set()  # fixture first: declared 1, held 1
+    table = read_analyses(dst / "analyses.tsv")
+    assert table.rows[0]["completion_n_missing_total"] == "1"
+    table.rows[0]["completion_n_missing_total"] = "2"
+    write_analyses(dst / "analyses.tsv", table)
+
+    result = validate_store(dst, rules=rule)
+
+    assert result.failed() == rule
+    (message,) = result.of("completion.missing_total")
+    assert "declares completion_n_missing_total=2" in str(message)
+
+
 class TestCompletionRollupColumns:
     """Issue #70: analyses.tsv's completion-rollup columns
     (completion_median_pearson_r, completion_n_imputed_total,
@@ -2187,3 +2279,17 @@ def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
     assert {"n_imputed": result.n_imputed, "n_missing": result.n_missing} == (
         _STORED_MISSING_TOTALS
     )
+    # The block attempted the stored missing row and its fill was superseded by the source's
+    # row (ADR 0036): the quality row counts the attempt, one more than the rows held imputed,
+    # which `completion.quality_counts` bounds by the missing rows held and the totals judge
+    # exactly (#362).
+    from completion_counts import quality_counts
+
+    (attempts,) = [counts for (analysis, _block), counts in quality_counts(completed).items()
+                   if analysis == 1]
+    imputed = group["imputed"][int(group["offsets"][1]) : int(group["offsets"][2])]
+    imputed_held = int((imputed == 1).sum())
+    assert attempts[0] == imputed_held + 1  # fixture: the superseded fill, the 8 against 7
+    rules = {"completion.quality_counts", "completion.imputed_total", "completion.missing_total"}
+    result = validate_store(completed, rules=rules)
+    assert result.failed() == set(), result.errors
