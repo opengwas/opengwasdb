@@ -1,3 +1,4 @@
+
 """Indexed Variant Subsets over a Hybrid release (issue #271).
 
 A Hybrid release's Indexed Variant Subset belongs to its self-contained Dense
@@ -49,6 +50,8 @@ from typer.testing import CliRunner
 
 # Project imports.
 from opengwasdb.cli.main import app
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetExistsError,
     OverflowOnlyPolicy,
@@ -656,7 +659,9 @@ def completed_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     src, crossover_alid, _se, crossover_eaf = _residual_hybrid_crossover_source(tmp)
     ld = _residual_ld_panel_with_crossover(tmp, crossover_alid, crossover_eaf)
     dst = tmp / "completed.opengwasdb"
-    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    result = complete_hybrid_store(
+        src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9)
+    )
     assert result.n_imputed > 0, (
         "the fixture must impute a cell for the index tests to mean anything"
     )

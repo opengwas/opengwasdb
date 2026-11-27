@@ -30,6 +30,8 @@ from reader_constants import set_reader_constant
 from rsid_releases import RELEASE_NAMES
 from variant_info_answers import answers
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.store.rewrite import rewrite_release
@@ -418,7 +420,10 @@ def test_a_lifted_hybrid_release_completes_with_its_sidecar(tmp_path: Path):
 
     source = thc._build_source(tmp_path)
     completed = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(source, completed, thc._make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(
+        source, completed, PanelSource(thc._make_ld_panel(tmp_path)),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
+    )
     with query_store(source) as q:
         before = {row["alid"]: row["source_alid"] for row in q.variants_table().values()}
     with query_store(completed) as q:

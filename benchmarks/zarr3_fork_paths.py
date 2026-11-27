@@ -40,6 +40,8 @@ import numpy as np
 from benchmarks import _zarr3_levers as levers
 from benchmarks import zarr3_fixture_trees as trees
 from benchmarks._zarr3_levers import say
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 
 #: Every top-hit gather's worker count, in call order.
 GATHERS: list[int] = []
@@ -101,7 +103,7 @@ def dense_completion_n2(out: Path) -> None:
     )
     panel = tdc._make_ld_panel(d)
     kwargs = {"ancestry": "EUR", "min_cor": 0.0, "release_id": "comp-v1", "n_workers": 2}
-    complete_dense_store(observed, d / "comp.opengwasdb", panel, **kwargs)
+    complete_dense_store(observed, d / "comp.opengwasdb", PanelSource(panel), **kwargs)
 
 
 def ragged_completion_n2(out: Path) -> None:
@@ -120,7 +122,10 @@ def ragged_completion_n2(out: Path) -> None:
     )
     panel = trc._make_ld_panel(d, "1", 900_000, 1_300_000)
     kwargs = {"ancestry": "EUR", "cis_window_bp": 500_000, "min_cor": 0.0, "release_id": "comp-v1"}
-    complete_ragged_store(observed, d / "comp.opengwasdb", panel, n_workers=2, **kwargs)
+    complete_ragged_store(
+        observed, d / "comp.opengwasdb", PanelSource(panel),
+        CompletionOptions(n_workers=2), **kwargs,
+    )
 
 
 def gather_n2(out: Path) -> None:

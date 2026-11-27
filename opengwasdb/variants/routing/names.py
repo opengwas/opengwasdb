@@ -17,8 +17,8 @@ that routing.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple, TypeVar
@@ -244,48 +244,6 @@ def _log_dropped_rsids(label: str, conflicts: RsidConflicts) -> None:
         first.key,
         " and ".join(first.names),
     )
-
-
-@dataclass(frozen=True, eq=False)
-class SiteNames(Mapping[SourceKey, str]):
-    """Each source site's first-named rsid in ``(rank, site)`` order, blind to assembly
-    (``names``), and ``hg19``: for each site both assemblies declare, the rsid its hg19
-    sources named it, ``""`` if none did.
-
-    A site both assemblies declare was named by whichever source ranked first, which
-    may be the other assembly's row, so a lifted site's name is `lifted` (issue #325).
-    Every other site's name is the same under either assembly. A mapping of ``names``.
-    """
-
-    names: Mapping[SourceKey, str]
-    hg19: Mapping[SourceKey, str] = field(default_factory=dict)
-
-    def __getitem__(self, site: SourceKey) -> str:
-        return self.names[site]
-
-    def __iter__(self) -> Iterator[SourceKey]:
-        return iter(self.names)
-
-    def __len__(self) -> int:
-        return len(self.names)
-
-    def lifted(self, site: SourceKey) -> str:
-        """The rsid the hg19 sources named ``site``, ``""`` if none did."""
-        return self.hg19[site] if site in self.hg19 else self.names.get(site, "")
-
-    def without(
-        self, routing_keys: Collection[str], sites: Collection[SourceKey] = ()
-    ) -> Mapping[SourceKey, str]:
-        """The names less the sites ``sites`` and those whose Routing Key is in
-        ``routing_keys``: sites that name nothing because no variant of theirs is stored.
-        Plain names, the ones a build compares: a dropped site's own name is `lifted`'s."""
-        if not routing_keys and not sites:
-            return self.names
-        return {
-            s: r
-            for s, r in self.names.items()
-            if s not in sites and routing_key(s) not in routing_keys
-        }
 
 
 @dataclass(frozen=True)

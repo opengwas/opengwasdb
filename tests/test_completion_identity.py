@@ -69,6 +69,11 @@ twice and disagree on DISPUTED (three conflicting fills in all), and the two com
 totals were the blocks' sums, 5 imputed and 0 missing, where they are now the cells the
 release holds: 1 imputed (AGREED) and 1 missing (DISPUTED). Every other entry of the pin is
 unchanged.
+
+Since #327 each pin's manifest holds the five `provenance.completion` panel fields,
+the digest and the id derived from it among them. A fixture panel is written with no time
+in its gzip header (`ld_blocks.write_gzipped_matrix`), so its digest is the same on every
+run. Re-derived after checking that every other entry of all nine pins was unchanged.
 """
 
 from __future__ import annotations
@@ -84,6 +89,8 @@ from region_tables import NO_SIGNIFICANT_REGIONS, every_analysis, with_regions
 from store_digest import GOLDEN, matches_pin
 from stored_rows import stored_rows
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -159,8 +166,8 @@ def besd_completion(tmp_path_factory: pytest.TempPathFactory):
     dst = root / "comp.opengwasdb"
     panel = trc._make_ld_panel(root, "1", 900_000, 1_300_000)
     result = complete_ragged_store(
-        observed, dst, panel,
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        observed, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     _INPUTS[dst] = (observed, panel)
     return dst, _ragged_totals(result)
@@ -179,7 +186,8 @@ def trait_less_completion(tmp_path_factory: pytest.TempPathFactory):
     dst = root / "comp.opengwasdb"
     panel = trc._make_rich_ld_panel(root)
     result = complete_ragged_store(
-        observed, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        observed, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     _INPUTS[dst] = (observed, panel)
     return dst, _ragged_totals(result)
@@ -192,8 +200,8 @@ def overlapping_completion(tmp_path_factory: pytest.TempPathFactory):
     source = with_regions(_observed_rich(root), NO_SIGNIFICANT_REGIONS)
     panel = _overlapping_panel(root)
     result = complete_ragged_store(
-        source, dst, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-        release_id="comp-v1",
+        source, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     _INPUTS[dst] = (source, panel)
     return dst, _ragged_totals(result)
@@ -205,8 +213,8 @@ def dense_completion(tmp_path, signal_observed_store, signal_panel_npz_only):
     every position observed but one, which completion imputes."""
     dst = tmp_path / "comp.opengwasdb"
     result = complete_dense_store(
-        signal_observed_store, dst, signal_panel_npz_only, ancestry="EUR", min_cor=0.0,
-        release_id="comp-signal-v1",
+        signal_observed_store, dst, PanelSource(signal_panel_npz_only, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-signal-v1"),
     )
     totals = {
         name: int(getattr(result, name))

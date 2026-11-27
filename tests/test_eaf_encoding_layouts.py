@@ -27,6 +27,8 @@ import zarr
 from region_tables import write_region_table
 from store_assertions import replace_exception_table
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import write_eaf_reference
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -686,7 +688,7 @@ def _ld_panel(tmp_path: Path) -> Path:
     a = rng.standard_normal((n, n))
     ld = a @ a.T + np.eye(n) * n * 0.1
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         for row in ld:
             gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
     (block_dir / "block1.unphased.vcor1.gz").write_bytes(buf.getvalue())
@@ -701,7 +703,8 @@ def _completed_store_seed(
     source = _copy_store(_dense_store_seed, seed_path)
     out = seed_path / "dense-completed.opengwasdb"
     complete_dense_store(
-        source, out, _ld_panel(seed_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+        source, out, PanelSource(_ld_panel(seed_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     return out
 
@@ -819,8 +822,8 @@ def _completed_store_with_no_source_frequencies_seed(
     source = _copy_store(_store_with_no_frequencies_seed, seed_path)
     out = seed_path / "nofreq-completed.opengwasdb"
     complete_dense_store(
-        source, out, _ld_panel(seed_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99,
+        source, out, PanelSource(_ld_panel(seed_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     return out
 
@@ -943,8 +946,8 @@ def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
 
     out = tmp_path / "ragged-nofreq-completed.opengwasdb"
     complete_ragged_store(
-        ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99,
+        ragged_store_with_no_frequencies, out, PanelSource(_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["reference"] is True
@@ -998,8 +1001,8 @@ def test_orientation_evidence_is_not_required_of_panel_only_frequencies(
 
     out = tmp_path / "ragged-nofreq-noorientation.opengwasdb"
     complete_ragged_store(
-        ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99,
+        ragged_store_with_no_frequencies, out, PanelSource(_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     # Fixture meaningfulness: the release must be the panel-only shape, and
     # must declare `association` -- otherwise the rule is never reached.
@@ -1059,7 +1062,8 @@ def test_a_completed_hybrid_whose_only_frequencies_are_the_panels_validates(
 
     out = tmp_path / "hybrid-nofreq-completed.opengwasdb"
     complete_hybrid_store(
-        observed, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+        observed, out, PanelSource(_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     dense_plan = json.loads(
         (dense_component_path(out) / "manifest.json").read_text()
@@ -1113,8 +1117,8 @@ def test_a_panel_with_no_eaf_column_completes_and_keeps_the_stores_own_frequenci
     """
     out = tmp_path / "nofreq-panel-completed.opengwasdb"
     complete_dense_store(
-        dense_store, out, _panel_without_frequencies(tmp_path),
-        ancestry="EUR", min_cor=0.0, thresh=0.99,
+        dense_store, out, PanelSource(_panel_without_frequencies(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     manifest = json.loads((out / "manifest.json").read_text())
     assert "reference" not in manifest["encoding"]["eaf"]
@@ -1264,7 +1268,8 @@ def test_a_completed_hybrid_records_the_panel_it_was_completed_against(
 
     out = tmp_path / "hybrid-completed.opengwasdb"
     complete_hybrid_store(
-        hybrid_store, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+        hybrid_store, out, PanelSource(_ld_panel(tmp_path)),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     completion = json.loads((out / "manifest.json").read_text())["provenance"]["completion"]
     dense_completion = json.loads(
@@ -1304,7 +1309,8 @@ def test_a_hybrid_refuses_to_write_a_manifest_that_names_no_panel(
 
     out = tmp_path / "hybrid-completed-broken.opengwasdb"
     complete_hybrid_store(
-        hybrid_store, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+        hybrid_store, out, PanelSource(_ld_panel(tmp_path)),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     # Fixture meaningfulness: it reads cleanly before the mutation.
     assert _dense_completion_provenance(out)["ld_panel_id"]
@@ -1384,7 +1390,8 @@ def test_completion_stamps_eaf_scope_on_an_analysis_that_gains_imputed_cells(
 
     completed = tmp_path / "scope-completed.opengwasdb"
     complete_dense_store(
-        observed, completed, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+        observed, completed, PanelSource(_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, thresh=0.99),
     )
     with query_store(completed) as query:
         status = query.analysis("a4")["association_status"]
@@ -1397,3 +1404,88 @@ def test_completion_stamps_eaf_scope_on_an_analysis_that_gains_imputed_cells(
     assert after["a4"] == EafScope.ASSOCIATION.value, after
     result = validate_store(completed)
     assert result.ok, result.errors
+
+
+
+def _hybrid_records(out: Path) -> tuple[dict, dict]:
+    outer = json.loads((out / "manifest.json").read_text())["provenance"]["completion"]
+    inner = json.loads((dense_component_path(out) / "manifest.json").read_text())["provenance"][
+        "completion"
+    ]
+    return outer, inner
+
+
+class TestHybridLdPanelIdentity:
+    """A Hybrid completion records the panel its Dense Component read (#327)."""
+
+    @staticmethod
+    def _complete(source: Path, out: Path, panel, name=None) -> tuple[dict, dict]:
+        from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+
+        complete_hybrid_store(
+            source, out, PanelSource(panel, ancestry="EUR", name=name),
+            CompletionOptions(min_cor=0.0, thresh=0.99),
+        )
+        return _hybrid_records(out)
+
+    def test_two_panels_given_no_name_record_two_identities(
+        self, tmp_path: Path, hybrid_store: Path
+    ):
+        from ld_blocks import regenerated_panel
+
+        panel = _ld_panel(tmp_path)
+        other = regenerated_panel(panel, tmp_path / "other_panel")
+        first = self._complete(hybrid_store, tmp_path / "a.opengwasdb", panel)
+        second = self._complete(hybrid_store, tmp_path / "b.opengwasdb", other)
+        for outer, inner in (first, second):
+            assert outer["ld_panel_id"] != "eur-hg38-gpm"
+            assert outer["ld_panel_id_source"] == "digest"
+            assert {k: v for k, v in outer.items() if k.startswith("ld_panel_")} == {
+                k: v for k, v in inner.items() if k.startswith("ld_panel_")
+            }
+        assert first[0]["ld_panel_id"] != second[0]["ld_panel_id"]
+        assert first[0]["ld_panel_path"] == str(panel)
+
+    def test_a_name_the_caller_gives_is_recorded_on_both_manifests(
+        self, tmp_path: Path, hybrid_store: Path
+    ):
+        panel = _ld_panel(tmp_path)
+        outer, inner = self._complete(
+            hybrid_store, tmp_path / "a.opengwasdb", panel, name="mine"
+        )
+        for record in (outer, inner):
+            assert (record["ld_panel_id"], record["ld_panel_id_source"]) == ("mine", "caller")
+        assert outer["ld_panel_digest"] == inner["ld_panel_digest"]
+
+    def test_the_path_as_given_is_recorded(self, tmp_path: Path, hybrid_store: Path, monkeypatch):
+        _ld_panel(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        outer, inner = self._complete(hybrid_store, tmp_path / "a.opengwasdb", "ld")
+        assert outer["ld_panel_path"] == inner["ld_panel_path"] == "ld"
+
+    def test_a_source_completion_record_is_merged_not_replaced(
+        self, tmp_path: Path, hybrid_store: Path
+    ):
+        path = hybrid_store / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["provenance"]["completion"] = {"carried_from_source": 1}
+        path.write_text(json.dumps(manifest))
+        outer, _ = self._complete(hybrid_store, tmp_path / "a.opengwasdb", _ld_panel(tmp_path))
+        assert outer["carried_from_source"] == 1
+        assert outer["method"]
+
+    def test_a_root_and_component_that_name_two_panels_fail_validation(
+        self, tmp_path: Path, hybrid_store: Path
+    ):
+        from opengwasdb.validation.validate import validate_store
+
+        out = tmp_path / "a.opengwasdb"
+        self._complete(hybrid_store, out, _ld_panel(tmp_path))
+        assert not [e for e in validate_store(out).errors if "ld_panel" in e]
+        path = dense_component_path(out) / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["provenance"]["completion"]["ld_panel_id"] = "other"
+        manifest["provenance"]["completion"]["ld_panel_id_source"] = "caller"
+        path.write_text(json.dumps(manifest))
+        errors = [e for e in validate_store(out).errors if "ld_panel" in e]
+        assert any("one panel per completed release" in e for e in errors), errors

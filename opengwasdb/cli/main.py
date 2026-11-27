@@ -52,6 +52,8 @@ from opengwasdb.variants.windows import (
 from opengwasdb.version import __version__
 
 if TYPE_CHECKING:
+    from opengwasdb.completion.ld_panel import PanelSource
+    from opengwasdb.completion.options import CompletionOptions
     from opengwasdb.layouts.hybrid.build import HybridBuildResult
     from opengwasdb.variants.routing import UnionOptions, VariantReferenceExtraction
 
@@ -1599,12 +1601,58 @@ _RAGGED_WORKERS_HELP = (
 )
 
 
+#: The LD-panel options `complete-hybrid`, `complete-ragged` and `complete-dense` share.
+#: The root is a ``str``: what the caller typed is what the completion records (``./panel/``
+#: stays ``./panel/``), where a ``Path`` would have normalised it.
+LdPanelRoot = Annotated[
+    str, typer.Option(help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)")
+]
+LdPanelAncestry = Annotated[str, typer.Option()]
+LdPanelName = Annotated[
+    str | None,
+    typer.Option(
+        help="A name for the LD panel, recorded beside its content digest; "
+        "unset records the digest-derived id",
+    ),
+]
+
+
+def _panel_source(ld_panel: str, ancestry: str, ld_panel_id: str | None) -> "PanelSource":
+    """The LD panel a completion command was asked for. Imported here: reading the panel's
+    module loads pysam and scipy, which no query command may."""
+    from opengwasdb.completion.ld_panel import PanelSource
+
+    try:
+        return PanelSource(ld_panel, ancestry, ld_panel_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--ld-panel-id") from exc
+
+
+def _completion_options(
+    min_cor: float, release_id: str | None, n_workers: int, overwrite: bool
+) -> "CompletionOptions":
+    """The tuning a completion command was given; ``thresh`` stays the completion's own
+    unless the command has the option (see `_with_thresh`)."""
+    from opengwasdb.completion.options import CompletionOptions
+
+    return CompletionOptions(
+        min_cor=min_cor, release_id=release_id or None, n_workers=n_workers, overwrite=overwrite
+    )
+
+
+def _with_thresh(options: "CompletionOptions", thresh: float) -> "CompletionOptions":
+    from dataclasses import replace
+
+    return replace(options, thresh=thresh)
+
+
 @app.command("complete-hybrid")
 def complete_hybrid_command(
     source_path: Path,
     dest_path: Path,
-    ld_panel: Path = typer.Option(..., help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)"),
-    ancestry: str = typer.Option("EUR"),
+    ld_panel: LdPanelRoot,
+    ancestry: LdPanelAncestry = "EUR",
+    ld_panel_id: LdPanelName = None,
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
@@ -1620,13 +1668,8 @@ def complete_hybrid_command(
     result = complete_hybrid_store(
         source_path,
         dest_path,
-        ld_panel,
-        ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id or None,
-        n_workers=n_workers,
-        overwrite=overwrite,
+        _panel_source(ld_panel, ancestry, ld_panel_id),
+        _with_thresh(_completion_options(min_cor, release_id, n_workers, overwrite), thresh),
     )
     elapsed = time.time() - t0
     typer.echo(
@@ -1770,8 +1813,9 @@ def build_ragged_ssf_command(
 def complete_ragged_command(
     source_path: Path,
     dest_path: Path,
-    ld_panel: Path = typer.Option(..., help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)"),
-    ancestry: str = typer.Option("EUR"),
+    ld_panel: LdPanelRoot,
+    ancestry: LdPanelAncestry = "EUR",
+    ld_panel_id: LdPanelName = None,
     cis_window_bp: int = typer.Option(1_000_000),
     min_cor: float = typer.Option(0.7),
     release_id: str = typer.Option(None),
@@ -1795,13 +1839,9 @@ def complete_ragged_command(
     result = complete_ragged_store(
         source_path,
         dest_path,
-        ld_panel,
-        ancestry=ancestry,
+        _panel_source(ld_panel, ancestry, ld_panel_id),
+        _completion_options(min_cor, release_id, n_workers, overwrite),
         cis_window_bp=cis_window_bp,
-        min_cor=min_cor,
-        release_id=release_id or None,
-        n_workers=n_workers,
-        overwrite=overwrite,
     )
     _echo_summary(
         {
@@ -1844,11 +1884,12 @@ def _echo_dense_completion_result(result: Any, elapsed: float) -> None:
 def complete_dense_command(
     source_path: Path,
     dest_path: Path,
-    ld_panel: Path = typer.Option(..., help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)"),
-    ancestry: str = typer.Option("EUR"),
+    ld_panel: LdPanelRoot,
+    ancestry: LdPanelAncestry = "EUR",
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
+    ld_panel_id: LdPanelName = None,
     n_workers: int = typer.Option(1, help=_DENSE_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
@@ -1861,13 +1902,8 @@ def complete_dense_command(
     result = complete_dense_store(
         source_path,
         dest_path,
-        ld_panel,
-        ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id or None,
-        n_workers=n_workers,
-        overwrite=overwrite,
+        _panel_source(ld_panel, ancestry, ld_panel_id),
+        _with_thresh(_completion_options(min_cor, release_id, n_workers, overwrite), thresh),
     )
     elapsed = time.time() - t0
     _echo_dense_completion_result(result, elapsed)

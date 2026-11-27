@@ -26,6 +26,8 @@ from reader_constants import set_reader_constant
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
@@ -54,7 +56,8 @@ def _build_pair(root: Path, rows: list[str], panel: Path) -> tuple[Path, Path]:
         [source], observed, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
     )
     complete_dense_store(
-        observed, completed, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        observed, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     return observed, completed
 
@@ -542,7 +545,9 @@ def test_a_hybrid_root_is_checked_rather_than_refused(tmp_path):
     from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 
     hybrid, completed = thc._build_source(tmp_path), tmp_path / "comp.opengwasdb"
-    complete_hybrid_store(hybrid, completed, thc._make_ld_panel(tmp_path), min_cor=0.0)
+    complete_hybrid_store(
+        hybrid, completed, PanelSource(thc._make_ld_panel(tmp_path)), CompletionOptions(min_cor=0.0)
+    )
     out = tmp_path / "verdict.json"
 
     result = _run(hybrid, completed, out)
@@ -614,7 +619,8 @@ def _small_chunked_pair(
         reference_assembly="GRCh38", chunk_shape=(2, 1),
     )
     complete_dense_store(
-        observed, completed, tdc._make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0
+        observed, completed, PanelSource(tdc._make_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0),
     )
     # The patched shard shape reached the writer AND is the one the readers will check: a
     # patch that missed one side would build the fixture at another geometry (#475).

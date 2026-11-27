@@ -22,6 +22,8 @@ import test_hybrid_completion as thc
 from dense_sources import build_dense_fixture
 from region_tables import edit_manifest
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -152,8 +154,8 @@ def lifted_dense_completion(tmp_path: Path) -> tuple[Path, Path]:
     )
     completed = tmp_path / "comp.opengwasdb"
     complete_dense_store(
-        observed, completed, _strand_panel(tmp_path / "panel"),
-        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        observed, completed, PanelSource(_strand_panel(tmp_path / "panel"), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     return observed, completed
 
@@ -176,8 +178,8 @@ def test_a_lifted_ragged_source_keeps_its_source_alid_through_completion(tmp_pat
     )
     completed = tmp_path / "comp.opengwasdb"
     complete_ragged_store(
-        observed, completed, _strand_panel(tmp_path / "panel"),
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        observed, completed, PanelSource(_strand_panel(tmp_path / "panel"), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     alids = _besd_source_alids(tb)
     assert_lifted_provenance_kept(observed, completed, alids)
@@ -196,8 +198,8 @@ def test_dense_completion_leaves_a_blank_source_row_blank(tmp_path: Path) -> Non
     planted = plant_source_alids(observed)
     completed = tmp_path / "comp.opengwasdb"
     complete_dense_store(
-        observed, completed, tdc._make_ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        observed, completed, PanelSource(tdc._make_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     assert_source_alids_survive(observed, completed, planted)
 
@@ -207,7 +209,10 @@ def test_hybrid_completion_keeps_the_shared_tables_source_alid(tmp_path: Path) -
     Built from an hg19 source and lifted, so the observed rows' `source_alid` is real."""
     source = thc._build_source(tmp_path)
     completed = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(source, completed, thc._make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(
+        source, completed, PanelSource(thc._make_ld_panel(tmp_path)),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
+    )
 
     before = {r.alid: r.source_alid for r in _records(source)}
     after = {r.alid: r.source_alid for r in _records(completed)}
@@ -336,8 +341,8 @@ def test_the_rule_passes_a_completed_lifted_release_that_kept_them(
     record_liftover(observed_dense)
     completed = tmp_path / "comp.opengwasdb"
     complete_dense_store(
-        observed_dense, completed, tdc._make_ld_panel(tmp_path),
-        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        observed_dense, completed, PanelSource(tdc._make_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     assert validate_store(completed).failed() == frozenset()
 

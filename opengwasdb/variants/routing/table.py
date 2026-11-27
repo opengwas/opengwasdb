@@ -47,7 +47,6 @@ from opengwasdb.variants.routing.keys import (
     KeyHash,
     SourceKey,
     hash_tagged,
-    raw_site_key,
     routing_key,
 )
 
@@ -147,18 +146,6 @@ class Unmatched:
     def keys(self) -> list[str]:
         """Each row's Routing Key, in order."""
         return [self.key_at(row) for row in range(len(self))]
-
-    def raw_keys_of(self, wanted: Collection[str]) -> frozenset[str]:
-        """The rows whose Routing Key is in ``wanted``, each as ``chrom:pos:ref:alt``
-        the way its source spells it: the identity of the row a gate dropped, which
-        its case-folded Routing Key does not keep (#325)."""
-        return frozenset(
-            raw_site_key(
-                (self.chromosome[row], int(self.position[row]), self.ref[row], self.alt[row])
-            )
-            for row, key in enumerate(self.keys)
-            if key in wanted
-        )
 
     @cached_property
     def conflicting(self) -> list[str]:
